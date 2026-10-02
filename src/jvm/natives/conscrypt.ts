@@ -350,12 +350,12 @@ nc("chacha20_encrypt_decrypt([BI[BII[B[BI)V", (input: Int8Array, inOff: number, 
 
 // ── EVP_PKEY: RSA, EC and X25519 keys; a key an opaque Java PrivateKey backs signs and decrypts
 // through conscrypt's CryptoUpcalls, as BoringSSL's custom key methods do
-export type Wrapped = { type: typeof EVP_PKEY_RSA | typeof EVP_PKEY_EC; wrapper: JObj; rsa?: Rsa; curve?: Curve };
+type Wrapped = { type: typeof EVP_PKEY_RSA | typeof EVP_PKEY_EC; wrapper: JObj; rsa?: Rsa; curve?: Curve };
 export type Key = PKey | Wrapped;
 const RSA = 4, EC = 15, EVP = 6;
 export const keyOf = (ref: JObj) => ptr<Key>(ref);
 export const newKey = (k: Key) => ownedHandle(k);
-export const javaBytes = (v: bigint) => i8(concat([Uint8Array.of(0), bigToBytes(v)]));
+const javaBytes = (v: bigint) => i8(concat([Uint8Array.of(0), bigToBytes(v)]));
 const bnArg = (b: Int8Array | null) => b === null ? undefined : fromSigned(u8(b));
 export const parsing = (msg: string) => rt.mkThrowable("com/android/org/conscrypt/OpenSSLX509CertificateFactory$ParsingException", msg);
 nc("EVP_parse_public_key([B)J", (b: Int8Array) => {

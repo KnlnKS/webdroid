@@ -207,7 +207,7 @@ async function newIntent(r: ActivityRecord, intent: JObj): Promise<void> {
 }
 
 /** ActivityStarter: a resolved activity on top of this process's task, or the instance already there that takes the intent */
-export async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number,
+async function startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number,
   remote: ActivityRecord["remote"] = null): Promise<void> {
   transitions++;
   try {

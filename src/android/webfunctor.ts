@@ -5,7 +5,7 @@
 import type { Ctx2D } from "./recording";
 
 export type Rect = [number, number, number, number];
-export interface Functor {
+interface Functor {
   /** the view's size, in the coordinates the functor draws in */
   w: number; h: number;
   /** where the display shows the content this frame, or null when nothing composed it */

@@ -7,7 +7,7 @@ import { NativePath, PathMeasure, VerbIterator } from "./path";
 import type { NativePaint } from "./paint";
 
 /** SkStrokeRec's part the effects read and change: fill, or a stroke of `width` (0 a hairline) */
-export interface StrokeRec { fill: boolean; width: number; strokeAndFill: boolean }
+interface StrokeRec { fill: boolean; width: number; strokeAndFill: boolean }
 export abstract class NativePathEffect {
   /** the effect of `src` appended to `dst`; false when it leaves the path as it is */
   abstract filter(dst: NativePath, src: NativePath, rec: StrokeRec): boolean;

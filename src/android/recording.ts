@@ -53,7 +53,7 @@ const DRAWS = new Set(["fillRect", "strokeRect", "clearRect", "fillText", "strok
   "putImageData", "clip", "drawFocusIfNeeded"]);
 
 /** Mirror native operations for measurement while retaining them for display-list replay. */
-export function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D { return recordInto(mirror, { ops }); }
+function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D { return recordInto(mirror, { ops }); }
 function recordInto(mirror: Ctx2D, rec: Recording): Ctx2D {
   const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
   const context = new Proxy(mirror, {

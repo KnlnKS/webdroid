@@ -84,7 +84,7 @@ const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) 
 /** controls minikin treats as Extend, so no break comes before them */
 const extendsCluster = (c: number) => c === 0xad || c === 0x61c || c === 0x180e || c === 0x200b || c === 0x200e || c === 0x200f
   || c >= 0x202a && c <= 0x202e || (c | 0xf) === 0x206f || c === 0xfeff;
-export function isGraphemeBreak(adv: Float32Array | null, text: string, start: number, count: number, offset: number): boolean {
+function isGraphemeBreak(adv: Float32Array | null, text: string, start: number, count: number, offset: number): boolean {
   if (offset <= start || offset >= start + count) return true;
   const c = text.charCodeAt(offset), prev = text.charCodeAt(offset - 1);
   if (isTrail(c)) return !isLead(prev);
@@ -543,7 +543,7 @@ function pushLine(out: BreakResult, m: Measured, start: number, end: number, wid
   out.breaks.push(end); out.widths.push(width); out.ascents.push(ascent); out.descents.push(descent); out.flags.push(flags);
 }
 
-export interface Breaker { strategy: number; frequency: number; justified: boolean; indents: Float32Array; useBounds: boolean }
+interface Breaker { strategy: number; frequency: number; justified: boolean; indents: Float32Array; useBounds: boolean }
 /** breakIntoLines, with word_style_auto's phrase-based retry for short paragraphs */
 export const computeBreaks = driven(function* computeBreaks(b: Breaker, m: Measured, len: number, lineWidth: LineWidth, tabs: TabStops): Gen<BreakResult> {
   if (!len) return emptyResult();

@@ -8,7 +8,7 @@ import { SINGLE_BYTE_CHARSETS } from "./charset-tables";
 type Kind = "utf8" | "utf16" | "utf32" | "ascii" | "latin1" | "table";
 /** A charset's converter model: `little` is its byte order, and a marked charset (UTF-16, UTF-32)
  *  writes a byte-order mark in that order and reads either, defaulting to big-endian. */
-export interface CharsetInfo {
+interface CharsetInfo {
   name: string;
   /** as aliases() iterates them on the device, the name among them */
   aliases: string[];
@@ -58,7 +58,7 @@ export function charsetNamed(name: string): CharsetInfo | null {
 
 let charsetName: string | undefined, lastCharset: unknown, lastInfo: CharsetInfo;
 /** the charset named by a string or a Charset, or UnsupportedEncodingException */
-export function charsetInfo(value: unknown): CharsetInfo {
+function charsetInfo(value: unknown): CharsetInfo {
   // the last one answers again without the name's keyed load and lookup
   if (value === lastCharset) return lastInfo;
   const name = typeof value === "string" ? value : value && typeof value === "object"
@@ -408,13 +408,3 @@ function whole<T extends Int8Array | Uint16Array>(length: number, average: numbe
   }
 }
 
-export function encodeModifiedUtf8(str: string): Uint8Array {
-  const bytes: number[] = [];
-  for (let i = 0; i < str.length; i++) {
-    const c = str.charCodeAt(i);
-    if (c > 0 && c < 128) bytes.push(c);
-    else if (c < 2048) bytes.push(0xc0 | c >> 6, 0x80 | c & 63);
-    else bytes.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
-  }
-  return Uint8Array.from(bytes);
-}

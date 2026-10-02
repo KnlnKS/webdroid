@@ -1,7 +1,7 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, type NativeSpec, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
-import { mangleField, concat, i8 } from "../abi";
+import { concat, i8 } from "../abi";
 import { vcall, vcallOn, curThread, after, newObj, checkFromIndexSize } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
@@ -18,13 +18,6 @@ export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "(
 /** `new File(path)` */
 export const newFile = (path: string): Promise<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
 
-// the stream a TS subclass of FilterInputStream or FilterOutputStream wraps
-const FILTER_IN = mangleField("java/io/FilterInputStream", "in"), FILTER_OUT = mangleField("java/io/FilterOutputStream", "out");
-type Fields = Record<string, unknown>;
-export const filterIn = (s: object): unknown => (s as Fields)[FILTER_IN];
-export const filterOut = (s: object): unknown => (s as Fields)[FILTER_OUT];
-export const setFilterIn = (s: object, stream: unknown): void => { (s as Fields)[FILTER_IN] = stream; };
-export const setFilterOut = (s: object, stream: unknown): void => { (s as Fields)[FILTER_OUT] = stream; };
 const BAOS = "java/io/ByteArrayOutputStream";
 /** the bytes a ByteArrayOutputStream holds, without copying */
 export function baosBytes(s: JObj): Uint8Array {

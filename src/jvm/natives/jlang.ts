@@ -868,7 +868,7 @@ function jToString(v: unknown): string {
 const valueOfObject = (v: unknown): string | null | Promise<string | null> =>
   v === null ? "null" : typeof v === "string" ? v : vcall(boxObject(v), "toString", "()Ljava/lang/String;");
 /** the text string concatenation appends for a value */
-export const stringOf = (v: unknown): string | Promise<string> => after(valueOfObject(v), String);
+const stringOf = (v: unknown): string | Promise<string> => after(valueOfObject(v), String);
 rt.register({
   name: "java/lang/String",
   ctor: String, // instances are JS primitives
@@ -1427,8 +1427,8 @@ function enumerateThreads(threads: unknown[]): number {
 }
 // java.lang.Enum runs from libcore; TS reads a constant's name and ordinal through these
 const ENUM_NAME = mangleField("java/lang/Enum", "name"), ENUM_ORDINAL = mangleField("java/lang/Enum", "ordinal");
-export type JSimpleEnum = JObj;
-export const enumName = (e: unknown): string => (e as Record<string, string>)[ENUM_NAME];
+type JSimpleEnum = JObj;
+const enumName = (e: unknown): string => (e as Record<string, string>)[ENUM_NAME];
 // §4.7: compareTo within one enum class, and valueOf over the constants getSharedConstants shares
 // (AOSP asks getClass and getDeclaringClass of both, and an LRU cache under a lock, per call)
 const sharedEnums = new WeakMap<object, Record<string, unknown>[]>();

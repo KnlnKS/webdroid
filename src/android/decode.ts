@@ -20,7 +20,7 @@ import { edges, setEdges } from "./graphics";
 import { bitmapCanvas } from "./canvas";
 
 // ── headers
-export interface ImageHeader {
+interface ImageHeader {
   mime: string; width: number; height: number;
   /** how SkAndroidCodec samples the format: SkSampledCodec's floor, libjpeg's native scales, or SkScalingCodec's rounding */
   sampling: "floor" | "jpeg" | "round";

@@ -5,7 +5,6 @@ type Scheduled = {
   at: number;
   realm: number;
   sequence: number;
-  interval: number;
   callback: () => void;
 };
 
@@ -20,13 +19,12 @@ export class ControlledGuestClock {
 
   constructor(public nowMs: number) {}
 
-  schedule(callback: () => void, delayMs: number, realm = 0, intervalMs = 0): number {
+  schedule(callback: () => void, delayMs: number, realm = 0): number {
     const task: Scheduled = {
       id: this.nextId++,
       at: this.nowMs + Math.max(0, delayMs),
       realm,
       sequence: this.sequence++,
-      interval: Math.max(0, intervalMs),
       callback,
     };
     this.live.set(task.id, realm);
@@ -70,14 +68,9 @@ export class ControlledGuestClock {
       this.pop();
       if (!this.live.has(task.id)) continue;
       this.nowMs = task.at;
-      if (!task.interval) this.live.delete(task.id);
+      this.live.delete(task.id);
       task.callback();
       ran++;
-      if (task.interval && this.live.has(task.id)) {
-        task.at += task.interval;
-        task.sequence = this.sequence++;
-        this.push(task);
-      }
     }
     this.nowMs = targetMs;
     return ran;
@@ -128,8 +121,6 @@ const clock = controlledGuestTime
 const realNow = browser ? performance.now.bind(performance) : () => performance.now();
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
-const realSetInterval = globalThis.setInterval.bind(globalThis);
-const realClearInterval = globalThis.clearInterval.bind(globalThis);
 
 // HTML timers take a signed 32-bit delay: a longer one (a 30-day retry, a Long.MAX_VALUE wait)
 // would wrap and fire at once, so it waits the longest a timer can instead (~24.8 days)
@@ -141,12 +132,6 @@ export const setGuestTimeout = clock
 export const clearGuestTimeout = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearTimeout(timer as ReturnType<typeof setTimeout>); };
-export const setGuestInterval = clock
-  ? (callback: () => void, intervalMs: number): GuestTimer => clock.schedule(callback, intervalMs, realm, intervalMs)
-  : (callback: () => void, intervalMs: number): GuestTimer => realSetInterval(callback, Math.min(intervalMs, MAX_TIMER_DELAY));
-export const clearGuestInterval = clock
-  ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
-  : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearInterval(timer as ReturnType<typeof setInterval>); };
 export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
 /** the page's start: every realm's CLOCK_MONOTONIC (SystemClock.uptimeMillis, System.nanoTime) counts from it */
 export const bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;

@@ -81,8 +81,6 @@ export function directAddress(b: JBuffer): number | bigint | Promise<number | bi
 
 /** ByteBuffer.allocateDirect(n): guest memory, owned by the buffer */
 export const allocateDirect = (n: number): JBuffer | Promise<JBuffer> => scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", n);
-/** ByteBuffer.wrap: a heap buffer over the bytes themselves */
-export const wrapBytes = (bytes: Int8Array): JBuffer | Promise<JBuffer> => scall("java/nio/ByteBuffer", "wrap", "([B)Ljava/nio/ByteBuffer;", bytes);
 /** ByteBuffer.order(nativeOrder()) */
 export function nativeOrder(b: JBuffer): JBuffer {
   const o = b as Fields;
@@ -116,7 +114,7 @@ export function directView(bytes: Int8Array, offset: number, length: number, rea
 }
 const unmappers = new FinalizationRegistry<() => void>((unmap) => unmap());
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
-export function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void): JBuffer | Promise<JBuffer> {
+function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void): JBuffer | Promise<JBuffer> {
   return after(construct("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
     unmappers.register((b as Fields)[declaredField("java/nio/DirectByteBuffer", "memoryRef")], unmap);
     return b;
@@ -124,7 +122,7 @@ export function mappedBuffer(address: number | bigint, size: number, fd: JObj | 
 }
 
 /** a read-only MappedByteBuffer over an immutable source, paged in as it is read */
-export function readOnlyMapping(source: FileSource, offset: number, size: number, fd: JObj | null = null): JBuffer | Promise<JBuffer> {
+function readOnlyMapping(source: FileSource, offset: number, size: number, fd: JObj | null = null): JBuffer | Promise<JBuffer> {
   const address = mapExternal(source, offset, size);
   return mappedBuffer(address, size, fd, true, () => unmapExternal(address));
 }

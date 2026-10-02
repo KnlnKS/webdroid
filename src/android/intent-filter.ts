@@ -70,7 +70,7 @@ function* addGroup$(filter: JObj, node: XmlNode): Gen<void> {
 }
 
 /** what IntentFilter.match takes of an intent: its action, resolved type, scheme, data and categories */
-export type IntentTarget = { action: string | null; type: string | null; scheme: string | null; data: JObj | null; categories: JObj | null };
+type IntentTarget = { action: string | null; type: string | null; scheme: string | null; data: JObj | null; categories: JObj | null };
 export function* intentTarget$(q: IntentQuery): Gen<IntentTarget> {
   const data = q.dataUri === null ? null : mkUri(q.dataUri);
   return { action: q.action, type: q.typeStr, data, scheme: data && (yield vcall(data, "getScheme", `()${S}`)),

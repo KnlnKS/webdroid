@@ -86,7 +86,7 @@ export const basicConstraints = (x: X509): { ca: boolean; pathLen: number } | nu
 // the extensions BoringSSL understands; any other critical one sets EXFLAG_CRITICAL
 const SUPPORTED = new Set(["2.16.840.1.113730.1.1", KEY_USAGE, SUBJECT_ALT_NAME, BASIC_CONSTRAINTS, "2.5.29.30", "2.5.29.32", EXT_KEY_USAGE, "2.5.29.36",
   "2.5.29.54", "1.3.6.1.5.5.7.1.1", "1.3.6.1.5.5.7.1.14", "1.3.6.1.5.5.7.1.3", "1.3.6.1.5.5.7.1.7", "2.5.29.33"]);
-export const EXFLAG_BCONS = 0x1, EXFLAG_KUSAGE = 0x2, EXFLAG_XKUSAGE = 0x4, EXFLAG_CA = 0x10, EXFLAG_SI = 0x20, EXFLAG_V1 = 0x40, EXFLAG_CRITICAL = 0x200, EXFLAG_SS = 0x2000;
+const EXFLAG_BCONS = 0x1, EXFLAG_KUSAGE = 0x2, EXFLAG_XKUSAGE = 0x4, EXFLAG_CA = 0x10, EXFLAG_SI = 0x20, EXFLAG_V1 = 0x40, EXFLAG_CRITICAL = 0x200, EXFLAG_SS = 0x2000;
 export function exFlags(x: X509, selfSigned: () => boolean): number {
   let flags = 0;
   const bc = basicConstraints(x);
@@ -143,7 +143,7 @@ export function nameRfc2253(name: Uint8Array): string {
 }
 
 // ── subjectAltName entries as conscrypt's GENERAL_NAME_to_jobject answers them
-export type GeneralName = [number, string | Uint8Array];
+type GeneralName = [number, string | Uint8Array];
 function ipText(b: Uint8Array): string | null {
   if (b.length === 4) return Array.from(b).join(".");
   if (b.length !== 16) return null;

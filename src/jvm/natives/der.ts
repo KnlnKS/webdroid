@@ -52,7 +52,7 @@ export function oidToString(body: Uint8Array): string {
   }
   return parts.join(".");
 }
-export function oidBody(oid: string): number[] {
+function oidBody(oid: string): number[] {
   const p = oid.split(".").map(Number), out: number[] = [];
   const push = (v: number) => { const b = [v & 0x7f]; while ((v = Math.floor(v / 128))) b.unshift((v & 0x7f) | 0x80); out.push(...b); };
   push(40 * p[0] + p[1]);

@@ -126,7 +126,7 @@ export function mainHandler(): JObj {
 }
 
 /** a Runnable over a JS closure, for host work that must go through a Handler queue */
-export class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
+class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
 rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });
 export function fnRunnable(fn: () => unknown): JFnRunnable {
   rt.link("webdroid/FnRunnable");

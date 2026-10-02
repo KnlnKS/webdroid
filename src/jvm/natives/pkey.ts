@@ -10,7 +10,7 @@ import {
 } from "./der";
 
 export const EVP_PKEY_RSA = 6, EVP_PKEY_EC = 408, EVP_PKEY_X25519 = 948;
-export const OID_RSA = "1.2.840.113549.1.1.1", OID_EC = "1.2.840.10045.2.1", OID_X25519 = "1.3.101.110";
+const OID_RSA = "1.2.840.113549.1.1.1", OID_EC = "1.2.840.10045.2.1", OID_X25519 = "1.3.101.110";
 
 // ── curves
 export type Curve = { name: string; oid: string; bytes: number; p: bigint; a: bigint; b: bigint; gx: bigint; gy: bigint; n: bigint; h: bigint };
@@ -36,7 +36,7 @@ export const CURVES: Curve[] = [
     n: x("1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409"), h: 1n },
 ];
 export const curveByName = (name: string) => CURVES.find((c) => c.name === name);
-export const curveByOid = (o: string) => CURVES.find((c) => c.oid === o);
+const curveByOid = (o: string) => CURVES.find((c) => c.oid === o);
 export const bitLength = (v: bigint) => v === 0n ? 0 : v.toString(2).length;
 
 // Jacobian points [X, Y, Z], each coordinate in [0, p); Z = 0 is the point at infinity. Scalar
@@ -161,7 +161,7 @@ function mulAddJac(c: Curve, terms: [bigint, Point][]): Jac {
   }
   return R;
 }
-export const mulAdd = (c: Curve, terms: [bigint, Point][]): Point => toAffine(c, mulAddJac(c, terms));
+const mulAdd = (c: Curve, terms: [bigint, Point][]): Point => toAffine(c, mulAddJac(c, terms));
 export const mul = (c: Curve, k: bigint, P: Point): Point => P && k % c.n !== 0n ? mulAdd(c, [[k, P]]) : null;
 export const onCurve = (c: Curve, [X, Y]: [bigint, bigint]) =>
   X >= 0n && Y >= 0n && X < c.p && Y < c.p && md(Y * Y - (X * X * X + c.a * X + c.b), c.p) === 0n;
@@ -205,7 +205,7 @@ function sqrtMod(v: bigint, p: bigint): bigint | null {
   }
   return r;
 }
-export const encodePoint = (c: Curve, [X, Y]: [bigint, bigint]) => concat([Uint8Array.of(4), bigToBytes(X, c.bytes), bigToBytes(Y, c.bytes)]);
+const encodePoint = (c: Curve, [X, Y]: [bigint, bigint]) => concat([Uint8Array.of(4), bigToBytes(X, c.bytes), bigToBytes(Y, c.bytes)]);
 
 // ── ECDSA (SEC 1 §4.1): signatures are DER SEQUENCE { r, s }
 const hashToInt = (c: Curve, digest: Uint8Array) => {
@@ -291,7 +291,7 @@ export function pkcs1SignPad(k: number, digestName: string | null, digest: Uint8
   em[0] = 0; em[1] = 1; em[k - t.length - 1] = 0; em.set(t, k - t.length);
   return em;
 }
-export function mgf1(make: () => Hash, seed: Uint8Array, len: number): Uint8Array {
+function mgf1(make: () => Hash, seed: Uint8Array, len: number): Uint8Array {
   const out = new Uint8Array(len), c = new Uint8Array(4);
   for (let i = 0, at = 0; at < len; i++) {
     new DataView(c.buffer).setUint32(0, i);

@@ -47,7 +47,7 @@ export const mkEnumeration = (items: unknown[]): unknown =>
   scall("java/util/Collections", "enumeration", "(Ljava/util/Collection;)Ljava/util/Enumeration;", newArrayList(items));
 
 /** a Java collection of class `cls` holding `items`, added in order */
-export const newCollection = driven(function* newCollection(cls: string, items: Iterable<unknown>): Gen<Obj> {
+const newCollection = driven(function* newCollection(cls: string, items: Iterable<unknown>): Gen<Obj> {
   const info = rt.link(cls);
   const init = rt.initClass(info);
   if (init) yield init;

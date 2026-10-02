@@ -228,7 +228,7 @@ function saveCode(): Promise<void> {
 /** a gap: its method list (0 direct, 1 virtual), index there, mangled name and how it is filled
  *  (0 the platform body, 1 its JNI binding, 2 the superclass's implementation) */
 export type Gap = [list: number, index: number, mangled: string, kind: number];
-export type LinkTable = { fingerprint: string; gaps: Record<string, Gap[]> };
+type LinkTable = { fingerprint: string; gaps: Record<string, Gap[]> };
 let gaps: Record<string, Gap[]> | null = null, foundGaps: Record<string, Gap[]> | null = null;
 /** the served table for this bytecode switch, if the page has one to ask */
 export async function fetchLinkTable(): Promise<LinkTable | null> {

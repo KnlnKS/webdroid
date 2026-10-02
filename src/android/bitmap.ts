@@ -33,7 +33,7 @@ const nextGeneration = () => (generation = (generation + 1) | 0) || (generation 
 
 type RGBA = Uint8ClampedArray<ArrayBuffer>;
 /** a ColorSpace.Rgb's native instance (delegates.ts): skcms' a..g and the D50 matrix, column-major */
-export interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
+interface NativeColorSpace { transfer: number[]; xyz: Float32Array }
 
 export class NativeBitmap {
   rowBytes: number;
