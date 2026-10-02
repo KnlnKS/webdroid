@@ -11,8 +11,6 @@ import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
 import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/fs";
 
-
-
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
 /** `new File(path)` */
@@ -36,7 +34,6 @@ export const readStreamFully = driven(function* (s: unknown): Gen<Uint8Array> {
   }
   return concat(chunks);
 });
-
 
 const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;
 /** a FileDescriptor's int, -1 for none (JNIHelp's jniGetFDFromFileDescriptor) */

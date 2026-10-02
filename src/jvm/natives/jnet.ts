@@ -308,7 +308,7 @@ rt.register({
     "getPeerPort()I": function (this: JSSLSession) { return this.port; },
     "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) { return relayChain(this.host); },
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
-    "getPeerPrincipal()Ljava/security/Principal;": function (this: JSSLSession) { return after(relayChain(this.host), (chain) => vcall(chain[0], "getSubjectX500Principal", "()Ljavax/security/auth/x500/X500Principal;")); },
+    "getPeerPrincipal()Ljava/security/Principal;": function (this: JSSLSession) { return after(relayChain(this.host), subjectOf); },
     "getLocalPrincipal()Ljava/security/Principal;": () => null,
     "getId()[B": () => new Int8Array(0),
     "isValid()Z": () => 1,
@@ -545,6 +545,11 @@ class JHttpURLConnection extends JObj {
 function withRes<A extends unknown[], C extends JHttpURLConnection = JHttpURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
   return driven(function* (this: C, ...a: A): Gen { return yield f.call(this, yield this.connect(), ...a); });
 }
+/** URLConnection's checks before a request property changes */
+function checkRequestKey(c: JHttpURLConnection, k: string | null): asserts k is string {
+  if (c.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
+  if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+}
 const connectionMethods: NativeSpec["methods"] = {
   "connect()V": driven(function* (this: JHttpURLConnection): Gen {
     this.connected = 1;
@@ -569,14 +574,12 @@ const connectionMethods: NativeSpec["methods"] = {
     return this.out ??= await newObj("java/io/ByteArrayOutputStream");
   },
   "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JHttpURLConnection, k: string | null, v: string) {
-    if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
-    if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+    checkRequestKey(this, k);
     this.req = this.req.filter(([n]) => n.toLowerCase() !== k.toLowerCase());
     this.req.push([k, v]);
   },
   "addRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JHttpURLConnection, k: string | null, v: string) {
-    if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
-    if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
+    checkRequestKey(this, k);
     this.req.push([k, v]);
   },
   "getRequestProperty(Ljava/lang/String;)Ljava/lang/String;": function (this: JHttpURLConnection, k: string | null) {

@@ -329,12 +329,7 @@ function parseTypeSig(s: string, ref: { pos: number }, scope: TypeScope = { decl
       while (ref.pos < s.length && s[ref.pos] !== ";") ref.pos++;
     }
     ref.pos++; // ';'
-    if (!args.length) return rt.classFor(name);
-    const t = new JPType();
-    t.raw = rt.classFor(name);
-    t.args = args;
-    t.key = dotName(name) + "<" + args.map(typeKey).join(", ") + ">";
-    return t;
+    return args.length ? mkPType(rt.classFor(name), args) : rt.classFor(name);
   }
   if (c === "[") {
     ref.pos++;
@@ -752,7 +747,6 @@ function arrayIndexScale(cls: JClass): number {
   return PRIM_ARRAYS[cls.arrDesc?.[1] as PrimElem]?.BYTES_PER_ELEMENT ?? 4;
 }
 
-
 const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
 /** Class.getMethods (public, own and inherited) or, when declaredOnly, getDeclaredMethods */
 export function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
@@ -918,12 +912,11 @@ rt.register({
     "getExceptionTypes()[Ljava/lang/Class;": function (this: JCtor) { return thrownTypes(this.owner, "<init>", this.desc); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return types(genericMethodTypes(this.owner, "<init>", this.desc).params); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
-    ...annotatedElement(function (this: JCtor) { return classAnno(this.owner).methodsByRef.get("<init>" + this.desc) ?? []; }),
+    ...annotatedElement(function (this: JCtor) { return methodAnnotations(this.owner, "<init>", this.desc); }),
     // ObjectStreamClass: deserialization allocates the serializable class and runs its first
     // non-serializable superclass's constructor
     "serializationCopy(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/reflect/Constructor;": function (this: JCtor, _ctor: JClass, cls: JClass) {
-      const copy = Object.assign(new JCtor(), { owner: this.owner, desc: this.desc, flags: this.flags, alloc: cls.ci });
-      return copy;
+      return Object.assign(new JCtor(), { owner: this.owner, desc: this.desc, flags: this.flags, alloc: cls.ci });
     },
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JCtor, args: unknown[] | null): Gen {
       const info = this.owner;

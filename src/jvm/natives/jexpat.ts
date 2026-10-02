@@ -87,6 +87,15 @@ function markupEnd(buffer: string): number {
   return -1;
 }
 
+/** endElement for the element just popped, then the end of each prefix it declared */
+function* endElement(parser: unknown, c: Context, name: Name, declared: string[]): Gen<void> {
+  yield vcall(parser, "endElement", PARSER_NAME, name.uri, name.local, name.qName);
+  c.scopes.pop();
+  for (const prefix of declared.reverse()) yield vcall(parser, "endNamespace", "(Ljava/lang/String;)V", prefix);
+  if (!c.open.length) c.rootClosed = true;
+}
+const ATTRIBUTE = /\s*([^\s=]+)\s*=\s*(["'])([\s\S]*?)\2/g;
+
 const parse = driven(function* (parser: unknown, c: Context, final: boolean): Gen<void> {
   if (final && c.decoder) c.buffer += c.decoder.decode();
   for (;;) {
@@ -128,11 +137,7 @@ const parse = driven(function* (parser: unknown, c: Context, final: boolean): Ge
     } else if (token.startsWith("</")) {
       const qName = token.slice(2, -1).trim(), top = c.open.pop();
       if (!top || top.qName !== qName) throw expatError("mismatched tag");
-      const name = resolve(c, qName, false);
-      yield vcall(parser, "endElement", PARSER_NAME, name.uri, name.local, name.qName);
-      c.scopes.pop();
-      for (const prefix of top.declared.reverse()) yield vcall(parser, "endNamespace", "(Ljava/lang/String;)V", prefix);
-      if (!c.open.length) c.rootClosed = true;
+      yield* endElement(parser, c, resolve(c, qName, false), top.declared);
     } else {
       if (c.rootClosed) throw expatError("junk after document element");
       const empty = token.endsWith("/>"), inner = token.slice(1, empty ? -2 : -1);
@@ -140,8 +145,8 @@ const parse = driven(function* (parser: unknown, c: Context, final: boolean): Ge
       if (!m) throw expatError("not well-formed (invalid token)");
       const raw: [string, string][] = [];
       let rest = m[2];
-      for (const a of rest.matchAll(/\s*([^\s=]+)\s*=\s*(["'])([\s\S]*?)\2/g)) raw.push([a[1], expand(c, a[3], true)]);
-      rest = rest.replace(/\s*([^\s=]+)\s*=\s*(["'])([\s\S]*?)\2/g, "");
+      for (const a of rest.matchAll(ATTRIBUTE)) raw.push([a[1], expand(c, a[3], true)]);
+      rest = rest.replace(ATTRIBUTE, "");
       if (rest.trim()) throw expatError("not well-formed (invalid token)");
       if (new Set(raw.map(([n]) => n)).size !== raw.length) throw expatError("duplicate attribute");
       const scope = new Map<string, string>(), declared: string[] = [];
@@ -163,10 +168,7 @@ const parse = driven(function* (parser: unknown, c: Context, final: boolean): Ge
       finally { attributeSets.delete(pointer); }
       if (empty) {
         c.open.pop();
-        yield vcall(parser, "endElement", PARSER_NAME, name.uri, name.local, name.qName);
-        c.scopes.pop();
-        for (const prefix of declared.reverse()) yield vcall(parser, "endNamespace", "(Ljava/lang/String;)V", prefix);
-        if (!c.open.length) c.rootClosed = true;
+        yield* endElement(parser, c, name, declared);
       }
     }
     consume(c, token);

@@ -194,7 +194,6 @@ const staticHandle = (holder: object, prop: string, type: string) => {
 const arrayHandle = (type: string) => varHandle(null, "[" + type,
   () => handleClass(ArrayVarHandle, type, "a[b]", (v) => `a[b]=${v}`, "if((b>>>0)>=a.length)R.aio(b,a.length);", null), type);
 
-
 const fence = () => {};
 rt.register({
   name: "java/lang/invoke/VarHandle", ctor: JVarHandle as unknown as new () => object,

@@ -42,7 +42,6 @@ const iterateAll = driven(function* iterateAll(c: unknown): Gen<unknown[]> {
   return out;
 });
 
-
 /** a java.util.Enumeration over `items` */
 export const mkEnumeration = (items: unknown[]): unknown =>
   scall("java/util/Collections", "enumeration", "(Ljava/util/Collection;)Ljava/util/Enumeration;", newArrayList(items));
