@@ -582,11 +582,36 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-04 (Stage E: 2026-10-01). The branch is `knlnks/bytecode` (not pushed); read "Latest handoff"
-first. The older handoffs below it are history: where they list next steps for
+Last updated 2026-10-05 (Stage E: 2026-10-01). Stage F's work is on `knlnks/bytecode-stage-f`
+(worktree `../webdroid-stage-f`, not pushed); read "Stage F handoff" first, then "Latest handoff".
+The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings. Stage E is complete on this branch: its handoff is "Stage E handoff" below.
+
+### Stage F handoff (2026-10-05): superseded TS removed
+
+Every platform class's TS spec now implements natives only, except the VM built-ins, boundaries
+and intrinsics `TS_SPECS` lists (`src/jvm/provenance.ts`) and the backlog in
+`tests/fixtures/desccheck-baseline.json`; `bun run desccheck` (in `bun run test`) fails a new
+spec method that stands in for an AOSP body. Findings are in the implementation history's
+2026-10-05 Stage F entry. Gates on the tip: typecheck, `bun run test`, FitNotes smoke, fast e2e
+7/7 (mihon-app, komikku and doodlejump can flake under parallel load; rerun alone) and `bun run
+lat` (worst gated tap 125 ms).
+
+**§7 metric:** hand-written TS in `src/android` + `src/jvm/natives` is 41,612 lines (2.47 MB),
+from 44,438 at b475a694; specs of platform classes 80 (from 291).
+
+**Open:**
+1. StatsEvent (GC stall under bytecode, see history) and print (needs a hosted IPrintManager and a
+   PDF-producing WebView adapter) are the desccheck backlog.
+2. Build's fields-only spec needs per-ABI zygote state before its <clinit> can run from bytecode.
+3. The async-natives baseline (ATM, WM, IMM, surfaces, intentipc) and the `.then`/timer callbacks
+   the lint cannot see; MediaDataSource.readAt runs from a host read callback.
+4. Class-init re-entry is judged by JThread identity while main-loop jobs share mainThread.
+5. Merge into `knlnks/bytecode` once Stage E allows; the sql.js patch rebuilds each checkout's
+   `vendor/sql.js/dist` on its first bun command, so give a checkout its own dist rather than a
+   symlink to a shared one.
 
 ### Stage E handoff (2026-10-01): Stage E is complete
 

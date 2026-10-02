@@ -1593,6 +1593,52 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     spec is under a STAGE_D prefix.
   - MediaPlayer.create, SoundPool.load and MediaStore.canManageMedia read the deleted TS
     Context's `$host`.
+- 2026-10-05, Stage F: specs that stood in for AOSP bytecode. Specs of platform classes fell from
+  291 to 80, and spec methods resolving to an AOSP body from 1,752 to 494 (465 in TS_SPECS' VM
+  classes). android.os, android.system, android.database, android.media, android.speech,
+  android.renderscript, android.net, android.util, android.location, android.webkit, android.opengl,
+  telephony, Camera, Compatibility and the graphics geometry values run from bytecode over natives
+  and hosted services. Hand-written TS in `src/android` + `src/jvm/natives` fell from 44,438 to
+  41,612 lines. `bun run desccheck` now fails a spec method with an AOSP body outside TS_SPECS.
+  - Parcel's native half is a NativeParcel behind mNativePtr (bytes plus a side table of binders
+    and owned descriptors; a binder is a flat_binder_object plus stability word). Incoming
+    transactions enter through Binder.execTransact; marshall() throws when objects are present.
+    A ParcelFileDescriptor crosses processes as its bytes plus a writer binder, written back when
+    the importer closes its last descriptor; a raw pipe or socket throws instead of crossing.
+  - SystemClock.<clinit> reads System.nanoTime, so the main loop's first SystemClock read started
+    System.<clinit> on a JThread that other jobs share; one judged it re-entry and read null
+    properties. startMainLooper initialises System first, as the zygote does. The hazard (init
+    re-entry judged by JThread identity while jobs share mainThread) remains.
+  - Build keeps a fields-only spec: its <clinit> reads ro.* properties in zygoteInit, before the
+    app's ABI is known, so ARM32-only apps would see an arm64 CPU_ABI. It needs per-ABI zygote state.
+  - SQLiteConnection's natives run over sql.js (rebuilt with the C API they call,
+    `vendor/sql.js/sqljs.patch`); each connection is its own sqlite3 handle on the file, TEMP state
+    stays per connection, and snapshots are debounced per file until every connection is in
+    autocommit. A file replaced on disk while closed is reread. Error codes and collator strengths
+    follow recalled AOSP behaviour and are unverified. SQLiteRawStatement, custom functions and
+    PHONE_NUMBERS_EQUAL are unimplemented. Cursor iteration costs 1.5–2x, inserts about 2x the TS;
+    no tap regressed.
+  - MediaPlayer's and MediaCodec's Java EventHandler drops events while mNativeContext is 0, so
+    the natives set it; native_invoke must rewind its parcel before enforceInterface. Unsupported
+    paths (encoders, DRM, AudioTrack static mode, RenderScript intrinsics other than blur) fail as
+    AOSP documents. Audible output was not verified headless.
+  - The kernel gained AF_UNIX bind/listen/accept for LocalSocket; libcore's MimeMap comes from
+    framework.jar's mime.types through RuntimeInit.preForkInit; geocoding goes through
+    ILocationManager, so no provider answers an empty list where TS threw IOException.
+  - StatsEvent stays TS: with bytecode StatsEvent, Mihon's main thread spent ~12.7 s of a 20 s
+    latency run in GC and its theme taps took 170–540 ms. It narrows to ChangeReporter's
+    FrameworkStatsLog.write(IIJII); the cause is not found (next: a Chrome heap snapshot). Print
+    stays TS: AOSP's print() with no print feature returns null, losing WebView's window.print.
+  - Async natives: `rt.su` makes the thread main whenever a frame suspends, so Java after any await
+    in an async native, even one on a Java call, ran as main, losing binder calling identity too.
+    About 45 services and helpers became driven generators, and `scall` now resumes through
+    `after`. `bun run async-natives` (in `bun run test`) finds async functions natives reach that
+    call Java after an await, plus generators called without being run; its baseline holds the
+    remaining sites (ATM, WM, IMM, surfaces, intentipc). `.then` and host-timer callbacks that run
+    Java are the same class and are not linted.
+  - Measured noise: doodlejump's `05 back` times out about one run in five at any commit under
+    load (timers and frames keep it busy, so it settles only by the pixel rule); a single-run
+    bisect blamed an unrelated commit.
 
 ## Java, storage and framework semantics
 
