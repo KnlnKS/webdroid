@@ -6,9 +6,8 @@
 import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { hostStub } from "./binder";
+import { hostStub, oneway } from "./binder";
 import { isMusicActive } from "./media";
-import { reportUncaught } from "./os";
 
 /** [min, max, index] by stream type, STREAM_VOICE_CALL..STREAM_ASSISTANT */
 const VOLUMES: [number, number, number][] = [[1, 5, 3], [0, 7, 5], [0, 7, 5], [0, 15, 5], [1, 7, 6], [0, 7, 5], [0, 15, 7],
@@ -36,8 +35,9 @@ const GAIN = 1, GAIN_TRANSIENT_MAY_DUCK = 3, LOSS = -1, LOSS_TRANSIENT = -2, LOS
 /** FocusRequester.focusLossForGainRequest */
 const lossFor = (gain: number, loss: number) => loss === LOSS || gain === GAIN ? LOSS
   : gain === GAIN_TRANSIENT_MAY_DUCK && loss !== LOSS_TRANSIENT ? LOSS_TRANSIENT_CAN_DUCK : LOSS_TRANSIENT;
-const dispatch = (h: Holder, change: number) =>
-  void (h.dispatcher && vcall(h.dispatcher, "dispatchAudioFocusChange", "(ILjava/lang/String;)V", change, h.clientId))?.catch(reportUncaught);
+const dispatch = (h: Holder, change: number) => {
+  if (h.dispatcher) oneway(h.dispatcher, "dispatchAudioFocusChange", "(ILjava/lang/String;)V", change, h.clientId);
+};
 function requestFocus(gain: number, dispatcher: JObj | null, clientId: string): number {
   abandon(clientId, false);
   for (const h of [...focusStack]) {

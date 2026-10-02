@@ -4,8 +4,7 @@
 import { JObj, rt, driven, noops, type Gen } from "../jvm/runtime";
 import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jlambda";
-import { hostStub, newStub } from "./binder";
-import { reportUncaught } from "./os";
+import { hostStub, newStub, oneway } from "./binder";
 import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio";
 
 const MS = "android/media/session/", S = "Ljava/lang/String;", B = "Landroid/os/Bundle;";
@@ -20,9 +19,6 @@ type Record = {
 };
 class JRecordBinder extends JObj { r!: Record; }
 
-/** a oneway call: the caller neither waits for the callee nor hears of its failure */
-const oneway = (target: JObj, name: string, desc: string, ...args: unknown[]) =>
-  void Promise.resolve().then(() => vcall(target, name, desc, ...args)).catch(reportUncaught);
 const push = (r: Record, name: string, desc: string, ...args: unknown[]) => {
   for (const cb of r.callbacks) oneway(cb, name, desc, ...args);
 };

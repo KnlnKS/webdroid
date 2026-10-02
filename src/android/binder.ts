@@ -1,7 +1,7 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, construct, scall, vcall, after } from "../jvm/natives/jlang";
+import { callOn, callUncaught, curThread, JThread, construct, scall, vcall, after } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
 import { type JParcel, NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, parcelBytes, setParcelBytes, readInt, readString, writeInt, writeString } from "./parcel";
@@ -126,6 +126,12 @@ function setWorkSource(uid: number, propagate: boolean): bigint {
 }
 export const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+/** a oneway call to a local binder: made on a fresh turn of the caller's thread, which neither
+ *  waits for the callee nor hears of its failure */
+export function oneway(target: JObj, name: string, desc: string, ...args: unknown[]): void {
+  const thread = curThread;
+  queueMicrotask(() => callUncaught(() => callOn(thread, () => vcall(target, name, desc, ...args))));
+}
 /** a cross-process transport's call before the broker connects it */
 export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
 /** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
