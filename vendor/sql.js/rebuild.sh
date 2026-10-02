@@ -19,7 +19,7 @@ trap 'rm -rf "$work" "$partial"' EXIT
 git clone --quiet --depth 1 --branch v1.14.2 https://github.com/sql-js/sql.js.git "$work/sql.js"
 cd "$work/sql.js"
 git checkout --quiet 9c4e167ec37129192d166ab9223faa9a4bd07c58
-git apply "$output/int64.patch"
+git apply "$output/sqljs.patch"
 python3 - <<'PY'
 import hashlib, io, pathlib, urllib.request, zipfile
 
@@ -35,9 +35,9 @@ pathlib.Path('sqlite-src/sqlite-amalgamation-3490100/extension-functions.c').wri
 PY
 mkdir -p dist
 make -o sqlite-src/sqlite-amalgamation-3490100 EMFLAGS_OPTIMIZED='-Oz -flto' dist/sql-wasm.js dist/sql-wasm-browser.js
-# swapped in whole, so the preload only has to recognise a missing dist/
+# swapped in whole, with the patch as its stamp, so the preload recognises a complete build
 mkdir "$partial"
-cp dist/sql-wasm.js dist/sql-wasm.wasm dist/sql-wasm-browser.js dist/sql-wasm-browser.wasm "$partial/"
+cp dist/sql-wasm.js dist/sql-wasm.wasm dist/sql-wasm-browser.js dist/sql-wasm-browser.wasm "$output/sqljs.patch" "$partial/"
 chmod 644 "$partial"/*.wasm
 rm -rf "$output/dist"
 mv "$partial" "$output/dist"

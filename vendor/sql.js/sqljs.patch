@@ -14,7 +14,7 @@ index 126baf1..d423a73 100644
                  return this.bindNumber(val + 0, pos);
              case "object":
 diff --git a/src/exported_functions.json b/src/exported_functions.json
-index 3be2595..684bed9 100644
+index 3be2595..0fcddb6 100644
 --- a/src/exported_functions.json
 +++ b/src/exported_functions.json
 @@ -13,6 +13,7 @@
@@ -25,3 +25,30 @@ index 3be2595..684bed9 100644
  "_sqlite3_bind_parameter_index",
  "_sqlite3_step",
  "_sqlite3_column_count",
+@@ -43,5 +44,13 @@
+ "_sqlite3_result_error",
+ "_sqlite3_aggregate_context",
+ "_RegisterExtensionFunctions",
+-"_sqlite3_update_hook"
++"_sqlite3_update_hook",
++"_sqlite3_bind_parameter_count",
++"_sqlite3_stmt_readonly",
++"_sqlite3_column_int64",
++"_sqlite3_last_insert_rowid",
++"_sqlite3_get_autocommit",
++"_sqlite3_total_changes",
++"_sqlite3_extended_errcode",
++"_sqlite3_create_collation_v2"
+ ]
+diff --git a/src/exported_runtime_methods.json b/src/exported_runtime_methods.json
+index f099056..58603f6 100644
+--- a/src/exported_runtime_methods.json
++++ b/src/exported_runtime_methods.json
+@@ -7,5 +7,6 @@
+ "stringToNewUTF8",
+ "writeArrayToMemory",
+ "removeFunction",
+-"addFunction"
++"addFunction",
++"HEAPU8"
+ ]
