@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import { zipSync } from "fflate";
 import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { unbox } from "../src/jvm/natives/jbox";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
@@ -15,7 +15,7 @@ import { centralDir, zipTree } from "../src/jvm/natives/jzip";
 import { mergeInstall } from "../src/shell/install";
 import { BytesFile, readFully } from "../src/shell/lazyfile";
 import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
-import { registerPackage, FLAG_IS_GAME, field } from "../src/android/pm";
+import { registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { hostedService } from "../src/android/binder";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
 import { Resources, rvString, newSV } from "../src/android/res";
@@ -272,7 +272,7 @@ describe("package-game-info", () => {
     try {
       const info = await vcall(await hostedService("package"), "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, 0n, 0);
       const APP = "android/content/pm/ApplicationInfo";
-      expect([field(info, APP, "category"), field<number>(info, APP, "flags") & (FLAG_IS_GAME | 1)]).toEqual([0, FLAG_IS_GAME | 1]);
+      expect([getDeclared(info, APP, "category"), getDeclared<number>(info, APP, "flags") & (FLAG_IS_GAME | 1)]).toEqual([0, FLAG_IS_GAME | 1]);
     } finally { packages.delete(pkg); }
   });
 });
@@ -327,13 +327,13 @@ describe("package-permissions", () => {
       const pms = await hostedService("package"), PI = "android/content/pm/PackageInfo";
       const packageInfo = (flags: bigint) => vcall(pms, "getPackageInfo", "(Ljava/lang/String;JI)Landroid/content/pm/PackageInfo;", pkg, flags, 0);
       const info = await packageInfo(0x1000n);
-      expect([...field<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
-      expect([...field<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
+      expect([...getDeclared<string[]>(info, PI, "requestedPermissions")]).toEqual(["android.permission.INTERNET", denied]);
+      expect([...getDeclared<Int32Array>(info, PI, "requestedPermissionsFlags")]).toEqual([3, 1]);
       record.grants.add(denied);
-      expect([...field<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
+      expect([...getDeclared<Int32Array>(await packageInfo(0x1000n), PI, "requestedPermissionsFlags")]).toEqual([3, 3]);
       const omitted = await packageInfo(0n);
-      expect(field(omitted, PI, "requestedPermissions")).toBeNull();
-      expect(field(omitted, PI, "requestedPermissionsFlags")).toBeNull();
+      expect(getDeclared(omitted, PI, "requestedPermissions")).toBeNull();
+      expect(getDeclared(omitted, PI, "requestedPermissionsFlags")).toBeNull();
     } finally { packages.delete(pkg); signaturePermissions.delete(denied); }
   });
 });

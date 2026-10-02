@@ -1293,17 +1293,24 @@ export const rt = new Runtime();
 const declaredFields = new Map<string, string>();
 /** the property holding `cls`'s instance field `name`, whether a spec maps it or bytecode keeps it;
  *  "" when the class has none */
-/** assigns `values` to `o`'s fields as `cls` declares or inherits them */
-export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<string, unknown>): T {
-  for (const name in values) (o as unknown as Record<string, unknown>)[declaredField(cls, name)] = values[name];
-  return o;
-}
 export function declaredField(cls: string, name: string): string {
   const key = cls + "." + name;
   let prop = declaredFields.get(key);
   if (prop === undefined) declaredFields.set(key, prop = instanceFieldOf(rt.link(cls), name) ?? "");
   return prop;
 }
+function fieldOf(cls: string, name: string): string {
+  const prop = declaredField(cls, name);
+  if (!prop) throw new Error(`${cls} has no field ${name}`);
+  return prop;
+}
+/** assigns `values` to `o`'s fields as `cls` declares or inherits them */
+export function setDeclared<T extends JObj>(o: T, cls: string, values: Record<string, unknown>): T {
+  for (const name in values) (o as unknown as Record<string, unknown>)[fieldOf(cls, name)] = values[name];
+  return o;
+}
+/** `o`'s field `name` as `cls` declares or inherits it */
+export const getDeclared = <T = unknown>(o: unknown, cls: string, name: string): T => (o as Record<string, T>)[fieldOf(cls, name)]!;
 
 /** A native implemented as a generator (see Runtime.drive), callable like any other method.
  *  It forwards every argument: caller-sensitive natives receive the caller's Runtime past their

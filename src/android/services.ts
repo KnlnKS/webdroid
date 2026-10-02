@@ -67,10 +67,10 @@ rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends J
   ...activityTaskMethods,
   ...intentSenderTaskMethods,
   "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": async () => {
-    const info: JObj = await newObj("android/content/pm/ConfigurationInfo"), config = deviceConfiguration(), fields = info as unknown as Record<string, number>;
-    const values = { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard, reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION };
-    for (const [name, value] of Object.entries(values)) fields[declaredField("android/content/pm/ConfigurationInfo", name)] = value;
-    return info;
+    const config = deviceConfiguration();
+    return setDeclared(await newObj("android/content/pm/ConfigurationInfo"), "android/content/pm/ConfigurationInfo", { 
+      reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard,
+      reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION });
   },
 } });
 

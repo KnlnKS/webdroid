@@ -2,14 +2,14 @@
 // bound, unbound and stopped through its IApplicationThread in ActiveServices' order, and their
 // connections hear each binder the service publishes. A service of another process is reached
 // through the broker, whose request lands in that process's ActiveServices.
-import { rt, JObj } from "../../jvm/runtime";
+import { rt, JObj, getDeclared } from "../../jvm/runtime";
 import { newObj, vcall, vcallUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "../os";
 import { appHost } from "../apphost";
 import { packages } from "../packages";
-import { checkPermission, field } from "../pm";
+import { checkPermission } from "../pm";
 import { serviceTransport } from "../runningservices";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo } from "./am";
@@ -34,19 +34,19 @@ const byToken = (token: JObj) => [...services.values()].find((s) => s.token === 
 interface Target { info: JObj; name: JObj; pkg: string; process: string }
 async function resolve(intent: JObj, resolvedType: string | null): Promise<Target | null> {
   const resolved = await vcall(await pms(), "resolveService", `(${INTENT}Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;`, intent, resolvedType, GET_SHARED_LIBRARY_FILES, 0);
-  const info = resolved && field<JObj | null>(resolved, "android/content/pm/ResolveInfo", "serviceInfo");
+  const info = resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "serviceInfo");
   if (!info) return null;
-  const pkg = field<string>(info, SI, "packageName");
-  return { info, pkg, process: field<string>(info, SI, "processName"),
-    name: await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, field(info, SI, "name")) };
+  const pkg = getDeclared<string>(info, SI, "packageName");
+  return { info, pkg, process: getDeclared<string>(info, SI, "processName"),
+    name: await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", pkg, getDeclared(info, SI, "name")) };
 }
 const isLocal = (t: Target) => t.pkg === appHost?.pkg && t.process === (PROCESS_NAME || t.pkg);
 /** retrieveServiceLocked's refusal of the calling package, or null */
 async function denial(t: Target, callingPackage: string): Promise<string | null> {
-  const uid = field<number>(field(t.info, SI, "applicationInfo"), "android/content/pm/ApplicationInfo", "uid");
+  const uid = getDeclared<number>(getDeclared(t.info, SI, "applicationInfo"), "android/content/pm/ApplicationInfo", "uid");
   if (uid === PROCESS_UID) return null;
-  if (!field(t.info, SI, "exported")) return "not exported from uid " + uid;
-  const permission = field<string | null>(t.info, SI, "permission");
+  if (!getDeclared(t.info, SI, "exported")) return "not exported from uid " + uid;
+  const permission = getDeclared<string | null>(t.info, SI, "permission");
   return permission && await checkPermission(permission, callingPackage) !== 0 ? permission : null;
 }
 const withComponent = async (intent: JObj, name: JObj): Promise<JObj> => {
@@ -60,7 +60,7 @@ function remoteOwner(t: Target) {
   return owner;
 }
 
-const keyOf = (t: Target) => t.pkg + "/" + field<string>(t.info, SI, "name");
+const keyOf = (t: Target) => t.pkg + "/" + getDeclared<string>(t.info, SI, "name");
 async function record(t: Target, intent: JObj): Promise<ServiceRecord> {
   const key = keyOf(t), token = services.has(key) ? null : await newObj("android/os/Binder", "()V");
   let s = services.get(key);

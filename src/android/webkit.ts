@@ -4,7 +4,7 @@
 // placed where the WebView's draw functor composes. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, declaredField, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
 import { vcall, callOn, newObj, linkInit, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
@@ -50,11 +50,10 @@ const UA = `Mozilla/5.0 (Linux; Android 13; webdroid) AppleWebKit/537.36 (KHTML,
 const FACTORY = "webdroid/WebViewFactoryProvider";
 /** the provider package's PackageInfo */
 const webViewPackage = driven(function* webViewPackage$(): Gen<JObj> {
-  const pi: Record<string, unknown> = yield newObj("android/content/pm/PackageInfo"), ai: Record<string, unknown> = yield newObj("android/content/pm/ApplicationInfo");
-  const set = (o: Record<string, unknown>, cls: string, values: Record<string, unknown>) => { for (const k in values) o[declaredField(cls, k)] = values[k]; };
-  set(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
-  set(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
-  return pi as unknown as JObj;
+  const pi: JObj = yield newObj("android/content/pm/PackageInfo"), ai: JObj = yield newObj("android/content/pm/ApplicationInfo");
+  setDeclared(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
+  setDeclared(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
+  return pi;
 });
 rt.register({
   name: "android/webkit/WebViewFactory", ctor: class extends JObj {}, platformClinit: true,

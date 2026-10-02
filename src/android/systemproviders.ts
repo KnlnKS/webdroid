@@ -1,6 +1,6 @@
 // Content providers system packages publish (SettingsProvider, ExternalStorageProvider, MediaProvider),
 // which no app's manifest declares: ActivityManagerService hands their binders out of getContentProvider.
-import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { construct, newObj, vcall } from "../jvm/natives/jlang";
 
 /** ContentProvider.Transport's *Async calls, which ContentResolver.getType and canonicalize make: the
@@ -37,24 +37,17 @@ export function registerSystemProvider(authority: string, provider: SystemProvid
 export const systemProvider = (authority: string | null): JObj | Promise<JObj> | null =>
   authority === null ? null : providers.get(authority)?.binder() ?? null;
 
-const set = (o: JObj, cls: string, values: Record<string, unknown>) => {
-  for (const [name, value] of Object.entries(values)) {
-    const field = declaredField(cls, name);
-    if (!field) throw new Error(`${cls} has no field ${name}`);
-    (o as unknown as Record<string, unknown>)[field] = value;
-  }
-};
 /** ActivityManagerService.getContentProvider's holder for a system provider: its ProviderInfo, its
  *  binder, and no reference to release */
 export const systemProviderHolder = driven(function* systemProviderHolder$(authority: string): Gen<JObj | null> {
   const p = providers.get(authority);
   if (!p) return null;
   const app: JObj = yield construct("android/content/pm/ApplicationInfo", "()V"), info: JObj = yield construct("android/content/pm/ProviderInfo", "()V");
-  set(app, "android/content/pm/ApplicationInfo", { packageName: p.pkg, processName: p.process, uid: 1000, flags: p.appFlags });
-  set(info, "android/content/pm/ProviderInfo", { authority, initOrder: p.initOrder, flags: p.flags });
-  set(info, "android/content/pm/ComponentInfo", { applicationInfo: app, processName: p.process, exported: 1 });
-  set(info, "android/content/pm/PackageItemInfo", { name: p.cls, packageName: p.pkg });
+  setDeclared(app, "android/content/pm/ApplicationInfo", { packageName: p.pkg, processName: p.process, uid: 1000, flags: p.appFlags });
+  setDeclared(info, "android/content/pm/ProviderInfo", { authority, initOrder: p.initOrder, flags: p.flags });
+  setDeclared(info, "android/content/pm/ComponentInfo", { applicationInfo: app, processName: p.process, exported: 1 });
+  setDeclared(info, "android/content/pm/PackageItemInfo", { name: p.cls, packageName: p.pkg });
   const holder: JObj = yield construct("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
-  set(holder, "android/app/ContentProviderHolder", { provider: yield p.binder(), noReleaseNeeded: 1 });
+  setDeclared(holder, "android/app/ContentProviderHolder", { provider: yield p.binder(), noReleaseNeeded: 1 });
   return holder;
 });

@@ -3,7 +3,7 @@
 // ActivityTaskSupervisor gives them. Starting pauses the resumed activity, launches and resumes the
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
-import { rt, JObj, noops, stubs, declaredField, setDeclared } from "../../jvm/runtime";
+import { rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared } from "../../jvm/runtime";
 import { newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
@@ -13,7 +13,6 @@ import { hostedService, systemToken } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
 import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler } from "../intent";
-import { field } from "../pm";
 import { grantResultUris } from "../urigrants";
 import { thisApp, userLaunched } from "./am";
 
@@ -159,13 +158,13 @@ const FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, FLAG_SINGLE_TOP = 0x20000000, FLAG_NE
  *  what is above it and hand it the intent; REORDER_TO_FRONT brings it to the top; CLEAR_TASK with
  *  NEW_TASK empties the task first. Returns whether the existing instance took the intent. */
 async function reuseActivity(intent: JObj, info: JObj): Promise<boolean> {
-  const flags: number = await vcall(intent, "getFlags", "()I"), mode = field<number>(info, AI, "launchMode");
+  const flags: number = await vcall(intent, "getFlags", "()I"), mode = getDeclared<number>(info, AI, "launchMode");
   if ((flags & FLAG_CLEAR_TASK) && (flags & FLAG_NEW_TASK)) {
     await clearAbove(null);
     return false;
   }
-  const name = field<string>(info, AI, "name");
-  const existing = [...stack].reverse().find((r) => !r.finishing && field<string>(r.info, AI, "name") === name);
+  const name = getDeclared<string>(info, AI, "name");
+  const existing = [...stack].reverse().find((r) => !r.finishing && getDeclared<string>(r.info, AI, "name") === name);
   if (!existing) return false;
   const singleTop = mode === LAUNCH_SINGLE_TOP || (flags & FLAG_SINGLE_TOP) !== 0;
   if (existing === stack.at(-1) && (singleTop || mode >= LAUNCH_SINGLE_TASK)) return newIntent(existing, intent).then(() => true);
@@ -215,7 +214,7 @@ export async function startActivity(app: JObj, intent: JObj, info: JObj, resultT
     if (await reuseActivity(intent, info)) return;
     const token = systemToken();
     const prev = stack.at(-1);
-    const orientation = field<number>(info, AI, "screenOrientation");
+    const orientation = getDeclared<number>(info, AI, "screenOrientation");
     if (prev) await pause(prev);
     // the display turns for an activity that fixes its orientation before it launches
     if (displayHooks.requestOrientation?.(orientation)) await configurationChanged();
@@ -286,18 +285,18 @@ export async function startActivityFor(app: JObj, intent: JObj, resolvedType: st
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = await intentQuery(intent), system = systemActivity(q, false) ??
-      (info && field<string>(info, AI, "packageName") === "android" && field<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
+      (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
     if (system) { void runSystemActivity(system, intent, resultRecord, resultWho, requestCode).catch(reportUncaught); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
     const copy = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
     await vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
-    const pkg = field<string>(info, AI, "packageName"), process = field<string>(info, AI, "processName");
+    const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
     if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) void startActivity(app, copy, info, resultRecord, resultWho, requestCode).catch(reportUncaught);
     else if (activityTransport.launch) {
-      await activityTransport.launch(pkg, process, field<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
-        code: requestCode, caller: { pkg: appHost!.pkg, cls: field<string>(resultRecord.info, AI, "name") },
+      await activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
+        code: requestCode, caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
         deliver: (resultCode, data) => void deliverResult(resultRecord, resultWho, requestCode, resultCode, data).catch(reportUncaught),
       } : undefined);
     }
@@ -372,8 +371,8 @@ async function finish(r: ActivityRecord, resultCode: number, data: JObj | null):
 }
 
 const isComponent = async (r: ActivityRecord, component: JObj | null) => !!component &&
-  field<string>(r.info, AI, "packageName") === await vcall(component, "getPackageName", "()Ljava/lang/String;") &&
-  field<string>(r.info, AI, "name") === await vcall(component, "getClassName", "()Ljava/lang/String;");
+  getDeclared<string>(r.info, AI, "packageName") === await vcall(component, "getPackageName", "()Ljava/lang/String;") &&
+  getDeclared<string>(r.info, AI, "name") === await vcall(component, "getClassName", "()Ljava/lang/String;");
 /** ActivityRecord.navigateUpTo: finish up to the nearest instance of the destination below, which
  *  gets the intent as a new one, or, a standard activity not asked to clear top, is replaced by a
  *  new instance; with none, only `r` finishes. Returns whether the destination was in the task. */
@@ -382,7 +381,7 @@ async function navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, r
   let parent: ActivityRecord | null = null;
   for (let i = stack.indexOf(r) - 1; i >= 0 && !parent; i--) if (await isComponent(stack[i], component)) parent = stack[i];
   const covered = parent ? stack.slice(stack.indexOf(parent) + 1, stack.indexOf(r)) : [];
-  const reuse = parent && (field<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
+  const reuse = parent && (getDeclared<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
     (await vcall(dest, "getFlags", "()I") & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
   const restarted = parent && !reuse && await startActivityFor(r.app, dest) === START_SUCCESS;
   void (async () => {
@@ -434,13 +433,13 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     },
   // the task's affinity is its root activity's
   "shouldUpRecreateTask(Landroid/os/IBinder;Ljava/lang/String;)Z": (token: JObj, affinity: string | null) =>
-    +(!!byToken(token) && field<string | null>(stack[0].info, AI, "taskAffinity") !== affinity),
+    +(!!byToken(token) && getDeclared<string | null>(stack[0].info, AI, "taskAffinity") !== affinity),
   // Task.finishActivityAffinity: it and the activities directly below it that share its affinity
   "finishActivityAffinity(Landroid/os/IBinder;)Z": (token: JObj) => {
     const r = byToken(token);
     if (!r) return 0;
-    const affinity = field<string | null>(r.info, AI, "taskAffinity"), doomed: ActivityRecord[] = [];
-    for (let i = stack.indexOf(r); i >= 0 && field<string | null>(stack[i].info, AI, "taskAffinity") === affinity; i--) doomed.push(stack[i]);
+    const affinity = getDeclared<string | null>(r.info, AI, "taskAffinity"), doomed: ActivityRecord[] = [];
+    for (let i = stack.indexOf(r); i >= 0 && getDeclared<string | null>(stack[i].info, AI, "taskAffinity") === affinity; i--) doomed.push(stack[i]);
     void (async () => { for (const d of doomed.reverse()) await finish(d, RESULT_CANCELED, null); })().catch(reportUncaught);
     return 1;
   },

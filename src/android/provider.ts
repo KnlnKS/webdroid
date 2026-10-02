@@ -4,9 +4,9 @@
 // querying the package manager themselves. The manifest walk (providerNodes, matchesAction,
 // authoritiesOf) lives with PackageManager in pm.ts; DocumentsContract reads it from there.
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, driven, getDeclared, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { isDocumentsProvider, field, serviceContext } from "./pm";
+import { isDocumentsProvider, serviceContext } from "./pm";
 import { startActivityFor } from "./server/atm";
 import { thisApp } from "./server/am";
 import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
@@ -80,9 +80,9 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   const choice = await (await import("../shell/share")).chooseActivity(title == null ? frameworkString("chooseActivity") ?? "" : await csText(title), labels);
   if (choice === null) return null;
   const chosen: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", target);
-  const activity = field<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
+  const activity = getDeclared<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
   await vcall(chosen, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(
-    field<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), field<string>(activity, "android/content/pm/PackageItemInfo", "name")));
+    getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "name")));
   await startActivityFor(thisApp(), chosen);
   return newIntent();
 });
