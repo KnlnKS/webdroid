@@ -76,5 +76,11 @@ export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${str
 /** the TS_SPECS key that allows `name`, if any */
 export const tsSpecAllowance = (name: string): string | undefined =>
   name in TS_SPECS ? name : Object.keys(TS_SPECS).find((k) => k.endsWith("/") && name.startsWith(k));
+/** libcore's namespaces, where AOSP's bytecode answers unless a spec is allowed there */
+const LIBCORE = /^(java|javax|jdk|sun|libcore|dalvik|android\/icu|org\/(json|xml|w3c|xmlpull)|com\/android\/(okhttp|org))\//;
+/** does a spec for `name` break §2: one that `reimplements` an AOSP bytecode body, or any in
+ *  libcore's namespaces, needs TS_SPECS to allow its class */
+export const tsSpecViolation = (name: string, reimplements: boolean): boolean =>
+  (reimplements || LIBCORE.test(name)) && !tsSpecAllowance(name);
 
 export { PLATFORM_JARS } from "./bootclasspath";

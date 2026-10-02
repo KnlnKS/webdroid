@@ -9,10 +9,12 @@ import { ACC, rt } from "../src/jvm/runtime";
 import { descToName } from "../src/jvm/abi";
 import type { ClassDef, DexFile } from "../src/jvm/dex";
 import { jarDexes } from "../src/android/framework";
-import { PLATFORM_JARS, tsSpecAllowance } from "../src/jvm/provenance";
+import { PLATFORM_JARS, tsSpecViolation } from "../src/jvm/provenance";
 import "../src/natives";
 
-const NO_INDEX = 0xffffffff, PRIVATE = 0x2, HAS_CODE = 1 << 30;
+const NO_INDEX = 0xffffffff, PRIVATE = 0x2;
+/** a method declaration: its access flags, and whether it has a bytecode body */
+type Declared = { flags: number; hasCode: boolean };
 const aosp = (jar: string) => resolve(import.meta.dir, "../vendor/aosp", jar);
 
 export const hasPlatformJars = () => PLATFORM_JARS.every((jar) => existsSync(aosp(jar)));
@@ -28,14 +30,14 @@ export function descriptorMismatches(): Map<string, string[]> {
       }
     }
   }
-  const declared = new Map<string, Map<string, number>>();
+  const declared = new Map<string, Map<string, Declared>>();
   const methodsOf = (name: string) => {
     let m = declared.get(name);
     if (m) return m;
     declared.set(name, m = new Map());
     const def = defs.get(name);
     if (def) for (const e of [...def.directMethods, ...def.virtualMethods]) {
-      m.set(def.dex.method(e.methodIdx).name + def.dex.methodDesc(e.methodIdx), e.flags | (e.codeOff ? HAS_CODE : 0));
+      m.set(def.dex.method(e.methodIdx).name + def.dex.methodDesc(e.methodIdx), { flags: e.flags, hasCode: !!e.codeOff });
     }
     return m;
   };
@@ -43,17 +45,17 @@ export function descriptorMismatches(): Map<string, string[]> {
     const dex: DexFile = def.dex;
     return [...(def.superIdx === NO_INDEX ? [] : [def.superIdx]), ...def.interfaces].map((t) => descToName(dex.type(t)));
   };
-  /** the flags of the declaration `sig` resolves to from `name`, through its supertypes */
-  const resolve = (name: string, sig: string, own = true, seen = new Set<string>()): number | undefined => {
+  /** the declaration `sig` resolves to from `name`, through its supertypes */
+  const resolve = (name: string, sig: string, own = true, seen = new Set<string>()): Declared | undefined => {
     if (seen.has(name)) return undefined;
     seen.add(name);
-    const flags = methodsOf(name).get(sig);
-    if (flags !== undefined && (own || !(flags & PRIVATE))) return flags;
+    const found = methodsOf(name).get(sig);
+    if (found && (own || !(found.flags & PRIVATE))) return found;
     if (sig.startsWith("<init>")) return undefined;
     const def = defs.get(name);
     for (const s of def ? supers(def) : []) {
-      const f = resolve(s, sig, false, seen);
-      if (f !== undefined) return f;
+      const found = resolve(s, sig, false, seen);
+      if (found) return found;
     }
     return undefined;
   };
@@ -77,18 +79,18 @@ export function descriptorMismatches(): Map<string, string[]> {
     for (const key of Object.keys(spec.methods ?? {})) {
       const isStatic = key.startsWith("static ");
       const sig = isStatic ? key.slice(7) : key;
-      const flags = resolve(spec.name, sig);
-      if (flags === undefined) report(spec.name, missing(spec.name, key, sig));
-      else if (!!(flags & ACC.STATIC) !== isStatic) report(spec.name, `${isStatic ? "static" : "instance"} ${sig} is ${isStatic ? "instance" : "static"} in AOSP`);
-      else if (flags & HAS_CODE && !tsSpecAllowance(spec.name)) report(spec.name, `reimplements ${key}`);
+      const found = resolve(spec.name, sig);
+      if (!found) report(spec.name, missing(spec.name, key, sig));
+      else if (!!(found.flags & ACC.STATIC) !== isStatic) report(spec.name, `${isStatic ? "static" : "instance"} ${sig} is ${isStatic ? "instance" : "static"} in AOSP`);
+      else if (found.hasCode && tsSpecViolation(spec.name, true)) report(spec.name, `reimplements ${key}`);
     }
   }
   for (const key of rt.jni.keys()) {
     const [cls, sig] = key.split("|");
     if (!defs.has(cls)) continue;
-    const flags = methodsOf(cls).get(sig);
-    if (flags === undefined) report(cls, "jni " + missing(cls, sig, sig));
-    else if (!(flags & ACC.NATIVE)) report(cls, `jni ${sig} is not native in AOSP`);
+    const found = methodsOf(cls).get(sig);
+    if (!found) report(cls, "jni " + missing(cls, sig, sig));
+    else if (!(found.flags & ACC.NATIVE)) report(cls, `jni ${sig} is not native in AOSP`);
   }
   return out;
 }
