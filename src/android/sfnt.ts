@@ -1,8 +1,10 @@
 // The sfnt (TrueType/OpenType) tables minikin, Skia and FreeType read apart from glyphs: a font
 // file's faces, their metrics, style, variation axes and cmap coverage, and FontFileUtil's answers.
 
+/** a face's table directory: offsets of its tables by tag */
+type Tables = { dv: DataView; at: Map<number, number> };
 /** Offsets of the sfnt tables we read, by tag, or null if `b` is not a font we understand. */
-export function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at: Map<number, number> } | null {
+export function sfntTables(b: Uint8Array, ttcIndex: number): Tables | null {
   if (b.length < 12) return null;
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   let base = 0;
@@ -28,8 +30,7 @@ const T_GLYF = 0x676c7966, T_CBLC = 0x43424c43;
 const isScalable = (at: Map<number, number>) => at.has(T_GLYF) || at.has(T_CFF) || at.has(T_CFF2);
 
 /** weight/italic from the face's OS/2 table (what AOSP's analyzeStyle reads), null if absent */
-function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boolean } | null {
-  const t = sfntTables(b, ttcIndex);
+function sfntStyle(b: Uint8Array, t: Tables | null): { weight: number; italic: boolean } | null {
   const off = t?.at.get(T_OS2);
   if (!t || off === undefined || off + 64 > b.length) return null;
   return { weight: t.dv.getUint16(off + 4), italic: (t.dv.getUint16(off + 62) & 1) !== 0 };
@@ -40,8 +41,7 @@ function sfntStyle(b: Uint8Array, ttcIndex = 0): { weight: number; italic: boole
  *  underline's top and thickness from post. A face with only bitmaps (a CBDT emoji font) has its
  *  largest strike's line metrics, scaled, and no underline. */
 export interface FaceMetrics { ascent: number; descent: number; top: number; bottom: number; leading: number; underline?: number; underlineThickness?: number }
-function sfntMetrics(b: Uint8Array, ttcIndex = 0): FaceMetrics | null {
-  const t = sfntTables(b, ttcIndex);
+function sfntMetrics(b: Uint8Array, t: Tables | null): FaceMetrics | null {
   const head = t?.at.get(T_HEAD), hhea = t?.at.get(T_HHEA);
   if (!t || head === undefined || hhea === undefined || head + 44 > b.length || hhea + 10 > b.length) return null;
   const upem = t.dv.getUint16(head + 18), cblc = t.at.get(T_CBLC);
@@ -109,8 +109,8 @@ const TTCF = 0x74746366;
 
 /** an axis a face declares in its fvar table, with its range */
 export interface FvarAxis { tag: number; min: number; def: number; max: number }
-function fvarAxes(b: Uint8Array, ttcIndex: number): FvarAxis[] {
-  const t = sfntTables(b, ttcIndex), fvar = t?.at.get(T_FVAR);
+function fvarAxes(b: Uint8Array, t: Tables | null): FvarAxis[] {
+  const fvar = t?.at.get(T_FVAR);
   if (!t || fvar === undefined || fvar + 12 > b.length) return [];
   const count = t.dv.getUint16(fvar + 8), size = t.dv.getUint16(fvar + 10), axes: FvarAxis[] = [];
   for (let i = 0, at = fvar + t.dv.getUint16(fvar + 4); i < count && at + 16 <= b.length; i++, at += size)
@@ -120,8 +120,8 @@ function fvarAxes(b: Uint8Array, ttcIndex: number): FvarAxis[] {
 
 /** CmapCoverage: the code points a face's best Unicode cmap (format 12, else 4) maps, as sorted
  *  inclusive [first, last] pairs */
-function cmapCoverage(b: Uint8Array, ttcIndex: number): Uint32Array {
-  const t = sfntTables(b, ttcIndex), cmap = t?.at.get(T_CMAP), out: number[] = [];
+function cmapCoverage(b: Uint8Array, t: Tables | null): Uint32Array {
+  const cmap = t?.at.get(T_CMAP), out: number[] = [];
   if (!t || cmap === undefined || cmap + 4 > b.length) return new Uint32Array(0);
   const dv = t.dv, add = (first: number, last: number) => {
     if (out.length && out[out.length - 1] + 1 >= first) out[out.length - 1] = Math.max(out[out.length - 1], last);
@@ -160,8 +160,8 @@ function cmapCoverage(b: Uint8Array, ttcIndex: number): Uint32Array {
  *  variation axes, whether it has outlines, and its cmap's coverage */
 export interface FaceInfo { style: { weight: number; italic: boolean } | null; metrics: FaceMetrics | null; axes: FvarAxis[]; scalable: boolean; coverage: Uint32Array }
 export function faceInfo(b: Uint8Array, ttcIndex: number): FaceInfo {
-  return { style: sfntStyle(b, ttcIndex), metrics: sfntMetrics(b, ttcIndex), axes: fvarAxes(b, ttcIndex),
-    scalable: isScalable(sfntTables(b, ttcIndex)?.at ?? new Map()), coverage: cmapCoverage(b, ttcIndex) };
+  const t = sfntTables(b, ttcIndex);
+  return { style: sfntStyle(b, t), metrics: sfntMetrics(b, t), axes: fvarAxes(b, t), scalable: !!t && isScalable(t.at), coverage: cmapCoverage(b, t) };
 }
 /** face `ttcIndex` of a font collection as a font file of its own: its table directory and tables */
 export function sfntFace(b: Uint8Array, ttcIndex: number): Uint8Array {
