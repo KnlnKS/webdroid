@@ -358,7 +358,12 @@ async function registerCss(font: NativeFont, ital: number): Promise<string> {
     if (a.tag !== WGHT && value !== chromeAxis(a)) pins.push([a.tag, value]);
   }
   const ttc = new DataView(font.bytes.buffer, font.bytes.byteOffset).getUint32(0) === 0x74746366;
-  const bytes = pins.length ? await instanceFace(font.bytes, font.ttcIndex, pins) : ttc ? sfntFace(font.bytes, font.ttcIndex) : font.bytes;
+  const face = ttc ? sfntFace(font.bytes, font.ttcIndex) : font.bytes;
+  // a face HarfBuzz cannot instance draws at Chrome's axis values
+  const bytes = pins.length ? await instanceFace(font.bytes, font.ttcIndex, pins).catch((e) => {
+    console.warn("[fonts] cannot pin axes of", font.path || "an app font", e);
+    return face;
+  }) : face;
   const m = font.faceMetrics, desc: FontFaceDescriptors = {
     weight: wght ? `${wght.min} ${wght.max}` : String(font.weight),
     style: font.italic || ital === 1 ? "italic" : "normal",
