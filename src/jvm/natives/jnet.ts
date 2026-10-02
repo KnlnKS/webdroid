@@ -195,10 +195,10 @@ rt.register({
       this.host = h ?? ""; this.port = p; yield this.open();
     }),
     "connect(Ljava/net/SocketAddress;)V": function (this: JSSLSocket, a: unknown) { return vcall(this, "connect", "(Ljava/net/SocketAddress;I)V", a, 0); },
-    "connect(Ljava/net/SocketAddress;I)V": async function (this: JSSLSocket, a: JObj | null) {
-      this.host = a === null ? "" : await vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = await socketPort(a);
-      await this.open();
-    },
+    "connect(Ljava/net/SocketAddress;I)V": driven(function* (this: JSSLSocket, a: JObj | null): Gen {
+      this.host = a === null ? "" : yield vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = yield socketPort(a);
+      yield this.open();
+    }),
     "getInputStream()Ljava/io/InputStream;": function (this: JSSLSocket) {
       const o = rt.make("webdroid/SocketInputStream") as JSocketIn; o.s = this; return o;
     },
@@ -541,9 +541,9 @@ class JHttpURLConnection extends JObj {
   }
   stream(): JHttpInputStream { return this.res!.stream; }
 }
-/** an accessor that needs the response: connect first */
+/** an accessor that needs the response: connect first, then answer on the calling thread */
 function withRes<A extends unknown[], C extends JHttpURLConnection = JHttpURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
-  return async function (this: C, ...a: A) { return f.call(this, await this.connect(), ...a); };
+  return driven(function* (this: C, ...a: A): Gen { return yield f.call(this, yield this.connect(), ...a); });
 }
 const connectionMethods: NativeSpec["methods"] = {
   "connect()V": driven(function* (this: JHttpURLConnection): Gen {

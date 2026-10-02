@@ -56,8 +56,12 @@ export function callOn<T>(thread: JThread, call: () => T): T {
   setCurThread(thread);
   try { return call(); } finally { setCurThread(previous); }
 }
-export const after = <R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> =>
-  (r instanceof Promise ? r.then(f) : f(r as R));
+/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread that asked */
+export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
+  if (!(r instanceof Promise)) return f(r);
+  const thread = curThread;
+  return r.then((v) => callOn(thread, () => f(v)));
+}
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
 }
