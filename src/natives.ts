@@ -99,6 +99,7 @@ import "./android/locationmanager";
 import "./android/job";
 import "./android/service";
 import "./android/documents";
+import "./android/mediastore";
 import "./android/provider";
 import "./android/ime";
 import "./android/notification";

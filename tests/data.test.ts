@@ -3,7 +3,7 @@ import initSqlJs from "sql.js";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, JThread, curThread, mainThread, setCurThread, vcallOn } from "../src/jvm/natives/jlang";
-import { mangleMethod } from "../src/jvm/abi";
+import { mangleMethod, strArray } from "../src/jvm/abi";
 import { newStringSet, toJsArray } from "../src/jvm/natives/jcoll";
 import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
@@ -260,5 +260,23 @@ describe("mediastore", () => {
     expect(await mediaUpdate(uri, new Map([["_display_name", "b"], ["relative_path", "DCIM/Camera/"]]), null, null)).toBe(1);
     expect(await mediaPath(uri)).toBe("/sdcard/DCIM/Camera/b.jpg");
     expect(vfs.exists("/sdcard/Pictures/a.jpg")).toBe(false);
+  });
+
+  test("an app's ContentResolver inserts, writes and queries through the hosted MediaProvider", async () => {
+    freshSQLiteStore();
+    const context = await bootApp(await packageRecord("org.webdroid.test.sqlite"));
+    const cr = await vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;");
+    const values = await newObj("android/content/ContentValues", "()V");
+    await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "_display_name", "resolved");
+    await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "mime_type", "image/png");
+    const uri = await vcall(cr, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri("content://media/external/images/media"), values);
+    const out = await vcall(cr, "openOutputStream", "(Landroid/net/Uri;)Ljava/io/OutputStream;", uri);
+    await vcall(out, "write", "([B)V", new Int8Array([1, 2, 3]));
+    await vcall(out, "close", "()V");
+    expect(await vcall(cr, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", uri)).toBe("image/png");
+    const cursor = await vcall(cr, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+      mkUri("content://media/external/images/media"), strArray(["_data", "_size"]), "_display_name = ?", strArray(["resolved.png"]), "_id");
+    expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
+    expect([await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0), await vcall(cursor, "getInt", "(I)I", 1)]).toEqual(["/sdcard/Pictures/resolved.png", 3]);
   });
 });
