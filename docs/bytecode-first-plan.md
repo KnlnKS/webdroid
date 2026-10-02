@@ -609,7 +609,7 @@ shape. An action's main-loop queries are now bounded, so a wedged step no longer
 Cleanup: four area passes removed dead code and duplicate helpers (`src` −171 lines net);
 hand-written TS in `src/android` + `src/jvm/natives` is 41,455 lines. Since then String case
 mapping follows the locale and `bun run fwtest` passes 30/30 (its nine failures were stale harness
-reads). Open: ColorLongs outside sRGB in gradients and `drawColor`, and a serial `bun test` of the
+reads). Gradients and `drawColor` decode ColorLongs in their colour space. Open: a serial `bun test` of the
 java-io, net, java-lang, serialization and data files that hangs (also at 602d87cf; the parallel
 run passes).
 
