@@ -1,7 +1,7 @@
 // WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
-import { rt, JObj, noops, stubs, declaredField } from "../../jvm/runtime";
+import { rt, JObj, noops, stubs, getDeclared } from "../../jvm/runtime";
 import { newObj, vcall, scall } from "../../jvm/natives/jlang";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
@@ -73,8 +73,7 @@ class WindowState {
 const windows = new Map<JObj, WindowState>();
 let seq = 0;
 const LP = "android/view/WindowManager$LayoutParams";
-const field = (name: string) => declaredField(LP, name);
-const lp = <T>(attrs: JObj, name: string) => (attrs as unknown as Record<string, T>)[field(name)];
+const lp = <T>(attrs: JObj, name: string) => getDeclared<T>(attrs, LP, name);
 
 const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/Rect", "(IIII)V", l, t, r, b);
 const displayRect = () => rect(0, 0, device.width, device.height);
@@ -115,7 +114,7 @@ export async function setImeShown(shown: boolean): Promise<void> {
 export async function configurations(): Promise<{ global: JObj; override: JObj }> {
   const global = await javaConfiguration(deviceConfiguration()) as JObj;
   const override = await newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
-  const windowConfig = (override as unknown as Record<string, JObj>)[declaredField("android/content/res/Configuration", "windowConfiguration")];
+  const windowConfig = getDeclared<JObj>(override, "android/content/res/Configuration", "windowConfiguration");
   await vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);
   return { global, override };
 }
@@ -147,17 +146,17 @@ async function addWindow(window: JObj, attrs: JObj, visibility: number, outChann
   return ADD_OKAY | ADD_FLAG_IN_TOUCH_MODE | ADD_FLAG_APP_VISIBLE;
 }
 
-async function relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: Record<string, JObj>): Promise<number> {
+async function relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: JObj): Promise<number> {
   const ws = windows.get(window);
   if (!ws) return 0;
   if (attrs) await vcall(ws.attrs, "copyFrom", `(L${LP};)I`, attrs);
-  const R = (name: string) => result[declaredField("android/view/WindowRelayoutResult", name)];
+  const R = (name: string) => getDeclared<JObj>(result, "android/view/WindowRelayoutResult", name);
   const state = await insetsState();
   ws.requested = { width, height };
   await computeFrames(ws, state, R("frames"));
   await mergedConfiguration(R("mergedConfiguration"));
   await vcall(R("insetsState"), "set", "(Landroid/view/InsetsState;)V", state);
-  const frame = edges((R("frames") as unknown as Record<string, JObj>)[declaredField("android/window/ClientWindowFrames", "frame")]);
+  const frame = edges(getDeclared<JObj>(R("frames"), "android/window/ClientWindowFrames", "frame"));
   let res = 0;
   const firstTime = ws.visibility !== VISIBLE && visibility === VISIBLE;
   ws.visibility = visibility;
@@ -289,7 +288,7 @@ rt.register({ name: "webdroid/WindowSession", ctor: class extends JObj {}, sup: 
     (window: JObj, attrs: JObj, visibility: number, _display: number, state: JObj | null, frame: JObj | null, scale: Float32Array | null) =>
       addWindow(window, attrs, visibility, null, state, frame, scale),
   [`relayout(${SESSION}L${LP};IIIIIILandroid/view/WindowRelayoutResult;)I`]:
-    (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number, _flags: number, _seq: number, _sync: number, result: Record<string, JObj>) =>
+    (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number, _flags: number, _seq: number, _sync: number, result: JObj) =>
       relayout(window, attrs, w, h, visibility, result),
   [`relayoutAsync(${SESSION}L${LP};IIIIII)V`]: async (window: JObj, attrs: JObj | null, w: number, h: number, visibility: number) => {
     const result = await newObj("android/view/WindowRelayoutResult", "()V");
