@@ -17,7 +17,7 @@ import { newObj } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newStub } from "./binder";
 import { mimeOf } from "../mime";
-import { registerSystemProvider, JSystemContentProvider } from "./systemproviders";
+import { registerSystemProvider, JSystemContentProvider, DOCUMENTS_PROVIDER } from "./systemproviders";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
@@ -276,4 +276,4 @@ rt.register({ name: "webdroid/ExternalStorageProvider", ctor: class extends JSys
 } });
 let storageProvider: JObj | Promise<JObj> | null = null;
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
-  process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, binder: () => storageProvider ??= newStub("webdroid/ExternalStorageProvider") });
+  process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER, binder: () => storageProvider ??= newStub("webdroid/ExternalStorageProvider") });

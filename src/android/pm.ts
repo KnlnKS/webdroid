@@ -16,7 +16,7 @@ import { verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
-import { DOCS_AUTHORITY } from "./documents";
+import { systemProviders, systemProviderInfo$, DOCUMENTS_PROVIDER } from "./systemproviders";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, registerSystemActivity, newIntent, putExtra, type IntentQuery } from "./intent";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
@@ -313,22 +313,12 @@ function* all$<T, R>(items: T[], each: (item: T) => Gen<R>): Gen<R[]> {
 }
 
 // ── the platform's own providers and activities
-const DOCS_PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
-/** Providers the *system* installs. A device answers for the storage authority out of
- *  ExternalStorageProvider, which no app can see in its own manifest, yet every SAF client
- *  (UniFile, DocumentFile) asks the package manager for it before trusting a tree URI. */
-const SYSTEM_PROVIDERS: { authority: string; cls: string; action: string }[] =
-  [{ authority: DOCS_AUTHORITY, cls: "com.android.externalstorage.ExternalStorageProvider", action: DOCS_PROVIDER_INTERFACE }];
+/** a provider answering DocumentsContract.PROVIDER_INTERFACE: the system's ExternalStorageProvider,
+ *  which SAF clients (UniFile, DocumentFile) ask about before trusting a tree URI, or an app's */
 export const isDocumentsProvider = (authority: string): boolean =>
-  SYSTEM_PROVIDERS.some((p) => p.authority === authority && p.action === DOCS_PROVIDER_INTERFACE) ||
+  systemProviders.get(authority)?.action === DOCUMENTS_PROVIDER ||
   [...packages.values()].some((owner) => [...owner.components.provider.values()].some((n) =>
-    handlesAction(n, DOCS_PROVIDER_INTERFACE) && authoritiesOf(n).includes(authority)));
-function* systemProviderInfo$(p: typeof SYSTEM_PROVIDERS[number]): Gen<JObj> {
-  const pkg = p.cls.slice(0, p.cls.lastIndexOf(".")), info: JObj = yield make(PROVIDER), app: JObj = yield make(APP);
-  setDeclared(app, APP, { packageName: pkg, processName: pkg, uid: 1000, flags: 1 | 0x800000, enabled: 1 });
-  setDeclared(info, PROVIDER, { name: p.cls, packageName: pkg, authority: p.authority, applicationInfo: app, processName: pkg, exported: 1, grantUriPermissions: 1, enabled: 1 });
-  return info;
-}
+    handlesAction(n, DOCUMENTS_PROVIDER) && authoritiesOf(n).includes(authority)));
 const handlesAction = (node: XmlNode, action: string) => node.children.some((f) => f.name === "intent-filter" &&
   f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
 
@@ -383,11 +373,8 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
   const q = yield* intentQuery$(intent, type);
   const infos = yield* all$(yield* queryComponents$(q, flags, kind), (m) => resolveInfo$(m, flags));
   if (kind === "activity" && answersSystem(q)) infos.push(yield* systemResolveInfo$());
-  if (kind === "provider") for (const p of SYSTEM_PROVIDERS) if (!q.action || p.action === q.action) {
-    const info: JObj = yield make(RESOLVE);
-    setDeclared(info, RESOLVE, { providerInfo: yield* systemProviderInfo$(p) });
-    infos.push(info);
-  }
+  if (kind === "provider") for (const [authority, p] of systemProviders) if (p.action && (!q.action || p.action === q.action))
+    infos.push(setDeclared(yield make(RESOLVE), RESOLVE, { providerInfo: yield* systemProviderInfo$(authority) }));
   return infos;
 }
 /** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
@@ -788,13 +775,12 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   [`queryIntentReceivers(${INTENT}${S}JI)${SLICE}`]: queryFor("receiver", false),
   [`queryIntentContentProviders(${INTENT}${S}JI)${SLICE}`]: queryFor("provider", false),
   [`resolveContentProvider(${S}JI)Landroid/content/pm/ProviderInfo;`]: driven(function* resolveContentProvider$(authority: string, flags: bigint): Gen {
-    const system = SYSTEM_PROVIDERS.find((p) => p.authority === authority);
-    if (system) return yield* systemProviderInfo$(system);
+    if (systemProviders.has(authority)) return yield* systemProviderInfo$(authority);
     const c = resolveProvider(authority, flag(flags));
     return c ? yield* providerInfo$(c, flag(flags), null) : null;
   }),
   [`queryContentProviders(${S}IJ${S})${SLICE}`]: driven(function* queryContentProviders$(process: string | null, uid: number, flags: bigint, metaDataKey: string | null): Gen {
-    const out: JObj[] = process === null ? yield* all$(SYSTEM_PROVIDERS, systemProviderInfo$) : [];
+    const out = process === null && metaDataKey === null ? yield* all$([...systemProviders.keys()], systemProviderInfo$) : [];
     const own: [number, JObj][] = [];
     for (const owner of packages.values()) for (const c of components(owner, "provider", flag(flags))) {
       if (!authoritiesOf(c.node).length || process !== null && (componentProcess(c) !== process || owner.uid !== uid)) continue;
