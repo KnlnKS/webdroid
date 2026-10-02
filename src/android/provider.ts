@@ -6,8 +6,8 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { isDocumentsProvider, field } from "./pm";
-import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
+import { isDocumentsProvider, field, serviceContext } from "./pm";
+import { registerSystemActivity, systemActivity, mkResultIntent, newIntent, intentQuery, putExtra, mkComponentName, type JIntent } from "./intent";
 
 const S = "Ljava/lang/String;";
 const typeOf = (intent: JIntent): Promise<string | null> => vcall(intent, "getType", `()${S}`);
@@ -71,7 +71,7 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   if (handler) return handler(target);
   // AOSP's chooser lists the activities that handle the target; with none it only says so, and
   // the user dismissing it is RESULT_CANCELED
-  const pm = await vcall(appHost!.application, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+  const pm = await vcall(await serviceContext(), "getPackageManager", "()Landroid/content/pm/PackageManager;");
   const matches = await toJsArray(await vcall(pm, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", target, 0x10000));
   if (!matches.length) return null;
   const labels = await Promise.all(matches.map(async (m) => csText(await vcall(m, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm))));
@@ -82,7 +82,8 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   const activity = field<JObj>(matches[choice], "android/content/pm/ResolveInfo", "activityInfo");
   await vcall(chosen, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(
     field<string>(activity, "android/content/pm/PackageItemInfo", "packageName"), field<string>(activity, "android/content/pm/PackageItemInfo", "name")));
-  await launchIntent(appHost!, chosen);
+  const [{ startActivityFor }, { thisApp }] = await Promise.all([import("./server/atm"), import("./server/am")]);
+  await startActivityFor(thisApp(), chosen);
   return newIntent();
 });
 

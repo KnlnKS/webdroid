@@ -2,9 +2,8 @@ import type { Resources, JTheme } from "./res";
 import type { JApplication, JActivity } from "./app";
 import type { JLocaleList } from "./resnative";
 import type { JObj } from "../jvm/runtime";
-import type { JIntent, ActivityResultTarget } from "./intent";
-
-export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: ActivityResultTarget; remoteId?: number; activityId?: number; taskId?: number };
+import type { JIntent } from "./intent";
+export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: { act: JActivity; code: number }; remoteId?: number; activityId?: number; taskId?: number };
 
 /** Host bundle shared by all contexts of the app */
 export interface AppHost {

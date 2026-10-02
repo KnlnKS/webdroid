@@ -13,7 +13,6 @@ import { mkComponentName, newIntent, putExtra, registerSystemActivity } from "./
 import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
 import type { JActivity } from "./app";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
-import { runningServices } from "./runningservices";
 import { GL_ES_VERSION, protectionLevel, enforceCallingOrSelfPermission, isRuntimePermission, permissionGranted, uidPermissionState } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { absentService, callingIdentity, hostStub } from "./binder";
@@ -26,11 +25,11 @@ import { activeServiceMethods } from "./server/activeservices";
 import { broadcastQueueMethods } from "./server/broadcastqueue";
 
 const PROCESS_INFO = "android/app/ActivityManager$RunningAppProcessInfo";
-const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_SERVICE = 300, IMPORTANCE_CACHED = 400;
+const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 function fillProc(info: JObj): JObj {
   const pkg = appHost?.pkg ?? "";
   return setDeclared(info, PROCESS_INFO, { processName: PROCESS_NAME || pkg, pid: PROCESS_PID, uid: PROCESS_UID, pkgList: jarray([pkg], "Ljava/lang/String;"),
-    importance: appHost?.currentActivity() ? IMPORTANCE_FOREGROUND : runningServices.size ? IMPORTANCE_SERVICE : IMPORTANCE_CACHED });
+    importance: appHost?.currentActivity() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED });
 }
 
 // IActivityManager: this process's view of the activity manager
@@ -43,7 +42,8 @@ const activityManager: NativeSpec["methods"] = {
   },
   "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) =>
     jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
-  "getServices(II)Ljava/util/List;": (max: number) => newArrayList([...runningServices.values()].slice(0, max)),
+  // ActiveServices does not report its records as RunningServiceInfo
+  "getServices(II)Ljava/util/List;": () => newArrayList(),
   // no exits or starts are recorded, and nothing restricts this app or drives it as a monkey
   "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": () =>
     newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList()),

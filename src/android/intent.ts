@@ -1,14 +1,10 @@
 // android.content.Intent and ComponentName are AOSP's own classes; the shell reads and builds them
-// through their Java API, with the helpers here. Starting an activity from an intent is the
-// shell's half of ActivityManager: resolution, the platform's own activities and results.
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+// through their Java API, with the helpers here, beside the platform's own activities and the
+// broker's transport for starts in other processes.
+import { JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
-import { reportUncaught, PROCESS_NAME } from "./os";
-import type { AppHost } from "./apphost";
 import { mkUri } from "./net";
-import type { JActivity } from "./app";
-import { onMain } from "./mainloop";
 
 /** an android.content.Intent */
 export type JIntent = JObj;
@@ -52,55 +48,15 @@ export const intentQuery = driven(intentQuery$);
 export const putExtra = (intent: JIntent, key: string, value: unknown, desc: string): unknown =>
   vcall(intent, "putExtra", `(${S}${desc})${I}`, key, value);
 
-export type ActivityResultTarget = { act: JActivity; code: number };
-/** Stage D's result target: the calling component, and the delivery to its activity record */
+/** a result target in the calling process: the calling component, and the delivery to its activity record */
 export type ResultDelivery = { code: number; caller: { pkg: string; cls: string }; deliver: (resultCode: number, data: JIntent | null) => void };
+/** the broker's half of ActivityTaskManager: starts in other processes and their results */
 export const activityTransport: {
-  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ActivityResultTarget | ResultDelivery) => Promise<void>;
-  finish?: (act: JActivity) => boolean;
-  attach?: (act: JActivity, task: number, affinity: string) => void;
-  finishAffinity?: (act: JActivity) => void;
-  isTaskRoot?: (act: JActivity) => boolean;
-  removeTask?: (act: JActivity) => void;
+  launch?: (pkg: string, process: string, component: string, intent: JIntent, result?: ResultDelivery) => Promise<void>;
   presentation?: (translucent: boolean) => void;
   /** an activity the broker started here (its record id) finished with a result */
   finished?: (remoteId: number, code: number, data: JIntent | null) => void;
 } = {};
-/** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
-export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
-  const runSystem = (system: SystemHandler) => {
-    // the system activity covered its caller, which resumes after its result, unless the
-    // system activity went on to start another one in front of it
-    const caller = result?.act ?? host.currentActivity();
-    void system(intent).then((data) => {
-      if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data);
-      if (caller) setTimeout(() => void onMain(async () => { if (host.currentActivity() === caller) await host.roundTrip(caller); }).catch(reportUncaught), 0);
-    }, (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); });
-  };
-  if (!intent) throw rt.mkThrowable("java/lang/NullPointerException", "intent");
-  const q = await intentQuery(intent);
-  const system = systemActivity(q, false);
-  if (system) return runSystem(system);
-  const pm = await import("./pm");
-  const resolved = await pm.resolveActivity(intent);
-  // Instrumentation.checkStartActivityResult's message
-  if (!resolved) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No Activity found to handle " + await vcall(intent, "toString", `()${S}`));
-  // a data-scoped system activity (the browser) answers only where no installed activity does
-  if (resolved === "system") return runSystem(systemActivity(q)!);
-  const pkg = resolved.owner.pkg, permission = pm.componentPermission(resolved), processName = pm.componentProcess(resolved);
-  if (pkg !== sender && (!pm.exported(resolved) || permission && await pm.checkPermission(permission, sender) !== 0))
-    throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + resolved.name);
-  const component = resolved.name.replace(/\./g, "/");
-  if (pkg !== host.pkg || processName !== (PROCESS_NAME || host.pkg)) {
-    if (!activityTransport.launch) throw rt.mkThrowable("android/content/ActivityNotFoundException", "Activity process unavailable: " + processName);
-    return activityTransport.launch(pkg, processName, component, intent, result);
-  }
-  const caller = result && result.code >= 0 ? await componentParts(await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;")) : null;
-  // ActivityThread delivers the launch after the caller's current lifecycle callback returns.
-  void onMain(() => host.launch(component, intent, { caller, result })).catch(reportUncaught);
-}
-
-const RESULT_OK = -1, RESULT_CANCELED = 0;
 
 /**
  * The activities the *system* provides, keyed by the action an app sends. On a device these are
@@ -129,17 +85,4 @@ export async function mkResultIntent(uri: string | null, flags = 3 | 0x40): Prom
   if (uri !== null) await vcall(intent, "setData", `(Landroid/net/Uri;)${I}`, mkUri(uri));
   await vcall(intent, "setFlags", `(I)${I}`, flags);
   return intent;
-}
-
-/** Post a result to the activity that asked for it. Scheduled, never inline: the caller is
- *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
-export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
-  setTimeout(() => void onMain(async () => {
-    if (resultCode === RESULT_OK && data) await (await import("./contentresolver")).grantResultUris(act.$host.pkg, data);
-    const target = act.fragmentResults.get(code);
-    if (target) {
-      act.fragmentResults.delete(code);
-      await vcall(target.fragment, "onActivityResult", `(II${I})V`, target.requestCode, resultCode, data);
-    } else await vcall(act, "onActivityResult", `(II${I})V`, code, resultCode, data);
-  }).catch(reportUncaught), 0);
 }

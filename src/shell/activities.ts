@@ -6,7 +6,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, scall, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode, manifestTaskAffinity } from "../android/pm";
-import { type JIntent, deliverActivityResult, activityTransport, mkComponentName, componentParts } from "../android/intent";
+import { type JIntent, activityTransport, mkComponentName, componentParts } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
 import { JActivity } from "../android/app";
@@ -17,7 +17,6 @@ import { onMain, inMainJob } from "../android/mainloop";
 import { JView, uiState, requestLayoutAll, dispatchAttached, dispatchDetached } from "../android/view";
 import { detachContextOverlays } from "../android/popup";
 import { setGuestTimeout } from "../guest-clock";
-import { affinityRun } from "./activitytasks";
 import { notificationPromptOnLaunch } from "../android/notification";
 import { applyOrientationRequest } from "./device";
 
@@ -156,11 +155,6 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
   act.resultTo = options?.result ?? null;
   act.remoteId = options?.remoteId ?? 0;
   act.activityId = options?.activityId ?? 0; act.taskId = options?.taskId ?? 0;
-  if (!act.activityId) {
-    const previous = booted.stack.at(-1);
-    const newTask = intent && (yield vcall(intent, "getFlags", "()I")) & FLAG_ACTIVITY_NEW_TASK;
-    activityTransport.attach?.(act, options?.taskId ?? (newTask ? 0 : previous?.taskId ?? 0), manifestTaskAffinity(cls));
-  }
   act.requestedOrientation = requestedOrientation;
   act.lastNonConfig = relaunch?.nonConfig ?? null;
   const saved = relaunch?.state ?? null;
@@ -292,9 +286,8 @@ const finishActivity = driven(function* finishActivity(act: JActivity, resume: b
   act.finished = true;
   if (act.resumed) yield pauseActivity(act);
   yield windowFocus(act, false);
-  const remote = activityTransport.finish?.(act) ?? false;
   const top = booted.stack.at(-1);
-  if (top && !top.finished && !remote && resume) yield resumeTop(top);
+  if (top && !top.finished && resume) yield resumeTop(top);
   // AOSP hands the result to the launcher once it is back up, before the finished instance dies.
   if (act.resultTo) deliverActivityResult(act.resultTo.act, act.resultTo.code, act.resultCode, act.resultData);
   if (act.window.decor) yield dispatchDetached(act.window.decor);
@@ -304,9 +297,7 @@ const finishActivity = driven(function* finishActivity(act: JActivity, resume: b
   invalidateWindow();
 });
 
-/** the broker has already dropped a removed task's records */
-export const finishTask = (taskId: number, resume: boolean) => finishActivities(() => booted?.stack.filter(a => a.taskId === taskId) ?? [], resume, true);
-export const finishActivityIds = (ids: number[], resume: boolean) => finishActivities(() => booted?.stack.filter(a => ids.includes(a.activityId)) ?? [], resume, false);
+const finishTask = (taskId: number, resume: boolean) => finishActivities(() => booted?.stack.filter(a => a.taskId === taskId) ?? [], resume, true);
 /** a process of its own (no broker) walks its own stack */
 function localAffinityGroup(act: JActivity): JActivity[] {
   const task = booted?.stack.filter(a => a.taskId === act.taskId) ?? [];
@@ -334,9 +325,6 @@ async function sendTaskToBack(): Promise<void> {
   await activityVisibility0("pause");
   await activityVisibility0("stop");
   uiState.needsDraw = true;
-}
-export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
-  return onMain(() => activityVisibility0(phase));
 }
 export async function activityVisibility0(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
   if (phase === "resume" && booted) booted.background = false;
@@ -395,9 +383,28 @@ export const activityHost: Pick<AppHost, "launch" | "finishActivity" | "roundTri
   currentActivity: () => booted?.stack.at(-1) ?? null,
   activities: () => booted?.stack.slice() ?? [],
   finishTask: (taskId) => { void finishTask(taskId, true); },
-  finishAffinity: (a) => {
-    if (activityTransport.finishAffinity) activityTransport.finishAffinity(a);
-    else void finishActivities(() => localAffinityGroup(a), true, false);
-  },
+  finishAffinity: (a) => { void finishActivities(() => localAffinityGroup(a), true, false); },
   invalidateOptionsMenu: requestOptionsMenu,
 };
+
+/** Post a result to the activity that asked for it. Scheduled, never inline: the caller is
+ *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
+function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
+  setTimeout(() => void onMain(async () => {
+    if (resultCode === -1 && data) await (await import("../android/contentresolver")).grantResultUris(act.$host.pkg, data);
+    const target = act.fragmentResults.get(code);
+    if (target) {
+      act.fragmentResults.delete(code);
+      await vcall(target.fragment, "onActivityResult", "(IILandroid/content/Intent;)V", target.requestCode, resultCode, data);
+    } else await vcall(act, "onActivityResult", "(IILandroid/content/Intent;)V", code, resultCode, data);
+  }).catch(reportUncaught), 0);
+}
+/** finishActivityAffinity's walk: from `index` down the task (bottom first), stopping at the first
+ *  activity of another affinity; top first */
+function affinityRun<T>(task: T[], index: number, affinityOf: (activity: T) => string): T[] {
+  const run: T[] = [];
+  if (index < 0) return run;
+  const affinity = affinityOf(task[index]);
+  for (let i = index; i >= 0 && affinityOf(task[i]) === affinity; i--) run.push(task[i]);
+  return run;
+}
