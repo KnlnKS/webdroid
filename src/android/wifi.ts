@@ -7,7 +7,7 @@
 // or toggle: a scan fails and setWifiEnabled is refused.
 import { JObj, declaredField, rt, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { staticField, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { checkUidPermission } from "./permissions";
 import { packages } from "./packages";
@@ -20,6 +20,8 @@ const emptySlice = () => newObj(SLICE, "(Ljava/util/List;)V", newArrayList());
 
 const enforce = (permission: string) => enforceCallingOrSelfPermission(permission, "WifiService");
 const enforceAccess = () => enforce("android.permission.ACCESS_WIFI_STATE");
+/** there is no radio to change: refused once the caller may ask */
+const refuseChange = () => after(enforce("android.permission.CHANGE_WIFI_STATE"), () => 0);
 /** WifiPermissionsUtil.enforceCanAccessScanResults for an app: location on, and fine location (coarse
  *  below Q) */
 function* canAccessScanResults(pkg: string): Gen<boolean> {
@@ -46,7 +48,7 @@ const inet4 = (address: string) => address.split(".").reduceRight((n, octet) => 
 
 const locks = new Set<unknown>(), multicast = new Map<unknown, string>();
 rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "android/net/wifi/IWifiManager$Stub", methods: {
-  "getWifiEnabledState()I": async () => { await enforceAccess(); return WIFI_STATE_ENABLED; },
+  "getWifiEnabledState()I": () => after(enforceAccess(), () => WIFI_STATE_ENABLED),
   [`getConnectionInfo(${S}${S})Landroid/net/wifi/WifiInfo;`]: driven(function* (pkg: string) {
     yield enforceAccess();
     const info = yield* connectionInfo(), redactions: bigint = yield vcall(info, "getApplicableRedactions", "()J");
@@ -61,32 +63,25 @@ rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "a
   }),
   // this device never scans: no results, and a scan request fails
   [`getScanResults(${S}${S})L${SLICE};`]: driven(function* () { yield enforceAccess(); return yield emptySlice(); }),
-  [`startScan(${S}${S})Z`]: async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; },
+  [`startScan(${S}${S})Z`]: refuseChange,
   // an app sees no saved networks from Q, and the page's network is not one it can change
   [`getConfiguredNetworks(${S}${S}Z)L${SLICE};`]: driven(function* () { yield enforceAccess(); return yield emptySlice(); }),
-  [`setWifiEnabled(${S}Z)Z`]: async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; },
-  ...Object.fromEntries(["reconnect", "reassociate", "disconnect"].map((name) =>
-    [`${name}(${S})Z`, async () => { await enforce("android.permission.CHANGE_WIFI_STATE"); return 0; }])),
+  [`setWifiEnabled(${S}Z)Z`]: refuseChange,
+  ...Object.fromEntries(["reconnect", "reassociate", "disconnect"].map((name) => [`${name}(${S})Z`, refuseChange])),
   "isScanAlwaysAvailable()Z": () => 0,
   "getVerboseLoggingLevel()I": () => 0,
   // the AVD's 2.4 GHz-only radio, with none of the optional features (p2p, aware, rtt...) this device lacks
   "is24GHzBandSupported()Z": () => 1,
   "is5GHzBandSupported()Z": () => 0,
   "getSupportedFeatures()J": () => 0n,
-  [`acquireWifiLock(Landroid/os/IBinder;I${S}Landroid/os/WorkSource;${S}Landroid/os/Bundle;)Z`]: async (binder: unknown) => {
-    await enforce("android.permission.WAKE_LOCK");
-    locks.add(binder);
-    return 1;
-  },
-  "releaseWifiLock(Landroid/os/IBinder;)Z": async (binder: unknown) => { await enforce("android.permission.WAKE_LOCK"); return +locks.delete(binder); },
-  [`acquireMulticastLock(Landroid/os/IBinder;${S})V`]: async (binder: unknown, tag: string) => {
-    await enforce("android.permission.CHANGE_WIFI_MULTICAST_STATE");
-    multicast.set(binder, tag);
-  },
-  [`releaseMulticastLock(${S})V`]: async (tag: string) => {
-    await enforce("android.permission.CHANGE_WIFI_MULTICAST_STATE");
+  [`acquireWifiLock(Landroid/os/IBinder;I${S}Landroid/os/WorkSource;${S}Landroid/os/Bundle;)Z`]: (binder: unknown) =>
+    after(enforce("android.permission.WAKE_LOCK"), () => { locks.add(binder); return 1; }),
+  "releaseWifiLock(Landroid/os/IBinder;)Z": (binder: unknown) => after(enforce("android.permission.WAKE_LOCK"), () => +locks.delete(binder)),
+  [`acquireMulticastLock(Landroid/os/IBinder;${S})V`]: (binder: unknown, tag: string) =>
+    after(enforce("android.permission.CHANGE_WIFI_MULTICAST_STATE"), () => { multicast.set(binder, tag); }),
+  [`releaseMulticastLock(${S})V`]: (tag: string) => after(enforce("android.permission.CHANGE_WIFI_MULTICAST_STATE"), () => {
     for (const [binder, held] of multicast) if (held === tag) { multicast.delete(binder); break; }
-  },
+  }),
   "isMulticastEnabled()Z": () => +(multicast.size > 0),
 } });
 hostStub("wifi", "webdroid/WifiService");

@@ -10,7 +10,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize, construct } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize } from "../jvm/natives/jlang";
 import { E, ERRSTR, strerror } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jreflect";
 import { OS_CONSTANTS } from "./os-constants";
@@ -231,7 +231,7 @@ rt.registerJnis("android/os/SharedMemory", {
 });
 /** a ParcelFileDescriptor over bytes, as fdOverBytes opens them */
 export const mkPfd = (bytes: Uint8Array, sink: ((b: Uint8Array) => unknown) | null = null, key?: string): JObj | Promise<JObj> =>
-  after(mkFd(fdOverBytes(bytes, sink, key)), (fd) => construct("android/os/ParcelFileDescriptor", `(${FD})V`, fd));
+  after(mkFd(fdOverBytes(bytes, sink, key)), (fd) => newObj("android/os/ParcelFileDescriptor", `(${FD})V`, fd));
 /** what a descriptor's file holds, whatever its offset; null for one with no file (a pipe, a socket) */
 export function fdContents(fd: number): Uint8Array | null | Promise<Uint8Array> {
   const source = javaFdSource(fd);
@@ -282,7 +282,7 @@ const storageStatVfs = driven(function* storageStatVfs(): Gen<StatVfs> {
 /** a StructStatVfs as statvfs(2) fills it: 4K blocks, no inode counts, 255-byte names */
 const structStatVfs = driven(function* structStatVfs(): Gen<JObj> {
   const s: StatVfs = yield storageStatVfs();
-  return construct("android/system/StructStatVfs", "(JJJJJJJJJJJ)V", BLK, s.f_frsize, s.f_blocks, s.f_bfree, s.f_bavail, 0n, 0n, 0n, 0n, 0n, 255n);
+  return newObj("android/system/StructStatVfs", "(JJJJJJJJJJJ)V", BLK, s.f_frsize, s.f_blocks, s.f_bfree, s.f_bavail, 0n, 0n, 0n, 0n, 0n, 255n);
 });
 // libcore.io.Linux: the syscalls behind android.system.Os and Libcore.os, over the descriptor
 // table native code shares

@@ -30,6 +30,16 @@ const joinIterable = driven(function* (separator: unknown, parts: unknown): Gen<
   return yield* joinCharSequences(separator, values);
 });
 
+/** Does a Java thread own this event-loop turn? A frame that suspends releases it (rt.su) to the
+ *  main thread's identity; a resumed frame or driven generator takes its thread back (rt.st), and
+ *  host code enters with onMain or callOn. Java entered from a turn nothing owns (a plain async
+ *  function or a timer resuming) would run as whichever thread ran last, so the entry helpers
+ *  refuse it. Bun's host tools and tests own every turn; a page's realms are strict. */
+let owned = true, strictOwnership = false;
+export function strictThreadOwnership(): void { strictOwnership = true; owned = false; }
+function unowned(what: string): never {
+  throw new Error(`[webdroid unowned] ${what} from a turn no Java thread owns: enter with onMain, callOn or a driven generator`);
+}
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? lateMethod.find?.(obj, name, desc);
   if (typeof fn !== "function") throw rt.unimplemented(`vcall ${describe(obj)}.${name}${desc}`);
@@ -37,6 +47,7 @@ function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => 
 }
 /** Dynamic virtual call from native code: the result, or a Promise when the callee suspends. */
 export function vcall(obj: any, name: string, desc: string, ...args: unknown[]): any {
+  if (!owned) unowned(`vcall ${name}${desc}`);
   return findMethod(obj, name, desc).apply(obj, args);
 }
 /** A Java call as a Promise, for callers that chain on its completion. */
@@ -51,10 +62,11 @@ export function callUncaught(call: () => unknown): void {
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));
 }
+/** `call` on `thread`, which owns the turn while it runs */
 export function callOn<T>(thread: JThread, call: () => T): T {
-  const previous = curThread;
-  setCurThread(thread);
-  try { return call(); } finally { setCurThread(previous); }
+  const previous = curThread, was = owned;
+  owned = true; setCurThread(thread);
+  try { return call(); } finally { owned = was; setCurThread(previous); }
 }
 /** `f` of `r`, now or once it settles; settled later, `f` runs on the thread that asked */
 export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
@@ -66,36 +78,25 @@ function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
 }
 /** link + run <clinit>: the class is ready to be instantiated or have its statics read */
-export async function linkInit(cls: string): Promise<ClassInfo> {
+export function linkInit(cls: string): ClassInfo | Promise<ClassInfo> {
+  if (!owned) unowned(`initialize ${cls}`);
   const info = rt.link(cls);
-  const p = rt.initClass(info);
-  if (p) await p;
-  return info;
+  return after(rt.initClass(info), () => info);
 }
 /** a static field's value, once the class has initialized */
-export const staticField = async <T = unknown>(cls: string, field: string): Promise<T> =>
-  ((await linkInit(cls)).ctor as Record<string, T>)[mangleStaticField(field)];
+export const staticField = <T = unknown>(cls: string, field: string): T | Promise<T> =>
+  after(linkInit(cls), (info) => (info.ctor as Record<string, T>)[mangleStaticField(field)]);
 /** A static Java call from native code, once the class has initialized, on the calling thread */
 export function scall(cls: string, name: string, desc: string, ...args: unknown[]): any {
-  const info = rt.link(cls), init = rt.initClass(info);
-  return init ? after(init, () => vcall(info.ctor, name, desc, ...args)) : vcall(info.ctor, name, desc, ...args);
+  return after(linkInit(cls), (info) => vcall(info.ctor, name, desc, ...args));
 }
-/** `new Cls(args)` from native code: init the class, construct, run the Java constructor `desc` (none when null) */
-export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
-  const thread = curThread, info = await linkInit(cls);
-  const o = callOn(thread, () => new info.ctor());
-  if (desc !== null) await vcallOn(thread, o, "<init>", desc, ...args);
-  return o;
-}
-
-/** `new cls(args)` from TS, synchronous unless class initialization or the constructor suspends */
-export function construct(cls: string, desc: string, ...args: unknown[]): JObj | Promise<JObj> {
-  const thread = curThread, info = rt.link(cls), init = rt.initClass(info);
-  const make = () => {
+/** `new cls(args)` from native code: initialize the class, then run the Java constructor `desc`;
+ *  synchronous unless initialization or the constructor suspends */
+export function newObj(cls: string, desc = "()V", ...args: unknown[]): JObj | Promise<any> {
+  return after(linkInit(cls), (info) => {
     const o = new info.ctor() as JObj;
-    return after(vcallOn(thread, o, "<init>", desc, ...args), () => o);
-  };
-  return init ? init.then(make) : make();
+    return after(vcall(o, "<init>", desc, ...args), () => o);
+  });
 }
 
 let hashCounter = 1;
@@ -1242,8 +1243,8 @@ export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
 rt.th = () => curThread;
-rt.st = (t) => setCurThread(t as JThread);
-rt.su = () => setCurThread(mainThread);
+rt.st = (t) => { owned = true; setCurThread(t as JThread); };
+rt.su = () => { owned = !strictOwnership; setCurThread(mainThread); };
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],

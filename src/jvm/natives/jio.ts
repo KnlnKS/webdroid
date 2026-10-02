@@ -14,7 +14,7 @@ import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWri
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
 /** `new File(path)` */
-export const newFile = (path: string): Promise<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
+export const newFile = (path: string): JObj | Promise<JObj> => newObj("java/io/File", "(Ljava/lang/String;)V", path);
 
 const BAOS = "java/io/ByteArrayOutputStream";
 /** the bytes a ByteArrayOutputStream holds, without copying */

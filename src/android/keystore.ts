@@ -399,15 +399,17 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
     (d: unknown, params: unknown[]) => createOperation(d, params),
   "deleteKey(Landroid/system/keystore2/KeyDescriptor;)V": (d: unknown) => deleteKey(d),
 } });
-const teeLevel = once((): JObj | Promise<JObj> => newObj("webdroid/KeystoreSecurityLevel"));
+const teeLevel = once(() => newObj("webdroid/KeystoreSecurityLevel"));
 const deleteKey = driven(function* (d: unknown): Gen<void> {
   const e = yield* find(d);
   save(entries().filter((x) => x !== e));
 });
-async function listed(start: string | null): Promise<unknown[]> {
-  const aliases = entries().map((e) => e.alias).filter((a) => start === null || a > start).sort();
-  return jarray(await Promise.all(aliases.map(async (alias) => setDeclared(await newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }))), `L${KD};`);
-}
+const listed = driven(function* (start: string | null): Gen<unknown[]> {
+  const descriptors: JObj[] = [];
+  for (const alias of entries().map((e) => e.alias).filter((a) => start === null || a > start).sort())
+    descriptors.push(setDeclared(yield newObj(KD), KD, { domain: DOMAIN.APP, nspace: BigInt(PROCESS_UID), alias, blob: null }));
+  return jarray(descriptors, `L${KD};`);
+});
 rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup: "android/system/keystore2/IKeystoreService$Stub", methods: {
   "getSecurityLevel(I)Landroid/system/keystore2/IKeystoreSecurityLevel;": (level: number) =>
     level === TRUSTED_ENVIRONMENT ? teeLevel() : failure(-68, "No KeyMint instance for security level " + level),
@@ -416,7 +418,7 @@ rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup
     return setDeclared(yield newObj(KER), KER, { iSecurityLevel: e.material ? yield teeLevel() : null, metadata: yield* metadata(e) });
   }),
   // a certificate for a key (its leaf and the rest of its chain), or a certificate-only entry
-  "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": async (d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
+  "updateSubcomponent(Landroid/system/keystore2/KeyDescriptor;[B[B)V": (d: unknown, cert: Int8Array | null, chain: Int8Array | null) => {
     const k = descriptor(d), list = entries();
     let e = k.domain === DOMAIN.KEY_ID ? list.find((x) => x.id === k.nspace.toString()) : list.find((x) => x.alias === k.alias);
     if (!e) {

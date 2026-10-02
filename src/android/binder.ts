@@ -1,7 +1,7 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { callOn, callUncaught, curThread, JThread, construct, newObj, scall, vcall, after, linkInit, reportUncaught } from "../jvm/natives/jlang";
+import { callOn, callUncaught, curThread, JThread, scall, vcall, after, linkInit, reportUncaught, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
@@ -54,7 +54,7 @@ function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
   let proxy = proxies.get(key);
   if (proxy) return proxy;
   const data: ProxyData = { handle: h, deaths: new Map() };
-  proxy = after(construct("android/os/BinderProxy", "(J)V", handle(data)), (made) => { proxyData.set(made, data); proxies.set(key, made); return made; });
+  proxy = after<JObj, JObj>(newObj("android/os/BinderProxy", "(J)V", handle(data)), (made) => { proxyData.set(made, data); proxies.set(key, made); return made; });
   proxies.set(key, proxy);
   return proxy;
 }
@@ -316,7 +316,7 @@ rt.registerJnis("android/os/BinderProxy", {
 const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
 const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
 /** a ParceledListSlice over `items`, as a service returns a list too long for one transaction */
-export const parceledList = (items: unknown[] = []): Promise<JObj> => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
+export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
 /** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
  *  methods declare @EnforcePermission takes its enforcer at construction (its no-argument
  *  constructor asks the system context for one); none of the hosted methods calls it. */
@@ -327,7 +327,7 @@ export function hostStub(name: string, cls: string): void {
  *  the asking thread: a class it initializes may be one that thread is already initializing */
 export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
   return M_ENFORCED in rt.link(cls).ctor.prototype
-    ? yield construct(cls, "(Landroid/os/PermissionEnforcer;)V", yield construct("android/os/PermissionEnforcer", "()V")) : yield construct(cls, "()V");
+    ? yield newObj(cls, "(Landroid/os/PermissionEnforcer;)V", yield newObj("android/os/PermissionEnforcer", "()V")) : yield newObj(cls, "()V");
 });
 /** services the platform registers only on hardware this device does not have */
 const absentServices = new Set<string>();
@@ -354,7 +354,7 @@ rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["
   },
 } });
 let contextObject: JObj | Promise<JObj> | null = null;
-rt.registerJni("com/android/internal/os/BinderInternal", "getContextObject()Landroid/os/IBinder;", () => contextObject ??= after(construct("android/os/Binder", "()V"), (binder) => {
+rt.registerJni("com/android/internal/os/BinderInternal", "getContextObject()Landroid/os/IBinder;", () => contextObject ??= after(newObj("android/os/Binder", "()V"), (binder) => {
   const manager = rt.make("webdroid/ServiceManager") as JServiceManager;
   manager.binder = binder;
   return after(vcall(binder, "attachInterface", "(Landroid/os/IInterface;Ljava/lang/String;)V", manager, "android.os.IServiceManager"), () => contextObject = binder);

@@ -1,10 +1,11 @@
 // What the media classes' native halves share: the peer a JNI keeps for a Java object, events
 // posted back through postEventFromNative, and the sources a native half reads.
 import { rt, setDeclared, type JObj } from "../jvm/runtime";
-import { after, callOn, curThread, scall, vcall, callUncaught } from "../jvm/natives/jlang";
+import { after, callOn, curThread, scall, vcall } from "../jvm/natives/jlang";
 import { javaFdSource } from "../native/fs";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { onMain } from "./mainloop";
+import { reportUncaught } from "../jvm/natives/jlang";
 
 /** The native halves of a Java class's objects: attached by setup and closed once, by release or
  *  finalize. Given `cls`, an attached object's mNativeContext is non-zero, which is all its Java
@@ -38,9 +39,9 @@ export function nativePeer<T>(cls: string | null, missing: string | null, close:
  *  [class, WeakReference] target is the static form. It is dropped unless `live` holds when it
  *  runs, and `obj` builds its payload then. */
 export function postNativeEvent(to: JObj | [string, JObj], live: (() => boolean) | null, what: number, arg1 = 0, arg2 = 0, obj: () => unknown = () => null): void {
-  callUncaught(() => onMain(() => !live || live() ? after(obj(), (o) => Array.isArray(to)
+  void onMain(() => !live || live() ? after(obj(), (o) => Array.isArray(to)
     ? scall(to[0], "postEventFromNative", "(Ljava/lang/Object;IIILjava/lang/Object;)V", to[1], what, arg1, arg2, o)
-    : vcall(to, "postEventFromNative", "(IIILjava/lang/Object;)V", what, arg1, arg2, o)) : undefined));
+    : vcall(to, "postEventFromNative", "(IIILjava/lang/Object;)V", what, arg1, arg2, o)) : undefined).catch(reportUncaught);
 }
 
 /** At most `length` bytes of a descriptor from `offset`, or null when it is not a readable file or

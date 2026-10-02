@@ -6,7 +6,7 @@
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { bindAsSystem } from "./server/activeservices";
-import { hostStub, parceledList } from "./binder";
+import { asSystem, hostStub, parceledList } from "./binder";
 import { batteryLow, netUp } from "./services";
 import { device } from "../shell/config";
 import type { JComponentName } from "./intent";
@@ -28,7 +28,7 @@ function* jobSpec(info: JObj, namespace: string | null): Gen<JobSpec> {
   };
 }
 
-type JobRun = { service: JObj | null; params: JObj | null; unbind: () => Promise<void>; executing: Set<number> };
+type JobRun = { service: JObj | null; params: JObj | null; unbind: () => unknown; executing: Set<number> };
 type ScheduledJob = { spec: JobSpec; timer: ReturnType<typeof setTimeout> | null; run: JobRun | null; work: JObj[]; nextWork: number };
 const namespaces = new Map<string | null, Map<number, ScheduledJob>>();
 const jobsIn = (namespace: string | null) => {
@@ -38,12 +38,15 @@ const jobsIn = (namespace: string | null) => {
 };
 const pending = (job: ScheduledJob) => namespaces.get(job.spec.namespace)?.get(job.spec.id) === job;
 let nextBinding = 1;
+/** the scheduler's own work, as system_server's JobServiceContext does it: a job waits on its
+ *  service's binding, which the app's main thread publishes */
+const asScheduler = (job: () => Gen<void>) => callUncaught(() => asSystem(() => rt.drive(job())));
 /** off the caller's stack, as JobServiceContext's handler messages are: a service reporting from
  *  inside a callback is not unbound under itself */
-const later = (job: () => Gen<void>) => { setTimeout(() => callUncaught(() => rt.drive(job())), 0); };
+const later = (job: () => Gen<void>) => { setTimeout(() => asScheduler(job), 0); };
 function armJob(job: ScheduledJob, delay: number): void {
   if (job.timer) clearTimeout(job.timer);
-  job.timer = setTimeout(() => { job.timer = null; callUncaught(() => rt.drive(startJob(job))); }, Math.min(Math.max(0, delay), 0x7fffffff));
+  job.timer = setTimeout(() => { job.timer = null; asScheduler(() => startJob(job)); }, Math.min(Math.max(0, delay), 0x7fffffff));
 }
 function* finishJob(job: ScheduledJob, run: JobRun, reschedule: boolean): Gen<void> {
   if (job.run !== run) return;
@@ -62,7 +65,7 @@ function* startJob(job: ScheduledJob): Gen<void> {
     armJob(job, 30000); return;
   }
   const callback: JJobCallback = yield newObj("webdroid/JobCallback");
-  const run: JobRun = { service: null, params: null, unbind: async () => {}, executing: new Set() };
+  const run: JobRun = { service: null, params: null, unbind: () => {}, executing: new Set() };
   callback.job = job; callback.run = run; job.run = run;
   try {
     const { binder, unbind } = yield bindAsSystem(p.service, "job:" + p.id + ":" + nextBinding++);

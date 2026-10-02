@@ -13,7 +13,7 @@
 
 import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
-import { construct, scall, vcall, newObj, after } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, after } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
@@ -340,7 +340,7 @@ let ptrField = "";
 export const bitmapOf = (b: object): NativeBitmap => deref<NativeBitmap>((b as Record<string, bigint>)[ptrField ||= declaredField(BITMAP, "mNativePtr")]);
 /** bitmap::createBitmap: the Java Bitmap around `b`; a density below 0 is Bitmap.getDefaultDensity */
 export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | null = null, insets: unknown = null, requestPremultiplied = b.alphaType !== UNPREMUL): object | Promise<object> {
-  return construct(BITMAP, "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;Z)V", handle(b), b.w, b.h, density, +requestPremultiplied, chunk, insets, 1);
+  return newObj(BITMAP, "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;Z)V", handle(b), b.w, b.h, density, +requestPremultiplied, chunk, insets, 1);
 }
 /** Bitmap.reinit: a reused Java Bitmap takes the geometry its native bitmap was reconfigured to */
 export const reinitJava = (bitmap: object, b: NativeBitmap, requestPremultiplied: boolean) =>

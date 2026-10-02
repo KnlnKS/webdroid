@@ -6,8 +6,8 @@
 // onMain, as an asynchronous message on the main looper: it keeps its order with the app's own
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
-import { rt, JObj } from "../jvm/runtime";
-import { curThread, setCurThread, mainThread, scall, newObj, vcall, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
+import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
+import { curThread, mainThread, scall, newObj, vcall, callOn, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
@@ -60,10 +60,8 @@ export class NativeLooper {
     }
     this.woken = false;
     for (const fn of this.callbacks.splice(0)) {
-      setCurThread(this.thread);
-      try { await fn(); } catch (error) { await dispatchUncaught(this.thread, error); }
+      try { await callOn(this.thread, fn); } catch (error) { await dispatchUncaught(this.thread, error); }
     }
-    setCurThread(this.thread);
   }
   private idle(timeout: number): Promise<void> {
     return new Promise((resolve) => {
@@ -93,30 +91,27 @@ const ready = Promise.withResolvers<void>();
  *  An exception escaping a message goes to the main thread's uncaught handler and the loop goes on,
  *  where a device would kill the process. */
 export function startMainLooper(): Promise<void> {
-  return starting ??= (async () => {
-    const thread = curThread;
-    setCurThread(mainThread);
-    try {
-      // as after the zygote: System is initialized before the loop's first SystemClock read
-      // initializes it, which would otherwise suspend inside the loop sharing this thread
-      await rt.initClass(rt.link("java/lang/System"));
-      await scall("android/os/Looper", "prepareMainLooper", "()V");
-      mainLooper = mainThread.looper as NativeLooper;
-      const looper = await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");
-      mainHandlerObj = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
-      hostHandler = await scall("android/os/Handler", "createAsync", "(Landroid/os/Looper;)Landroid/os/Handler;", looper);
-    } finally { setCurThread(thread); }
+  return starting ??= (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
+    // as after the zygote: System is initialized before the loop's first SystemClock read
+    // initializes it, which would otherwise suspend inside the loop sharing this thread
+    yield rt.initClass(rt.link("java/lang/System"));
+    yield scall("android/os/Looper", "prepareMainLooper", "()V");
+    mainLooper = mainThread.looper as NativeLooper;
+    const looper = yield scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");
+    mainHandlerObj = yield newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
+    hostHandler = yield scall("android/os/Handler", "createAsync", "(Landroid/os/Looper;)Landroid/os/Handler;", looper);
     mainDbg.depth++;
-    const loop = (): void => {
-      setCurThread(mainThread);
-      void Promise.resolve(scall("android/os/Looper", "loop", "()V")).catch(async (error) => {
-        await dispatchUncaught(mainThread, error);
-        loop();
-      });
-    };
     loop();
     ready.resolve();
-  })();
+  }())))();
+}
+function loop(): void {
+  let looping: unknown;
+  try { looping = callOn(mainThread, () => scall("android/os/Looper", "loop", "()V")); } catch (error) { looping = Promise.reject(error); }
+  void Promise.resolve(looping).catch(async (error) => {
+    await dispatchUncaught(mainThread, error);
+    loop();
+  });
 }
 
 /** the main thread's Handler, which View.post and the framework's managers post on */
@@ -139,11 +134,13 @@ export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   const site = mainDbg.trace ? new Error().stack ?? "" : "";
   mainDbg.queued++; perf.mainJobs++;
   return new Promise<T>((resolve, reject) => {
-    const post = () => void postRunnable(fnRunnable(async () => {
+    const run = async () => {
       mainDbg.queued--;
       if (mainDbg.trace) { mainDbg.running = site; mainDbg.started = Date.now(); }
       try { resolve(await job()); } catch (error) { reject(error); }
-    }), 0, hostHandler!);
+    };
+    // posting is itself a call into Java, as the main thread
+    const post = () => { try { void Promise.resolve(callOn(mainThread, () => postRunnable(fnRunnable(run), 0, hostHandler!))).catch(reject); } catch (error) { reject(error); } };
     if (hostHandler) post(); else void ready.promise.then(post);
   });
 }
@@ -159,9 +156,8 @@ export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable
 }
 
 /** debug: the main queue's pending messages and the looper's wait state (wd.looperDump) */
-export async function looperDump(): Promise<unknown> {
-  const { declaredField } = await import("../jvm/runtime");
-  const queue = await vcall(await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"), "getQueue", "()Landroid/os/MessageQueue;");
+export const looperDump = (): unknown => callOn(mainThread, () => rt.drive(function* (): Gen<unknown> {
+  const queue = yield vcall(yield scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;"), "getQueue", "()Landroid/os/MessageQueue;");
   const f = (cls: string, o: unknown, name: string) => (o as Record<string, unknown>)[declaredField(cls, name)];
   const M = "android/os/Message", messages: string[] = [];
   for (let m = f("android/os/MessageQueue", queue, "mMessages"); m && messages.length < 50; m = f(M, m, "next")) {
@@ -172,4 +168,4 @@ export async function looperDump(): Promise<unknown> {
   const native = mainLooper as unknown as Record<string, unknown>;
   return { now: uptimeMillis(), blocked: f("android/os/MessageQueue", queue, "mBlocked"), barrierToken: f("android/os/MessageQueue", queue, "mNextBarrierToken"),
     polling: native.polling, woken: native.woken, waiting: native.waiter !== null, callbacks: (native.callbacks as unknown[]).length, depth: mainDbg.depth, messages };
-}
+}()));

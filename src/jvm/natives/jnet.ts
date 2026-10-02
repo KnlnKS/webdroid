@@ -417,7 +417,7 @@ function group(entries: [string | null, string][]): Map<string | null, string[]>
 }
 /** the URI a CookieHandler sees, escaped as OkHttp's HttpUrl.uri() does: WHATWG leaves characters
  *  in the path, query and fragment that java.net.URI rejects */
-function cookieURI(target: string): Promise<unknown> {
+function cookieURI(target: string): unknown {
   const u = new URL(target), tail = u.pathname + u.search + u.hash;
   const text = u.href.slice(0, u.href.length - tail.length) + tail.replace(/[[\]{}|\\^`"<> ]|%(?![\dA-Fa-f]{2})/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
   return newObj("java/net/URI", "(Ljava/lang/String;)V", text);

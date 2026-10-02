@@ -3,7 +3,7 @@
 // AVD's services.jar): another uid's or the user's stats need PACKAGE_USAGE_STATS, which an app
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
 import { JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
 import { mimeOf } from "../mime";
@@ -22,20 +22,20 @@ const apkBytes = (pkgs: string[]) => pkgs.reduce((sum, pkg) => {
   const path = packages.get(pkg)?.path ?? "";
   return sum + BigInt(vfs.files.get(path)?.length ?? vfs.lazyFiles.get(path)?.size ?? 0);
 }, 0n);
-async function storageStats(pkgs: string[]): Promise<JObj> {
+function storageStats(pkgs: string[]): JObj | Promise<JObj> {
   const own = (sub: string) => pkgs.flatMap((pkg) => [`/data/data/${pkg}/${sub}`, `/sdcard/Android/data/${pkg}/${sub}`]);
-  return setDeclared(await newObj("android/app/usage/StorageStats"), "android/app/usage/StorageStats", {
+  return after(newObj("android/app/usage/StorageStats"), (stats) => setDeclared(stats, "android/app/usage/StorageStats", {
     codeBytes: apkBytes(pkgs), dataBytes: bytesUnder(own("")),
     cacheBytes: bytesUnder([...own("cache/"), ...pkgs.map((pkg) => `/data/data/${pkg}/code_cache/`)]),
     externalCacheBytes: bytesUnder(pkgs.map((pkg) => `/sdcard/Android/data/${pkg}/cache/`)),
-  });
+  }));
 }
 const media = (kind: string) => (path: string) => mimeOf(path)?.startsWith(kind) ?? false;
-async function externalStats(): Promise<JObj> {
-  return setDeclared(await newObj("android/app/usage/ExternalStorageStats"), "android/app/usage/ExternalStorageStats", {
+function externalStats(): JObj | Promise<JObj> {
+  return after(newObj("android/app/usage/ExternalStorageStats"), (stats) => setDeclared(stats, "android/app/usage/ExternalStorageStats", {
     totalBytes: bytesUnder(["/sdcard/"]), audioBytes: bytesUnder(["/sdcard/"], media("audio/")), videoBytes: bytesUnder(["/sdcard/"], media("video/")),
     imageBytes: bytesUnder(["/sdcard/"], media("image/")), appBytes: bytesUnder(["/sdcard/Android/data/"]), obbBytes: bytesUnder(["/sdcard/Android/obb/"]),
-  });
+  }));
 }
 
 const OP_GET_USAGE_STATS = 43, MODE_ALLOWED = 0, MODE_DEFAULT = 3;
@@ -56,8 +56,8 @@ function* enforceStats(pkg: string): Gen<void> {
 const uidPackages = (uid: number) => [...packages.values()].filter((record) => record.uid === uid).map((record) => record.pkg);
 const S = "Ljava/lang/String;";
 rt.register({ name: "webdroid/StorageStatsService", ctor: class extends JObj {}, sup: "android/app/usage/IStorageStatsManager$Stub", methods: {
-  [`getTotalBytes(${S}${S})J`]: async () => BigInt(Math.floor((await storageEstimate()).total)),
-  [`getFreeBytes(${S}${S})J`]: async () => BigInt(Math.floor((await storageEstimate()).free)),
+  [`getTotalBytes(${S}${S})J`]: () => after(storageEstimate(), (e) => BigInt(Math.floor(e.total))),
+  [`getFreeBytes(${S}${S})J`]: () => after(storageEstimate(), (e) => BigInt(Math.floor(e.free))),
   // the VFS keeps no per-uid quota, and vold reserves nothing
   [`isQuotaSupported(${S}${S})Z`]: () => 0,
   [`isReservedSupported(${S}${S})Z`]: () => 0,

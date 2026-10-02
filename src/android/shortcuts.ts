@@ -2,7 +2,7 @@
 // A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { after, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { hostStub, parceledList } from "./binder";
@@ -64,10 +64,7 @@ function* commit(pkg: string, shortcuts: JObj[]): Gen<void> {
   for (const si of shortcuts) next.set(yield idOf(si), si);
   packages.set(pkg, next);
 }
-async function remove(pkg: string, ids: JObj | null): Promise<void> {
-  const shortcuts = dynamicOf(pkg);
-  for (const id of (await toJsArray(ids)) as string[]) shortcuts.delete(id);
-}
+const remove = (pkg: string, ids: JObj | null) => after(toJsArray(ids), (list) => { const shortcuts = dynamicOf(pkg); for (const id of list as string[]) shortcuts.delete(id); });
 const complete = (future: JObj, value: unknown) => vcall(future, "complete", "(Ljava/lang/Object;)Z", value);
 
 const SLICE = "Landroid/content/pm/ParceledListSlice;", LIST = "Ljava/util/List;", S = "Ljava/lang/String;", FUTURE = "Lcom/android/internal/infra/AndroidFuture;";

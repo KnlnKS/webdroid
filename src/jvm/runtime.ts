@@ -905,7 +905,8 @@ export class Runtime {
       info.initP = (async () => {
         try {
           await pending;
-          const more = after?.();
+          let more;
+          try { more = after?.(); } finally { this.su(null); } // the <clinit> run here releases its thread
           if (more) await more;
         } catch (e) { throw failed(e); }
         settle();

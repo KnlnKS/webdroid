@@ -3,7 +3,7 @@
 // IPermissionManager over them.
 import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, sameBytes } from "../jvm/abi";
-import { vcall, construct } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { type XmlNode, attrStr, attr } from "./axml";
 import { appHost } from "./apphost";
@@ -156,7 +156,7 @@ rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JOb
   [`shouldShowRequestPermissionRationale(${S}${S}II)Z`]: () => 0,
   "getSplitPermissions()Ljava/util/List;": driven(function* getSplitPermissions$(): Gen {
     const splits: JObj[] = [];
-    for (const [name, target, added] of SPLIT_PERMISSIONS) splits.push(yield construct("android/content/pm/permission/SplitPermissionInfoParcelable",
+    for (const [name, target, added] of SPLIT_PERMISSIONS) splits.push(yield newObj("android/content/pm/permission/SplitPermissionInfoParcelable",
       `(${S}Ljava/util/List;I)V`, permissionName(name), newArrayList([permissionName(added)]), target));
     return newArrayList(splits);
   }),

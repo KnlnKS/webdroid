@@ -3,7 +3,7 @@
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
 import { rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleStaticField } from "../jvm/abi";
-import { vcall, JThread, curThread, scall, after, callUncaught } from "../jvm/natives/jlang";
+import { vcall, JThread, curThread, scall, after, reportUncaught } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { uptimeMillis } from "../guest-clock";
 import { gl, tables } from "./gl";
@@ -141,7 +141,8 @@ export class NativeSurfaceTexture {
       : this.surface.presentationTimeNanos ?? BigInt(Math.floor(uptimeMillis() * 1e6));
     this.surface.presentationTimeNanos = undefined;
     if (!this.weak) return;
-    callUncaught(() => scall(SURFACE_TEXTURE, "postEventFromNative", "(Ljava/lang/ref/WeakReference;)V", this.weak));
+    try { void Promise.resolve(scall(SURFACE_TEXTURE, "postEventFromNative", "(Ljava/lang/ref/WeakReference;)V", this.weak)).catch(reportUncaught); }
+    catch (e) { reportUncaught(e); }
   }
   /** EGLConsumer::checkAndUpdateEglStateLocked: the first use records the current context */
   private eglState(contextCheck: boolean): boolean {

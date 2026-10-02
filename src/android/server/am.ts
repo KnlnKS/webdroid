@@ -35,7 +35,7 @@ export function scheduleOnApp(name: string, desc: string, ...args: unknown[]): P
   lane = call.catch(() => {});
   return call;
 }
-export const compatInfo = (): Promise<JObj> => staticField("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
+export const compatInfo = () => staticField<JObj>("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO");
 
 async function bind(app: JObj): Promise<void> {
   const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;

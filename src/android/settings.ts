@@ -8,7 +8,7 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { vcall, scall, construct, staticField, reportUncaught } from "../jvm/natives/jlang";
+import { vcall, scall, staticField, callUncaught, newObj } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
 import { once } from "../jvm/suspend";
@@ -31,7 +31,7 @@ export function useSettingsStore(shared: SettingsStore): () => void {
 export const settingsStore = (): SettingsStore => store;
 /** SettingsProvider.notifyForSettingsChange: notifyChange(uri, null, syncToNetwork) as the system */
 function settingsChanged(table: SettingsTable, name: string): void {
-  void asSystem(async () => notifyContent(`content://settings/${table}/${name}`, null, false, 1)).catch(reportUncaught);
+  callUncaught(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)));
 }
 
 /** UiModeManagerService persists the device's night mode as Secure.UI_NIGHT_MODE once it is set:
@@ -56,7 +56,7 @@ const javaStrings = (collection: unknown): Gen<Set<string>> => (function* () { r
 // ── the Settings classes' own key sets (Settings.X.getPublicSettings, getMovedTo*), read once
 type KeySets = { all: Set<string>; readable: Set<string>; maxTarget: Map<string, number> };
 const keySets = Object.fromEntries(TABLES.map((table) => [table, once(driven(function* publicSettings$(): Gen<KeySets> {
-  const all = yield construct("java/util/HashSet", "()V"), readable = yield construct("java/util/HashSet", "()V"), max = yield construct("android/util/ArrayMap", "()V");
+  const all = yield newObj("java/util/HashSet", "()V"), readable = yield newObj("java/util/HashSet", "()V"), max = yield newObj("android/util/ArrayMap", "()V");
   const cls = yield scall("java/lang/Class", "forName", `(${S})Ljava/lang/Class;`, CLASS[table].replace(/\//g, "."));
   yield scall("android/provider/Settings", "getPublicSettingsForClass", "(Ljava/lang/Class;Ljava/util/Set;Ljava/util/Set;Landroid/util/ArrayMap;)V", cls, all, readable, max);
   return { all: yield* javaStrings(all), readable: yield* javaStrings(readable),
@@ -67,7 +67,7 @@ const keySets = Object.fromEntries(TABLES.map((table) => [table, once(driven(fun
 export const publicSettings = (table: Table): KeySets | Promise<KeySets> => keySets[table]();
 const MOVES: [Table, Table][] = [["system", "secure"], ["system", "global"], ["secure", "global"], ["global", "secure"], ["global", "system"]];
 const movedSets = new Map(MOVES.map(([from, to]) => [from + ">" + to, once(driven(function* moved$(): Gen<Set<string>> {
-  const out = yield construct("java/util/HashSet", "()V");
+  const out = yield newObj("java/util/HashSet", "()V");
   yield scall(CLASS[from], `getMovedTo${to[0].toUpperCase()}${to.slice(1)}Settings`, "(Ljava/util/Set;)V", out);
   return yield* javaStrings(out);
 }))]));
@@ -222,7 +222,7 @@ function* writeSetting(c: Caller, table: Table, name: string, value: string | nu
 const string = (b: unknown, key: string): unknown => vcall(b, "getString", `(${S})${S}`, key);
 const PUT: Record<string, string> = { String: `(${S}${S})V`, Int: `(${S}I)V`, Serializable: `(${S}Ljava/io/Serializable;)V`, StringArrayList: `(${S}Ljava/util/ArrayList;)V` };
 function* bundle(entries: [string, string, unknown][]): Gen<JObj> {
-  const b: JObj = yield construct("android/os/Bundle", "()V");
+  const b: JObj = yield newObj("android/os/Bundle", "()V");
   for (const [type, key, value] of entries) yield vcall(b, `put${type}`, PUT[type], key, value);
   return b;
 }
@@ -235,7 +235,7 @@ const call = driven(function* call$(method: string, name: string | null, args: J
     if (verb === "GET") return yield* bundle([["String", "value", store.get("config", key)]]);
     if (verb === "LIST") {
       const prefix: string | null = args ? yield string(args, "_prefix") : null;
-      const map = yield construct("java/util/HashMap", "()V");
+      const map = yield newObj("java/util/HashMap", "()V");
       for (const [k, value] of store.entries("config")) if (!prefix || k.startsWith(prefix)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
       return yield* bundle([["Serializable", "value", map]]);
     }

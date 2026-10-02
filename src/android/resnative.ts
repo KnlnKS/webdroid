@@ -5,7 +5,7 @@ import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
-import { vcall, after, scall, newObj, construct } from "../jvm/natives/jlang";
+import { vcall, after, scall, newObj } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues";
 import { mkPfd } from "./os";
@@ -27,7 +27,7 @@ function withTags(values: JLocale[]): Locales | Promise<Locales> {
 }
 const sameTags = (a: Locales, b: Locales) => a.tags.length === b.tags.length && a.tags.every((tag, i) => tag === b.tags[i]);
 /** an android.os.LocaleList of them */
-export const javaLocales = (l: Locales): JObj | Promise<JObj> => construct("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray(l.values, "Ljava/util/Locale;"));
+export const javaLocales = (l: Locales): JObj | Promise<JObj> => newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", jarray(l.values, "Ljava/util/Locale;"));
 /** the Locales of an android.os.LocaleList */
 const localesOf = driven(function* localesOf(list: JObj): Gen<Locales> {
   const values: JLocale[] = [];

@@ -121,10 +121,9 @@ function subscribe(key: unknown, provider: string, request: Request, on: {
   locationTransport.subscribe(subscription.id, request.high, provider !== "passive" && request.interval !== PASSIVE_INTERVAL,
     (event) => { events = events.then(() => receive(event)).catch(reportUncaught); });
 }
-async function distanceM(a: LocationFix, b: LocationFix): Promise<number> {
+function distanceM(a: LocationFix, b: LocationFix): Promise<number> {
   const results = new Float32Array(1);
-  await scall("android/location/Location", "distanceBetween", "(DDDD[F)V", a.latitude, a.longitude, b.latitude, b.longitude, results);
-  return results[0];
+  return onMain(() => after(scall("android/location/Location", "distanceBetween", "(DDDD[F)V", a.latitude, a.longitude, b.latitude, b.longitude, results), () => results[0]));
 }
 /** LocationManagerService.getProviders: none for a caller without location permission */
 function* providerList(criteria: JObj | null, enabledOnly: number): Gen<string[]> {

@@ -4,7 +4,7 @@
 
 import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
-import { after, construct, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";
@@ -153,12 +153,12 @@ const TEXT_PAINT = "android/text/TextPaint";
 /** `new Paint(ANTI_ALIAS_FLAG)` or `new TextPaint(ANTI_ALIAS_FLAG)` from TS, synchronously: the
  *  zygote has initialized both (preloadPaint) */
 export function newPaint(cls: typeof PAINT | typeof TEXT_PAINT = PAINT): JObj {
-  const p = construct(cls, "(I)V", AA);
+  const p = newObj(cls, "(I)V", AA);
   if (p instanceof Promise) throw new Error(`${cls} constructed before preloadPaint`);
   return p;
 }
 /** ZygoteInit.preloadClasses' share: Paint, TextPaint and what their constructors reach */
-export const preloadPaint = (): Promise<unknown> => newObj(TEXT_PAINT, "(I)V", AA);
+export const preloadPaint = (): unknown => newObj(TEXT_PAINT, "(I)V", AA);
 const TF = "Landroid/graphics/Typeface;";
 /** Paint.getTypeface and setTypeface: the Java paint keeps the Typeface, its native paint the face */
 export const paintTypeface = (p: object) => vcall(p, "getTypeface", `()${TF}`) as object | null;

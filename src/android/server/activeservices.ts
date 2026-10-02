@@ -94,8 +94,11 @@ function requestBind(s: ServiceRecord, b: Binding, rebind: boolean): Promise<voi
 function sendArgs(s: ServiceRecord): Promise<void> | undefined {
   if (!s.pendingStarts.length) return;
   const starts = s.pendingStarts.splice(0);
-  const args = Promise.all(starts.map(([intent, id]) => newObj("android/app/ServiceStartArgs", `(ZII${INTENT})V`, 0, id, 0, intent)))
-    .then(parceledList);
+  const args = rt.drive(function* () {
+    const list: JObj[] = [];
+    for (const [intent, id] of starts) list.push(yield newObj("android/app/ServiceStartArgs", `(ZII${INTENT})V`, 0, id, 0, intent));
+    return yield parceledList(list);
+  }());
   return scheduleOnApp("scheduleServiceArgs", `(${BINDER}Landroid/content/pm/ParceledListSlice;)V`, s.token, args);
 }
 /** bringUpServiceLocked: create, then request the bindings clients wait on, then deliver starts */

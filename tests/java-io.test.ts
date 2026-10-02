@@ -232,7 +232,7 @@ describe("file-input-descriptor", () => {
   });
 
   test("descriptor constructors defer invalid descriptor failures and honor explicit ownership", async () => {
-    await rejectsJava(newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", null), "java/lang/NullPointerException");
+    await rejectsJava((async () => newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", null))(), "java/lang/NullPointerException");
     const fd = await mkFd(-1);
     const invalid = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
     await rejectsJava(vcallAsync(invalid, "read", "()I"), "java/io/IOException");

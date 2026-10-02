@@ -9,8 +9,7 @@ import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
 import { rt } from "./jvm/runtime";
-import { newObj, vcall, linkInit, threadStates } from "./jvm/natives/jlang";
-import { mangleMethod } from "./jvm/abi";
+import { newObj, vcall, scall, threadStates } from "./jvm/natives/jlang";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
 import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
@@ -142,13 +141,10 @@ const wd = {
   rt, vfs, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
   nativeRequirements,
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
-  newObj, vcall, code: codeStats,
-  /** a static on a bytecode class: statics live on the constructor, mangled the same way */
-  scall: async (cls: string, name: string, desc: string, ...args: unknown[]) => {
-    const fn = ((await linkInit(cls)).ctor as Record<string, unknown>)[mangleMethod(name, desc)];
-    if (typeof fn !== "function") throw new Error(`no static ${cls}.${name}${desc}`);
-    return (fn as (...a: unknown[]) => unknown)(...args);
-  },
+  newObj: (cls: string, desc?: string, ...args: unknown[]) => onMain(() => newObj(cls, desc, ...args)),
+  vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
+  code: codeStats,
+  scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, app: () => appHost, back,
   background: (ms = 1000) => processBroker().background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),

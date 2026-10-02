@@ -13,8 +13,8 @@ export type JComponentName = JObj;
 const S = "Ljava/lang/String;", I = "Landroid/content/Intent;";
 
 /** `new Intent(action)` */
-export const newIntent = (action: string | null = null): Promise<JIntent> => newObj("android/content/Intent", `(${S})V`, action);
-export const mkComponentName = (pkg: string, cls: string): Promise<JComponentName> =>
+export const newIntent = (action: string | null = null): JIntent | Promise<JIntent> => newObj("android/content/Intent", `(${S})V`, action);
+export const mkComponentName = (pkg: string, cls: string): JComponentName | Promise<JComponentName> =>
   newObj("android/content/ComponentName", `(${S}${S})V`, pkg, cls);
 /** a component by its package and class name */
 export type ComponentRef = { pkg: string; cls: string };
@@ -54,7 +54,7 @@ export const putExtra = (intent: JIntent, key: string, value: unknown, desc: str
  * DocumentsUI; here they are the browser's own pickers. Each answers with the result Intent, or
  * null for "the user backed out" — which is RESULT_CANCELED, not an error.
  */
-export type SystemHandler = (intent: JIntent) => Promise<JIntent | null>;
+export type SystemHandler = (intent: JIntent) => JIntent | null | Promise<JIntent | null>;
 const systemActivities = new Map<string, { run: SystemHandler; schemes?: string[] }[]>();
 /** `schemes` scopes a handler to intents whose data has one of them; such a handler yields to
  *  any installed activity that matches, as a default browser does to an app's own links. */

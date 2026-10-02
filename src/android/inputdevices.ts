@@ -5,7 +5,7 @@
 // sets its motion ranges and the events' precision.
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import { hostStub } from "./binder";
 import { device } from "../shell/config";
@@ -54,7 +54,7 @@ function hasKeys(id: number, sourceMask: number, codes: Int32Array, out: Uint8Ar
 }
 
 rt.register({ name: "webdroid/InputManagerService", ctor: class extends JObj {}, sup: "android/hardware/input/IInputManager$Stub", methods: {
-  "getInputDevice(I)Landroid/view/InputDevice;": async (id: number) => (await inputDevices()).get(id) ?? null,
+  "getInputDevice(I)Landroid/view/InputDevice;": (id: number) => after(inputDevices(), (devices) => devices.get(id) ?? null),
   "getInputDeviceIds()[I": () => Int32Array.of(VIRTUAL_KEYBOARD, TOUCHSCREEN),
   // the devices never change, so a listener is never called
   "registerInputDevicesChangedListener(Landroid/hardware/input/IInputDevicesChangedListener;)V": () => {},

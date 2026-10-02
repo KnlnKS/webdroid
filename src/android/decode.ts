@@ -8,7 +8,7 @@
 
 import { rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, ownedHandle, deref, release } from "./handles";
-import { vcall, scall, construct, after } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat } from "../jvm/abi";
@@ -267,7 +267,7 @@ function setPadding(pad: object, chunk: Int8Array | null) {
 }
 /** NinePatchPeeker::createNinePatchInsets */
 const insetsOf = (h: ImageHeader, scale: number) => !h.layout && !h.outline ? null
-  : construct("android/graphics/NinePatch$InsetStruct", "(IIIIIIIIFIF)V", ...(h.layout ?? [0, 0, 0, 0]), ...(h.outline ?? [0, 0, 0, 0, 0, 0]), scale);
+  : newObj("android/graphics/NinePatch$InsetStruct", "(IIIIIIIIFIF)V", ...(h.layout ?? [0, 0, 0, 0]), ...(h.outline ?? [0, 0, 0, 0, 0, 0]), scale);
 
 // ── BitmapFactory.Options, as BitmapFactory and BitmapRegionDecoder read and answer it
 const OPTIONS = "android/graphics/BitmapFactory$Options";
@@ -387,7 +387,7 @@ const REGION_FORMATS = ["image/jpeg", "image/png", "image/webp", "image/heif", "
 function regionDecoder(bytes: Uint8Array) {
   const h = readHeader(bytes);
   if (!h || h === INCOMPLETE || !REGION_FORMATS.includes(h.mime)) throw rt.mkThrowable("java/io/IOException", "Image format not supported");
-  return construct("android/graphics/BitmapRegionDecoder", "(J)V", ownedHandle({ bytes, header: h } satisfies EncodedImage));
+  return newObj("android/graphics/BitmapRegionDecoder", "(J)V", ownedHandle({ bytes, header: h } satisfies EncodedImage));
 }
 rt.registerJnis("android/graphics/BitmapRegionDecoder", {
   "nativeNewInstance([BII)Landroid/graphics/BitmapRegionDecoder;": (bytes: Int8Array, off: number, len: number) => regionDecoder(u8(bytes, off, len).slice()),
@@ -429,7 +429,7 @@ const DECODER = "android/graphics/ImageDecoder";
 const SOURCE_EXCEPTION = 1, SOURCE_INCOMPLETE = 2, SOURCE_MALFORMED_DATA = 3;
 /** ImageDecoder.cpp's throw_exception: a DecodeException for the source */
 const decodeException = (error: number, message: string, cause: unknown, source: unknown) =>
-  construct(`${DECODER}$DecodeException`, "(ILjava/lang/String;Ljava/lang/Throwable;Landroid/graphics/ImageDecoder$Source;)V", error, message, cause, source);
+  newObj(`${DECODER}$DecodeException`, "(ILjava/lang/String;Ljava/lang/Throwable;Landroid/graphics/ImageDecoder$Source;)V", error, message, cause, source);
 /** ImageDecoder.cpp's native_create: the decoder, sized as EXIF orientation leaves the image */
 const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Promise<Uint8Array>, source: unknown): Gen {
   let bytes: Uint8Array;
@@ -442,7 +442,7 @@ const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Pr
   if (h === INCOMPLETE) throw yield decodeException(SOURCE_INCOMPLETE, "", null, source);
   if (!h) throw yield decodeException(SOURCE_MALFORMED_DATA, "Failed to create image decoder with message 'unimplemented'", null, source);
   const [w, ht] = oriented(h, h.width, h.height);
-  return construct(DECODER, "(JIIZZ)V", ownedHandle({ bytes, header: h } satisfies EncodedImage), w, ht, +(h.frames > 1), +!!h.patch);
+  return newObj(DECODER, "(JIIZZ)V", ownedHandle({ bytes, header: h } satisfies EncodedImage), w, ht, +(h.frames > 1), +!!h.patch);
 });
 /** width and height as SkAndroidCodec reports them once EXIF orientation is applied */
 const oriented = (h: ImageHeader, w: number, ht: number): [number, number] => h.orientation >= 5 ? [ht, w] : [w, ht];
@@ -465,7 +465,7 @@ rt.registerJnis(DECODER, {
     createDecoder(async () => { const b = await fdBytes(fd); return length < 0n ? b : b.subarray(0, Number(length)); }, source),
   "nGetSampledSize(JI)Landroid/util/Size;": (h: bigint, sample: number) => {
     const { header } = encodedAt(h);
-    return construct("android/util/Size", "(II)V", ...oriented(header, ...sampledSize(header, sample)));
+    return newObj("android/util/Size", "(II)V", ...oriented(header, ...sampledSize(header, sample)));
   },
   "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: object) => setPadding(pad, encodedAt(h).header.patch),
   "nGetMimeType(J)Ljava/lang/String;": (h: bigint) => encodedAt(h).header.mime,
@@ -496,7 +496,7 @@ rt.registerJnis(DECODER, {
       const b = placePixels(img, bw, bh, config, header.opaque ? OPAQUE : unpremul ? UNPREMUL : PREMUL, hardware);
       if (postProcess) {
         const format: number = yield vcall(jdecoder, "postProcessAndRelease", "(Landroid/graphics/Canvas;)I",
-          yield construct("android/graphics/Canvas", "(J)V", handle(bitmapCanvas(b))));
+          yield newObj("android/graphics/Canvas", "(J)V", handle(bitmapCanvas(b))));
         if (format === TRANSLUCENT) b.alphaType = PREMUL;
         else if (format === OPAQUE_FORMAT) b.alphaType = OPAQUE;
         else if (format !== UNKNOWN) throw rt.mkThrowable("java/lang/IllegalArgumentException", `invalid return from postProcess: ${format}`);

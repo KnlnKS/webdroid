@@ -4,7 +4,7 @@
 // read-only mapping, jmemory.ts), else a heap buffer's array from its offset.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
-import { after, scall, construct } from "./jlang";
+import { after, scall, newObj } from "./jlang";
 import { intrinsicCompiler } from "./jbox";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
@@ -104,11 +104,11 @@ export function allocateDirectNow(n: number): JBuffer {
 }
 /** JNI's NewDirectByteBuffer: a buffer over memory it does not own */
 export const newDirectBuffer = (address: number | bigint, cap: number): JBuffer | Promise<JBuffer> =>
-  construct("java/nio/DirectByteBuffer", "(JI)V", BigInt(address), cap);
+  newObj("java/nio/DirectByteBuffer", "(JI)V", BigInt(address), cap);
 const unmappers = new FinalizationRegistry<() => void>((unmap) => unmap());
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
 function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void): JBuffer | Promise<JBuffer> {
-  return after(construct("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
+  return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
     unmappers.register((b as Fields)[declaredField("java/nio/DirectByteBuffer", "memoryRef")], unmap);
     return b;
   });
@@ -194,7 +194,7 @@ rt.registerJnis("com/android/icu/charset/NativeConverter", {
   // ICU names the converter; the Java name, the one CharsetICU's codecs open, stands for it
   "charsetForName(Ljava/lang/String;)Ljava/nio/charset/Charset;": (name: string) => {
     const cs = charsetNamed(name);
-    return cs && construct("com/android/icu/charset/CharsetICU", "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V", cs.name, cs.name, jarray(cs.aliases, "Ljava/lang/String;"));
+    return cs && newObj("com/android/icu/charset/CharsetICU", "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)V", cs.name, cs.name, jarray(cs.aliases, "Ljava/lang/String;"));
   },
   "contains(Ljava/lang/String;Ljava/lang/String;)Z": (a: string, b: string) => {
     const x = charsetNamed(a), y = charsetNamed(b);

@@ -7,7 +7,7 @@ import { JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault } from "./os";
-import { vcall, construct, after } from "../jvm/natives/jlang";
+import { vcall, after, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -64,12 +64,11 @@ const resolvedLabel = (node: XmlNode | null | undefined) => {
   return label?.type === TV.REFERENCE ? { labelRes: label.data, nonLocalizedLabel: null } : { labelRes: 0, nonLocalizedLabel: label?.str ?? null };
 };
 const intAttr = (node: XmlNode | null | undefined, name: string, def: number) => (node ? attr(node, name)?.data : undefined) ?? def;
-const make = (cls: string, desc = "()V", ...args: unknown[]) => construct(cls, desc, ...args);
 /** <meta-data> children → Bundle, typed the way aapt encoded them (string / boolean / int). */
 function* metaData$(node: XmlNode | null | undefined, res: Resources): Gen<JObj | null> {
   const items = node?.children.filter((md) => md.name === "meta-data") ?? [];
   if (!items.length) return null;
-  const bundle: JObj = yield make("android/os/Bundle");
+  const bundle: JObj = yield newObj("android/os/Bundle");
   const put = (setter: string, desc: string, key: string, value: unknown) => vcall(bundle, setter, `(Ljava/lang/String;${desc})V`, key, value);
   for (const md of items) {
     const key = attrStr(md, "name");
@@ -140,7 +139,7 @@ const privateFlagsExt = (record: PackageRecord) => {
 
 /** the ApplicationInfo PackageInfoUtils.generateApplicationInfo makes for `flags` */
 function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
-  const ai: JObj = yield make(APP), app = record.application, pkg = record.pkg, { min, target } = record.sdk;
+  const ai: JObj = yield newObj(APP), app = record.application, pkg = record.pkg, { min, target } = record.sdk;
   const own = record === currentPackage && appHost?.pkg === pkg ? appHost : null;
   const splits = own?.splits.length ? own.splits : null;
   const qualified = (name: string) => { const value = app && attrStr(app, name); return value ? qualifyComponent(value, pkg) : null; };
@@ -261,7 +260,7 @@ function resizeMode(c: Component): number {
 }
 const CONFIG_MCC = 1, CONFIG_MNC = 2;
 function* activityInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
-  const info: JObj = yield make(ACTIVITY);
+  const info: JObj = yield newObj(ACTIVITY);
   yield* componentInfo$(info, c, flags, app);
   setDeclared(info, ACTIVITY, { taskAffinity: manifestAffinity(c), permission: componentPermission(c), flags: activityFlags(c) });
   // an activity is relaunched for an MCC/MNC change only when it asks to be (recreateOnConfigChanges)
@@ -280,7 +279,7 @@ function* activityInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj
 const DEFAULT_MAX_RECENTS = 8;
 const manifestAffinity = (c: Component) => (attrStr(c.node, "taskAffinity") ?? (c.owner.application && attrStr(c.owner.application, "taskAffinity")) ?? c.owner.pkg) || null;
 function* serviceInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
-  const info: JObj = yield make(SERVICE);
+  const info: JObj = yield newObj(SERVICE);
   yield* componentInfo$(info, c, flags, app);
   setDeclared(info, SERVICE, {
     permission: componentPermission(c), mForegroundServiceType: intAttr(c.node, "foregroundServiceType", 0),
@@ -291,7 +290,7 @@ function* serviceInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj>
 }
 const authoritiesOf = (node: XmlNode) => (attrStr(node, "authorities") ?? "").split(";").filter(Boolean);
 function* providerInfo$(c: Component, flags: number, app: JObj | null): Gen<JObj> {
-  const info: JObj = yield make(PROVIDER), permission = attrStr(c.node, "permission");
+  const info: JObj = yield newObj(PROVIDER), permission = attrStr(c.node, "permission");
   yield* componentInfo$(info, c, flags, app);
   setDeclared(info, PROVIDER, {
     authority: authoritiesOf(c.node).join(";") || null, readPermission: attrStr(c.node, "readPermission") ?? permission,
@@ -345,7 +344,7 @@ function* queryComponents$(q: IntentQuery, flags: number, kind: ComponentKind): 
 }
 /** the platform's chooser or picker standing for a system activity, as ResolverActivity does */
 function* systemResolveInfo$(): Gen<JObj> {
-  const info: JObj = yield make(RESOLVE), activity: JObj = yield make(ACTIVITY), platform = packages.get("android");
+  const info: JObj = yield newObj(RESOLVE), activity: JObj = yield newObj(ACTIVITY), platform = packages.get("android");
   setDeclared(activity, ACTIVITY, { name: SYSTEM_ACTIVITY, packageName: "android", processName: "system", exported: 1, enabled: 1,
     applicationInfo: platform ? yield* applicationInfo$(platform, 0) : null });
   setDeclared(info, RESOLVE, { activityInfo: activity });
@@ -353,7 +352,7 @@ function* systemResolveInfo$(): Gen<JObj> {
 }
 const answersSystem = (q: IntentQuery) => !!systemActivity(q) && (!q.pkg || q.pkg === "android");
 function* resolveInfo$(m: Match, flags: number): Gen<JObj> {
-  const info: JObj = yield make(RESOLVE), component: JObj = yield* infoOf$(m, flags);
+  const info: JObj = yield newObj(RESOLVE), component: JObj = yield* infoOf$(m, flags);
   setDeclared(info, RESOLVE, {
     [m.kind === "service" ? "serviceInfo" : m.kind === "provider" ? "providerInfo" : "activityInfo"]: component,
     priority: m.priority, isDefault: m.isDefault ? 1 : 0,
@@ -366,7 +365,7 @@ function* queryIntent$(intent: JObj | null, type: string | null, flags: number, 
   const infos = yield* all$(yield* queryComponents$(q, flags, kind), (m) => resolveInfo$(m, flags));
   if (kind === "activity" && answersSystem(q)) infos.push(yield* systemResolveInfo$());
   if (kind === "provider") for (const [authority, p] of systemProviders) if (p.action && (!q.action || p.action === q.action))
-    infos.push(setDeclared(yield make(RESOLVE), RESOLVE, { providerInfo: yield* systemProviderInfo$(authority) }));
+    infos.push(setDeclared(yield newObj(RESOLVE), RESOLVE, { providerInfo: yield* systemProviderInfo$(authority) }));
   return infos;
 }
 /** what the activity manager starts for an intent: the best activity, or the system activity standing for one */
@@ -396,7 +395,7 @@ export function launcherActivity(pkg: string): Component | null {
 
 /** a declared permission's PermissionInfo */
 export function* permissionInfo$(owner: PackageRecord, node: XmlNode, flags: number): Gen<JObj> {
-  const info: JObj = yield make(PKG + "PermissionInfo");
+  const info: JObj = yield newObj(PKG + "PermissionInfo");
   setDeclared(info, PKG + "PermissionInfo", {
     ...resolvedLabel(node), name: attrStr(node, "name"), packageName: owner.pkg, icon: intAttr(node, "icon", 0),
     group: attrStr(node, "permissionGroup"), protectionLevel: intAttr(node, "protectionLevel", 0),
@@ -409,13 +408,13 @@ export function* permissionInfo$(owner: PackageRecord, node: XmlNode, flags: num
 // ── packages
 function* signatureArray$(certificates: Uint8Array[]): Gen<JObj[]> {
   const signatures: JObj[] = [];
-  for (const c of certificates) signatures.push(yield make(PKG + "Signature", "([B)V", new Int8Array(c)));
+  for (const c of certificates) signatures.push(yield newObj(PKG + "Signature", "([B)V", new Int8Array(c)));
   return jarray(signatures, "Landroid/content/pm/Signature;");
 }
 /** SigningInfo over the signers, with no rotation history; which scheme signed is not tracked (UNKNOWN) */
 function* signingInfo$(certificates: Uint8Array[]): Gen<JObj> {
-  const details = yield make(PKG + "SigningDetails", "([Landroid/content/pm/Signature;I)V", yield* signatureArray$(certificates), 0);
-  return yield make(PKG + "SigningInfo", "(Landroid/content/pm/SigningDetails;)V", details);
+  const details = yield newObj(PKG + "SigningDetails", "([Landroid/content/pm/Signature;I)V", yield* signatureArray$(certificates), 0);
+  return yield newObj(PKG + "SigningInfo", "(Landroid/content/pm/SigningDetails;)V", details);
 }
 function requestedPermissions(root: XmlNode): string[] {
   const names = new Set<string>();
@@ -429,12 +428,12 @@ function requestedPermissions(root: XmlNode): string[] {
   return [...names];
 }
 function* featureInfo$(name: string | null, flags = 0, glEs = 0): Gen<JObj> {
-  const info: JObj = yield make(PKG + "FeatureInfo");
+  const info: JObj = yield newObj(PKG + "FeatureInfo");
   setDeclared(info, PKG + "FeatureInfo", { name, flags, reqGlEsVersion: glEs });
   return info;
 }
 function* instrumentationInfo$(record: PackageRecord, node: XmlNode, flags: number): Gen<JObj> {
-  const item: JObj = yield make(PKG + "InstrumentationInfo");
+  const item: JObj = yield newObj(PKG + "InstrumentationInfo");
   setDeclared(item, PKG + "InstrumentationInfo", {
     ...resolvedLabel(node), name: qualifyComponent(attrStr(node, "name") ?? "", record.pkg), packageName: record.pkg,
     targetPackage: attrStr(node, "targetPackage"), targetProcesses: attrStr(node, "targetProcesses"),
@@ -445,7 +444,7 @@ function* instrumentationInfo$(record: PackageRecord, node: XmlNode, flags: numb
   return item;
 }
 function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
-  const pi: JObj = yield make(PACKAGE), root = record.root, app: JObj = yield* applicationInfo$(record, flags);
+  const pi: JObj = yield newObj(PACKAGE), root = record.root, app: JObj = yield* applicationInfo$(record, flags);
   const version = attr(root, "versionName");
   const own = record === currentPackage && appHost?.pkg === record.pkg ? appHost : null;
   const time = installTime(record.pkg);
@@ -587,7 +586,7 @@ function compareSignatures(left: Uint8Array[], right: Uint8Array[]): number {
 }
 const recordsForUid = (uid: number) => [...packages.values()].filter((p) => p.uid === uid);
 
-const slice = (items: unknown[]) => make(PKG + "ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
+const slice = (items: unknown[]) => newObj(PKG + "ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
 function* componentArgs$(component: JObj | null): Gen<[string, string]> {
   if (!component) rt.npe();
   return [yield vcall(component, "getPackageName", "()Ljava/lang/String;"), yield vcall(component, "getClassName", "()Ljava/lang/String;")];
@@ -610,12 +609,12 @@ function propertyOf(owner: PackageRecord, node: XmlNode, cls: string | null): JO
   const name = attrStr(node, "name");
   if (!name) return null;
   const P = PKG + "PackageManager$Property", resource = attr(node, "resource"), value = attr(node, "value");
-  if (resource) return make(P, `(${S}IZ${S}${S})V`, name, resource.data, 1, owner.pkg, cls);
+  if (resource) return newObj(P, `(${S}IZ${S}${S})V`, name, resource.data, 1, owner.pkg, cls);
   if (!value) return null;
-  if (value.type === TV.BOOLEAN) return make(P, `(${S}Z${S}${S})V`, name, +!!value.data, owner.pkg, cls);
-  if (value.type === TV.FLOAT) return make(P, `(${S}F${S}${S})V`, name, new Float32Array(new Int32Array([value.data]).buffer)[0], owner.pkg, cls);
-  if (value.type >= TV.INT_DEC && value.type <= TV.COLOR_RGB4) return make(P, `(${S}I${S}${S})V`, name, value.data, owner.pkg, cls);
-  return make(P, `(${S}${S}${S}${S})V`, name, value.str ?? attrStr(node, "value") ?? "", owner.pkg, cls);
+  if (value.type === TV.BOOLEAN) return newObj(P, `(${S}Z${S}${S})V`, name, +!!value.data, owner.pkg, cls);
+  if (value.type === TV.FLOAT) return newObj(P, `(${S}F${S}${S})V`, name, new Float32Array(new Int32Array([value.data]).buffer)[0], owner.pkg, cls);
+  if (value.type >= TV.INT_DEC && value.type <= TV.COLOR_RGB4) return newObj(P, `(${S}I${S}${S})V`, name, value.data, owner.pkg, cls);
+  return newObj(P, `(${S}${S}${S}${S})V`, name, value.str ?? attrStr(node, "value") ?? "", owner.pkg, cls);
 }
 /** every <property> named `name` under the nodes of a component type, across packages */
 function* properties$(name: string, type: number): Gen<JObj[]> {
@@ -688,7 +687,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   [`getInstallSourceInfo(${S}I)Landroid/content/pm/InstallSourceInfo;`]: driven(function* getInstallSourceInfo$(pkg: string): Gen {
     if (!(yield packageRecord(pkg))) return null;
     // APK loading has no Android installer of record or installer-supplied source metadata
-    return make(PKG + "InstallSourceInfo", `(${S}Landroid/content/pm/SigningInfo;${S}${S}${S}I)V`, null, null, null, null, null, 0);
+    return newObj(PKG + "InstallSourceInfo", `(${S}Landroid/content/pm/SigningInfo;${S}${S}${S}I)V`, null, null, null, null, null, 0);
   }),
   [`getInstallerPackageName(${S})${S}`]: (pkg: string) => after(packageRecord(pkg), (record) => { if (!record) throw unknownPackage(pkg); return null; }),
   "getPackageInstaller()Landroid/content/pm/IPackageInstaller;": () => installerService(),
@@ -750,7 +749,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     if (!record) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
     const checksums: JObj[] = [];
     for (const [split, type, value] of (yield apkDigests(record, includeSplits !== 0, required)) as [string | null, number, Uint8Array][])
-      checksums.push(yield make(PKG + "ApkChecksum", `(${S}I[B)V`, split, type, new Int8Array(value)));
+      checksums.push(yield newObj(PKG + "ApkChecksum", `(${S}I[B)V`, split, type, new Int8Array(value)));
     yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", newArrayList(checksums));
   }),
   ...noops(`notifyPackageUse(${S}I)V`, `notifyDexLoad(${S}Ljava/util/Map;${S})V`),

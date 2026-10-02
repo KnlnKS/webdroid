@@ -6,7 +6,8 @@
 import { once } from "../jvm/suspend";
 import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
-import { newObj, vcall, scall, linkInit, staticField, reportUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, staticField, after, callUncaught } from "../jvm/natives/jlang";
+import { onMain } from "./mainloop";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
@@ -35,7 +36,7 @@ function fillProc(info: JObj): JObj {
 
 // IActivityManager: this process's view of the activity manager
 const activityManager: NativeSpec["methods"] = {
-  "getRunningAppProcesses()Ljava/util/List;": async () => newArrayList([fillProc(await newObj(PROCESS_INFO, "()V"))]),
+  "getRunningAppProcesses()Ljava/util/List;": () => after(newObj(PROCESS_INFO), (info) => newArrayList([fillProc(info)])),
   "getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JObj) => { fillProc(info); },
   // the device profile's memory: the page cannot read the host's
   "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: { totalMem: bigint; availMem: bigint; lowMemory: number; threshold: bigint }) => {
@@ -75,12 +76,11 @@ rt.register({ name: "webdroid/ActivityManagerService", ctor: class extends JObj 
 rt.register({ name: "webdroid/ActivityTaskManagerService", ctor: class extends JObj {}, sup: "android/app/IActivityTaskManager$Stub", methods: {
   ...activityTaskMethods,
   ...intentSenderTaskMethods,
-  "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": async () => {
+  "getDeviceConfigurationInfo()Landroid/content/pm/ConfigurationInfo;": () => after(newObj("android/content/pm/ConfigurationInfo"), (info) => {
     const config = deviceConfiguration();
-    return setDeclared(await newObj("android/content/pm/ConfigurationInfo"), "android/content/pm/ConfigurationInfo", { 
-      reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard,
+    return setDeclared(info, "android/content/pm/ConfigurationInfo", { reqTouchScreen: config.touchscreen, reqKeyboardType: config.keyboard,
       reqNavigation: config.navigation, reqGlEsVersion: GL_ES_VERSION });
-  },
+  }),
 } });
 
 hostStub("activity", "webdroid/ActivityManagerService");
@@ -150,13 +150,13 @@ hostStub("time_detector", "webdroid/TimeDetectorService");
 // IDeviceIdentifiersPolicyService: ro.serialno is unset, so a caller that may read the serial gets
 // Build.UNKNOWN; TelephonyPermissions admits READ_PRIVILEGED_PHONE_STATE, or READ_PHONE_STATE below Q
 rt.register({ name: "webdroid/DeviceIdentifiersPolicyService", ctor: class extends JObj {}, sup: "android/os/IDeviceIdentifiersPolicyService$Stub", methods: {
-  "getSerialForPackage(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": async (pkg: string | null) => {
+  "getSerialForPackage(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": driven(function* (pkg: string | null) {
     const { uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg);
     if (record?.uid !== uid) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid callingPackage or callingPackage does not belong to caller's uid:" + uid);
-    if (await checkUidPermission("android.permission.READ_PRIVILEGED_PHONE_STATE", uid) === 0) return "unknown";
-    if (record.sdk.target < 29 && await checkUidPermission("android.permission.READ_PHONE_STATE", uid) === 0) return "unknown";
+    if ((yield checkUidPermission("android.permission.READ_PRIVILEGED_PHONE_STATE", uid)) === 0) return "unknown";
+    if (record.sdk.target < 29 && (yield checkUidPermission("android.permission.READ_PHONE_STATE", uid)) === 0) return "unknown";
     throw rt.mkThrowable("java/lang/SecurityException", `getSerial: The uid ${uid} does not meet the requirements to access device identifiers.`);
-  },
+  }),
 } });
 hostStub("device_identifiers", "webdroid/DeviceIdentifiersPolicyService");
 // StatusBarManagerService: quick settings never bind a tile, so a tile's listening request has no panel to reach
@@ -199,8 +199,8 @@ export const DNS_SERVER = "8.8.8.8";
 const CAPABILITIES = [11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 28, 37];
 export const netUp = (): boolean => typeof navigator === "undefined" || navigator.onLine !== false;
 const NC = "android/net/NetworkCapabilities", NCB = "Landroid/net/NetworkCapabilities$Builder;";
-export const theNetwork = once((): JObj | Promise<JObj> => newObj("android/net/Network", "(I)V", NET_ID));
-const capabilities = once(() => rt.drive(function* (): Gen<JObj> {
+export const theNetwork = once(() => newObj("android/net/Network", "(I)V", NET_ID));
+const capabilities = once(driven(function* (): Gen<JObj> {
   let b = yield newObj(`${NC}$Builder`);
   b = yield vcall(b, "addTransportType", `(I)${NCB}`, TRANSPORT_WIFI);
   for (const c of CAPABILITIES) b = yield vcall(b, "addCapability", `(I)${NCB}`, c);
@@ -208,14 +208,14 @@ const capabilities = once(() => rt.drive(function* (): Gen<JObj> {
   b = yield vcall(b, "setLinkDownstreamBandwidthKbps", `(I)${NCB}`, 30000);
   b = yield vcall(b, "setSignalStrength", `(I)${NCB}`, -50);
   return yield vcall(b, "build", `()L${NC};`);
-}()));
-const linkProperties = once(() => rt.drive(function* (): Gen<JObj> {
+}));
+const linkProperties = once(driven(function* (): Gen<JObj> {
   const lp = yield newObj("android/net/LinkProperties");
   yield vcall(lp, "setInterfaceName", "(Ljava/lang/String;)V", "wlan0");
   const dns = yield scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", DNS_SERVER);
   yield vcall(lp, "addDnsServer", "(Ljava/net/InetAddress;)Z", dns);
   return lp;
-}()));
+}));
 /** `n` is the one network: then `answer`, else null */
 const ifOurs = (answer: () => unknown) => driven(function* (n: unknown): Gen {
   return n != null && (yield vcall(n, "equals", "(Ljava/lang/Object;)Z", yield theNetwork())) === 1 ? yield answer() : null;
@@ -228,7 +228,7 @@ const networkInfo = driven(function* (): Gen<JObj> {
   return info;
 });
 /** ConnectivityManager's CALLBACK_* message codes */
-const callbackCode = (name: string): Promise<number> => staticField("android/net/ConnectivityManager", name);
+const callbackCode = (name: string) => staticField<number>("android/net/ConnectivityManager", name);
 type Registration = { request: JObj; messenger: JObj };
 const registrations = new Map<JObj, Registration>();
 let nextRequestId = 1;
@@ -261,7 +261,7 @@ const register = driven(function* (caps: unknown, legacyType: number, messenger:
 rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {}, sup: "android/net/IConnectivityManager$Stub", methods: {
   "getActiveNetwork()Landroid/net/Network;": () => netUp() ? theNetwork() : null,
   "getActiveNetworkForUid(IZ)Landroid/net/Network;": () => netUp() ? theNetwork() : null,
-  "getAllNetworks()[Landroid/net/Network;": async () => jarray(netUp() ? [await theNetwork()] : [], "Landroid/net/Network;"),
+  "getAllNetworks()[Landroid/net/Network;": driven(function* () { return jarray(netUp() ? [yield theNetwork()] : [], "Landroid/net/Network;"); }),
   "getActiveNetworkInfo()Landroid/net/NetworkInfo;": networkInfo,
   "getActiveNetworkInfoForUid(IZ)Landroid/net/NetworkInfo;": networkInfo,
   // the one network's own type answers; this device has no other
@@ -285,9 +285,9 @@ rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {},
     "unregisterNetworkActivityListener(Landroid/net/INetworkActivityListener;)V"),
 } });
 if (typeof addEventListener !== "undefined") for (const event of ["online", "offline"])
-  addEventListener(event, () => void Promise.resolve().then(() => rt.drive(function* () {
+  addEventListener(event, () => callUncaught(() => onMain(() => rt.drive(function* () {
     for (const r of registrations.values()) yield* sendCallback(r, event === "online" ? "CALLBACK_AVAILABLE" : "CALLBACK_LOST");
-  }())).catch(reportUncaught));
+  }()))));
 
 hostStub("connectivity", "webdroid/ConnectivityService");
 
@@ -322,9 +322,7 @@ rt.register({ name: "webdroid/ThermalService", ctor: class extends JObj {}, sup:
   "getCurrentThermalStatus()I": () => 0,
   "getThermalHeadroom(I)F": () => NaN,
   // ThermalManagerService reports the current status to a listener as it registers
-  "registerThermalStatusListener(Landroid/os/IThermalStatusListener;)Z": async (listener: unknown) => {
-    await vcall(listener, "onStatusChange", "(I)V", 0); return 1;
-  },
+  "registerThermalStatusListener(Landroid/os/IThermalStatusListener;)Z": (listener: unknown) => after(vcall(listener, "onStatusChange", "(I)V", 0), () => 1),
   "unregisterThermalStatusListener(Landroid/os/IThermalStatusListener;)Z": () => 1,
 } });
 // IDeviceIdleController's power-save allowlist, which PowerManager.isIgnoringBatteryOptimizations
@@ -332,14 +330,14 @@ rt.register({ name: "webdroid/ThermalService", ctor: class extends JObj {}, sup:
 // permissions follow (permissions.ts). AOSP's activity ignores an app that did not declare the
 // permission to ask, which reads as the user declining.
 const DOZE_EXEMPTION = "__system_power";
-registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
-  const data: JObj | null = await vcall(intent, "getData", "()Landroid/net/Uri;");
-  const pkg = data && await vcall(data, "getScheme", "()Ljava/lang/String;") === "package" ? await vcall(data, "getSchemeSpecificPart", "()Ljava/lang/String;") as string : null;
+registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", driven(function* (intent: JObj) {
+  const data: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
+  const pkg: string | null = data && (yield vcall(data, "getScheme", "()Ljava/lang/String;")) === "package" ? yield vcall(data, "getSchemeSpecificPart", "()Ljava/lang/String;") : null;
   if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
   const prefs = getPrefs(pkg, DOZE_EXEMPTION);
   prefs.map.set("exempt", 1); prefs.persist();
   return newIntent();
-});
+}));
 const exempt = (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1);
 rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}, sup: "android/os/IDeviceIdleController$Stub", methods: {
   "isPowerSaveWhitelistApp(Ljava/lang/String;)Z": exempt,
@@ -427,13 +425,13 @@ hostStub("appops", "webdroid/AppOpsService");
 const SOURCE = "android/content/AttributionSourceState";
 rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionChecker$Stub", methods: {
   "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
-    async (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) => {
+    driven(function* (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) {
       for (let current: JObj | undefined = source, first = true; current; first = false) {
-        if (!(first && fromDatasource) && await checkUidPermission(permission, getDeclared(current, SOURCE, "uid")) !== 0) return 2; // PERMISSION_HARD_DENIED
+        if (!(first && fromDatasource) && (yield checkUidPermission(permission, getDeclared(current, SOURCE, "uid"))) !== 0) return 2; // PERMISSION_HARD_DENIED
         current = getDeclared<JObj[] | null>(current, SOURCE, "next")?.[0];
       }
       return 0;
-    },
+    }),
   "finishDataDelivery(ILandroid/content/AttributionSourceState;Z)V": () => {},
 } });
 hostStub("permission_checker", "webdroid/PermissionCheckerService");
@@ -514,11 +512,9 @@ rt.register({ name: "webdroid/BatteryStatsService", ctor: class extends JObj {},
 // IPowerStatsService: present on every device; nothing here reads a power monitor
 rt.register({ name: "webdroid/PowerStatsService", ctor: class extends JObj {}, sup: "android/os/IPowerStatsService$Stub" });
 rt.register({ name: "webdroid/BatteryPropertiesRegistrar", ctor: class extends JObj {}, sup: "android/os/IBatteryPropertiesRegistrar$Stub", methods: {
-  "getProperty(ILandroid/os/BatteryProperty;)I": async (id: number, prop: JObj) => {
+  "getProperty(ILandroid/os/BatteryProperty;)I": (id: number, prop: JObj) => {
     const value = id === BATTERY_CAPACITY ? device.battery.level : id === BATTERY_STATUS ? device.battery.status : null;
-    if (value === null) return NAME_NOT_FOUND;
-    await vcall(prop, "setLong", "(J)V", BigInt(value));
-    return 0;
+    return value === null ? NAME_NOT_FOUND : after(vcall(prop, "setLong", "(J)V", BigInt(value)), () => 0);
   },
 } });
 
@@ -537,8 +533,8 @@ const isUser = (id: number) => +(id === USER);
 rt.register({ name: "webdroid/UserManagerService", ctor: class extends JObj {}, sup: "android/os/IUserManager$Stub", methods: {
   "getUserName()Ljava/lang/String;": () => "Owner",
   "getUserInfo(I)Landroid/content/pm/UserInfo;": (id: number) => id === USER ? userInfo() : null,
-  "getProfiles(IZ)Ljava/util/List;": async () => newArrayList([await userInfo()]),
-  "getUsers(ZZZ)Ljava/util/List;": async () => newArrayList([await userInfo()]),
+  "getProfiles(IZ)Ljava/util/List;": () => after(userInfo(), (user) => newArrayList([user])),
+  "getUsers(ZZZ)Ljava/util/List;": () => after(userInfo(), (user) => newArrayList([user])),
   "getProfileIds(IZ)[I": () => Int32Array.of(USER),
   "getProfileIdsExcludingHidden(IZ)[I": () => Int32Array.of(USER),
   "getProfileType(I)Ljava/lang/String;": () => "",

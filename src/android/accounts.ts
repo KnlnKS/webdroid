@@ -5,7 +5,7 @@
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
 import { JObj, rt, noops, declaredField, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall, reportUncaught } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, reportUncaught, callUncaught, after } from "../jvm/natives/jlang";
 import { boxInt } from "../jvm/natives/jbox";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";
@@ -19,6 +19,7 @@ import { asSystem, hostStub } from "./binder";
 import { bindAsSystem } from "./server/activeservices";
 import { mkComponentName, newIntent } from "./intent";
 import { deliverBroadcast } from "./server/broadcastqueue";
+import { onMain } from "./mainloop";
 
 type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
 /** the manifests' authenticator services, each described by its <account-authenticator> resource */
@@ -48,10 +49,8 @@ let accountStore = new AccountStore(), stopAccountUpdates = () => {};
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
 function accountsChanged(): void {
   if (!appHost) return;
-  for (const action of CHANGED) {
-    void newIntent(action)
-      .then((intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null)).catch(reportUncaught);
-  }
+  for (const action of CHANGED) callUncaught(() => onMain(() => after(newIntent(action),
+    (intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null))));
 }
 export function useAccountStore(store: AccountStore): () => void {
   stopAccountUpdates(); accountStore = store;
@@ -116,11 +115,11 @@ type SessionOptions = {
 };
 class SessionError { constructor(readonly code: number, readonly message: string) {} }
 class JAccountSession extends JObj {
-  response: JObj | null = null; options: SessionOptions = {}; unbind: () => Promise<void> = async () => {};
+  response: JObj | null = null; options: SessionOptions = {}; unbind: () => unknown = () => {};
   /** the response to answer, and the session closed unless it waits on an activity */
   take(keepOpen: boolean): JObj | null {
     const response = this.response;
-    if (!keepOpen) { this.response = null; void this.unbind().catch(reportUncaught); }
+    if (!keepOpen) { this.response = null; callUncaught(this.unbind); }
     return response;
   }
 }
@@ -139,13 +138,13 @@ rt.register({ name: "webdroid/AccountSession", ctor: JAccountSession, sup: "andr
       yield reply(response, result);
     }),
     "onRequestContinued()V": () => {},
-    "onError(ILjava/lang/String;)V": async function (this: JAccountSession, code: number, message: string | null) {
+    "onError(ILjava/lang/String;)V": function (this: JAccountSession, code: number, message: string | null) {
       const response = this.take(false);
-      if (response) await fail(response, code, message ?? "");
+      return response && fail(response, code, message ?? "");
     },
-    "binderDied()V": async function (this: JAccountSession) {
+    "binderDied()V": function (this: JAccountSession) {
       const response = this.take(false);
-      if (response) await fail(response, ERROR_REMOTE, "disconnected");
+      return response && fail(response, ERROR_REMOTE, "disconnected");
     },
   } });
 let nextSession = 1;
@@ -159,7 +158,7 @@ const session = driven(function* (type: string, response: JObj, call: (authentic
     s.unbind = unbind;
     yield vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", s, 0);
     const authenticator = yield scall("android/accounts/IAccountAuthenticator$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/accounts/IAccountAuthenticator;", binder);
-    yield asSystem(async () => call(authenticator, s));
+    yield asSystem(() => call(authenticator, s));
   } catch (error) {
     reportUncaught(error);
     const lost = s.take(false);
@@ -183,8 +182,8 @@ function* hasFeatures(account: JObj, features: string[]): Gen<boolean> {
 }
 class JAccountFeatures extends JObj { settle: (has: boolean) => void = () => {}; }
 rt.register({ name: "webdroid/AccountFeatures", ctor: JAccountFeatures, sup: "android/accounts/IAccountManagerResponse$Stub", methods: {
-  "onResult(Landroid/os/Bundle;)V": async function (this: JAccountFeatures, result: JObj) {
-    this.settle(!!await vcall(result, "getBoolean", "(Ljava/lang/String;Z)Z", "booleanResult", 0));
+  "onResult(Landroid/os/Bundle;)V": function (this: JAccountFeatures, result: JObj) {
+    return after(vcall(result, "getBoolean", "(Ljava/lang/String;Z)Z", "booleanResult", 0), (has) => this.settle(!!has));
   },
   "onError(ILjava/lang/String;)V": function (this: JAccountFeatures) { this.settle(false); },
 } });
@@ -199,9 +198,12 @@ rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {
       throw rt.mkThrowable("java/lang/SecurityException", `uid ${PROCESS_UID} cannot get accounts of other packages`);
     return byType(type, pkg);
   },
-  "getAuthenticatorTypes(I)[Landroid/accounts/AuthenticatorDescription;": async () => jarray(await Promise.all(authenticators().map((a) =>
-    newObj("android/accounts/AuthenticatorDescription", "(Ljava/lang/String;Ljava/lang/String;IIIIZ)V",
-      a.type, a.pkg, a.label, a.icon, a.smallIcon, a.preferences, +a.customTokens))), "Landroid/accounts/AuthenticatorDescription;"),
+  "getAuthenticatorTypes(I)[Landroid/accounts/AuthenticatorDescription;": driven(function* () {
+    const out: JObj[] = [];
+    for (const a of authenticators()) out.push(yield newObj("android/accounts/AuthenticatorDescription", "(Ljava/lang/String;Ljava/lang/String;IIIIZ)V",
+      a.type, a.pkg, a.label, a.icon, a.smallIcon, a.preferences, +a.customTokens));
+    return jarray(out, "Landroid/accounts/AuthenticatorDescription;");
+  }),
   [`addAccountExplicitly(${A}${S}${B}${S})Z`]: (account: JObj, password: string | null, extras: JObj | null) => rt.drive(addExplicitly(account, password, extras, null)),
   [`addAccountExplicitlyWithVisibility(${A}${S}${B}Ljava/util/Map;${S})Z`]: driven(addExplicitly),
   [`removeAccountExplicitly(${A})Z`]: (account: JObj) => drop(owned(account)),

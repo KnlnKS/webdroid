@@ -2,7 +2,8 @@
 // scheduler (the broker's, across processes), and an OnAlarmListener's alarm fires in this process
 // by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, reportUncaught, callUncaught, after } from "../jvm/natives/jlang";
+import { onMain } from "./mainloop";
 import { operationId, localPendingIntents } from "./pendingintent";
 import { Alarms } from "../shell/alarms";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis, type GuestTimer } from "../guest-clock";
@@ -38,8 +39,8 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
       const delay = trigger - (type < 2 ? Date.now() : uptimeMillis());
       listenerAlarms.set(listener, setGuestTimeout(() => {
         listenerAlarms.delete(listener);
-        void newObj("webdroid/AlarmCompleteListener").then((done) =>
-          vcall(listener, "doAlarm", "(Landroid/app/IAlarmCompleteListener;)V", done)).catch(reportUncaught);
+        callUncaught(() => onMain(() => after(newObj("webdroid/AlarmCompleteListener"), (done) =>
+          vcall(listener, "doAlarm", "(Landroid/app/IAlarmCompleteListener;)V", done))));
       }, Math.max(0, Math.min(delay, 0x7fffffff))));
     }),
   "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": driven(function* (operation: JObj | null, listener: unknown): Gen<void> {

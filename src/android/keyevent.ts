@@ -211,7 +211,7 @@ function sameMap(a: KeyMap, b: KeyMap): boolean {
 class NativeKeyCharacterMap { constructor(readonly deviceId: number, readonly map: KeyMap | null) {} }
 const kcmAt = (h: bigint) => deref<NativeKeyCharacterMap>(h);
 /** a Java KeyCharacterMap over `map` for device `deviceId` */
-export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): Promise<JObj> =>
+export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): JObj | Promise<JObj> =>
   newObj(KCM, "(J)V", ownedHandle(new NativeKeyCharacterMap(deviceId, map)));
 
 /** KeyCharacterMap::writeToParcel */

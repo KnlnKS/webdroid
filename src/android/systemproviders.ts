@@ -1,7 +1,7 @@
 // Content providers system packages publish (SettingsProvider, ExternalStorageProvider, MediaProvider),
 // which no app's manifest declares: ActivityManagerService hands their binders out of getContentProvider.
 import { rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { construct, newObj, scall, vcall, after } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, after } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import { arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
@@ -147,7 +147,7 @@ export const systemProvider = (authority: string | null): JObj | Promise<JObj> |
 export function* systemProviderInfo$(authority: string): Gen<JObj | null> {
   const p = providers.get(authority);
   if (!p) return null;
-  const app: JObj = yield construct("android/content/pm/ApplicationInfo", "()V"), info: JObj = yield construct("android/content/pm/ProviderInfo", "()V");
+  const app: JObj = yield newObj("android/content/pm/ApplicationInfo", "()V"), info: JObj = yield newObj("android/content/pm/ProviderInfo", "()V");
   setDeclared(app, "android/content/pm/ApplicationInfo", { packageName: p.pkg, processName: p.process, uid: 1000, flags: p.appFlags });
   return setDeclared(info, "android/content/pm/ProviderInfo", { authority, initOrder: p.initOrder, flags: p.flags,
     grantUriPermissions: p.grantUriPermissions ? 1 : 0, applicationInfo: app, processName: p.process, exported: 1, name: p.cls, packageName: p.pkg });
@@ -157,6 +157,6 @@ export function* systemProviderInfo$(authority: string): Gen<JObj | null> {
 export const systemProviderHolder = driven(function* systemProviderHolder$(authority: string): Gen<JObj | null> {
   const info: JObj | null = yield* systemProviderInfo$(authority);
   if (!info) return null;
-  const holder: JObj = yield construct("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
+  const holder: JObj = yield newObj("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
   return setDeclared(holder, "android/app/ContentProviderHolder", { provider: yield providers.get(authority)!.binder(), noReleaseNeeded: 1 });
 });
