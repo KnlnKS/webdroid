@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj } from "../../../src/jvm/natives/jlang";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit } from "../../../src/jvm/natives/jlang";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
 import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";
@@ -101,7 +101,7 @@ function uploadExtents() {
 }
 
 /** Java GLES20 client arrays: read at the draw, one reused buffer per attribute and for indices, bindings kept */
-function clientArrays() {
+async function clientArrays() {
   const context = new EglContext();
   context.makeCurrent({ width: 1, height: 1, present: null, frames: 0 });
   const g = context.gl!, program = g.createProgram()!;
@@ -112,8 +112,8 @@ function clientArrays() {
   let created = 0;
   const create = g.createBuffer.bind(g);
   g.createBuffer = () => { created++; return create(); };
-  const gles = rt.link("android/opengl/GLES20").ctor;
-  const call = (name: string, desc: string, ...args: unknown[]) => Reflect.apply(Reflect.get(gles, mangleMethod(name, desc)), gles, args);
+  const gles = (await linkInit("android/opengl/GLES20")).ctor;
+  const call = (name: string, desc: string, ...args: unknown[]) => vcall(gles, name, desc, ...args);
   const vertices = nativeOrder(allocateDirectNow(24)), indices = nativeOrder(allocateDirectNow(12));
   const f32 = (b: typeof vertices) => { const bytes = bufferBytes(b); return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length >> 2); };
   new Uint32Array(f32(indices).buffer, f32(indices).byteOffset, 3).set([0, 1, 2]);
@@ -220,8 +220,8 @@ async function probe() {
   await startMainLooper();
   await directReady();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
-  const c14 = rt.link("android/opengl/EGL14").ctor;
-  const call14 = (name: string, desc: string, ...args: unknown[]) => Reflect.apply(Reflect.get(c14, mangleMethod(name, desc)), c14, args);
+  const c14 = (await linkInit("android/opengl/EGL14")).ctor;
+  const call14 = (name: string, desc: string, ...args: unknown[]) => vcall(c14, name, desc, ...args);
   const E10 = "Ljavax/microedition/khronos/egl/", E14 = "Landroid/opengl/";
   const display10 = vcall(e10, "eglGetDisplay", "(Ljava/lang/Object;)" + E10 + "EGLDisplay;", null);
   const context10 = vcall(e10, "eglCreateContext", `(${E10}EGLDisplay;${E10}EGLConfig;${E10}EGLContext;[I)${E10}EGLContext;`, display10, null, null, Int32Array.of(0x3098, 2, 0x3038));
@@ -251,7 +251,8 @@ async function probe() {
   const sameContext10 = vcall(e10, "eglGetCurrentContext", "()" + E10 + "EGLContext;") === context10;
   rt.st(second);
   const secondError = call14("eglGetError", "()I");
-  const sameContext14 = call14("eglGetCurrentContext", "()" + E14 + "EGLContext;") === context14;
+  // a Java EGLContext names its native context by handle, a new object per call as JNI makes them
+  const sameContext14 = vcall(call14("eglGetCurrentContext", "()" + E14 + "EGLContext;"), "equals", "(Ljava/lang/Object;)Z", context14) === 1;
   call14("eglReleaseThread", "()Z");
   await suspended;
   rt.st(first);
@@ -271,7 +272,7 @@ async function probe() {
   return { bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
     nativeWindow: await nativeWindow(), readback: readback(), uploads: uploadExtents(),
-    clientArrays: clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture(), surfaceTexture: await surfaceTexture() };
+    clientArrays: await clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture(), surfaceTexture: await surfaceTexture() };
 }
 async function nativeWindow() {
   ndkInit();

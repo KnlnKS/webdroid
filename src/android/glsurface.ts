@@ -1,7 +1,8 @@
 // The GL surfaces EGL draws to (a Surface's BLAST queue, a SurfaceTexture, a pbuffer), the EGL
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
-import { rt, JObj, stubs, driven, declaredField, type Gen } from "../jvm/runtime";
+import { rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
+import { mangleStaticField } from "../jvm/abi";
 import { vcall, JThread, curThread, scall, after } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { uptimeMillis } from "../guest-clock";
@@ -400,25 +401,19 @@ rt.register({
     egl10DisplayValid(display) ? setEglSwapInterval(interval) : eglFailure(EGL_BAD_DISPLAY, 0) },
 });
 
-class JEGLHandle extends JObj { constructor(readonly handle = 0) { super(); } }
-class JEGL14Display extends JEGLHandle {}
-class JEGL14Config extends JEGLHandle {}
-class JEGL14Context extends JEGLHandle { egl: EglContext | null = null; }
-class JEGL14Surface extends JEGLHandle { surf: GlSurface | null = null; owned = false; }
-rt.register({ name: "android/opengl/EGLObjectHandle", ctor: JEGLHandle, methods: {
-  "getNativeHandle()J": function (this: JEGLHandle) { return BigInt(this.handle); },
-  "getHandle()I": function (this: JEGLHandle) { return this.handle; },
-  "hashCode()I": function (this: JEGLHandle) { return this.handle; },
-  "equals(Ljava/lang/Object;)Z": function (this: JEGLHandle, other: unknown) { return +(other instanceof JEGLHandle && other.constructor === this.constructor && other.handle === this.handle); },
-} });
-for (const [name, ctor] of [["EGLDisplay", JEGL14Display], ["EGLConfig", JEGL14Config], ["EGLContext", JEGL14Context], ["EGLSurface", JEGL14Surface]] as const) {
-  rt.register({ name: "android/opengl/" + name, ctor, sup: "android/opengl/EGLObjectHandle" });
-  rt.link("android/opengl/" + name);
-}
-const noDisplay = new JEGL14Display(), noContext = new JEGL14Context(), noSurface = new JEGL14Surface();
-const defaultDisplay = new JEGL14Display(1), defaultConfig = new JEGL14Config(1);
-let eglHandle = 2;
-const egl14Contexts = new WeakMap<EglContext, JEGL14Context>();
+// android_opengl_EGL14.cpp: an EGLObjectHandle's long names a context or surface record here; the
+// one display and config are handle 1, and handle 0 is EGL_NO_*
+type Ctx = { egl: EglContext | null };
+type Surf = { surf: GlSurface | null; owned: boolean };
+const DEFAULT = 1n;
+const mHandle = () => declaredField("android/opengl/EGLObjectHandle", "mHandle");
+const handleOf = (o: JObj | null): bigint => o ? (o as unknown as Record<string, bigint>)[mHandle()] : 0n;
+const eglObject = (cls: string, h: bigint): JObj => setDeclared(rt.make("android/opengl/" + cls), "android/opengl/EGLObjectHandle", { mHandle: h });
+const ctxOf = (o: JObj | null) => deref<Ctx | undefined>(handleOf(o));
+const surfOf = (o: JObj | null) => deref<Surf | undefined>(handleOf(o));
+const isDefault = (o: JObj | null) => handleOf(o) === DEFAULT;
+const noContext = () => eglObject("EGLContext", 0n), noSurface = () => eglObject("EGLSurface", 0n);
+const egl14Contexts = new WeakMap<EglContext, Ctx>();
 const eglErrors = new WeakMap<JThread, number>();
 function eglOut(array: Int32Array | null, offset: number, value: number): void {
   if (!array) return;
@@ -427,24 +422,26 @@ function eglOut(array: Int32Array | null, offset: number, value: number): void {
 }
 export function eglFailure<T>(error: number, result: T, thread = curThread): T { eglErrors.set(thread, error); return result; }
 export function takeEglError(thread = curThread): number { const error = eglErrors.get(thread) ?? 0x3000; eglErrors.delete(thread); return error; }
-rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics: {
-  EGL_NO_DISPLAY: noDisplay, EGL_NO_CONTEXT: noContext, EGL_NO_SURFACE: noSurface, EGL_DEFAULT_DISPLAY: 0,
-  EGL_NONE: 0x3038, EGL_SUCCESS: 0x3000, EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_CONTEXT_CLIENT_VERSION: 0x3098,
-  EGL_CONFIG_ID: 0x3028, EGL_CONTEXT_CLIENT_TYPE: 0x3097, EGL_RENDER_BUFFER: 0x3086,
-  EGL_OPENGL_ES_API: 0x30a0, EGL_BACK_BUFFER: 0x3084,
-  EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
-  EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_SURFACE_TYPE: 0x3033,
-  EGL_MIN_SWAP_INTERVAL: 0x303b, EGL_MAX_SWAP_INTERVAL: 0x303c,
-  EGL_OPENGL_ES2_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_WINDOW_BIT: 4,
-}, methods: {
-  "static eglGetDisplay(I)Landroid/opengl/EGLDisplay;": (display: number) => display === 0 ? defaultDisplay : eglFailure(0x3008, noDisplay),
-  "static eglInitialize(Landroid/opengl/EGLDisplay;[II[II)Z": (display: JEGL14Display, major: Int32Array | null, majorOffset: number, minor: Int32Array | null, minorOffset: number) => {
-    if (display !== defaultDisplay) return eglFailure(0x3008, 0);
+const newSurface = (surf: GlSurface, owned: boolean) => eglObject("EGLSurface", handle({ surf, owned } satisfies Surf));
+const windowSurface14 = (display: JObj, config: JObj, window: unknown) => {
+  if (!isDefault(display) || !isDefault(config)) return eglFailure(0x3005, noSurface());
+  return after(windowSurface(window), (target) => target ? newSurface(target, false) : eglFailure(0x300b, noSurface()));
+};
+rt.registerJnis("android/opengl/EGL14", {
+  "_nativeClassInit()V": () => {
+    const statics = rt.link("android/opengl/EGL14").ctor as unknown as Record<string, unknown>;
+    statics[mangleStaticField("EGL_NO_CONTEXT")] = noContext();
+    statics[mangleStaticField("EGL_NO_DISPLAY")] = eglObject("EGLDisplay", 0n);
+    statics[mangleStaticField("EGL_NO_SURFACE")] = noSurface();
+  },
+  "eglGetDisplay(I)Landroid/opengl/EGLDisplay;": (display: number) => display === 0 ? eglObject("EGLDisplay", DEFAULT) : eglFailure(0x3008, eglObject("EGLDisplay", 0n)),
+  "eglInitialize(Landroid/opengl/EGLDisplay;[II[II)Z": (display: JObj, major: Int32Array | null, majorOffset: number, minor: Int32Array | null, minorOffset: number) => {
+    if (!isDefault(display)) return eglFailure(0x3008, 0);
     eglOut(major, majorOffset, 1); eglOut(minor, minorOffset, 4); return 1;
   },
-  "static eglQueryString(Landroid/opengl/EGLDisplay;I)Ljava/lang/String;": (display: JEGL14Display, name: number) => display !== defaultDisplay ? eglFailure(0x3008, null) : name === 0x3053 ? "webdroid" : name === 0x3054 ? "1.4" : name === 0x308d ? "OpenGL_ES" : "",
-  "static eglChooseConfig(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z": (display: JEGL14Display, attrs: Int32Array | null, offset: number, configs: JEGL14Config[] | null, configOffset: number, size: number, count: Int32Array | null, countOffset: number) => {
-    if (display !== defaultDisplay) return eglFailure(0x3008, 0);
+  "eglQueryString(Landroid/opengl/EGLDisplay;I)Ljava/lang/String;": (display: JObj, name: number) => !isDefault(display) ? eglFailure(0x3008, null) : name === 0x3053 ? "webdroid" : name === 0x3054 ? "1.4" : name === 0x308d ? "OpenGL_ES" : "",
+  "eglChooseConfig(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z": (display: JObj, attrs: Int32Array | null, offset: number, configs: JObj[] | null, configOffset: number, size: number, count: Int32Array | null, countOffset: number) => {
+    if (!isDefault(display)) return eglFailure(0x3008, 0);
     let matches = true;
     for (let i = offset; attrs && i + 1 < attrs.length && attrs[i] !== 0x3038; i += 2) {
       const actual = eglConfigAttrib(attrs[i]), requested = attrs[i + 1];
@@ -453,78 +450,78 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
     eglOut(count, countOffset, +matches);
     if (matches && configs && size > 0) {
       if (configOffset < 0 || configOffset >= configs.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid EGL config offset");
-      configs[configOffset] = defaultConfig;
+      configs[configOffset] = eglObject("EGLConfig", DEFAULT);
     }
     return 1;
   },
-  "static eglGetConfigAttrib(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;I[II)Z": (display: JEGL14Display, config: JEGL14Config, attr: number, out: Int32Array, offset: number) => {
-    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, 0);
+  "eglGetConfigAttrib(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;I[II)Z": (display: JObj, config: JObj, attr: number, out: Int32Array, offset: number) => {
+    if (!isDefault(display) || !isDefault(config)) return eglFailure(0x3005, 0);
     eglOut(out, offset, eglConfigAttrib(attr)); return 1;
   },
-  "static eglCreateContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Landroid/opengl/EGLContext;[II)Landroid/opengl/EGLContext;": (display: JEGL14Display, config: JEGL14Config, share: JEGL14Context, attrs: Int32Array | null, offset: number) => {
-    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noContext);
+  "eglCreateContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Landroid/opengl/EGLContext;[II)Landroid/opengl/EGLContext;": (display: JObj, config: JObj, share: JObj | null, attrs: Int32Array | null, offset: number) => {
+    if (!isDefault(display) || !isDefault(config)) return eglFailure(0x3005, noContext());
     const version = attrVal(attrs?.subarray(offset) ?? null, 0x3098) || 1;
-    if (version < 1 || version > 3) return eglFailure(0x3004, noContext);
-    const context = new JEGL14Context(eglHandle++); context.egl = new EglContext(share?.egl ?? undefined); context.egl.major = version; return context;
+    if (version < 1 || version > 3) return eglFailure(0x3004, noContext());
+    const egl = new EglContext(ctxOf(share)?.egl ?? undefined), ctx: Ctx = { egl };
+    egl.major = version; egl14Contexts.set(egl, ctx);
+    return eglObject("EGLContext", handle(ctx));
   },
-  "static eglCreatePbufferSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;[II)Landroid/opengl/EGLSurface;": (display: JEGL14Display, config: JEGL14Config, attrs: Int32Array | null, offset: number) => {
-    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noSurface);
+  "eglCreatePbufferSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;[II)Landroid/opengl/EGLSurface;": (display: JObj, config: JObj, attrs: Int32Array | null, offset: number) => {
+    if (!isDefault(display) || !isDefault(config)) return eglFailure(0x3005, noSurface());
     const a = attrs?.subarray(offset) ?? null, width = attrVal(a, 0x3057) || 1, height = attrVal(a, 0x3056) || 1;
-    if (width < 0 || height < 0) return eglFailure(0x3004, noSurface);
-    const surface = new JEGL14Surface(eglHandle++); surface.owned = true;
-    surface.surf = { width, height, present: null, frames: 0 }; return surface;
+    if (width < 0 || height < 0) return eglFailure(0x3004, noSurface());
+    return newSurface({ width, height, present: null, frames: 0 }, true);
   },
-  "static eglCreateWindowSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Ljava/lang/Object;[II)Landroid/opengl/EGLSurface;": (display: JEGL14Display, config: JEGL14Config, window: unknown) => {
-    if (display !== defaultDisplay || config !== defaultConfig) return eglFailure(0x3005, noSurface);
-    return after(windowSurface(window), (target) => {
-      if (!target) return eglFailure(0x300b, noSurface);
-      const surface = new JEGL14Surface(eglHandle++); surface.surf = target; return surface;
-    });
+  "_eglCreateWindowSurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Ljava/lang/Object;[II)Landroid/opengl/EGLSurface;": windowSurface14,
+  "_eglCreateWindowSurfaceTexture(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Ljava/lang/Object;[II)Landroid/opengl/EGLSurface;": windowSurface14,
+  "eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JObj, draw: JObj, _read: JObj, context: JObj) => {
+    if (!isDefault(display)) return eglFailure(0x3008, 0);
+    if (!handleOf(context)) { glSurfaces.current = null; return 1; }
+    const egl = ctxOf(context)?.egl;
+    if (!egl || !egl.makeCurrent(surfOf(draw)?.surf ?? null)) return eglFailure(egl?.gl?.isContextLost() ? 0x300e : 0x3006, 0);
+    return 1;
   },
-  "static eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JEGL14Display, draw: JEGL14Surface, _read: JEGL14Surface, context: JEGL14Context) => {
-    if (display !== defaultDisplay) return eglFailure(0x3008, 0);
-    if (context === noContext) { glSurfaces.current = null; return 1; }
-    if (!context?.egl || !context.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(context?.egl?.gl?.isContextLost() ? 0x300e : 0x3006, 0);
-    egl14Contexts.set(context.egl, context); return 1;
-  },
-  "static eglGetCurrentContext()Landroid/opengl/EGLContext;": () => {
+  "eglGetCurrentContext()Landroid/opengl/EGLContext;": () => {
     const current = glSurfaces.current;
-    if (!current) return noContext;
-    let context = egl14Contexts.get(current);
-    if (!context) { context = new JEGL14Context(eglHandle++); context.egl = current; egl14Contexts.set(current, context); }
-    return context;
+    if (!current) return noContext();
+    let ctx = egl14Contexts.get(current);
+    if (!ctx) egl14Contexts.set(current, ctx = { egl: current });
+    return eglObject("EGLContext", handle(ctx));
   },
-  "static eglQueryContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z":
-    (display: JEGL14Display, context: JEGL14Context, attribute: number, out: Int32Array, offset: number) => {
-      if (display !== defaultDisplay) return eglFailure(0x3008, 0);
-      if (!context?.egl) return eglFailure(0x3006, 0);
-      let value: number;
-      if (attribute === 0x3028) value = 1;
-      else if (attribute === 0x3097) value = 0x30a0;
-      else if (attribute === 0x3098) value = context.egl.major;
-      else if (attribute === 0x3086) value = boundEglCurrent(curThread) === context.egl && context.egl.target ? 0x3084 : 0x3038;
-      else return eglFailure(0x3004, 0);
-      eglOut(out, offset, value);
-      return 1;
+  "eglQueryContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z": (display: JObj, context: JObj, attribute: number, out: Int32Array, offset: number) => {
+    if (!isDefault(display)) return eglFailure(0x3008, 0);
+    const egl = ctxOf(context)?.egl;
+    if (!egl) return eglFailure(0x3006, 0);
+    let value: number;
+    if (attribute === 0x3028) value = 1;
+    else if (attribute === 0x3097) value = 0x30a0;
+    else if (attribute === 0x3098) value = egl.major;
+    else if (attribute === 0x3086) value = boundEglCurrent(curThread) === egl && egl.target ? 0x3084 : 0x3038;
+    else return eglFailure(0x3004, 0);
+    eglOut(out, offset, value);
+    return 1;
   },
-  "static eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": driven(function* (_display: JEGL14Display, surface: JEGL14Surface): Gen {
-    const thread = curThread, context = glSurfaces.current;
-    if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
+  "eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": driven(function* (_display: JObj, surface: JObj): Gen {
+    const thread = curThread, context = glSurfaces.current, surf = surfOf(surface)?.surf;
+    if (!surf || context?.target !== surf) return eglFailure(0x300d, 0);
     return (yield context.swap()) ? 1 : eglFailure(0x300e, 0, thread);
   }),
-  "static eglSwapInterval(Landroid/opengl/EGLDisplay;I)Z": (display: JEGL14Display, interval: number) =>
-    display === defaultDisplay ? setEglSwapInterval(interval) : eglFailure(0x3008, 0),
-  "static eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JEGL14Display, surface: JEGL14Surface) => {
-    if (!surface?.surf) return eglFailure(0x300d, 0);
-    if (glSurfaces.current?.target === surface.surf) glSurfaces.current.target = null;
-    if (surface.owned) surface.surf.present?.close(); surface.surf = null; return 1;
+  "eglSwapInterval(Landroid/opengl/EGLDisplay;I)Z": (display: JObj, interval: number) =>
+    isDefault(display) ? setEglSwapInterval(interval) : eglFailure(0x3008, 0),
+  "eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JObj, surface: JObj) => {
+    const s = surfOf(surface);
+    if (!s?.surf) return eglFailure(0x300d, 0);
+    if (glSurfaces.current?.target === s.surf) glSurfaces.current.target = null;
+    if (s.owned) s.surf.present?.close();
+    s.surf = null; release(handleOf(surface)); return 1;
   },
-  "static eglDestroyContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;)Z": (_display: JEGL14Display, context: JEGL14Context) => {
-    if (!context?.egl) return eglFailure(0x3006, 0);
-    if (glSurfaces.current === context.egl) { glSurfaces.current = null; }
-    context.egl = null; return 1;
+  "eglDestroyContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;)Z": (_display: JObj, context: JObj) => {
+    const ctx = ctxOf(context);
+    if (!ctx?.egl) return eglFailure(0x3006, 0);
+    if (glSurfaces.current === ctx.egl) glSurfaces.current = null;
+    egl14Contexts.delete(ctx.egl); ctx.egl = null; release(handleOf(context)); return 1;
   },
-  "static eglReleaseThread()Z": () => { glSurfaces.current = null; takeEglError(); return 1; },
-  "static eglTerminate(Landroid/opengl/EGLDisplay;)Z": (display: JEGL14Display) => display === defaultDisplay ? 1 : eglFailure(0x3008, 0),
-  "static eglGetError()I": takeEglError,
-} });
+  "eglReleaseThread()Z": () => { glSurfaces.current = null; takeEglError(); return 1; },
+  "eglTerminate(Landroid/opengl/EGLDisplay;)Z": (display: JObj) => isDefault(display) ? 1 : eglFailure(0x3008, 0),
+  "eglGetError()I": takeEglError,
+});
