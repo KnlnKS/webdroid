@@ -134,6 +134,9 @@ export const activityManagerMethods = {
   "checkUriPermission(Landroid/net/Uri;IIIILandroid/os/IBinder;)I": (uri: JUri, pid: number, uid: number, modes: number) => checkUriPermission(uri, pid, uid, modes),
   "grantUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, pkg: string, uri: JUri, modes: number) => grantUriPermission(pkg, uri, modes),
   "revokeUriPermission(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/net/Uri;II)V": (_app: JObj, _pkg: string, uri: JUri, modes: number) => revokeUriPermission(uri, modes),
+  // Log.wtf's report, which RuntimeInit sends after logging it: with Settings.Global wtf_is_fatal
+  // unset, ActivityManagerService records it and the process lives
+  "handleApplicationWtf(Landroid/os/IBinder;Ljava/lang/String;ZLandroid/app/ApplicationErrorReport$ParcelableCrashInfo;I)Z": () => 0,
 };
 
 /** ActivityThread.main for this process: its thread attaches to the activity manager, which binds
