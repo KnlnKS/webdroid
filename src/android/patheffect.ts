@@ -114,13 +114,14 @@ class CornerEffect extends NativePathEffect {
   }
 }
 /** SkDiscretePathEffect: points every segment length along each contour, pushed off it along the
- *  normal by an LCG's deviation (seeded from the path's length, as Skia seeds it) */
+ *  normal by an LCG's deviation (seeded from the path's length, as Skia seeds it; DiscretePathEffect
+ *  gives no seed assist) */
 class DiscreteEffect extends NativePathEffect {
-  constructor(readonly segLength: number, readonly deviation: number, readonly seedAssist = 0) { super(); }
+  constructor(readonly segLength: number, readonly deviation: number) { super(); }
   filter(dst: NativePath, src: NativePath, rec: StrokeRec): boolean {
     const meas = new PathMeasure(), pos = new Float32Array(2), tan = new Float32Array(2);
     meas.setPath(src, rec.fill);
-    const s0 = (this.seedAssist ^ Math.round(meas.length())) >>> 0;
+    const s0 = Math.round(meas.length()) >>> 0;
     let seed = (s0 ^ ((s0 << 16) | (s0 >>> 16))) >>> 0;
     // LCGRandom::nextSScalar1: a signed 16.16 fraction in [-1, 1)
     const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return ((seed | 0) >> 15) / 65536; };
