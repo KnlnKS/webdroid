@@ -292,15 +292,19 @@ function installProbe(cfg: ProbeConfig): void {
     const hashes: number[] = [];
     let activeSince = 0;
     const seen: Record<string, number> = {};
-    let lastSample = horizonAt - q.intervalMs;
+    let lastSample = horizonAt - q.intervalMs, interval = q.intervalMs;
     lastHash = -1;
     for (;;) {
       const now = performance.now();
-      if (now - lastSample >= q.intervalMs) {
+      if (now - lastSample >= interval) {
         lastSample = now;
         if (now > horizonAt) hashes.push(lastHash);
         if (hashes.length > q.stableFrames * 2) hashes.shift();
         wantSample = true;
+        // each sample is a synchronous GPU readback, which under SwiftShader can take most of a
+        // busy app's main thread: a screen whose every sample differs (a spinner) is sampled less
+        // often until a frame repeats
+        interval = hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs;
       }
       const b = busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
