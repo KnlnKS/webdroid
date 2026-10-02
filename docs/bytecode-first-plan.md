@@ -582,13 +582,53 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-02. The branch is `knlnks/bytecode` (not pushed); read "Latest handoff"
+Last updated 2026-10-04. The branch is `knlnks/bytecode` (not pushed); read "Latest handoff"
 first. The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings.
 
-### Latest handoff (2026-10-03): Stage D in progress, start here
+### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
+
+Branch `knlnks/bytecode` (not pushed). Each commit passed typecheck, `bun run test`, the FitNotes
+smoke and the fast e2e (7/7) when it landed; the history's 2026-10-04 entries record the findings.
+
+**State.**
+- **Stage D is the only mode.** STAGE_D is always cut over, and `stageD()` no longer exists.
+- **Stage F removed most of the TS framework.** About 18,000 lines are gone under `src/`: the TS
+  view, widget, window, app, context and lifecycle layers, and the TS ContentResolver with its
+  provider IPC. Every spec in them was withheld under a STAGE_D prefix.
+- **System providers are hosted.** MediaStore's provider (`mediastore.ts`), Settings and
+  ExternalStorage are hosted IContentProviders on a shared base in `systemproviders.ts`, which
+  also answers ContentResolver's async getType/canonicalize calls.
+- **Lifecycle differential (§5.3) is clean on the gated flows the AVD runs.** FitNotes,
+  CalculatorM and Mihon onboarding emit the same `wm_on_*` EventLog sequence per step as the
+  reference AVD. The recording scripts are not committed; the history describes the method.
+- **The latency gate passes** cold and warm.
+- **Amazon reaches its sign-in screen.** It previously froze the page; see the history on async
+  natives and thread identity.
+
+**Next, in order:**
+1. **Remaining Stage F.** Delete what no caller reaches any more: grep `src/android` for specs
+   under STAGE_D prefixes (Runtime.register withholds them) and for helpers only they used.
+   `AppHost.application` is always null and can go with its readers. Report the
+   hand-written size in `src/android` as §7's metric.
+2. **Async natives that call Java after an `await` run as the main thread.** Convert the ones
+   that reach app code to `driven` generators: hosted services in notification, appwidget,
+   telephony and storagestats.
+3. **Wider matrix.** Run `--live` one flow at a time, `--full --jobs 1` on an idle host (it has
+   not run since the flip) and `bun run corpus`, always excluding Genshin.
+4. **Performance (§4).** D-mode launches compile about 45% more classes than TS mode did; next
+   are build-time AOT for the platform prefixes (§4.1) and the boot image (§4.3).
+
+**Known limits:** Reddit's flow is timing-sensitive (microG's One Tap sheet in its own process
+takes taps); Resy and TikTok fail their live flows on live content; Clash of Clans and Clash
+Royale fail their anti-tamper checks; activities run as one task per process.
+
+**How to work here** is unchanged from the previous handoff below, with one change: `scratch-d.ts`
+needs no `?bytecode=stage-d`.
+
+### Previous handoff (2026-10-03): Stage D in progress
 
 Branch `knlnks/bytecode` (not pushed). Every commit on it passed typecheck, `bun run test`, the
 FitNotes smoke and the default fast e2e when it landed. Findings and failure mechanisms are in

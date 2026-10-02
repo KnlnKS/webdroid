@@ -1557,6 +1557,20 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Any TS async native that calls Java after an `await` has the same exposure. Driven generators
     are the safe form. Hosted services still use plain async natives that call Java after host
     awaits (notification, appwidget, telephony, storagestats); they were not converted.
+  - Harness: the pixel rule's readbacks starved Komikku's manga step (above); a screen whose every
+    sample differs is now sampled less often. Komikku's `16 populated-library` timeouts came
+    from step 06 settling on the unchanged welcome page before the library appeared, leaving later
+    taps a screen behind; that step now waits for the navigation bar.
+  - Open: about one parallel gate run in five early in this session failed Komikku's
+    `21 restore` with NotFoundError from `docRead` on a picked "single" document (the backup file
+    in the OPFS stand-in). Logging showed no delete or rename of it; it did not recur in 16 later
+    runs, alone or parallel. A read overlapping the backup's `createWritable().close()` is the
+    untested hypothesis.
+  - AOSP's ContentResolver.getType calls `getTypeAsync` (canonicalize and uncanonicalize have
+    async forms too), which the hosted Settings and ExternalStorage providers lacked, so getType
+    on their URIs failed. A shared base in `systemproviders.ts` answers them as
+    ContentProvider.Transport does, and MediaStore's provider is hosted on it (`media`, package and
+    process `com.google.android.providers.media.module`, as on the reference AVD).
 
 ## Java, storage and framework semantics
 
