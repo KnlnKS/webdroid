@@ -580,9 +580,8 @@ export function socketOption(fd: number, level: number, name: number): number {
       case SO_RCVBUF: return stored ?? (stream ? 1_048_576 : 229_376);
       case SO_SNDBUF: return stored ?? (stream ? socket.connected ? 1_048_576 : 524_288 : 229_376);
       case SO_REUSEADDR: case SO_BROADCAST: case 9 /* SO_KEEPALIVE */: case 10 /* SO_OOBINLINE */: case 5 /* SO_DONTROUTE */:
-      case SO_RCVTIMEO: case SO_SNDTIMEO:
+      case SO_RCVTIMEO: case SO_SNDTIMEO: case SO_LINGER:
         return stored ?? 0;
-      case SO_LINGER: return stored ?? 0;
     }
     return -E.NOPROTOOPT;
   }
@@ -943,7 +942,7 @@ function nativeRead(cpu: Cpu, fd: number, destination: number, length: number, n
   return localPollProvider?.read(cpu, fd, destination, length) ?? fail(cpu, E.BADF);
 }
 
-function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
+export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
   const entries: PollEntry[] = [];
   for (let i = 0; i < count; i++) entries.push({ fd: mem.ld32(pollfds + i * 8), events: mem.ld16u(pollfds + i * 8 + 4), revents: 0 });
   const target = mem.va(pollfds);
@@ -955,7 +954,6 @@ function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, 
   const n = pollEntries(entries, timeout, signal);
   return n instanceof Promise ? n.then(land) : land(n);
 }
-export { nativePoll };
 
 const FD_SETSIZE = 1024;
 const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (fd >>> 3)] & (1 << (fd & 7)));
