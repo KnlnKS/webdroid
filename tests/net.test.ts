@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
 import { dialName, syntheticAddress } from "../src/shell/relay";
-import { scall, mountApexData, loadFrameworkJar } from "./java";
+import { scall, mountApexData, loadFrameworkJar, bootApp, packageRecord } from "./java";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -296,7 +296,7 @@ describe("nsd-service", () => {
   rt.linkNatives();
 
   test("NSD reports unavailable multicast discovery without fabricated services", async () => {
-    const context = rt.make("android/content/Context");
+    const context = await bootApp(await packageRecord("org.webdroid.test.nsd"));
     const manager = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "servicediscovery");
     expect(manager).not.toBeNull();
     const callback = new Promise<void>((resolve) => { finish = resolve; });

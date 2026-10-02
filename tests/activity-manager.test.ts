@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
 
-// ActivityThread's services, receivers and providers are AOSP's under Stage D, so the activity
-// manager is driven in a process that serves android/app from bytecode.
+// Each fixture drives the activity manager in a process of its own, whose app identity and
+// registered binders it sets up from scratch.
 async function fixture(name: string): Promise<unknown> {
-  const run = Bun.spawn(["bun", new URL(`fixtures/${name}.ts`, import.meta.url).pathname],
-    { env: { ...process.env, WEBDROID_BYTECODE: "stage-d" }, stdout: "pipe", stderr: "ignore" });
+  const run = Bun.spawn(["bun", new URL(`fixtures/${name}.ts`, import.meta.url).pathname], { stdout: "pipe", stderr: "ignore" });
   return JSON.parse((await new Response(run.stdout).text()).trim().split("\n").at(-1)!);
 }
 

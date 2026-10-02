@@ -1,4 +1,4 @@
-// bun tests/fixtures/activity-manager.ts, with WEBDROID_BYTECODE=stage-d: what the activity manager asks of a
+// bun tests/fixtures/activity-manager.ts: what the activity manager asks of a
 // process's IApplicationThread as its services and receivers are driven, as one JSON object.
 const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 await import(W + "/tests/platform");

@@ -1,9 +1,8 @@
 import { expect, test, describe, beforeAll } from "bun:test";
-import { loadFrameworkJar } from "./java";
+import { loadFrameworkJar, bootApp, packageRecord } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
-import { JContext } from "../src/android/context";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
@@ -168,16 +167,13 @@ describe("mediadrm", () => {
 
 describe("mediasession", () => {
   const commands: string[] = [];
-  rt.register({ name: "test/SessionContext", ctor: class extends JContext {}, sup: "android/content/Context", methods: {
-    "getPackageName()Ljava/lang/String;": () => "test.session",
-  } });
   rt.register({ name: "test/SessionCallback", ctor: class extends JObj {}, sup: "android/media/session/MediaSession$Callback", methods: {
     "onCommand(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V": (command: string) => { commands.push(command); },
   } });
   rt.linkNatives();
 
   test("MediaSession keeps controller identity and dispatches commands through the callback looper", async () => {
-    const context = rt.make("test/SessionContext");
+    const context = await bootApp(await packageRecord("org.webdroid.test.session"));
     const session = await newObj("android/media/session/MediaSession", "(Landroid/content/Context;Ljava/lang/String;)V", context, "test");
     const token = await vcall(session, "getSessionToken", "()Landroid/media/session/MediaSession$Token;");
     const controller = await newObj("android/media/session/MediaController", "(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V", context, token);

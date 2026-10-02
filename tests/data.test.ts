@@ -11,7 +11,7 @@ import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
 import { onMain } from "../src/android/mainloop";
-import { loadLibcore, loadFrameworkJar } from "./java";
+import { loadLibcore, loadFrameworkJar, bootApp, packageRecord } from "./java";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -207,7 +207,7 @@ describe("sqlite-transaction-listener", () => {
       "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V": (db: unknown) =>
         vcall(db, "execSQL", "(Ljava/lang/String;)V", "CREATE TEMP TABLE temp_marker (id INTEGER)"),
     } });
-    const context = Object.assign(rt.make("android/content/Context"), { $host: { pkg: "test.sqlite" } });
+    const context = await bootApp(await packageRecord("org.webdroid.test.sqlite"));
     const make = () => newObj("test/TempTableHelper", "(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V", context, "temp-isolation.db", null, 1);
     const first = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
     const second = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");

@@ -670,7 +670,8 @@ not been run in D-mode.
 6. **Latency gate in D-mode**: `bun run lat` and `lat --warm`, with no agents loading the host.
    Then the D-mode performance pass: D-mode compiles about 40% more classes at launch, so look at
    §4's AOT/boot-image work for the stage-D prefixes.
-7. **Flip the default to stage-d, then Stage F**: delete the TS view, widget, app, policy, webkit
+7. **Stage F** (the default is now stage-d: `STAGE_D` is always cut over, and the `stage-d`
+   token is a no-op): delete the TS view, widget, app, policy, webkit
    and manager stacks that D-mode no longer reaches (`provideripc.ts` is TS-mode only), and the TS
    paths in device.ts, processes.ts, apphost.ts and the harness's `wd.app().stack` uses.
 
@@ -693,8 +694,8 @@ not been run in D-mode.
   server port. Merge by cherry-pick, re-gate, then remove the worktree and branch.
 - **Never** `pkill -f server.ts` or `pkill -f e2e`: other sessions' servers and runs share the host.
 - **Gate:** `bun run typecheck`; `bun run test`; `bun run smoke apks/FitNotes.apk`;
-  `PORT=4311 bun run server.ts`; then `WEBDROID_URL=http://localhost:4311 bun run e2e` with and
-  without `WEBDROID_BYTECODE=stage-d`.
+  `PORT=4311 bun run server.ts`; then `WEBDROID_URL=http://localhost:4311 bun run e2e` (Stage D
+  is the only mode).
 - **Debugging D-mode:**
   - `bun scratch-d.ts '<page expr>'` (repo root, uncommitted) drives `?bytecode=stage-d`. Env:
     `URL`, `T`/`WAIT`, `LEN`, `ALL=1` for the full console, `SCREEN=1` for a `#screen` PNG in

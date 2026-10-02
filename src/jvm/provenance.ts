@@ -14,8 +14,8 @@
 // exactly this reason: its super is java/lang/Object, which has no fields.
 
 /** `?bytecode=android/graphics/text/,android/graphics/fonts/` (headless: WEBDROID_BYTECODE) cuts
- *  those prefixes over for one page load, so the same bundle can be A/B'd against itself — by the
- *  e2e driver, by a comparison script, or by hand — without an edit and a rebuild. */
+ *  those prefixes over too for one page load, so a further cut can be A/B'd against the same bundle
+ *  — by the e2e driver, by a comparison script, or by hand — without an edit and a rebuild. */
 const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode")
   : typeof process !== "undefined" ? process.env.WEBDROID_BYTECODE ?? null : null;
 
@@ -30,10 +30,10 @@ const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/co
   "android/media/MediaRoute2ProviderService"];
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
- *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). `stage-d`
- *  names the STAGE_D group. */
-export const BYTECODE: string[] = fromUrl ? fromUrl.split(",").map((s) => s.trim()).filter(Boolean)
-  .flatMap((p) => p === "stage-d" ? STAGE_D : [p]) : [];
+ *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). STAGE_D is
+ *  always cut over; the `stage-d` token, which once opted into it, adds nothing. */
+export const BYTECODE: string[] = [...STAGE_D, ...(fromUrl ?? "").split(",").map((s) => s.trim())
+  .filter((p) => p && p !== "stage-d")];
 
 /** whether AOSP's ActivityThread runs this process, over the TS system services (Stage D) */
 export const stageD = (): boolean => isBytecode("android/app/ActivityThread");

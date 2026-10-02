@@ -1,4 +1,5 @@
-import { rt } from "../src/jvm/runtime";
+import { rt, type JObj } from "../src/jvm/runtime";
+import { scall } from "../src/jvm/natives/jlang";
 
 export { scall } from "../src/jvm/natives/jlang";
 
@@ -66,10 +67,9 @@ export async function fakeStyles(strings: string[], styles: Record<number, [numb
   return res;
 }
 
-/** AOSP's Resources over `res`, installed as an app at /data/app/`name`.apk beside framework-res */
-export async function appResources(res: import("../src/android/res").Resources, name: string) {
+/** framework.jar, the main looper, framework-res as the system package and the device's locales, as a booted page has them */
+async function loadPlatform(): Promise<void> {
   const { loadFramework } = await import("../src/android/framework");
-  const { javaResources } = await import("../src/android/resources");
   await loadFrameworkJar();
   const fetch = globalThis.fetch;
   globalThis.fetch = (async (url: string) => url === "/vendor/aosp/framework-res.apk"
@@ -77,7 +77,58 @@ export async function appResources(res: import("../src/android/res").Resources, 
   try { await loadFramework(); } finally { globalThis.fetch = fetch; }
   const { deviceConfiguration, initDeviceLocales } = await import("../src/android/resnative");
   if (!deviceConfiguration().locales.values.length) await initDeviceLocales();
+}
+
+/** AOSP's Resources over `res`, installed as an app at /data/app/`name`.apk beside framework-res */
+export async function appResources(res: import("../src/android/res").Resources, name: string) {
+  const { javaResources } = await import("../src/android/resources");
+  await loadPlatform();
   return javaResources(res, `/data/app/${name}.apk`);
+}
+
+let booted: Promise<JObj> | null = null;
+/** `record`'s process as a page boots it: the package installed and naming this process, AOSP's
+ *  ActivityThread attached to the activity manager, which binds its Application. Resolves to that
+ *  Application once its onCreate ran; one app per test file. */
+export function bootApp(record: import("../src/android/packages").PackageRecord, pid = 4321): Promise<JObj> {
+  return booted ??= (async () => {
+    const { packages } = await import("../src/android/packages");
+    const { registerApk } = await import("../src/android/assetmanager");
+    const { setProcessIdentity, setProcessName } = await import("../src/android/os");
+    const { setAppHost } = await import("../src/android/apphost");
+    const { onMain } = await import("../src/android/mainloop");
+    const { vfs } = await import("../src/shell/vfs");
+    const { startActivityThread } = await import("../src/android/server/am");
+    const { hostWindowManager } = await import("../src/android/server/wm");
+    await loadPlatform();
+    await loadSystemFonts();
+    packages.set(record.pkg, record);
+    registerApk(record.path, record.res);
+    // installd's createAppData, as a page's boot does it
+    for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
+    setProcessIdentity(pid, record.uid);
+    setProcessName(record.pkg);
+    setAppHost({ pkg: record.pkg, application: null, res: record.res, splits: [], currentActivity: () => null, activities: () => [] } as never);
+    hostWindowManager();
+    await onMain(() => startActivityThread(false));
+    // bindApplication is a message to the main looper; the Application exists once it ran
+    return onMain(() => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"));
+  })();
+}
+
+/** a package `pkg` targeting `target` that requests `permissions`, as the package manager records an
+ *  installed one; its archive is an empty table at /data/app/`pkg`.apk */
+export async function packageRecord(pkg: string, { target = 35, permissions = [] as string[], certificate = 1, application = [] as import("../src/android/axml").XmlNode[] } = {}) {
+  const { PackageRecord, packageUid } = await import("../src/android/packages");
+  const { Resources } = await import("../src/android/res");
+  const { TV } = await import("../src/android/axml");
+  const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
+  const manifest = { name: "manifest", attrs: [attr("package", pkg)], children: [
+    { name: "uses-sdk", attrs: [attr("minSdkVersion", null, 21), attr("targetSdkVersion", null, target)], children: [] },
+    ...permissions.map((name) => ({ name: "uses-permission", attrs: [attr("name", name)], children: [] })),
+    { name: "application", attrs: [], children: application },
+  ] };
+  return new PackageRecord(manifest, new Resources(null, {}), `/data/app/${pkg}.apk`, packageUid(pkg), async () => [new Uint8Array([certificate])]);
 }
 
 /** a compiled XML document of `root`, as aapt writes one: a UTF-16 string pool, then each

@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe } from "bun:test";
 import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -8,7 +8,6 @@ import { checkUriPermission, grantUriPermission, revokeUriPermission, providerOp
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
 import { mangleMethod } from "../src/jvm/abi";
-import { JContext } from "../src/android/context";
 import { defaultDisplay } from "../src/android/display";
 import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
@@ -28,7 +27,7 @@ import { mkPfd } from "../src/android/os";
 import { decodeProviderValue, encodeProviderValue } from "../src/android/provideripc";
 import { javaReadFd } from "../src/native/stdio";
 import { Arsc } from "../src/android/arsc";
-import { scall, loadLibcore, preloadTextPaint } from "./java";
+import { scall, loadLibcore, bootApp, packageRecord } from "./java";
 
 describe("android-uri-permission", () => {
   test("tree URI grants cover descendants with the granted access mode", () => {
@@ -76,13 +75,17 @@ describe("clip-data", () => {
   });
 });
 
+// one app process for the file
+const PKG = "org.webdroid.test.content";
+const app = async () => bootApp(await packageRecord(PKG));
+rt.register({ name: "test/Connection", ctor: class extends JObj {}, ifaces: ["android/content/ServiceConnection"], methods: {} });
+
 describe("context-process-state", () => {
   rt.linkNatives();
 
   test("Context.databaseList returns private database directory entries", async () => {
-    const context = rt.make("android/content/Context") as JContext;
-    context.$host = { pkg: "database-list-test" } as JContext["$host"];
-    const dir = "/data/data/database-list-test/databases";
+    const context = await app();
+    const dir = `/data/data/${PKG}/databases`;
     const paths = [`${dir}/main.db`, `${dir}/main.db-wal`];
     for (const path of paths) vfs.write(path, new Uint8Array(0));
     try {
@@ -387,10 +390,10 @@ describe("pending-intents", () => {
   });
 
   test("PendingIntent reports its stored operation type", async () => {
-    const context = new JContext(), intent = await newIntent();
+    const context = await app(), intent = await newIntent();
     const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
-    const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
-    const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
+    const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
+    const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
     expect(await vcall(activity, "isActivity", "()Z")).toBe(1);
     expect(await vcall(activity, "isBroadcast", "()Z")).toBe(0);
     expect(await vcall(activity, "isImmutable", "()Z")).toBe(1);
@@ -639,30 +642,28 @@ describe("service-bind", () => {
   rt.linkNatives();
 
   test("a failed service binding still requires one unbind", async () => {
-    const context = rt.make("android/content/Context") as JContext;
-    context.$host = { pkg: "service-bind-test" } as JContext["$host"];
-    const intent = await newIntent();
-    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName("service-bind-test", "service-bind-test.MissingService"));
-    const connection = new JObj();
+    const context = await app(), intent = await newIntent();
+    await vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", await mkComponentName(PKG, PKG + ".MissingService"));
+    const connection = await newObj("test/Connection");
     expect(await vcall(context, "bindService", "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z", intent, connection, 0)).toBe(0);
     await vcall(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection);
-    await expect(vcallAsync(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection)).rejects.toMatchObject({ msg: "Service not registered" });
+    const second = await vcallAsync(context, "unbindService", "(Landroid/content/ServiceConnection;)V", connection).then(() => null, (e: { msg?: string }) => e.msg);
+    expect(second).toMatch(/^Service not registered: /);
   });
 });
 
 describe("window-context", () => {
-  beforeAll(preloadTextPaint);
   rt.linkNatives();
 
   test("display and window contexts retain display identity and own their window service", async () => {
-    const source = new JContext(), screen = await defaultDisplay();
-    Reflect.set(source, "$host", { pkg: "test" });
+    const source = await app(), screen = await defaultDisplay();
     const displayContext = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", screen);
     expect(await vcall(displayContext, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
     expect(await vcall(displayContext, "isUiContext", "()Z")).toBe(0);
     const window = await vcall(displayContext, "createWindowContext", "(ILandroid/os/Bundle;)Landroid/content/Context;", 2038, null);
     expect(rt.iof(window, "android/content/ContextWrapper")).toBeTruthy();
-    expect(await vcall(window, "getDisplay", "()Landroid/view/Display;")).toBe(screen);
+    // its display is the window manager's for the same display id, not the caller's object
+    expect(await vcall(await vcall(window, "getDisplay", "()Landroid/view/Display;"), "getDisplayId", "()I")).toBe(await vcall(screen, "getDisplayId", "()I"));
     expect(await vcall(window, "isUiContext", "()Z")).toBe(1);
     const manager = await vcall(window, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "window");
     expect(await vcall(window, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", rt.classFor("android/view/WindowManager"))).toBe(manager);
@@ -673,8 +674,7 @@ describe("window-context", () => {
   });
 
   test("attribution contexts retain their base and expose their tag", async () => {
-    const source = new JContext();
-    Reflect.set(source, "$host", { application: source, pkg: "test" });
+    const source = await app();
     const tagged = await vcall(source, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", "navigation");
     expect(tagged).not.toBe(source);
     expect(await vcall(tagged, "getApplicationContext", "()Landroid/content/Context;")).toBe(source);
