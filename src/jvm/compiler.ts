@@ -864,8 +864,9 @@ ${profileEnd}
         // this chain — JVM reentrancy); skip init to avoid clinit self-deadlock
         const own = clsName === this.info.name;
         // A platform body on a native class keeps the resolved function: a native spec's JS class
-        // need not extend its declared superclass. Strings are JS primitives.
-        if (this.cold || this.info.native || clsName === "java/lang/String") {
+        // need not extend its declared superclass. Strings are JS primitives, and an interface's
+        // private method is on no implementor's prototype chain.
+        if (this.cold || this.info.native || clsName === "java/lang/String" || (this.R.classDefOf(clsName)?.def.flags ?? 0) & ACC.INTERFACE) {
           if (own) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
           else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
           this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out, this.t, quiet);

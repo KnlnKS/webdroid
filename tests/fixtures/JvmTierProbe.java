@@ -1,11 +1,15 @@
-// Rebuild in a temporary directory with javac --release 8, then Android build-tools 35 d8
+// Rebuild in a temporary directory with javac --release 9, then Android build-tools 35 d8
 // --min-api 26 --lib "$ANDROID_HOME/platforms/android-35/android.jar" --output <dir> <dir>/*.class.
 // Copy classes.dex to JvmTierProbe.dex; tests need neither Java nor the Android SDK.
 public final class JvmTierProbe {
     public static final class Host {
         public static native int call(int mode, int value);
     }
-    public interface Callable { int apply(int value); }
+    public interface Callable {
+        int apply(int value);
+        default int plus(int value) { return offset(apply(value)); }
+        private int offset(int value) { return value + 3; }
+    }
     public static final class Worker implements Callable {
         private int twice(int value) { return Host.call(0, value) * 2; }
         public int apply(int value) { return twice(value) + 1; }
@@ -49,4 +53,5 @@ public final class JvmTierProbe {
         return value;
     }
     public static int dispatch(Callable target, int value) { return target.apply(value); }
+    public static int composed(Callable target, int value) { return target.plus(value); }
 }

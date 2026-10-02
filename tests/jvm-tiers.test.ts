@@ -160,9 +160,12 @@ test("DEX backedges yield and captured direct/interface entries follow promotion
     const instance = new worker.ctor();
     const direct = f.R.dexLink(worker.dex!).rdp0(worker.def!.directMethods.find((method) => worker.dex!.method(method.methodIdx).name === "twice")!.methodIdx);
     const call = await f.warm("dispatch", "(LJvmTierProbe$Callable;I)I", [instance, 1]);
+    // an interface default reaching its private method on an implementor
+    const composed = await f.warm("composed", "(LJvmTierProbe$Callable;I)I", [instance, 1]);
     for (let i = 0; i < 40; i++) {
       expect(await call(instance, i)).toBe(i * 2 + 1);
       expect(await direct.call(instance, i)).toBe(i * 2);
+      expect(await composed(instance, i)).toBe(i * 2 + 4);
     }
   }
 });
