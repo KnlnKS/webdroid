@@ -713,8 +713,7 @@ export class Cpu {
   /** an instruction this CPU does not have, under a SIGILL handler (a feature probe such as
    *  OpenSSL's armcap) */
   private trapsIllegal(): boolean {
-    if (!sigHandlers.has(SIGILL) || this.signalMask & 1n << BigInt(SIGILL - 1)) return false;
-    return true;
+    return sigHandlers.has(SIGILL) && !(this.signalMask & 1n << BigInt(SIGILL - 1));
   }
   private async deliverFromLoop(sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
     this.state = "deliver";
