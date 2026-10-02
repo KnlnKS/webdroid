@@ -17,13 +17,6 @@ import { yieldToLoop } from "../jvm/yield";
  *  inline; phase: which stage of a frame the main thread is in, so a stuck frame names it */
 export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued: 0, phase: "" };
 
-/**
- * Is the main thread dispatching right now? Thread identity is NOT the same question: a chain that
- * only set curThread would run "inline" while the main thread is free to interleave with it at
- * every await. Callers that must not wait behind the main thread (it awaits them) test this.
- */
-export function inMainJob(): boolean { return mainDbg.depth > 0; }
-
 /** A thread may hold the JS thread this long between macrotask turns before its looper yields, so
  *  a message that keeps reposting itself cannot starve input, rendering or other realms. */
 const SLICE_MS = 16;
@@ -164,11 +157,6 @@ export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable
   void postRunnable(r, delay, handler);
   return r;
 }
-
-/** Context.getMainExecutor: AOSP's HandlerExecutor over the main handler */
-let mainExecutorObj: Promise<unknown> | null = null;
-export const mainExecutor = (): Promise<unknown> =>
-  mainExecutorObj ??= newObj("android/os/HandlerExecutor", "(Landroid/os/Handler;)V", mainHandler());
 
 /** debug: the main queue's pending messages and the looper's wait state (wd.looperDump) */
 export async function looperDump(): Promise<unknown> {

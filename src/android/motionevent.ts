@@ -12,13 +12,13 @@ const HISTORY_CURRENT = -0x80000000;
 export const AXIS_X = 0, AXIS_Y = 1, AXIS_PRESSURE = 2, AXIS_SIZE = 3, AXIS_ORIENTATION = 8, AXIS_RELATIVE_X = 27, AXIS_RELATIVE_Y = 28;
 const SOURCE_CLASS_POINTER = 2, SOURCE_CLASS_POSITION = 8, SOURCE_CLASS_JOYSTICK = 16, SOURCE_MOUSE_RELATIVE = 0x20004;
 /** AMOTION_EVENT_PRIVATE_FLAG_SUPPORTS_ORIENTATION and _SUPPORTS_DIRECTIONAL_ORIENTATION: kept from Java */
-export const SUPPORTS_ORIENTATION = 0x80;
+const SUPPORTS_ORIENTATION = 0x80;
 const DIRECTIONAL = 0x100, PRIVATE_FLAGS = 0x180;
 const MAX_POINTERS = 16, MAX_AXES = 30;
 const f32 = Math.fround;
 
 // ── ui::Transform: [a, b, tx, c, d, ty] with x' = a·x + b·y + tx and y' = c·x + d·y + ty, in float
-export type Xform = Float32Array;
+type Xform = Float32Array;
 const IDENTITY_XF = () => Float32Array.of(1, 0, 0, 0, 1, 0);
 const mapX = (t: Xform, x: number, y: number) => f32(f32(f32(t[0] * x) + f32(t[1] * y)) + t[2]);
 const mapY = (t: Xform, x: number, y: number) => f32(f32(f32(t[3] * x) + f32(t[4] * y)) + t[5]);
@@ -55,7 +55,7 @@ function rotationOf(flags: number): Xform {
 const round = (v: number) => f32((v < 0 ? -Math.round(-v * 1024) : Math.round(v * 1024)) / 1024);
 
 // ── PointerCoords: BitSet64 of axes (MSB first, as Java's mPackedAxisBits) and their values
-export class Coords {
+class Coords {
   /** axes 0-31 at bit 31 - axis, and 32-63 at bit 63 - axis */
   hi = 0; lo = 0;
   v = new Float32Array(64);

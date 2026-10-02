@@ -166,7 +166,7 @@ const op = (fn: (layer: Layer, ...a: never[]) => void) => (t: bigint, sc: bigint
   const layer = layerOf(sc);
   tx(t).ops.push(() => fn(layer, ...a));
 };
-export function applyOps(t: Transaction): void {
+function applyOps(t: Transaction): void {
   const ops = t.ops.splice(0);
   for (const fn of ops) fn();
   if (ops.length) scheduleComposite();

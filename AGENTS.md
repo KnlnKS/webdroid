@@ -80,7 +80,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - Java strings are JS strings; int/float/double are numbers, long is BigInt; primitive arrays
   are typed arrays and object arrays carry `$t`. JVM code owns mangling, defining-loader
   identity, null/zero normalization and reaching-definition typing of floating constants.
-- Main-thread entry uses `onMain`; queue ownership is `inMainJob()`, not thread identity.
+- Main-thread entry uses `onMain`; queue ownership is the main loop's dispatch depth, not thread identity.
   Preserve lifecycle/callback ordering. Class initialization waits for concurrent initialization
   while allowing same-class re-entry and handling cycles.
 - Java overrides, overloads, reflection and boxing must reach the correct Java entry point.

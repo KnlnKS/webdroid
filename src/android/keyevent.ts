@@ -208,7 +208,7 @@ function sameMap(a: KeyMap, b: KeyMap): boolean {
 }
 
 /** NativeKeyCharacterMap: a device's id and its map, or no map for obtainEmptyMap's */
-export class NativeKeyCharacterMap { constructor(readonly deviceId: number, readonly map: KeyMap | null) {} }
+class NativeKeyCharacterMap { constructor(readonly deviceId: number, readonly map: KeyMap | null) {} }
 const kcmAt = (h: bigint) => deref<NativeKeyCharacterMap>(h);
 /** a Java KeyCharacterMap over `map` for device `deviceId` */
 export const javaKeyCharacterMap = (deviceId: number, map: KeyMap | null): Promise<JObj> =>

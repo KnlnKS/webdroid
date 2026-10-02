@@ -35,12 +35,12 @@ rt.register({ name: "android/graphics/Rect", ctor: JRect, ifaces: PARCELABLE, fi
 /** a RectF: its own class, since fallthrough would otherwise give it Rect's same-descriptor bodies */
 export class JRectF extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 rt.register({ name: "android/graphics/RectF", ctor: JRectF, ifaces: PARCELABLE, fields: RECT_FIELDS, statics: geometryCreator("android/graphics/RectF", RECT_FIELDS, true) });
-export class JPoint extends JObj { x = 0; y = 0; }
+class JPoint extends JObj { x = 0; y = 0; }
 rt.register({ name: "android/graphics/Point", ctor: JPoint, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/Point", POINT_FIELDS, false) });
 rt.register({ name: "android/graphics/PointF", ctor: class extends JObj { x = 0; y = 0; }, ifaces: PARCELABLE, fields: POINT_FIELDS, statics: geometryCreator("android/graphics/PointF", POINT_FIELDS, true) });
 
 // android.graphics.Insets — immutable 4-sided inset value (WindowInsets.getInsets() etc).
-export class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
+class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 const INSETS_NONE = new JInsets();
 /** Mirrors Insets.of(): the all-zero case returns the cached NONE singleton, like AOSP. */
 export function insetsOf(l: number, t: number, r: number, b: number): JInsets {

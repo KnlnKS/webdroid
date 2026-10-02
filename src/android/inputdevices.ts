@@ -13,7 +13,7 @@ import { parseKeyMap, javaKeyCharacterMap } from "./keyevent";
 
 export const VIRTUAL_KEYBOARD = -1, TOUCHSCREEN = 12;
 /** TOUCHSCREEN | STYLUS: the source of the touchscreen's events */
-export const TOUCH_SOURCE = 0x5002;
+const TOUCH_SOURCE = 0x5002;
 const RAW_RANGE = 32768;
 
 const B = "android/view/InputDevice$Builder";

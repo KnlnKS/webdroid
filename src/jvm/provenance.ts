@@ -4,7 +4,7 @@
 // rather than implied by import order in src/natives.ts. HostStubGen drives the same
 // decision for Ravenwood from a policy file, for the same reason.
 //
-// Empty keeps every native spec. Adding a prefix moves that subtree onto
+// Adding a prefix moves that subtree onto
 // vendor/aosp/framework.jar and withholds our native spec for it, which is what makes a cut
 // one line and a measurement rather than a rewrite.
 //
@@ -31,9 +31,8 @@ const STAGE_D = ["android/app/", "android/view/", "android/widget/", "android/co
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec; one ending in `$` names
  *  just that class and its inner classes (`java/io/File$` leaves FileInputStream alone). STAGE_D is
- *  always cut over; the `stage-d` token, which once opted into it, adds nothing. */
-export const BYTECODE: string[] = [...STAGE_D, ...(fromUrl ?? "").split(",").map((s) => s.trim())
-  .filter((p) => p && p !== "stage-d")];
+ *  always cut over. */
+export const BYTECODE: string[] = [...STAGE_D, ...(fromUrl ?? "").split(",").map((s) => s.trim()).filter(Boolean)];
 
 
 /** under Stage D's static cut, which withholds a TS spec in every load */
