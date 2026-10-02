@@ -6,7 +6,7 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { rt, driven, type Gen } from "../jvm/runtime";
+import { rt, driven, declaredField, type Gen } from "../jvm/runtime";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
@@ -195,13 +195,16 @@ delegate("android/content/res/XmlBlock", {
 const assets = (h: bigint) => deref<Resources>(h);
 let liveAssetManagers = 0, liveAssets = 0;
 
-interface TypedValueLike { type: number; data: number; resourceId: number; density: number; string: unknown; assetCookie: number; changingConfigurations: number }
+type TypedValueLike = Record<string, unknown>;
+const TV_FIELDS = ["type", "assetCookie", "data", "string", "resourceId", "changingConfigurations", "density"] as const;
+let tvKeys: string[] | null = null;
 /** CopyValue: a selected value into the caller's TypedValue, returning its cookie; the Java side
  *  reads a string out of the cookie's pool */
 function copyValue(res: Resources, v: SV, tv: TypedValueLike): number {
   const cookie = res.cookieOf(v.pkg);
-  tv.type = v.t; tv.assetCookie = cookie; tv.data = v.d; tv.string = null;
-  tv.resourceId = v.resid; tv.changingConfigurations = v.flags; tv.density = v.density;
+  const k = tvKeys ??= TV_FIELDS.map((f) => declaredField("android/util/TypedValue", f));
+  tv[k[0]] = v.t; tv[k[1]] = cookie; tv[k[2]] = v.d; tv[k[3]] = null;
+  tv[k[4]] = v.resid; tv[k[5]] = v.flags; tv[k[6]] = v.density;
   return cookie;
 }
 const SVAL = newSV();

@@ -5,7 +5,6 @@ import { Arsc } from "./arsc";
 import { TV, type XmlNode, type XmlAttr } from "./axml";
 import { JObj, declaredField } from "../jvm/runtime";
 import { deref } from "./handles";
-import { JDisplayMetrics } from "./util";
 import { intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
 
@@ -92,7 +91,6 @@ export class Resources {
   arsc: Arsc | null;
   zip: Record<string, Uint8Array>;
   lazyEntries: Map<string, FileSource>;
-  dm = new JDisplayMetrics();
   bagCache = new Map<number, Bag | null>();
   private framework: Arsc | null | undefined;
   /** an AssetManager's apks in cookie order; null for a package's own tables */
@@ -506,9 +504,7 @@ function javaField<T>(o: unknown, cls: string, name: string): T {
 /** the AssetManager2 behind AOSP's Resources */
 export function nativeRes(jres: unknown): Resources {
   const impl = javaField<object>(jres, "android/content/res/Resources", "mResourcesImpl");
-  const res = nativeAssets(javaField(impl, "android/content/res/ResourcesImpl", "mAssets"));
-  res.dm = javaField<JDisplayMetrics>(impl, "android/content/res/ResourcesImpl", "mMetrics");
-  return res;
+  return nativeAssets(javaField(impl, "android/content/res/ResourcesImpl", "mAssets"));
 }
 /** the AssetManager2 behind AOSP's AssetManager */
 export function nativeAssets(am: unknown): Resources {

@@ -1,12 +1,18 @@
 // AOSP's Resources as the shell builds them, the way LoadedApk has ResourcesManager build an app's,
 // and the device configuration they take.
 
-import { rt, driven, type Gen, type JObj } from "../jvm/runtime";
+import { rt, driven, setDeclared, type Gen, type JObj } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
-import { JDisplayMetrics } from "./util";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration } from "./resnative";
 import { device } from "../shell/config";
 
+/** the device's DisplayMetrics, as Display.getMetrics fills one */
+const deviceMetrics = driven(function* deviceMetrics(): Gen<JObj> {
+  const dm: JObj = yield newObj("android/util/DisplayMetrics", "()V");
+  yield vcall(dm, "setToDefaults", "()V");
+  const { width, height } = device;
+  return setDeclared(dm, "android/util/DisplayMetrics", { widthPixels: width, heightPixels: height, noncompatWidthPixels: width, noncompatHeightPixels: height });
+});
 /** An installed apk's Resources, as ResourcesManager builds them: its ApkAssets over the system
  *  ones in an AssetManager, under the device's configuration. */
 export const loadResources = driven(function* loadResources(path: string, config: unknown): Gen<JObj> {
@@ -15,7 +21,7 @@ export const loadResources = driven(function* loadResources(path: string, config
   yield vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);
   const assets = yield vcall(builder, "build", "()Landroid/content/res/AssetManager;");
   const jres: JObj = yield newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
-    assets, new JDisplayMetrics(), config);
+    assets, yield deviceMetrics(), config);
   built.push(new WeakRef(jres));
   return jres;
 });
@@ -30,7 +36,7 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
   // the system Resources exist before any configuration reaches them, as the zygote preloads them
   yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
   yield scall("android/content/res/Resources", "updateSystemConfiguration",
-    `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, new JDisplayMetrics(), null);
+    `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, yield deviceMetrics(), null);
   for (const entry of built.slice()) {
     const jres = entry.deref();
     if (!jres) { built.splice(built.indexOf(entry), 1); continue; }

@@ -6,6 +6,8 @@ import { utf8 } from "../jvm/abi";
 
 const properties: Record<string, () => string> = {
   "persist.sys.timezone": () => device.timezone,
+  // DisplayMetrics.DENSITY_DEVICE
+  "ro.sf.lcd_density": () => String(device.densityDpi),
   // the reference AVD's heap limits, which ActivityManager reports as the memory classes
   "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
   // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
