@@ -1,4 +1,5 @@
 // DER (X.690) for the natives that parse and build keys and certificates.
+import { concat } from "../abi";
 
 export type Tlv = { tag: number; /** the whole encoding */ raw: Uint8Array; body: Uint8Array };
 export class DerError extends Error {}
@@ -71,12 +72,6 @@ export const oid = (s: string) => tlv(OID, oidBody(s));
 export const derNull = () => Uint8Array.of(NULL, 0);
 export const octets = (b: Uint8Array) => tlv(OCTET_STRING, b);
 export const bits = (b: Uint8Array) => tlv(BIT_STRING, concat([Uint8Array.of(0), b]));
-export function concat(parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.length; }
-  return out;
-}
 
 /** unsigned big-endian bytes ↔ bigint */
 export function bytesToBig(b: Uint8Array): bigint {

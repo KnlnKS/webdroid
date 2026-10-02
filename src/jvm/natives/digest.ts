@@ -236,7 +236,8 @@ export const DIGESTS: Record<string, () => Hash> = {
   md5: () => new MD5(), sha1: () => new SHA1(), sha224: () => new SHA256(28), sha256: () => new SHA256(32),
   sha384: () => new SHA512(48), sha512: () => new SHA512(64),
 };
-const hashOf = (name: string, data: Uint8Array) => { const h = DIGESTS[name](); h.update(data); return h.digest(); };
+/** the `name` digest of `data` */
+export const hashOf = (name: string, data: Uint8Array) => { const h = DIGESTS[name](); h.update(data); return h.digest(); };
 export const md5 = (data: Uint8Array) => hashOf("md5", data);
 export const sha1 = (data: Uint8Array) => hashOf("sha1", data);
 export const sha256 = (data: Uint8Array) => hashOf("sha256", data);

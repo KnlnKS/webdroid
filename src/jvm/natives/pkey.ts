@@ -4,8 +4,9 @@
 
 import { modInverse, modPow } from "./jmath";
 import { DIGESTS, type Hash } from "./digest";
+import { concat } from "../abi";
 import {
-  readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, concat, integer, uintOf,
+  readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, integer, uintOf,
   bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
 } from "./der";
 
@@ -205,7 +206,8 @@ function sqrtMod(v: bigint, p: bigint): bigint | null {
   }
   return r;
 }
-const encodePoint = (c: Curve, [X, Y]: [bigint, bigint]) => concat([Uint8Array.of(4), bigToBytes(X, c.bytes), bigToBytes(Y, c.bytes)]);
+/** an uncompressed point (SEC 1) */
+export const encodePoint = (c: Curve, [X, Y]: [bigint, bigint]) => concat([Uint8Array.of(4), bigToBytes(X, c.bytes), bigToBytes(Y, c.bytes)]);
 
 // ── ECDSA (SEC 1 §4.1): signatures are DER SEQUENCE { r, s }
 const hashToInt = (c: Curve, digest: Uint8Array) => {

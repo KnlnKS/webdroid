@@ -12,14 +12,14 @@ import { type JBuffer, remainingBytes, resident, addressOf, limit, position, dir
 import { physical } from "./jmemory";
 import { mem } from "../../native/mem";
 import { after, scall } from "./jlang";
-import { jarray } from "../abi";
+import { concat, i8, jarray, u8 } from "../abi";
 import {
   CURVES, curveByName, curveOfParams, G, mul, onCurve, randomScalar, bitLength, ecdsaSign, ecdsaVerify, equal, x25519, X25519_BASE,
   rsaBytes, rsaPublic, rsaPrivate, pkcs1SignPad, pssEncode, pssVerify, oaepEncode, oaepDecode, pkcs1EncryptPad, pkcs1Unpad, digestNamed,
   parsePublicKey, parsePrivateKey, marshalPublicKey, marshalPrivateKey, EVP_PKEY_RSA, EVP_PKEY_EC, EVP_PKEY_X25519,
   type Curve, type Point, type Rsa, type EcKey, type PKey,
 } from "./pkey";
-import { concat, bigToBytes, bytesToBig, fromSigned, parseOne, DerError, oid as oidDer } from "./der";
+import { bigToBytes, bytesToBig, fromSigned, parseOne, DerError, oid as oidDer } from "./der";
 
 const NC = "com/android/org/conscrypt/NativeCrypto";
 export const nc = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni(NC, sig, fn);
@@ -34,8 +34,6 @@ export function ptr<T>(ref: JObj | null): T {
   if (!o) throw rt.mkThrowable("java/lang/NullPointerException", "address == 0");
   return o;
 }
-export const u8 = (b: Int8Array) => new Uint8Array(b.buffer, b.byteOffset, b.length);
-export const i8 = (b: Uint8Array) => new Int8Array(b.buffer, b.byteOffset, b.length);
 /** JNI's array region check (ARRAY_OFFSET_LENGTH_INVALID) */
 export function region(b: Int8Array | null, off: number, len: number): Uint8Array {
   if (!b) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -367,28 +365,34 @@ nc("EVP_parse_private_key([B)J", (b: Int8Array) => {
 });
 nc("EVP_marshal_public_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)[B", (ref: JObj) => {
   const k = keyOf(ref);
-  return i8(marshalPublicKey("wrapper" in k ? publicOf(k) : k));
+  return i8(marshalPublicKey(publicOf(k)));
 });
 nc("EVP_marshal_private_key(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)[B", (ref: JObj) => {
   const k = keyOf(ref), der = "wrapper" in k ? null : marshalPrivateKey(k);
   if (!der) throw sslError("java/lang/RuntimeException", EVP, 124, "INTERNAL_ERROR");
   return i8(der);
 });
-function publicOf(k: Wrapped): PKey {
+/** the key a public key marshals from: a wrapped RSA key's modulus and exponent */
+function publicOf(k: Key): PKey {
+  if (!("wrapper" in k)) return k;
   if (k.type === EVP_PKEY_RSA) return { type: EVP_PKEY_RSA, rsa: k.rsa! };
   throw sslError("java/lang/RuntimeException", EVP, 124, "INTERNAL_ERROR");
 }
+/** an RSA key's numbers; a wrapped key has only the public ones */
+const rsaNumbers = (k: Key): Rsa => "wrapper" in k ? k.rsa! : (k as { rsa: Rsa }).rsa;
+/** an EC key's curve and points; a wrapped key has only its curve */
+const ecNumbers = (k: Key): EcKey => "wrapper" in k ? { curve: k.curve! } as EcKey : (k as { ec: EcKey }).ec;
 nc("EVP_PKEY_type(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (ref: JObj) => keyOf(ref).type);
 nc("EVP_PKEY_free(J)V", (h: bigint) => release(h));
 nc("EVP_PKEY_cmp(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (a: JObj, b: JObj) => {
   const x = keyOf(a), y = keyOf(b);
   if (x.type !== y.type) return -1;
-  return +equal(marshalPublicKey("wrapper" in x ? publicOf(x) : x), marshalPublicKey("wrapper" in y ? publicOf(y) : y));
+  return +equal(marshalPublicKey(publicOf(x)), marshalPublicKey(publicOf(y)));
 });
 const rsaOf = (ref: JObj): Rsa => {
   const k = keyOf(ref);
   if (k.type !== EVP_PKEY_RSA) throw sslError("java/security/InvalidKeyException", EVP, 124, "EXPECTING_AN_RSA_KEY");
-  return "wrapper" in k ? k.rsa! : k.rsa;
+  return rsaNumbers(k);
 };
 nc("EVP_PKEY_new_RSA([B[B[B[B[B[B[B[B)J", (...f: (Int8Array | null)[]) => {
   const [n, e, d, p, q, dp, dq, qinv] = f.map(bnArg);
@@ -494,7 +498,7 @@ const pkeyCrypt = (encrypt: boolean) => (ref: JObj, out: Int8Array, outOff: numb
       return finish(m);
     });
   }
-  const r = "wrapper" in k ? k.rsa! : (k as { rsa: Rsa }).rsa;
+  const r = rsaNumbers(k);
   return finish(encrypt ? rsaEncryptPadded(r, data, p.padding, p) : rsaDecryptPadded(r, data, p.padding, p));
 };
 nc("EVP_PKEY_encrypt(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY_CTX;[BI[BII)I", pkeyCrypt(true));
@@ -532,7 +536,7 @@ nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", (r
     if (ec.priv === undefined) throw sslError("java/security/InvalidKeyException", EC, 123, "MISSING_PRIVATE_KEY");
     return i8(ecdsaSign(ec.curve, ec.priv, digest));
   }
-  const r = "wrapper" in key ? key.rsa! : (key as { rsa: Rsa }).rsa, len = rsaBytes(r), bitsN = bitLength(r.n);
+  const r = rsaNumbers(key), len = rsaBytes(r), bitsN = bitLength(r.n);
   const em = p.padding === RSA_PKCS1_PSS_PADDING
     ? pssEncode(digest, bitsN - 1, c.md!.make, digestNamed(p.mgf1Md ?? c.md!.name), saltFor(p, digest.length, (bitsN - 1 + 7) >> 3))
     : pkcs1SignPad(len, c.md!.name, digest);
@@ -546,8 +550,8 @@ nc("EVP_DigestVerifyFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)Z
   if (!s || s.signing) throw runtimeError("EVP_DigestVerifyFinal: not initialized for verifying");
   const digest = liveHash(ref).digest(), key = s.key, p = s.params, sg = region(sig, off, len);
   c.hash = deferred(c.md!.name);
-  if (key.type === EVP_PKEY_EC) { const e = "wrapper" in key ? { curve: key.curve! } as EcKey : key.ec; return +(e.pub !== undefined && ecdsaVerify(e.curve, e.pub, digest, sg)); }
-  const r = "wrapper" in key ? key.rsa! : (key as { rsa: Rsa }).rsa, n = rsaBytes(r);
+  if (key.type === EVP_PKEY_EC) { const e = ecNumbers(key); return +(e.pub !== undefined && ecdsaVerify(e.curve, e.pub, digest, sg)); }
+  const r = rsaNumbers(key), n = rsaBytes(r);
   if (sg.length !== n) return 0;
   const v = bytesToBig(sg);
   if (v >= r.n) return 0;
@@ -597,7 +601,7 @@ nc("EC_POINT_get_affine_coordinates(Lcom/android/org/conscrypt/NativeRef$EC_GROU
 const ecOf = (ref: JObj): EcKey => {
   const k = keyOf(ref);
   if (k.type !== EVP_PKEY_EC) throw sslError("java/security/InvalidKeyException", EVP, 124, "EXPECTING_AN_EC_KEY_KEY");
-  return "wrapper" in k ? { curve: k.curve! } as EcKey : k.ec;
+  return ecNumbers(k);
 };
 nc("EC_KEY_generate_key(Lcom/android/org/conscrypt/NativeRef$EC_GROUP;)J", (g: JObj) => {
   const curve = groupOf(g), d = randomScalar(curve.n);

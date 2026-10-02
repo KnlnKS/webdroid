@@ -5,7 +5,7 @@
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
 import { rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
+import { concat, jarray } from "../jvm/abi";
 import { after, newObj, scall } from "../jvm/natives/jlang";
 import { unbox } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
@@ -18,7 +18,7 @@ import {
   oaepDecode, oaepEncode, pkcs1EncryptPad, pkcs1Unpad, parsePrivateKey, parsePublicKey, marshalPrivateKey, marshalPublicKey, bitLength, equal,
   EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
 } from "../jvm/natives/pkey";
-import { seq, oid, tlv, integer, bits, concat, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der";
+import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der";
 
 // KeyMint's constants (android.hardware.security.keymint)
 const TAG = {

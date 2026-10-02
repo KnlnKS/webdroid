@@ -9,7 +9,7 @@ import { driven, type Gen } from "../runtime";
 import { newObj, vcall, scall } from "./jlang";
 import { vfs } from "../../shell/vfs";
 import { BytesFile } from "../../shell/lazyfile";
-import { DIGESTS, md5, sha1 } from "./digest";
+import { md5, sha1, sha256 } from "./digest";
 import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "./der";
 import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "./pkey";
 
@@ -31,8 +31,7 @@ function newKey(): Keyed {
   return { ec, spki, keyId: sha1(spki.subarray(-65)) };
 }
 function signed(tbs: Uint8Array, by: EcKey): Uint8Array {
-  const h = DIGESTS.sha256(); h.update(tbs);
-  return seq(tbs, ECDSA_SHA256, bits(ecdsaSign(by.curve, by.priv!, h.digest())));
+  return seq(tbs, ECDSA_SHA256, bits(ecdsaSign(by.curve, by.priv!, sha256(tbs))));
 }
 
 let relayCa: (Keyed & { name: Uint8Array; der: Uint8Array }) | null = null;

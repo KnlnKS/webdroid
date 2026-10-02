@@ -3,15 +3,15 @@
 
 import { rt, type JObj } from "../runtime";
 import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles";
-import { jarray } from "../abi";
+import { concat, i8, jarray, u8 } from "../abi";
 import { vcall } from "./jlang";
 import { boxInt } from "./jbox";
-import { nc, u8, i8, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt";
-import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253, sameBytes,
+import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt";
+import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,
   KEY_USAGE, EXT_KEY_USAGE, SUBJECT_ALT_NAME, ISSUER_ALT_NAME, type Time } from "./x509";
-import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey";
-import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, concat, bytesToBig, bigToBytes, DerError, SEQUENCE, INTEGER, type Tlv } from "./der";
-import { sha1 } from "./digest";
+import { parsePublicKey, rsaPublic, rsaBytes, pkcs1SignPad, pssVerify, ecdsaVerify, digestNamed, bitLength, encodePoint, equal, EVP_PKEY_RSA, EVP_PKEY_EC } from "./pkey";
+import { children, parseOne, readTlv, oidToString, seq, oid, integer, tlv, bytesToBig, bigToBytes, DerError, SEQUENCE, INTEGER, type Tlv } from "./der";
+import { hashOf, sha1 } from "./digest";
 
 const X = "Lcom/android/org/conscrypt/OpenSSLX509Certificate;";
 const x509Of = (h: bigint): X509 => {
@@ -124,20 +124,18 @@ function verify(x: X509, key: Key): JObj | null {
   if ("wrapper" in key) return wrong();
   if (alg.kind === "ec") {
     if (key.type !== EVP_PKEY_EC) return wrong();
-    const h = digestNamed(alg.md)(); h.update(x.tbs);
-    return ecdsaVerify(key.ec.curve, key.ec.pub, h.digest(), x.signature) ? null : sslError("java/security/SignatureException", 26, 100, "BAD_SIGNATURE");
+    return ecdsaVerify(key.ec.curve, key.ec.pub, hashOf(alg.md, x.tbs), x.signature) ? null : sslError("java/security/SignatureException", 26, 100, "BAD_SIGNATURE");
   }
   if (key.type !== EVP_PKEY_RSA) return wrong();
   const r = key.rsa, n = rsaBytes(r), s = x.signature;
   if (s.length !== n || bytesToBig(s) >= r.n) return sslError("javax/crypto/BadPaddingException", 4, 145, "WRONG_SIGNATURE_LENGTH");
   const em = bigToBytes(rsaPublic(r, bytesToBig(s)), n);
   if (alg.kind === "pss") {
-    const p = pssParams(x.sigParams), h = digestNamed(p.md)(); h.update(x.tbs);
-    return pssVerify(h.digest(), em, bitLength(r.n) - 1, digestNamed(p.md), digestNamed(p.mgf), p.salt) ? null : sslError("javax/crypto/BadPaddingException", 4, 138, "SLEN_CHECK_FAILED");
+    const p = pssParams(x.sigParams);
+    return pssVerify(hashOf(p.md, x.tbs), em, bitLength(r.n) - 1, digestNamed(p.md), digestNamed(p.mgf), p.salt) ? null : sslError("javax/crypto/BadPaddingException", 4, 138, "SLEN_CHECK_FAILED");
   }
-  const h = digestNamed(alg.md)(); h.update(x.tbs);
-  const want = pkcs1SignPad(n, alg.md, h.digest());
-  if (want && sameBytes(want, em)) return null;
+  const want = pkcs1SignPad(n, alg.md, hashOf(alg.md, x.tbs));
+  if (want && equal(want, em)) return null;
   return em[0] === 0 && em[1] === 1 ? sslError("javax/crypto/BadPaddingException", 4, 105, "BAD_SIGNATURE") : sslError("javax/crypto/BadPaddingException", 4, 107, "BLOCK_TYPE_IS_NOT_01");
 }
 nc(`X509_verify(J${X}Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)V`, (h: bigint, _c: JObj, ref: JObj) => {
@@ -146,7 +144,7 @@ nc(`X509_verify(J${X}Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)V`, (h: bigi
 });
 nc(`X509_check_issued(J${X}J${X})I`, (issuerH: bigint, _a: JObj, subjectH: bigint) => {
   const issuer = x509Of(issuerH), subject = x509Of(subjectH);
-  if (!sameBytes(issuer.issuer.length ? issuer.subject : issuer.subject, subject.issuer)) return 29; // X509_V_ERR_SUBJECT_ISSUER_MISMATCH
+  if (!equal(issuer.subject, subject.issuer)) return 29; // X509_V_ERR_SUBJECT_ISSUER_MISMATCH
   const ku = issuer.ext(KEY_USAGE);
   if (ku && !bitBooleans(parseOne(ku.value, 3).body)[5]) return 32; // X509_V_ERR_KEYUSAGE_NO_CERTSIGN
   return 0;
@@ -297,8 +295,8 @@ function printPublic(k: Key, indent: number): string {
   const pad = " ".repeat(indent);
   if ("wrapper" in k) return pad + "<opaque key>\n";
   if (k.type === EVP_PKEY_EC) {
-    const c = k.ec.curve, pt = concat([Uint8Array.of(4), bigToBytes(k.ec.pub[0], c.bytes), bigToBytes(k.ec.pub[1], c.bytes)]);
-    return `${pad}Public-Key: (${CURVE_NIST[c.name] ?? bitLength(c.p) + " bit"})\n${pad}pub:\n${colonHex(pt, indent + 4)}\n`;
+    const c = k.ec.curve;
+    return `${pad}Public-Key: (${CURVE_NIST[c.name] ?? bitLength(c.p) + " bit"})\n${pad}pub:\n${colonHex(encodePoint(c, k.ec.pub), indent + 4)}\n`;
   }
   if (k.type === EVP_PKEY_RSA) {
     const r = k.rsa, n = bigToBytes(r.n), mod = n[0] & 0x80 ? concat([Uint8Array.of(0), n]) : n;
