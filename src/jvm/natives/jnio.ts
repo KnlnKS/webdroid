@@ -123,12 +123,11 @@ export const readOnlyBuffer = (bytes: Uint8Array): JBuffer | Promise<JBuffer> =>
 
 const guestArrays = new FinalizationRegistry<number>((address) => mem.free(address));
 /** VMRuntime.newNonMovableArray's byte[]: guest memory, as ART's non-moving space is the memory
- *  native code sees, so the array and its address are the same bytes. Until native code sizes the
- *  memory (a grow would detach the array) it is a host array instead: committing a native ABI's
- *  whole memory in every process that makes one (StatsEvent's buffer) puts the page's realms past
- *  V8's global heap limit, which then marks without pause. */
+ *  native code sees, so the array and its address are the same bytes. Where the memory is not
+ *  shared, committing the native ABI's address space (mem.init) would detach the array, so until
+ *  then it is a host array instead. */
 export function nonMovableBytes(n: number): Int8Array {
-  if (!mem.sized()) return hostBytes(n);
+  if (!mem.attached()) return hostBytes(n);
   const address = mem.calloc(1, Math.max(1, n));
   if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", `Failed to allocate a ${n} byte allocation in the non-moving space`);
   const array = new Int8Array(mem.buf, address, n);

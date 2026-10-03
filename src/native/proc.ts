@@ -170,7 +170,6 @@ export function procInit(): void {
   hostData("libc.so", "__stack_chk_guard", guard);
   const progname = mem.hostAlloc(PTR); stp(progname, mem.hostStr("app_process"));
   hostData("libc.so", "__progname", progname);
-  const u8 = mem.u8;
   // struct passwd: name, passwd, uid, gid, gecos, dir, shell — pointers at the pointer stride
   const pw = mem.hostAlloc(8 * PTR);
   const uid = procIdentity.uid;
@@ -181,7 +180,7 @@ export function procInit(): void {
     sysinfo: (_c, a) => { fillSysinfo(a.p()); return 0; },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
     sched_setaffinity: () => 0, sched_getcpu: () => 0,
-    __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
+    __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = mem.ld8u(set + i); while (b) { k += b & 1; b >>= 1; } } return k; },
     sched_get_priority_max: () => 99, sched_get_priority_min: () => 1,
     sched_setscheduler: () => 0, sched_getparam: (_c, a) => { a.i(); mem.st32(a.p(), 0); return 0; },
     getpwuid: () => pw,
@@ -297,9 +296,9 @@ export function procInit(): void {
     __vsprintf_chk: (_c, a) => { const d = a.p(); a.i(); a.u(); const f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },
     __sprintf_chk: (_c, a) => { const d = a.p(); a.i(); a.u(); const f = a.str(); return mem.putCstr(d, format(f, a)); },
     __umask_chk: () => 0o22,
-    __FD_SET_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), u8[set + (fd >> 3)] | (1 << (fd & 7))); },
-    __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), u8[set + (fd >> 3)] & ~(1 << (fd & 7))); },
-    __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (u8[set + (fd >> 3)] >> (fd & 7)) & 1; },
+    __FD_SET_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), mem.ld8u(set + (fd >> 3)) | (1 << (fd & 7))); },
+    __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), mem.ld8u(set + (fd >> 3)) & ~(1 << (fd & 7))); },
+    __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (mem.ld8u(set + (fd >> 3)) >> (fd & 7)) & 1; },
   };
   // no second process (see cloneThread), so no child to wait for
   for (const n of ["fork", "vfork"]) M[n] = (cpu) => fail(cpu, E.AGAIN);

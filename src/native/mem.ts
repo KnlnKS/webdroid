@@ -2,19 +2,24 @@
 // allocator, page, plane and region calls forwarded to the core (mem.zig). See abi.ts for the
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
-import { core, memory, NativeFault } from "./core";
-import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, POOL_BASE, MEM_SIZE_A64 } from "./abi";
+import { core, memory, shared, NativeFault, onMemoryGrown } from "./core";
+import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 export { NativeFault };
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
+/** the committed bytes past LOW: a host access beyond them is to no page in use */
 let SPAN = 0;
+/** a 64-bit process: any buffer offset may be a plane's pool unit */
+let planes = false;
+/** every buffer the memory has had: views made before a grow keep the one they were made over */
+const buffers = new WeakSet<ArrayBufferLike>();
 const enc = new TextEncoder(), dec = new TextDecoder();
 
 /** a host access of n bytes: in range, and backed where it lands in a plane (which may commit
  *  the plane's writable pages under it) */
 function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
-  if ((a >>> 0) >= POOL_BASE && !core.commit_phys(a >>> 0, n)) throw new NativeFault(`[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
+  if (planes && !core.commit_phys(a >>> 0, n)) throw new NativeFault(`[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
 }
 /** Notify after a host writes directly into a guest-provided buffer. */
 export function wrote(a: number, n: number): void {
@@ -27,6 +32,8 @@ function badAddr(a: number): never {
 }
 function views(): void {
   buf = memory.buffer;
+  buffers.add(buf);
+  SPAN = buf.byteLength - LOW;
   u8 = new Uint8Array(buf); i8 = new Int8Array(buf); u16 = new Uint16Array(buf);
   u32 = new Uint32Array(buf); i32 = new Int32Array(buf); f32 = new Float32Array(buf); f64 = new Float64Array(buf);
   dv = new DataView(buf);
@@ -46,18 +53,19 @@ const num = (v: bigint): number | bigint => (v <= 0xffffffffn ? Number(v) : v);
 export const mem = {
   buf: null as unknown as ArrayBuffer, u8: null as unknown as Uint8Array, u16: null as unknown as Uint16Array,
   u32: null as unknown as Uint32Array, i32: null as unknown as Int32Array, f32: null as unknown as Float32Array,
-  /** run after the memory is resized: the block cache's page tables are sized from it */
+  /** run after an unshared memory is committed whole, which detached every view of it */
   initHooks: [] as (() => void)[],
-  /** size the process's memory: grown in place, so everything allocated so far carries over;
-   *  the image region is reset, so this happens before the first image loads (setA64) */
+  /** size the process's address space: everything allocated so far carries over, and the
+   *  memory is committed as the guest uses it (or now, when growing it would detach views) */
   init(size: number): void {
     if (size === MEM_SIZE) return;
-    if (size > buf.byteLength) { memory.grow((size - buf.byteLength) / 65536); views(); }
+    if (!shared && size > buf.byteLength) { memory.grow((size - buf.byteLength) / 65536); views(); for (const h of mem.initHooks) h(); }
     core.mem_init(size);
-    SPAN = size - LOW;
     setMemSize(size);
-    for (const h of mem.initHooks) h();
+    planes = size > MEM_SIZE_A32;
   },
+  /** a view of guest memory */
+  isGuest: (view: ArrayBufferView): boolean => buffers.has(view.buffer),
 
   ld32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); return (a & 3) === 0 ? i32[a >>> 2] : dv.getInt32(a >>> 0, true); },
   ld16u(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) badAddr(a); return (a & 1) === 0 ? u16[a >>> 1] : dv.getUint16(a >>> 0, true); },
@@ -86,8 +94,8 @@ export const mem = {
   ld64(a: number): bigint { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return dv.getBigInt64(a >>> 0, true); },
   st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); dv.setBigInt64(a >>> 0, v, true); wrote(a, 8); },
 
-  /** the process memory has its final size, so views over it stay attached */
-  sized: (): boolean => MEM_SIZE !== MEM_SIZE_INITIAL,
+  /** views over the memory stay attached from now on: it is shared, or committed whole */
+  attached: (): boolean => shared || MEM_SIZE !== MEM_SIZE_INITIAL,
   /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data */
   writeProtected: (a: number): boolean => !!(codePages[a >>> PAGE_SHIFT] & 2),
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,
@@ -113,7 +121,7 @@ export const mem = {
   },
   txVa(va: bigint): number { const [h, lo] = split(va); return h ? mem.tx(h, lo) : lo; },
   /** buffer offset → the address the guest knows it by: itself in plane 0, else the plane's */
-  va: (phys: number): number | bigint => (phys < POOL_BASE || MEM_SIZE <= POOL_BASE ? phys : num(core.va(phys >>> 0))),
+  va: (phys: number): number | bigint => (planes ? num(core.va(phys >>> 0)) : phys),
   /** mmap: plane 0 while it has room, else a plane of its own; 0 when neither has room */
   mapVa: (n: number, reserve: boolean, low = false): number | bigint => (!Number.isSafeInteger(n) || n <= 0 ? 0 : num(core.map_va(BigInt(n), reserve ? 1 : 0, low ? 1 : 0))),
   unmapVa: (va: bigint, n: number): boolean => Number.isSafeInteger(n) && n > 0 && core.unmap_va(va, BigInt(n)) !== 0,
@@ -148,8 +156,7 @@ export const mem = {
   reserve(size: number, align = 0x10000): number {
     const base = core.reserve(size >>> 0, align) >>> 0;
     if (base) return base;
-    const e = core.err(), why = e & 0x100 ? `the pool holds plane ${e & 255}` : e === 2 ? "the pool reaches the images" : `${(mem.stats().free / 1048576).toFixed(1)} free`;
-    throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, ${why})`);
+    throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, ${(mem.stats().free / 1048576).toFixed(1)} above the heap)`);
   },
   /** an unloaded image's space, which the next reserve may reuse */
   releaseImage: (base: number, size: number): void => core.release_image(base >>> 0, size >>> 0),
@@ -170,7 +177,7 @@ export const mem = {
   cstr(a: number, max = 0x100000): string {
     if (!a) return "";
     checkAddr(a, 1);
-    const bytes = u8.subarray(a >>> 0, Math.min((a >>> 0) + max, MEM_SIZE)), end = bytes.indexOf(0);
+    const bytes = u8.subarray(a >>> 0, (a >>> 0) + max), end = bytes.indexOf(0);
     return dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
   },
   /** writes s + NUL (truncating to max-1 bytes when max is given); returns bytes written excluding NUL */
@@ -187,7 +194,7 @@ export const mem = {
   strlen(a: number): number {
     checkAddr(a, 1);
     let e = a >>> 0;
-    while (e < MEM_SIZE && u8[e] !== 0) e++;
+    while (e < u8.length && u8[e] !== 0) e++;
     return e - (a >>> 0);
   },
   bytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); },
@@ -220,5 +227,5 @@ export function anchor(p: number): (offset?: number) => number {
   return (offset = 0) => guestAt(va, offset);
 }
 views();
+onMemoryGrown(views);
 core.mem_init(MEM_SIZE_INITIAL);
-SPAN = MEM_SIZE_INITIAL - LOW;

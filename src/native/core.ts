@@ -1,6 +1,6 @@
 // The wasm core (src/native/core/*.zig) owns the guest memory: a guest address is an offset
-// into the memory it imports. One instance per process; memory grows to the native ABI's
-// address space when its first image loads (mem.init), without copying or rebuilding the core.
+// into the memory it imports. One instance per process; the memory grows as the guest's pages
+// come into use (mem.zig's back), within the native ABI's address space (mem.init).
 
 import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi";
 import { perf } from "../perf";
@@ -15,7 +15,6 @@ interface Core {
   mem_init(size: number): void;
   flags_ptr(): number;
   stat(i: number): number;
-  err(): number;
   malloc(n: number): number;
   free(p: number): number;
   calloc(n: number, m: number): number;
@@ -86,20 +85,47 @@ export const CORE_LIBC: Record<string, number> = Object.fromEntries("memcpy memm
 /** pthread keys per thread, the size of the table each Cpu carries (libc.zig) */
 export const TLS_KEYS = 256;
 
-export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_INITIAL / 65536, maximum: MEM_SIZE_A64 / 65536 });
+/** The page's realms share one V8 isolate, which counts each committed wasm memory toward its
+ *  global heap limit and past it marks without pause, so the memory is committed as the guest
+ *  uses it. That takes a shared memory: growing an unshared one detaches every view of it, Java's
+ *  non-movable arrays among them. Chrome makes one without cross-origin isolation; where none can
+ *  be made, mem.init commits the address space whole. */
+export const memory = ((limits: WebAssembly.MemoryDescriptor) => {
+  try { return new WebAssembly.Memory({ ...limits, shared: true }); } catch { return new WebAssembly.Memory(limits); }
+})({ initial: MEM_SIZE_INITIAL / 65536, maximum: MEM_SIZE_A64 / 65536 });
+export const shared = !(memory.buffer instanceof ArrayBuffer);
+if (shared) {
+  // The Encoding Standard decodes a shared view (AllowSharedBufferSource); Chrome's TextDecoder
+  // still refuses one, and guest memory and the arrays in it are shared.
+  const decode = TextDecoder.prototype.decode;
+  TextDecoder.prototype.decode = function (input, options) {
+    return decode.call(this, ArrayBuffer.isView(input) && !(input.buffer instanceof ArrayBuffer) ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength).slice() : input, options);
+  };
+}
+const MEMORY_IMPORT = [3, ..."env", 6, ..."memory", 2, 1].map((c) => typeof c === "string" ? c.charCodeAt(0) : c);
+/** the core's import of `memory`, which the build declares unshared, as the memory was made */
+function imported(bytes: Uint8Array): Uint8Array {
+  if (!shared) return bytes;
+  const at = bytes.findIndex((_, i) => MEMORY_IMPORT.every((b, j) => bytes[i + j] === b));
+  bytes[at + MEMORY_IMPORT.length - 1] = 0x03; // limits: shared, with a maximum
+  return bytes;
+}
 /** the core's function table, which JIT regions are linked into above the core's own entries */
 const TABLE_SIZE = 1 << 18, JIT_SLOT0 = 8192; // cpu.zig's dead map is sized to match
 const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyfunc" });
+/** the core grew the memory */
+let grown = (): void => {};
+export function onMemoryGrown(f: () => void): void { grown = f; }
 
 async function load(): Promise<WebAssembly.Module> {
   if (process.env.NODE_ENV === "production") {
     const response = await fetch("/native-core.wasm");
     if (!response.ok) throw new Error(`Native core unavailable: ${response.status}`);
-    return WebAssembly.compile(await response.arrayBuffer());
+    return WebAssembly.compile(imported(new Uint8Array(await response.arrayBuffer())));
   }
   // the tests run the safety-checked build: undefined behaviour panics instead of miscomputing
   const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm")).default : (await import("./core.wasm")).default;
-  return WebAssembly.compile(Uint8Array.fromBase64(b64));
+  return WebAssembly.compile(imported(Uint8Array.fromBase64(b64)));
 }
 const instance = await WebAssembly.instantiate(await load(), {
   env: {
@@ -108,6 +134,7 @@ const instance = await WebAssembly.instantiate(await load(), {
     now_ms: () => performance.now(),
     guest_ms: guestNow,
     wall_ms: wallMillis,
+    mem_grown: () => grown(),
     js_panic(ptr: number, len: number): never {
       throw new NativeFault("[native] core: " + new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
     },
@@ -122,7 +149,7 @@ const JIT_CAP = 1 << 20; // the last MiB of the KERN region (abi.ts)
 const jitImports = { env: { memory, __indirect_function_table: table, exec: core.exec_word, exec32: core.exec_word32, store: core.on_store, fmax32: core.jit_fmax32, fmin32: core.jit_fmin32, fmaxnm32: core.jit_fmaxnm32, fminnm32: core.jit_fminnm32, fmax64: core.jit_fmax64, fmin64: core.jit_fmin64, fmaxnm64: core.jit_fmaxnm64, fminnm64: core.jit_fminnm64, fma64: core.jit_fma64, it32: core.exec_it_block32, tx: core.tx, estimate32: core.jit_estimate32 } };
 /** whether the engine has wasm tail calls: a region then hands off to the next region without returning to the dispatcher */
 const TAIL = WebAssembly.validate(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 5, 1, 0x60, 0, 1, 0x7f, 3, 2, 1, 0, 10, 6, 1, 4, 0, 0x12, 0, 0x0b]));
-core.jit_config(TAIL ? 1 : 0);
+core.jit_config((TAIL ? 1 : 0) | (shared ? 2 : 0));
 let nextSlot = JIT_SLOT0;
 const freeSlots: number[] = [];
 /** whether this engine compiles synchronously (bun does; Chrome's main thread refuses past 4 KB) */

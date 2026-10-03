@@ -59,6 +59,22 @@ test("core zlib checksums preserve incremental state", () => {
   }
 });
 
+test("the memory commits as pages come into use, and views made before keep their bytes", () => {
+  const committed = mem.u8.length, early = mem.malloc(16), view = mem.bytes(early, 16);
+  expect(committed).toBeLessThan(0x4000_0000);
+  view[3] = 7;
+  const big = mem.mapPages(committed);                    // past what is committed: the memory grows under it
+  expect(mem.u8.length).toBeGreaterThanOrEqual(big + committed);
+  mem.st8(big + committed - 1, 1);
+  expect(view[3]).toBe(7);                                // shared, the grow detached nothing
+  const plane = mem.mapVa(0x0040_0000, false);
+  if (typeof plane !== "bigint") throw new Error("large A64 mapping did not receive a virtual plane");
+  expect(mem.txVa(plane)).toBeLessThan(mem.u8.length);
+  expect(mem.unmapVa(plane, 0x0040_0000)).toBe(true);
+  expect(mem.unmapPages(big, committed)).toBe(true);
+  mem.free(early);
+});
+
 test("A64 transient mappings stay out of the malloc arena", () => {
   const warmup = mem.malloc(16);
   mem.free(warmup);
@@ -158,7 +174,8 @@ test("a reservation commits sparsely, as an allocator's strided regions do", () 
 });
 
 test("mprotect accepts mapped ELF image pages", () => {
-  const image = mem.reserve(4096, 4096);
-  expect(mem.commitVa(BigInt(image), 4096)).toBe(true);
-  expect(mem.commitVa(BigInt(image - 4096), 4096)).toBe(false);
+  const image = mem.reserve(8192, 4096);
+  expect(mem.unmapPages(image, 4096)).toBe(true);
+  expect(mem.commitVa(BigInt(image + 4096), 4096)).toBe(true);
+  expect(mem.commitVa(BigInt(image), 4096)).toBe(false);
 });

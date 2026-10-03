@@ -61,7 +61,7 @@ rt.register({
     // a byte[] in guest memory is at its address there, a host one where jmemory resolves it;
     // another non-movable array's address is the handle JNI implementations dereference it by
     "addressOf(Ljava/lang/Object;)J": (array: object) =>
-      array instanceof Int8Array && array.buffer === mem.buf ? BigInt(mem.va(array.byteOffset)) : hostAddress(array) ?? handle(array),
+      array instanceof Int8Array && mem.isGuest(array) ? BigInt(mem.va(array.byteOffset)) : hostAddress(array) ?? handle(array),
     "getTargetSdkVersion()I": () => targetSdk,
     "is64Bit()Z": () => +is64BitProcess(),
     "setTargetSdkVersion(I)V": setTargetSdkVersion,

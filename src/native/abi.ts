@@ -6,13 +6,12 @@ export const PAGE_SIZE = 1 << PAGE_SHIFT;
 /** the first 64 KiB is never mapped: a null-ish pointer faults instead of reading zeros */
 export const LOW = 0x1_0000;
 
-// Every fixed region sits at the bottom, each starting where the last ended, so the memory can
-// grow from 256 MiB to the process address space when its first native image loads:
-// 2 GiB for ARM32, or the whole 32-bit space a wasm memory can back for ARM64
-// (mem.init from setA64). Above the fixed regions the malloc arena and the ELF images share one
-// region and grow toward each other (malloc bumps up, mem.reserve bumps down), which is what a
-// process does anyway. The range test mem.ts inlines into every load and store is derived from
-// the live size, never spelled.
+// Every fixed region sits at the bottom, each starting where the last ended. Above them the
+// malloc arena, mappings, ELF images and (ARM64) the planes' pool units share the pages, each
+// taking the lowest free run, so the memory grows from 256 MiB only as far as pages are in use,
+// within the process address space its first native image sets: 2 GiB for ARM32, or the whole
+// 32-bit space a wasm memory can back for ARM64 (mem.init from setA64). The range test mem.ts
+// inlines into every load and store is derived from the committed size, never spelled.
 const STACK_SPAN = 0x0400_0000;                // thread stacks, 1 MiB + a 64 KiB guard gap each: 60 of them, then arena pages
 const HOST_SPAN = 0x0008_0000;                 // host-owned guest data: __sF, _ctype_, JNI tables, static strings, program headers
 const TRAMP_SPAN = 0x0007_0000;                // host-call trampolines, 8 bytes per slot
@@ -32,8 +31,6 @@ export const JIT_BUF = KERN_END - 0x0010_0000;
 export const MEM_SIZE_INITIAL = 0x1000_0000;
 export const MEM_SIZE_A32 = 0x8000_0000;
 export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
-/** above this the buffer backs the address planes' chunks rather than plane 0 itself (mem.ts) */
-export const POOL_BASE = 0x8000_0000;
 /** the live size, set by mem.init */
 export let MEM_SIZE = MEM_SIZE_INITIAL;
 export function setMemSize(n: number): void { MEM_SIZE = n; }

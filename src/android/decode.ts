@@ -11,7 +11,7 @@ import { handle, ownedHandle, deref, release } from "./handles";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
-import { u8, concat } from "../jvm/abi";
+import { u8, concat, unshared } from "../jvm/abi";
 import { javaFdBytes, javaSeekFd } from "../native/fs";
 import { assetBytes } from "./assetmanager";
 import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
@@ -218,7 +218,7 @@ async function decodePixels(bytes: Uint8Array, h: ImageHeader, w: number, ht: nu
   let heif: ImageBitmap | null = null;
   try {
     if (!orient && h.orientation !== 1) { bytes = bytes.slice(); new DataView(bytes.buffer).setUint16(h.orientationAt, 1, h.orientationLE); }
-    const source = h.mime === "image/heif" ? heif = await decodeHeif(bytes) : new Blob([bytes as BlobPart], { type: h.mime });
+    const source = h.mime === "image/heif" ? heif = await decodeHeif(bytes) : new Blob([unshared(bytes)], { type: h.mime });
     const [sx, sy, sw, sh] = region ?? [0, 0, 0, 0];
     const resize: ImageBitmapOptions = region ? (sw !== w || sh !== ht ? { resizeWidth: w, resizeHeight: ht } : {})
       : w !== h.width || ht !== h.height ? { resizeWidth: w, resizeHeight: ht } : {};

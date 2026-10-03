@@ -286,7 +286,7 @@ export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingConte
   gl.readPixels(x, y, w, h, format, type, data);
   // A short destination is rejected by WebGL. Padding and skipped pixels are never written.
   if (extent > data.byteLength) return;
-  if (data.buffer !== mem.buf) mem.u8.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), p);
+  if (!mem.isGuest(data)) mem.u8.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), p);
   for (let row = 0; row < h; row++) wrote(p + skip + row * stride, w * bytes);
 }
 const PACK = 0x88eb, UNPACK = 0x88ec;

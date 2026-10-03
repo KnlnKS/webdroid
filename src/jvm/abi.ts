@@ -191,6 +191,9 @@ export function decodeModifiedUtf8(bytes: Uint8Array, pos = 0, end = bytes.lengt
 
 export const i8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Int8Array(b.buffer, b.byteOffset + off, len);
 export const u8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Uint8Array(b.buffer, b.byteOffset + off, len);
+/** bytes as a Web API that refuses shared memory takes them: a view of guest memory, where Java's
+ *  non-movable arrays live too, is copied */
+export const unshared = (b: Uint8Array): Uint8Array<ArrayBuffer> => (b.buffer instanceof ArrayBuffer ? b as Uint8Array<ArrayBuffer> : b.slice());
 export function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
   let n = 0;
   for (const p of parts) n += p.length;

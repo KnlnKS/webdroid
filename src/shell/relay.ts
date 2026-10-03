@@ -1,3 +1,5 @@
+import { unshared } from "../jvm/abi";
+
 const EMPTY_CHUNK = new Uint8Array(0);
 
 type Ipv4 = [number, number, number, number];
@@ -214,7 +216,7 @@ export class Relay {
 
   write(bytes: Uint8Array): boolean {
     if (this.transport.readyState !== 1) return false;
-    this.transport.send(bytes);
+    this.transport.send(unshared(bytes));
     return true;
   }
 

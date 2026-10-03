@@ -5,7 +5,6 @@ const assert = std.debug.assert;
 
 const PAGE_SHIFT = abi.PAGE_SHIFT;
 const PAGE_SIZE = abi.PAGE_SIZE;
-const MAX_PAGES: u32 = abi.MEM_SIZE_A64 >> PAGE_SHIFT;
 
 pub inline fn ptr(comptime T: type, a: u32) *align(1) T {
     return @ptrFromInt(a);
@@ -27,6 +26,8 @@ const FREE = 0;
 const RESERVED = 1;
 const USED = 2;
 const IMAGE = 3;
+/// a plane's pool unit: plane 0 has no page there
+const POOL = 4;
 const pages: [*]u8 = @ptrFromInt(abi.KERN_PAGES);
 pub const page_flags: [*]u8 = @ptrFromInt(abi.KERN_PAGE_FLAGS);
 const big_len: [*]u32 = @ptrFromInt(abi.KERN_BIG_LEN);
@@ -57,9 +58,24 @@ var heap_top: u32 = abi.ARENA_BASE;
 var heap_peak: u32 = 0;
 var blocks: u32 = 0;
 var used: u64 = 0;
-var module_bot: u32 = abi.MEM_SIZE_INITIAL;
 var stack_top: u32 = abi.STACK_BASE;
 var host_top: u32 = abi.HOST_DATA;
+
+extern "env" fn mem_grown() void;
+/// The wasm memory backs the address space only up to the highest page in use, grown in steps
+/// where pages come into use: the page's realms share one V8 isolate, which counts every
+/// committed byte toward its heap limit (mem.ts). Every allocator here takes the lowest free run
+/// (planes' units included), so the pages in use stay a prefix.
+const COMMIT_STEP: u64 = 64 << 20;
+fn back(end: u64) bool {
+    const have = @as(u64, @wasmMemorySize(0)) << 16;
+    if (end <= have) return true;
+    if (end > mem_size) return false;
+    const want = @min((end + COMMIT_STEP - 1) & ~(COMMIT_STEP - 1), mem_size);
+    if (@wasmMemoryGrow(0, @intCast((want - have) >> 16)) < 0) return false;
+    mem_grown();
+    return true;
+}
 
 fn classSize(n: u32) u32 {
     if (n <= SMALL_MAX) return @max(CLASS_STEP, (n + CLASS_STEP - 1) & ~@as(u32, CLASS_STEP - 1));
@@ -77,9 +93,9 @@ fn bigIdx(cs: u32) usize {
 }
 
 fn findRun(n: u32, allow: u8, alignment: u32, phantom_in: bool) u32 {
-    const end = pageOf(if (pool_base != 0) pool_base else module_bot);
+    const end = pageOf(mem_size);
     const top: u32 = abi.PAGE_INDEX_MAX;
-    const phantom = phantom_in and pool_base == 0;
+    const phantom = phantom_in and !planes;
     var s = (pageOf(abi.ARENA_BASE) + alignment - 1) & ~(alignment - 1);
     while (s < end and s + n <= top) : (s = (s + alignment) & ~(alignment - 1)) {
         var j = s;
@@ -93,11 +109,13 @@ fn bump(n: u32) u32 {
     var p = heap_top;
     while (true) {
         const a = pageOf(p);
-        const b = pageOf(p + n + PAGE_SIZE - 1);
-        if (b > pageOf(if (pool_base != 0) pool_base else module_bot)) return 0;
+        const end = @as(u64, p) + n + PAGE_SIZE - 1;
+        if (end >> PAGE_SHIFT > pageOf(mem_size)) return 0;
+        const b: u32 = @intCast(end >> PAGE_SHIFT);
         var j = a + @as(u32, if (p & (PAGE_SIZE - 1) != 0) 1 else 0);
         while (j < b and pages[j] == FREE) j += 1;
         if (j == b) {
+            if (!back(@as(u64, b) << PAGE_SHIFT)) return 0;
             heap_top = p + n;
             if (heap_top > heap_peak) heap_peak = heap_top;
             @memset(pages[a..b], USED);
@@ -207,9 +225,9 @@ pub export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     if (rsv != 0 and np >= 256) al = @max(al, @as(u32, 1) << @intCast(31 - @clz((np + 1) >> 1)));
     al = @max(al, 1);
     const p = findRun(np, FREE, al, rsv != 0);
-    if (p == 0) return 0;
+    if (p == 0 or (rsv == 0 and !back(@as(u64, p) + n))) return 0;
     const a = pageOf(p);
-    const b = @min(a + np, pageOf(module_bot));
+    const b = @min(a + np, pageOf(mem_size));
     cpu.invalidate_range(p, (b - a) * PAGE_SIZE);
     @memset(pages[a..b], if (rsv != 0) RESERVED else USED);
     if (rsv == 0) fill(p, 0, n);
@@ -219,10 +237,12 @@ pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
     const n = (n_in +% (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     if (addr & (PAGE_SIZE - 1) != 0 or n == 0 or addr < abi.ARENA_BASE) return 0;
     const a = pageOf(addr);
-    const b = @min(a + (n >> PAGE_SHIFT), pageOf(module_bot));
+    const b = @min(a + (n >> PAGE_SHIFT), pageOf(mem_size));
     if (b > a) {
         cpu.invalidate_range(addr, (b - a) * PAGE_SIZE);
-        @memset(pages[a..b], FREE);
+        for (a..b) |i| if (pages[i] != POOL) {
+            pages[i] = FREE;
+        };
     }
     return 1;
 }
@@ -232,7 +252,8 @@ export fn commit_pages(addr: u32, n: u32) u32 {
     const end = @as(u64, addr) + n;
     if (end > mem_size) return 0;
     const b: u32 = @intCast((end + PAGE_SIZE - 1) >> PAGE_SHIFT);
-    for (a..b) |i| if (pages[i] == FREE) return 0;
+    for (a..b) |i| if (pages[i] == FREE or pages[i] == POOL) return 0;
+    if (!back(@as(u64, b) << PAGE_SHIFT)) return 0;
     for (a..b) |i| if (pages[i] == RESERVED) {
         cpu.invalidate_range(@intCast(i * PAGE_SIZE), PAGE_SIZE);
         pages[i] = USED;
@@ -242,7 +263,7 @@ export fn commit_pages(addr: u32, n: u32) u32 {
 }
 export fn decommit_pages(addr: u32, n: u32) void {
     const a = @max(pageOf(addr), pageOf(abi.ARENA_BASE));
-    const b = @min(pageOf(addr +% n +% (PAGE_SIZE - 1)), pageOf(module_bot));
+    const b = @min(pageOf(addr +% n +% (PAGE_SIZE - 1)), pageOf(mem_size));
     var i = a;
     while (i < b) : (i += 1) if (pages[i] == USED) {
         cpu.invalidate_range(@intCast(i * PAGE_SIZE), PAGE_SIZE);
@@ -252,11 +273,13 @@ export fn decommit_pages(addr: u32, n: u32) void {
 
 /// a plane's pages come from the pool in units this size: a small mapping still takes a whole one
 const UNIT: u32 = 1 << 21;
+const UNIT_PAGES = UNIT >> PAGE_SHIFT;
 const PLANES = 256;
 const PLANE_LO: u32 = 0x1000_0000;
-var pool_base: u32 = 0;
-var owner = [_]i16{-1} ** ((abi.MEM_SIZE_A64 - abi.POOL_BASE) / UNIT);
-var owner_len: u32 = 0;
+/// A 64-bit process has planes; their pool is plane 0's free pages, a unit at a time, which plane
+/// 0 then skips (POOL). owner[u] is the plane holding unit u, the buffer's [u * UNIT, (u + 1) * UNIT).
+var planes = false;
+var owner = [_]i16{-1} ** (abi.MEM_SIZE_A64 / UNIT);
 pub var P = [_]u32{0} ** PLANES;
 var R = [_]u64{0} ** PLANES;
 pub var S = [_]u32{0} ** PLANES;
@@ -299,13 +322,12 @@ fn commitExtent(h: u32, l: u32, n: u64) bool {
         const slot = for (0..EXTENTS) |i| {
             if (ext_h[i] == 0) break i;
         } else return false;
-        const dst = placeRun(units, false);
-        if (dst < 0) return false;
-        @memset(owner[@intCast(dst) .. @as(usize, @intCast(dst)) + units], @intCast(h));
+        const dst = placeRun(units, false) orelse return false;
+        take(dst, units, h);
         ext_h[slot] = h;
         ext_lo[slot] = @intCast(u);
         ext_size[slot] = units * UNIT;
-        ext_p[slot] = pool_base + @as(u32, @intCast(dst)) * UNIT;
+        ext_p[slot] = dst * UNIT;
         fill(ext_p[slot], 0, ext_size[slot]);
         u = run_end;
     }
@@ -341,7 +363,7 @@ fn zeroExtent(i: usize, a: u64, b: u64) void {
 fn releaseUnits(i: usize, ua: u64, ub: u64) void {
     const lo_e: u64 = ext_lo[i];
     const hi_e = lo_e + ext_size[i];
-    const first = (ext_p[i] - pool_base) / UNIT + @as(u32, @intCast((ua - lo_e) / UNIT));
+    const first = ext_p[i] / UNIT + @as(u32, @intCast((ua - lo_e) / UNIT));
     if (ua > lo_e and ub < hi_e) {
         const j = for (0..EXTENTS) |k| {
             if (ext_h[k] == 0) break k;
@@ -354,7 +376,7 @@ fn releaseUnits(i: usize, ua: u64, ub: u64) void {
         ext_size[j] = @intCast(hi_e - ub);
         ext_p[j] = ext_p[i] + @as(u32, @intCast(ub - lo_e));
     }
-    @memset(owner[first .. first + @as(u32, @intCast((ub - ua) / UNIT))], -1);
+    give(first, @intCast((ub - ua) / UNIT));
     if (ua == lo_e and ub == hi_e) {
         ext_h[i] = 0;
     } else if (ua == lo_e) {
@@ -370,48 +392,63 @@ var moves: u32 = 0;
 inline fn unitsOf(n: u64) u32 {
     return @intCast((n + UNIT - 1) / UNIT);
 }
-fn poolUnits() u32 {
-    return @min(owner_len, (module_bot - pool_base) / UNIT);
+inline fn unitCount() u32 {
+    return if (planes) mem_size / UNIT else 0;
 }
-/// the first run of `units` free units in [from, top)
-fn freeRun(units: u32, from: u32, top: u32) i32 {
-    var run: u32 = 0;
-    var i = from;
-    while (i < top) : (i += 1) {
-        run = if (owner[i] < 0) run + 1 else 0;
-        if (run == units) return @intCast(i + 1 - units);
-    }
-    return -1;
+/// no plane owns unit u and plane 0 has none of its pages
+fn unitFree(u: u32) bool {
+    if (owner[u] >= 0) return false;
+    const w: [*]align(1) const u64 = @ptrCast(pages + u * UNIT_PAGES);
+    for (0..UNIT_PAGES / 8) |i| if (w[i] != FREE) return false;
+    return true;
 }
-/// room for `units` in the widest free run: a plane that grows on demand takes its bottom so it can
-/// extend in place, any other plane its top
-fn placeRun(units: u32, grows: bool) i32 {
-    const top = poolUnits();
-    var best: i32 = -1;
+fn runFree(from: u32, units: u32) bool {
+    if (from + units > unitCount()) return false;
+    for (from..from + units) |u| if (!unitFree(@intCast(u))) return false;
+    return true;
+}
+fn take(at: u32, units: u32, h: u32) void {
+    @memset(owner[at .. at + units], @intCast(h));
+    @memset(pages[at * UNIT_PAGES .. (at + units) * UNIT_PAGES], POOL);
+}
+fn give(at: u32, units: u32) void {
+    @memset(owner[at .. at + units], -1);
+    @memset(pages[at * UNIT_PAGES .. (at + units) * UNIT_PAGES], FREE);
+}
+/// room for `units`, committed as needed: a plane that grows on demand takes the bottom of the
+/// widest free run so it can extend in place, any other plane the lowest run that fits
+fn placeRun(units: u32, grows: bool) ?u32 {
+    const top = unitCount();
+    var best: ?u32 = null;
     var best_len: u32 = 0;
     var i: u32 = 0;
     while (i < top) : (i += 1) {
-        if (owner[i] >= 0) continue;
+        if (!unitFree(i)) continue;
         var j = i;
-        while (j < top and owner[j] < 0) j += 1;
+        while (j < top and unitFree(j)) j += 1;
+        if (j - i >= units and !grows) {
+            best = i;
+            break;
+        }
         if (j - i >= units and j - i > best_len) {
-            best = @intCast(i);
+            best = i;
             best_len = j - i;
         }
         i = j;
     }
-    return if (best < 0 or grows) best else best + @as(i32, @intCast(best_len - units));
+    const at = best orelse return null;
+    return if (back(@as(u64, at + units) * UNIT)) at else null;
 }
 fn moveRun(h: usize, dst: u32, need: u32) void {
-    const at = (P[h] - pool_base) / UNIT;
+    const at = P[h] / UNIT;
     const have = unitsOf(S[h]);
     if (dst != at) {
-        move(pool_base + dst * UNIT, P[h], S[h]);
-        @memset(owner[at .. at + have], -1);
+        move(dst * UNIT, P[h], S[h]);
+        give(at, have);
         moves += 1;
     }
-    @memset(owner[dst .. dst + need], @intCast(h));
-    P[h] = pool_base + dst * UNIT;
+    take(dst, need, @intCast(h));
+    P[h] = dst * UNIT;
 }
 /// commit [0, n) of plane h; moving it invalidates every translation into it, so a caller that
 /// already holds one passes may_move = false
@@ -419,27 +456,23 @@ fn grow(h: usize, n: u32, may_move: bool) bool {
     const have = unitsOf(S[h]);
     const need = unitsOf(n);
     if (need > have) {
-        const at: i32 = if (have != 0) @intCast((P[h] - pool_base) / UNIT) else -1;
-        var dst: i32 = undefined;
-        if (at < 0) dst = placeRun(need, W[h] > n) else {
-            const after: u32 = @intCast(at + @as(i32, @intCast(have)));
-            dst = if (freeRun(need - have, after, poolUnits()) == @as(i32, @intCast(after))) at else if (may_move) freeRun(need, 0, poolUnits()) else -1;
+        if (have == 0) {
+            const dst = placeRun(need, W[h] > n) orelse return false;
+            take(dst, need, @intCast(h));
+            P[h] = dst * UNIT;
+        } else {
+            const at = P[h] / UNIT;
+            const in_place = runFree(at + have, need - have) and back(@as(u64, at + need) * UNIT);
+            const dst = if (in_place) at else if (may_move) placeRun(need, true) orelse return false else return false;
+            moveRun(h, dst, need);
         }
-        if (dst < 0) return false;
-        if (at < 0) {
-            @memset(owner[@intCast(dst) .. @as(usize, @intCast(dst)) + need], @intCast(h));
-            P[h] = pool_base + @as(u32, @intCast(dst)) * UNIT;
-        } else moveRun(h, @intCast(dst), need);
     }
     fill(P[h] + S[h], 0, n - S[h]);
     S[h] = n;
     return true;
 }
 fn release(h: usize) void {
-    if (S[h] != 0) {
-        const at = (P[h] - pool_base) / UNIT;
-        @memset(owner[at .. at + unitsOf(S[h])], -1);
-    }
+    if (S[h] != 0) give(P[h] / UNIT, unitsOf(S[h]));
     R[h] = 0;
     S[h] = 0;
     W[h] = 0;
@@ -464,9 +497,8 @@ pub fn commit_range(v_in: u64, n: u32) u32 {
 /// a host access of n bytes at buffer offset p: the host already holds p, so a plane's writable
 /// pages under it commit in place; 0 when the plane cannot back the access there
 export fn commit_phys(p: u32, n: u32) u32 {
-    if (pool_base == 0 or p < pool_base) return 1;
-    const u = (p - pool_base) / UNIT;
-    if (u >= owner_len or owner[u] < 0) return 1;
+    const u = p / UNIT;
+    if (u >= unitCount() or owner[u] < 0) return 1;
     const h: usize = @intCast(owner[u]);
     if (extentOfPhys(@intCast(h), p)) |i| return @intFromBool(@as(u64, p - ext_p[i]) + n <= ext_size[i]);
     const off = p - P[h];
@@ -491,9 +523,8 @@ export fn plane_reserved(h: u32) u32 {
     return @intFromBool(R[h & 255] != 0);
 }
 pub export fn va(phys: u32) u64 {
-    if (pool_base == 0 or phys < pool_base) return phys;
-    const u = (phys - pool_base) / UNIT;
-    if (u >= owner_len or owner[u] < 0) return phys;
+    const u = phys / UNIT;
+    if (u >= unitCount() or owner[u] < 0) return phys;
     const h: u32 = @intCast(owner[u]);
     if (extentOfPhys(h, phys)) |i| return (@as(u64, h) << 32) | (ext_lo[i] + (phys - ext_p[i]));
     return (@as(u64, h) << 32) | (L[h] + (phys - P[h]));
@@ -502,7 +533,7 @@ pub export fn va(phys: u32) u64 {
 export fn map_va(n: u64, rsv: u32, low: u32) u64 {
     if (n == 0) return 0;
     if (n > @as(u64, 0x1_0000_0000) - PLANE_LO) {
-        if (pool_base == 0) return 0;
+        if (!planes) return 0;
         const count: usize = @intCast((n + 0xffff_ffff) / 0x1_0000_0000);
         var h: usize = 1;
         outer: while (h + count <= PLANES) : (h += 1) {
@@ -519,9 +550,9 @@ export fn map_va(n: u64, rsv: u32, low: u32) u64 {
     // Large transient mappings strand the monotonic malloc bump when they share plane 0, and a
     // plane commits in whole pool units: keep sub-stack-sized mappings, reserved or not, in
     // plane 0 where they cost pages only.
-    if (pool_base == 0 or n < abi.STACK_SIZE or low != 0) {
+    if (!planes or n < abi.STACK_SIZE or low != 0) {
         const p = map_pages(@intCast(n), rsv, PAGE_SIZE);
-        if (p != 0 or pool_base == 0) return p;
+        if (p != 0 or !planes) return p;
     }
     var h: usize = 1;
     while (h < PLANES and R[h] != 0) h += 1;
@@ -566,12 +597,12 @@ export fn extend_va(v: u64, old_n: u64, new_n: u64) u32 {
     const l = lo(v);
     if (v & (PAGE_SIZE - 1) != 0 or new_n <= old_n) return 0;
     if (h == 0) {
-        const top: u64 = if (pool_base != 0) pool_base else module_bot;
-        if (l < abi.ARENA_BASE or @as(u64, l) + new_n > top) return 0;
+        if (l < abi.ARENA_BASE or @as(u64, l) + new_n > mem_size) return 0;
         const a = pageOf(@intCast((@as(u64, l) + old_n + PAGE_SIZE - 1) & ~@as(u64, PAGE_SIZE - 1)));
         const b: u32 = @intCast((@as(u64, l) + new_n + PAGE_SIZE - 1) >> PAGE_SHIFT);
         for (a..b) |i| if (pages[i] != FREE) return 0;
         const state = pages[a - 1];
+        if (state != RESERVED and !back(@as(u64, b) << PAGE_SHIFT)) return 0;
         cpu.invalidate_range(a * PAGE_SIZE, (b - a) * PAGE_SIZE);
         @memset(pages[a..b], state);
         if (state != RESERVED) fill(a * PAGE_SIZE, 0, (b - a) * PAGE_SIZE);
@@ -588,7 +619,7 @@ export fn extend_va(v: u64, old_n: u64, new_n: u64) u32 {
 /// MAP_FIXED's and MREMAP_FIXED's claim on [v, v + n): address space no mapping holds becomes
 /// reserved, as the kernel maps at any address in the process's range; the caller then commits or
 /// reserves the range as usual. 0 when part of it is space the core keeps for itself (below the
-/// arena, its pool or module images) or past the planes.
+/// arena, or a plane's pool unit) or past the planes.
 export fn map_fixed(v: u64, n: u64) u32 {
     if (v & (PAGE_SIZE - 1) != 0 or n == 0) return 0;
     for (0..2) |pass| {
@@ -599,14 +630,12 @@ export fn map_fixed(v: u64, n: u64) u32 {
             const l = lo(a);
             const size: u64 = @min(left, 0x1_0000_0000 - @as(u64, l));
             if (h == 0) {
-                const top: u64 = @min(mem_size, if (pool_base != 0) pool_base else module_bot);
-                if (l < abi.ARENA_BASE or l + size > top) return 0;
-                if (pass == 1) {
-                    for (pageOf(l)..@as(usize, @intCast((l + size + PAGE_SIZE - 1) >> PAGE_SHIFT))) |i| {
-                        if (pages[i] == FREE) pages[i] = RESERVED;
-                    }
+                if (l < abi.ARENA_BASE or l + size > mem_size) return 0;
+                for (pageOf(l)..@as(usize, @intCast((l + size + PAGE_SIZE - 1) >> PAGE_SHIFT))) |i| {
+                    if (pages[i] == POOL) return 0;
+                    if (pass == 1 and pages[i] == FREE) pages[i] = RESERVED;
                 }
-            } else if (h >= PLANES or pool_base == 0) {
+            } else if (h >= PLANES or !planes) {
                 return 0;
             } else if (pass == 1 and !claimPlane(h, l, size)) return 0;
             left -= size;
@@ -641,9 +670,9 @@ fn claimPlane(h: usize, l: u32, size: u64) bool {
 }
 export fn check_reserve(h: u32, l: u32, size: u32) u32 {
     if (h == 0) {
-        if (l < abi.ARENA_BASE or @as(u64, l) + size > (if (pool_base != 0) pool_base else module_bot)) return 0;
+        if (l < abi.ARENA_BASE or @as(u64, l) + size > mem_size) return 0;
         var p = pageOf(l);
-        while (p < pageOf(l +% size +% (PAGE_SIZE - 1))) : (p += 1) if (pages[p] == FREE) return 0;
+        while (p < pageOf(l +% size +% (PAGE_SIZE - 1))) : (p += 1) if (pages[p] == FREE or pages[p] == POOL) return 0;
         return 1;
     }
     return @intFromBool(h < PLANES and l >= L[h] and @as(u64, l - L[h]) + size <= R[h]);
@@ -652,9 +681,9 @@ export fn resident_va(v: u64) i32 {
     const h = hi(v);
     const l = lo(v);
     if (h == 0) {
-        if (l < abi.ARENA_BASE or l >= (if (pool_base != 0) pool_base else module_bot)) return -1;
+        if (l < abi.ARENA_BASE or l >= mem_size) return -1;
         const state = pages[pageOf(l)];
-        return if (state == FREE) -1 else @intFromBool(state == USED or state == IMAGE);
+        return if (state == FREE or state == POOL) -1 else @intFromBool(state == USED or state == IMAGE);
     }
     if (h >= PLANES or R[h] == 0 or l < L[h] or @as(u64, l - L[h]) >= R[h]) return -1;
     return @intFromBool(l - L[h] < S[h] or extentAt(h, l) != null);
@@ -675,9 +704,15 @@ export fn drop_va(v: u64, n: u64) u32 {
     const h = hi(v);
     const l = lo(v);
     if (h == 0) {
-        if (l < abi.ARENA_BASE or @as(u64, l) + n > (if (pool_base != 0) pool_base else module_bot)) return 0;
+        if (l < abi.ARENA_BASE or @as(u64, l) + n > mem_size) return 0;
         _ = cpu.code_write(l, @intCast(n));
-        fill(l, 0, @intCast(n));
+        // what is committed of plane 0's pages: another plane's units are not this mapping
+        const end = @min(@as(u64, l) + n, @as(u64, @wasmMemorySize(0)) << 16);
+        var pg: u64 = l >> PAGE_SHIFT;
+        while (pg << PAGE_SHIFT < end) : (pg += 1) if (pages[@intCast(pg)] != POOL) {
+            const a: u32 = @intCast(@max(pg << PAGE_SHIFT, l));
+            fill(a, 0, @intCast(@min((pg + 1) << PAGE_SHIFT, end) - a));
+        };
         return 1;
     }
     const off = l - L[h];
@@ -700,112 +735,34 @@ export fn decommit_va(v: u64, n: u64) void {
     dropExtents(h, l, n, true);
     if (off + n >= W[h]) W[h] = @min(W[h], off);
     if (off < S[h] and off + n >= S[h]) {
-        const at = (P[h] - pool_base) / UNIT;
-        @memset(owner[at + unitsOf(off) .. at + unitsOf(S[h])], -1);
+        const at = P[h] / UNIT;
+        give(at + unitsOf(off), unitsOf(S[h]) - unitsOf(off));
         S[h] = off;
     }
 }
 
-var last_err: u32 = 0;
-export fn err() u32 {
-    return last_err;
-}
+/// address space for a module image, the lowest that fits, zeroed: never freed
 pub export fn reserve(size: u32, alignment: u32) u32 {
     abi.require(alignment != 0 and alignment & (alignment - 1) == 0, "reserve: alignment is not a power of two");
-    // Running out of address space is a result the caller already reads through err(), not a
-    // programmer error; without the test the subtraction below wraps and hands back a base above
-    // module_bot, which then walks the page map backwards.
-    if (size == 0 or size > module_bot - abi.ARENA_BASE) {
-        last_err = 4;
-        return 0;
-    }
-    if (image_holes != 0) {
-        const hole = imageHole(size, alignment);
-        if (hole != 0) {
-            const a = pageOf(hole);
-            const b = a + ((size + PAGE_SIZE - 1) >> PAGE_SHIFT);
-            @memset(pages[a..b], IMAGE);
-            image_holes -= b - a;
-            return hole;
-        }
-    }
-    const base = (module_bot - size) & ~(alignment - 1);
-    if (pool_base != 0) {
-        const keep = (base - pool_base) / UNIT;
-        for (1..PLANES) |h| {
-            if (R[h] == 0 or S[h] == 0) continue;
-            const at = (P[h] - pool_base) / UNIT;
-            const need = unitsOf(S[h]);
-            if (at + need <= keep) continue;
-            @memset(owner[at .. at + need], -1);
-            const dst = freeRun(need, 0, keep);
-            @memset(owner[at .. at + need], @intCast(h));
-            if (dst < 0) {
-                last_err = 0x100 | @as(u32, @intCast(h));
-                return 0;
-            }
-            moveRun(h, @intCast(dst), need);
-        }
-        for (0..EXTENTS) |i| {
-            if (ext_h[i] == 0) continue;
-            const at = (ext_p[i] - pool_base) / UNIT;
-            const need = ext_size[i] / UNIT;
-            if (at + need <= keep) continue;
-            const dst = freeRun(need, 0, keep);
-            if (dst < 0) {
-                last_err = 0x100 | ext_h[i];
-                return 0;
-            }
-            const to = pool_base + @as(u32, @intCast(dst)) * UNIT;
-            move(to, ext_p[i], ext_size[i]);
-            @memset(owner[at .. at + need], -1);
-            @memset(owner[@intCast(dst) .. @as(usize, @intCast(dst)) + need], @intCast(ext_h[i]));
-            ext_p[i] = to;
-            moves += 1;
-        }
-    }
-    for (pageOf(base)..pageOf(module_bot)) |i| if (pages[i] == USED) {
-        last_err = 2;
-        return 0;
-    };
-    if (base < heap_top) {
-        last_err = 3;
-        return 0;
-    }
-    @memset(pages[pageOf(base)..pageOf(module_bot)], IMAGE);
-    module_bot = base;
-    return base;
+    const n = (size +% (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+    if (n == 0) return 0;
+    const p = findRun(n >> PAGE_SHIFT, FREE, @max(alignment / PAGE_SIZE, 1), false);
+    if (p == 0 or !back(@as(u64, p) + n)) return 0;
+    cpu.invalidate_range(p, n);
+    @memset(pages[pageOf(p) .. pageOf(p) + (n >> PAGE_SHIFT)], IMAGE);
+    fill(p, 0, n);
+    return p;
 }
 
-/// free pages among the module images, which dlclose left
-var image_holes: u32 = 0;
-fn imageHole(size: u32, alignment: u32) u32 {
-    const n = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
-    const al = @max(alignment / PAGE_SIZE, 1);
-    const end = pageOf(mem_size);
-    var s = (pageOf(module_bot) + al - 1) & ~(al - 1);
-    while (s + n <= end) {
-        var j = s;
-        while (j < s + n and pages[j] == FREE) j += 1;
-        if (j == s + n) return s * PAGE_SIZE;
-        s = (j + al) & ~(al - 1);
-    }
-    return 0;
-}
-/// dlclose's unmapping of a module image: its pages leave module space for a later image, and once
-/// the images below them are gone too they return to the arena (or the pool) under the rest
+/// dlclose's unmapping of a module image: its pages are free for a later image or mapping
 export fn release_image(base: u32, size: u32) void {
     const a = pageOf(base);
     const b = pageOf(base +% size +% (PAGE_SIZE - 1));
-    if (base < module_bot or b > pageOf(mem_size) or a >= b) return;
+    if (base < abi.ARENA_BASE or b > pageOf(mem_size) or a >= b) return;
     cpu.invalidate_range(base, (b - a) * PAGE_SIZE);
-    fill(base, 0, (b - a) * PAGE_SIZE);
-    @memset(pages[a..b], FREE);
-    image_holes += b - a;
-    while (module_bot < mem_size and pages[pageOf(module_bot)] == FREE) {
-        module_bot += PAGE_SIZE;
-        image_holes -= 1;
-    }
+    for (a..b) |i| if (pages[i] == IMAGE) {
+        pages[i] = FREE;
+    };
 }
 
 var free_stacks: [64][2]u32 = undefined;
@@ -859,25 +816,18 @@ export fn host_alloc(n: u32, alignment: u32) u32 {
     return p;
 }
 
+/// the process's address space: what is in use carries over, its planes do not
 export fn mem_init(size: u32) void {
+    for (0..owner.len) |u| if (owner[u] >= 0) give(@intCast(u), 1);
     mem_size = size;
-    module_bot = size;
-    image_holes = 0;
-    pool_base = if (size > abi.POOL_BASE) abi.POOL_BASE else 0;
-    owner_len = if (pool_base != 0) @min(owner.len, (size - pool_base) / UNIT) else 0;
-    @memset(&owner, -1);
+    planes = size > abi.MEM_SIZE_A32;
     @memset(&R, 0);
     @memset(&S, 0);
     @memset(&W, 0);
     @memset(&L, PLANE_LO);
     @memset(&ext_h, 0);
-    @memset(pages[0..pageOf(heap_top + PAGE_SIZE - 1)], USED);
-    // a later reserve hands these out again and must read as fresh memory
-    for (pageOf(heap_top)..MAX_PAGES) |i| if (pages[i] == IMAGE) {
-        pages[i] = FREE;
-        fill(@intCast(i * PAGE_SIZE), 0, PAGE_SIZE);
-    };
-    cpu.reset(size > abi.MEM_SIZE_A32);
+    @memset(pages[0..pageOf(abi.ARENA_BASE)], USED);
+    cpu.reset(planes);
     // the core's own data lies below the stacks: a guest store there faults, as below LOW
     @memset(page_flags[0..pageOf(abi.STACK_BASE)], 2);
 }
@@ -890,7 +840,7 @@ export fn stat(i: u32) f64 {
         1 => @floatFromInt(blocks),
         2 => @as(f64, @floatFromInt(heap_peak)) - @as(f64, @floatFromInt(abi.ARENA_BASE)),
         3 => @floatFromInt(mem_size),
-        4 => @floatFromInt(module_bot - heap_top),
+        4 => @floatFromInt(mem_size - heap_top),
         5 => blk: {
             var n: u32 = 0;
             for (R) |r| n += @intFromBool(r != 0);
@@ -902,7 +852,6 @@ export fn stat(i: u32) f64 {
             break :blk @floatFromInt(n);
         },
         7 => @floatFromInt(moves),
-        8 => @floatFromInt(module_bot),
         else => 0,
     };
 }

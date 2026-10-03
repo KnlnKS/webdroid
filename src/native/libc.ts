@@ -55,9 +55,12 @@ function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return 
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const randomWord = new Uint32Array(1);
-/** getRandomValues fills at most 64 KiB a call */
+/** getRandomValues fills at most 64 KiB a call, and no shared view (guest memory): such a
+ *  target is filled through a copy */
 export function randomBytes(target: Uint8Array): void {
-  for (let off = 0; off < target.length; off += 65536) crypto.getRandomValues(target.subarray(off, off + 65536));
+  const out = target.buffer instanceof ArrayBuffer ? target : new Uint8Array(target.length);
+  for (let off = 0; off < out.length; off += 65536) crypto.getRandomValues(out.subarray(off, off + 65536));
+  if (out !== target) target.set(out);
 }
 export function fillRandom(p: number, n: number): void { randomBytes(mem.bytes(p, n)); wrote(p, n); }
 function random32(): number { crypto.getRandomValues(randomWord); return randomWord[0] >>> 0; }

@@ -1,7 +1,8 @@
 // libcore.io.Memory's natives (libcore_io_Memory.cpp), and the i18n module's copy of the class
 // that reads tzdata: raw access to guest memory, which is little-endian as the host is, so a
 // `swap` reverses each element's bytes. Addresses from EXTERNAL up are outside guest memory:
-// read-only mappings of immutable files (Region) and early non-movable arrays (HostBytes).
+// read-only mappings of immutable files (Region) and early non-movable arrays where guest memory
+// is not shared (HostBytes).
 import { mem } from "../../native/mem";
 import { rt } from "../runtime";
 import { after } from "./jlang";
@@ -77,10 +78,10 @@ class Region {
     return after(this.load(at, width), () => get(new DataView(this.bytes(at, width).slice().buffer), 0));
   }
 }
-/** A non-movable byte[] made before the process sized guest memory for native code. Sizing grows
- *  the memory, which detaches every view of it, so the bytes stay in the JS heap: host code reaches
- *  them by address like a mapping's, and native code, which reads guest memory, cannot (JNI's
- *  GetDirectBufferAddress answers 0, its "region undefined"). */
+/** A non-movable byte[] made before an unshared guest memory is committed for native code, which
+ *  grows it and detaches every view of it (jnio's nonMovableBytes), so the bytes stay in the JS
+ *  heap: host code reaches them by address like a mapping's, and native code, which reads guest
+ *  memory, cannot (JNI's GetDirectBufferAddress answers 0, its "region undefined"). */
 class HostBytes {
   // over the array's buffer, not the array, which the finalization registry watches
   readonly u8: Uint8Array;

@@ -8,7 +8,7 @@ import { mem } from "./mem";
 import { Cpu } from "./cpu";
 import { core, jitStats, JIT_HEAT } from "./core";
 import { mainThread } from "../jvm/natives/jlang";
-import { MEM_SIZE, RET_SENTINEL } from "./abi";
+import { RET_SENTINEL } from "./abi";
 
 export const RET = 0xd65f03c0;
 /** run c's slices to the return sentinel; a fault's synchronous signal throws with its siginfo */
@@ -20,6 +20,11 @@ export function finish(c: Cpu, budget = 10000): void {
     throw new Error(`signal ${sig} code ${info.code} addr 0x${info.addr.toString(16)}`);
   }
 }
+
+/** every image page the tests reserved (code, data), which sweep puts back */
+const images: [number, number][] = [];
+const reserve = mem.reserve;
+mem.reserve = (size, align) => { const base = reserve(size, align); images.push([base, size]); return base; };
 
 /** one Cpu for every run: a thread stack is address space that is never given back */
 let shared: Cpu | null = null;
@@ -56,7 +61,7 @@ const state = (c: Cpu) => [Array.from(c.w), vfile(c), c.pc, c.cpsr, c.fpcr, c.fp
  *  run reproduces the first (no time, no memory it rewrites) then runs to the JIT, which must
  *  agree; memory is put back so the test sees the first run's. */
 export function sweep(run1: (at: number, setup: (c: Cpu) => void) => Cpu, at: number, setup: (c: Cpu) => void): Cpu {
-  const bot = core.stat(8), image = mem.u8.slice(bot, MEM_SIZE);
+  const image = images.map(([base, size]) => mem.u8.slice(base, base + size));
   const c0 = run1(at, setup), stack = mem.u8.slice(c0.stackBase, c0.stackTop);
   const s1 = state(c0);
   if (JSON.stringify(state(run1(at, setup))) === JSON.stringify(s1)) {
@@ -66,7 +71,7 @@ export function sweep(run1: (at: number, setup: (c: Cpu) => void) => Cpu, at: nu
     expect(jitStats.regions).toBeGreaterThan(before);
     expect(state(c)).toEqual(s1);
   }
-  mem.u8.set(image, bot); mem.u8.set(stack, c0.stackBase);
+  images.forEach(([base], i) => mem.u8.set(image[i], base)); mem.u8.set(stack, c0.stackBase);
   core.invalidate_all(); // the image region holds the decode blocks too
   return run1(at, setup);
 }

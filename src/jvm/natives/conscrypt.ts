@@ -10,6 +10,7 @@ import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers";
 import { type JBuffer, remainingBytes, resident, addressOf, limit, position, directAddress } from "./jnio";
 import { memoryAt } from "./jmemory";
+import { randomBytes } from "../../native/libc";
 import { after, scall } from "./jlang";
 import { concat, i8, jarray, u8 } from "../abi";
 import {
@@ -65,7 +66,7 @@ nc("get_cipher_names(Ljava/lang/String;)[Ljava/lang/String;", (selector: string)
 nc("getDirectBufferAddress(Ljava/nio/Buffer;)J", (b: JBuffer) => after(directAddress(b ?? rt.npe()), BigInt));
 nc("RAND_bytes([B)V", (b: Int8Array | null) => {
   if (!b) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  for (let i = 0; i < b.length; i += 65536) crypto.getRandomValues(b.subarray(i, i + 65536));
+  randomBytes(u8(b));
 });
 
 // ── message digests (EVP_MD, EVP_MD_CTX)

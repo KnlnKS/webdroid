@@ -131,9 +131,12 @@ const OFF_EXCL = @offsetOf(Cpu, "excl");
 const OFF_TLS = @offsetOf(Cpu, "tls");
 const OFF_SLOT = @offsetOf(cpu.Page, "slot");
 const FLAGS_BASE = @intFromPtr(mem.page_flags);
+/// bit 0: the engine has tail calls; bit 1: the host's memory is shared
 var chain: bool = false;
+var shared: bool = false;
 export fn jit_config(c: u32) void {
-    chain = c != 0;
+    chain = c & 1 != 0;
+    shared = c & 2 != 0;
 }
 
 pub const Isa = enum(u8) { a64 = 0, arm = 1, thumb = 2 };
@@ -1359,7 +1362,9 @@ fn emitModule(b: *Buf, n: u32) void {
     b.bytes("env");
     b.u(6);
     b.bytes("memory");
-    b.bytes(&[_]u8{ 0x02, 0x00, 1, 3 });
+    // the core's memory, as the host made it: a shared one declares its maximum (65535 pages)
+    b.bytes(if (shared) &[_]u8{ 0x02, 0x03, 1, 0xff, 0xff, 0x03 } else &[_]u8{ 0x02, 0x00, 1 });
+    b.u(3);
     b.bytes("env");
     b.u(25);
     b.bytes("__indirect_function_table");

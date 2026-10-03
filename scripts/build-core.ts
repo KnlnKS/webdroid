@@ -23,7 +23,7 @@ function stale(): boolean {
 async function build(): Promise<void> {
   await Promise.all(OUT.map(async ([mode, name]) => {
     const bin = `${dir}/${name}`;
-    await $`zig build-exe ${src}/core.zig -target wasm32-freestanding -O ${mode} -mcpu=${FEATURES} -fno-entry -rdynamic --import-memory --import-table --global-base=65536 --stack 262144 --export=__heap_base -fstrip -femit-bin=${bin}`;
+    await $`zig build-exe ${src}/core.zig -target wasm32-freestanding -O ${mode} -mcpu=${FEATURES} -fno-entry -rdynamic --import-memory --max-memory=4294901760 --import-table --global-base=65536 --stack 262144 --export=__heap_base -fstrip -femit-bin=${bin}`;
     const bytes = new Uint8Array(await Bun.file(bin).arrayBuffer());
     if (mode === "ReleaseFast") await rename(bin, `${dir}/native-core.wasm`);
     else await rm(bin);
