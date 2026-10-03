@@ -6,7 +6,7 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { awaited, rt, driven, declaredField, type Gen } from "../jvm/runtime";
+import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
@@ -268,10 +268,9 @@ delegate("android/content/res/AssetManager", {
   // Asset::getAssetAllocations lists nothing when no asset is open
   "getAssetAllocations()Ljava/lang/String;": () => null,
   "nativeSetApkAssets(J[Landroid/content/res/ApkAssets;ZZ)V": (h: bigint, apkAssets: (Record<string, bigint> | null)[]) => {
-    const ptr = rt.fieldProp("android/content/res/ApkAssets", "mNativePtr")!;
     assets(h).setApks(apkAssets.map((a, i) => {
       if (!a) throw rt.mkThrowable("java/lang/NullPointerException", `ApkAssets at index ${i} is null`);
-      return apkN(a[ptr]);
+      return apkN(getDeclared(a, "android/content/res/ApkAssets", "mNativePtr"));
     }));
   },
   "nativeSetConfiguration(JIILjava/lang/String;[Ljava/lang/String;IIIIIIIIIIIIIIIIZ)V": (
@@ -488,7 +487,6 @@ function overlayablesOf(res: Resources, pkg: string): Map<string, string> | null
 /** the app's size (and UI mode) qualifiers as Configurations with just those fields set */
 const sizeConfigurations = driven(function* (res: Resources, uiMode: boolean): Gen {
   const seen = new Set<string>(), out: unknown[] = [];
-  const field = (name: string) => rt.fieldProp("android/content/res/Configuration", name)!;
   for (const apk of apksOf(res)) {
     if (!apk.table || apk.table.pkgId === 0x01) continue;
     for (const c of apk.table.configs()) {
@@ -497,10 +495,8 @@ const sizeConfigurations = driven(function* (res: Resources, uiMode: boolean): G
       seen.add(key);
       const config = yield newObj("android/content/res/Configuration", "()V");
       yield vcall(config, "unset", "()V");
-      config[field("smallestScreenWidthDp")] = c.swdp;
-      config[field("screenWidthDp")] = c.wdp;
-      config[field("screenHeightDp")] = c.hdp;
-      if (uiMode) config[field("uiMode")] = c.uiType | (c.night > 0 ? 0x20 : c.night < 0 ? 0x10 : 0);
+      setDeclared(config, "android/content/res/Configuration", { smallestScreenWidthDp: c.swdp, screenWidthDp: c.wdp, screenHeightDp: c.hdp,
+        ...uiMode ? { uiMode: c.uiType | (c.night > 0 ? 0x20 : c.night < 0 ? 0x10 : 0) } : {} });
       out.push(config);
     }
   }
