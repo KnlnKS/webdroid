@@ -83,8 +83,7 @@ class ZipEntryFile implements FileSource {
     return (await this.resolved).read(offset, length);
   }
 }
-async function openedApk(source: FileSource): Promise<OpenedApk> {
-  const entries = await centralDirOfSource(source);
+async function openedApk(source: FileSource, entries: Map<string, ZEntry>): Promise<OpenedApk> {
   const manifestEntry = entries.get("AndroidManifest.xml");
   const manifestSource = manifestEntry ? await entrySource(source, manifestEntry) : null;
   const manifest = manifestSource ? await readFully(manifestSource) : null;
@@ -98,24 +97,32 @@ async function openedApk(source: FileSource): Promise<OpenedApk> {
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
 }
 
-async function openInstallSource(source: FileSource): Promise<Install> {
+/** told an install's entry names once its central directories are read, before its contents arrive */
+type EntryNames = (names: string[]) => void;
+
+async function openInstallSource(source: FileSource, onEntries?: EntryNames): Promise<Install> {
   const entries = await centralDirOfSource(source);
-  if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
+  if (entries.has("AndroidManifest.xml")) {
+    onEntries?.([...entries.keys()]);
+    return openInstall(await readFully(source));
+  }
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
-  return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))));
+  return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))), undefined, onEntries);
 }
 
 /** an install from its apks: the base among them, or given already open (a packed archive, a
  *  parsed apk) so that it is not read again */
-export async function openInstallApks(apks: FileSource[], base?: Pick<Install, "zip" | "base">): Promise<Install> {
-  return mergeInstall(await Promise.all(apks.map(openedApk)), base);
+export async function openInstallApks(apks: FileSource[], base?: Pick<Install, "zip" | "base">, onEntries?: EntryNames): Promise<Install> {
+  const dirs = await Promise.all(apks.map(centralDirOfSource));
+  onEntries?.(dirs.flatMap((entries) => [...entries.keys()]));
+  return mergeInstall(await Promise.all(apks.map((apk, i) => openedApk(apk, dirs[i]))), base);
 }
 
-export async function openInstallRemote(url: string): Promise<Install> {
-  return openInstallSource(await RangeFile.open(url));
+export async function openInstallRemote(url: string, onEntries?: EntryNames): Promise<Install> {
+  return openInstallSource(await RangeFile.open(url), onEntries);
 }
 
-export async function openInstallLocal(file: File): Promise<Install> {
-  return openInstallSource(new BlobFile(file));
+export async function openInstallLocal(file: File, onEntries?: EntryNames): Promise<Install> {
+  return openInstallSource(new BlobFile(file), onEntries);
 }

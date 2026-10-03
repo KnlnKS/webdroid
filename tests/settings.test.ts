@@ -10,6 +10,7 @@ import { mkUri, uriText, type JUri } from "../src/android/net";
 import { settingsStore } from "../src/android/settings";
 import { systemProvider } from "../src/android/systemproviders";
 import { bootApp, packageRecord } from "./java";
+import { DEVICE_PROPERTIES } from "../src/shell/device-properties";
 
 async function install(pkg: string, target: number, permissions: string[], certificate: number): Promise<PackageRecord> {
   const record = await packageRecord(pkg, { target, permissions, certificate });
@@ -47,7 +48,7 @@ describe("settings-provider", () => {
     expect(await scall(SYSTEM, "getFloat", `(${CR}${S})F`, cr, "font_scale")).toBe(1);
     expect(await scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "screen_brightness")).toBe(102);
     expect(await thrown(() => scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "font_scale"))).toBe("android/provider/Settings$SettingNotFoundException: font_scale");
-    expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, "device_name")).toBe("webdroid");
+    expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, "device_name")).toBe(DEVICE_PROPERTIES["ro.product.model"]);
     expect(await scall(GLOBAL, "getFloat", `(${CR}${S}F)F`, cr, "animator_duration_scale", 0.5)).toBe(0.5);
     const enabled = locationTransport.enabled;
     try {

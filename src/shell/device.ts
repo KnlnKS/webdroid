@@ -6,7 +6,7 @@ import { rt } from "../jvm/runtime";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
-import { setTargetSdkVersion } from "../jvm/natives/jreflect";
+import { fixProcessBitness, processBitness, setTargetSdkVersion } from "../jvm/natives/jreflect";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
@@ -100,7 +100,9 @@ export function startZygote(): Promise<void> {
     await Promise.all([loadFramework(), loadPlatformDex(), loadPlatformCode()]);
     useLinkTable(await table, rt.linkFingerprint());
     await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
-    // the runtime's own setup and the system font map need no app: a device's zygote runs them
+    // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
+    // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
+    await processBitness;
     await zygoteInit();
   })();
 }
@@ -123,6 +125,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcher ? launcherOrientation(appNode, launcher, pkg) : -1);
   const code = loadCode(processName ?? pkg);
+  fixProcessBitness([...Object.keys(zip), ...rt.classpathSource?.names() ?? []]);
   await Promise.all([startZygote(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its

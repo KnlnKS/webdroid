@@ -27,6 +27,7 @@ import { jitStats } from "./native/core";
 import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics";
 import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
+import { fixProcessBitness } from "./jvm/natives/jreflect";
 import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
@@ -96,7 +97,7 @@ async function boot(file: string, local?: File) {
   let rollbackAssets: (() => void) | undefined;
   try {
     void startZygote();
-    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkia(), displayRate]);
+    const [install] = await Promise.all([local ? openInstallLocal(local, fixProcessBitness) : openInstallRemote("/apks/" + encodeURIComponent(file), fixProcessBitness), provisionPackages(), loadSkia(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });

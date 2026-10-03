@@ -1100,12 +1100,16 @@ const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
 function pickAbi(has: (abi: string) => boolean): string | null {
   return rt.nativeAbis.find(has) ?? ABIS.find(has) ?? null;
 }
+/** the ABI an app's libraries load from, given its entry names, when it ships any */
+export function libraryAbi(names: Iterable<string>): string | null {
+  const dirs = new Set([...names].flatMap((name) => /^lib\/([^/]+)\/[^/]+\.so$/.exec(name)?.[1] ?? []));
+  return dirs.size ? pickAbi((a) => dirs.has(a)) : null;
+}
 const appAbis = new WeakMap<Runtime, string | null>();
 /** the ABI the app's own libraries load from, when it ships any */
 export function appNativeAbi(owner: Runtime = rt): string | null {
   if (appAbis.has(owner)) return appAbis.get(owner)!;
-  const dirs = new Set(owner.classpathNames().flatMap((name) => /^lib\/([^/]+)\/[^/]+\.so$/.exec(name)?.[1] ?? []));
-  const abi = dirs.size ? pickAbi((a) => dirs.has(a)) : null;
+  const abi = libraryAbi(owner.classpathNames());
   appAbis.set(owner, abi);
   return abi;
 }

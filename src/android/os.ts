@@ -39,7 +39,7 @@ rt.registerJnis("android/os/PerformanceHintManager", {
 
 
 const RUNTIME_STATS = ["art.gc.gc-count", "art.gc.gc-time", "art.gc.bytes-allocated", "art.gc.bytes-freed", "art.gc.blocking-gc-count", "art.gc.blocking-gc-time", "art.gc.gc-count-rate-histogram", "art.gc.blocking-gc-count-rate-histogram"];
-// ── SystemClock / Build / Process / Trace / Debug
+// ── SystemClock / Process / Trace / Debug
 const nanos = (ms: number) => BigInt(Math.floor(ms * 1e6));
 rt.registerJnis("android/os/SystemClock", {
   "uptimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
@@ -49,45 +49,6 @@ rt.registerJnis("android/os/SystemClock", {
   "currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
   "currentThreadTimeMicro()J": () => BigInt(Math.floor(performance.now() * 1e3)),
   "currentTimeMicro()J": () => BigInt(Math.floor(wallMillis() * 1e3)),
-});
-class JBuild extends JObj {}
-const abi32 = jarray(["armeabi-v7a"], "Ljava/lang/String;"), abi64 = jarray(["arm64-v8a"], "Ljava/lang/String;");
-rt.register({
-  name: "android/os/Build", ctor: JBuild,
-  statics: {
-    MODEL: "webdroid", MANUFACTURER: "webdroid", BRAND: "google", DEVICE: "webdroid",
-    PRODUCT: "webdroid", HARDWARE: "browser", FINGERPRINT: "google/webdroid/1.0", SOC_MANUFACTURER: "unknown", SOC_MODEL: "unknown", SKU: "unknown", ODM_SKU: "unknown",
-    SERIAL: "unknown", RADIO: "unknown", ID: "WD1A", DISPLAY: "webdroid 1.0", TAGS: "release-keys", TYPE: "user",
-    BOARD: "web", BOOTLOADER: "unknown", HOST: "localhost", USER: "web", TIME: 0n, UNKNOWN: "unknown",
-    SUPPORTED_ABIS: jarray([...abi64, ...abi32], "Ljava/lang/String;"),
-    SUPPORTED_32_BIT_ABIS: abi32,
-    SUPPORTED_64_BIT_ABIS: abi64,
-    get CPU_ABI() { return (is64BitProcess() ? abi64 : abi32)[0]; },
-    get CPU_ABI2() { return (is64BitProcess() ? abi64 : abi32)[1] ?? ""; },
-  },
-});
-class JBuildVersion extends JObj {}
-rt.register({
-  name: "android/os/Build$VERSION", ctor: JBuildVersion,
-  // a release build: the codename is REL, so every RELEASE_OR_* name reads the release
-  statics: { SDK_INT: device.sdk, RELEASE: device.release, RELEASE_OR_CODENAME: device.release, RELEASE_OR_PREVIEW_DISPLAY: device.release,
-    CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0,
-    PREVIEW_SDK_FINGERPRINT: "REL", DEVICE_INITIAL_SDK_INT: device.sdk, MEDIA_PERFORMANCE_CLASS: 0,
-    // SDK_INT, plus one for a pre-release codename, which a release build has none of
-    RESOURCES_SDK_INT: device.sdk, ACTIVE_CODENAMES: jarray([], "Ljava/lang/String;") },
-});
-// API 33's codes, in the name order ART's getFields() reports for a dex class; apps index
-// the array by SDK_INT to read the release codename
-rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {},
-  statics: Object.fromEntries([
-    ["BASE", 1], ["BASE_1_1", 2], ["CUPCAKE", 3], ["CUR_DEVELOPMENT", 10000], ["DONUT", 4], ["ECLAIR", 5],
-    ["ECLAIR_0_1", 6], ["ECLAIR_MR1", 7], ["FROYO", 8], ["GINGERBREAD", 9], ["GINGERBREAD_MR1", 10],
-    ["HONEYCOMB", 11], ["HONEYCOMB_MR1", 12], ["HONEYCOMB_MR2", 13], ["ICE_CREAM_SANDWICH", 14],
-    ["ICE_CREAM_SANDWICH_MR1", 15], ["JELLY_BEAN", 16], ["JELLY_BEAN_MR1", 17], ["JELLY_BEAN_MR2", 18],
-    ["KITKAT", 19], ["KITKAT_WATCH", 20], ["LOLLIPOP", 21], ["LOLLIPOP_MR1", 22], ["M", 23], ["N", 24],
-    ["N_MR1", 25], ["O", 26], ["O_MR1", 27], ["P", 28], ["Q", 29], ["R", 30], ["S", 31], ["S_V2", 32],
-    ["TIRAMISU", 33],
-  ]),
 });
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";

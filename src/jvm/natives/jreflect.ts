@@ -2,11 +2,12 @@
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
-import { vcall, packageNamed, stringHash, idHash, JClass, classpathStream, after, enclosingClass, newObj } from "./jlang";
+import { vcall, packageNamed, stringHash, idHash, JClass, classpathStream, after, enclosingClass, newObj, libraryAbi } from "./jlang";
 import { box, boxObject, unbox, type BoxDesc } from "./jbox";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import { unsafeFallthrough } from "../compiler";
 import { device } from "../../shell/config";
+import { ABIS_32 } from "../../shell/properties";
 import { mem } from "../../native/mem";
 import { handle } from "../../android/handles";
 import { nonMovableBytes } from "./jnio";
@@ -446,9 +447,19 @@ rt.registerJnis("java/lang/reflect/Array", {
 // slack here, so the array is exactly the length asked for — which the contract allows.
 class JVMRuntime extends JObj {}
 const theVmRuntime = new JVMRuntime();
-/** whether the process runs arm64 code: an app shipping only armeabi-v7a libraries runs as a 32-bit process */
-export const is64BitProcess = (): boolean =>
-  rt.nativeAbis.find((abi) => Object.keys(rt.classpath).some((path) => path.startsWith("lib/" + abi + "/"))) !== "armeabi-v7a";
+const is32Bit = (names: Iterable<string>) => ABIS_32.includes(libraryAbi(names) ?? "");
+let wide: boolean | null = null, bitnessFixed!: () => void;
+/** resolves once the process's bitness is fixed: until then no zygote of either bitness is chosen */
+export const processBitness = new Promise<void>((resolve) => { bitnessFixed = resolve; });
+/** Fix the bitness of the process that runs the app with these entries. PackageManager's ABI
+ *  selection gives the app a 32-bit primary ABI only when 32-bit libraries are the ones that match,
+ *  and that ABI picks the zygote (zygote64 or zygote) that forks it. */
+export function fixProcessBitness(names: Iterable<string>): void {
+  wide ??= !is32Bit(names);
+  bitnessFixed();
+}
+/** whether the process runs arm64 code */
+export const is64BitProcess = (): boolean => wide ?? !is32Bit(rt.classpathNames());
 /** the app's targetSdkVersion as ActivityThread binds it; ART's default is the development SDK */
 let targetSdk = 10000;
 export const setTargetSdkVersion = (version: number) => { targetSdk = version; };
