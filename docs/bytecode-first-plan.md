@@ -612,13 +612,13 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   lock-order race close.
 - **Done (cleanup):** base64 through `Uint8Array`, one `systemResource`, field helpers, and test
   pruning (1,182 → 1,097 tests, about 11 → 6 s); sql.js builds are cached per checkout.
-- **Gates on the merge:** typecheck, `bun run test` (1097), FitNotes smoke, `fwtest` 30/30,
-  `textcmp` 72/72, fast e2e 7/7, and `lat` cold and warm (worst gated tap 123 ms). Live flows,
-  run one at a time: YouTube (3/3 after its flow taps the film by text, since a sponsored card
-  can cover the old point), Lichess, Harmonic, ChatGPT and Reddit pass. Resy and Reddit now pass
-  repeatedly (UI dumps report view ids and every shown process's windows; history, 2026-10-02).
-  TikTok wedged under V8 memory pressure from two 4 GiB guest memories; guest memory is now
-  committed as used (shared), and its swipe step's remaining wedge is native CPU, not GC.
+- **Gates on the tip (2026-10-03):** typecheck, `bun run test` (1133), FitNotes smoke, `fwtest`
+  31/31, `textcmp` 108/108 layouts and 184/184 hyphenated lines, fast e2e 7/7 (mihon-app can flake
+  under parallel load; it passes alone), and `lat` cold and warm (worst gated tap: Mihon
+  dark-warm, 118 ms cold and 100 ms warm). Live flows, one at a time: YouTube, Lichess, Harmonic,
+  ChatGPT, Reddit and Resy pass. TikTok refuses guest sessions to this host after many installs,
+  so its last measured state (no GC spiral; software HEVC decode and a cold first-page step)
+  needs a re-test from another network.
 - **Done (platform):** loopback URLs reach the process's own listeners, and apps load the device's
   shared libraries (YouTube's exocache answers). PdfDocument rasterises its pages. WebView
   interface names travel with the load, so print snapshots work without site isolation. A serial
