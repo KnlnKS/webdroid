@@ -698,6 +698,11 @@ at most ~0.2 s on a browser profile's first app launch (history, 2026-10-02). Mi
 is its own 5 s splash, as on the reference AVD. Remaining launch costs are diffuse: class linking,
 lazy-method installation and mangling (~120 ms of a warm FitNotes launch), clinit (~130 ms).
 `knlnks/q-async` waited on the platform image; re-measure its Mihon race on this tip instead.
+First launches (§4.4, `knlnks/open-aot`, 2026-10-03): the compile worker emits the launch
+components and what they and the profile call, after the profile, for every APK; idle preparation
+takes the newest methods first. Cold taps run 35-60% fewer cold calls (Mihon's second dark tap
+6.4k -> 2.6k, Komikku's first 12.3k -> 5.1k) at unchanged first frames and +49-65 MB of page heap.
+A memoised ApplicationInfo suspension that hung Mihon's launch is fixed (history, 2026-10-03).
 
 **Post-flip matrix (2026-10-02).** `--full --jobs 1` without Genshin: the seven local flows render
 every step (FitNotes 39/39 at 7.4% content); live flows run one at a time render Harmonic 14/14,

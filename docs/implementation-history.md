@@ -2182,6 +2182,36 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Komikku's restore step then failed 3 of 10 runs (0 of 5 at the base) on OPFS's NotFoundError
     from a document removed while a listing or lookup read it; documents.ts answers such a
     document as gone, and komikku passed 6 of 6. The failing operation itself was not captured.
+- 2026-10-03, first-launch compilation past the baseline profile (§4.4, branch `knlnks/open-aot`):
+  - Coverage: through Mihon's lat scenario 3,692 app methods ran cold outside its 18,274-method
+    profile (the profiled classes hold 595 of them). Breadth first from the profile and the launch
+    components, exact calls and touched classes' `<clinit>` add 4,399 methods covering 518; adding
+    each virtual call's declared target, 8,857 covering 1,329. TikTok: 16,359 cold outside its
+    66,140-method profile; the closure's first 20,000 cover about 5,100 (all 218,894 cover 12,706).
+    RTA from the manifest (reach.ts) reaches 52k (Mihon) and 1.16M (TikTok) methods, less precisely.
+  - The compile worker now runs on every first launch: the profile, the Application's and launcher
+    Activity's methods, then breadth first what they call (`callClosure`, declared targets), then
+    the manifest's other components, up to 20,000 methods past the profile. FitNotes, which has no
+    profile, gets 3.5k bodies. Bodies still persist only once a method claims one.
+  - Idle preparation took its queue oldest first. A method queues on its first call, so a tap's
+    methods waited behind launch's; it now takes the newest first. Interleaved against oldest
+    first (n=2): Mihon's second dark tap 3,128 cold calls against 5,409.
+  - Cold lat, fresh browser profile, pooled interleaved runs (7 against 10 at the base, load 3-11):
+    cold calls in Komikku's first tap 12,256 -> 5,050 (compile 27 -> 17 ms, 198 -> 185 ms), Mihon's
+    second dark tap 6,426 -> 2,569 (10.7 -> 2.7 ms, 126 -> 110 ms), second light 4,552 -> 1,922;
+    first frames 1,778/7,444/4,638 ms against 1,824/7,417/4,552 (FitNotes/Mihon/Komikku, within
+    noise); page heap +49-65 MB, from offered bodies no method claims; code store +1-2 MB.
+  - Rejected: starting the worker beside the zygote. First frames were no better (n=2: Mihon 7,588
+    against 7,437 ms, Komikku 4,900 against 4,682) and launch ran as many app methods cold. Importing
+    the closure's chunks only after the first frame changed no first frame measurably and left
+    Komikku's first tap at 8,698 cold calls against 4,966.
+  - Mihon's first launch then hung 7 of 22 times before its first frame: `applicationInfoOf` cached
+    rt.drive's pending result, a suspension whose continuation list a second caller's frames joined
+    and which settles only when the first caller's whole chain (here the main looper's) ends. The
+    second `getInstalledPackages` waited on it forever; `once` now shares the build (12/12 launch).
+    `scripts/generators.ts` catches only `??=` of such a result, not a `Map.set`.
+  - Open: TikTok (no guest session on this host) is unmeasured; its swipe's 9,500-class message is
+    class linking, which a worker's runtime cannot do for the page.
 
 ## Java, storage and framework semantics
 
