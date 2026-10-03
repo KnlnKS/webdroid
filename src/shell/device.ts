@@ -49,10 +49,13 @@ let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
 let frame = fb.getContext("2d")!;
 let screen: ImageBitmapRenderingContext | null = null;
 export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
+let firstFrame!: () => void;
+/** resolves once the screen first shows the app: work a device did before the app launched waits for it */
+export const firstPresented = new Promise<void>((resolve) => { firstFrame = resolve; });
 function present(): void {
   if (!screen) return;
   screen.transferFromImageBitmap(fb.transferToImageBitmap());
-  if (!perf.presentations++) startupDone();
+  if (!perf.presentations++) { startupDone(); firstFrame(); }
   notePresent();
 }
 

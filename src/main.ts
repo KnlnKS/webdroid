@@ -13,7 +13,7 @@ import { rt } from "./jvm/runtime";
 import { newObj, vcall, scall, strictThreadOwnership, threadStates } from "./jvm/natives/jlang";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
-import { bootApk, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, firstPresented, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -111,7 +111,9 @@ async function boot(file: string, local?: File) {
     connectProcess();
     runtimeStarted = true;
     const label = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
-    void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
+    // a device's Play services are up before an app launches: here their realm boots after the
+    // app's first frame rather than competing with it
+    void firstPresented.then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
       .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
     perf.bootMs = performance.now() - t0;
     shell.setState({ kind: "running", file, label });
