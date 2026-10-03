@@ -11,7 +11,8 @@ import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, type LazyMethod } from "./compiler";
-import { addCell, type Cells, type CompiledCtor, type ResumeBody } from "./tiering";
+import type { CompiledCtor, ResumeBody } from "./tiering";
+import { DexLink, instanceFieldOf, findStaticOwner } from "./link";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
 import { isBytecode, isStageD } from "./provenance";
@@ -125,32 +126,6 @@ export class ClassInfo {
     if (!this.owner?.parent && !target.owner?.parent) return true;
     return this === target || !!this.superInfo?.assignableTo(target) || this.interfaces.some((i) => i.assignableTo(target));
   }
-}
-
-interface DexLink {
-  dex: DexFile;
-  cl: any[];            // typeIdx → linked ctor
-  ic: any[];            // typeIdx → inited ctor
-  s: readonly (string | undefined)[]; // string cache
-  dp: any[];            // methodIdx → direct-invoke prototype fn
-  fs: any[];            // fieldIdx → inited owner ctor (static fields declared off-refclass)
-  cs: any[];            // callSiteIdx → linked invoke-custom target
-  info: ClassInfo[];    // typeIdx → ClassInfo (linked)
-  gs(i: number): string;
-  link(i: number): any;             // sync: linked ctor
-  linfo(i: number): ClassInfo;
-  init(i: number, from?: number): Promise<any> | any;  // inited ctor (from = clinit accessor's type)
-  rdp(i: number, from?: number): Promise<any> | any;   // resolve direct-dispatch fn
-  rdp0(i: number): any;                 // resolve w/o init (same-class call sites)
-  rdc(c: unknown[], k: number, i: number, from?: number): Promise<any> | any; // rdp into a hot method's site cache
-  rdc0(c: unknown[], k: number, i: number): any;
-  rsf(i: number, from?: number): Promise<any> | any;   // resolve+init static field owner ctor
-  ics(i: number): any;                  // link an invoke-custom call site
-}
-
-function siteCache(c: unknown[], k: number, fn: Cells): unknown {
-  addCell(fn, c, k);
-  return (c[k] = fn);
 }
 
 /** the app heap's limit, as Runtime.maxMemory reports it */
@@ -378,65 +353,9 @@ export class Runtime {
   }
 
   dexLink(dex: DexFile): DexLink {
-    let d = this.links.get(dex);
-    if (d) return d;
-    const R = this;
-    d = {
-      dex,
-      cl: new Array(dex.typeCount), ic: new Array(dex.typeCount),
-      s: dex.cachedStrings, dp: [], fs: [], cs: [], info: new Array(dex.typeCount),
-      gs(i) { return dex.string(i); },
-      linfo(i) { return this.info[i] ?? (this.info[i] = R.link(descToName(dex.type(i)))); },
-      link(i) { return (this.cl[i] = this.linfo(i).ctor); },
-      init(i, from) {
-        const info = this.linfo(i);
-        // ART fails the resolution itself, so the call site re-throws every time: never cache
-        if (info.stub) throw R.ncdfe(info.name);
-        if (info.state === 2) return (this.ic[i] = info.ctor);
-        // only cache once fully inited — a mid-init hit must keep going through init()
-        const done = () => (info.state === 2 ? (this.ic[i] = info.ctor) : info.ctor);
-        const p = R.initClass(info, from === undefined ? undefined : this.linfo(from));
-        return p ? p.then(done) : done();
-      },
-      rdp(i, from) {
-        const info = this.linfo(dex.method(i).cls);
-        if (info.state === 2) return this.rdp0(i);
-        const p = R.initClass(info, from === undefined ? undefined : this.linfo(from));
-        return p ? p.then(() => this.rdp0(i)) : this.rdp0(i);
-      },
-      rdp0(i) {
-        const m = dex.method(i);
-        const info = this.linfo(m.cls);
-        if (info.stub) throw R.ncdfe(info.name);
-        R.ensureCompiled(info);
-        const proto = info.ctor.prototype, mangled = mangleMethod(m.name, dex.methodDesc(i));
-        const fn: Cells | undefined = proto[mangled];
-        if (!fn) throw R.unimplemented(`${info.name}.${m.name}${dex.methodDesc(i)} (direct)`);
-        addCell(fn, this.dp, i);
-        const direct = directName(info.name, mangled);
-        if (!Object.hasOwn(proto, direct)) { proto[direct] = fn; addCell(fn, proto, direct); }
-        return (this.dp[i] = fn);
-      },
-      // dp is sparse, so V8 keeps it in dictionary mode; a hot site reads its own dense slot
-      rdc(c, k, i, from) {
-        const fn = this.dp[i] ?? this.rdp(i, from);
-        return fn instanceof Promise ? fn : siteCache(c, k, fn);
-      },
-      rdc0(c, k, i) { return siteCache(c, k, this.dp[i] ?? this.rdp0(i)); },
-      rsf(i, from) {
-        const fr = dex.field(i);
-        const start = this.linfo(fr.cls);
-        if (start.stub) throw R.ncdfe(start.name);
-        const owner = findStaticOwner(start, fr.name, dex.type(fr.type))?.info ?? start;
-        if (owner.state === 2) return (this.fs[i] = owner.ctor);
-        const set = () => (owner.state === 2 ? (this.fs[i] = owner.ctor) : owner.ctor);
-        const p = R.initClass(owner, from === undefined ? undefined : this.linfo(from));
-        return p ? p.then(set) : set();
-      },
-      ics(i) { return (this.cs[i] = R.linkCallSite(R, dex, i)); },
-    };
-    this.links.set(dex, d);
-    return d;
+    let link = this.links.get(dex);
+    if (!link) this.links.set(dex, link = new DexLink(this, dex));
+    return link;
   }
 
   /** the property an instance field of `cls` (or a superclass) lives in, bytecode or spec */
@@ -1245,28 +1164,6 @@ export class Runtime {
       for (let i = 0; i < vals.length; i++) a[i] = vals[i];
     }
   }
-}
-
-function instanceFieldOf(start: ClassInfo, name: string): string | undefined {
-  for (let info: ClassInfo | null = start; info; info = info.superInfo) {
-    const prop = info.fieldTable.get(name);
-    if (prop) return prop;
-  }
-  return undefined;
-}
-
-function findStaticOwner(start: ClassInfo, name: string, desc: string): { info: ClassInfo; prop: string } | null {
-  let info: ClassInfo | null = start;
-  while (info) {
-    const prop = info.staticFieldTable.get(name + ":" + desc) ?? (info.native ? mangleStaticField(name) : null);
-    if (prop && Object.hasOwn(info.ctor, prop)) return { info, prop };
-    for (const iface of info.interfaces) {
-      const r = findStaticOwner(iface, name, desc);
-      if (r) return r;
-    }
-    info = info.superInfo;
-  }
-  return null;
 }
 
 type ArrLike = unknown[] | { length: number };
