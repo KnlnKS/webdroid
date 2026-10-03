@@ -412,7 +412,7 @@ nc("RSA_size(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)I", (ref: JObj) => r
 nc("RSA_generate_key_ex(I[B)J", async (bits: number, e: Int8Array) => {
   const pair = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: bits, publicExponent: new Uint8Array(u8(e)), hash: "SHA-256" }, true, ["sign"]) as CryptoKeyPair;
   const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
-  const n = (s?: string) => bytesToBig(Uint8Array.from(atob(s!.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)));
+  const n = (s?: string) => bytesToBig(Uint8Array.fromBase64(s!, { alphabet: "base64url" }));
   return newKey({ type: EVP_PKEY_RSA, rsa: { n: n(jwk.n), e: n(jwk.e), d: n(jwk.d), p: n(jwk.p), q: n(jwk.q), dp: n(jwk.dp), dq: n(jwk.dq), qinv: n(jwk.qi) } });
 });
 const RSA_PKCS1_PADDING = 1, RSA_NO_PADDING = 3, RSA_PKCS1_OAEP_PADDING = 4, RSA_PKCS1_PSS_PADDING = 6;

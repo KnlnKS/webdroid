@@ -207,7 +207,7 @@ async function readPem(b: Reader, labels: string[]): Promise<Uint8Array> {
     if (t === `-----END ${label}-----`) break;
     if (!t.includes(":")) body += t;
   }
-  try { return Uint8Array.from(atob(body), (c) => c.charCodeAt(0)); } catch { throw sslError("java/lang/RuntimeException", 9, 100, "BAD_BASE64_DECODE"); }
+  try { return Uint8Array.fromBase64(body); } catch { throw sslError("java/lang/RuntimeException", 9, 100, "BAD_BASE64_DECODE"); }
 }
 const CERT_LABELS = ["CERTIFICATE", "X509 CERTIFICATE"];
 nc("d2i_X509_bio(J)J", (h: bigint) => readDer(reader(h)).then((der) => ownedHandle(parse(der))));

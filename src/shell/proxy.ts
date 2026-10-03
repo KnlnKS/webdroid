@@ -45,7 +45,7 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
       if (reply.error) throw new Error(reply.error);
       if (reply.value) {
         const value = reply.value, empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
-        intercepted = new Response(empty ? null : Uint8Array.from(atob(value.body), (c) => c.charCodeAt(0)), {
+        intercepted = new Response(empty ? null : Uint8Array.fromBase64(value.body), {
           status: value.status, statusText: value.reason, headers: value.headers,
         });
       }

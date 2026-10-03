@@ -109,12 +109,7 @@ function* getPM(): Gen<JObj> { return yield vcall(yield* awaited(serviceContext(
 // ── PreferencesHelper: a package's channels, groups and delegate
 const policyFile = (pkg: string) => "android:notification-policy:" + pkg;
 const CHANNEL_KEY = "channel:", GROUP_KEY = "group:", DELEGATE_KEY = "delegate";
-const toBase64 = (bytes: Uint8Array) => {
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-};
-const parcelData = (stored: string): ParcelData => ({ bytes: Uint8Array.from(atob(stored), (c) => c.charCodeAt(0)), objects: [] });
+const parcelData = (stored: string): ParcelData => ({ bytes: Uint8Array.fromBase64(stored), objects: [] });
 class Preferences {
   readonly values: Map<string, unknown>;
   constructor(readonly pkg: string) { this.values = preferenceStore.open(policyFile(pkg)); }
@@ -127,7 +122,7 @@ class Preferences {
     return typeof stored === "string" ? yield* awaited(unparcelled(prefix === CHANNEL_KEY ? CHANNEL : GROUP, parcelData(stored))) : null;
   }
   *write(prefix: string, id: string, o: JObj): Gen<void> {
-    this.values.set(prefix + id, toBase64((yield* awaited(parcelled(o))).bytes));
+    this.values.set(prefix + id, (yield* awaited(parcelled(o))).bytes.toBase64());
     this.save();
   }
   remove(key: string): void { this.values.delete(key); this.save(); }

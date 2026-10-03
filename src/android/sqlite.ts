@@ -134,7 +134,7 @@ function retire(file: SharedDatabase) {
 function legacySnapshot(path: string): Uint8Array | null {
   try {
     const raw = globalThis.localStorage?.getItem("wd:db:" + path);
-    return raw ? Uint8Array.from(atob(raw), (c) => c.charCodeAt(0)) : null;
+    return raw ? Uint8Array.fromBase64(raw) : null;
   } catch { return null; }
 }
 

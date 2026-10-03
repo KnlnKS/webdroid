@@ -43,7 +43,7 @@ function ca() {
     tlv(0xa3, seq(ext("2.5.29.19", true, seq(tlv(1, [0xff]))), ext("2.5.29.15", true, tlv(3, [1, 0x06])), ext("2.5.29.14", false, octets(key.keyId))))), key.ec);
   // TrustedCertificateStore names a file by X509_NAME_hash_old: the subject's MD5, first four bytes little-endian
   const h = md5(subject), hash = ((h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24) >>> 0).toString(16).padStart(8, "0");
-  const pem = `-----BEGIN CERTIFICATE-----\n${btoa(String.fromCharCode(...der)).replace(/(.{64})/g, "$1\n")}\n-----END CERTIFICATE-----\n`;
+  const pem = `-----BEGIN CERTIFICATE-----\n${der.toBase64().replace(/(.{64})/g, "$1\n")}\n-----END CERTIFICATE-----\n`;
   vfs.mount(`/system/etc/security/cacerts/${hash}.0`, new BytesFile(utf8(pem)));
   return relayCa = { ...key, name: subject, der };
 }

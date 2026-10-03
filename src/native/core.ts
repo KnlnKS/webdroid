@@ -97,9 +97,7 @@ async function load(): Promise<WebAssembly.Module> {
   }
   // the tests run the safety-checked build: undefined behaviour panics instead of miscomputing
   const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm")).default : (await import("./core.wasm")).default;
-  const s = atob(b64), bytes = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
-  return WebAssembly.compile(bytes);
+  return WebAssembly.compile(Uint8Array.fromBase64(b64));
 }
 const instance = await WebAssembly.instantiate(await load(), {
   env: {

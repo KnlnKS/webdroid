@@ -107,7 +107,7 @@ export function installFramework(apk: Uint8Array): Arsc {
         const response = await fetch("/vendor/platform.x509.pem");
         if (!response.ok) throw new Error("Platform certificate unavailable");
         const encoded = (await response.text()).replace(/-----[^-]+-----|\s/g, "");
-        return [Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))];
+        return [Uint8Array.fromBase64(encoded)];
       })());
     platform.system = true;
     packages.set(platform.pkg, platform);

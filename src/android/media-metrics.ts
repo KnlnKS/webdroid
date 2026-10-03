@@ -4,8 +4,7 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { hostStub } from "./binder";
 
-const sessionId = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(12))))
-  .replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+const sessionId = () => crypto.getRandomValues(new Uint8Array(12)).toBase64({ alphabet: "base64url", omitPadding: true });
 const M = "android/media/metrics/", S = "Ljava/lang/String;";
 rt.register({ name: "webdroid/MediaMetricsManagerService", ctor: class extends JObj {}, sup: M + "IMediaMetricsManager$Stub", methods: {
   ...Object.fromEntries(["Playback", "Recording", "Transcoding", "Editing", "Bundle"].map((kind) => [`get${kind}SessionId(I)${S}`, sessionId])),

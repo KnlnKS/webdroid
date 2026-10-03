@@ -80,12 +80,10 @@ const num = (ps: Param[], tag: number) => { const v = one(ps, tag); return v ===
 
 // ── entries, per app uid, persisted as JSON
 type Entry = { id: string; alias: string; params: [number, number, string][]; material?: string; cert?: string; chain?: string; created: number; modified: number };
-const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
-const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const encodeParam = (p: Param): [number, number, string] =>
-  [p.tag, p.kind, p.v instanceof Uint8Array ? b64(p.v) : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
+  [p.tag, p.kind, p.v instanceof Uint8Array ? p.v.toBase64() : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
 const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
-  ({ tag, kind, v: kind === KIND.blob ? unb64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
+  ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
 const storeKey = () => "wd:keystore2:" + PROCESS_UID;
 let cache: { raw: string | null; entries: Entry[] } = { raw: null, entries: [] };
 function entries(): Entry[] {
@@ -170,7 +168,7 @@ function* metadata(e: Entry): Gen<JObj> {
   return setDeclared(yield newObj(KM), KM, {
     key: setDeclared(yield newObj(KD), KD, { domain: DOMAIN.KEY_ID, nspace: BigInt(e.id), alias: null, blob: null }),
     keySecurityLevel: e.material ? TRUSTED_ENVIRONMENT : SOFTWARE, authorizations: jarray(auths, `L${AUTH};`),
-    certificate: e.cert ? new Int8Array(unb64(e.cert)) : null, certificateChain: e.chain ? new Int8Array(unb64(e.chain)) : null, modificationTimeMs: BigInt(e.modified),
+    certificate: e.cert ? new Int8Array(Uint8Array.fromBase64(e.cert)) : null, certificateChain: e.chain ? new Int8Array(Uint8Array.fromBase64(e.chain)) : null, modificationTimeMs: BigInt(e.modified),
   });
 }
 
@@ -209,8 +207,8 @@ async function generateMaterial(ps: Param[]): Promise<{ material: Uint8Array; ex
 }
 function* store(alias: string, req: Param[], origin: number, made: { material: Uint8Array; extra: Param[]; key?: PKey }): Gen<JObj> {
   const now = Date.now(), purposes = all(req, TAG.PURPOSE).map(Number);
-  const e: Entry = { id: newId(), alias, params: characteristics(req, origin, made.extra).map(encodeParam), material: b64(made.material), created: now, modified: now };
-  if (made.key) e.cert = b64(certificate(made.key, req, purposes));
+  const e: Entry = { id: newId(), alias, params: characteristics(req, origin, made.extra).map(encodeParam), material: made.material.toBase64(), created: now, modified: now };
+  if (made.key) e.cert = certificate(made.key, req, purposes).toBase64();
   save([...entries().filter((x) => x.alias !== alias), e]);
   return yield* metadata(e);
 }
@@ -221,10 +219,10 @@ function* keymint$<T>(body: Gen<T>): Gen<T> {
 
 // ── operations
 type Op = { e: Entry; params: Param[]; purpose: number; input: Uint8Array[]; aad: Uint8Array[]; nonce: Uint8Array | null; done: boolean };
-function keyOf(e: Entry): PKey { return parsePrivateKey(unb64(e.material!)); }
+function keyOf(e: Entry): PKey { return parsePrivateKey(Uint8Array.fromBase64(e.material!)); }
 function blockCipher(op: Op, data: Uint8Array): Uint8Array {
   const ps = op.params, mode = num(ps, TAG.BLOCK_MODE) ?? MODE.ECB, pad = num(ps, TAG.PADDING) ?? PAD.NONE, enc = op.purpose === PURPOSE.ENCRYPT;
-  const key = unb64(op.e.material!);
+  const key = Uint8Array.fromBase64(op.e.material!);
   if (mode === MODE.GCM) {
     const gcm = new AesGcm(key), tagLen = (num(ps, TAG.MAC_LENGTH) ?? 128) / 8, aad = concat(op.aad);
     if (enc) return gcm.seal(op.nonce!, data, aad, tagLen);
@@ -255,7 +253,7 @@ function finishOp(op: Op, signature: Uint8Array | null): Uint8Array | null {
   if (alg === ALG.AES) return blockCipher(op, data);
   const digestName = DIGEST_NAMES[num(ps, TAG.DIGEST) ?? 0] ?? null;
   if (alg === ALG.HMAC) {
-    const mac = new Hmac(DIGESTS[digestName ?? "sha256"], unb64(op.e.material!));
+    const mac = new Hmac(DIGESTS[digestName ?? "sha256"], Uint8Array.fromBase64(op.e.material!));
     mac.update(data);
     const full = mac.digest();
     if (op.purpose === PURPOSE.SIGN) return full.subarray(0, (num(ps, TAG.MAC_LENGTH) ?? full.length * 8) / 8);
@@ -425,8 +423,8 @@ rt.register({ name: "webdroid/KeystoreService", ctor: class extends JObj {}, sup
       e = { id: newId(), alias: k.alias, params: [], created: Date.now(), modified: Date.now() };
       list.push(e);
     }
-    e.cert = cert ? b64(new Uint8Array(cert)) : undefined;
-    e.chain = chain ? b64(new Uint8Array(chain)) : undefined;
+    e.cert = cert ? new Uint8Array(cert).toBase64() : undefined;
+    e.chain = chain ? new Uint8Array(chain).toBase64() : undefined;
     e.modified = Date.now();
     if (!e.material && !e.cert && !e.chain) list.splice(list.indexOf(e), 1);
     save(list);

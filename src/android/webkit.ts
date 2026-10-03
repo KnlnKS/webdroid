@@ -452,14 +452,12 @@ export class WebViewChromium extends JObj {
       headers[key] = await on(() => vcall(entry, "getValue", "()Ljava/lang/Object;")) as string;
     }
     if (mime) headers["content-type"] = mime + (enc ? "; charset=" + enc : "");
-    let binary = "";
+    let body = "";
     if (data) {
-      try {
-        const bytes = await on(() => readStreamFully(data));
-        for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
-      } finally { await on(() => vcall(data, "close", "()V")); }
+      try { body = (await on(() => readStreamFully(data))).toBase64(); }
+      finally { await on(() => vcall(data, "close", "()V")); }
     }
-    return { body: btoa(binary), status, reason: reason ?? "OK", headers };
+    return { body, status, reason: reason ?? "OK", headers };
   }
   step(n: number) {
     const i = this.idx + n;
@@ -628,7 +626,7 @@ export class WebViewChromium extends JObj {
 }
 /** srcdoc payload: the bridge bootstrap first (after a doctype, or the document goes quirks), then the base */
 function srcdoc(data: string, enc: string | null, base: string | null): string {
-  if (/^base64$/i.test(enc ?? "")) data = new TextDecoder().decode(Uint8Array.from(atob(data), (c) => c.charCodeAt(0)));
+  if (/^base64$/i.test(enc ?? "")) data = new TextDecoder().decode(Uint8Array.fromBase64(data));
   const inject = WEB_INJECT + (base ? `<base href="${base.replace(/"/g, "&quot;")}">` : "");
   const dt = /^\s*<!doctype[^>]*>/i.exec(data);
   return dt ? dt[0] + inject + data.slice(dt[0].length) : inject + data;
