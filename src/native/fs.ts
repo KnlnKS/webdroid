@@ -118,8 +118,6 @@ setNativePollProvider({
     waiters.push(wake);
     return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
   },
-  read(cpu, fd, destination, length) { return fds.has(fd) ? fdRead(cpu, fd, destination, length) : null; },
-  write(cpu, fd, source, length) { return fds.has(fd) ? fdWrite(cpu, fd, source, length) : null; },
 });
 
 function atPath(cpu: Cpu, dirfd: number, path: string): string | number {

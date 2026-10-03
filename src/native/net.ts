@@ -11,7 +11,7 @@ import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
 import { mem, guestAt } from "./mem";
 import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
-import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName } from "./fs";
+import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, fdRead, fdWrite } from "./fs";
 import { unixAt, unixConnectPath, sockaddrUn } from "./unix";
 import {
   AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_ADDRFAMILY, EAI_NONAME,
@@ -127,8 +127,6 @@ function record(event: string): void {
 interface NativePollProvider {
   query(fd: number, events: number): number | null;
   subscribe(fd: number, wake: () => void): () => void;
-  read(cpu: Cpu, fd: number, destination: number, length: number): number | Promise<number> | null;
-  write(cpu: Cpu, fd: number, source: number, length: number): number | null;
 }
 let localPollProvider: NativePollProvider | null = null;
 export function setNativePollProvider(provider: NativePollProvider): void {
@@ -201,7 +199,7 @@ function portTaken(socket: Socket, ep: Endpoint): boolean {
     if (other === socket || local.port !== ep.port) continue;
     const overlap = isAny(local.address) || isAny(ep.address) || sameAddress(local.address, ep.address);
     const shared = option(socket, SOL_SOCKET, SO_REUSEADDR) && option(other, SOL_SOCKET, SO_REUSEADDR) &&
-      (socket.kind === "datagram" || !(other as StreamSocket).backlog);
+      (other.kind === "datagram" || !other.backlog);
     if (overlap && !shared) return true;
   }
   return false;
@@ -614,8 +612,8 @@ function sysAsync(cpu: Cpu | null, r: number | Promise<number>): number | Promis
   return r instanceof Promise ? r.then((x) => sys(cpu, x)) : sys(cpu, r);
 }
 
-export function nativeSocketRead(cpu: Cpu | null, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
-  return nativeReceive(cpu, fd, destination, length, nonblock ? MSG_DONTWAIT : 0, 0, 0);
+export function nativeSocketRead(cpu: Cpu | null, fd: number, destination: number, length: number): number | Promise<number> {
+  return nativeReceive(cpu, fd, destination, length, 0, 0, 0);
 }
 export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: number): number {
   return sys(cpu, socketSend(fd, mem.u8.subarray(source, source + length)));
@@ -842,15 +840,6 @@ function nativeGetnameinfo(sockaddr: number, length: number, host: number, hostL
   return copyText(resolved ?? ipv4Text(bytes), host, hostLength) && copyText(String(port), service, serviceLength) ? 0 : EAI_OVERFLOW;
 }
 
-function nativeSend(cpu: Cpu, fd: number, source: number, length: number): number {
-  if (isNativeSocket(fd)) return nativeSocketWrite(cpu, fd, source, length);
-  return localPollProvider?.write(cpu, fd, source, length) ?? fail(cpu, E.BADF);
-}
-function nativeRead(cpu: Cpu, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
-  if (isNativeSocket(fd)) return nativeSocketRead(cpu, fd, destination, length, nonblock);
-  return localPollProvider?.read(cpu, fd, destination, length) ?? fail(cpu, E.BADF);
-}
-
 export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
   const entries: PollEntry[] = [];
   for (let i = 0; i < count; i++) entries.push({ fd: mem.ld32(pollfds + i * 8), events: mem.ld16u(pollfds + i * 8 + 4), revents: 0 });
@@ -928,7 +917,7 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   sendto: (cpu, args) => {
     const fd = args.i(), source = args.p(), length = args.u();
     args.i(); const destination = args.p(), destinationLength = args.u();
-    if (!isNativeSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : nativeSend(cpu, fd, source, length);
+    if (!isNativeSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : fdWrite(cpu, fd, source, length);
     if (length && !source) return fail(cpu, E.FAULT);
     let endpoint: Endpoint | null = null;
     if (destination || destinationLength) { endpoint = readEndpoint(cpu, destination, destinationLength); if (!endpoint) return -1; }
@@ -939,7 +928,7 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
     const source = args.p(), sourceLength = args.p();
     if (isNativeSocket(fd)) return nativeReceive(cpu, fd, destination, length, flags, source, sourceLength);
     if (source || sourceLength) return fail(cpu, E.NOTCONN);
-    return nativeRead(cpu, fd, destination, length, !!(flags & MSG_DONTWAIT));
+    return fdRead(cpu, fd, destination, length);
   },
   sendmsg: (cpu) => fail(cpu, E.NETUNREACH), recvmsg: (cpu) => fail(cpu, E.NETUNREACH),
   shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, socketShutdown(fd, how)); },
@@ -951,10 +940,10 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
 
 export function netInit(): void {
   const functions: Record<string, HostFn> = {
-    send: (cpu, args) => { const fd = args.i(), source = args.p(), length = args.u(); args.i(); return nativeSend(cpu, fd, source, length); },
+    send: (cpu, args) => { const fd = args.i(), source = args.p(), length = args.u(); args.i(); return fdWrite(cpu, fd, source, length); },
     recv: (cpu, args) => {
       const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
-      return isNativeSocket(fd) ? nativeReceive(cpu, fd, destination, length, flags, 0, 0) : nativeRead(cpu, fd, destination, length);
+      return isNativeSocket(fd) ? nativeReceive(cpu, fd, destination, length, flags, 0, 0) : fdRead(cpu, fd, destination, length);
     },
     getaddrinfo: (cpu, args) => nativeGetaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
     freeaddrinfo: (_cpu, args) => { const address = args.p(); if (address) mem.free(address); },
