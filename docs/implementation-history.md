@@ -2242,6 +2242,20 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     I at 20 px to 6, where every recorded wght-400 advance is round(linear)). Neither mode
     reproduces the 6, so it is left: the next step is a device probe of getTextWidths across sizes
     and weights, with and without `Paint.setHinting(HINTING_OFF)`, against a static instance.
+  - The faster boot made DoodleJump wedge every run in a Java monitor deadlock inside the app: main
+    holds IabHelper.mServiceLock across onServiceConnected's isBillingSupported call and then wants
+    the game's lock; the game's Thread-1, holding that lock each frame, wants mServiceLock. On a
+    device the billing service binds long before the game's loop starts and the call takes under a
+    millisecond. Here the bound service's realm booted at `scheduler.postTask` background
+    priority, since it presents nothing, under the game's native texture decode: 8 s from
+    bindService to the answer, so whichever of the game loop and the answer came first decided the
+    run, and removing the font map parses moved the game ~0.5 s ahead. A realm now inherits the
+    priority of a presented process (or of one serving it) for each bind, start, provider request
+    and transaction that process waits on, through its boot, as binder calls inherit their
+    caller's priority and a service bound by the top app runs in its scheduling group: the bind
+    answers in 0.9 s and the loop starts after it. A realm nobody visible waits on still yields at
+    background priority. microG's exposure-notification ServiceTrigger NPE in its process (a
+    browser error that fails the flow in some runs) also occurs at 55c3a17b without this change.
 
 ## App investigations and remaining limits
 

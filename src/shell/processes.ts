@@ -73,6 +73,8 @@ type ProcessEndpoint = {
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
+  /** requests in flight from foreground processes, which this one runs at their priority */
+  foregroundClients: number;
   bindings: Map<string, { pkg: string; process: string }>;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 class ProcessBroker {
@@ -266,7 +268,7 @@ class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, bindings: new Map(), watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, bindings: new Map(), watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -310,6 +312,16 @@ class ProcessBroker {
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
+  /** whether a process shown on screen, or one serving such a process, waits on `pid`: as binder
+   *  calls inherit their caller's priority and a service bound from the top app runs in its
+   *  scheduling group, process start included */
+  servesForeground(pid: number): boolean { return (this.entries.get(pid)?.foregroundClients ?? 0) > 0; }
+  /** `work` for `caller` on `target`, at the caller's priority */
+  private inherit<T>(caller: Entry | null, target: Entry, work: () => Promise<T>): Promise<T> {
+    if (!caller || !(this.shownPids.has(caller.pid) || caller.foregroundClients > 0)) return work();
+    target.foregroundClients++;
+    return work().finally(() => { target.foregroundClients--; });
+  }
   watch(pid: number, died: () => void): () => void {
     const entry = this.entry(pid); entry.watchers.add(died); return () => { entry.watchers.delete(died); };
   }
@@ -322,7 +334,7 @@ class ProcessBroker {
       return { handled, data: await exportParcel(reply) };
     }
     const target = this.entry(request.handle.pid);
-    return this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid }));
+    return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid })));
   }
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     const caller = pid === null ? null : this.entry(pid);
@@ -333,7 +345,7 @@ class ProcessBroker {
     const binding = request.kind === "bind" ? { pkg, process } : null;
     if (request.kind === "bind" && binding) caller?.bindings.set(request.key, binding);
     try {
-      const result = await this.request(entry, endpoint => endpoint.service(request));
+      const result = await this.inherit(caller, entry, () => this.request(entry, endpoint => endpoint.service(request)));
       if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
       return result;
     } catch (error) {
@@ -353,7 +365,8 @@ class ProcessBroker {
       if (!exported(provider) || !await allowed("readPermission") && !await allowed("writePermission"))
         throw rt.mkThrowable("java/lang/SecurityException", `Permission Denial: opening provider ${provider.name} from pid=${pid}, uid=${caller.uid}`);
     }
-    return this.request(this.connect(pkg, process), (endpoint) => endpoint.contentProvider(authority));
+    const target = this.connect(pkg, process);
+    return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.contentProvider(authority)));
   }
   broadcast(pid: number | null, data: ParcelData, permissions: string[], ordered: boolean, initial?: BroadcastData): Promise<BroadcastData> {
     const broker = this;

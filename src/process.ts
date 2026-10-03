@@ -49,7 +49,7 @@ setScreenCanvas(canvas);
 setWebLayer(document.getElementById("weblayer")!);
 attachIme(canvas, document.getElementById("kbd") as HTMLTextAreaElement);
 processPresentation.visible = false;
-setBackgroundRealm(true);
+setBackgroundRealm(() => !processPresentation.visible && !broker.servesForeground(pid));
 let frameId = 0, ticks = 0;
 function frame(time: number): void {
   frameId = 0;
@@ -59,7 +59,6 @@ function frame(time: number): void {
   frameId = requestAnimationFrame(frame);
 }
 processPresentation.changed = (visible) => {
-  setBackgroundRealm(!visible);
   if (visible && !frameId) frameId = requestAnimationFrame(frame);
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
