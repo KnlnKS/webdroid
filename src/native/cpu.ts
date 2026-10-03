@@ -176,7 +176,7 @@ export class Cpu {
     this.vw = new Uint16Array(b, base + OFF_V, 256); this.vsw = new Int16Array(b, base + OFF_V, 256);
     this.vb = new Uint8Array(b, base + OFF_V, 512);
     this.u32 = new Uint32Array(b, base, SIZE >> 2);
-    this.bytes = new Uint8Array(b, base, SIZE);
+    this.bytes = new Uint8Array(b, base, ARCH_SIZE);
   }
   // ── the struct's scalar fields
   get pc(): number { return this.u32[OFF_PC >> 2]; }
@@ -413,7 +413,7 @@ export class Cpu {
 
   /** clone(2)'s child: the caller's architectural state, returning 0 from the svc on `stack` */
   forkFrom(parent: Cpu, stack: bigint): void {
-    this.bytes.set(parent.bytes.subarray(0, ARCH_SIZE));
+    this.bytes.set(parent.bytes);
     this.w[0] = 0; this.w[1] = 0;
     this.w[2 * this.spx] = Number(stack & 0xffffffffn); this.w[2 * this.spx + 1] = Number(stack >> 32n);
     this.stackTop = Number(stack & 0xffffffffn);                         // the guest's: stackBase stays 0, never freed here
@@ -451,12 +451,12 @@ export class Cpu {
     this.ensureStack();
     const w = this.w;
     const saved = this.savePool.pop() ?? new Uint8Array(ARCH_SIZE);
-    saved.set(this.bytes.subarray(0, ARCH_SIZE));
+    saved.set(this.bytes);
     const spending = this.pending, sstate = this.state;   // the frame below is parked in its host call until we return
     this.excl = 0;
     if (!this.a64) this.cpsr &= ~0x0600fc00;
     let n = 0, nv = 0;
-    const stack: (number | bigint)[] = [];
+    let stack: (number | bigint)[] | undefined;
     const nregs = this.a64 ? 8 : 4;
     for (const a0 of args) {
       let a = a0;
@@ -464,7 +464,7 @@ export class Cpu {
         // AAPCS64 hard float: v0-v7, then 8-byte stack slots. softfp: the bits, as an integer
         if (this.a64) {
           if (nv < 8) { if ("f" in a) this.s[nv * 4] = a.f; else this.d[nv * 2] = a.d; nv++; continue; }
-          stack.push("f" in a ? fbits(a.f) : dbits(a.d));
+          (stack ??= []).push("f" in a ? fbits(a.f) : dbits(a.d));
           continue;
         } else a = "f" in a ? fbits(a.f) : dbits(a.d);
       }
@@ -475,9 +475,9 @@ export class Cpu {
           w[2 * n] = Number(a & 0xffffffffn) | 0;
           if (this.a64) { w[2 * n + 1] = Number((a >> 32n) & 0xffffffffn) | 0; n++; }
           else { w[2 * n + 2] = Number((a >> 32n) & 0xffffffffn) | 0; n += 2; }
-        } else { n = nregs; stack.push(a); }
+        } else { n = nregs; (stack ??= []).push(a); }
       } else if (n < nregs) { w[2 * n] = a | 0; w[2 * n + 1] = 0; n++; }
-      else stack.push(a | 0);
+      else (stack ??= []).push(a | 0);
     }
     // a nested call (Java → native while this Cpu is parked in a host call) builds its frame below the guest's sp
     const slotSz = this.a64 ? 8 : 4, align = this.a64 ? ~15 : ~7;
@@ -486,7 +486,7 @@ export class Cpu {
     const top = stackTop ?? (this.depth ? currentSp - 64n : BigInt(this.stackTop));
     const baseSp = nested ? mem.txVa(top - 16n) + 16 : this.stackTop;
     let sp = (baseSp & align) >>> 0;
-    if (stack.length) {
+    if (stack?.length) {
       sp = ((sp - stack.length * slotSz) & align) >>> 0;
       let p = sp;
       for (const a of stack) {
@@ -516,7 +516,7 @@ export class Cpu {
       this.pending = spending; this.state = sstate;
       // A signal frame's state belongs to it until the interrupted frame can resume.
       resume?.(returned);
-      for (const w2 of this.idle.splice(0)) w2();
+      if (this.idle.length) for (const w2 of this.idle.splice(0)) w2();
       this.pump();                                                          // a signal that arrived while this frame owned the register file reaches the frame below now
     }
   }

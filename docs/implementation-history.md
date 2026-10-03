@@ -2406,3 +2406,19 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   while the page is hidden, as `requestVideoFrameCallback` does. General view
   elevation shadows remain unimplemented: goldens here are Material 3 and flat,
   so none calibrates them.
+- Native callback allocation pass (2026-10-02). Every JNI `Call<Type>Method`
+  previously parked the guest because `invoke` was async, even when Java
+  returned synchronously. It now parks only for class initialization or a
+  suspended callback; exception conversion, calling-thread identity and
+  pinned-array synchronization still enclose the complete invocation. Cpu
+  call frames reuse their architectural byte view, allocate stack-argument
+  storage only when registers spill, and drain idle waiters only when present.
+  Against 304c0529, a Bun scratch probe entering an A64 `CallStaticIntMethod`
+  through `Cpu.call` (100k calls/sample, five samples after 10k warmup, loaded
+  platform jars) went from median 64.71 to 47.60 ms; guest parks fell from
+  100k to zero. This isolates a synchronous callback, not app latency or FPS.
+  The 39 CPU/JNI/cache tests passed, including both ABIs, signal ordering,
+  floating argument spills, suspended class initialization and callback
+  rejection; TypeScript checking passed. The scheduler and JIT architecture
+  remain intact: historical native profiles still identify compiled guest
+  execution and region transitions as the larger native-game costs.
