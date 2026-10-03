@@ -776,27 +776,22 @@ sm("doRepeat(I)Ljava/lang/String;", function (n: number) { return this.repeat(n)
 // CaseMapper: only Turkish, Azeri and Lithuanian case differently, and only these letters; the
 // no-argument forms case for Locale.getDefault()
 const LOCALE_CASED = /[IiJj\u00cc\u00cd\u0128\u012e\u0130\u0131\u0307]/, CASE_LOCALES = new Set(["tr", "az", "lt"]);
+/** `s` cased as `lang` cases it; languages CaseMapper does not treat apart case as the root locale */
+const caseAs = (s: string, upper: boolean, lang: string): string => !CASE_LOCALES.has(lang)
+  ? upper ? s.toUpperCase() : s.toLowerCase() : upper ? s.toLocaleUpperCase(lang) : s.toLocaleLowerCase(lang);
+const language = (locale: unknown): string | Promise<string> => vcall(locale, "getLanguage", "()Ljava/lang/String;");
 function caseIn(s: string, locale: unknown, upper: boolean): unknown {
   if (locale === null) rt.npe();
-  if (!LOCALE_CASED.test(s)) return upper ? s.toUpperCase() : s.toLowerCase();
-  return after(vcall(locale, "getLanguage", "()Ljava/lang/String;"), (lang: string) => !CASE_LOCALES.has(lang)
-    ? upper ? s.toUpperCase() : s.toLowerCase() : upper ? s.toLocaleUpperCase(lang) : s.toLocaleLowerCase(lang));
+  return LOCALE_CASED.test(s) ? after(language(locale), (lang) => caseAs(s, upper, lang)) : caseAs(s, upper, "");
 }
-/** the default locale's language while it is one CaseMapper treats apart, else ""; null once
- *  Locale.setDefault may have changed it */
-let defaultCaseLang: string | null = null;
-const caseInDefault = (s: string, upper: boolean): unknown => {
-  if (defaultCaseLang === "" || !LOCALE_CASED.test(s)) return upper ? s.toUpperCase() : s.toLowerCase();
-  if (defaultCaseLang !== null) return upper ? s.toLocaleUpperCase(defaultCaseLang) : s.toLocaleLowerCase(defaultCaseLang);
-  return after(scall("java/util/Locale", "getDefault", "()Ljava/util/Locale;"), (locale) =>
-    after(vcall(locale, "getLanguage", "()Ljava/lang/String;"), (lang: string) => {
-      defaultCaseLang = CASE_LOCALES.has(lang) ? lang : "";
-      return caseInDefault(s, upper);
-    }));
-};
+/** the default locale's language, until Locale.setDefault may have changed it */
+let defaultLanguage: string | null = null;
+const caseInDefault = (s: string, upper: boolean): unknown => !LOCALE_CASED.test(s) ? caseAs(s, upper, "")
+  : defaultLanguage !== null ? caseAs(s, upper, defaultLanguage)
+  : after(after(scall("java/util/Locale", "getDefault", "()Ljava/util/Locale;"), language), (lang) => caseAs(s, upper, defaultLanguage = lang));
 rt.intrinsic("java/util/Locale", {
-  "static setDefault(Ljava/util/Locale;)V": (base) => (locale: unknown) => { defaultCaseLang = null; return base(locale); },
-  "static setDefault(Ljava/util/Locale$Category;Ljava/util/Locale;)V": (base) => (category: unknown, locale: unknown) => { defaultCaseLang = null; return base(category, locale); },
+  "static setDefault(Ljava/util/Locale;)V": (base) => (locale: unknown) => { defaultLanguage = null; return base(locale); },
+  "static setDefault(Ljava/util/Locale$Category;Ljava/util/Locale;)V": (base) => (category: unknown, locale: unknown) => { defaultLanguage = null; return base(category, locale); },
 });
 sm("toLowerCase()Ljava/lang/String;", function () { return caseInDefault(this, false); });
 sm("toUpperCase()Ljava/lang/String;", function () { return caseInDefault(this, true); });
