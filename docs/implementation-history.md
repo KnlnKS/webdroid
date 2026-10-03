@@ -2402,6 +2402,37 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     of calculatorm, lichess, reddit, resy and youtube hold none; fitnotes, harmonic and both mihon
     flows load no emoji font). IFontManager.getFontConfig needs UPDATE_FONTS (signature|privileged),
     so apps cannot read it; the page registers no `font` service.
+- **2026-10-02, the text open items: device-recorded hyphenation and advances, Typeface.<clinit>.**
+  - `textcmp --record` now records hyphenated layouts (en-US and de, NORMAL and FULL, two widths:
+    each line's hyphen edits, and a hyphenated line's glyphs shaped with them) and getTextWidths
+    of printable ASCII at wght 100-900, ten sizes, hinting on and off (fwtest compares all
+    11,280). `app_process` registers no hyphenators, so the probe calls `Hyphenator.init()` as
+    the zygote does; without it the device breaks desperately and records no hyphen.
+  - The recording showed three measurement rules, now followed: minikin lays text out at the
+    paint's size truncated to whole pixels unless it has LINEAR_TEXT (prepareMinikinPaint; 13.5 px
+    measures as 13, while Font.getGlyphBounds keeps 13.5); FreeType varies an advance with 16.16
+    coordinates through avar and rounds HVAR's delta to whole units, where HarfBuzz rounds the
+    coordinate to 2.14 and keeps the fraction (Roboto's avar maps wght 300 to exactly -0.5 in 2.14,
+    so A was 1279.5 units here and 1279 on the device; `variedAdvances` in sfnt.ts); and a hinted
+    advance rounds the 26.6 advance to pixels, so wght 900's `l` at 20 px (351.75/64, 352/64 in
+    26.6) is 6. The 2026-10-02 autohinter hypothesis was wrong: no hinter is involved. HINTING_OFF
+    now measures unhinted.
+  - Hyphenation itself already broke where the device does (108/108 layouts with their edits);
+    TextRunShaper, getTextBounds and getTextPath ignored a paint's hyphen edits, which
+    MinikinUtils::doLayout applies, and pieces were placed by one running float sum where
+    Layout::appendLayout adds each piece's own layout at the advance so far (184/184 hyphenated
+    lines now match the device's glyphs and positions).
+  - Typeface.<clinit> in each realm: with warm code (0 cold calls) it still took 92-137 ms in a
+    FitNotes process realm, mostly suspended on ICU data reads. Every realm mounted its own
+    platform sources and faulted in its own 64 KB pages of the ICU data. The sources and the pages
+    of a mapping are now the page's, as a device's page cache serves every process: process realms
+    run the clinit in 42-47 ms warm and 47-80 ms cold (from 122-339 ms, 4.6k cold calls instead
+    of 22-55k). The first realm is unchanged (92-104 ms warm, 142-162 cold): 8 page faults
+    (12-18 ms), the fonts.xml parse (15 ms warm in bun) and ICU's likely-subtags data decode
+    (LSR) on the first addLikelySubtags. Making nativeWarmUpCache non-blocking (the device's
+    madvise does not block) measured no gain and was left out. Still open for the first realm: a
+    TS intrinsic for addLikelySubtags (§4.7, differential against ICU4J) or a page-shared
+    likely-subtags table; a precomputed FontConfig would replace a method's bytecode for ~15 ms.
 
 ## App investigations and remaining limits
 

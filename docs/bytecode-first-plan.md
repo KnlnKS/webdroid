@@ -769,11 +769,12 @@ grid) for measurement, TextRunShaper and drawing;
 4. Done 2026-10-02: `gen-framework --properties` records the AVD's app-readable, build-fixed
    properties and uname (`src/shell/device-properties.ts`); the ABI lists follow the native tier.
    The identity is the emulator build's (sdk_gphone64_arm64, dev-keys); see the history.
-5. Text (2026-10-02, history "Stage E2 follow-up"): bindApplication receives the serialized font
-   map from `/font-index.json` and hyphenation runs on the reference patterns. Open: each realm's
-   Typeface.<clinit> (legacy `fonts.xml`, ICU likely subtags; 130-500 ms) needs the boot image
-   (§4.3); hyphenated layouts have no device recording (extend textcmp's probe); FreeType's 6 px `l` at wght
-   900 matches neither unhinted nor auto-hinted FreeType here and needs a device probe.
+5. Text (2026-10-02, history "Stage E2 follow-up" and "the text open items"): bindApplication
+   receives the serialized font map from `/font-index.json`; hyphenation matches the device's
+   recorded layouts and glyphs; advances follow FreeType (whole-pixel layout size, HVAR rounded
+   to units, 26.6 hinted rounding) across wght 100-900. Realms share the platform data's pages, so
+   Typeface.<clinit> takes 42-80 ms in a process realm. Open: the first realm's clinit (92-162 ms:
+   fonts.xml parse and ICU's likely-subtags data). Apps get the Google Play emoji update.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 

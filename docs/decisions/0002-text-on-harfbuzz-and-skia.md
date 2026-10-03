@@ -50,12 +50,12 @@ implementation history's "Stage E2" entry.
 
 - Applications receive the serialized font map (`/font-index.json`, built by AOSP's
   `Typeface.serializeFontMap`), but each realm's Typeface.<clinit> still parses the legacy
-  `fonts.xml`; only the boot image (§4.3) removes it.
-- FreeType's hinter can widen an advance HarfBuzz rounds down (Roboto l at wght 900, 20 px: 6 on
-  the device, 5 here), and hinted outlines lift some bounds a pixel.
+  `fonts.xml`; realms after the first read the ICU data pages it fetched.
+- Skia's advances are FreeType's, not HarfBuzz's: HVAR deltas rounded to units from 16.16
+  coordinates, and hinted advances rounded from 26.6 (`sfnt.ts`, `shaping.ts`). Hinted outlines
+  still lift some bounds a pixel.
 - CanvasKit 0.38's PathOps returns a whole conic arc as quads where the device's Skia keeps it.
 - The page draws `/system/fonts`' preinstalled emoji font, which the recorded device glyphs
   match; the AVD has since installed a NotoColorEmoji update under `/data/fonts` through GMS.
-- Hyphenation (minikin's Hyphenator over `/system/usr/hyphen-data`) has no device recording.
 - `fillText` positions glyphs by Chrome's unhinted advances, so a drawn run can drift from its
   hinted layout by a fraction of a pixel per glyph.
