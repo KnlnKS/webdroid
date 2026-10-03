@@ -250,21 +250,52 @@ for (const [isa, program] of Object.entries(FAULTING)) test(`a ${isa} memory fau
   });
   const previous = sigHandlers.get(11);
   sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
-  const runs = async (n: number) => { const out = []; for (let i = 0; i < n; i++) out.push(await cpu.call(at | program.thumb, [0, 8, 5, 5 + (i & 1)])); return out; };
+  // an ARM32 address past the 2 GiB the process has is unmapped too, not a wasm trap
+  const pointers = a64 ? [8] : [8, 0x9000_0000];
+  const runs = async (n: number, p: number) => { const out = []; for (let i = 0; i < n; i++) out.push(await cpu.call(at | program.thumb, [0, p, 5, 5 + (i & 1)])); return out; };
   try {
-    jitStats.on = false;
-    expect(await runs(2)).toEqual([41, 40]);
-    expect(seen[0]).toEqual([11, 11, 1, 8, program.step, 8]);
-    jitStats.on = true;
-    const before = jitStats.regions;
-    await runs(JIT_HEAT + 2);
-    expect(jitStats.regions).toBeGreaterThan(before);
-    seen.length = 0;
-    expect(await runs(2)).toEqual([41, 40]);
-    expect(seen[0]).toEqual([11, 11, 1, 8, program.step, 8]);
+    for (const p of pointers) {
+      jitStats.on = false;
+      seen.length = 0;
+      expect(await runs(2, p)).toEqual([41, 40]);
+      expect(seen[0]).toEqual([11, 11, 1, p | 0, program.step, p | 0]);
+      jitStats.on = true;
+      const before = jitStats.regions;
+      await runs(JIT_HEAT + 2, p);
+      if (p === 8) expect(jitStats.regions).toBeGreaterThan(before);
+      seen.length = 0;
+      expect(await runs(2, p)).toEqual([41, 40]);
+      expect(seen[0]).toEqual([11, 11, 1, p | 0, program.step, p | 0]);
+    }
   } finally {
     if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
     cpu.dispose(); setA64(false);
+  }
+});
+
+test("an ARM32 store past 2 GiB or to space the memory does not yet back faults as SEGV_MAPERR", async () => {
+  setA64(false);
+  const cpu = new Cpu(new JThread(), "segv-store"), at = mem.reserve(4096, 4096), seen: number[] = [];
+  mem.u32.set([0xe5810000, 0xe12fff1e], at >>> 2);                                     // str r0, [r1]; bx lr
+  const handler = defineHost("test.segv.store", (_c, a) => {
+    a.i(); const info = a.p(), ctx = a.p();
+    seen.push(mem.ld32(info + 8), mem.ld32(info + 12) >>> 0);
+    mem.st32(ctx + 92, mem.ld32(ctx + 92) + 4);
+    return 0;
+  });
+  const previous = sigHandlers.get(11);
+  sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
+  try {
+    // the first page past what the memory backs, when it lies below 2 GiB (a shared memory)
+    const unbacked = mem.buf.byteLength < 0x8000_0000 ? mem.buf.byteLength : 0x9000_0000;
+    for (const p of new Set([0x9000_0000, unbacked])) {
+      seen.length = 0;
+      await cpu.call(at, [7, p]);
+      expect(seen).toEqual([1, p]);
+    }
+  } finally {
+    if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
+    cpu.dispose();
   }
 });
 

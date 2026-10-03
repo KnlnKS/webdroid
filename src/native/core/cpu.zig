@@ -363,8 +363,8 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         }
         // The first 64 KiB is never mapped, and below it lies the core's own stack rather than
         // anything the guest may run: a null-ish branch target faults here instead of being
-        // decoded, for either ISA.
-        if (pc < abi.LOW) {
+        // decoded, for either ISA, as does one past the end of the memory.
+        if (pc < abi.LOW or pc >= mem.mem_size) {
             c.fault_addr = pc;
             _ = raise(c, .null_page, pc);
             return @intFromEnum(Exit.fault);

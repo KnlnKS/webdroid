@@ -62,8 +62,10 @@ inline fn misaligned(c: *Cpu, a: u32, w: u32, pc: u32) Status {
     c.fault_addr = a;
     return badAddr(c, w, pc);
 }
+/// below LOW, or past the 2 GiB an ARM32 process's memory ends at, which as a signed compare
+/// costs no more than the null page's alone
 inline fn addr(c: *Cpu, a: u32) ?u32 {
-    if (a < abi.LOW) {
+    if (@as(i32, @bitCast(a)) < abi.LOW) {
         c.fault_addr = a;
         return null;
     }

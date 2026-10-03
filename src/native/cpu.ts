@@ -8,7 +8,7 @@ import { currentStrand, enterStrand } from "../jvm/suspend";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
-import { LOW, RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
@@ -800,7 +800,7 @@ export class Cpu {
         const addr = this.faultAddress, h = Number(addr >> 32n), lo = Number(addr & 0xffffffffn);
         // no mapping, or one without the access; a plane-0 address past both is a misaligned access
         if (h) return { sig: SIGSEGV, info: { code: core.plane_reserved(h) ? SEGV_ACCERR : SEGV_MAPERR, addr } };
-        if (lo < LOW) return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr } };
+        if (!mem.backed(lo)) return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr } };
         if (mem.writeProtected(lo)) return { sig: SIGSEGV, info: { code: SEGV_ACCERR, addr } };
         return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
       }

@@ -96,6 +96,8 @@ export const mem = {
 
   /** views over the memory stay attached from now on: it is shared, or committed whole */
   attached: (): boolean => shared || MEM_SIZE !== MEM_SIZE_INITIAL,
+  /** a plane-0 address of a page the memory backs: not below LOW, nor past the pages in use */
+  backed: (a: number): boolean => ((a >>> 0) - LOW) >>> 0 < SPAN,
   /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data */
   writeProtected: (a: number): boolean => !!(codePages[a >>> PAGE_SHIFT] & 2),
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,

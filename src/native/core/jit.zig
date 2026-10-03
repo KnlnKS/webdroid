@@ -618,10 +618,11 @@ pub fn Emit(comptime wide: bool) type {
         pub fn checkLowAddress(e: *Self) void {
             e.checkAddress(0);
         }
-        /// L_A faults as bad_address below LOW or, with a nonzero mask, when misaligned.
+        /// L_A faults as bad_address below LOW, past ARM32's 2 GiB (signed, as arm.addr) or, with
+        /// a nonzero mask, when misaligned.
         pub fn checkAddress(e: *Self, align_mask: u32) void {
             const b = e.b;
-            b.emit(.{ get(L_A), c32(abi.LOW), O.i32_lt_u });
+            b.emit(.{ get(L_A), c32(abi.LOW), O.i32_lt_s });
             if (align_mask != 0) b.emit(.{ get(L_A), c32(@intCast(align_mask)), O.i32_and, O.i32_or });
             e.ifv();
             b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT),

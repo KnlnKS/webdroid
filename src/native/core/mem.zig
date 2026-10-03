@@ -53,7 +53,7 @@ comptime {
     assert(SMALL_MAX / CLASS_STEP + 1 == small_heads.len);
     assert(PAGE_MAX > SMALL_MAX);
 }
-var mem_size: u32 = abi.MEM_SIZE_INITIAL;
+pub var mem_size: u32 = abi.MEM_SIZE_INITIAL;
 var heap_top: u32 = abi.ARENA_BASE;
 var heap_peak: u32 = 0;
 var blocks: u32 = 0;
@@ -73,8 +73,15 @@ fn back(end: u64) bool {
     if (end > mem_size) return false;
     const want = @min((end + COMMIT_STEP - 1) & ~(COMMIT_STEP - 1), mem_size);
     if (@wasmMemoryGrow(0, @intCast((want - have) >> 16)) < 0) return false;
+    for (page_flags[@intCast(have >> PAGE_SHIFT)..@intCast(want >> PAGE_SHIFT)]) |*f| f.* &= ~@as(u8, 2);
     mem_grown();
     return true;
+}
+/// No page past what is backed is in use: a guest store there faults as on the core's own data
+/// (the store path tests these flags already), and a load past ARM32's 2 GiB fails its address
+/// test. A load below that into space not yet backed still traps in wasm.
+fn protectUnbacked() void {
+    @memset(page_flags[@intCast(@as(u64, @wasmMemorySize(0)) << 16 >> PAGE_SHIFT)..abi.PAGE_INDEX_MAX], 2);
 }
 
 fn classSize(n: u32) u32 {
@@ -830,6 +837,7 @@ export fn mem_init(size: u32) void {
     cpu.reset(planes);
     // the core's own data lies below the stacks: a guest store there faults, as below LOW
     @memset(page_flags[0..pageOf(abi.STACK_BASE)], 2);
+    protectUnbacked();
 }
 export fn flags_ptr() u32 {
     return @intFromPtr(page_flags);
