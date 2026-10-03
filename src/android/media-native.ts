@@ -1,7 +1,8 @@
 // What the media classes' native halves share: the peer a JNI keeps for a Java object, events
 // posted back through postEventFromNative, and the sources a native half reads.
 import { rt, setDeclared, type JObj } from "../jvm/runtime";
-import { after, callOn, curThread, scall, vcall, callUncaught } from "../jvm/natives/jlang";
+import { after, callOn, scall, vcall, callUncaught } from "../jvm/natives/jlang";
+import { binderThread } from "./binder";
 import { javaFdSource } from "../native/fs";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { onMain } from "./mainloop";
@@ -52,12 +53,12 @@ export function fdSlice(fd: number, offset: bigint, length: bigint): FileSource 
   return new SliceFile(file, start, Math.min(Number(length), file.size - start));
 }
 
-/** A Java MediaDataSource as a source; its reads run on the thread that opened it */
+/** A Java MediaDataSource as a source. The player and the retriever read it from the media server
+ *  through IDataSource, so each read reaches readAt on one of this process's binder threads. */
 export function dataSourceFile(ds: JObj): FileSource | Promise<FileSource> {
-  const thread = curThread;
   return after(vcall(ds, "getSize", "()J"), (size: bigint): FileSource => ({ size: Math.max(0, Number(size)), read: async (offset, length) => {
     const out = new Int8Array(length);
-    const count: number = await callOn(thread, () => vcall(ds, "readAt", "(J[BII)I", BigInt(offset), out, 0, length));
+    const count: number = await callOn(binderThread(), () => vcall(ds, "readAt", "(J[BII)I", BigInt(offset), out, 0, length));
     return count <= 0 ? new Uint8Array(0) : new Uint8Array(out.buffer, 0, Math.min(count, length));
   } }));
 }

@@ -155,11 +155,13 @@ export const enforceCallingOrSelfPermission = driven(function* (permission: stri
   yield vcall(yield* awaited(serviceContext()), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
 });
 const oneWay = new Map<number, Promise<unknown>>();
+/** a thread of this process's binder pool, which another process's calls into it run on */
+export const binderThread = (): JThread => Object.assign(new JThread(), { jname: "Binder:" + PROCESS_PID });
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
 async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
-  const thread = new JThread();
-  thread.jname = "Binder:" + PROCESS_PID; callers.set(thread, caller);
+  const thread = binderThread();
+  callers.set(thread, caller);
   if (system) systemThreads.add(thread);
   try { return await callOn(thread, call); }
   finally { callers.delete(thread); }
