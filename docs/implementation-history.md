@@ -2111,7 +2111,8 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - A line's and `getFontMetricsInt(text)`'s extent is the extent of the fonts its pieces used,
     as minikin's LayoutPieces keep it; text bounds are the laid-out glyphs' boxes.
   - Every system family is read at zygote boot (Typeface.createFromFamilies resolves styles from
-    OS/2), so laziness needs what the device's serialized font map carries: `/font-index.json`.
+    OS/2), so laziness needs what the device's serialized font map carries: `/font-index.json`
+    (which since 2026-10-02 carries the map itself; see the follow-up below).
   - `textcmp`'s harness started layouts once `bootMs` was set, but Stage D binds the application
     afterwards and LineBreakConfig dereferences `currentApplication()`: under a cold server every
     layout threw. It now waits for the application.
@@ -2167,6 +2168,44 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     sigsetsize as the timeout. The ARM32 libc's holders (qsort, bsearch, fgets, scandir, its
     pthread waits) were left: a 2 GiB process has no planes. Lichess (Flutter, cronet) passed
     15/15 live afterwards.
+- **2026-10-02, Stage E2 follow-up: the serialized font map, hyphenation, emoji and heavy weights.**
+  - Every realm loaded the system font map twice: the zygote ran `loadPreinstalledSystemFontMap`,
+    and bindApplication, handed no map, called `setSystemFontMap(null)`, which parses
+    `font_fallback.xml` and builds every family again (6 parses for FitNotes' 3 realms). One
+    load cost 37-177 ms and 8-45k cold calls a realm in the page, 49 ms headless. `/font-index.json`
+    now carries `Typeface.serializeFontMap`'s bytes, built by AOSP's own code in a headless boot at
+    index time (`nativeWrite/ReadTypefaces` serialize minikin's collections by font path, as
+    MinikinFontSkia does); bindApplication receives them as SharedMemory, as FontManagerService
+    shares them: 7 ms and 508 cold calls headless, no configuration parse. textcmp stays 72/72.
+    Typeface.<clinit> still parses the legacy `fonts.xml` and runs ICU's likely-subtags for ~150
+    families in every realm: 130-500 ms and 25-60k cold calls (fonts.xml cold 60-150 ms, the
+    first `addLikelySubtags` 60-190 ms); the device runs it once in its zygote, so only the boot
+    image (§4.3) removes it.
+  - Hyphenation: the reference build's 53 `.hyb` files (extracted from the AVD's system image,
+    as gen-framework now pulls them) back `hyphenator.ts`, a port of HyphenatorCXX (alphabet
+    tables v0/v1, the trie, minPrefix/minSuffix), HyphenatorMap's subtag fallbacks and
+    android_text_Hyphenator's registry (`hyph-am.hyb` is absent, so `am` resolves through
+    `und-Ethi` as on the device). minikin's HyphenatorTest and HyphenatorMapTest cases pass.
+    MeasuredText computes points (full, or fast from advances), OptimalLineBreaker merges them
+    with desperate breaks, the greedy breaker hyphenates a word that does not fit, line flags
+    carry the edits, and Paint's measurement and drawText apply a paint's hyphen edits (the
+    hyphen shaped in the edge font run, U+2010 falling back to U+002D). No device layout with
+    hyphenation is recorded: textcmp's probe uses StaticLayout's default (none), so hyphenated
+    breaks are checked only against minikin's unit tests and plausibility.
+  - The updatable emoji font: the AVD's fwtest recordings shape "a👍🏽b👨‍👩‍👧🇨🇦" to glyphs 571
+    and 856 of `NotoColorEmoji.ttf` with the preinstalled font's advances, which the page
+    reproduces, and nothing recorded points at `/data/fonts`. The image supports updatable fonts
+    (an API 35 device has fs-verity; `/system/etc/security/fsverity` holds the release cert), but
+    without evidence of an installed update the page keeps `/system/fonts`. `adb shell ls
+    /data/fonts/files` on the AVD would settle it.
+  - FreeType's heavy-weight advances (fwtest "Blk": the device's `l` at wght 900, 20 px is 6, the
+    page's 5): HVAR and the gvar phantom points agree (5.498 px), so the variation source is not
+    the cause. Roboto's variable face is unhinted (no fpgm/prep or glyph programs), so FreeType
+    auto-hints it; CanvasKit's FreeType on a static wght-900 instance gives 5.498 unhinted or
+    slight and 5 under normal auto-hinting (which also moves wght-400 advances off round(linear),
+    I at 20 px to 6, where every recorded wght-400 advance is round(linear)). Neither mode
+    reproduces the 6, so it is left: the next step is a device probe of getTextWidths across sizes
+    and weights, with and without `Paint.setHinting(HINTING_OFF)`, against a static instance.
 
 ## App investigations and remaining limits
 

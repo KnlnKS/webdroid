@@ -701,9 +701,12 @@ grid) for measurement, TextRunShaper and drawing;
 4. Done 2026-10-02: `gen-framework --properties` records the AVD's app-readable, build-fixed
    properties and uname (`src/shell/device-properties.ts`); the ABI lists follow the native tier.
    The identity is the emulator build's (sdk_gphone64_arm64, dev-keys); see the history.
-5. Text: hyphenation (patterns in `/system/usr/hyphen-data`), the updatable emoji font under
-   `/data/fonts`, FreeType's hinted advances at heavy variable weights, and each realm's zygote
-   parsing `font_fallback.xml` (the boot image, §4.3, or the serialized font map would remove it).
+5. Text (2026-10-02, history "Stage E2 follow-up"): bindApplication receives the serialized font
+   map from `/font-index.json` and hyphenation runs on the reference patterns. Open: each realm's
+   Typeface.<clinit> (legacy `fonts.xml`, ICU likely subtags; 130-500 ms) needs the boot image
+   (§4.3); hyphenated layouts have no device recording (extend textcmp's probe); the emoji font
+   stays `/system/fonts`' until the AVD shows a `/data/fonts` update; FreeType's 6 px `l` at wght
+   900 matches neither unhinted nor auto-hinted FreeType here and needs a device probe.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 

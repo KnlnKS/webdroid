@@ -48,14 +48,14 @@ implementation history's "Stage E2" entry.
 
 ## Costs and follow-ups
 
-- Each process realm's zygote parses `font_fallback.xml` (about 130k more cold calls at launch);
-  the boot image (§4.3) or the device's serialized font map would remove it.
+- Applications receive the serialized font map (`/font-index.json`, built by AOSP's
+  `Typeface.serializeFontMap`), but each realm's Typeface.<clinit> still parses the legacy
+  `fonts.xml`; only the boot image (§4.3) removes it.
 - FreeType's hinter can widen an advance HarfBuzz rounds down (Roboto l at wght 900, 20 px: 6 on
   the device, 5 here), and hinted outlines lift some bounds a pixel.
 - CanvasKit 0.38's PathOps returns a whole conic arc as quads where the device's Skia keeps it.
-- The device's apps draw the updated emoji font under `/data/fonts`; the page uses
-  `/system/fonts`' preinstalled one.
-- Hyphenation is unsupported (TextView's default frequency is none); the reference build's
-  patterns are in `/system/usr/hyphen-data`.
+- The page draws `/system/fonts`' preinstalled emoji font, which the recorded device glyphs
+  match; an update under `/data/fonts` on the AVD is unconfirmed.
+- Hyphenation (minikin's Hyphenator over `/system/usr/hyphen-data`) has no device recording.
 - `fillText` positions glyphs by Chrome's unhinted advances, so a drawn run can drift from its
   hinted layout by a fraction of a pixel per glyph.
