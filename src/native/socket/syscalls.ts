@@ -99,10 +99,8 @@ function sockname(cpu: Cpu, fd: number, address: number, length: number, peer: b
   if (typeof s === "number") return s;
   const name = s.name(peer);
   if (typeof name === "number") return fail(cpu, -name);
-  if (!length) return fail(cpu, E.FAULT);
   const capacity = mem.ld32(length);
   if (capacity < 0) return fail(cpu, E.INVAL);
-  if (capacity && !address) return fail(cpu, E.FAULT);
   writeSockaddr(name, address, length, capacity);
   return 0;
 }
@@ -153,7 +151,6 @@ function setsockopt(cpu: Cpu, fd: number, level: number, name: number, value: nu
 function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): number {
   const s = socketOf(fd);
   if (typeof s === "number") return destination || destinationLength ? fail(cpu, E.ISCONN) : fdWrite(cpu, fd, source, length);
-  if (length && !source) return fail(cpu, E.FAULT);
   return send(cpu, s, mem.bytes(source, length), destination, destinationLength, flags);
 }
 /** recvfrom(2): a descriptor that is no socket takes a plain read */

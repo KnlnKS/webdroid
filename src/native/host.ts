@@ -141,10 +141,21 @@ export const ptr = (p: number): number | bigint => mem.va(p);
 const fns: HostFn[] = [];
 const names: string[] = [];
 const bound: number[] = [];
+/** per slot: a system call's entry (the kernel's body, or a libc wrapper whose pointers reach only
+ *  the kernel), which a bad pointer fails with EFAULT where any other faults as libc's code would */
+const kernelSlots = new Uint8Array((TRAMP_END - TRAMP_BASE) >>> 3);
+const kernelNames = new Set<string>();
+export const kernelEntry = (slot: number): boolean => kernelSlots[slot] === 1;
+/** the system call entries by name (syscall.ts), marked on their slots now and as they are defined */
+export function markKernelEntries(list: Iterable<string>): void {
+  for (const name of list) kernelNames.add(name);
+  names.forEach((name, slot) => { if (kernelNames.has(name)) kernelSlots[slot] = 1; });
+}
 export function defineHost(name: string, fn: HostFn): number {
   const slot = fns.length;
   if (trampAddr(slot) >= RET_SENTINEL) throw new Error("out of trampoline slots");
   fns.push(fn); names.push(name);
+  if (kernelNames.has(name)) kernelSlots[slot] = 1;
   if (CORE_LIBC[name]) core.host_bind(slot, (bound[slot] = CORE_LIBC[name]));
   // `bx lr` at the slot so a guest that reads its own code (or a disassembler) sees something sane
   mem.u32[trampAddr(slot) >>> 2] = 0xe12fff1e;
@@ -186,7 +197,7 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   let ret: HostRet | Promise<HostRet>;
   try { ret = served === 0 ? ARG0 : fn(cpu, a); }
   catch (e) {
-    if (e instanceof BadAddress) { ret = badPointer(cpu, slot, e); }
+    if (e instanceof BadAddress) ret = onBadAddress(cpu, e, kernelSlots[slot] === 1);
     // any other JS Error (not a Java throwable or a fault already placed) is a fault of the
     // guest call: name the block and caller as one
     else if (e instanceof Error && !("msg" in e) && !(e instanceof NativeFault && e.pc)) cpu.fault(`${e.message.replace(/^\[native\] /, "")} in ${names[slot]}`);
@@ -199,13 +210,11 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   hostReturn(cpu, ret);
 }
 
-/** libc's system call wrappers by name (syscall.ts): their pointers reach only the kernel */
-export const syscallWrappers = new Set<string>();
-/** a host body that met a bad guest pointer, synchronously or once its call resumed: a system
- *  call's wrapper fails with EFAULT; anything else faults as bionic's own code would */
-export function badPointer(cpu: Cpu, slot: number, e: unknown): HostRet {
-  if (!(e instanceof BadAddress)) throw e;
-  if (syscallWrappers.has(names[slot])) { mem.st32(cpu.errnoAddr, E.FAULT); return -1; }
+/** a host body or system call that met a bad guest pointer, synchronously or once its call
+ *  resumed: a system call fails with EFAULT (-1 and errno, which a raw one answers as -EFAULT);
+ *  anything else faults as bionic's own code would */
+export function onBadAddress(cpu: Cpu, e: BadAddress, kernel: boolean): HostRet {
+  if (kernel) { mem.st32(cpu.errnoAddr, E.FAULT); return -1; }
   cpu.raiseBadAddress(e);
   return NORET;
 }

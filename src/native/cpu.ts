@@ -7,8 +7,8 @@ import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../
 import { currentStrand, enterStrand } from "../jvm/suspend";
 import { NativeFault, BadAddress, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
-import { Args, Args64, type ArgReader, badPointer, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64, E } from "./abi";
+import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
@@ -566,7 +566,10 @@ export class Cpu {
           this.state = "park";
           turn.release();
           let v: unknown;
-          try { v = await p; } catch (e) { v = badPointer(this, slot, e); }
+          try { v = await p; } catch (e) {
+            if (!(e instanceof BadAddress)) throw e;
+            v = onBadAddress(this, e, kernelEntry(slot));
+          }
           // a handler delivered while we were parked may still be running on top of this frame,
           // parked in its own host call (sigsuspend): the flag is its until it finishes
           this.state = "idle";
@@ -665,15 +668,20 @@ export class Cpu {
       const a = this.args;
       a.reset(this);
       let ret: HostRet | Promise<HostRet>;
-      try { ret = rawSyscall(this, nr, a); } catch (e) { ret = efault(e); }
+      try { ret = rawSyscall(this, nr, a); } catch (e) { ret = this.copyFault(e); }
       // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
       if (ret instanceof Promise) {
         if (nr === 124) this.deferSignalsUntilResume(); // sched_yield completes before a pending signal is delivered
-        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(efault(e)); return NORET; });
+        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(this.copyFault(e)); return NORET; });
         return;
       }
       this.syscallReturn(ret);
     }
+  }
+  /** a system call's access through a bad user pointer fails as copy_from_user does */
+  private copyFault(e: unknown): HostRet {
+    if (!(e instanceof BadAddress)) throw e;
+    return onBadAddress(this, e, true);
   }
   /** the kernel's convention: the result in x0/r0, a failure as -errno (the wrapper bodies
    *  answer -1 with errno set, which is turned back into what the kernel would have said) */
@@ -787,11 +795,6 @@ function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
   if (!mem.backed(lo)) return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr } };
   if (mem.writeProtected(lo)) return { sig: SIGSEGV, info: { code: SEGV_ACCERR, addr } };
   return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
-}
-/** a system call's access through a bad user pointer fails as copy_from_user does */
-function efault(e: unknown): HostRet {
-  if (e instanceof BadAddress) return -E.FAULT;
-  throw e;
 }
 export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
 /** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */

@@ -5,7 +5,7 @@
 
 import { mem, anchor } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
-import { calledMissing, syscallWrappers, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
+import { calledMissing, markKernelEntries, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
 import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu";
 import { exitGroup, installDebuggerdHandlers } from "./crash";
@@ -193,7 +193,7 @@ export function kernelInit(): void {
     table[+nr] = byName[name];
   }
   for (const [nr, fn] of Object.entries(wide ? A64 : A32)) table[+nr] = fn;
-  for (const name of [...Object.keys(byName), ...WRAPPERS, "syscall"]) syscallWrappers.add(name);
+  markKernelEntries([...Object.keys(byName), ...WRAPPERS, "syscall"]);
   setRawSyscall(rawSyscall);
   installDebuggerdHandlers();
   fsInit();
