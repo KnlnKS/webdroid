@@ -12,22 +12,21 @@ import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_S
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
-import { exitProcess, never, processExited } from "../process-exit";
+import { never, processExited } from "../process-exit";
+import { SIGILL, SIGTRAP, SIGBUS, SIGSEGV, SA_SIGINFO, SA_ONSTACK, SA_RESETHAND, SA_NODEFER, SS_DISABLE, SS_AUTODISARM, BLOCKABLE, action, blocked, dispositions, sigbit, type Handler } from "./signals";
+import { frameSize, writeFrame, loadContext, type SigInfo } from "./sigframe";
+import { dieOfSignal } from "./crash";
+import { backtrace } from "./dl";
 export { NativeFault, yieldToLoop, yieldStats };
 
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2, Signal = 3 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
-const SIGNAL_FRAME = "signal ";
-const SIGILL = 4, SIGTRAP = 5, SIGBUS = 7, SIGSEGV = 11;
 const ILL_ILLOPC = 1, TRAP_BRKPT = 1, BUS_ADRALN = 1, SEGV_MAPERR = 1, SEGV_ACCERR = 2;
-const SA_SIGINFO = 4, SA_ONSTACK = 0x08000000, SA_RESETHAND = 0x80000000, SA_NODEFER = 0x40000000, SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
-/** siginfo's si_code and si_addr, for a signal an instruction raised */
-export type SigInfo = { code: number; addr: bigint };
-/** siginfo_t, then the ucontext_t with its FP/SIMD record (arm64's fpsimd_context in __reserved,
- *  ARM32's vfp_sigframe in uc_regspace) */
-const SIGINFO_SIZE = 0x80, FRAME_SIZE_A64 = 0x1300, FRAME_SIZE_A32 = 0x380;
-const FPSIMD_MAGIC = 0x46508001, VFP_MAGIC = 0x56465001;
-const isSignalFrame = (label: string | undefined): boolean => label?.startsWith(SIGNAL_FRAME) ?? false;
+/** a nested call() on this register file: what it is for (wd.native.regs) and, for a signal handler,
+ *  the stack range it runs on, the state a siglongjmp out of it leaves for the interrupted code, and
+ *  what its return restores */
+interface Frame { label: string; handler?: HandlerFrame }
+interface HandlerFrame { lo: bigint; hi: bigint; exit: (() => void) | null; resume: (returned: boolean) => void }
 // ~5 ms of guest time per slice: coarse enough that the macrotask hop per slice is noise, fine
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence
 const SLICE_INSTR = 3_000_000;
@@ -74,13 +73,6 @@ const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "
 const XN = [...Array(31)].map((_, i) => `x${i}`).concat(["sp"]);
 /** slice-boundary pc samples (one per budget exit; `slice.instr` sets how fine): a free statistical profile */
 export const profile = { on: true, samples: new Map<number, number>() };
-/** exit_group(2): the process ends with `code`, and the calling thread never returns */
-export function exitGroup(cpu: Cpu, code: number, how: string): Promise<never> {
-  console.warn(`[native] ${how}(${code}) from ${cpu.name} lr=${(cpu.lr >>> 0).toString(16)}`);
-  exitProcess({ code: code & 0xff });
-  cpu.finished = true;
-  return never();
-}
 /** why code pages were invalidated, by cause (wd.native.invalidations) */
 export const invalidations = new Map<string, number>();
 export function invalidateRange(addr: number, size: number, reason = "range"): void {
@@ -106,11 +98,6 @@ export function isA64(): boolean { return A64; }
 
 /** the register file at the first native fault, as the faulting block found it (debug) */
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null; msg: string } = { regs: null, msg: "" };
-let backtraceHook: (cpu: Cpu) => string[] = () => [];
-export function setBacktraceHook(f: (cpu: Cpu) => string[]): void { backtraceHook = f; }
-/** debuggerd's tombstone protobuf for a crash (tombstone.ts, with dl.ts's unwinding) */
-let tombstoneHook: (cpu: Cpu, sig: number, info: SigInfo | null, abort: string) => Uint8Array | undefined = () => undefined;
-export function setTombstoneHook(f: typeof tombstoneHook): void { tombstoneHook = f; }
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
 /** a run loop taking its thread for a turn it resumes in, and handing it back where it parks */
 interface LoopTurn { own(): void; release(): void }
@@ -157,9 +144,6 @@ export class Cpu {
   signalMask = 0x80001204n;
   alternateStack: { sp: bigint; size: bigint; flags: number } | null = null;
   alternateActive = false;
-  /** the handlers running, innermost last: the stack range each runs on, and the state a
-   *  siglongjmp out of it leaves for the interrupted code */
-  private handlerFrames: { lo: bigint; hi: bigint; exit: (() => void) | null }[] = [];
 
   constructor(jthread: JThread, name: string) {
     this.jthread = jthread;
@@ -244,17 +228,17 @@ export class Cpu {
     const mask = set ? (size === 8 ? mem.ld64(set) : BigInt(mem.ld32(set) >>> 0)) : 0n;
     if (old) { if (size === 8) mem.st64(old, this.signalMask); else mem.st32(old, Number(this.signalMask & 0xffffffffn)); }
     if (set) {
-      this.signalMask = (how === 0 ? this.signalMask | mask : how === 1 ? this.signalMask & ~mask : mask) & 0xfffffffffffbfeffn;
+      this.signalMask = (how === 0 ? this.signalMask | mask : how === 1 ? this.signalMask & ~mask : mask) & BLOCKABLE;
       this.pump();
     }
     return 0;
   }
   /** a pending signal the mask lets through: a call that raised or unblocked one returns to it, as
    *  the kernel delivers on the way back to user space */
-  private deliverable(): boolean { return this.signals.some((sig) => !(this.signalMask & 1n << BigInt(sig - 1))); }
+  private deliverable(): boolean { return this.signals.some((sig) => !blocked(this.signalMask, sig)); }
   private takeSignal(): number {
     if (!this.signals.length) return 0;
-    const i = this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
+    const i = this.signals.findIndex((sig) => !blocked(this.signalMask, sig));
     return i < 0 ? 0 : this.signals.splice(i, 1)[0];
   }
   /** the depth of the run loop awaiting a host call's promise, -1 for none: the Cpu is parked only when that
@@ -272,10 +256,10 @@ export class Cpu {
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
   kill(sig: number): void {
     // an ignored signal is discarded unless blocked: a handler may be installed before it is unblocked
-    if (this.finished || signalIgnored(sig) && !(this.signalMask & 1n << BigInt(sig - 1))) return;
+    if (this.finished || !blocked(this.signalMask, sig) && action(sig, this.signalMask, false) === "ignore") return;
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
     this.sigQueued?.();
-    if (this.signalInterrupt && !(this.signalMask & 1n << BigInt(sig - 1))) {
+    if (this.signalInterrupt && !blocked(this.signalMask, sig)) {
       this.deferSignalsUntilResume();
       this.signalInterrupt();
       return;
@@ -286,7 +270,7 @@ export class Cpu {
    *  returns to the guest first. A running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
-    if (this.budgetWake && this.signals.some((sig) => !(this.signalMask & 1n << BigInt(sig - 1)))) this.budgetWake();
+    if (this.budgetWake && this.deliverable()) this.budgetWake();
     queueMicrotask(() => {
       if (this.finished || this.deferredSignalDepths.size || (!this.parked && !this.baseAvailable)) return;
       const sig = this.takeSignal();
@@ -301,7 +285,7 @@ export class Cpu {
   async awaitIdleBase(): Promise<void> {
     for (;;) {
       if (this.baseBusy) { await this.baseBusy; continue; }
-      if (this.loops > 0 && isSignalFrame(this.frames[0])) {
+      if (this.loops > 0 && this.frames[0]?.handler) {
         await new Promise<void>((r) => this.idle.push(r));
         continue;
       }
@@ -314,13 +298,13 @@ export class Cpu {
   /** `info`: the siginfo of a signal this thread's own instruction raised. As the kernel's
    *  force_sig_fault, such a signal blocked or ignored takes its default action. */
   async deliver(sig: number, info: SigInfo | null = null): Promise<void> {
-    const bit = 1n << BigInt(sig - 1);
-    const h = info && this.signalMask & bit ? undefined : sigHandlers.get(sig);
-    if (!h) { if (info || !signalIgnored(sig)) void dieOfSignal(this, sig, info); return; }
-    if (h.flags & SA_RESETHAND) sigHandlers.delete(sig);
+    const act = action(sig, this.signalMask, !!info);
+    if (act !== "handler") { if (act !== "ignore") void dieOfSignal(this, sig, info); return; }
+    const h = dispositions.get(sig) as Handler;
+    if (h.flags & SA_RESETHAND) dispositions.delete(sig);
     this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
     const mask = this.signalMask, handling = this.handling.has(sig);
-    this.signalMask = (mask | (h.mask ?? 0n) | (h.flags & SA_NODEFER ? 0n : bit)) & 0xfffffffffffbfeffn;
+    this.signalMask = (mask | h.mask | (h.flags & SA_NODEFER ? 0n : sigbit(sig))) & BLOCKABLE;
     this.handling.add(sig);
     let restored = false;
     const restore = () => {
@@ -333,29 +317,28 @@ export class Cpu {
     const alt = (h.flags & SA_ONSTACK) && this.alternateStack && !(this.alternateStack.flags & SS_DISABLE) && !this.alternateActive
       ? this.alternateStack.sp + this.alternateStack.size : undefined;
     const p = (async () => {
-      const frame = h.flags & SA_SIGINFO ? mem.malloc(this.a64 ? FRAME_SIZE_A64 : FRAME_SIZE_A32) : 0;
+      const frame = h.flags & SA_SIGINFO ? mem.malloc(frameSize(this)) : 0;
       if (h.flags & SA_SIGINFO && !frame) throw new NativeFault("[native] out of memory for signal frame");
-      const context = frame ? frame + SIGINFO_SIZE : 0;
-      if (frame) this.writeFrame(frame, sig, info, mask);
+      const context = frame ? writeFrame(this, frame, sig, info, mask) : 0;
       const previousAlt = this.alternateStack, previousActive = this.alternateActive;
       if (alt !== undefined) {
         const autodisarm = !!(previousAlt && previousAlt.flags & SS_AUTODISARM);
         this.alternateActive = !autodisarm;
         if (autodisarm) this.alternateStack = { sp: 0n, size: 0n, flags: SS_DISABLE };
       }
-      // sigreturn: the handler may have rewritten the context. It is loaded before the interrupted
-      // frame or another signal can run on this register file.
-      // a handler runs below the interrupted sp, or on the alternate stack
-      const record = { lo: alt !== undefined ? this.alternateStack!.sp : 0n, hi: alt ?? this.spVa, exit: null as (() => void) | null };
-      this.handlerFrames.push(record);
-      const resume = (returned: boolean) => {
-        restore();
-        this.handlerFrames.pop();
-        if (record.exit) { record.exit(); return; }
-        if (returned && context) this.loadContext(context);
+      // a handler runs below the interrupted sp, or on the alternate stack. sigreturn: the handler
+      // may have rewritten the context, which is loaded before the interrupted frame or another
+      // signal can run on this register file.
+      const handler: HandlerFrame = {
+        lo: alt !== undefined ? this.alternateStack!.sp : 0n, hi: alt ?? this.spVa, exit: null,
+        resume: (returned) => {
+          restore();
+          if (handler.exit) handler.exit();
+          else if (returned && context) loadContext(this, context);
+        },
       };
       try {
-        await this.call(h.fn, [sig, frame, context], SIGNAL_FRAME + sig, resume, alt);
+        await this.enter(h.fn, [sig, frame, context], { label: "signal " + sig, handler }, alt);
       } finally {
         if (alt !== undefined) { this.alternateStack = previousAlt; this.alternateActive = previousActive; }
         if (frame) mem.free(frame);
@@ -371,63 +354,6 @@ export class Cpu {
     }
     const w = this.sigWait;
     if (w) { this.sigWait = null; w(); }
-  }
-  /** the siginfo and ucontext the kernel's setup_rt_frame writes: the interrupted registers, the
-   *  mask to restore and the FP/SIMD state, all of which the handler may rewrite before it returns */
-  private writeFrame(frame: number, sig: number, info: SigInfo | null, mask: bigint): void {
-    const a64 = this.a64, context = frame + SIGINFO_SIZE, alt = this.alternateStack;
-    mem.memset(frame, 0, a64 ? FRAME_SIZE_A64 : FRAME_SIZE_A32);
-    mem.st32(frame, sig);
-    mem.st32(frame + 8, info ? info.code : -6);                                  // SI_TKILL
-    if (a64) {
-      if (info) mem.st64(frame + 16, info.addr);
-      if (alt) { mem.st64(context + 0x10, alt.sp); mem.st32(context + 0x18, alt.flags); mem.st64(context + 0x20, alt.size); }
-      mem.st64(context + 0x28, mask);
-      // sigcontext: fault_address, x0-x30, sp, pc, pstate, then __reserved's fpsimd_context
-      if (info) mem.st64(context + 0xb0, info.addr);
-      const regs = new Uint32Array(mem.buf, context + 0xb8, 64);
-      regs.set(new Uint32Array(this.w.buffer, this.w.byteOffset, 64));
-      mem.st64(context + 0x1b8, BigInt(this.pc));
-      mem.st64(context + 0x1c0, BigInt(this.cpsr >>> 0));
-      mem.st32(context + 0x1d0, FPSIMD_MAGIC); mem.st32(context + 0x1d4, 0x210);
-      mem.st32(context + 0x1d8, this.fpsr); mem.st32(context + 0x1dc, this.fpcr);
-      mem.u8.set(this.vb, context + 0x1e0);
-      return;
-    }
-    if (info) mem.st32(frame + 12, Number(info.addr & 0xffffffffn));
-    if (alt) { mem.st32(context + 8, Number(alt.sp)); mem.st32(context + 12, alt.flags); mem.st32(context + 16, Number(alt.size)); }
-    // sigcontext at 20: trap_no, error_code, oldmask, r0-r15, cpsr, fault_address; the mask at 104
-    mem.st32(context + 28, Number(mask & 0xffffffffn));
-    for (let i = 0; i < 15; i++) mem.st32(context + 32 + 4 * i, this.w[2 * i]);
-    mem.st32(context + 92, this.pc);
-    mem.st32(context + 96, this.cpsr);
-    if (info) mem.st32(context + 100, Number(info.addr & 0xffffffffn));
-    mem.st64(context + 104, mask);
-    // uc_regspace: vfp_sigframe's d0-d31 and fpscr
-    mem.st32(context + 232, VFP_MAGIC); mem.st32(context + 236, 0x120);
-    mem.u8.set(this.vb.subarray(0, 256), context + 240);
-    mem.st32(context + 496, this.fpcr);
-  }
-  /** rt_sigreturn: the state the handler left in its ucontext */
-  loadContext(context: number): void {
-    this.signalMask = mem.ld64(context + (this.a64 ? 0x28 : 104)) & 0xfffffffffffbfeffn;
-    if (this.a64) {
-      new Uint32Array(this.w.buffer, this.w.byteOffset, 64).set(new Uint32Array(mem.buf, context + 0xb8, 64));
-      this.setPc(Number(mem.ld64(context + 0x1b8) & 0xffffffffn));
-      this.cpsr = mem.ld32(context + 0x1c0);
-      if (mem.ld32(context + 0x1d0) === FPSIMD_MAGIC) {
-        this.fpsr = mem.ld32(context + 0x1d8); this.fpcr = mem.ld32(context + 0x1dc);
-        this.vb.set(mem.u8.subarray(context + 0x1e0, context + 0x3e0));
-      }
-      return;
-    }
-    for (let i = 0; i < 15; i++) this.w[2 * i] = mem.ld32(context + 32 + 4 * i);
-    this.cpsr = mem.ld32(context + 96);
-    this.setPc((mem.ld32(context + 92) & ~1) | this.t);
-    if (mem.ld32(context + 232) === VFP_MAGIC) {
-      this.vb.set(mem.u8.subarray(context + 240, context + 496));
-      this.fpcr = mem.ld32(context + 496);
-    }
   }
   exc: unknown = null;
   ret1 = 0;           // r1 (ARM32) or the high half of x0 at the return of the last call() (64-bit results)
@@ -501,16 +427,19 @@ export class Cpu {
     }
   }
 
-  frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
+  /** the nested calls running on this register file, innermost last */
+  frames: Frame[] = [];
   private savePool: Uint8Array[] = [];
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
-  async call(fn: number, args: CallArg[] = [], label = "call", resume?: (returned: boolean) => void, stackTop?: bigint): Promise<number> {
+  call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> { return this.enter(fn, args, { label }); }
+  /** `fn` as `frame`: a signal handler's on `stackTop` (its alternate stack) when given */
+  private async enter(fn: number, args: CallArg[], frame: Frame, stackTop?: bigint): Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
     const chain = currentStrand();
-    if (!isSignalFrame(label)) while (isSignalFrame(this.frames.at(-1))) await new Promise<void>((r) => this.idle.push(r));
-    this.frames.push(label);
+    if (!frame.handler) while (this.frames.at(-1)?.handler) await new Promise<void>((r) => this.idle.push(r));
+    this.frames.push(frame);
     this.ensureStack();
     const w = this.w;
     const saved = this.savePool.pop() ?? new Uint8Array(ARCH_SIZE);
@@ -567,7 +496,7 @@ export class Cpu {
     try {
       await this.run(chain);
       returned = true;
-      if (isSignalFrame(label) && this.spVa !== stackVa) this.escapeHandler();
+      if (frame.handler && this.spVa !== stackVa) this.escapeHandler(frame.handler);
       this.ret1 = this.a64 ? w[1] : w[2];
       this.retFp0 = this.a64 ? this.si[0] : w[0];
       this.retFp1 = this.a64 ? this.si[1] : w[2];
@@ -579,7 +508,7 @@ export class Cpu {
       this.savePool.push(saved);
       this.pending = spending; this.state = sstate;
       // A signal frame's state belongs to it until the interrupted frame can resume.
-      resume?.(returned);
+      frame.handler?.resume(returned);
       if (this.idle.length) for (const w2 of this.idle.splice(0)) w2();
       this.pump();                                                          // a signal that arrived while this frame owned the register file reaches the frame below now
     }
@@ -627,17 +556,6 @@ export class Cpu {
           if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
         }
         if (ex === SliceExit.Exit) return;
-        if (ex === SliceExit.Signal) {
-          // the handler runs with the state the faulting instruction left, pc at it
-          const { sig, info } = this.raised!;
-          this.raised = null;
-          await this.deliverFromLoop(turn, sig, info);
-          // a handler that returns to an instruction that faults again spins as on a device, but
-          // as a slice: other threads and the page run between its turns
-          turn.release();
-          await yieldToLoop();
-          continue;
-        }
         if (ex === SliceExit.Suspend) {
           budgetStreak = 0;
           const p = this.pending!, slot = this.exit;
@@ -659,15 +577,19 @@ export class Cpu {
           this.parkedAt = outerParked;
           turn.own();
           if (this.finished) return;
-          if (this.raised) {
-            const { sig, info } = this.raised;
-            this.raised = null;
-            this.deferredSignalDepths.delete(myDepth);
-            await this.deliverFromLoop(turn, sig, info);
-            continue;
-          }
-          hostReturn(this, v as HostRet);
           this.deferredSignalDepths.delete(myDepth);
+          if (!this.raised) { hostReturn(this, v as HostRet); continue; }
+          ex = SliceExit.Signal;
+        }
+        if (ex === SliceExit.Signal) {
+          // the handler runs with the state the faulting instruction (or host body) left, pc at it
+          const { sig, info } = this.raised!;
+          this.raised = null;
+          await this.deliverFromLoop(turn, sig, info);
+          // a handler that returns to an instruction that faults again spins as on a device, but
+          // as a slice: other threads and the page run between its turns
+          turn.release();
+          await yieldToLoop();
           continue;
         }
         this.state = "yield";
@@ -798,7 +720,7 @@ export class Cpu {
   }
   /** the register file at the first fault, for wd.native.lastFault */
   private snapshot(): void {
-    if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: [...Array(32)].map((_, i) => this.w[2 * i]), h: [...Array(32)].map((_, i) => this.w[2 * i + 1]), bt: backtraceHook(this), frames: [...this.frames] };
+    if (!lastFault.regs) lastFault.regs = { cpu: this.name, r: [...Array(32)].map((_, i) => this.w[2 * i]), h: [...Array(32)].map((_, i) => this.w[2 * i + 1]), bt: backtrace(this), frames: this.frames.map((f) => f.label) };
   }
   /** the signal a guest instruction's fault raises, as the kernel's abort handlers choose it; null
    *  for an emulator gap (an unimplemented encoding, an unsupported syscall), which stays a host fault */
@@ -830,8 +752,8 @@ export class Cpu {
    *  the handler's frame is abandoned, as the kernel's would be, and the code it interrupted
    *  resumes in the state `apply` sets */
   leaveHandler(sp: bigint, apply: () => void): boolean {
-    const h = this.handlerFrames.at(-1);
-    if (!h || !isSignalFrame(this.frames.at(-1)) || (sp >= h.lo && sp < h.hi)) return false;
+    const h = this.frames.at(-1)?.handler;
+    if (!h || (sp >= h.lo && sp < h.hi)) return false;
     h.exit = apply;
     this.setPc(RET_SENTINEL);
     return true;
@@ -839,9 +761,8 @@ export class Cpu {
   /** A handler frame that reaches its return with another sp was left without sigreturn (its
    *  registers restored by hand, as a guest's own longjmp does): what returned is the code it
    *  jumped to, so the interrupted frame returns too, in this state and signal mask. */
-  private escapeHandler(): void {
-    const h = this.handlerFrames.at(-1);
-    if (!h || h.exit) return;
+  private escapeHandler(h: HandlerFrame): void {
+    if (h.exit) return;
     const state = this.bytes.slice(), mask = this.signalMask;
     h.exit = () => { this.bytes.set(state); this.signalMask = mask; };
   }
@@ -858,11 +779,6 @@ export class Cpu {
 
 /** the kernel's syscall dispatcher, installed by kernelInit: raw svc/swi numbers the core leaves to the host */
 let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>) | null = null;
-/** a system call's access through a bad user pointer fails as copy_from_user does */
-function efault(e: unknown): HostRet {
-  if (e instanceof BadAddress) return -E.FAULT;
-  throw e;
-}
 /** a data access fault at `addr`: no mapping, or one without the access; a plane-0 address
  *  past both is a misaligned access */
 function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
@@ -871,6 +787,11 @@ function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
   if (!mem.backed(lo)) return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr } };
   if (mem.writeProtected(lo)) return { sig: SIGSEGV, info: { code: SEGV_ACCERR, addr } };
   return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
+}
+/** a system call's access through a bad user pointer fails as copy_from_user does */
+function efault(e: unknown): HostRet {
+  if (e instanceof BadAddress) return -E.FAULT;
+  throw e;
 }
 export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
 /** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
@@ -892,45 +813,5 @@ export const cpuOf = (t: JThread): Cpu | undefined => byThread.get(t);
 export function bindCpu(t: JThread, c: Cpu): void { byThread.set(t, c); }
 export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.tid === tid) return c; return undefined; }
 export function cpuByOsTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.osTid === tid) return c; return undefined; }
-/** sigaction's table: signal → handler (sa_handler or sa_sigaction) and flags */
-export const sigHandlers = new Map<number, { fn: number; flags: number; mask?: bigint }>();
-/** the signals set to SIG_IGN */
-export const ignoredSignals = new Set<number>();
-const signalBits = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | 1n << BigInt(sig - 1), 0n);
-// signal(7)'s default actions. Stop signals are ignored: nothing here could continue the process.
-const DEFAULT_IGNORED = signalBits(17, 18, 19, 20, 21, 22, 23, 28);  // SIGCHLD SIGCONT, stops, SIGURG SIGWINCH
-const DUMPS_CORE = signalBits(3, 4, 5, 6, 7, 8, 11, 24, 25, 31);
-export const SIGNAL_NAMES = ["", "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1", "SIGSEGV",
-  "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG",
-  "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH", "SIGIO", "SIGPWR", "SIGSYS"];
-const has = (bits: bigint, sig: number): boolean => !!(bits >> BigInt(sig - 1) & 1n);
-/** delivering `sig` runs nothing: no handler, and SIG_IGN or a default of ignoring it */
-export const signalIgnored = (sig: number): boolean => !sigHandlers.has(sig) && (ignoredSignals.has(sig) || has(DEFAULT_IGNORED, sig));
-/** android_set_abort_message's text: the HLE's own (proc.ts), or what the guest libc keeps (bionic.ts) */
-export const abortMessageSource = { text: (): string => "" };
-/**
- * A terminating signal nothing handles: the process ends as exit_group ends it, every thread
- * parking at its next turn. One that dumps core is logged as debuggerd's handler logs it (the
- * "Fatal signal" line and the tombstone's head and backtrace) before the kernel's default runs.
- */
-export function dieOfSignal(cpu: Cpu, sig: number, info: SigInfo | null = null): Promise<never> {
-  if (!processExited()) {
-    const name = SIGNAL_NAMES[sig] ?? "?", process = `pid ${cpu.pid} (${procIdentity.name})`, code = info ? `, code ${info.code}` : "";
-    let tombstone: Uint8Array | undefined;
-    if (has(DUMPS_CORE, sig)) {
-      const abort = abortMessageSource.text();
-      tombstone = tombstoneHook(cpu, sig, info, abort);
-      console.error([`Fatal signal ${sig} (${name})${code} in tid ${cpu.osTid} (${cpu.name}), ${process}`,
-        "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***",
-        `pid: ${cpu.pid}, tid: ${cpu.osTid}, name: ${cpu.name}  >>> ${procIdentity.name} <<<`,
-        `signal ${sig} (${name})${code}, fault addr ${info ? "0x" + info.addr.toString(16) : "--------"}`,
-        ...(abort ? [`Abort message: '${abort}'`] : []),
-        "backtrace:", ...backtraceHook(cpu).map((frame, i) => `  #${String(i).padStart(2, "0")} ${frame}`)].join("\n"));
-    } else console.warn(`[native] ${process} killed by signal ${sig} (${name})`);
-    exitProcess({ signal: sig, tombstone });
-  }
-  return never();
-}
-
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }

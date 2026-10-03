@@ -1,25 +1,23 @@
-// The process-facing rest of Bionic: sysinfo and scheduling, users, signals, syslog, the abort
-// message and asserts, fortified wrappers, qsort/bsearch (which call the guest's comparator),
+// The process-facing rest of Bionic: sysinfo and scheduling, users, syslog, the abort message and
+// asserts, fortified wrappers, qsort/bsearch (which call the guest's comparator),
 // and the calls a sandboxed app process cannot make (fork, exec, ptrace), which fail as they
 // would on a device at its process limit or under its sandbox.
 
 import { wrote, mem } from "./mem";
-import { defineHost, hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
+import { hostLib, hostData, type HostFn, PTR, stp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
-import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers, ignoredSignals, abortMessageSource, dieOfSignal } from "./cpu";
-import { tidOf } from "./pthread";
+import { type Cpu, cpuByOsTid } from "./cpu";
+import { setAbortMessage } from "./crash";
+import { SIGNAL_LIBC } from "./signals";
 import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
 import { format } from "./printf";
 import { device } from "../shell/config";
 import { PROP_VALUE_MAX, propertyHandle, propertyKey, propertyValue } from "../shell/properties";
 import { appUserName, procIdentity } from "../shell/procfs";
-/** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
-export const killLog: string[] = [];
 
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
 const writeProperty = (out: number, text: string) => mem.putCstr(out, text, PROP_VALUE_MAX);
-const SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
 const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
 /** RLIMIT_STACK is Android's 8 MiB, the main thread's stack; the rest keep 1 MiB */
 const limit = (resource: number) => resourceLimits.get(resource) ?? (resource === 3 ? { soft: 0x800000n, hard: 0x800000n } : { soft: 0x100000n, hard: 0x100000n });
@@ -34,27 +32,6 @@ const setLimit = (cpu: Cpu, resource: number, soft: bigint, hard: bigint) => {
   resourceLimits.set(resource, { soft, hard });
   return 0;
 };
-
-function sigaltstack(cpu: Cpu, a: ArgReader): number {
-  const next = a.p(), old = a.p();
-  const previous = cpu.alternateStack ?? { sp: 0n, size: 0n, flags: SS_DISABLE };
-  const sizeAt = PTR === 8 ? 16 : 8;
-  if (old) {
-    if (PTR === 8) mem.st64(old, previous.sp); else mem.st32(old, Number(previous.sp));
-    mem.st32(old + PTR, previous.flags | (cpu.alternateActive ? 1 : 0));
-    if (PTR === 8) mem.st64(old + sizeAt, previous.size); else mem.st32(old + sizeAt, Number(previous.size));
-  }
-  if (!next) return 0;
-  if (cpu.alternateActive) return fail(cpu, E.PERM);
-  const flags = mem.ld32(next + PTR) >>> 0;
-  if (flags !== 0 && flags !== SS_DISABLE && flags !== SS_AUTODISARM) return fail(cpu, E.INVAL);
-  if (flags === SS_DISABLE) { cpu.alternateStack = { sp: 0n, size: 0n, flags }; return 0; }
-  const size = PTR === 8 ? mem.ld64(next + sizeAt) : BigInt(mem.ld32(next + sizeAt) >>> 0);
-  if (size < 2048n) return fail(cpu, E.NOMEM);
-  const sp = PTR === 8 ? mem.ld64(next) : BigInt(mem.ld32(next) >>> 0);
-  cpu.alternateStack = { sp, size, flags };
-  return 0;
-}
 
 /** Linux capget for the one unprivileged Android app process represented by this runtime. */
 function capget(cpu: Cpu, header: number, data: number): number {
@@ -72,66 +49,6 @@ function capget(cpu: Cpu, header: number, data: number): number {
   return 0;
 }
 
-let abortMessage = "";
-abortMessageSource.text = () => abortMessage;
-const SIGKILL = 9, SIGSTOP = 19, SIGABRT = 6, SIG_IGN = 1;
-/** kill/tgkill/raise: signal 0 only probes the target */
-export function signalThread(cpu: Cpu, target: Cpu, sig: number): number {
-  if (sig < 0 || sig > 64) return fail(cpu, E.INVAL);
-  if (sig) target.kill(sig);
-  return 0;
-}
-/** bionic's abort: SIGABRT unblocked and raised; a handler that returns is followed by the default action */
-export function abortThread(cpu: Cpu): Promise<never> {
-  cpu.signalMask &= ~(1n << BigInt(SIGABRT - 1));
-  // a microtask on: the call has parked, so a handler runs on top of it
-  return Promise.resolve().then(() => cpu.deliver(SIGABRT)).then(() => dieOfSignal(cpu, SIGABRT));
-}
-/** debuggerd_init's handler, which the linker installs in every process for the signals that dump
- *  core: a runtime chaining to the handler it replaced (libunity's, sigchain's, a crash reporter's)
- *  reaches it. It logs the tombstone and the process dies of the signal, as crash_dump and the
- *  re-raise after it end it. */
-const DEBUGGERD_SIGNALS = [4, 5, 6, 7, 8, 11, 16, 31];   // SIGILL SIGTRAP SIGABRT SIGBUS SIGFPE SIGSEGV SIGSTKFLT SIGSYS
-let debuggerdHandler = 0;
-export function installDebuggerdHandlers(): void {
-  debuggerdHandler ||= defineHost("debuggerd_signal_handler", (cpu, a) => {
-    const sig = a.i(), info = a.p(), context = a.p();
-    // the tombstone describes the interrupted state, which this thread never returns to
-    if (context) cpu.loadContext(context);
-    return dieOfSignal(cpu, sig, info ? { code: mem.ld32(info + 8), addr: PTR === 8 ? mem.ld64(info + 16) : BigInt(mem.ld32(info + 12) >>> 0) } : null);
-  });
-  // SA_SIGINFO | SA_ONSTACK | SA_RESTART, every signal blocked while it runs
-  for (const sig of DEBUGGERD_SIGNALS) if (!sigHandlers.has(sig) && !ignoredSignals.has(sig)) sigHandlers.set(sig, { fn: debuggerdHandler, flags: 0x18000004, mask: ~0n });
-}
-/** sigaction's disposition change: SIGKILL and SIGSTOP keep their default */
-function setDisposition(sig: number, fn: number, flags: number, mask: bigint): void {
-  sigHandlers.delete(sig); ignoredSignals.delete(sig);
-  if (fn > SIG_IGN) sigHandlers.set(sig, { fn, flags, mask });
-  else if (fn === SIG_IGN) ignoredSignals.add(sig);
-}
-
-interface SigactionLayout { size: number; handler: number; mask: number; flags: number; wideMask: boolean }
-/** bionic's ARM32 struct sigaction, and sigaction64's, whose mask widens to 8 bytes and pushes sa_flags on */
-const SIGACTION: SigactionLayout = { size: 16, handler: 0, mask: 4, flags: 8, wideMask: false };
-const SIGACTION64: SigactionLayout = { size: 20, handler: 0, mask: 4, flags: 12, wideMask: true };
-/** one signal's handler exchanged through a struct sigaction laid out as given */
-function exchangeAction(cpu: Cpu, a: ArgReader, { size, handler: handlerAt, flags: flagsAt, mask: maskAt, wideMask }: SigactionLayout): number {
-  const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
-  if (sig < 1 || sig > 64 || act && (sig === SIGKILL || sig === SIGSTOP)) return fail(cpu, E.INVAL);
-  if (old) {
-    mem.memset(old, 0, size);
-    if (ignoredSignals.has(sig)) stp(old + handlerAt, SIG_IGN);
-    if (prev) {
-      stp(old + handlerAt, prev.fn); mem.st32(old + flagsAt, prev.flags);
-      if (wideMask) mem.st64(old + maskAt, prev.mask ?? 0n); else mem.st32(old + maskAt, Number((prev.mask ?? 0n) & 0xffffffffn));
-    }
-  }
-  if (act) setDisposition(sig, ldp(act + handlerAt), mem.ld32(act + flagsAt), wideMask ? mem.ld64(act + maskAt) : BigInt(mem.ld32(act + maskAt) >>> 0));
-  return 0;
-}
-/** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
- *  mask), which is not bionic's */
-const rtSigaction = (cpu: Cpu, a: ArgReader): number => exchangeAction(cpu, a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true });
 const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
 /** what the core leaves to the host of a __memcpy_chk it serves: a failed check */
 export const memcpyChk: HostFn = (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; };
@@ -155,13 +72,6 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   },
   sched_getscheduler: () => 0,
   capget: (cpu, a) => capget(cpu, a.p(), a.p()),
-  // signals: a handler runs on the target thread, at once when it is parked in a host call
-  // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
-  rt_sigaction: (cpu, a) => rtSigaction(cpu, a),
-  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); return signalThread(cpu, t, sig); },
-  kill: (cpu, a) => { a.i(); return signalThread(cpu, cpu, a.i()); },
-  sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
-  sigaltstack,
 };
 
 export function procInit(): void {
@@ -177,6 +87,7 @@ export function procInit(): void {
   stp(pw + 2 * PTR + 8, mem.hostStr("")); stp(pw + 3 * PTR + 8, mem.hostStr("/data")); stp(pw + 4 * PTR + 8, mem.hostStr("/system/bin/sh"));
   const cpuMask = (1 << device.cpu.cores) - 1;
   const M: Record<string, HostFn> = {
+    ...SIGNAL_LIBC,
     sysinfo: (_c, a) => { fillSysinfo(a.p()); return 0; },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
     sched_setaffinity: () => 0, sched_getcpu: () => 0,
@@ -188,31 +99,6 @@ export function procInit(): void {
     getpwnam: () => pw,
     setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: (cpu) => cpu.pid,
     ptrace: (cpu) => fail(cpu, E.PERM),
-    // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
-    __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
-    sigaction: (cpu, a) => exchangeAction(cpu, a, SIGACTION),
-    sigaction64: (cpu, a) => exchangeAction(cpu, a, SIGACTION64),
-    // bionic's signal(): sigaction with SA_RESTART; SIG_ERR and EINVAL for SIGKILL, SIGSTOP or a bad number
-    signal: (cpu, a) => {
-      const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? (ignoredSignals.has(sig) ? SIG_IGN : 0);
-      if (sig < 1 || sig > 64 || sig === SIGKILL || sig === SIGSTOP) { fail(cpu, E.INVAL); return -1; }
-      setDisposition(sig, fn, 0x10000000, 0n);
-      return prev;
-    },
-    // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
-    pthread_kill: (c, a) => {
-      const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : sig < 0 || sig > 64 ? E.INVAL : 0;
-      killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
-      if (killLog.length > 300) killLog.splice(0, 100);
-      if (r === 0 && sig) t!.kill(sig);
-      return r;
-    },
-    raise: (cpu, a) => signalThread(cpu, cpu, a.i()),
-    sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
-    sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
-    sigwait: () => new Promise<never>(() => {}),
-    sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); mem.st32(a.p(), Number(mask & 0xffffffffn)); return 0; },
-    pthread_sigqueue: () => 0, killpg: () => 0,
     openlog: () => {}, closelog: () => {},
     syslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, a)); },
     vsyslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, vaList(a.p()))); },
@@ -226,7 +112,7 @@ export function procInit(): void {
     },
     // only init's property service sets properties, and it refuses an app
     __system_property_set: () => -1,
-    android_set_abort_message: (_c, a) => { abortMessage = a.str(); },
+    android_set_abort_message: (_c, a) => { setAbortMessage(a.str()); },
     __assert2: (cpu, a) => { const file = a.str(), line = a.i(), fn = a.str(), msg = a.str(); cpu.fault(`assertion "${msg}" failed: ${file}:${line} ${fn}`); },
     __assert: (cpu, a) => { const file = a.str(), line = a.i(), msg = a.str(); cpu.fault(`assertion "${msg}" failed: ${file}:${line}`); },
     __register_atfork: () => 0,
@@ -304,18 +190,6 @@ export function procInit(): void {
   for (const n of ["fork", "vfork"]) M[n] = (cpu) => fail(cpu, E.AGAIN);
   for (const n of ["waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.CHILD);
   for (const n of ["execl", "execlp", "execv", "execve", "execvp"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
-  for (const suffix of ["", "64"]) {
-    M["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : 4); return 0; };
-    M["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : 4); return 0; };
-    for (const op of ["add", "del", "ismember"]) M[(op === "ismember" ? "sigismember" : "sig" + op + "set") + suffix] = (cpu, a) => {
-      const p = a.p(), n = a.i() - 1;
-      if (n < 0 || n >= (suffix ? 8 : 4) * 8) return fail(cpu, E.INVAL);
-      const at = p + (n >> 3), bit = 1 << (n & 7);
-      if (op === "ismember") return mem.u8[at] & bit ? 1 : 0;
-      mem.st8(at, op === "add" ? mem.u8[at] | bit : mem.u8[at] & ~bit);
-      return 0;
-    };
-  }
   hostLib("libc.so", M);
 }
 function asctime(tm: number): string {

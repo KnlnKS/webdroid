@@ -6,7 +6,9 @@
 import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
 import { E, strerror, PAGE_SIZE } from "./abi";
-import { exitGroup, invalidateRange, type Cpu } from "./cpu";
+import { invalidateRange, type Cpu } from "./cpu";
+import { exitGroup } from "./crash";
+import { abortThread, SIGNAL_SYSCALLS } from "./signals";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs";
@@ -15,7 +17,7 @@ import { KLAYOUT, syscallEntry } from "./syscall";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
-import { PROC_SYSCALLS, procInit, abortThread } from "./proc";
+import { PROC_SYSCALLS, procInit } from "./proc";
 import { NET_SYSCALLS, netInit } from "./socket/syscalls";
 import { POLL_SYSCALLS } from "./poll";
 import { device } from "../shell/config";
@@ -594,7 +596,7 @@ export function libcInit(): void {
     const d = a.p(), n = a.u(), value = a.i();
     mem.memset(d, value, n);
   };
-  hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...M });
+  hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS, ...M });
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(TM.size);
   const inetBuf = mem.hostAlloc(20);

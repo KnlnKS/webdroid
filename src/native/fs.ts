@@ -15,13 +15,14 @@ import { concat } from "../jvm/abi";
 import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd";
 import { armClockTimer, disarmClockTimer, timerState, validTime, type ClockTimer } from "./timers";
 import { gather } from "./socket/abi";
+import { SIGPIPE } from "./signals";
 import type { Socket, Received } from "./socket/core";
 import type { Epoll } from "./poll";
 const dec = new TextDecoder();
 
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
-const O_RDWR = 2, SIGPIPE = 13, MSG_NOSIGNAL = 0x4000, SOCK_STREAM = 1;
+const O_RDWR = 2, MSG_NOSIGNAL = 0x4000, SOCK_STREAM = 1;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
 
 /** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its

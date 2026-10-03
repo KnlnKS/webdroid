@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry";
-import { Cpu, setA64, sigHandlers, slice } from "./cpu";
+import { Cpu, setA64, slice } from "./cpu";
+import { dispositions, sigHandler } from "./signals";
 import { defineHost } from "./host";
 import { mem } from "./mem";
 import { futex } from "./pthread";
@@ -86,8 +87,8 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     const worker = new JThread(), cpu = new Cpu(worker, "identity"), entered: JThread[] = [];
     const handler = defineHost("test.thread.signal", () => { entered.push(curThread); return 0; });
     const address = defineHost("test.thread.interrupted", () => { entered.push(curThread); return 23; });
-    const previous = sigHandlers.get(12);
-    sigHandlers.set(12, { fn: handler, mask: 0n, flags: 0 });
+    const previous = dispositions.get(12);
+    dispositions.set(12, sigHandler(handler, 0, 0n));
     cpu.signals.push(12);
     setCurThread(mainThread);
     try {
@@ -95,7 +96,7 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       expect(entered).toEqual([worker, worker]);
       expect(curThread).toBe(mainThread);
     } finally {
-      if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+      if (previous) dispositions.set(12, previous); else dispositions.delete(12);
       cpu.dispose(); setCurThread(mainThread);
     }
   });
@@ -110,8 +111,8 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       order.push("handled");
       return 0;
     });
-    const previous = sigHandlers.get(12);
-    sigHandlers.set(12, { fn: handler, mask: 0n, flags: 0 });
+    const previous = dispositions.get(12);
+    dispositions.set(12, sigHandler(handler, 0, 0n));
     try {
       cpu.kill(12);
       const idle = cpu.awaitIdleBase().then(() => order.push("idle"));
@@ -121,7 +122,7 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       await idle;
       expect(order).toEqual(["handler", "handled", "idle"]);
     } finally {
-      if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+      if (previous) dispositions.set(12, previous); else dispositions.delete(12);
       cpu.dispose();
     }
   });
@@ -133,8 +134,8 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     let resumedMask = -1n;
     const observe = defineHost("test.signal.mask.observe." + a64, () => { resumedMask = cpu.signalMask; return 0; });
     const handler = defineHost("test.signal.mask.handler." + a64, () => { deferred.resolve(0); return 0; });
-    const previous = sigHandlers.get(30), address = mem.reserve(4096, 4096);
-    sigHandlers.set(30, { fn: handler, mask: 0xffffffffffffffffn, flags: 0 });
+    const previous = dispositions.get(30), address = mem.reserve(4096, 4096);
+    dispositions.set(30, sigHandler(handler, 0, 0xffffffffffffffffn));
     mem.u32.set(a64
       ? [0xa9bf7bfd, 0x580000f0, 0xd63f0200, 0x580000f0, 0xd63f0200, 0xa8c17bfd, 0xd65f03c0, 0xd503201f, entry, 0, observe, 0]
       : [0xe92d4010, 0xe59fc00c, 0xe12fff3c, 0xe59fc008, 0xe12fff3c, 0xe8bd8010, entry, observe], address >>> 2);
@@ -145,7 +146,7 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       expect(resumedMask).toBe(initial);
       expect(cpu.signalMask).toBe(initial);
     } finally {
-      if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+      if (previous) dispositions.set(30, previous); else dispositions.delete(30);
       cpu.dispose();
     }
   });
@@ -156,11 +157,11 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     let handlerFrames: string[] = [];
     const entry = defineHost("test.signal.teardown.entry." + a64, () => 0);
     const handler = defineHost("test.signal.teardown.handler." + a64, () => {
-      handlerFrames = [...cpu.frames];
+      handlerFrames = cpu.frames.map((f) => f.label);
       return 0;
     });
-    const previous = sigHandlers.get(12);
-    sigHandlers.set(12, { fn: handler, mask: 0n, flags: 0 });
+    const previous = dispositions.get(12);
+    dispositions.set(12, sigHandler(handler, 0, 0n));
     try {
       const result = cpu.call(entry, [], "outer call");
       cpu.kill(12);
@@ -168,7 +169,7 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       await cpu.awaitIdleBase();
       expect(handlerFrames).toEqual(["signal 12"]);
     } finally {
-      if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+      if (previous) dispositions.set(12, previous); else dispositions.delete(12);
       cpu.dispose();
     }
   });
@@ -188,8 +189,8 @@ test("a signal interrupts an ARM64 futex before its handler observes the saved c
     order.push("handler");
     return 0;
   });
-  const previous = sigHandlers.get(12);
-  sigHandlers.set(12, { fn: handler, mask: 0n, flags: 4 });
+  const previous = dispositions.get(12);
+  dispositions.set(12, sigHandler(handler, 4, 0n));
   try {
     const result = cpu.call(entry);
     savedSp = BigInt(cpu.sp >>> 0);
@@ -201,7 +202,7 @@ test("a signal interrupts an ARM64 futex before its handler observes the saved c
     expect(contextSp).toBe(savedSp);
     expect(contextPc).toBe(BigInt(RET_SENTINEL));
   } finally {
-    if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+    if (previous) dispositions.set(12, previous); else dispositions.delete(12);
     cpu.dispose(); setA64(false);
   }
 });
@@ -213,8 +214,8 @@ test("an ARM64 signal context is restored before the interrupted frame runs on",
   const entry = defineHost("test.signal.context.wait", () => first.promise);
   const next = defineHost("test.signal.context.next", () => { seconds++; return second.promise; });
   const handler = defineHost("test.signal.context.handler", () => { first.resolve(0); return 0; });
-  const previous = sigHandlers.get(30), address = mem.reserve(4096, 4096);
-  sigHandlers.set(30, { fn: handler, mask: 0n, flags: 4 });
+  const previous = dispositions.get(30), address = mem.reserve(4096, 4096);
+  dispositions.set(30, sigHandler(handler, 4, 0n));
   mem.u32.set([0xa9bf7bfd, 0x580000f0, 0xd63f0200, 0x580000f0, 0xd63f0200, 0xa8c17bfd, 0xd65f03c0, 0xd503201f, entry, 0, next, 0], address >>> 2);
   try {
     const result = cpu.call(address);
@@ -224,7 +225,7 @@ test("an ARM64 signal context is restored before the interrupted frame runs on",
     expect(await result).toBe(5);
     expect(seconds).toBe(1);
   } finally {
-    if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    if (previous) dispositions.set(30, previous); else dispositions.delete(30);
     cpu.dispose(); setA64(false);
   }
 });
@@ -233,16 +234,16 @@ test("an ARM64 handler that restores the interrupted sp by hand returns from the
   setA64(true);
   const cpu = new Cpu(new JThread(), "signal-escape");
   const raise = defineHost("test.signal.escape.raise", (c) => { c.kill(30); return 0; });
-  const previous = sigHandlers.get(30), address = mem.reserve(4096, 4096);
+  const previous = dispositions.get(30), address = mem.reserve(4096, 4096);
   // f: push fp/lr; x19 = sp; raise; x0 = 1; pop; ret. handler: sp = x19; x0 = 7; pop; ret (f's return)
   mem.u32.set([0xa9bf7bfd, 0x910003f3, 0x580000d0, 0xd63f0200, 0xd2800020, 0xa8c17bfd, 0xd65f03c0, 0xd503201f, raise, 0,
     0x9100027f, 0xd28000e0, 0xa8c17bfd, 0xd65f03c0], address >>> 2);
-  sigHandlers.set(30, { fn: address + 0x28, mask: 0n, flags: 4 });
+  dispositions.set(30, sigHandler(address + 0x28, 4, 0n));
   try {
     expect(await cpu.call(address)).toBe(7);
     expect(cpu.signalMask & 1n << 29n).toBe(1n << 29n);
   } finally {
-    if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    if (previous) dispositions.set(30, previous); else dispositions.delete(30);
     cpu.dispose(); setA64(false);
   }
 });
@@ -266,8 +267,8 @@ for (const [isa, program] of Object.entries(FAULTING)) test(`a ${isa} memory fau
     mem.st32(ctx + ctxPc, pc + program.step);
     return 0;
   });
-  const previous = sigHandlers.get(11);
-  sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
+  const previous = dispositions.get(11);
+  dispositions.set(11, sigHandler(handler, 4, 0n));
   // an ARM32 address past the 2 GiB the process has is unmapped too, not a wasm trap
   const pointers = a64 ? [8] : [8, 0x9000_0000];
   const runs = async (n: number, p: number) => { const out = []; for (let i = 0; i < n; i++) out.push(await cpu.call(at | program.thumb, [0, p, 5, 5 + (i & 1)])); return out; };
@@ -286,7 +287,7 @@ for (const [isa, program] of Object.entries(FAULTING)) test(`a ${isa} memory fau
       expect(seen[0]).toEqual([11, 11, 1, p | 0, program.step, p | 0]);
     }
   } finally {
-    if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
+    if (previous) dispositions.set(11, previous); else dispositions.delete(11);
     cpu.dispose(); setA64(false);
   }
 });
@@ -301,8 +302,8 @@ test("an ARM32 store past 2 GiB or to space the memory does not yet back faults 
     mem.st32(ctx + 92, mem.ld32(ctx + 92) + 4);
     return 0;
   });
-  const previous = sigHandlers.get(11);
-  sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
+  const previous = dispositions.get(11);
+  dispositions.set(11, sigHandler(handler, 4, 0n));
   try {
     // the first page past what the memory backs, when it lies below 2 GiB (a shared memory)
     const unbacked = mem.buf.byteLength < 0x8000_0000 ? mem.buf.byteLength : 0x9000_0000;
@@ -312,7 +313,7 @@ test("an ARM32 store past 2 GiB or to space the memory does not yet back faults 
       expect(seen).toEqual([1, p]);
     }
   } finally {
-    if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
+    if (previous) dispositions.set(11, previous); else dispositions.delete(11);
     cpu.dispose();
   }
 });
@@ -330,8 +331,8 @@ test("a bad pointer fails a system call with EFAULT and faults a libc body with 
     mem.st64(ctx + 0x1b8, mem.ld64(ctx + 0xb8 + 30 * 8));                              // return to the caller
     return 0;
   });
-  const previous = sigHandlers.get(11);
-  sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
+  const previous = dispositions.get(11);
+  dispositions.set(11, sigHandler(handler, 4, 0n));
   try {
     expect(await cpu.call(at, [8])).toBe(-E.FAULT);
     expect(await cpu.call(libcSyscall, [160, 8])).toBe(-1);
@@ -339,7 +340,7 @@ test("a bad pointer fails a system call with EFAULT and faults a libc body with 
     expect(await cpu.call(userRead, [0x24])).toBe(7);
     expect(seen).toEqual([0x24n]);
   } finally {
-    if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
+    if (previous) dispositions.set(11, previous); else dispositions.delete(11);
     cpu.dispose(); setA64(false);
   }
 });
@@ -381,14 +382,14 @@ test("ARM signal entry clears Thumb IT state and restores it on return", async (
   mem.u16.set([0x2107, 0x6021, 0x4770], address >>> 1);
   cpu.w[8] = address + 64;
   cpu.cpsr = 0x820;
-  const previous = sigHandlers.get(30);
-  sigHandlers.set(30, { fn: address | 1, flags: 0, mask: 0n });
+  const previous = dispositions.get(30);
+  dispositions.set(30, sigHandler(address | 1, 0, 0n));
   try {
     await cpu.deliver(30);
     expect(mem.ld32(address + 64)).toBe(7);
     expect(cpu.cpsr).toBe(0x820);
   } finally {
-    if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    if (previous) dispositions.set(30, previous); else dispositions.delete(30);
     cpu.dispose();
   }
 });
@@ -420,13 +421,14 @@ test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signa
 test("an unhandled terminating signal ends the process once unblocked; ignored ones are discarded", async () => {
   // in a child process: dying marks this one's native tier exited for good
   const code = `
-    import { Cpu, setA64, ignoredSignals } from "${import.meta.dir}/cpu";
+    import { Cpu, setA64 } from "${import.meta.dir}/cpu";
+    import { dispositions } from "${import.meta.dir}/signals";
     import { processExited } from "${import.meta.dir}/../process-exit";
     import { JThread } from "${import.meta.dir}/../jvm/natives/jentry";
     setA64(true);
     const cpu = new Cpu(new JThread(), "victim"), turn = () => new Promise((r) => setTimeout(r, 0));
     cpu.signalMask = 0n;
-    ignoredSignals.add(15);
+    dispositions.set(15, { kind: "ignore" });
     for (const sig of [17, 23, 28, 15]) cpu.kill(sig);
     await turn();
     const ignored = !processExited() && !cpu.signals.length;

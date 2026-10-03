@@ -7,13 +7,16 @@ import { mem, anchor } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { calledMissing, syscallWrappers, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
-import { cpuByOsTid, exitGroup, setRawSyscall, type Cpu } from "./cpu";
+import { cpuByOsTid, setRawSyscall, type Cpu } from "./cpu";
+import { exitGroup, installDebuggerdHandlers } from "./crash";
+import { blocked, signalThread, SIGNAL_SYSCALLS } from "./signals";
+import { writeSiginfo } from "./sigframe";
 import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
 import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
 import { NET_SYSCALLS } from "./socket/syscalls";
 import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll";
-import { PROC_SYSCALLS, installDebuggerdHandlers, signalThread } from "./proc";
+import { PROC_SYSCALLS } from "./proc";
 import { device } from "../shell/config";
 
 /** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
@@ -102,11 +105,11 @@ const A64: Record<number, HostFn> = {
   137: (cpu, a) => {                                                             // rt_sigtimedwait
     const set = mem.ld64(a.p()), info = anchor(a.p()), ms = millis(a.p());
     const take = (): number => {
-      const i = cpu.signals.findIndex((sig) => set & 1n << BigInt(sig - 1));
+      const i = cpu.signals.findIndex((sig) => blocked(set, sig));
       if (i < 0) return 0;
       const sig = cpu.signals.splice(i, 1)[0];
       const at = info();
-      if (at) { mem.memset(at, 0, 128); mem.st32(at, sig); }
+      if (at) writeSiginfo(at, sig, 0);
       return sig;
     };
     const now = take();
@@ -183,7 +186,7 @@ let table: (HostFn | undefined)[] = [];
 export function kernelInit(): void {
   const wide = PTR === 8;
   KLAYOUT = wide ? KERNEL64 : KERNEL32;
-  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS };
+  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...SIGNAL_SYSCALLS };
   table = [];
   for (const [nr, name] of Object.entries(wide ? SAME64 : SAME32)) {
     if (!byName[name]) throw new Error(`kernel: no body for ${name}`);

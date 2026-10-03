@@ -8,7 +8,8 @@
 import { mem } from "./mem";
 import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host";
 import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl";
-import { setThreadHooks, abortMessageSource, type Cpu } from "./cpu";
+import { setThreadHooks, type Cpu } from "./cpu";
+import { setAbortMessage } from "./crash";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
 import { auxv, fail } from "./libc";
 import { memcpyChk } from "./proc";
@@ -110,7 +111,7 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
     if (cfiShadow && begin < end) cfiFill(begin, end, () => 0);
   };
   // abort_msg_t {size, msg[]}, which android_set_abort_message maps for the crash reporter
-  abortMessageSource.text = () => { const m = mem.ld64(globals + G_ABORT_MSG); return m ? mem.cstr(mem.txVa(m) + 8) : ""; };
+  setAbortMessage(() => { const m = mem.ld64(globals + G_ABORT_MSG); return m ? mem.cstr(mem.txVa(m) + 8) : ""; });
   await cfiAdd(mods, cpu);
   for (const mod of mods) await runInit(mod, cpu);
   // after libc's own init, which zeroes __libc_globals; what scudo allocated before is never freed
