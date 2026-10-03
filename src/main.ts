@@ -42,8 +42,7 @@ import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
 import { onProcessExit, processExited } from "./process-exit";
-import { lastExit, REASON_CRASH, REASON_CRASH_NATIVE } from "./android/server/appexitinfo";
-import type { Death } from "./shell/servicerecords";
+import { deathOf, lastExit, type Death } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
 const params = new URLSearchParams(location.search);
@@ -122,20 +121,22 @@ async function boot(file: string, local?: File) {
     // state) and the launcher returns, under AppErrors' crash dialog when it showed one. Opening the
     // app again starts a new process for it, in a frame: the other processes and the broker live on.
     const exited = (death: Death) => {
+      processPresentation.visible = false;
       const pkg = appHost?.pkg;
       shell.setState({ kind: "exited", file, label: shown, crashed: death.crashed, crashDialog: death.crashed && death.repeated, retry: pkg ? () => relaunch(pkg) : null });
     };
     const relaunch = (pkg: string) => {
       shell.setState({ kind: "loading", file, stage: "Starting app…" });
       const broker = processBroker(), started = broker.launch(pkg, assets?.key ?? file);
-      broker.watch(started.pid, () => exited(broker.death(started.pid) ?? { crashed: false, repeated: false }));
+      broker.watch(started.pid, exited);
       started.shown.then(() => shell.setState({ kind: "running", file, label: shown }), (error) => shell.setState({ kind: "failed", file, error, retry: () => relaunch(pkg) }));
     };
-    onProcessExit(() => {
-      processPresentation.visible = false;
-      exited({ crashed: lastExit?.reason === REASON_CRASH || lastExit?.reason === REASON_CRASH_NATIVE, repeated: !!lastExit?.dialog });
-    });
-    const label = shown = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
+    // the broker tells of this process's death once it registers, with its package; only this realm
+    // sees a death before then
+    let registered = false;
+    onProcessExit(() => { if (!registered) exited(deathOf(lastExit)); });
+    const register = () => { registerForegroundProcess(); registered = true; processBroker().watch(PROCESS_PID, exited); };
+    const label = shown = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, register);
     // a device's Play services are up before an app launches: here their realm boots after the
     // app's first frame rather than competing with it
     void firstPresented.then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))

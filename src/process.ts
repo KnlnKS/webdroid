@@ -28,6 +28,7 @@ import { guestClockControl } from "./guest-clock";
 import { nativeRequirements } from "./shell/diagnostics";
 import { native } from "./native/debug";
 import { appHost } from "./android/apphost";
+import { NOT_CRASHED } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
@@ -69,7 +70,7 @@ processPresentation.changed = (visible) => {
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => {
   guestClockControl.dispose();
-  broker.fail(pid, "Process frame unloaded");
+  broker.fail(pid, "Process frame unloaded", NOT_CRASHED);
 }, { once: true });
 try {
   mountPlatformData();
@@ -107,5 +108,5 @@ try {
   broker.ready(pid, endpoint);
 } catch (error) {
   console.error("[process]", pid, error);
-  broker.fail(pid, error instanceof Error ? error.message : String(error));
+  broker.fail(pid, error instanceof Error ? error.message : String(error), NOT_CRASHED);
 }

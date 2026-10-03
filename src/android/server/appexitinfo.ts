@@ -17,6 +17,12 @@ export type ExitRecord = {
   /** AppErrors showed the crash dialog: the process had crashed within MIN_CRASH_INTERVAL */
   dialog: boolean;
 };
+/** how a process ended, as the broker and the shell tell it: whether it crashed, and whether
+ *  AppErrors found it crashed within MIN_CRASH_INTERVAL of its last crash */
+export type Death = { crashed: boolean; repeated: boolean };
+export const deathOf = (record: ExitRecord | null): Death =>
+  ({ crashed: record?.reason === REASON_CRASH || record?.reason === REASON_CRASH_NATIVE, repeated: !!record?.dialog });
+export const NOT_CRASHED = deathOf(null);
 /** AppExitInfoTracker's history per package */
 const HISTORY = 16;
 /** ActivityManagerConstants.MIN_CRASH_INTERVAL */

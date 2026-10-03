@@ -12,15 +12,14 @@ import { asSystem, binderTransport, receiveTransaction, SYSTEM_CALLER, INTERFACE
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID, processTransport } from "../android/os";
-import { exitProcess, onProcessExit, type ExitStatus } from "../process-exit";
-import { noteAppKill, type KillNote } from "../android/server/appexitinfo";
+import { exitProcess, onProcessExit } from "../process-exit";
+import { deathOf, lastExit, noteAppKill, NOT_CRASHED, type Death, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
 import { after } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
-import { ServiceRecords, type Death, type ServiceRequest, type ServiceStarts } from "./servicerecords";
-import { lastExit, REASON_CRASH, REASON_CRASH_NATIVE } from "../android/server/appexitinfo";
+import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
@@ -95,9 +94,8 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   foregroundClients: number;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
   launcher: { assetKey: string } | null;
-  /** how it ended, once it has */
-  death: Death | null;
-  watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
+  /** what hears how it ended */
+  watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void> };
 class ProcessBroker {
   readonly files = new PrivateFiles();
   readonly accounts = new AccountStore();
@@ -311,7 +309,7 @@ class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, launcher: null, death: null, watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, launcher: null, watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -324,7 +322,7 @@ class ProcessBroker {
       for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock"]) {
         const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
       }
-      frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));
+      frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed", NOT_CRASHED));
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
     this.services.processStarted(pkg, process);
@@ -343,7 +341,6 @@ class ProcessBroker {
     })).finally(() => { entry.foregroundClients--; });
     return { pid: entry.pid, shown };
   }
-  death(pid: number): Death | null { return this.entries.get(pid)?.death ?? null; }
   async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[]; launcher: Entry["launcher"] }> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     const registry = await Promise.all([...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map(async (record) => {
@@ -355,16 +352,18 @@ class ProcessBroker {
     return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry, launcher: entry.launcher };
   }
   ready(pid: number, endpoint: ProcessEndpoint): void { this.entry(pid).resolve(endpoint); }
-  fail(pid: number, message: string, death?: Death): void {
+  /** a process ended, or its frame failed: ActivityManagerService.appDiedLocked */
+  fail(pid: number, message: string, death: Death): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
+    console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
-    entry.dead = true; entry.death = death ?? null; entry.reject(error);
+    entry.dead = true; entry.reject(error);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     this.services.clientDied(pid);
-    this.services.processDied(entry.pkg, entry.process, death ?? { crashed: false, repeated: false });
-    for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
+    this.services.processDied(entry.pkg, entry.process, death);
+    for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
@@ -396,13 +395,6 @@ class ProcessBroker {
     await changePackageData(this, pkg, change);
     for (const { data, targets } of broadcasts) await this.broadcast(null, data, targets, [], false);
   }
-  /** a process ended: ActivityManagerService.appDiedLocked's notice, from the process itself */
-  died(pid: number, status: ExitStatus, death: Death): void {
-    const entry = this.entries.get(pid);
-    if (!entry || entry.dead) return;
-    console.warn(`[process] ${entry.process} (pid ${pid}) has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`);
-    this.fail(pid, "Process has died", death);
-  }
   /** whether a process shown on screen, or one serving such a process, waits on `pid` (process
    *  start included) or binds a service it runs: as binder calls inherit their caller's priority,
    *  and OomAdjuster gives a service its clients' scheduling group unless they bind it
@@ -421,7 +413,7 @@ class ProcessBroker {
     target.foregroundClients++;
     return work().finally(() => { target.foregroundClients--; });
   }
-  watch(pid: number, died: () => void): () => void {
+  watch(pid: number, died: (death: Death) => void): () => void {
     const entry = this.entry(pid); entry.watchers.add(died); return () => { entry.watchers.delete(died); };
   }
   async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
@@ -535,8 +527,7 @@ async function remote<T>(pending: Promise<T>): Promise<T> {
 }
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
-  onProcessExit((status) => broker.died(PROCESS_PID, status, {
-    crashed: lastExit?.reason === REASON_CRASH || lastExit?.reason === REASON_CRASH_NATIVE, repeated: !!lastExit?.dialog }));
+  onProcessExit((status) => broker.fail(PROCESS_PID, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
   processTransport.signal = (pid, signal) => broker.signal(PROCESS_PID, pid, signal);
   clipboardTransport.set = data => broker.setClipboard(PROCESS_PID, data);
   clipboardTransport.get = () => broker.getClipboard(PROCESS_PID);

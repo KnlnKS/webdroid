@@ -6,6 +6,7 @@
 // process crashing counts against its services as AppErrors.handleAppCrashLocked counts it.
 import type { BinderHandle, ParcelData } from "../android/binder";
 import type { PendingOperation } from "./pendingintents";
+import type { Death } from "../android/server/appexitinfo";
 import { clearGuestTimeout, setSystemTimeout, uptimeMillis, type GuestTimer } from "../guest-clock";
 
 /** ActivityManagerConstants' restart timing and ServiceRecord's redelivery limits */
@@ -26,9 +27,6 @@ export type ServiceRequest = { kind: "bind"; cls: string; intent: ParcelData; ke
   | { kind: "stop"; cls: string; intent: ParcelData } | { kind: "peek"; intent: ParcelData } | { kind: "restart"; intent: ParcelData; binds: ServiceBinding[] }
   | { kind: "start"; intent: ParcelData; foreground: boolean }
   | { kind: "pending"; operation: PendingOperation; fill: ParcelData | null; alarmCount: number };
-/** how a process ended: whether it crashed, and whether AppErrors found it crashed within
- *  MIN_CRASH_INTERVAL of its last crash */
-export type Death = { crashed: boolean; repeated: boolean };
 /** how the records reach processes: `send` a request from `client` (null for the system) to
  *  `process`, starting it when `start` and otherwise only while it runs (null when it does not);
  *  `connected` tells a client's binding of its binder; `persistent` is ApplicationInfo.FLAG_PERSISTENT */
