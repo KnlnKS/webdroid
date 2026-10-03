@@ -190,7 +190,7 @@ export class Runtime {
    *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call.
    *  The holder is a thread as one call chain (Monitors' chainHolds, inlined) */
   me(obj: object | string | null | 0, m?: Monitor) {
-    const thread = this.th(), s = currentStrand();
+    const thread = this.cur, s = currentStrand();
     if (m !== undefined && (m.depth === 0 || (m.owner === thread && (m.strand === s || m.strand === 0 || s === 0)))) {
       if (m.depth++ === 0) { m.owner = thread; m.strand = s; }
       return;
@@ -198,7 +198,7 @@ export class Runtime {
     return this.monitors.enter(obj, thread, s);
   }
   mx(obj: object | string | null | 0, m?: Monitor) {
-    const thread = this.th(), s = currentStrand();
+    const thread = this.cur, s = currentStrand();
     if (m !== undefined && m.owner === thread && (m.strand === s || m.strand === 0 || s === 0) && (m.depth > 1 || m.entrants.length === 0)) {
       if (--m.depth === 0) m.owner = null;
       return;
