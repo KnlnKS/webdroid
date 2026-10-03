@@ -122,7 +122,13 @@ export function bootApp(record: import("../src/android/packages").PackageRecord,
     hostWindowManager();
     await onMain(() => startActivityThread(false));
     // bindApplication is a message to the main looper; the Application exists once it ran
-    return onMain(() => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"));
+    const app = await onMain(() => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"));
+    // bindApplication enables StrictMode's death on network for the main thread, which test bodies
+    // call Java from; a later file in the same process (a serial `bun test`) does network I/O there
+    const { staticField } = await import("../src/jvm/natives/jlang");
+    await onMain(async () => scall("android/os/StrictMode", "setThreadPolicy", "(Landroid/os/StrictMode$ThreadPolicy;)V",
+      await staticField("android/os/StrictMode$ThreadPolicy", "LAX")));
+    return app;
   })();
 }
 
