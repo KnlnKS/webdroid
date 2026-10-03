@@ -9,6 +9,7 @@ import { mkUri } from "./net";
 import { appHost } from "./apphost";
 import { resString } from "./res";
 import type { IntentQuery } from "./intent";
+import { awaited } from "../jvm/runtime";
 
 const S = "Ljava/lang/String;";
 function value(node: XmlNode, name: string): string | null {
@@ -72,9 +73,9 @@ function* addGroup$(filter: JObj, node: XmlNode): Gen<void> {
 /** what IntentFilter.match takes of an intent: its action, resolved type, scheme, data and categories */
 type IntentTarget = { action: string | null; type: string | null; scheme: string | null; data: JObj | null; categories: JObj | null };
 export function* intentTarget$(q: IntentQuery): Gen<IntentTarget> {
-  const data: JObj | null = q.dataUri === null ? null : yield mkUri(q.dataUri);
+  const data: JObj | null = q.dataUri === null ? null : yield* awaited(mkUri(q.dataUri));
   return { action: q.action, type: q.typeStr, data, scheme: data && (yield vcall(data, "getScheme", `()${S}`)),
-    categories: q.categories.length ? yield newLinkedHashSet(q.categories) : null };
+    categories: q.categories.length ? yield* awaited(newLinkedHashSet(q.categories)) : null };
 }
 /** IntentResolver.buildResolveList: the filter's match, and with `defaultOnly` its CATEGORY_DEFAULT */
 export function* matches$(filter: JObj, target: IntentTarget, defaultOnly: boolean): Gen<boolean> {

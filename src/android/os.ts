@@ -4,7 +4,7 @@ import { processEnv } from "../shell/environment";
 import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
-import { rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { i8, jarray, utf8 } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
@@ -239,7 +239,7 @@ export function fdContents(fd: number): Uint8Array | null | Promise<Uint8Array> 
 }
 /** the bytes a ParcelFileDescriptor's file holds */
 export const pfdContents = driven(function* pfdContents(pfd: JObj): Gen<Uint8Array | null> {
-  return (yield fdContents(fdInt(yield vcall(pfd, "getFileDescriptor", `()${FD}`)))) as Uint8Array | null;
+  return yield* awaited(fdContents(fdInt(yield vcall(pfd, "getFileDescriptor", `()${FD}`))));
 });
 
 // statvfs answers the browser's storage estimate for whichever path is asked about (one
@@ -250,7 +250,7 @@ let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
 export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   try {
-    const e = yield navigator.storage?.estimate?.();
+    const e = yield* awaited(navigator.storage?.estimate?.());
     return { total: e?.quota ?? 0, free: Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0)) };
   } catch { return { total: 0, free: 0 }; /* no estimate available: report an empty filesystem */ }
 });
@@ -276,12 +276,12 @@ function statOf(path: string | null, size: number, mode: number, mtimeMs: number
 }
 type StatVfs = { f_frsize: bigint; f_blocks: bigint; f_bfree: bigint; f_bavail: bigint };
 const storageStatVfs = driven(function* storageStatVfs(): Gen<StatVfs> {
-  const { total, free } = yield storageEstimate(), f_bfree = BigInt(Math.floor(free / Number(BLK)));
+  const { total, free } = yield* awaited(storageEstimate()), f_bfree = BigInt(Math.floor(free / Number(BLK)));
   return { f_frsize: BLK, f_blocks: BigInt(Math.floor(total / Number(BLK))), f_bfree, f_bavail: f_bfree };
 });
 /** a StructStatVfs as statvfs(2) fills it: 4K blocks, no inode counts, 255-byte names */
 const structStatVfs = driven(function* structStatVfs(): Gen<JObj> {
-  const s: StatVfs = yield storageStatVfs();
+  const s = yield* awaited(storageStatVfs());
   return newObj("android/system/StructStatVfs", "(JJJJJJJJJJJ)V", BLK, s.f_frsize, s.f_blocks, s.f_bfree, s.f_bavail, 0n, 0n, 0n, 0n, 0n, 255n);
 });
 // libcore.io.Linux: the syscalls behind android.system.Os and Libcore.os, over the descriptor
@@ -371,7 +371,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       const address = mem.mapVa(size, prot === 0);
       if (!address) throw errno("mmap", E.NOMEM);
       try {
-        if (source && prot) mem.write(guestAt(address), yield readFully(source, Number(offset), size));
+        if (source && prot) mem.write(guestAt(address), yield* awaited(readFully(source, Number(offset), size)));
       } catch {
         mem.unmapVa(BigInt(address), size);
         throw errno("mmap", E.IO);
@@ -513,7 +513,7 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => +vfs.exists(pathOf(file)),
   // FileSystem.SPACE_TOTAL, SPACE_FREE, SPACE_USABLE
   "getSpace0(Ljava/io/File;I)J": driven(function* (_file: JObj, kind: number): Gen {
-    const s: StatVfs = yield storageStatVfs();
+    const s = yield* awaited(storageStatVfs());
     return kind === 0 ? s.f_blocks * s.f_frsize : kind === 1 ? s.f_bfree * s.f_frsize : s.f_bavail * s.f_frsize;
   }),
   "getNameMax0(Ljava/lang/String;)J": () => 255n,
@@ -654,7 +654,7 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "getgrgid(I)[B": passwdName,
   "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V": driven(function* (path: bigint, attrs: JObj): Gen {
     statPath(cpath(path), null);
-    const s: StatVfs = yield storageStatVfs(), a = attrs as unknown as Record<string, bigint>;
+    const s = yield* awaited(storageStatVfs()), a = attrs as unknown as Record<string, bigint>;
     const f = (name: string) => declaredField("sun/nio/fs/UnixFileStoreAttributes", name);
     a[f("f_frsize")] = s.f_frsize; a[f("f_blocks")] = s.f_blocks; a[f("f_bfree")] = s.f_bfree; a[f("f_bavail")] = s.f_bavail;
   }),
@@ -690,7 +690,7 @@ rt.registerJnis("sun/nio/fs/LinuxNativeDispatcher", linuxNativeDispatcher);
 rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (dst: number, src: number, cancel: bigint): Gen {
   const buffer = new Uint8Array(1 << 16);
   for (;;) {
-    const n = unixSys(yield javaReadFd(src, buffer));
+    const n = unixSys(yield* awaited(javaReadFd(src, buffer)));
     if (!n) return;
     if (cancel && mem.ld32(mem.txVa(cancel))) throw unixError(OS_CONSTANTS.ECANCELED);
     for (let at = 0; at < n;) at += unixSys(javaWriteFd(dst, buffer.subarray(at, n)));

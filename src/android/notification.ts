@@ -6,7 +6,7 @@
 // back copies, never its own object. Nothing presents them; there is no shade, sound or listener.
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
-import { JObj, rt, declaredField, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall, callUncaught } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
@@ -73,9 +73,9 @@ const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
   items.map((item, i) => ({ item, hash: javaHash(key(item)), i })).sort((a, b) => a.hash - b.hash || a.i - b.i).map(({ item }) => item);
 
 /** what a binder call hands the service: a copy of the caller's object */
-function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield unparcelled(cls, yield parcelled(o)); }
+function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield* awaited(unparcelled(cls, yield* awaited(parcelled(o)))); }
 function* sliceItems(slice: JObj | null): Gen<JObj[]> {
-  return slice ? yield toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")) : rt.npe();
+  return slice ? (yield* awaited(toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")))) as JObj[] : rt.npe();
 }
 
 // ── callers
@@ -109,7 +109,7 @@ function hasPermission(uid: number): boolean {
   return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
 }
 /** the system's view of packages: the application's PackageManager over the hosted service */
-function* getPM(): Gen<JObj> { return yield vcall(yield serviceContext(), "getPackageManager", "()Landroid/content/pm/PackageManager;"); }
+function* getPM(): Gen<JObj> { return yield vcall(yield* awaited(serviceContext()), "getPackageManager", "()Landroid/content/pm/PackageManager;"); }
 
 // ── PreferencesHelper: a package's channels, groups and delegate
 const policyFile = (pkg: string) => "android:notification-policy:" + pkg;
@@ -129,10 +129,10 @@ class Preferences {
   has(prefix: string, id: string): boolean { return this.values.has(prefix + id); }
   *read(prefix: string, id: string): Gen<JObj | null> {
     const stored = this.values.get(prefix + id);
-    return typeof stored === "string" ? yield unparcelled(prefix === CHANNEL_KEY ? CHANNEL : GROUP, parcelData(stored)) : null;
+    return typeof stored === "string" ? yield* awaited(unparcelled(prefix === CHANNEL_KEY ? CHANNEL : GROUP, parcelData(stored))) : null;
   }
   *write(prefix: string, id: string, o: JObj): Gen<void> {
-    this.values.set(prefix + id, toBase64((yield parcelled(o)).bytes));
+    this.values.set(prefix + id, toBase64((yield* awaited(parcelled(o))).bytes));
     this.save();
   }
   remove(key: string): void { this.values.delete(key); this.save(); }
@@ -165,7 +165,7 @@ const str = (cs: unknown) => cs == null ? null : csText(cs);
 function* createChannel(prefs: Preferences, channel: JObj): Gen<boolean> {
   const id: string | null = yield vcall(channel, "getId", "()Ljava/lang/String;");
   if (id === null) rt.npe();
-  if (!(yield str(yield vcall(channel, "getName", "()Ljava/lang/CharSequence;")))) fail("java/lang/IllegalArgumentException", null);
+  if (!(yield* awaited(str(yield vcall(channel, "getName", "()Ljava/lang/CharSequence;"))))) fail("java/lang/IllegalArgumentException", null);
   const importance: number = yield vcall(channel, "getImportance", "()I");
   if (importance < IMPORTANCE_NONE || importance > 5) fail("java/lang/IllegalArgumentException", "Invalid importance level");
   const group: string | null = yield vcall(channel, "getGroup", "()Ljava/lang/String;");
@@ -178,8 +178,8 @@ function* createChannel(prefs: Preferences, channel: JObj): Gen<boolean> {
     if (yield vcall(existing, "isDeleted", "()Z")) {
       yield vcall(existing, "setDeleted", "(Z)V", 0); yield vcall(existing, "setDeletedTimeMs", "(J)V", -1n); changed = true;
     }
-    const name = yield str(yield vcall(channel, "getName", "()Ljava/lang/CharSequence;"));
-    if (name !== (yield str(yield vcall(existing, "getName", "()Ljava/lang/CharSequence;")))) { yield vcall(existing, "setName", "(Ljava/lang/CharSequence;)V", name); changed = true; }
+    const name = yield* awaited(str(yield vcall(channel, "getName", "()Ljava/lang/CharSequence;")));
+    if (name !== (yield* awaited(str(yield vcall(existing, "getName", "()Ljava/lang/CharSequence;"))))) { yield vcall(existing, "setName", "(Ljava/lang/CharSequence;)V", name); changed = true; }
     const description: string | null = yield vcall(channel, "getDescription", "()Ljava/lang/String;");
     if (description !== (yield vcall(existing, "getDescription", "()Ljava/lang/String;"))) { yield vcall(existing, "setDescription", "(Ljava/lang/String;)V", description); changed = true; }
     const blockable: number = yield vcall(channel, "isBlockable", "()Z");
@@ -209,7 +209,7 @@ function* createChannel(prefs: Preferences, channel: JObj): Gen<boolean> {
 function* createGroup(prefs: Preferences, group: JObj): Gen<void> {
   const id: string | null = yield vcall(group, "getId", "()Ljava/lang/String;");
   if (id === null) rt.npe();
-  if (!(yield str(yield vcall(group, "getName", "()Ljava/lang/CharSequence;")))) fail("java/lang/IllegalArgumentException", "group.getName() can't be empty");
+  if (!(yield* awaited(str(yield vcall(group, "getName", "()Ljava/lang/CharSequence;"))))) fail("java/lang/IllegalArgumentException", "group.getName() can't be empty");
   if (prefs.ids(GROUP_KEY).length >= 6000) fail("java/lang/IllegalStateException", "Limit exceed; cannot create more groups");
   yield vcall(group, "setBlocked", "(Z)V", 0);
   const existing = yield* prefs.read(GROUP_KEY, id!);
@@ -275,7 +275,7 @@ function groupKey(r: PostedNotification): string {
 const find = (pkg: string, tag: string | null, id: number, userId: number) =>
   notificationStore.posted.find((r) => r.pkg === pkg && r.tag === tag && r.id === id && r.userId === userId) ?? null;
 function* statusBarNotification(r: PostedNotification): Gen<JObj> {
-  const notification = yield unparcelled(N, r.data);
+  const notification = yield* awaited(unparcelled(N, r.data));
   const user = yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", r.userId);
   return yield newObj("android/service/notification/StatusBarNotification",
     "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;IILandroid/app/Notification;Landroid/os/UserHandle;Ljava/lang/String;J)V",
@@ -335,7 +335,7 @@ function* summaryLook(pkg: string, members: Ungrouped[]): Gen<{ icon: JObj; colo
   let icon: JObj | null = null;
   if (sameIcon) {
     const holder = notificationStore.posted.find((r) => notificationStore.ungrouped.get(packageKey(r.userId, r.pkg))?.get(r.key)?.icon === members[0].icon);
-    if (holder) icon = yield vcall(yield unparcelled(N, holder.data), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
+    if (holder) icon = yield vcall(yield* awaited(unparcelled(N, holder.data)), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
   }
   return { icon: icon ?? (yield* monochromeAppIcon(pkg)), color, visibility };
 }
@@ -383,8 +383,8 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
   const pk = packageKey(trigger.userId, trigger.pkg);
   if (notificationStore.autobundled.has(pk)) return;
   const look = yield* summaryLook(trigger.pkg, members);
-  const context = yield serviceContext();
-  const triggering = yield unparcelled(N, trigger.data);
+  const context = yield* awaited(serviceContext());
+  const triggering = yield* awaited(unparcelled(N, trigger.data));
   let builder = yield newObj(`${N}$Builder`, "(Landroid/content/Context;Ljava/lang/String;)V", context, trigger.channel);
   const B = `L${N}$Builder;`;
   builder = yield vcall(builder, "setSmallIcon", `(Landroid/graphics/drawable/Icon;)${B}`, look.icon);
@@ -403,7 +403,7 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
     "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 0, launch, 0x4000000));
   const record: PostedNotification = {
     ...trigger, key: `${keyOf(trigger.userId, trigger.pkg, 0x7fffffff, RANKER_GROUP, trigger.uid)}|${RANKER_GROUP}`, id: 0x7fffffff, tag: RANKER_GROUP,
-    postTime: BigInt(Date.now()), flags: get(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield parcelled(summary),
+    postTime: BigInt(Date.now()), flags: get(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(parcelled(summary)),
   };
   notificationStore.autobundled.set(pk, record.key);
   if (!hasPermission(record.uid) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
@@ -414,7 +414,7 @@ function* updateAutobundledSummary(trigger: PostedNotification, flags: number, m
   const key = notificationStore.autobundled.get(packageKey(trigger.userId, trigger.pkg));
   const record = key && notificationStore.posted.find((r) => r.key === key);
   if (!record) return;
-  const summary = yield unparcelled(N, record.data), look = yield* summaryLook(trigger.pkg, members);
+  const summary = yield* awaited(unparcelled(N, record.data)), look = yield* summaryLook(trigger.pkg, members);
   const sameLook = (yield* iconIdentity(yield vcall(summary, "getSmallIcon", "()Landroid/graphics/drawable/Icon;"))) === (yield* iconIdentity(look.icon))
     && get(summary, N, "color") === look.color && get(summary, N, "visibility") === look.visibility;
   if (record.flags === flags && sameLook) return;
@@ -423,7 +423,7 @@ function* updateAutobundledSummary(trigger: PostedNotification, flags: number, m
   set(summary, N, "color", look.color);
   set(summary, N, "visibility", look.visibility);
   record.flags = flags;
-  record.data = yield parcelled(summary);
+  record.data = yield* awaited(parcelled(summary));
 }
 function* channelImportance(r: PostedNotification): Gen<number> {
   const channel = yield* channelFor(new Preferences(r.pkg), r.channel, true);
@@ -530,7 +530,7 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
   set(n, N, "flags", flags);
   const record: PostedNotification = {
     key, pkg: pkg!, opPkg: opPkg ?? pkg!, id, tag, uid: notifyUid, pid, userId, postTime: BigInt(Date.now()),
-    channel: yield vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: yield parcelled(n),
+    channel: yield vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: yield* awaited(parcelled(n)),
   };
   if (old && isGroupSummary(old) && (!isGroupSummary(record) || groupKey(old) !== groupKey(record)))
     yield* removeRecords(groupChildren(old, (f) => (f & (FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB)) !== 0));
@@ -570,9 +570,9 @@ export const stopForegroundNotification = driven(function* (id: number, remove: 
   const r = find(pkg, null, id, 0);
   if (!r) return;
   if (remove) return yield* removeRecords([r]);
-  const n = yield unparcelled(N, r.data);
+  const n = yield* awaited(unparcelled(N, r.data));
   set(n, N, "flags", r.flags &= ~FLAG_FOREGROUND_SERVICE);
-  r.data = yield parcelled(n);
+  r.data = yield* awaited(parcelled(n));
 });
 
 const POLICY = "android/app/NotificationManager$Policy";
@@ -593,13 +593,13 @@ function* showToast(service: JObj, t: ToastRecord): Gen<void> {
   const windowToken = yield newObj("android/os/Binder", "()V");
   if (t.custom) yield vcall(t.custom, "show", "(Landroid/os/IBinder;)V", windowToken);
   else {
-    const ctx = yield serviceContext();
+    const ctx = yield* awaited(serviceContext());
     const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
     const id = (name: string, type: string) => vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
     const gravity: number = yield vcall(res, "getInteger", "(I)I", yield id("config_toastDefaultGravity", "integer"));
     const y: number = yield vcall(res, "getDimensionPixelSize", "(I)I", yield id("toast_y_offset", "dimen"));
     t.presenter = yield newObj("android/widget/ToastPresenter", "(Landroid/content/Context;Landroid/view/accessibility/IAccessibilityManager;Landroid/app/INotificationManager;Ljava/lang/String;)V",
-      ctx, yield hostedService("accessibility"), service, t.pkg);
+      ctx, yield* awaited(hostedService("accessibility")), service, t.pkg);
     const view = yield scall("android/widget/ToastPresenter", "getTextToastView", "(Landroid/content/Context;Ljava/lang/CharSequence;)Landroid/view/View;", ctx, t.text);
     yield vcall(t.presenter, "show", `(Landroid/view/View;Landroid/os/IBinder;Landroid/os/IBinder;IIIIFF${T}Z)V`, view, t.token, windowToken, t.duration, gravity, 0, y, 0, 0, t.callback, 0);
   }
@@ -665,7 +665,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     const mine = notificationStore.posted.filter((r) => r.userId === userId && (r.pkg === pkg || r.opPkg === pkg));
     const sbns: JObj[] = [];
     for (const r of hashOrder(mine, (r) => r.key)) sbns.push(yield* statusBarNotification(r));
-    return yield parceledList(sbns);
+    return yield* awaited(parceledList(sbns));
   }),
 
   "createNotificationChannelGroups(Ljava/lang/String;Landroid/content/pm/ParceledListSlice;)V": driven(function* (pkg: string, slice: JObj | null) {
@@ -692,7 +692,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     }),
   "getNotificationChannels(Ljava/lang/String;Ljava/lang/String;I)Landroid/content/pm/ParceledListSlice;": driven(function* (callingPkg: string, pkg: string, userId: number) {
     if (!canNotifyAsPackage(callingPkg, pkg, userId)) fail("java/lang/SecurityException", `Pkg ${callingPkg} cannot read channels for ${pkg} in ${userId}`);
-    return yield parceledList(yield* (yield* preferences(pkg)).channels(false));
+    return yield* awaited(parceledList(yield* (yield* preferences(pkg)).channels(false)));
   }),
   "deleteNotificationChannel(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (pkg: string, channelId: string) {
     checkCallerIsSystemOrSameApp(pkg);
@@ -718,13 +718,13 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
       yield vcall(group, "addChannel", "(Landroid/app/NotificationChannel;)V", channel);
     }
     for (const id of prefs.ids(GROUP_KEY)) if (!groups.has(id)) groups.set(id, (yield* prefs.read(GROUP_KEY, id))!);
-    return yield parceledList(hashOrder([...groups], ([id]) => id).map(([, group]) => group));
+    return yield* awaited(parceledList(hashOrder([...groups], ([id]) => id).map(([, group]) => group)));
   }),
   "deleteNotificationChannelGroup(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (pkg: string, groupId: string | null) {
     checkCallerIsSystemOrSameApp(pkg);
     const prefs = yield* preferences(pkg), group = yield* groupWithChannels(prefs, groupId, false);
     if (!group) return;
-    for (const channel of (yield toJsArray(yield vcall(group, "getChannels", "()Ljava/util/List;"))) as JObj[])
+    for (const channel of (yield* awaited(toJsArray(yield vcall(group, "getChannels", "()Ljava/util/List;")))) as JObj[])
       enforceNoForegroundService(pkg, 0, yield vcall(channel, "getId", "()Ljava/lang/String;"));
     prefs.remove(GROUP_KEY + groupId);
     for (const channel of yield* prefs.channels(true)) {

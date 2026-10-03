@@ -1,7 +1,7 @@
 // IAlarmManager, the TS half of AOSP's AlarmManager: PendingIntent alarms belong to the shell's
 // scheduler (the broker's, across processes), and an OnAlarmListener's alarm fires in this process
 // by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, reportUncaught, callUncaught, after } from "../jvm/natives/jlang";
 import { onMain } from "./mainloop";
 import { operationId, localPendingIntents } from "./pendingintent";
@@ -34,7 +34,7 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
       if (window === WINDOW_EXACT && !canScheduleExact(pkg))
         throw rt.mkThrowable("java/lang/SecurityException", `Caller ${pkg} needs to hold android.permission.SCHEDULE_EXACT_ALARM or android.permission.USE_EXACT_ALARM to set exact alarms.`);
       const trigger = Math.max(0, Number(at));
-      if (operation) return alarmTransport.schedule(yield operationId(operation), type, trigger, Number(interval));
+      if (operation) return alarmTransport.schedule(yield* awaited(operationId(operation)), type, trigger, Number(interval));
       clearGuestTimeout(listenerAlarms.get(listener));
       const delay = trigger - (type < 2 ? Date.now() : uptimeMillis());
       listenerAlarms.set(listener, setGuestTimeout(() => {
@@ -44,7 +44,7 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
       }, Math.max(0, Math.min(delay, 0x7fffffff))));
     }),
   "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": driven(function* (operation: JObj | null, listener: unknown): Gen<void> {
-    if (operation) alarmTransport.cancel(yield operationId(operation));
+    if (operation) alarmTransport.cancel(yield* awaited(operationId(operation)));
     if (listener) { clearGuestTimeout(listenerAlarms.get(listener)); listenerAlarms.delete(listener); }
   }),
   "canScheduleExactAlarms(Ljava/lang/String;)Z": (pkg: string) => +canScheduleExact(pkg),

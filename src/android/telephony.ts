@@ -3,7 +3,7 @@
 // (no modem, no SIM, no subscriptions). TelephonyRegistry is system_server's and every device has
 // it; with no active modem validatePhoneId fails, so a listener is never notified and only meets
 // TelephonyRegistry.checkListenerPermission (decoded from the reference AVD's services.jar).
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
@@ -40,7 +40,7 @@ function* locationResult(context: unknown, events: number[], pkg: string, featur
 /** TelephonyRegistry.checkListenerPermission: it throws for a missing permission, and a soft denial
  *  only leaves the listener unregistered, which with no modem is the same as registering it */
 function* checkListenerPermission(events: number[], subId: number, pkg: string, featureId: string | null): Gen<void> {
-  const context = yield serviceContext(), any = (set: number[]) => events.some((e) => set.includes(e));
+  const context = yield* awaited(serviceContext()), any = (set: number[]) => events.some((e) => set.includes(e));
   const enforce = (permission: string) => enforceCallingOrSelfPermission(permission, "listen");
   if (any(LOCATION)) {
     const result = yield* locationResult(context, events, pkg, featureId);

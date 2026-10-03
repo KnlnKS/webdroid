@@ -1,7 +1,7 @@
 // The browser keyboard: the page's text control in the role of the input method, serving the
 // editor InputMethodManagerService (server/imm.ts) binds it to. The page's edits reach the editor
 // as InputConnection calls; the editor's reports keep the control's text and selection current.
-import { rt, type JObj, driven, declaredField, type Gen } from "../jvm/runtime";
+import { awaited, rt, type JObj, driven, declaredField, type Gen } from "../jvm/runtime";
 import { onMain } from "./mainloop";
 import { csText } from "../jvm/natives/jchars";
 
@@ -37,7 +37,7 @@ let reports = 0;
 export const extractedInput = driven(function* extractedInput(session: ImeSession, extracted: JObj): Gen {
   reports++;
   const f = (name: string) => (extracted as unknown as Record<string, number>)[declaredField(ET, name)];
-  const text: string = yield csText(f("text")), partialStart = f("partialStartOffset"), startOffset = f("startOffset");
+  const text = yield* awaited(csText(f("text"))), partialStart = f("partialStartOffset"), startOffset = f("startOffset");
   if (partialStart < 0) { session.text = text; session.offset = startOffset; }
   else session.text = session.text.slice(0, partialStart - session.offset) + text + session.text.slice(f("partialEndOffset") - session.offset);
   session.start = f("selectionStart") + startOffset; session.end = f("selectionEnd") + startOffset;

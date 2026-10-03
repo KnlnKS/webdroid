@@ -1,7 +1,7 @@
 // The device configuration and its languages: the values AOSP's Configuration and LocaleList
 // are built from (resources.ts), LocaleManager, and android.util.Xml.
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
@@ -31,7 +31,7 @@ export const javaLocales = (l: Locales): JObj | Promise<JObj> => newObj("android
 const localesOf = driven(function* localesOf(list: JObj): Gen<Locales> {
   const values: JLocale[] = [];
   for (let i = 0, n: number = yield vcall(list, "size", "()I"); i < n; i++) values.push(yield vcall(list, "get", "(I)Ljava/util/Locale;", i));
-  return (yield withTags(values)) as Locales;
+  return yield* awaited(withTags(values));
 });
 /** the resource qualifier language of a configuration's first locale */
 const configLang = (c: JConfiguration) => { const lang = c.locales.tags[0]?.split("-")[0] ?? ""; return lang === "und" ? "" : lang; };
@@ -88,7 +88,7 @@ hostStub("locale", "webdroid/LocaleManagerService");
 const theConfig = new JConfiguration();
 /** the device's languages as Locales, once libcore can build them */
 export const initDeviceLocales = driven(function* initDeviceLocales(): Gen {
-  localeList = yield withTags([yield localeForTag(device.locale)]);
+  localeList = yield* awaited(withTags([yield* awaited(localeForTag(device.locale))]));
   setLocales(theConfig, localeList);
   setResourceLocale(configLang(theConfig), theConfig.screenLayout & 0xc0);
 });
@@ -116,8 +116,8 @@ export function applyApplicationLocales(list: Locales): boolean {
 }
 export const localesFromTags = driven(function* localesFromTags(tags: string): Gen<Locales> {
   const values: JLocale[] = [];
-  for (const t of tags.split(",").filter(Boolean)) values.push(yield localeForTag(t.trim()));
-  return (yield withTags(values)) as Locales;
+  for (const t of tags.split(",").filter(Boolean)) values.push(yield* awaited(localeForTag(t.trim())));
+  return yield* awaited(withTags(values));
 });
 /** The device's own night setting changed. Returns whether anything moved. */
 export function setDeviceNight(night: boolean): boolean {

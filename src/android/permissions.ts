@@ -1,7 +1,7 @@
 // The permission controller: which permissions a package or uid holds, as PermissionManagerService
 // checks them, the runtime grants an app's request (GrantPermissionsActivity) records, and
 // IPermissionManager over them.
-import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, sameBytes } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -78,7 +78,7 @@ export const grantPrompted = (pkg: string, name: string): void => permissionStor
 const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
 registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", driven(function* (intent: JIntent): Gen<JIntent> {
   const names: string[] = (yield vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES")) ?? jarray([], "Ljava/lang/String;");
-  const result = yield newIntent();
+  const result = yield* awaited(newIntent());
   yield putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
   yield putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
   return result;

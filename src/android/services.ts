@@ -4,7 +4,7 @@
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
 import { once } from "../jvm/suspend";
-import { JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
+import { awaited, JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField, after, callUncaught } from "../jvm/natives/jlang";
 import { onMain } from "./mainloop";
@@ -153,8 +153,8 @@ rt.register({ name: "webdroid/DeviceIdentifiersPolicyService", ctor: class exten
   "getSerialForPackage(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": driven(function* (pkg: string | null) {
     const { uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg);
     if (record?.uid !== uid) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid callingPackage or callingPackage does not belong to caller's uid:" + uid);
-    if ((yield checkUidPermission("android.permission.READ_PRIVILEGED_PHONE_STATE", uid)) === 0) return "unknown";
-    if (record.sdk.target < 29 && (yield checkUidPermission("android.permission.READ_PHONE_STATE", uid)) === 0) return "unknown";
+    if ((yield* awaited(checkUidPermission("android.permission.READ_PRIVILEGED_PHONE_STATE", uid))) === 0) return "unknown";
+    if (record.sdk.target < 29 && (yield* awaited(checkUidPermission("android.permission.READ_PHONE_STATE", uid))) === 0) return "unknown";
     throw rt.mkThrowable("java/lang/SecurityException", `getSerial: The uid ${uid} does not meet the requirements to access device identifiers.`);
   }),
 } });
@@ -239,22 +239,22 @@ function* sendCallback(r: Registration, name: string): Gen<void> {
   yield put("NetworkRequest", r.request);
   yield put("Network", yield theNetwork());
   if (name === "CALLBACK_AVAILABLE") {
-    yield put("NetworkCapabilities", yield capabilities());
-    yield put("LinkProperties", yield linkProperties());
+    yield put("NetworkCapabilities", yield* awaited(capabilities()));
+    yield put("LinkProperties", yield* awaited(linkProperties()));
   }
   const msg = yield scall("android/os/Message", "obtain", "()Landroid/os/Message;");
-  msg[declaredField("android/os/Message", "what")] = yield callbackCode(name);
+  msg[declaredField("android/os/Message", "what")] = yield* awaited(callbackCode(name));
   yield vcall(msg, "setData", "(Landroid/os/Bundle;)V", data);
   yield vcall(r.messenger, "send", "(Landroid/os/Message;)V", msg);
 }
 /** a request's NetworkRequest, registered for callbacks; one the network satisfies hears of it */
 const register = driven(function* (caps: unknown, legacyType: number, messenger: JObj, type: number): Gen<JObj> {
-  const types = (yield linkInit("android/net/NetworkRequest$Type")).ctor[mangleMethod("values", "()[Landroid/net/NetworkRequest$Type;")]() as JObj[];
+  const types = (yield* awaited(linkInit("android/net/NetworkRequest$Type"))).ctor[mangleMethod("values", "()[Landroid/net/NetworkRequest$Type;")]() as JObj[];
   const request: JObj = yield newObj("android/net/NetworkRequest", "(Landroid/net/NetworkCapabilities;IILandroid/net/NetworkRequest$Type;)V",
     caps ?? (yield newObj(NC)), legacyType, nextRequestId++, types[type]);
   const r = { request, messenger };
   registrations.set(request, r);
-  if (netUp() && (yield vcall(caps ?? (yield capabilities()), "satisfiedByNetworkCapabilities", `(L${NC};)Z`, yield capabilities())))
+  if (netUp() && (yield vcall(caps ?? (yield* awaited(capabilities())), "satisfiedByNetworkCapabilities", `(L${NC};)Z`, yield* awaited(capabilities()))))
     yield* sendCallback(r, "CALLBACK_AVAILABLE");
   return request;
 });
@@ -357,10 +357,10 @@ function* opMode(code: number, pkg: string): Gen<number> {
   const op: number = yield scall(AOM, "opToSwitch", "(I)I", code);
   const permission: string | null = yield scall(AOM, "opToPermission", "(I)Ljava/lang/String;", op);
   if (permission !== null && isRuntimePermission(permission)) return permissionGranted(pkg, permission) ? MODE_ALLOWED : MODE_IGNORED;
-  return yield defaultMode(op);
+  return yield* awaited(defaultMode(op));
 }
 const checkOp = driven(function* (code: number, uid: number, pkg: string | null): Gen<number> {
-  return owns(uid, pkg) ? yield* opMode(code, pkg!) : yield defaultMode(code);
+  return owns(uid, pkg) ? yield* opMode(code, pkg!) : yield* awaited(defaultMode(code));
 });
 const noteOp = driven(function* (code: number, uid: number, pkg: string | null, tag: string | null): Gen<JObj> {
   return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
@@ -370,8 +370,8 @@ const noteFor = (code: number, state: JObj) =>
   noteOp(code, sourceField(state, "uid") as number, sourceField(state, "packageName") as string | null, sourceField(state, "attributionTag") as string | null);
 /** a proxied op is noted for the proxy (an app is never a trusted proxy) and then the app it serves */
 const noteProxyOp = driven(function* (code: number, state: JObj): Gen<JObj> {
-  const proxy: JObj = yield noteFor(code, state), next = sourceField(state, "next") as JObj[] | null;
-  return next?.length && (yield vcall(proxy, "getOpMode", "()I")) === MODE_ALLOWED ? yield noteFor(code, next[0]) : proxy;
+  const proxy = yield* awaited(noteFor(code, state)), next = sourceField(state, "next") as JObj[] | null;
+  return next?.length && (yield vcall(proxy, "getOpMode", "()I")) === MODE_ALLOWED ? yield* awaited(noteFor(code, next[0])) : proxy;
 });
 rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IAppOpsService$Stub", methods: {
   "checkOperation(IILjava/lang/String;)I": checkOp,
@@ -427,7 +427,7 @@ rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JOb
   "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
     driven(function* (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) {
       for (let current: JObj | undefined = source, first = true; current; first = false) {
-        if (!(first && fromDatasource) && (yield checkUidPermission(permission, getDeclared(current, SOURCE, "uid"))) !== 0) return 2; // PERMISSION_HARD_DENIED
+        if (!(first && fromDatasource) && (yield* awaited(checkUidPermission(permission, getDeclared(current, SOURCE, "uid")))) !== 0) return 2; // PERMISSION_HARD_DENIED
         current = getDeclared<JObj[] | null>(current, SOURCE, "next")?.[0];
       }
       return 0;
@@ -477,7 +477,7 @@ const pluggedIn = () => device.battery.status === 2 || device.battery.status ===
 export const batteryLow = (): boolean => !pluggedIn() && device.battery.level <= 20;
 // the extras BatteryService puts on BATTERY_CHANGED that the battery model determines
 stickyBroadcasts.set("android.intent.action.BATTERY_CHANGED", driven(function* (): Gen<JObj> {
-  const intent: JObj = yield newIntent("android.intent.action.BATTERY_CHANGED");
+  const intent = yield* awaited(newIntent("android.intent.action.BATTERY_CHANGED"));
   // as recorded on the reference AVD: REGISTERED_ONLY, REPLACE_PENDING, EXCLUDE_STOPPED_PACKAGES
   yield vcall(intent, "setFlags", "(I)Landroid/content/Intent;", 0x60000010);
   for (const [key, value, desc] of [["status", device.battery.status, "I"], ["health", 2, "I"], ["present", 1, "Z"],

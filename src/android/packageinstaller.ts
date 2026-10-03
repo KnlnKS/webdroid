@@ -1,7 +1,7 @@
 // IPackageInstaller and IPackageInstallerSession, under AOSP's PackageInstaller and its Session:
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
-import { JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
 import { callUncaught, scall, vcall, after, newObj } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
@@ -44,7 +44,7 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
     if (s.mode !== MODE_FULL_INSTALL || s.names.length !== 1) throw new Error("Install requires one base APK");
     const bytes = vfs.read(stageDir(s.id) + "/" + s.names[0]);
     if (!bytes) throw new Error("Session file was not written");
-    installed = yield installPackageArchive(bytes, s.packageName);
+    installed = yield* awaited(installPackageArchive(bytes, s.packageName));
   } catch (error) {
     failure = error instanceof Error ? error.message : (error as { msg?: string } | null)?.msg ?? String(error);
   }
@@ -81,7 +81,7 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
     vfs.mkdir(stageDir(s.id));
     if (!s.names.includes(name)) s.names.push(name);
     return scall("android/os/ParcelFileDescriptor", "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;",
-      yield newFile(stageDir(s.id) + "/" + name), MODE_WRITE_ONLY | MODE_CREATE | MODE_TRUNCATE);
+      yield* awaited(newFile(stageDir(s.id) + "/" + name)), MODE_WRITE_ONLY | MODE_CREATE | MODE_TRUNCATE);
   }),
   "getNames()[Ljava/lang/String;": function (this: JSessionService) { return jarray(own(this).names.slice(), S); },
   "seal()V": function (this: JSessionService) { own(this).sealed = true; },

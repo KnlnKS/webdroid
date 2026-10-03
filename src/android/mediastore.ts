@@ -3,7 +3,7 @@ import { vfs } from "../shell/vfs";
 import { mimeOf, MIME_EXT } from "../mime";
 import { sqliteStore } from "./sqlite";
 import { clipUris } from "./net";
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, scall, vcall } from "../jvm/natives/jlang";
 import { strArray } from "../jvm/abi";
 import { serviceContext } from "./binder";
@@ -251,7 +251,7 @@ const QUERY_ARGS = new Set(["sql-selection", "sql-selection-args", "sql-sort-ord
 const query = driven(function* query$(u: string, projection: string[] | null, selection: string | null, args: string[] | null, extras: JObj | null): Gen<JObj | null> {
   const table = tableOf(u), requested = projection?.length ? projection : columns;
   if (!table) return null;
-  const keys = new Set<string>(extras ? yield toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;")) : []);
+  const keys = new Set(extras ? (yield* awaited(toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;")))) as string[] : []);
   for (const key of keys) if (!QUERY_ARGS.has(key)) throw rt.unimplemented(`MediaProvider query argument ${key}`);
   const get = (key: string, type: string): unknown => keys.has(ARG + key) ? vcall(extras, "get" + type, GET[type], ARG + key) : undefined;
   const limit: number | undefined = yield get("limit", "Int"), offset: number | undefined = yield get("offset", "Int");
@@ -260,12 +260,12 @@ const query = driven(function* query$(u: string, projection: string[] | null, se
   const sort = (yield get("sql-sort-order", "String")) ?? ((yield get("sort-columns", "StringArray")) as string[] | undefined)?.map((c) => c + direction).join(", ") ?? null;
   const sqlLimit = (yield get("sql-limit", "String")) ?? (limit === undefined ? null : limit + (offset ? ` OFFSET ${offset}` : ""));
   const match = { trashed: yield get("match-trashed", "Int"), pending: yield get("match-pending", "Int"), favorite: yield get("match-favorite", "Int"), limit: sqlLimit };
-  return yield matrixCursor(requested, yield select(table, requested, selection, args, sort, match));
+  return yield* awaited(matrixCursor(requested, yield* awaited(select(table, requested, selection, args, sort, match))));
 });
 const openFile = driven(function* openFile$(u: string, mode: string): Gen<JObj> {
-  const path: string | null = yield mediaPath(u);
+  const path = yield* awaited(mediaPath(u));
   if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u);
-  return yield scall(PFD, "open", `(Ljava/io/File;I)L${PFD};`, yield newFile(path), yield scall(PFD, "parseMode", `(${S})I`, mode));
+  return yield scall(PFD, "open", `(Ljava/io/File;I)L${PFD};`, yield* awaited(newFile(path)), yield scall(PFD, "parseMode", `(${S})I`, mode));
 });
 
 // MediaProvider's consent screen for a create*Request PendingIntent. It is answered by the grant
@@ -279,7 +279,7 @@ registerSystemActivity(MEDIA_REQUEST, driven(function* (intent: JIntent): Gen<JI
   const uris: string[] = [...(yield vcall(intent, "getStringArrayExtra", `(${S})[${S}`, "uris")) ?? []];
   if (op === "delete") for (const uri of uris) yield mediaDelete(uri, null, null);
   else if (op === "trash" || op === "favorite") yield mediaFlag(uris, op === "trash" ? "is_trashed" : "is_favorite", !!(yield vcall(intent, "getIntExtra", `(${S}I)I`, "value", 0)));
-  return yield newIntent();
+  return yield* awaited(newIntent());
 }));
 /** MediaStore.createRequest's call: the items in EXTRA_CLIP_DATA, the flag in EXTRA_CONTENT_VALUES,
  *  and the consent screen's PendingIntent back in EXTRA_RESULT */
@@ -289,13 +289,13 @@ function* mediaCall(method: string, extras: JObj | null): Gen<JObj> {
   const uris: string[] = yield* clipUris(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "clip_data"));
   if (uris.some((uri) => !isMediaUri(uri) || !/\/\d+$/.test(uri))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "All requested items must be referenced by specific ID");
   const values = contentValues(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "content_values"));
-  const intent: JObj = yield newIntent(MEDIA_REQUEST);
+  const intent = yield* awaited(newIntent(MEDIA_REQUEST));
   yield vcall(intent, "setIdentifier", `(${S})Landroid/content/Intent;`, String(++mediaRequests));
   yield putExtra(intent, "uris", strArray(uris), `[${S}`); yield putExtra(intent, "op", op, S);
   yield putExtra(intent, "value", Number(values.get("is_trashed") ?? values.get("is_favorite") ?? 0), "I");
   const result: JObj = yield newObj("android/os/Bundle", "()V");
   yield vcall(result, "putParcelable", `(${S}Landroid/os/Parcelable;)V`, "result", yield scall("android/app/PendingIntent", "getActivity",
-    "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", yield serviceContext(), 0, intent, 0x4000000)); // FLAG_IMMUTABLE
+    "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", yield* awaited(serviceContext()), 0, intent, 0x4000000)); // FLAG_IMMUTABLE
   return result;
 }
 // FLAG_SYSTEM | FLAG_HAS_CODE | FLAG_ALLOW_CLEAR_USER_DATA, in its own package's process
@@ -306,6 +306,6 @@ registerSystemProvider("media", { pkg: "com.google.android.providers.media.modul
   // answers its row, indexed now; the create*Request calls answer a consent PendingIntent
   call: driven(function* (method: string, arg: string | null, extras: JObj | null): Gen<JObj> {
     if (method !== "scan_file") return yield* mediaCall(method, extras);
-    return yield uriBundle("android.intent.extra.STREAM", yield scannedMediaUri(arg ?? ""));
+    return yield* awaited(uriBundle("android.intent.extra.STREAM", yield* awaited(scannedMediaUri(arg ?? ""))));
   }),
 });

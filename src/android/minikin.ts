@@ -10,7 +10,7 @@
 // Hyphenation is unsupported: the page has no hyphenation patterns, so every paragraph breaks as
 // under HYPHENATION_FREQUENCY_NONE. Glyph bounds are not known either, so no run overhangs.
 
-import { rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
 import { scall, vcall } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
@@ -173,7 +173,7 @@ class Tracker {
   private *bounds(run: Run, wordStyle: number): Gen<Int32Array> {
     if (run.lbStyle === LB_NO_BREAK) return Int32Array.of(this.text.length);
     const b = lineBoundaries(this.text, breakLocaleTag(run.lang, run.lbStyle, wordStyle));
-    return b instanceof Promise ? yield b : b;
+    return b instanceof Promise ? yield* awaited(b) : b;
   }
 }
 

@@ -6,7 +6,7 @@
 // pixels come from createImageBitmap (libheif for HEIF), sampled and scaled as the browser decodes
 // them, and become a NativeBitmap without an intermediate raster.
 
-import { rt, declaredField, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, ownedHandle, deref, release } from "./handles";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
@@ -335,7 +335,7 @@ const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | 
   let reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null;
   if (reuse?.immutable) reuse = null;
   if (reuse && sw * sh * bytesPerPixel(config) > reuse.allocation) return null;
-  const img: ImageBitmap | null = yield decodePixels(bytes, h, sw, sh, null, false);
+  const img = yield* awaited(decodePixels(bytes, h, sw, sh, null, false));
   // an incomplete input decodes as far as it goes (here: not at all), a corrupt one fails
   if (!img && h.complete) return null;
   const b = placePixels(img, sw, sh, config, h.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
@@ -343,7 +343,7 @@ const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | 
   const chunk = h.patch && h.patch.slice();
   if (chunk && scale !== 1) scalePatch(chunk, sw / w, sh / ht, sw, sh);
   if (padding) setPadding(padding, chunk);
-  const insets = yield insetsOf(h, scale);
+  const insets = yield* awaited(insetsOf(h, scale));
   return javaResult(b, reuse && options![opt().inBitmap] as object, premultiplied, chunk, insets);
 });
 /** The header's worth of a stream, for a bounds-only decode: as a device's front-buffered stream,
@@ -362,16 +362,16 @@ const fdBytes = async (fd: object | null) => await javaFdBytes(fdInt(fd as never
 rt.registerJnis("android/graphics/BitmapFactory", {
   "nativeDecodeStream(Ljava/io/InputStream;[BLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
     driven(function* (stream: unknown, storage: Int8Array, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
-      return doDecode(yield request(options).justBounds ? streamHeader(stream, storage) : readStreamFully(stream), padding, options, inBitmap);
+      return doDecode(yield* awaited(request(options).justBounds ? streamHeader(stream, storage) : readStreamFully(stream)), padding, options, inBitmap);
     }),
   // decodes from the descriptor's position and leaves it there, as AutoFDSeek restores it
   "nativeDecodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
     driven(function* (fd: object | null, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
-      return doDecode(yield fdBytes(fd), padding, options, inBitmap);
+      return doDecode(yield* awaited(fdBytes(fd)), padding, options, inBitmap);
     }),
   "nativeDecodeAsset(JLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
     driven(function* (asset: bigint, padding: object | null, options: Options | null, inBitmap: bigint): Gen {
-      return doDecode(yield assetBytes(asset), padding, options, inBitmap);
+      return doDecode(yield* awaited(assetBytes(asset)), padding, options, inBitmap);
     }),
   "nativeDecodeByteArray([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
     (bytes: Int8Array, off: number, len: number, options: Options | null, inBitmap: bigint) => doDecode(u8(bytes, off, len), null, options, inBitmap),
@@ -392,10 +392,10 @@ function regionDecoder(bytes: Uint8Array) {
 rt.registerJnis("android/graphics/BitmapRegionDecoder", {
   "nativeNewInstance([BII)Landroid/graphics/BitmapRegionDecoder;": (bytes: Int8Array, off: number, len: number) => regionDecoder(u8(bytes, off, len).slice()),
   "nativeNewInstance(Ljava/io/FileDescriptor;)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (fd: object | null): Gen { return regionDecoder(yield fdBytes(fd)); }),
+    driven(function* (fd: object | null): Gen { return regionDecoder(yield* awaited(fdBytes(fd))); }),
   "nativeNewInstance(Ljava/io/InputStream;[B)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (stream: unknown): Gen { return regionDecoder(yield readStreamFully(stream)); }),
-  "nativeNewInstance(J)Landroid/graphics/BitmapRegionDecoder;": driven(function* (asset: bigint): Gen { return regionDecoder(yield assetBytes(asset)); }),
+    driven(function* (stream: unknown): Gen { return regionDecoder(yield* awaited(readStreamFully(stream))); }),
+  "nativeNewInstance(J)Landroid/graphics/BitmapRegionDecoder;": driven(function* (asset: bigint): Gen { return regionDecoder(yield* awaited(assetBytes(asset))); }),
   "nativeGetWidth(J)I": (h: bigint) => encodedAt(h).header.width,
   "nativeGetHeight(J)I": (h: bigint) => encodedAt(h).header.height,
   "nativeClean(J)V": (h: bigint) => release(h),
@@ -414,7 +414,7 @@ rt.registerJnis("android/graphics/BitmapRegionDecoder", {
       const bh = ih + Math.trunc((top - y) / sample) + Math.trunc((y + ht - bottom) / sample);
       if (reuse && bw * bh * bytesPerPixel(config) > reuse.allocation) return null;
       // a crop reaching outside the image is transparent there, as the zero-initialized output is
-      const img: ImageBitmap | null = yield decodePixels(bytes, header, bw, bh, [x, y, w, ht], false);
+      const img = yield* awaited(decodePixels(bytes, header, bw, bh, [x, y, w, ht], false));
       if (!img && header.complete) return null;
       const b = placePixels(img, bw, bh, config, header.opaque ? OPAQUE : premultiplied ? PREMUL : UNPREMUL, hardware, reuse);
       if (!reuse) b.immutable = true;
@@ -433,7 +433,7 @@ const decodeException = (error: number, message: string, cause: unknown, source:
 /** ImageDecoder.cpp's native_create: the decoder, sized as EXIF orientation leaves the image */
 const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Promise<Uint8Array>, source: unknown): Gen {
   let bytes: Uint8Array;
-  try { bytes = yield read(); }
+  try { bytes = yield* awaited(read()); }
   catch (e) {
     if (!rt.iof(e, "java/lang/Throwable")) throw e;
     throw yield decodeException(SOURCE_EXCEPTION, "", e, source);
@@ -487,9 +487,9 @@ rt.registerJnis(DECODER, {
         const s = Math.max(1, Math.floor(nw / w)), [sw, sh] = oriented(header, ...sampledSize(header, s));
         if (sw !== w || sh !== ht) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot scale unpremultiplied pixels!");
       }
-      let img: ImageBitmap | null = yield decodePixels(bytes, header, ...oriented(header, w, ht), null, true);
+      let img = yield* awaited(decodePixels(bytes, header, ...oriented(header, w, ht), null, true));
       const [bw, bh] = crop ? [crop.right - crop.left, crop.bottom - crop.top] : [w, ht];
-      if (img && crop) { const whole = img; img = yield createImageBitmap(whole, crop.left, crop.top, bw, bh); whole.close(); }
+      if (img && crop) { const whole = img; img = yield* awaited(createImageBitmap(whole, crop.left, crop.top, bw, bh)); whole.close(); }
       // SkCodec::kIncompleteInput or kErrorInInput: the listener may take what was decoded
       const partial = !header.complete ? SOURCE_INCOMPLETE : !img ? SOURCE_MALFORMED_DATA : 0;
       if (partial) yield vcall(jdecoder, "onPartialImage", "(ILjava/lang/Throwable;)V", partial, null);
@@ -502,6 +502,6 @@ rt.registerJnis(DECODER, {
         else if (format !== UNKNOWN) throw rt.mkThrowable("java/lang/IllegalArgumentException", `invalid return from postProcess: ${format}`);
       }
       b.immutable = !mutable;
-      return javaBitmap(b, -1, postProcess ? null : header.patch, postProcess ? null : yield insetsOf(header, 1), !unpremul);
+      return javaBitmap(b, -1, postProcess ? null : header.patch, postProcess ? null : yield* awaited(insetsOf(header, 1)), !unpremul);
     }),
 });

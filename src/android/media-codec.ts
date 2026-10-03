@@ -1,7 +1,7 @@
 // MediaCodec's and MediaCodecList's natives over WebCodecs: the codec list is the definitions
 // below that the browser's decoders accept, and a codec is a VideoDecoder or AudioDecoder behind
 // MediaCodec's buffer-index protocol, which libmediandk's AMediaCodec shares.
-import { JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
 import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio";
@@ -96,7 +96,7 @@ const capabilities = driven(function* capabilities$(def: Definition): Gen<JObj> 
   // COLOR_FormatYUV420Flexible, and the planar and semi-planar layouts a VideoFrame copies out as
   const colors = def.kind === "video" ? Int32Array.of(0x7f420888, 19, 21) : new Int32Array(0);
   return newObj("android/media/MediaCodecInfo$CodecCapabilities", `([L${CPL};[IZLjava/util/Map;Ljava/util/Map;)V`,
-    jarray(levels, `L${CPL};`), colors, 0, yield stringMap({ mime: def.mime }), yield stringMap(capabilityMap(def)));
+    jarray(levels, `L${CPL};`), colors, 0, yield* awaited(stringMap({ mime: def.mime })), yield* awaited(stringMap(capabilityMap(def))));
 });
 const at = (index: number) => after(codecs(), (list) => {
   const def = list[index];

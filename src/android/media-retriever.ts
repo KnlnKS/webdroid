@@ -1,4 +1,4 @@
-import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
+import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { after } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import type { FileSource } from "../shell/lazyfile";
@@ -115,8 +115,8 @@ rt.registerJnis("android/media/MediaMetadataRetriever", {
   "nativeExtractMetadata(I)Ljava/lang/String;": R((r, key: number) => r.metadata.get(key) ?? null),
   "_getFrameAtTime(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;": driven(function* (this: JObj,
     time: bigint, option: number, width: number, height: number): Gen {
-    const bitmap: NativeBitmap | null = yield retrievers.get(this).frame(time, option, width > 0 ? width : undefined, height > 0 ? height : undefined);
-    return bitmap && (yield javaBitmap(bitmap));
+    const bitmap = yield* awaited(retrievers.get(this).frame(time, option, width > 0 ? width : undefined, height > 0 ? height : undefined));
+    return bitmap && (yield* awaited(javaBitmap(bitmap)));
   }),
   // only an MP3's APIC frame is read, whatever picture type is asked for
   "getEmbeddedPicture(I)[B": R((r) => r.picture),

@@ -6,7 +6,7 @@
 // getX() reads back, strings included: a string is (TYPE_STRING, pool index, cookie), read from
 // the XML block's pool for cookie -1 and from ApkAssets[cookie - 1]'s table pool otherwise.
 
-import { rt, driven, declaredField, type Gen } from "../jvm/runtime";
+import { awaited, rt, driven, declaredField, type Gen } from "../jvm/runtime";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
@@ -96,7 +96,7 @@ delegate("android/content/res/ApkAssets", {
   "nativeOpenXml(JLjava/lang/String;)J": driven(function* (h: bigint, path: string): Gen {
     const source = entrySource(apkN(h), path);
     if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", path);
-    return handle(mkBlock(yield readFully(source), null));
+    return handle(mkBlock(yield* awaited(readFully(source)), null));
   }),
   "nativeDefinesOverlayable(J)Z": (h: bigint) => (apkN(h).table?.overlayables.size ? 1 : 0),
   "nativeGetOverlayableInfo(JLjava/lang/String;)Landroid/content/om/OverlayableInfo;": (h: bigint, name: string) => {
@@ -415,7 +415,7 @@ delegate("android/content/res/AssetManager", {
   "nativeOpenXmlAsset(JILjava/lang/String;)J": driven(function* (h: bigint, cookie: number, path: string): Gen {
     const res = assets(h), hit = findEntry(res, path, cookie);
     if (!hit) throw rt.mkThrowable("java/io/FileNotFoundException", path);
-    return handle(mkBlock(yield readFully(hit.source), res));
+    return handle(mkBlock(yield* awaited(readFully(hit.source)), res));
   }),
   "nativeOpenXmlAssetFd(JILjava/io/FileDescriptor;)J": () => { throw rt.mkThrowable("java/io/FileNotFoundException", "Corrupt XML binary file"); },
   "nativeOpenAssetFd(JLjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;": (h: bigint, path: string, offsets: BigInt64Array) => openFd(assets(h), "assets/" + path, 0, offsets),
@@ -425,7 +425,7 @@ delegate("android/content/res/AssetManager", {
   "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.source.size - c.pos); },
   "nativeAssetReadChar(J)I": driven(function* (a: bigint): Gen {
     const c = deref<Cursor>(a);
-    const bytes = yield c.source.read(c.pos, 1);
+    const bytes = yield* awaited(c.source.read(c.pos, 1));
     if (!bytes.length) return -1;
     c.pos++;
     return bytes[0];
@@ -433,7 +433,7 @@ delegate("android/content/res/AssetManager", {
   "nativeAssetRead(J[BII)I": driven(function* (a: bigint, out: Int8Array, off: number, len: number): Gen {
     const c = deref<Cursor>(a);
     if (!len) return 0;
-    const bytes = yield c.source.read(c.pos, len);
+    const bytes = yield* awaited(c.source.read(c.pos, len));
     if (!bytes.length) return -1;
     out.set(i8(bytes), off);
     c.pos += bytes.length;
@@ -471,7 +471,7 @@ function openAsset(res: Resources, path: string, cookie = 0): bigint {
 const openFd = driven(function* (res: Resources, path: string, cookie: number, offsets: BigInt64Array): Gen {
   const hit = findEntry(res, path, cookie);
   if (!hit) throw rt.mkThrowable("java/io/FileNotFoundException", path);
-  const bytes: Uint8Array = yield readFully(hit.source);
+  const bytes = yield* awaited(readFully(hit.source));
   offsets[0] = 0n; offsets[1] = BigInt(bytes.length);
   return mkPfd(bytes, null);
 });

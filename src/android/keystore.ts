@@ -5,7 +5,7 @@
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
 import { once } from "../jvm/suspend";
-import { rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
 import { after, newObj, scall } from "../jvm/natives/jlang";
 import { unbox } from "../jvm/natives/jbox";
@@ -117,7 +117,7 @@ function descriptor(d: unknown): { domain: number; nspace: bigint; alias: string
 function* find(d: unknown): Gen<Entry> {
   const k = descriptor(d);
   const e = k.domain === DOMAIN.KEY_ID ? entries().find((x) => x.id === k.nspace.toString()) : k.domain === DOMAIN.APP ? entries().find((x) => x.alias === k.alias) : undefined;
-  return e ?? (yield failure(RESPONSE.KEY_NOT_FOUND, "Key not found"));
+  return e ?? (yield* awaited(failure(RESPONSE.KEY_NOT_FOUND, "Key not found")));
 }
 
 // the characteristics KeyMint enforces, from a generate or import request
@@ -217,7 +217,7 @@ function* store(alias: string, req: Param[], origin: number, made: { material: U
 }
 /** `body`'s answer, a KeyMint error code it throws as the ServiceSpecificException keystore2 sends */
 function* keymint$<T>(body: Gen<T>): Gen<T> {
-  try { return yield* body; } catch (e) { if (typeof e !== "number") throw e; return yield failure(e, "KeyMint error " + e); }
+  try { return yield* body; } catch (e) { if (typeof e !== "number") throw e; return yield* awaited(failure(e, "KeyMint error " + e)); }
 }
 
 // ── operations
@@ -377,7 +377,7 @@ rt.register({ name: "webdroid/KeystoreSecurityLevel", ctor: JSecurityLevel, sup:
       const ps = readParams(params), alias = descriptor(d).alias;
       if (alias === null) throw ERR.INVALID_ARGUMENT;
       if (ps.some((p) => p.tag === TAG.ATTESTATION_CHALLENGE)) throw ERR.ATTESTATION_KEYS_NOT_PROVISIONED;
-      return yield* store(alias, ps, 0, yield generateMaterial(ps));
+      return yield* store(alias, ps, 0, yield* awaited(generateMaterial(ps)));
     }())),
   "importKey(Landroid/system/keystore2/KeyDescriptor;Landroid/system/keystore2/KeyDescriptor;[Landroid/hardware/security/keymint/KeyParameter;I[B)Landroid/system/keystore2/KeyMetadata;":
     (d: unknown, _attest: unknown, params: unknown[], _flags: number, data: Int8Array) => rt.drive(keymint$(function* (): Gen<JObj> {

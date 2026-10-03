@@ -1,7 +1,7 @@
 // android.content.Intent and ComponentName are AOSP's own classes; the shell reads and builds them
 // through their Java API with the helpers here. The activities the platform answers through the
 // browser (pickers, share, VIEW) register here too.
-import { JObj, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { mkUri } from "./net";
@@ -37,7 +37,7 @@ export function* intentQuery$(intent: JIntent, resolvedType?: string | null): Ge
   const data: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
   return {
     action: yield vcall(intent, "getAction", `()${S}`),
-    categories: categories ? (yield toJsArray(categories)) as string[] : [],
+    categories: categories ? (yield* awaited(toJsArray(categories))) as string[] : [],
     dataUri: data && (yield vcall(data, "toString", `()${S}`)),
     typeStr: resolvedType !== undefined ? resolvedType : yield vcall(intent, "getType", `()${S}`),
     pkg: yield vcall(intent, "getPackage", `()${S}`),
@@ -72,8 +72,8 @@ export function systemActivity(intent: Pick<IntentQuery, "action" | "dataUri" | 
 }
 /** a picker's result: the chosen uri, with the grants it carries */
 export const mkResultIntent = driven(function* (uri: string | null, flags: number = 3 | 0x40): Gen<JIntent> {
-  const intent = yield newIntent();
-  if (uri !== null) yield vcall(intent, "setData", `(Landroid/net/Uri;)${I}`, yield mkUri(uri));
+  const intent = yield* awaited(newIntent());
+  if (uri !== null) yield vcall(intent, "setData", `(Landroid/net/Uri;)${I}`, yield* awaited(mkUri(uri)));
   yield vcall(intent, "setFlags", `(I)${I}`, flags);
   return intent;
 });

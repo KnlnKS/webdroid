@@ -1,7 +1,7 @@
 // AOSP's Resources as the shell builds them, the way LoadedApk has ResourcesManager build an app's,
 // and the device configuration they take.
 
-import { rt, driven, setDeclared, type Gen, type JObj } from "../jvm/runtime";
+import { awaited, rt, driven, setDeclared, type Gen, type JObj } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration, javaLocales } from "./resnative";
 import { device } from "../shell/config";
@@ -21,7 +21,7 @@ export const loadResources = driven(function* loadResources(path: string, config
   yield vcall(builder, "addApkAssets", "(Landroid/content/res/ApkAssets;)Landroid/content/res/AssetManager$Builder;", apk);
   const assets = yield vcall(builder, "build", "()Landroid/content/res/AssetManager;");
   const jres: JObj = yield newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V",
-    assets, yield deviceMetrics(), config);
+    assets, yield* awaited(deviceMetrics()), config);
   built.push(new WeakRef(jres));
   return jres;
 });
@@ -32,11 +32,11 @@ const built: WeakRef<JObj>[] = [];
  *  Resources built here. */
 export const applyDeviceConfiguration = driven(function* applyDeviceConfiguration(): Gen<unknown> {
   const C = "android/content/res/Configuration";
-  const config = yield javaConfiguration(deviceConfiguration());
+  const config = yield* awaited(javaConfiguration(deviceConfiguration()));
   // the system Resources exist before any configuration reaches them, as the zygote preloads them
   yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
   yield scall("android/content/res/Resources", "updateSystemConfiguration",
-    `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, yield deviceMetrics(), null);
+    `(L${C};Landroid/util/DisplayMetrics;Landroid/content/res/CompatibilityInfo;)V`, config, yield* awaited(deviceMetrics()), null);
   for (const entry of built.slice()) {
     const jres = entry.deref();
     if (!jres) { built.splice(built.indexOf(entry), 1); continue; }
@@ -47,11 +47,11 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
 });
 
 /** a Configuration of AOSP's carrying our device configuration's values */
-export const javaConfiguration = driven(function* javaConfiguration(c: JConfiguration): Gen<unknown> {
-  const config = yield newObj("android/content/res/Configuration", "()V");
+export const javaConfiguration = driven(function* javaConfiguration(c: JConfiguration): Gen<JObj> {
+  const config: JObj = yield newObj("android/content/res/Configuration", "()V");
   yield vcall(config, "setToDefaults", "()V");
   for (const k of CONFIG_FIELDS) (config as Record<string, number>)[rt.fieldProp("android/content/res/Configuration", k)!] = c[k];
-  yield vcall(config, "setLocales", "(Landroid/os/LocaleList;)V", yield javaLocales(c.locales));
+  yield vcall(config, "setLocales", "(Landroid/os/LocaleList;)V", yield* awaited(javaLocales(c.locales)));
   // the display's window configuration, which the global configuration carries on a device
   const windowConfig = (config as Record<string, unknown>)[rt.fieldProp("android/content/res/Configuration", "windowConfiguration")!];
   const bounds = yield newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height);

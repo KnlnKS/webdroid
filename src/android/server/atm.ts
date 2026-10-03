@@ -3,7 +3,7 @@
 // ActivityTaskSupervisor gives them. Starting pauses the resumed activity, launches and resumes the
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
-import { rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { awaited, rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { after, callUncaught, newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { once, shareable } from "../../jvm/suspend";
@@ -100,7 +100,7 @@ const CFG = "Landroid/content/res/Configuration;";
  *  configChanges hears the change; any other relaunches, ending at `lifecycle` with `results`
  *  delivered and `after` run. Returns whether it relaunched. */
 function* ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JObj, after: JObj | null = null): Gen<boolean> {
-  const { global, override } = yield configurations();
+  const { global, override } = yield* awaited(configurations());
   const changes: number = yield vcall(r.config, "diff", `(${CFG})I`, global);
   if (!changes) return false;
   r.config = global;
@@ -120,7 +120,7 @@ export const displayHooks: { requestOrientation?: (request: number) => boolean }
  *  then each visible activity (the others when they next resume), then each window its new frames */
 export const configurationChanged = driven(function* (): Gen<void> {
   notifyDisplayChanged();
-  const { global } = yield configurations();
+  const { global } = yield* awaited(configurations());
   yield* schedule(thisApp(), yield item("ConfigurationChangeItem", `${CFG}I`, global, 0), null);
   for (const r of [...stack]) {
     if (r.state === "resumed") yield* ensureConfiguration(r, [], yield resumeItem(r));
@@ -213,13 +213,13 @@ function* startActivity(app: JObj, intent: JObj, info: JObj, resultTo: ActivityR
   transitions++;
   try {
     if (yield* reuseActivity(intent, info)) return;
-    const token = yield systemToken();
+    const token = yield* awaited(systemToken());
     const prev = stack.at(-1);
     const orientation = getDeclared<number>(info, AI, "screenOrientation");
     if (prev) yield pause(prev);
     // the display turns for an activity that fixes its orientation before it launches
     if (displayHooks.requestOrientation?.(orientation)) yield configurationChanged();
-    const { global, override } = yield configurations();
+    const { global, override } = yield* awaited(configurations());
     const r: ActivityRecord = { token, intent, info, app, state: "launching", resultTo, resultWho, requestCode, results: [], finishing: false,
       translucent: yield* translucentTheme(info), pausing: null, owed: null, remote, config: global, orientation };
     stack.push(r);
@@ -248,9 +248,9 @@ const packageResources = once(driven(function* (): Gen<JObj> {
 /** ActivityRecord's occludesParent from the activity's theme: one translucent or floating, or showing
  *  the wallpaper, lets what is under it show */
 function* translucentTheme(info: JObj): Gen<boolean> {
-  const theme = yield vcall(yield packageResources(), "newTheme", "()Landroid/content/res/Resources$Theme;");
+  const theme = yield vcall(yield* awaited(packageResources()), "newTheme", "()Landroid/content/res/Resources$Theme;");
   yield vcall(theme, "applyStyle", "(IZ)V", yield vcall(info, "getThemeResource", "()I"), 1);
-  const statics = (yield linkInit(STYLEABLE)).ctor as Record<string, unknown>;
+  const statics = (yield* awaited(linkInit(STYLEABLE))).ctor as Record<string, unknown>;
   const a = yield vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", statics[mangleStaticField("Window")]);
   try {
     return !!(yield scall(AI, "isTranslucentOrFloating", "(Landroid/content/res/TypedArray;)Z", a)) ||
@@ -266,7 +266,7 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
   yield vcall(intent, "addCategory", "(Ljava/lang/String;)Landroid/content/Intent;", "android.intent.category.LAUNCHER");
   yield vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
   yield vcall(intent, "addFlags", "(I)Landroid/content/Intent;", 0x10200000);   // NEW_TASK | RESET_TASK_IF_NEEDED
-  const resolved = yield vcall(yield pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, GET_META_DATA, 0);
+  const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, GET_META_DATA, 0);
   const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
   if (!info) throw new Error(`no launcher activity in ${pkg}`);
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;",
@@ -279,12 +279,12 @@ const AI = "android/content/pm/ActivityInfo";
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
   try {
-    const resolved = yield vcall(yield pms(), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
+    const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
       intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
     const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
-    const q = yield intentQuery(intent), system = systemActivity(q, false) ??
+    const q = yield* awaited(intentQuery(intent)), system = systemActivity(q, false) ??
       (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
     if (system) { callUncaught(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode))); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
@@ -309,7 +309,7 @@ const RESULT_OK = -1;
  *  browser): it covers its caller, which resumes with any result it asked for */
 function* runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Gen<void> {
   let data: JObj | null = null;
-  try { data = yield run(intent); } catch (error) { reportUncaught(error); }
+  try { data = yield* awaited(run(intent)); } catch (error) { reportUncaught(error); }
   yield* deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data);
 }
 /** a result from an activity that covered `to` elsewhere (the browser, another process): the
@@ -327,8 +327,8 @@ export const coverTop = driven(function* (): Gen<void> {
 });
 /** the broker's launch of one of this process's activities for another process */
 export const startActivityInProcess = driven(function* (component: string, intent: JObj, remoteId: number, caller: ComponentRef | null): Gen<void> {
-  const name = yield mkComponentName(appHost!.pkg, component.replaceAll("/", "."));
-  const info = yield vcall(yield pms(), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
+  const name = yield* awaited(mkComponentName(appHost!.pkg, component.replaceAll("/", ".")));
+  const info = yield vcall(yield* awaited(pms()), "getActivityInfo", "(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;", name, GET_META_DATA, 0);
   if (!info) throw new Error("Activity not installed: " + component);
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", name);
   yield* startActivity(thisApp(), intent, info, null, null, -1, { id: remoteId, caller });
@@ -384,7 +384,7 @@ function* navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, result
   const covered = parent ? stack.slice(stack.indexOf(parent) + 1, stack.indexOf(r)) : [];
   const reuse = parent && (getDeclared<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
     ((yield vcall(dest, "getFlags", "()I")) & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
-  const restarted = parent && !reuse && (yield startActivityFor(r.app, dest)) === START_SUCCESS;
+  const restarted = parent && !reuse && (yield* awaited(startActivityFor(r.app, dest))) === START_SUCCESS;
   callUncaught(() => rt.drive(function* () {
     for (const c of covered) yield* finish(c, RESULT_CANCELED, null);
     if (reuse) yield* newIntent(parent!, dest);

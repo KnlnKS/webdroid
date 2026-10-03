@@ -1,6 +1,6 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { callOn, callUncaught, curThread, JThread, scall, vcall, after, linkInit, reportUncaught, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
@@ -74,7 +74,7 @@ export function systemToken(): JObj | Promise<JObj> {
 class JFileWriter extends JObj { fd = -1; }
 function* exportObject(o: unknown): Gen<BinderHandle | FileHandle | null> {
   if (!(o instanceof OwnedFd)) return exportBinder(o);
-  const bytes: Uint8Array | null = yield fdContents(o.fd);
+  const bytes = yield* awaited(fdContents(o.fd));
   if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
   const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
   if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
@@ -86,7 +86,7 @@ function importObject(o: BinderHandle | FileHandle | null): unknown {
   if (!o || !("bytes" in o)) return importBinder(o);
   return after(o.writer && importBinder(o.writer), (writer) => {
     const sink = writer && driven(function* (bytes: Uint8Array): Gen<void> {
-      const data = yield newParcel();
+      const data = yield* awaited(newParcel());
       yield vcall(data, "writeByteArray", "([B)V", i8(bytes));
       yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
     });
@@ -107,22 +107,22 @@ const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData
 });
 /** a Parcel holding what another process sent, read from its start */
 export const importParcel = driven(function* importParcel(data: ParcelData): Gen<JObj> {
-  const parcel = yield newParcel();
+  const parcel = yield* awaited(newParcel());
   yield fillParcel(nativeParcel(parcel), data);
   return parcel;
 });
 /** a Parcelable as it crosses processes: what its writeToParcel writes */
 export const parcelled = driven(function* parcelled(o: JObj): Gen<ParcelData> {
-  const parcel = yield newParcel();
+  const parcel = yield* awaited(newParcel());
   try {
     yield vcall(o, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-    return yield exportParcel(nativeParcel(parcel));
+    return yield* awaited(exportParcel(nativeParcel(parcel)));
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
 /** a Parcelable of class `cls` read back by its CREATOR; the parcel, and the descriptors it
  *  imported, are released once read */
 export const unparcelled = driven(function* unparcelled(cls: string, data: ParcelData): Gen<JObj> {
-  const creator = (yield linkInit(cls)).ctor[mangleStaticField("CREATOR")], parcel = yield importParcel(data);
+  const creator = (yield* awaited(linkInit(cls))).ctor[mangleStaticField("CREATOR")], parcel = yield* awaited(importParcel(data));
   try { return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel); }
   finally { yield vcall(parcel, "recycle", "()V"); }
 });
@@ -152,7 +152,7 @@ export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("
 /** the context a hosted service checks its callers with, as a system service's mContext: the process's application */
 export const serviceContext = (): Promise<JObj> => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
 export const enforceCallingOrSelfPermission = driven(function* (permission: string, message: string | null): Gen<void> {
-  yield vcall(yield serviceContext(), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
+  yield vcall(yield* awaited(serviceContext()), "enforceCallingOrSelfPermission", "(Ljava/lang/String;Ljava/lang/String;)V", permission, message);
 });
 const oneWay = new Map<number, Promise<unknown>>();
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
@@ -182,7 +182,7 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
       let handled = 0;
       try { handled = yield vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
       catch (error) { reportUncaught(error); } // "Uncaught remote exception!": the caller sees UNKNOWN_TRANSACTION
-      return { handled, data: yield exportParcel(reply) };
+      return { handled, data: yield* awaited(exportParcel(reply)) };
     } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
   }()));
   if (!(request.flags & 1)) return run();
@@ -276,7 +276,7 @@ const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
 const proxyAlive = function (this: JObj) { return +binderTransport.alive(proxyOf(this).handle.pid); };
 /** BpBinder::transact: the data parcel's bytes go whole; the reply is read from its start */
 const transact = driven(function* transact(target: BinderHandle, code: number, data: ParcelData, reply: NativeParcel | null, flags: number): Gen<number> {
-  const result: TransactionReply = yield binderTransport.transact({ handle: target, code, data, flags, system: systemThreads.has(curThread) });
+  const result = yield* awaited(binderTransport.transact({ handle: target, code, data, flags, system: systemThreads.has(curThread) }));
   if (reply) yield fillParcel(reply, result.data);
   return result.handled;
 });
@@ -290,7 +290,7 @@ rt.registerJnis("android/os/BinderProxy", {
   },
   "getInterfaceDescriptor()Ljava/lang/String;": driven(function* (this: JObj): Gen<string | null> {
     const reply = new NativeParcel();
-    yield transact(proxyOf(this).handle, INTERFACE_TRANSACTION, yield exportParcel(new NativeParcel()), reply, 0);
+    yield transact(proxyOf(this).handle, INTERFACE_TRANSACTION, yield* awaited(exportParcel(new NativeParcel())), reply, 0);
     return readString(reply);
   }),
   "linkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JObj, recipient: unknown) {

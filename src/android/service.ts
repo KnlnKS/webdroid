@@ -1,6 +1,6 @@
 // System services and binder-ish plumbing, and FileObserver's inotify.
 
-import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
 import { utf8 } from "../jvm/abi";
 import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch, javaReadFd } from "../native/fs";
@@ -59,7 +59,7 @@ rt.registerJnis("android/os/FileObserver$ObserverThread", {
   // android_os_FileObserver.cpp's loop: each event to onEvent(wd, mask, name) until a read fails
   "observe(I)V": driven(function* (this: JObj, fd: number): Gen {
     const buf = new Uint8Array(512), view = new DataView(buf.buffer);
-    for (let n: number; (n = yield javaReadFd(fd, buf)) >= 16;) {
+    for (let n: number; (n = yield* awaited(javaReadFd(fd, buf))) >= 16;) {
       for (let at = 0; at + 16 <= n;) {
         const len = view.getUint32(at + 12, true), name = buf.subarray(at + 16, at + 16 + len);
         const path = len ? utf8.dec.decode(name.subarray(0, name.indexOf(0) < 0 ? len : name.indexOf(0))) : null;

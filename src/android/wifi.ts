@@ -5,7 +5,7 @@
 // kept (decoded from the AVD's service-wifi.jar): ACCESS_WIFI_STATE to read, CHANGE_WIFI_STATE to
 // change, location access to see the network's identity or scan results. There is no radio to scan
 // or toggle: a scan fails and setWifiEnabled is refused.
-import { JObj, declaredField, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, declaredField, rt, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
@@ -26,7 +26,7 @@ const refuseChange = () => after(enforce("android.permission.CHANGE_WIFI_STATE")
  *  below Q) */
 function* canAccessScanResults(pkg: string): Gen<boolean> {
   const { uid } = callingIdentity(), check = (name: string) => checkUidPermission("android.permission." + name, uid);
-  return locationTransport.enabled() && ((yield check("ACCESS_FINE_LOCATION")) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield check("ACCESS_COARSE_LOCATION")) === 0);
+  return locationTransport.enabled() && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
 }
 function* connectionInfo(): Gen<JObj> {
   const info = yield newObj("android/net/wifi/WifiInfo");

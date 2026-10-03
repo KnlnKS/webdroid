@@ -1,6 +1,6 @@
 // android.net.Uri runs from AOSP bytecode; TS services reach one through its Java methods.
 
-import { rt, type JObj, type Gen } from "../jvm/runtime";
+import { awaited, rt, type JObj, type Gen } from "../jvm/runtime";
 import { scall, vcall } from "../jvm/natives/jlang";
 
 export type JUri = JObj;
@@ -21,7 +21,7 @@ export function* clipUris(clip: JObj | null): Gen<string[]> {
   const uris: string[] = [];
   for (let i = 0, n: number = clip ? yield vcall(clip, "getItemCount", "()I") : 0; i < n; i++) {
     const uri: JUri | null = yield vcall(yield vcall(clip, "getItemAt", "(I)Landroid/content/ClipData$Item;", i), "getUri", "()Landroid/net/Uri;");
-    if (uri) uris.push(yield uriText(uri));
+    if (uri) uris.push(yield* awaited(uriText(uri)));
   }
   return uris;
 }

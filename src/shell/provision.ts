@@ -8,7 +8,7 @@ import { vfs } from "./vfs";
 import { packages, signaturePermissions, componentState } from "../android/packages";
 import { mkComponentName, newIntent, putExtra } from "../android/intent";
 import { vcall } from "../jvm/natives/jlang";
-import { rt, type Gen } from "../jvm/runtime";
+import { awaited, rt, type Gen } from "../jvm/runtime";
 import { asSystem } from "../android/binder";
 import { serviceTransport } from "../android/server/activeservices";
 import { hexBytes } from "../jvm/abi";
@@ -50,8 +50,8 @@ export const provisionServices = (options: { attestationEnabled: boolean }): Pro
     if (!spec.provision) continue;
     const owner = packages.get(spec.pkg)!, component = owner.components.service.get(spec.provision.component);
     if (!component) throw new Error("Provisioning service unavailable: " + spec.pkg);
-    const intent = yield newIntent();
-    yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield mkComponentName(spec.pkg, spec.provision.component));
+    const intent = yield* awaited(newIntent());
+    yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield* awaited(mkComponentName(spec.pkg, spec.provision.component)));
     const extras = { ...spec.provision.extras,
       ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
     for (const [key, value] of Object.entries(extras)) yield putExtra(intent, key, +value, "Z");

@@ -1,6 +1,6 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // model native code shares (src/native/net.ts): a descriptor from either side is the same socket.
-import { rt, JObj, declaredField, getDeclared, driven } from "../jvm/runtime";
+import { awaited, rt, JObj, declaredField, getDeclared, driven } from "../jvm/runtime";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
@@ -235,7 +235,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     for (const i of INTERFACES) for (const { address, prefix } of i.addresses) {
       const mask = Array.from({ length: address.length }, (_, k) => 255 & ~(255 >> Math.max(0, Math.min(8, prefix - 8 * k))));
       list.push(yield newObj("android/system/StructIfaddrs", `(Ljava/lang/String;I${INET}${INET}${INET}[B)V`, i.name, i.flags,
-        yield inetAddress({ address }), yield inetAddress({ address: mask }), null, null));
+        yield* awaited(inetAddress({ address })), yield* awaited(inetAddress({ address: mask })), null, null));
     }
     return jarray(list, "Landroid/system/StructIfaddrs;");
   }),

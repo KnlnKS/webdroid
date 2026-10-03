@@ -1,7 +1,7 @@
 // WindowManagerService and its Session, for AOSP's ViewRootImpl: windows on the one display, their
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
-import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { awaited, rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { after, callOn, newObj, vcall, scall, JThread } from "../../jvm/natives/jlang";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
@@ -90,13 +90,13 @@ function* insetsState(): Gen<JObj> {
     yield vcall(source, "setVisible", "(Z)Landroid/view/InsetsSource;", +visible);
     yield vcall(state, "addSource", "(Landroid/view/InsetsSource;)V", source);
   };
-  if (statusBar) yield* add(0, yield insetsType("statusBars"), 0, 0, w, statusBar);
+  if (statusBar) yield* add(0, yield* awaited(insetsType("statusBars")), 0, 0, w, statusBar);
   if (navBar) {
-    yield* add(0, yield insetsType("navigationBars"), 0, h - navBar, w, h);
-    yield* add(1, yield insetsType("mandatorySystemGestures"), 0, h - navBar, w, h);
+    yield* add(0, yield* awaited(insetsType("navigationBars")), 0, h - navBar, w, h);
+    yield* add(1, yield* awaited(insetsType("mandatorySystemGestures")), 0, h - navBar, w, h);
   }
   // the input method's window: the browser keyboard, which the page lays out outside the display
-  yield* add(0, yield insetsType("ime"), 0, h, w, h, imeShown);
+  yield* add(0, yield* awaited(insetsType("ime")), 0, h, w, h, imeShown);
   return state;
 }
 let imeShown = false;
@@ -111,14 +111,14 @@ export const setImeShown = driven(function* (shown: boolean): Gen<void> {
 /** the device's configuration, and a full-screen task's override of it: what activities and
  *  windows are laid out against */
 export const configurations = driven(function* (): Gen<{ global: JObj; override: JObj }> {
-  const global = yield javaConfiguration(deviceConfiguration()) as JObj;
+  const global = yield* awaited(javaConfiguration(deviceConfiguration()));
   const override = yield newObj("android/content/res/Configuration", "(Landroid/content/res/Configuration;)V", global);
   const windowConfig = getDeclared<JObj>(override, "android/content/res/Configuration", "windowConfiguration");
   yield vcall(windowConfig, "setActivityType", "(I)V", ACTIVITY_TYPE_STANDARD);
   return { global, override };
 });
 function* mergedConfiguration(out: JObj): Gen<void> {
-  const { global, override } = yield configurations();
+  const { global, override } = yield* awaited(configurations());
   yield vcall(out, "setConfiguration", "(Landroid/content/res/Configuration;Landroid/content/res/Configuration;)V", global, override);
 }
 
@@ -130,7 +130,7 @@ function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: J
   const title = String((yield vcall(attrs, "getTitle", "()Ljava/lang/CharSequence;")) ?? "");
   const ws = new WindowState(window, copy, parent, title, type, windowZ(type, token, ++seq));
   ws.visibility = visibility;
-  ws.requestedVisibleTypes = yield insetsType("defaultVisible");
+  ws.requestedVisibleTypes = yield* awaited(insetsType("defaultVisible"));
   windows.set(window, ws);
   if (outChannel) {
     const pair: JObj[] = yield scall("android/view/InputChannel", "openInputChannelPair", "(Ljava/lang/String;)[Landroid/view/InputChannel;", title);
@@ -160,7 +160,7 @@ function* relayout(window: JObj, attrs: JObj | null, width: number, height: numb
   const firstTime = ws.visibility !== VISIBLE && visibility === VISIBLE;
   ws.visibility = visibility;
   if (visibility === VISIBLE) {
-    if (!ws.javaSurface) { ws.javaSurface = yield javaSurfaceControl(ws.layer, ws.layer.name); res |= RELAYOUT_RES_SURFACE_CHANGED; }
+    if (!ws.javaSurface) { ws.javaSurface = yield* awaited(javaSurfaceControl(ws.layer, ws.layer.name)); res |= RELAYOUT_RES_SURFACE_CHANGED; }
     yield vcall(R("surfaceControl"), "copyFrom", "(Landroid/view/SurfaceControl;Ljava/lang/String;)V", ws.javaSurface, "relayout");
     // the surface extends past the frame by its insets (room for a shadow)
     const insets = edges(lp<JObj>(ws.attrs, "surfaceInsets"));
@@ -275,7 +275,7 @@ export const dispatchTouch = (action: number, x: number, y: number, downTime: bi
   const event = yield scall("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", downTime, eventTime, action, x, y, 0);
   yield vcall(event, "setSource", "(I)V", SOURCE_TOUCHSCREEN);
   yield vcall(event, "offsetLocation", "(FF)V", -ws.frame.left, -ws.frame.top);
-  return yield publish(ws.channel, event);
+  return yield* awaited(publish(ws.channel, event));
 }());
 
 const SESSION = "Landroid/view/IWindow;";

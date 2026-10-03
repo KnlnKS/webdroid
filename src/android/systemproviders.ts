@@ -1,6 +1,6 @@
 // Content providers system packages publish (SettingsProvider, ExternalStorageProvider, MediaProvider),
 // which no app's manifest declares: ActivityManagerService hands their binders out of getContentProvider.
-import { rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
+import { awaited, rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { newObj, scall, vcall, after } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import { arrayMapEntries } from "../jvm/natives/jcoll";
@@ -46,7 +46,7 @@ rt.register({ name: "webdroid/SystemContentProvider", ctor: JSystemContentProvid
     if (filter !== "*/*") {
       const type: string | null = yield vcall(this, "getType", `(${AS}${URI})${S}`, source, uri);
       if (type === null || !(yield scall("android/content/ClipDescription", "compareMimeTypes", `(${S}${S})Z`, type, filter)))
-        throw rt.mkThrowable("java/io/FileNotFoundException", `Can't open ${yield uriText(uri)} as type ${filter}`);
+        throw rt.mkThrowable("java/io/FileNotFoundException", `Can't open ${yield* awaited(uriText(uri))} as type ${filter}`);
     }
     return yield vcall(this, "openAssetFile", OPEN_ASSET, source, uri, "r", signal);
   }),
@@ -78,7 +78,7 @@ export const matrixCursor = driven(function* matrixCursor(columns: string[], row
 /** a Bundle holding one Uri, as a call answers a document or a scanned file */
 export const uriBundle = driven(function* uriBundle$(key: string, uri: string | null): Gen<JObj> {
   const out: JObj = yield newObj("android/os/Bundle", "()V");
-  yield vcall(out, "putParcelable", `(${S}Landroid/os/Parcelable;)V`, key, uri === null ? null : yield mkUri(uri));
+  yield vcall(out, "putParcelable", `(${S}Landroid/os/Parcelable;)V`, key, uri === null ? null : yield* awaited(mkUri(uri)));
   return out;
 });
 
@@ -99,17 +99,17 @@ function transport(ops: ProviderOps): NativeSpec["methods"] {
   const methods: NativeSpec["methods"] = {};
   const { query, insert, update, delete: remove, getType, openFile, call } = ops;
   if (query) methods[`query(${AS}${URI}[${S}${B}${SIGNAL})Landroid/database/Cursor;`] = driven(function* (_source: unknown, uri: JUri | null, projection: string[] | null, extras: JObj | null): Gen {
-    return yield query(yield uriText(uri), projection, ...(yield* selectionOf(extras)), extras);
+    return yield* awaited(query(yield* awaited(uriText(uri)), projection, ...(yield* selectionOf(extras)), extras));
   });
   if (insert) methods[`insert(${AS}${URI}${CV}${B})${URI}`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null): Gen {
-    const inserted: string | null = yield insert(yield uriText(uri), contentValues(values));
-    return inserted === null ? null : yield mkUri(inserted);
+    const inserted = yield* awaited(insert(yield* awaited(uriText(uri)), contentValues(values)));
+    return inserted === null ? null : yield* awaited(mkUri(inserted));
   });
   if (update) methods[`update(${AS}${URI}${CV}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, values: JObj | null, extras: JObj | null): Gen {
-    return yield update(yield uriText(uri), contentValues(values), ...(yield* selectionOf(extras)));
+    return yield* awaited(update(yield* awaited(uriText(uri)), contentValues(values), ...(yield* selectionOf(extras))));
   });
   if (remove) methods[`delete(${AS}${URI}${B})I`] = driven(function* (_source: unknown, uri: JUri | null, extras: JObj | null): Gen {
-    return yield remove(yield uriText(uri), ...(yield* selectionOf(extras)));
+    return yield* awaited(remove(yield* awaited(uriText(uri)), ...(yield* selectionOf(extras))));
   });
   if (getType) methods[`getType(${AS}${URI})${S}`] = (_source: unknown, uri: JUri | null) => after(uriText(uri), getType);
   if (openFile) methods[`openFile${OPEN_FILE}`] = (_source: unknown, uri: JUri | null, mode: string) => after(uriText(uri), (u) => openFile(u, mode));
@@ -158,5 +158,5 @@ export const systemProviderHolder = driven(function* systemProviderHolder$(autho
   const info: JObj | null = yield* systemProviderInfo$(authority);
   if (!info) return null;
   const holder: JObj = yield newObj("android/app/ContentProviderHolder", "(Landroid/content/pm/ProviderInfo;)V", info);
-  return setDeclared(holder, "android/app/ContentProviderHolder", { provider: yield providers.get(authority)!.binder(), noReleaseNeeded: 1 });
+  return setDeclared(holder, "android/app/ContentProviderHolder", { provider: yield* awaited(providers.get(authority)!.binder()), noReleaseNeeded: 1 });
 });

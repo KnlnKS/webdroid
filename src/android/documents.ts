@@ -9,7 +9,7 @@
  * URI algebra needs no special case; the volume is the picked directory's own name.
  */
 
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { uriParts, uriText } from "./net";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
@@ -224,36 +224,36 @@ export async function pickDocuments(opts: { multiple?: boolean; save?: string; m
 /** a document opened in `mode`: a write commits its bytes on close, "t" truncating */
 const docPfd = driven(function* (docId: string, mode: string | null): Gen<JObj> {
   const write = (mode ?? "r").includes("w");
-  const bytes = (yield pfdBackingBytes(docId)) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : yield docRead(docId));
-  return yield mkPfd(bytes, write ? (b) => docWrite(docId, b) : null, docId);
+  const bytes = (yield* awaited(pfdBackingBytes(docId))) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : yield* awaited(docRead(docId)));
+  return yield* awaited(mkPfd(bytes, write ? (b) => docWrite(docId, b) : null, docId));
 });
 
 // ── ExternalStorageProvider, the storage authority's IContentProvider over the picked handles: a
 // document, or a directory's children, as DocumentsProvider's query answers them
 const docQuery = driven(function* (u: string, projection: string[] | null): Gen<JObj> {
   const id = documentId(u);
-  const rows: DocRow[] = isChildrenUri(u) ? yield docChildren(id) : [yield docRow(id)].filter((r) => r !== null);
+  const rows: DocRow[] = isChildrenUri(u) ? yield* awaited(docChildren(id)) : [yield* awaited(docRow(id))].filter((r) => r !== null);
   const cols = projection?.length ? projection : DOC_COLUMNS;
-  return yield matrixCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); }));
+  return yield* awaited(matrixCursor(cols, rows.map((r) => { const cells = docCells(r); return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null); })));
 });
 const S = "Ljava/lang/String;";
 /** DocumentsProvider.call's document methods, as DocumentsContract sends them: the document in
  *  EXTRA_URI, and a created or renamed one's uri back in it; failures throw as ExternalStorageProvider's do */
 const docCall = driven(function* (method: string, _arg: string | null, extras: JObj | null): Gen<JObj | null> {
   const get = (key: string): string | null | Promise<string | null> => vcall(extras, "getString", `(${S})${S}`, key);
-  const uri: string = yield uriText(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "uri")), id = documentId(uri);
+  const uri = yield* awaited(uriText(yield vcall(extras, "getParcelable", `(${S})Landroid/os/Parcelable;`, "uri"))), id = documentId(uri);
   let result: string | null;
   if (method === "android:createDocument") {
-    result = yield docCreate(id, (yield get("mime_type")) ?? "", (yield get("_display_name")) ?? "");
+    result = yield* awaited(docCreate(id, (yield* awaited(get("mime_type"))) ?? "", (yield* awaited(get("_display_name"))) ?? ""));
     if (!result) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Parent document isn't a directory");
   } else if (method === "android:renameDocument") {
-    const name: string = (yield get("_display_name")) ?? "";
-    if (!(result = yield docRename(id, name))) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to rename to " + name);
+    const name: string = (yield* awaited(get("_display_name"))) ?? "";
+    if (!(result = yield* awaited(docRename(id, name)))) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to rename to " + name);
   } else if (method === "android:deleteDocument") {
-    if (!(yield docDelete(id))) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to delete " + id);
+    if (!(yield* awaited(docDelete(id)))) throw rt.mkThrowable("java/lang/IllegalStateException", "Failed to delete " + id);
     return null;
   } else throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Method not supported " + method);
-  return yield uriBundle("uri", docUriLike(uri, result!));
+  return yield* awaited(uriBundle("uri", docUriLike(uri, result!)));
 });
 registerSystemProvider(DOCS_AUTHORITY, { pkg: "com.android.externalstorage", cls: "com.android.externalstorage.ExternalStorageProvider",
   process: "com.android.externalstorage", appFlags: 1, flags: 0, initOrder: 0, grantUriPermissions: true, action: DOCUMENTS_PROVIDER }, {

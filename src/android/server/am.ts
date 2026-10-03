@@ -2,7 +2,7 @@
 // application (ApplicationInfo and the process's providers from the package manager, the device
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
-import { rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
+import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
@@ -41,13 +41,13 @@ export const compatInfo = () => staticField<JObj>("android/content/res/Compatibi
 const bind = driven(function* (app: JObj): Gen<void> {
   const pkg = appHost!.pkg, process = PROCESS_NAME || pkg;
   appThread = app;
-  const pm = yield pms();
+  const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
   const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, GET_META_DATA, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
     slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
-  const { global } = yield configurations();
-  const compat = yield compatInfo();
+  const { global } = yield* awaited(configurations());
+  const compat = yield* awaited(compatInfo());
   const now = BigInt(Math.floor(uptimeMillis()));
   yield vcall(app, "bindApplication",
     "(Ljava/lang/String;Landroid/content/pm/ApplicationInfo;Ljava/lang/String;Ljava/lang/String;ZLandroid/content/pm/ProviderInfoList;" +
@@ -102,15 +102,15 @@ export const providerProcesses: { get: (pkg: string, process: string, authority:
  *  this process's with its uid, which ActivityThread instantiates rather than waiting for a
  *  publication; otherwise the binder its own process published, which the broker waits for */
 const contentProvider = driven(function* (name: string, userId: number): Gen<JObj | null> {
-  const own = published.get(name) ?? (yield systemProviderHolder(name));
+  const own = published.get(name) ?? (yield* awaited(systemProviderHolder(name)));
   if (own) return own;
-  const info: JObj | null = yield vcall(yield pms(), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
+  const info: JObj | null = yield vcall(yield* awaited(pms()), "resolveContentProvider", "(Ljava/lang/String;JI)Landroid/content/pm/ProviderInfo;", name, GET_SHARED_LIBRARY_FILES, userId);
   if (!info) return null;
   const app = getDeclared<JObj>(info, COMPONENT_INFO, "applicationInfo"), process = getDeclared<string>(info, COMPONENT_INFO, "processName");
   const holder: JObj = yield newObj(HOLDER, "(Landroid/content/pm/ProviderInfo;)V", info);
   if (getDeclared(app, APP_INFO, "uid") === PROCESS_UID && (getDeclared(info, PROVIDER_INFO, "multiprocess") || process === (PROCESS_NAME || appHost!.pkg)))
     return setDeclared(holder, HOLDER, { mLocal: 1 });
-  const binder = yield providerProcesses.get(getDeclared(app, APP_INFO, "packageName"), process, name);
+  const binder = yield* awaited(providerProcesses.get(getDeclared(app, APP_INFO, "packageName"), process, name));
   if (!binder) return null;
   return setDeclared(holder, HOLDER, { provider: yield scall("android/content/ContentProviderNative", "asInterface", "(Landroid/os/IBinder;)Landroid/content/IContentProvider;", binder) });
 });
@@ -153,7 +153,7 @@ export const startActivityThread = driven(function* (launched: boolean): Gen<voi
   yield scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", "<pre-initialized>");
   const thread = yield newObj(AT, "()V");
   yield vcall(thread, "attach", "(ZJ)V", 0, 0n);
-  const statics = (yield linkInit(AT)).ctor as Record<string, unknown>;
+  const statics = (yield* awaited(linkInit(AT))).ctor as Record<string, unknown>;
   statics[mangleStaticField("sMainThreadHandler")] ??= yield vcall(thread, "getHandler", "()Landroid/os/Handler;");
 });
 

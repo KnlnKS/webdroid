@@ -2,7 +2,7 @@
 // one volume, emulated;0, the primary shared storage on internal storage (no fsUuid, so its storage
 // UUID is UUID_DEFAULT), mounted and writable. Shared storage is /sdcard here, the vfs's, where the
 // AVD mounts /storage/emulated/0 over /data/media. Space answers follow the browser's estimate.
-import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleStaticField } from "../jvm/abi";
 import { newObj, scall, vcall, linkInit } from "../jvm/natives/jlang";
 import { newFile } from "../jvm/natives/jio";
@@ -19,11 +19,11 @@ const storageVolume = driven(function* storageVolume$(): Gen<JObj> {
   const id: number = yield vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "storage_internal", "string", "android");
   return newObj("android/os/storage/StorageVolume",
     "(Ljava/lang/String;Ljava/io/File;Ljava/io/File;Ljava/lang/String;ZZZZZJLandroid/os/UserHandle;Ljava/util/UUID;Ljava/lang/String;Ljava/lang/String;)V",
-    "emulated;0", yield newFile(SHARED), yield newFile(SHARED), yield vcall(res, "getString", "(I)Ljava/lang/String;", id),
+    "emulated;0", yield* awaited(newFile(SHARED)), yield* awaited(newFile(SHARED)), yield vcall(res, "getString", "(I)Ljava/lang/String;", id),
     1, 0, 1, 0, 0, 0n, yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", USER), uuidDefault(), null, "mounted");
 });
 const volumeInfo = driven(function* volumeInfo$(): Gen<JObj> {
-  const statics = (yield linkInit(VI)).ctor as Record<string, number>, flag = (name: string) => statics[mangleStaticField(name)];
+  const statics = (yield* awaited(linkInit(VI))).ctor as Record<string, number>, flag = (name: string) => statics[mangleStaticField(name)];
   const info: Record<string, unknown> = yield newObj(VI, "(Ljava/lang/String;ILandroid/os/storage/DiskInfo;Ljava/lang/String;)V",
     "emulated;0", flag("TYPE_EMULATED"), null, "");
   for (const [name, value] of Object.entries({ mountFlags: flag("MOUNT_FLAG_PRIMARY") | flag("MOUNT_FLAG_VISIBLE_FOR_WRITE"),
@@ -33,13 +33,13 @@ const volumeInfo = driven(function* volumeInfo$(): Gen<JObj> {
 
 rt.register({ name: "webdroid/StorageManagerService", ctor: class extends JObj {}, sup: "android/os/storage/IStorageManager$Stub", methods: {
   "getVolumeList(ILjava/lang/String;I)[Landroid/os/storage/StorageVolume;": driven(function* (): Gen {
-    return jarray([yield storageVolume()], "Landroid/os/storage/StorageVolume;");
+    return jarray([yield* awaited(storageVolume())], "Landroid/os/storage/StorageVolume;");
   }),
-  "getVolumes(I)[Landroid/os/storage/VolumeInfo;": driven(function* (): Gen { return jarray([yield volumeInfo()], `L${VI};`); }),
+  "getVolumes(I)[Landroid/os/storage/VolumeInfo;": driven(function* (): Gen { return jarray([yield* awaited(volumeInfo())], `L${VI};`); }),
   "getPrimaryStorageUuid()Ljava/lang/String;": () => null,
   "isCeStorageUnlocked(I)Z": (user: number) => +(user === USER),
-  "getAllocatableBytes(Ljava/lang/String;ILjava/lang/String;)J": driven(function* (): Gen { return bytes((yield storageEstimate()).free); }),
-  "getCacheQuotaBytes(Ljava/lang/String;I)J": driven(function* (): Gen { return bytes((yield storageEstimate()).total / 20); }),
+  "getAllocatableBytes(Ljava/lang/String;ILjava/lang/String;)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).free); }),
+  "getCacheQuotaBytes(Ljava/lang/String;I)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).total / 20); }),
   "getCacheSizeBytes(Ljava/lang/String;I)J": () => 0n,
   // vold creates an app's own external data, obb and media directories for it, and nothing else
   "mkdirs(Ljava/lang/String;Ljava/lang/String;)V": (pkg: string, path: string) => {

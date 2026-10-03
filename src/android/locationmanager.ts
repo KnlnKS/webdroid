@@ -4,7 +4,7 @@
 // browser for high accuracy, and passive requests only hear fixes others asked for. As in
 // LocationManagerService, locations need ACCESS_COARSE_LOCATION or ACCESS_FINE_LOCATION (a coarse
 // grant is not fudged here) and a caller without either sees no providers.
-import { JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { after, newObj, scall, vcall, reportUncaught, callUncaught } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
@@ -132,7 +132,7 @@ function* providerList(criteria: JObj | null, enabledOnly: number): Gen<string[]
   for (const name of providers()) {
     if (enabledOnly && !locationTransport.enabled()) continue;
     if (criteria && !(yield scall("android/location/LocationProvider", "propertiesMeetCriteria",
-      "(Ljava/lang/String;Landroid/location/provider/ProviderProperties;Landroid/location/Criteria;)Z", name, yield providerProperties(name), criteria))) continue;
+      "(Ljava/lang/String;Landroid/location/provider/ProviderProperties;Landroid/location/Criteria;)Z", name, yield* awaited(providerProperties(name)), criteria))) continue;
     out.push(name);
   }
   return out;

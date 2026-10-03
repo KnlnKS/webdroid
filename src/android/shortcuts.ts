@@ -1,7 +1,7 @@
 // IShortcutService, under AOSP's ShortcutManager: ShortcutInfo and its Builder run from bytecode.
 // A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
-import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { after, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
@@ -31,7 +31,7 @@ function* incoming(pkg: string, si: JObj | null, forUpdate = false): Gen<JObj> {
   if ((yield vcall(si, "getPackage", "()Ljava/lang/String;")) !== pkg) throw rt.mkThrowable("java/lang/SecurityException", "Shortcut package name mismatch");
   const copy: JObj = yield vcall(si, "clone", `(I)${SI}`, 0);
   if (!forUpdate) {
-    if (!(yield vcall(copy, "getActivity", `()${CN}`))) yield vcall(copy, "setActivity", `(${CN})V`, yield mainActivity(pkg));
+    if (!(yield vcall(copy, "getActivity", `()${CN}`))) yield vcall(copy, "setActivity", `(${CN})V`, yield* awaited(mainActivity(pkg)));
     yield vcall(copy, "enforceMandatoryFields", "(Z)V", 0);
   }
   yield vcall(copy, "setTimestamp", "(J)V", BigInt(Date.now()));
@@ -39,7 +39,7 @@ function* incoming(pkg: string, si: JObj | null, forUpdate = false): Gen<JObj> {
 }
 function* incomingList(pkg: string, slice: JObj): Gen<JObj[]> {
   const out: JObj[] = [];
-  for (const si of (yield toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;"))) as JObj[]) out.push(yield* incoming(pkg, si));
+  for (const si of (yield* awaited(toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")))) as JObj[]) out.push(yield* incoming(pkg, si));
   return out;
 }
 /** a package's shortcuts after a change: at most MAX_PER_ACTIVITY on an activity, each dynamic,
@@ -61,7 +61,7 @@ function* commit(pkg: string, shortcuts: JObj[]): Gen<void> {
     }
   }
   const next = new Map<string, JObj>();
-  for (const si of shortcuts) next.set(yield idOf(si), si);
+  for (const si of shortcuts) next.set(yield* awaited(idOf(si)), si);
   packages.set(pkg, next);
 }
 const remove = (pkg: string, ids: JObj | null) => after(toJsArray(ids), (list) => { const shortcuts = dynamicOf(pkg); for (const id of list as string[]) shortcuts.delete(id); });
@@ -72,28 +72,28 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
   [`setDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) { yield* commit(pkg, yield* incomingList(pkg, slice)); return 1; }),
   [`addDynamicShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
     const shortcuts = new Map(dynamicOf(pkg));
-    for (const si of yield* incomingList(pkg, slice)) shortcuts.set(yield idOf(si), si);
+    for (const si of yield* incomingList(pkg, slice)) shortcuts.set(yield* awaited(idOf(si)), si);
     yield* commit(pkg, [...shortcuts.values()]);
     return 1;
   }),
   // a full activity drops its lowest-ranked shortcut to make room
   [`pushDynamicShortcut(${S}${SI}I)V`]: driven(function* (pkg: string, si: JObj) {
-    const pushed = yield* incoming(pkg, si), id = yield idOf(pushed), shortcuts = new Map(dynamicOf(pkg));
+    const pushed = yield* incoming(pkg, si), id = yield* awaited(idOf(pushed)), shortcuts = new Map(dynamicOf(pkg));
     shortcuts.delete(id);
     const activity = yield vcall(pushed, "getActivity", `()${CN}`), same: JObj[] = [];
     for (const other of shortcuts.values()) if (yield vcall(activity, "equals", "(Ljava/lang/Object;)Z", yield vcall(other, "getActivity", `()${CN}`))) same.push(other);
     if (same.length >= MAX_PER_ACTIVITY) {
       let last = same[0];
       for (const other of same) if ((yield vcall(other, "getRank", "()I")) >= (yield vcall(last, "getRank", "()I"))) last = other;
-      shortcuts.delete(yield idOf(last));
+      shortcuts.delete(yield* awaited(idOf(last)));
     }
     yield* commit(pkg, [pushed, ...shortcuts.values()]);
   }),
   // an update changes only shortcuts that exist, and only the fields it sets
   [`updateShortcuts(${S}${SLICE}I)Z`]: driven(function* (pkg: string, slice: JObj) {
     const shortcuts = dynamicOf(pkg);
-    for (const si of (yield toJsArray(yield vcall(slice, "getList", `()${LIST}`))) as JObj[]) {
-      const update = yield* incoming(pkg, si, true), target = shortcuts.get(yield idOf(update));
+    for (const si of (yield* awaited(toJsArray(yield vcall(slice, "getList", `()${LIST}`)))) as JObj[]) {
+      const update = yield* incoming(pkg, si, true), target = shortcuts.get(yield* awaited(idOf(update)));
       if (target) yield vcall(target, "copyNonNullFieldsFrom", `(${SI})V`, update);
     }
     yield* commit(pkg, [...shortcuts.values()]);
@@ -107,7 +107,7 @@ rt.register({ name: "webdroid/ShortcutService", ctor: class extends JObj {}, sup
   [`getShortcuts(${S}II)${SLICE}`]: driven(function* (pkg: string, flags: number) {
     const clones: JObj[] = [];
     if (flags & MATCH_DYNAMIC) for (const si of dynamicOf(pkg).values()) clones.push(yield vcall(si, "clone", `(I)${SI}`, CLONE_REMOVE_FOR_CREATOR));
-    return yield parceledList(clones);
+    return yield* awaited(parceledList(clones));
   }),
   [`getShareTargets(${S}Landroid/content/IntentFilter;I)${SLICE}`]: () => parceledList(),
   [`hasShareTargets(${S}${S}I)Z`]: () => 0,

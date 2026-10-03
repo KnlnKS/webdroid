@@ -2,7 +2,7 @@
 // whose registered receivers hear it through scheduleRegisteredReceiver and whose manifest
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
-import { JObj, driven, type Gen } from "../../jvm/runtime";
+import { awaited, JObj, driven, type Gen } from "../../jvm/runtime";
 import { callUncaught, newObj, vcall } from "../../jvm/natives/jlang";
 import { hostedService, notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
@@ -51,7 +51,7 @@ function* hears(registration: Registration, intent: JObj, sender: Sender): Gen<b
   if (pkg && pkg !== registration.pkg) return false;
   if (sender.uid !== SYSTEM_UID && sender.uid !== PROCESS_UID) {
     if (registration.flags & RECEIVER_NOT_EXPORTED) return false;
-    if (registration.permission && (yield checkPermission(registration.permission, sender.pkg)) !== 0) return false;
+    if (registration.permission && (yield* awaited(checkPermission(registration.permission, sender.pkg))) !== 0) return false;
   }
   return yield* filterMatches(registration.filter, intent);
 }
@@ -60,15 +60,15 @@ function* hears(registration: Registration, intent: JObj, sender: Sender): Gen<b
 export const deliverBroadcast = driven(function* (intent: JObj, component: string | null, ordered: boolean, result: BroadcastResult, sender: Sender | null): Gen<BroadcastResult> {
   const from = sender ?? SYSTEM;
   if (component) {
-    const name = yield mkComponentName(appHost!.pkg, component);
-    const info = yield vcall(yield hostedService("package"), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
+    const name = yield* awaited(mkComponentName(appHost!.pkg, component));
+    const info = yield vcall(yield* awaited(hostedService("package")), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
     if (!info) throw new Error("Receiver not installed: " + component);
     const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
     yield vcall(copy, "setComponent", `(Landroid/content/ComponentName;)${INTENT}`, name);
     const done = finished(thisApp());
     yield scheduleOnApp("scheduleReceiver", RECEIVER, copy, info, compatInfo(), result.code, result.data, result.extras, +ordered, 0, 0,
       processState(PROCESS_STATE_RECEIVER), from.uid, from.pkg);
-    const answer = yield done;
+    const answer = yield* awaited(done);
     return ordered ? answer : result;
   }
   // as the registered receivers' resolver, an intent without an action reaches none
@@ -81,7 +81,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
     if (!ordered) { yield scheduleRegistered(receiver, intent, result, false, false, from); continue; }
     const done = finished(receiver);
     yield scheduleRegistered(receiver, intent, result, true, false, from);
-    result = yield done;
+    result = yield* awaited(done);
     if (result.aborted) break;
   }
   return result;
@@ -90,7 +90,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
 /** ActivityManagerService.broadcastIntent: through every process, then to the sender's result receiver */
 export const broadcastIntent = driven(function* (intent: JObj, permissions: string[], ordered: boolean, resultTo: JObj | null = null, initial?: BroadcastResult): Gen<void> {
   const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
-  const final = yield broadcastTransport.send(copy, permissions, ordered, initial);
+  const final = yield* awaited(broadcastTransport.send(copy, permissions, ordered, initial));
   if (resultTo) yield scheduleOnApp("scheduleRegisteredReceiver", REGISTERED, resultTo, copy, final.code, final.data, final.extras, 0, 0, 1, 0,
     processState(PROCESS_STATE_RECEIVER), PROCESS_UID, appHost!.pkg);
 });
@@ -103,7 +103,7 @@ export const broadcastQueueMethods = {
       const stickies: JObj[] = [];
       for (const [action, make] of stickyBroadcasts) {
         if (!(yield vcall(filter, "hasAction", `(${S})Z`, action))) continue;
-        const sticky = yield make();
+        const sticky = yield* awaited(make());
         if (yield* filterMatches(filter, sticky)) stickies.push(sticky);
       }
       if (receiver) {

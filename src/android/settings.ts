@@ -7,7 +7,7 @@
 // app holding WRITE_SETTINGS is not checked against SystemSettingsValidators, which ship in
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
-import { rt, driven, type JObj, type Gen } from "../jvm/runtime";
+import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { vcall, scall, staticField, callUncaught, newObj } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
@@ -51,7 +51,7 @@ const WRITE_SETTINGS = "android.permission.WRITE_SETTINGS", WRITE_SECURE_SETTING
 const SECURITY = "java/lang/SecurityException", ILLEGAL = "java/lang/IllegalArgumentException";
 const S = "Ljava/lang/String;";
 const fail = (cls: string, message: string): never => { throw rt.mkThrowable(cls, message); };
-const javaStrings = (collection: unknown): Gen<Set<string>> => (function* () { return new Set((yield toJsArray(collection)) as string[]); })();
+const javaStrings = (collection: unknown): Gen<Set<string>> => (function* () { return new Set((yield* awaited(toJsArray(collection))) as string[]); })();
 
 // ── the Settings classes' own key sets (Settings.X.getPublicSettings, getMovedTo*), read once
 type KeySets = { all: Set<string>; readable: Set<string>; maxTarget: Map<string, number> };
@@ -104,7 +104,7 @@ function* enforceReadable(c: Caller, table: Table, name: string): Gen<void> {
   const record = callingRecord(c);
   if (record.system) return;
   if (!record.flag(record.application, "testOnly", false)) {
-    const { all, readable, maxTarget }: KeySets = yield publicSettings(table);
+    const { all, readable, maxTarget } = yield* awaited(publicSettings(table));
     if (all.has(name)) {
       if (!readable.has(name)) fail(SECURITY, `Settings key: <${name}> is not readable. From S+, settings keys annotated with @hide are restricted to system_server and system apps only, unless they are annotated with @Readable.`);
       const max = maxTarget.get(name);
@@ -137,7 +137,7 @@ function* readSetting(c: Caller, table: Table, name: string): Gen<string | null>
   if (table === "secure") {
     // isSecureSettingAccessible: the Bluetooth address needs LOCAL_MAC_ADDRESS
     if (name === "bluetooth_address" && !holds(c, "android.permission.LOCAL_MAC_ADDRESS")) return null;
-    if (name === "android_id" && c.appId >= FIRST_APPLICATION_UID) return yield ssaid(callingRecord(c));
+    if (name === "android_id" && c.appId >= FIRST_APPLICATION_UID) return yield* awaited(ssaid(callingRecord(c)));
   }
   return yield valueOf(table, name);
 }
@@ -195,7 +195,7 @@ function* enforceSystemWrite(c: Caller, operation: number, name: string): Gen<vo
     fail(SECURITY, `${c.record?.pkg ?? formatUid(c.uid)} was not granted  this permission: ${WRITE_SETTINGS}.`);
   // enforceRestrictedSystemSettingsMutationForCallingPackage
   if (c.appId < FIRST_APPLICATION_UID || c.appId === 2000) return;
-  const publicSet: Set<string> = yield systemSets.PUBLIC_SETTINGS(), privateSet: Set<string> = yield systemSets.PRIVATE_SETTINGS();
+  const publicSet = yield* awaited(systemSets.PUBLIC_SETTINGS()), privateSet = yield* awaited(systemSets.PRIVATE_SETTINGS());
   if (operation === SYSTEM_DELETE && (publicSet.has(name) || privateSet.has(name))) fail(ILLEGAL, "You cannot delete system defined secure settings.");
   if (operation !== SYSTEM_DELETE && publicSet.has(name)) return;
   const record = callingRecord(c);
@@ -297,7 +297,7 @@ function* argumentsOf(uri: string, where: string | null, whereArgs: string[] | n
 function* tableFor(uri: string, name: string | null): Gen<string> {
   const table = validTable(uri);
   if (name === null || !TABLES.includes(table as Table)) return table;
-  for (const [from, to] of MOVES) if (from === table && ((yield movedSets.get(from + ">" + to)!()) as Set<string>).has(name)) return to;
+  for (const [from, to] of MOVES) if (from === table && (yield* awaited(movedSets.get(from + ">" + to)!())).has(name)) return to;
   return table;
 }
 function validTable(uri: string): string {
@@ -309,12 +309,12 @@ function validTable(uri: string): string {
 const query = driven(function* query$(uri: string, projection: string[] | null, where: string | null, whereArgs: string[] | null): Gen<JObj> {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, true);
   const columns = projectionOf(projection);
-  if (LEGACY_TABLES.has(table)) return yield matrixCursor(columns, []);
+  if (LEGACY_TABLES.has(table)) return yield* awaited(matrixCursor(columns, []));
   const c = caller();
-  if (name === null) return yield cursorOf(columns, yield* readableRows(c, table as Table));
+  if (name === null) return yield* awaited(cursorOf(columns, yield* readableRows(c, table as Table)));
   const value = yield* readSetting(c, table as Table, name);
   const index = namesOf(table as Table).indexOf(name);
-  return yield cursorOf(columns, value === null ? [] : [[String(index < 0 ? 0 : index + 1), name, value]]);
+  return yield* awaited(cursorOf(columns, value === null ? [] : [[String(index < 0 ? 0 : index + 1), name, value]]));
 });
 const named = (values: Map<string, unknown>): [string | null, string | null] => {
   const value = values.get("value");

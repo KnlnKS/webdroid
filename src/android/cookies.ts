@@ -1,4 +1,4 @@
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { vcall, callUncaught } from "../jvm/natives/jlang";
 import { boxBool } from "../jvm/natives/jbox";
 import type { WebCookies } from "../shell/webcookies";
@@ -24,10 +24,10 @@ let instance: JObj | null = null;
 /** the WebView provider's CookieManager, over the app's cookie jar */
 export const cookieManager = (): JObj => instance ??= rt.make("webdroid/CookieManager");
 let acceptFileSchemeCookies = false;
-const get = driven(function* (url: string): Gen { return (yield store()).get(url) || null; });
-const has = driven(function* (): Gen { return (yield store()).has() ? 1 : 0; });
-const removeAll = driven(function* (callback: unknown): Gen { return complete(callback, (yield store()).remove()); });
-const removeSession = driven(function* (callback: unknown): Gen { return complete(callback, (yield store()).remove(true)); });
+const get = driven(function* (url: string): Gen { return (yield* awaited(store())).get(url) || null; });
+const has = driven(function* (): Gen { return (yield* awaited(store())).has() ? 1 : 0; });
+const removeAll = driven(function* (callback: unknown): Gen { return complete(callback, (yield* awaited(store())).remove()); });
+const removeSession = driven(function* (callback: unknown): Gen { return complete(callback, (yield* awaited(store())).remove(true)); });
 rt.register({
   name: "webdroid/CookieManager", ctor: class extends JObj {}, sup: "android/webkit/CookieManager",
   methods: {
@@ -38,16 +38,16 @@ rt.register({
     "getCookie(Ljava/lang/String;Z)Ljava/lang/String;": get,
     "hasCookies()Z": has,
     "hasCookies(Z)Z": has,
-    "setCookie(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (url: string, value: string): Gen { (yield store()).set(url, value); }),
-    "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": driven(function* (url: string, value: string, callback: unknown): Gen { complete(callback, (yield store()).set(url, value)); }),
-    "setAcceptCookie(Z)V": driven(function* (accept: number): Gen { (yield store()).accept = !!accept; }),
-    "acceptCookie()Z": driven(function* (): Gen { return (yield store()).accept ? 1 : 0; }),
+    "setCookie(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (url: string, value: string): Gen { (yield* awaited(store())).set(url, value); }),
+    "setCookie(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V": driven(function* (url: string, value: string, callback: unknown): Gen { complete(callback, (yield* awaited(store())).set(url, value)); }),
+    "setAcceptCookie(Z)V": driven(function* (accept: number): Gen { (yield* awaited(store())).accept = !!accept; }),
+    "acceptCookie()Z": driven(function* (): Gen { return (yield* awaited(store())).accept ? 1 : 0; }),
     "setAcceptThirdPartyCookies(Landroid/webkit/WebView;Z)V": (view: JObj, accept: number) => { if (accept) thirdPartyCookies.add(view); else thirdPartyCookies.delete(view); },
     "acceptThirdPartyCookies(Landroid/webkit/WebView;)Z": (view: JObj) => thirdPartyCookies.has(view) ? 1 : 0,
     "removeAllCookies(Landroid/webkit/ValueCallback;)V": removeAll,
     "removeAllCookie()V": () => removeAll(null),
     "removeSessionCookies(Landroid/webkit/ValueCallback;)V": removeSession,
     "removeSessionCookie()V": () => removeSession(null),
-    "flush()V": driven(function* (): Gen { (yield store()).flush(); }),
+    "flush()V": driven(function* (): Gen { (yield* awaited(store())).flush(); }),
   },
 });

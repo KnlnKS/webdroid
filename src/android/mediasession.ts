@@ -1,7 +1,7 @@
 // ISessionManager, ISession and ISessionController, as MediaSessionService and MediaSessionRecord
 // keep sessions: a record holds what its session last set, relays a controller's transport calls
 // to the session's ISessionCallback, and tells registered ISessionControllerCallbacks of changes.
-import { JObj, rt, driven, noops, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, noops, type Gen } from "../jvm/runtime";
 import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { lambda } from "../jvm/natives/jlambda";
 import { hostStub, newStub, oneway } from "./binder";
@@ -134,7 +134,7 @@ rt.register({ name: "webdroid/MediaSessionController", ctor: JRecordBinder, sup:
 const noMediaControl = () => { throw rt.mkThrowable("java/lang/SecurityException", "Missing permission to control media."); };
 rt.register({ name: "webdroid/MediaSessionService", ctor: class extends JObj {}, sup: MS + "ISessionManager$Stub", methods: {
   [`createSession(${S}L${MS}ISessionCallback;${S}${B}I)L${MS}ISession;`]: driven(function* createSession$(pkg: string, cb: JObj, tag: string, info: JObj | null): Gen {
-    const binder = (yield newStub("webdroid/MediaSessionRecord")) as JRecordBinder, controller = (yield newStub("webdroid/MediaSessionController")) as JRecordBinder;
+    const binder = (yield* awaited(newStub("webdroid/MediaSessionRecord"))) as JRecordBinder, controller = (yield* awaited(newStub("webdroid/MediaSessionController"))) as JRecordBinder;
     binder.r = controller.r = {
       pkg, tag, info, cb, pid: yield scall("android/os/Process", "myPid", "()I"), uid: yield scall("android/os/Process", "myUid", "()I"),
       controller, callbacks: new Set(), destroyed: false, flags: 0n, launch: null, metadata: null, duration: -1n, playback: null,

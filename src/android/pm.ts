@@ -3,7 +3,7 @@
 // from its parsed packages. The registry-level queries are exported for the shell, which plays
 // system_server's part in resolving intents and providers; permissions.ts answers for permissions.
 // Intents and component names are read through their Java API only.
-import { JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault } from "./os";
@@ -189,12 +189,12 @@ function applicationInfoOf(record: PackageRecord, flags: number): JObj | Promise
   return info;
 }
 function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
-  return copy((yield applicationInfoOf(record, flags)) as JObj);
+  return copy(yield* awaited(applicationInfoOf(record, flags)));
 }
 
 // ── components
 interface Component { owner: PackageRecord; kind: ComponentKind; name: string; node: XmlNode }
-export interface Match extends Component { priority: number; isDefault: boolean }
+interface Match extends Component { priority: number; isDefault: boolean }
 const hasFilters = (node: XmlNode) => node.children.some((n) => n.name === "intent-filter");
 /** ComponentInfo.exported: declared, else whether it has an intent filter (a provider: below API 17) */
 export const exported = (c: Component): boolean => c.owner.flag(c.node, "exported", c.kind === "provider" ? c.owner.sdk.target < 17 : hasFilters(c.node));
@@ -470,7 +470,7 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
     const declared = root.children.filter((n) => n.name === "permission");
     if (declared.length) setDeclared(pi, PACKAGE, { permissions: jarray(yield* all$(declared, (n) => permissionInfo$(record, n, flags)), "Landroid/content/pm/PermissionInfo;") });
     const requested = requestedPermissions(root), granted: number[] = [];
-    for (const name of requested) granted.push(yield checkPermission(name, record.pkg));
+    for (const name of requested) granted.push(yield* awaited(checkPermission(name, record.pkg)));
     // REQUESTED_PERMISSION_REQUIRED, and REQUESTED_PERMISSION_GRANTED when held
     if (requested.length) setDeclared(pi, PACKAGE, { requestedPermissions: jarray(requested, "Ljava/lang/String;"),
       requestedPermissionsFlags: Int32Array.from(granted, (result) => 1 | (result === 0 ? 2 : 0)) });
@@ -479,7 +479,7 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   if (features.length) setDeclared(pi, PACKAGE, { reqFeatures: jarray(yield* all$(features, (n) =>
     featureInfo$(attrStr(n, "name"), record.flag(n, "required", true) ? 1 : 0, intAttr(n, "glEsVersion", 0))), "Landroid/content/pm/FeatureInfo;") });
   if (flags & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) {
-    const certificates: Uint8Array[] = yield record.visibleCertificates();
+    const certificates = yield* awaited(record.visibleCertificates());
     if (flags & GET_SIGNATURES) setDeclared(pi, PACKAGE, { signatures: yield* signatureArray$(certificates) });
     if (flags & GET_SIGNING_CERTIFICATES) setDeclared(pi, PACKAGE, { signingInfo: yield* signingInfo$(certificates) });
   }
@@ -625,18 +625,18 @@ function* properties$(name: string, type: number): Gen<JObj[]> {
     const nodes: [XmlNode, string | null][] = kind[1] ? [...owner.components[kind[1]]].map(([cls, node]) => [node, cls])
       : owner.application ? [[owner.application, null]] : [];
     for (const [node, cls] of nodes) for (const child of node.children)
-      if (child.name === "property" && attrStr(child, "name") === name) { const p = propertyOf(owner, child, cls); if (p) out.push(yield p); }
+      if (child.name === "property" && attrStr(child, "name") === name) { const p = propertyOf(owner, child, cls); if (p) out.push(yield* awaited(p)); }
   }
   return out;
 }
 const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", CN = "Landroid/content/ComponentName;", SLICE = "Landroid/content/pm/ParceledListSlice;";
 rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageManager$Stub", methods: {
   [`getPackageInfo(${S}JI)Landroid/content/pm/PackageInfo;`]: driven(function* getPackageInfo$(pkg: string, flags: bigint): Gen {
-    const record: PackageRecord | null = yield packageRecord(pkg);
+    const record = yield* awaited(packageRecord(pkg));
     return record ? yield* packageInfo$(record, flag(flags)) : null;
   }),
   [`getApplicationInfo(${S}JI)Landroid/content/pm/ApplicationInfo;`]: driven(function* getApplicationInfo$(pkg: string, flags: bigint): Gen {
-    const record: PackageRecord | null = yield packageRecord(pkg);
+    const record = yield* awaited(packageRecord(pkg));
     return record ? yield* applicationInfo$(record, flag(flags)) : null;
   }),
   [`getPackageUid(${S}JI)I`]: (pkg: string) => after(packageRecord(pkg), (record) => record?.uid ?? -1),
@@ -674,7 +674,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   [`setComponentEnabledSetting(${CN}IIILjava/lang/String;)V`]: driven(function* setComponentEnabledSetting$(c: JObj, state: number): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
     if (state < 0 || state > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid new component state: " + state);
-    if (!(yield packageRecord(pkg))) throw unknownPackage(pkg);
+    if (!(yield* awaited(packageRecord(pkg)))) throw unknownPackage(pkg);
     componentState.set({ pkg, cls: qualifyComponent(cls, pkg) }, state);
   }),
   [`getApplicationEnabledSetting(${S}I)I`]: (pkg: string) => after(packageRecord(pkg), (record) => { if (!record) throw unknownPackage(pkg); return 0; }),
@@ -685,7 +685,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   "getSystemSharedLibraryNames()[Ljava/lang/String;": () => jarray([], S),
   [`checkPermission(${S}${S}I)I`]: (permission: string, pkg: string) => checkPermission(permission, pkg),
   [`getInstallSourceInfo(${S}I)Landroid/content/pm/InstallSourceInfo;`]: driven(function* getInstallSourceInfo$(pkg: string): Gen {
-    if (!(yield packageRecord(pkg))) return null;
+    if (!(yield* awaited(packageRecord(pkg)))) return null;
     // APK loading has no Android installer of record or installer-supplied source metadata
     return newObj(PKG + "InstallSourceInfo", `(${S}Landroid/content/pm/SigningInfo;${S}${S}${S}I)V`, null, null, null, null, null, 0);
   }),
@@ -738,17 +738,17 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     return 0;
   },
   [`getInstalledPackages(JI)${SLICE}`]: driven(function* getInstalledPackages$(flags: bigint): Gen {
-    return slice(yield* all$((yield installedPackages()) as PackageRecord[], (record) => packageInfo$(record, flag(flags))));
+    return slice(yield* all$(yield* awaited(installedPackages()), (record) => packageInfo$(record, flag(flags))));
   }),
   [`getInstalledApplications(JI)${SLICE}`]: driven(function* getInstalledApplications$(flags: bigint): Gen {
-    return slice(yield* all$((yield installedPackages()) as PackageRecord[], (record) => applicationInfo$(record, flag(flags))));
+    return slice(yield* all$(yield* awaited(installedPackages()), (record) => applicationInfo$(record, flag(flags))));
   }),
   [`requestPackageChecksums(${S}ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V`]: driven(function* requestPackageChecksums$(
     pkg: string, includeSplits: number, _optional: number, required: number, _installers: unknown, listener: JObj): Gen {
-    const record: PackageRecord | null = yield packageRecord(pkg);
+    const record = yield* awaited(packageRecord(pkg));
     if (!record) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
     const checksums: JObj[] = [];
-    for (const [split, type, value] of (yield apkDigests(record, includeSplits !== 0, required)) as [string | null, number, Uint8Array][])
+    for (const [split, type, value] of yield* awaited(apkDigests(record, includeSplits !== 0, required)))
       checksums.push(yield newObj(PKG + "ApkChecksum", `(${S}I[B)V`, split, type, new Int8Array(value)));
     yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", newArrayList(checksums));
   }),

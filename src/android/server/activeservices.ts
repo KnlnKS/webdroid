@@ -2,7 +2,7 @@
 // bound, unbound and stopped through its IApplicationThread in ActiveServices' order, and their
 // connections hear each binder the service publishes. A service of another process is reached
 // through the broker, whose request lands in that process's ActiveServices.
-import { rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, callUncaught } from "../../jvm/natives/jlang";
 import { hostedService, notConnected, parceledList } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
@@ -41,12 +41,12 @@ const byToken = (token: JObj) => [...services.values()].find((s) => s.token === 
 
 interface Target { info: JObj; name: JObj; pkg: string; process: string }
 function* resolve(intent: JObj, resolvedType: string | null): Gen<Target | null> {
-  const resolved = yield vcall(yield pms(), "resolveService", `(${INTENT}Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;`, intent, resolvedType, GET_SHARED_LIBRARY_FILES, 0);
+  const resolved = yield vcall(yield* awaited(pms()), "resolveService", `(${INTENT}Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;`, intent, resolvedType, GET_SHARED_LIBRARY_FILES, 0);
   const info = resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "serviceInfo");
   if (!info) return null;
   const pkg = getDeclared<string>(info, SI, "packageName");
   return { info, pkg, process: getDeclared<string>(info, SI, "processName"),
-    name: yield mkComponentName(pkg, getDeclared(info, SI, "name")) };
+    name: yield* awaited(mkComponentName(pkg, getDeclared(info, SI, "name"))) };
 }
 const isLocal = (t: Target) => t.pkg === appHost?.pkg && t.process === (PROCESS_NAME || t.pkg);
 /** retrieveServiceLocked's refusal of the calling package, or null */
@@ -55,7 +55,7 @@ function* denial(t: Target, callingPackage: string): Gen<string | null> {
   if (uid === PROCESS_UID) return null;
   if (!getDeclared(t.info, SI, "exported")) return "not exported from uid " + uid;
   const permission = getDeclared<string | null>(t.info, SI, "permission");
-  return permission && (yield checkPermission(permission, callingPackage)) !== 0 ? permission : null;
+  return permission && (yield* awaited(checkPermission(permission, callingPackage))) !== 0 ? permission : null;
 }
 function* withComponent(intent: JObj, name: JObj): Gen<JObj> {
   const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
@@ -97,7 +97,7 @@ function sendArgs(s: ServiceRecord): Promise<void> | undefined {
   const args = rt.drive(function* () {
     const list: JObj[] = [];
     for (const [intent, id] of starts) list.push(yield newObj("android/app/ServiceStartArgs", `(ZII${INTENT})V`, 0, id, 0, intent));
-    return yield parceledList(list);
+    return yield* awaited(parceledList(list));
   }());
   return scheduleOnApp("scheduleServiceArgs", `(${BINDER}Landroid/content/pm/ParceledListSlice;)V`, s.token, args);
 }
@@ -180,21 +180,21 @@ export const hostedServices = {
     const t = yield* local(intent), bound = Promise.withResolvers<JObj | null>();
     yield* bindLocal(t, intent, { id: key, autoCreate: !!(flags & BIND_AUTO_CREATE), connected: (binder, dead) =>
       dead ? bound.reject(rt.mkThrowable("android/os/DeadObjectException", "Service stopped")) : bound.resolve(binder) });
-    return yield bound.promise;
+    return yield* awaited(bound.promise);
   }),
 };
 
 /** a service the platform binds for itself (JobScheduler, the geocode provider): no caller permission applies */
 export const bindAsSystem = driven(function* (component: JComponentName, key: string, action: string | null = null): Gen<{ binder: JObj; unbind: () => unknown }> {
-  const parts = (yield componentParts(component))!;
+  const parts = (yield* awaited(componentParts(component)))!;
   const owner = packages.get(parts.pkg), cls = qualifyComponent(parts.cls, parts.pkg);
   const node = owner?.components.service.get(cls);
   if (!owner || !node || !appHost) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No such service ComponentInfo{" + parts.pkg + "/" + cls + "}");
-  const intent = yield newIntent(action);
-  yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield mkComponentName(owner.pkg, cls));
+  const intent = yield* awaited(newIntent(action));
+  yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield* awaited(mkComponentName(owner.pkg, cls)));
   const process = owner.process(node);
   if (owner.pkg === appHost.pkg && process === (PROCESS_NAME || owner.pkg))
-    return { binder: (yield hostedServices.bind(intent, key))!, unbind: () => hostedServices.unbind(key) };
+    return { binder: (yield* awaited(hostedServices.bind(intent, key)))!, unbind: () => hostedServices.unbind(key) };
   return { binder: (yield serviceTransport.bind(owner, process, intent, key)) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
 });
 
@@ -203,7 +203,7 @@ export const startService = driven(function* (intent: JObj, resolvedType: string
   const t = yield* resolve(intent, resolvedType);
   if (!t) return null;
   const denied = yield* denial(t, callingPackage);
-  if (denied) return yield mkComponentName("!", denied);
+  if (denied) return yield* awaited(mkComponentName("!", denied));
   const bound = yield* withComponent(intent, t.name);
   if (isLocal(t)) yield* startLocal(t, bound);
   else callUncaught(() => serviceTransport.start(remoteOwner(t), t.process, bound, foreground));

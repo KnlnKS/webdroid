@@ -3,7 +3,7 @@
 // JobServiceContext runs it: bind the job's service (in whichever process declares it), start it
 // through the service's IJobService, and hear back through the IJobCallback its parameters carry.
 
-import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { bindAsSystem } from "./server/activeservices";
 import { asSystem, hostStub, parceledList } from "./binder";
@@ -68,7 +68,7 @@ function* startJob(job: ScheduledJob): Gen<void> {
   const run: JobRun = { service: null, params: null, unbind: () => {}, executing: new Set() };
   callback.job = job; callback.run = run; job.run = run;
   try {
-    const { binder, unbind } = yield bindAsSystem(p.service, "job:" + p.id + ":" + nextBinding++);
+    const { binder, unbind } = yield* awaited(bindAsSystem(p.service, "job:" + p.id + ":" + nextBinding++));
     run.unbind = unbind;
     if (!pending(job)) { job.run = null; yield unbind(); return; }
     run.service = yield scall("android/app/job/IJobService$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/app/job/IJobService;", binder);
@@ -116,7 +116,7 @@ rt.register({ name: "webdroid/JobSchedulerService", ctor: class extends JObj {},
   "getAllPendingJobs()Ljava/util/Map;": driven(function* () {
     const map = yield newObj("java/util/HashMap");
     for (const [namespace, jobs] of namespaces) {
-      if (jobs.size) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", namespace, yield slice(jobs));
+      if (jobs.size) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", namespace, yield* awaited(slice(jobs)));
     }
     return map;
   }),

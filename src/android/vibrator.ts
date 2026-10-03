@@ -1,7 +1,7 @@
 // IVibratorManagerService, the TS half of AOSP's SystemVibratorManager and SystemVibrator: one
 // vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { settingsStore } from "./settings";
@@ -34,7 +34,7 @@ function play(timings: number[], repeat: number): void {
 }
 /** a composed effect's segments as off/on durations (off first), and the index its repeat starts at */
 function* timingsOf(effect: JObj): Gen<[number[], number]> {
-  const segments = (yield toJsArray(yield vcall(effect, "getSegments", "()Ljava/util/List;"))) as JObj[];
+  const segments = (yield* awaited(toJsArray(yield vcall(effect, "getSegments", "()Ljava/util/List;")))) as JObj[];
   const repeatSegment: number = yield vcall(effect, "getRepeatIndex", "()I");
   const timings: number[] = [];
   let repeat = -1;

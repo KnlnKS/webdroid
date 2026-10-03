@@ -1,5 +1,5 @@
 import { hostStub } from "./binder";
-import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost } from "./apphost";
 import { type JUri, mkUri, uriText, clipUris } from "./net";
 import { PROCESS_UID } from "./os";
@@ -49,7 +49,7 @@ export const grantResultUris = driven(function* (pkg: string, data: JObj): Gen<v
   if (!(flags & 3)) return;
   const uri: JUri | null = yield vcall(data, "getData", "()Landroid/net/Uri;");
   const uris: string[] = yield* clipUris(yield vcall(data, "getClipData", "()Landroid/content/ClipData;"));
-  if (uri) uris.push(yield uriText(uri));
+  if (uri) uris.push(yield* awaited(uriText(uri)));
   for (const u of uris) grantUriPermission(pkg, u, flags);
 });
 export function revokeUriPermission(uri: string, modes: number): void {
@@ -94,7 +94,7 @@ function releasePersistable(u: string, modes: number): void {
 function* persistedPermissions(): Gen<JObj> {
   const permissions: JObj[] = [];
   for (const grant of uriGrants.all())
-    permissions.push(yield newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", yield mkUri(grant.uri), grant.flags, BigInt(grant.time)));
+    permissions.push(yield newObj("android/content/UriPermission", "(Landroid/net/Uri;IJ)V", yield* awaited(mkUri(grant.uri)), grant.flags, BigInt(grant.time)));
   return newArrayList(permissions);
 }
 

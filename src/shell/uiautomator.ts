@@ -1,7 +1,7 @@
 // What `uiautomator dump` sees, for windows AOSP's ViewRootImpl manages: each window's views as
 // AccessibilityNodeInfos, a virtual hierarchy (Compose) through its view's AccessibilityNodeProvider,
 // in screen pixels. The e2e harness diffs this against the device's dump.
-import { rt, declaredField, driven, type Gen, type JObj } from "../jvm/runtime";
+import { awaited, rt, declaredField, driven, type Gen, type JObj } from "../jvm/runtime";
 import { windowZOf } from "../android/server/wm";
 import { vcall, scall, newObj } from "../jvm/natives/jlang";
 import { csText } from "../jvm/natives/jchars";
@@ -17,7 +17,7 @@ function* describe(node: JObj, rect: JObj): Gen<UiNode | null> {
   if (!(yield vcall(node, "isVisibleToUser", "()Z"))) return null;
   yield vcall(node, "getBoundsInScreen", "(Landroid/graphics/Rect;)V", rect);
   const b = edges(rect);
-  const text = function* (name: string, desc: string): Gen<string> { return yield csText(yield vcall(node, name, desc)); };
+  const text = function* (name: string, desc: string): Gen<string> { return yield* awaited(csText(yield vcall(node, name, desc))); };
   const flag = function* (name: string): Gen<boolean> { return !!(yield vcall(node, name, "()Z")); };
   return {
     text: yield* text("getText", "()Ljava/lang/CharSequence;"),

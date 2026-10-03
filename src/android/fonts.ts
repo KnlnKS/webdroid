@@ -3,7 +3,7 @@
 // the reference build's /system/fonts, whose glyphs load when first shaped or drawn. A collection is
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
-import { declaredField, type Gen } from "../jvm/runtime";
+import { awaited, declaredField, type Gen } from "../jvm/runtime";
 import { scall, vcall, after } from "../jvm/natives/jlang";
 import { PLATFORM_DATA } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
@@ -250,7 +250,7 @@ export const typefaceOf = (t: object | null): NativeTypeface =>
 /** the zygote's preload of the system font map (Typeface.DEFAULT and the named families) over the
  *  platform font index, with HarfBuzz and the default family's font loaded to measure text */
 export function* loadSystemFontMap(): Gen<void> {
-  [fontIndex] = yield Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]);
+  [fontIndex] = yield* awaited(Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]));
   yield scall("android/graphics/Typeface", "loadPreinstalledSystemFontMap", "()V");
 }
 

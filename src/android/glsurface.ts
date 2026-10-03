@@ -1,7 +1,7 @@
 // The GL surfaces EGL draws to (a Surface's BLAST queue, a SurfaceTexture, a pbuffer), the EGL
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
-import { rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleStaticField } from "../jvm/abi";
 import { vcall, JThread, curThread, scall, after, callUncaught } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
@@ -364,7 +364,7 @@ rt.register({
         const thread = curThread, c = glSurfaces.current;
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0, thread);
         if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0, thread);
-        return (yield c.swap()) ? 1 : eglFailure(0x300e, 0, thread);
+        return (yield* awaited(c.swap())) ? 1 : eglFailure(0x300e, 0, thread);
       }),
     "eglQuerySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;I[I)Z":
       (display: unknown, s: JEGLSurface | null, attr: number, out: Int32Array) => {
@@ -503,7 +503,7 @@ rt.registerJnis("android/opengl/EGL14", {
   "eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": driven(function* (_display: JObj, surface: JObj): Gen {
     const thread = curThread, context = glSurfaces.current, surf = surfOf(surface)?.surf;
     if (!surf || context?.target !== surf) return eglFailure(0x300d, 0);
-    return (yield context.swap()) ? 1 : eglFailure(0x300e, 0, thread);
+    return (yield* awaited(context.swap())) ? 1 : eglFailure(0x300e, 0, thread);
   }),
   "eglSwapInterval(Landroid/opengl/EGLDisplay;I)Z": (display: JObj, interval: number) =>
     isDefault(display) ? setEglSwapInterval(interval) : eglFailure(0x3008, 0),

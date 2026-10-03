@@ -2,7 +2,7 @@
 // VFS the way installd walks it, with StorageStatsService's checks (decoded from the reference
 // AVD's services.jar): another uid's or the user's stats need PACKAGE_USAGE_STATS, which an app
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
-import { JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
@@ -41,7 +41,7 @@ function externalStats(): JObj | Promise<JObj> {
 const OP_GET_USAGE_STATS = 43, MODE_ALLOWED = 0, MODE_DEFAULT = 3;
 /** StorageStatsService.checkStatsPermission: null when the caller may read others' stats */
 function* statsDenial(uid: number, pkg: string): Gen<string | null> {
-  const context = yield serviceContext();
+  const context = yield* awaited(serviceContext());
   const appOps = yield vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "appops");
   const mode: number = yield vcall(appOps, "noteOp", "(IILjava/lang/String;)I", OP_GET_USAGE_STATS, uid, pkg);
   if (mode === MODE_ALLOWED) return null;

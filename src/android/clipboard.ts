@@ -1,6 +1,6 @@
 // IClipboard, the TS half of AOSP's ClipboardManager. The clip itself is the broker's, shared by
 // every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { vcall, callUncaught } from "../jvm/natives/jlang";
 import { parcelled, unparcelled, type ParcelData } from "./binder";
 import { onMain } from "./mainloop";
@@ -22,14 +22,14 @@ export function clipboardChanged(): void {
 /** the clip, read back from its parcel */
 function* current(): Gen<JObj | null> {
   const data = clipboardTransport.get();
-  return data && (yield unparcelled("android/content/ClipData", data));
+  return data && (yield* awaited(unparcelled("android/content/ClipData", data)));
 }
 const P = "Ljava/lang/String;Ljava/lang/String;II";
 rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, sup: "android/content/IClipboard$Stub", methods: {
   // ClipboardService stamps the clip as copied now
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
     yield vcall(yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
-    clipboardTransport.set(yield parcelled(clip));
+    clipboardTransport.set(yield* awaited(parcelled(clip)));
   }),
   [`getPrimaryClip(${P})Landroid/content/ClipData;`]: driven(current),
   [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: driven(function* () {

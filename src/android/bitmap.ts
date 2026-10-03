@@ -11,7 +11,7 @@
 // through the bitmap's own storage format first (premultiplied 8888, 565, 4444, F16, ...), so
 // reading it back gives what a device's memory would.
 
-import { rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
 import { newObj, scall, vcall, after } from "../jvm/natives/jlang";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
@@ -399,9 +399,9 @@ rt.registerJnis(BITMAP, {
     const type = ["image/jpeg", "image/png", "image/webp", "image/webp", "image/webp"][format];
     if (!type) return 0;
     const lossless = format === 4 || format === 2 && quality === 100;
-    const blob: Blob = yield b.raster().convertToBlob({ type, quality: lossless ? 1 : quality / 100 });
+    const blob = yield* awaited(b.raster().convertToBlob({ type, quality: lossless ? 1 : quality / 100 }));
     if (blob.type !== type) return 0;
-    const bytes = new Int8Array(yield blob.arrayBuffer());
+    const bytes = new Int8Array(yield* awaited(blob.arrayBuffer()));
     for (let at = 0; at < bytes.length; at += storage.length) {
       const n = Math.min(storage.length, bytes.length - at);
       storage.set(bytes.subarray(at, at + n));

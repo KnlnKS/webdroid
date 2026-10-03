@@ -4,7 +4,7 @@
 // placed where the WebView's draw functor composes. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
 import { after, vcall, callOn, newObj, staticField, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
@@ -42,7 +42,7 @@ rt.register({
   methods: {
     // getWebViewContextAndSetProvider's package, then the provider class its context's loader finds
     "static getProviderClass()Ljava/lang/Class;": driven(function* (): Gen {
-      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = yield webViewPackage();
+      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = yield* awaited(webViewPackage());
       return rt.classFor(FACTORY);
     }),
   },
@@ -644,7 +644,7 @@ rt.register({
       if (privateBrowsing) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Private browsing is not supported in WebView.");
       // AwContents draws its container: a ViewGroup otherwise skips onDraw
       yield vcall(this.view, "setWillNotDraw", "(Z)V", 0);
-      for (const e of interfaces ? yield toJsArray(yield vcall(interfaces, "entrySet", "()Ljava/util/Set;")) : [])
+      for (const e of interfaces ? yield* awaited(toJsArray(yield vcall(interfaces, "entrySet", "()Ljava/util/Set;"))) : [])
         this.ifaces[yield vcall(e, "getKey", "()Ljava/lang/Object;")] = bridge(yield vcall(e, "getValue", "()Ljava/lang/Object;"), this.bridgeThread);
     }),
     "getViewDelegate()Landroid/webkit/WebViewProvider$ViewDelegate;": function (this: P) { return this; },
@@ -729,7 +729,7 @@ rt.register({
       const nc = canvasOf(canvas);
       if (nc.bmp) {
         // a software capture of the view: the page's pixels
-        const image = yield this.bitmapSnapshot();
+        const image = yield* awaited(this.bitmapSnapshot());
         try { nc.ctx.drawImage(image, 0, 0, this.size.w, this.size.h); } finally { image.close(); }
       } else if (rt.iof(canvas, "android/graphics/RecordingCanvas")) {
         yield vcall(factory().delegate, "drawWebViewFunctor", "(Landroid/graphics/Canvas;I)V", canvas, this.hold.functor);
