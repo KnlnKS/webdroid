@@ -626,8 +626,11 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
 - **Done (GL, kernel, WebView):** glGetError answers without WebGL's GPU wait while no tracked
   call can have failed. Unhandled terminating signals end the process. dlclose unloads TLS images.
   WebView has Android WebView's user agent (history, "GL errors, signal defaults").
-- **Open:** without site isolation, `document.cookie` and JavaScript interface calls still block.
-  Two of 17 YouTube runs under heavy host load hit a `removeSyncBarrier` race in a resumed doFrame.
+- **Done (knlnks/open-race):** without site isolation, `document.cookie` answers from cookies the
+  app sends the page and interface calls returning nothing are posted (those returning a value
+  throw: no same-thread answer exists); WebView reports Android WebView's client hints. YouTube's
+  `removeSyncBarrier` race did not reproduce in 15 throttled runs; no other chain touches a
+  traversal (history). Open: interface results without site isolation.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity
   (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
   capabilities stay this device's. Apps get the NotoColorEmoji update Google Play installed on the

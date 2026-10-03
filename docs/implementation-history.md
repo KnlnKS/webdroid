@@ -1879,6 +1879,42 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     (identity, name, app host, an Application from its own LoadedApk, ActivityThread's current
     application and bound package). The notification order assertion depended on the uid, which
     install order decides. Serial runs of every file pass 1098/1098.
+- 2026-10-02, YouTube's `removeSyncBarrier` race and WebView's bridge without site isolation
+  (branch `knlnks/open-race`):
+  - The race did not reproduce. A probe (intrinsics over MessageQueue.postSyncBarrier/
+    removeSyncBarrier and ViewRootImpl's schedule/unschedule/doTraversal, plus Looper.loopOnce,
+    recording each call's chain) found no chain but the main loop's (and the looper callbacks it
+    runs) touching a traversal or barrier, in unthrottled runs and in YouTube `--live` under
+    `WEBDROID_CPU_THROTTLE=2` (CDP Emulation.setCPUThrottlingRate; at 3x the flow's steps time out).
+    Nothing dispatches a main-loop message while another is suspended: the loop's only reentry,
+    `loop()` after an uncaught error, starts after the old chain ended, and host turns reach Java
+    as messages (onMain) or through binder and Handler posts. On this base, before ef-followup's
+    `6a755f69`, every YouTube run wedged at video-open: callGuestNative awaited before cpu.call
+    captured the chain, so NetFetchCallbacks$CppProxy.a ran as chain 0 and each JNI callback was a
+    fresh chain, which waited on the class lock (aojk) its own native caller held; the main thread
+    then waited behind it. That is the commit's fix. With it, 10 of 10 throttled runs (and 5 of 5
+    later) completed without the IllegalStateException; 3 of 10 (and 1 of 5 at the base) missed the
+    harness's 3 s liveness probe at fullscreen or video-back under throttling, then went on. The
+    17-run failure predates chain-owned monitors (no timed escape since) and chain-carrying native
+    calls; neither mechanism is left to explain it, so it is recorded as not reproduced, not fixed.
+  - WebView without site isolation: document.cookie is the cookies the app sends the page (with
+    the load, after the document's own response, and on every jar change, each with its expiry);
+    a write applies in the page as the jar would store it and is posted, and the jar's answer
+    replaces the page's copy once it acknowledges every write. Interface calls stay synchronous
+    when the app can answer while the page waits; the first call probes that (a bridge call with a
+    1.5 s timeout that the app's socket answers apart from calls under way), and a renderer that
+    shares the thread posts calls returning nothing and throws for calls returning a value. No
+    browser mechanism answers a cross-origin synchronous call from the same thread (the frame's
+    origin must stay apart from the app's), so that is the honest limit. Markor's `Android`
+    interface: 3 ms isolated; without isolation the probe took 1.5 s once and calls returned at
+    once (its "toast" command then fails on the JavaBridge thread, as on a device: Toast needs a
+    Looper). JavaScript arrays now reach array parameters as Chromium converts them. A same-origin
+    WebView frame (no interfaces, no interception) still sees the host page's own cookies.
+  - The WebView reports Android WebView's client hints: userAgentData's brands (Chromium's
+    GenerateBrandVersionList for "Android WebView" at the host's Chromium major), mobile, Android,
+    and model/platformVersion from Build; the renderer's worker sends the default Sec-CH-UA,
+    -Mobile and -Platform to secure origins. Architecture and bitness answer empty, as Chrome on
+    Android does; high-entropy hints are not sent as headers (no Accept-CH bookkeeping).
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator
