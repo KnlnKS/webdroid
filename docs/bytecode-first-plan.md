@@ -798,9 +798,10 @@ grid) for measurement, TextRunShaper and drawing;
    siginfo and ucontext, behind the linker's debuggerd handler. Done 2026-10-02 (history "crash
    semantics"): uncaught Java exceptions reach Thread.dispatchUncaughtException and
    KillApplicationHandler, AMS records crashes and exits as ApplicationExitInfo, bad syscall
-   pointers fail with EFAULT, and ARM32 addresses past 2 GiB fault as SIGSEGV. Done (history
-   "system_server's work outlives app processes"): AMS restarts of sticky and bound services, and
-   broker work after the page's app dies. Open: ANR detection.
+   pointers fail with EFAULT, ARM32 addresses past 2 GiB and stores to unbacked pages fault as
+   SIGSEGV, and traces carry source files and lines. Done (history "system_server's work outlives
+   app processes"): AMS restarts of sticky and bound services, and broker work after the page's app
+   dies. Open: ANR detection, loads into unbacked space below 2 GiB.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 

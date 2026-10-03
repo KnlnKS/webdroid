@@ -2550,14 +2550,29 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     CRASH_NATIVE (signal), importance, setProcessStateSummary. Not modelled: ANR (nothing detects
     one), pss/rss, start reasons. The tombstone's field numbers were not checked against a device
     tombstone (no AVD was up).
-  - Bad pointers: mem.ts throws BadAddress with the address. A system call (svc, syscall(2), or a
-    libc wrapper whose body is in the kernel's table) fails with EFAULT, synchronously or after it
-    parked; any other host libc body raises SIGSEGV at its entry with si_addr, which a handler that
-    returns runs again. Host-call cost 44-48 ns before and after (base 46-58, noisy host).
-  - ARM32 addresses past 2 GiB trapped in wasm. Load address tests are now signed compares (the
-    null page's test, no extra instruction), pages past the end of memory are write-protected for
-    stores, a dispatch past the end faults as a null target does, and a spare page past the end
-    takes an access that straddles it. The fault test covers both tiers and Thumb.
+  - Bad pointers: mem.ts throws BadAddress with the address. A system call (svc, syscall(2)) or a
+    host body for a libc function bionic implements as a syscall stub, or as a call that only hands
+    its pointers to one (stat, open, access, readlink, connect: read from the reference libc.so's
+    code, its svc stubs and the functions that only tail-call them) fails with EFAULT,
+    synchronously or after it parked; any other host libc body raises SIGSEGV at its entry with
+    si_addr, which a handler that returns runs again. Host-call cost 44-48 ns before and after
+    (base 46-58, noisy host).
+  - Guest accesses past the memory trapped in wasm. On the shared, lazily committed memory (the
+    entry before), load address tests are now signed compares, which catch ARM32's past-2-GiB
+    addresses at no extra instruction; pages past those the memory backs are write-protected, so a
+    store there faults through the store path's existing flag test (back() clears the flags as it
+    grows); a dispatch past the end faults as a null target does. All are SEGV_MAPERR. A load below
+    2 GiB into space not yet backed (free or PROT_NONE pages) still traps in wasm: telling it from a
+    backed page would cost every load a compare against the committed size.
+  - StackTraceElements had no file and line -1 ("Unknown Source" in FATAL EXCEPTION, am_crash and
+    crash reporters). A trace now gets them when read, not thrown: the class's SourceFile and the
+    line the code item's debug info gives the frame's pc. A cold frame's next instruction is noted
+    at capture; a compiled body's function name carries its method index, and the frame's line in
+    its script (its own, `new Function`'s two header lines down, or a persisted chunk, whose
+    bodies codeText writes in order) is matched to the instruction the emitter marks on that line
+    when it regenerates the body. FitNotes' main looper reads Handler.java:959 and 100,
+    Looper.java:232 and 317, as Android 15's traces do, from fresh and persisted code. Eagerly
+    compiled classes (smoke) keep -1. Bun's stack depth cuts a deep hot trace in unit tests.
   - Flows: the fast gate already fails on any `[uncaught]` console error (still logged before
     dispatch), so no non-live flow passed despite one; fitnotes, mihon-onboarding, komikku,
     doodlejump and reddit `--live` pass with no uncaught exception and no crash. Other live flows
