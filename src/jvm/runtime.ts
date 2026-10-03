@@ -105,7 +105,6 @@ export class ClassInfo {
   state = 0;                          // 0 linked, 1 initing, 2 inited, 3 erroneous (<clinit> failed)
   initError: unknown = null;          // what the failed <clinit> threw
   initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
-  assumeReentrant = false;            // a wait on this clinit timed out once: stop waiting (same-chain cycle)
   initThread: unknown = null;         // thread running the in-flight clinit (JLS recursive-request check)
   stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
   waitingOn: ClassInfo | null = null; // class this one's clinit currently awaits (cycle detection)
@@ -132,8 +131,6 @@ export class ClassInfo {
 export const HEAP_LIMIT = 512 * 1024 * 1024;
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
 const STRICT_FIELDS = process.env.NODE_ENV !== "production";
-/** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
-const CLINIT_WAIT_MS = 60;
 
 export class Runtime {
   classes = new Map<string, ClassInfo>();
@@ -744,25 +741,11 @@ export class Runtime {
     return info;
   }
 
-  /** record from's clinit waiting on info; race a timeout escape for undetected cycles */
-  private awaitInit(info: ClassInfo, from: ClassInfo | undefined, timed: boolean): Promise<void> {
+  /** record from's clinit waiting on info until initialization settles */
+  private awaitInit(info: ClassInfo, from: ClassInfo | undefined): Promise<void> {
     if (from) from.waitingOn = info;
     const clear = () => { if (from && from.waitingOn === info) from.waitingOn = null; };
-    let esc: ReturnType<typeof setTimeout> | undefined;
-    const p = timed
-      ? Promise.race([info.initP!, new Promise<void>((res) => {
-          // short escape: legit cross-chain waits resolve in microtasks; anything longer
-          // is almost certainly a same-chain clinit cycle through methods we can't tag.
-          // Remember it so the next several hundred accesses don't each pay the timeout.
-          // The timer must be cleared when the race is won: left armed, it would mark a class
-          // reentrant after a healthy wait, and later reads would stop waiting for a <clinit>
-          // that really is in flight.
-          esc = setTimeout(() => { console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res(); },
-                           CLINIT_WAIT_MS);
-        })])
-      : info.initP!;
-    const done = () => { if (esc !== undefined) clearTimeout(esc); clear(); };
-    return p.then((v) => { done(); return v; }, (e) => { done(); throw e; });
+    return info.initP!.then((v) => { clear(); return v; }, (e) => { clear(); throw e; });
   }
 
   /** returns promise only if init work needed. `from` = class whose <clinit> performs the access */
@@ -773,7 +756,7 @@ export class Runtime {
     // still-uncompiled prototype silently inherits the SUPERCLASS's method instead.
     this.ensureCompiled(info);
     if (info.state === 1) {
-      if (!info.initP || info === from || info.assumeReentrant) return null; // sync-prefix / self / known-cycle reentrancy
+      if (!info.initP || info === from) return null; // sync-prefix / self reentrancy
       // JLS 12.4.2 step 3: a request from the thread already initializing this class is
       // recursive and completes at once with the statics as they are. The `from` tag only
       // sees <clinit>-to-<clinit> edges; <clinit> → constructor → sget of its own class is the
@@ -786,10 +769,8 @@ export class Runtime {
       // proceeds with partial statics rather than hanging the page.
       for (let c = info.waitingOn, n = 0; c; c = c.waitingOn) if (c === from || ++n > 64) return null;
       // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
-      // thread blocks until it completes, however long a heavy static initializer takes. The
-      // timed escape stays for the same thread, where a cycle through untagged methods is
-      // indistinguishable from a wait that will never end.
-      return this.awaitInit(info, from, info.initThread === this.th());
+      // thread blocks until it completes, however long a heavy static initializer takes.
+      return this.awaitInit(info, from);
     }
     if (info.state !== 0) {
       if (info.state === 3) throw Object.assign(this.mkThrowable("java/lang/NoClassDefFoundError",
@@ -809,7 +790,7 @@ export class Runtime {
       finally { this.clinitDepth--; if (outer) perf.clinitMs += performance.now() - started; }
     };
 
-    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; fastStatics(info.ctor); };
+    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; fastStatics(info.ctor); };
     /** JLS 12.4.2: the class becomes erroneous; an Exception reaches the caller wrapped in an
      *  ExceptionInInitializerError, and every later initialization fails with NoClassDefFoundError */
     const failed = (e: unknown) => {
@@ -831,7 +812,7 @@ export class Runtime {
         } catch (e) { throw failed(e); }
         settle();
       })();
-      return from ? this.awaitInit(info, from, false) : info.initP;
+      return from ? this.awaitInit(info, from) : info.initP;
     };
 
     try {
