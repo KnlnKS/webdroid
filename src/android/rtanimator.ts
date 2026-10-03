@@ -9,7 +9,7 @@ import { rt } from "../jvm/runtime";
 import { scall } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, take } from "./handles";
 import { type NativePaint } from "./paint";
-import { NativeRenderNode } from "./rendernode";
+import { NativeRenderNode, prop as canvasProperty } from "./rendernode";
 import { interpolatePaths, PathData } from "./pathparser";
 import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable";
 
@@ -143,7 +143,6 @@ export function animateRenderThread(now: number): boolean {
 }
 
 // ── RenderNodeAnimator: RenderPropertyAnimator, RevealAnimator and the CanvasProperty animators
-type Property<T> = { value: T };
 /** RenderPropertyAnimator::RenderProperty, read and written through the node's properties */
 const NODE_PROPERTIES: [get: (n: NativeRenderNode) => number, set: (n: NativeRenderNode, v: number) => void][] = [
   [(n) => n.tx, (n, v) => n.setTransform("tx", v)],
@@ -201,12 +200,12 @@ rt.registerJnis("android/graphics/animation/RenderNodeAnimator", {
     return ownedHandle(a);
   },
   "nCreateCanvasPropertyFloatAnimator(JF)J": (p: bigint, final: number) => {
-    const prop = deref<Property<number>>(p);
+    const prop = canvasProperty<number>(p);
     return ownedHandle(new NodeAnimator(final, () => prop.value, (_n, v) => { prop.value = v; }));
   },
   // CanvasPropertyPaintAnimator::PaintField: STROKE_WIDTH, ALPHA (set as a uint8)
   "nCreateCanvasPropertyPaintAnimator(JIF)J": (p: bigint, field: number, final: number) => {
-    const paint = deref<Property<NativePaint>>(p).value;
+    const paint = canvasProperty<NativePaint>(p).value;
     return ownedHandle(field === 0
       ? new NodeAnimator(final, () => paint.strokeWidth, (_n, v) => { paint.strokeWidth = v; })
       : new NodeAnimator(final, () => paint.color >>> 24, (_n, v) => paint.setAlpha(Math.trunc(v) & 255)));

@@ -431,7 +431,7 @@ function drawRipple(ctx: Ctx2D, x: number, y: number, radius: number, paint: Nat
 }
 /** CanvasProperty's containers: a float, or a paint an animator changes, read when replayed */
 type Property<T> = { value: T };
-const prop = <T>(h: bigint) => deref<Property<T>>(h);
+export const prop = <T>(h: bigint) => deref<Property<T>>(h);
 rt.registerJnis("android/graphics/RecordingCanvas", {
   "nCreateDisplayListCanvas(JII)J": (_node: bigint, w: number, h: number) => {
     const nc = new NativeCanvas();
