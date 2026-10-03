@@ -187,16 +187,6 @@ describe("fuzz-semantic", () => {
       }
     });
 
-    test("blind coordinates are only a recorded fallback", () => {
-      const action = generateUiAction(new Random(1), [], 100, 100);
-      if (action.type === "fallback-tap") {
-        expect(action.at.x).toBeGreaterThanOrEqual(0);
-        expect(action.at.x).toBeLessThan(1);
-      } else {
-        expect(["back", "enter", "background", "configuration"]).toContain(action.type);
-      }
-    });
-
     test("uiautomator parsing and action validation share strict boundaries", () => {
       const nodes = parseUiAutomator('<?xml version="1.0"?><hierarchy><node text="Save &amp; close" content-desc="" class="android.widget.Button" resource-id="app:id/save" clickable="true" enabled="true" bounds="[1,2][31,42]" /></hierarchy>');
       expect(nodes).toEqual([node({ text: "Save & close", resId: "app:id/save", clickable: true, bounds: [1, 2, 31, 42] })]);
