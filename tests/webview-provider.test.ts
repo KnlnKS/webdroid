@@ -98,3 +98,10 @@ describe("webview-keys", () => {
     expect(access.events).toEqual([back, escape]);
   });
 });
+
+test("WebView's default user agent is Android WebView's, the one a new WebSettings holds", async () => {
+  const statics = rt.make("webdroid/WebViewStatics"), settings = rt.make("webdroid/WebSettings");
+  const ua = await vcall(statics, "getDefaultUserAgent", "(Landroid/content/Context;)Ljava/lang/String;", null) as string;
+  expect(ua).toMatch(/^Mozilla\/5\.0 \(Linux; Android \d+; [^;]+ Build\/[\w.]+; wv\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Version\/4\.0 Chrome\/\d+\.\d+\.\d+\.\d+ Mobile Safari\/537\.36$/);
+  expect(await vcall(settings, "getUserAgentString", "()Ljava/lang/String;")).toBe(ua);
+});

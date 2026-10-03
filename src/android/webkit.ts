@@ -28,15 +28,32 @@ import { guestEndpoint } from "../native/net-address";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
-// ── WebViewFactory: the provider package is this one, versioned as the Chromium the UA names
-const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
-const UA = `Mozilla/5.0 (Linux; Android ${propertyValue("ro.build.version.release")}; ${propertyValue("ro.product.model")}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${WEBVIEW_VERSION} Mobile Safari/537.36`;
+// ── WebViewFactory: the provider package is this one, versioned as the Chromium the UA names.
+// Its pages render in the host's Blink, so that is the host's Chromium: a site's UA feature
+// detection then describes the engine running it, as the host's client hints do. WebView keeps the
+// full version (no UA reduction); the host's reduced UA gives the major until its client hints
+// answer, and the first reader fixes it. A host that is not Chromium has none to give: 120.0.0.0.
+const WEBVIEW_PACKAGE = "com.android.webview";
+let webViewVersion = /Chrome\/([\d.]+)/.exec(globalThis.navigator?.userAgent ?? "")?.[1] ?? "120.0.0.0", versionRead = false;
+type HostHints = { getHighEntropyValues(hints: string[]): Promise<{ fullVersionList?: { brand: string; version: string }[] }> };
+void (globalThis.navigator as { userAgentData?: HostHints } | undefined)?.userAgentData?.getHighEntropyValues(["fullVersionList"]).then((values) => {
+  const chromium = values.fullVersionList?.find((b) => b.brand === "Chromium")?.version;
+  if (chromium && !versionRead) webViewVersion = chromium;
+}, () => {});
+const providerVersion = (): string => { versionRead = true; return webViewVersion; };
+/** AwContentClient's user agent: GetAndroidOSInfo with the model and build ID, "; wv", and the
+ *  product after Version/4.0 */
+function defaultUserAgent(): string {
+  const model = propertyValue("ro.product.model") ?? "", build = propertyValue("ro.build.id") ?? "";
+  const info = (model ? `; ${model}` : "") + (build ? `${model ? "" : ";"} Build/${build}` : "");
+  return `Mozilla/5.0 (Linux; Android ${propertyValue("ro.build.version.release")}${info}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/${providerVersion()} Mobile Safari/537.36`;
+}
 const FACTORY = "webdroid/WebViewFactoryProvider";
 /** the provider package's PackageInfo */
 const webViewPackage = driven(function* webViewPackage$(): Gen<JObj> {
   const pi: JObj = yield newObj("android/content/pm/PackageInfo"), ai: JObj = yield newObj("android/content/pm/ApplicationInfo");
   setDeclared(ai, "android/content/pm/ApplicationInfo", { packageName: WEBVIEW_PACKAGE, processName: WEBVIEW_PACKAGE, flags: 1 }); // FLAG_SYSTEM
-  setDeclared(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: WEBVIEW_VERSION, applicationInfo: ai });
+  setDeclared(pi, "android/content/pm/PackageInfo", { packageName: WEBVIEW_PACKAGE, versionName: providerVersion(), applicationInfo: ai });
   return pi;
 });
 rt.register({
@@ -59,12 +76,12 @@ hostStub("webviewupdate", "webdroid/WebViewUpdateService");
 // ── WebSettings: the app reads back what it wrote, so every setter has its value and getter
 const settingsMethods: NonNullable<NativeSpec["methods"]> = {
   // AOSP: null or empty restores the default string
-  "setUserAgentString(Ljava/lang/String;)V": function (this: WebSettingsAdapter, s: string | null) { this.v.userAgentString = s || UA; },
+  "setUserAgentString(Ljava/lang/String;)V": function (this: WebSettingsAdapter, s: string | null) { this.v.userAgentString = s || defaultUserAgent(); },
   ...stubs(undefined, "setDatabasePath(Ljava/lang/String;)V", "setGeolocationDatabasePath(Ljava/lang/String;)V", "setEnableSmoothTransition(Z)V"),
 };
 class WebSettingsAdapter extends JObj {
   v: Record<string, unknown> = {
-    userAgentString: UA, cacheMode: -1, textZoom: 100, minimumFontSize: 8, minimumLogicalFontSize: 8, defaultFontSize: 16,
+    userAgentString: defaultUserAgent(), cacheMode: -1, textZoom: 100, minimumFontSize: 8, minimumLogicalFontSize: 8, defaultFontSize: 16,
     defaultFixedFontSize: 13, mixedContentMode: 1, forceDark: 1, supportZoom: 1, displayZoomControls: 1, allowContentAccess: 1,
     mediaPlaybackRequiresUserGesture: 1, safeBrowsingEnabled: 1, loadsImagesAutomatically: 1, standardFontFamily: "sans-serif",
     fixedFontFamily: "monospace", sansSerifFontFamily: "sans-serif", serifFontFamily: "serif", cursiveFontFamily: "cursive",
@@ -826,7 +843,7 @@ rt.register({
 rt.register({
   name: "webdroid/WebViewStatics", ctor: class extends JObj {}, ifaces: ["android/webkit/WebViewFactoryProvider$Statics"],
   methods: {
-    "getDefaultUserAgent(Landroid/content/Context;)Ljava/lang/String;": () => UA,
+    "getDefaultUserAgent(Landroid/content/Context;)Ljava/lang/String;": defaultUserAgent,
     "setWebContentsDebuggingEnabled(Z)V": () => {},
     "enableSlowWholeDocumentDraw()V": () => {},
     "freeMemoryForTests()V": () => {},
