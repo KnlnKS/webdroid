@@ -618,8 +618,12 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   can cover the old point), Lichess, Harmonic, ChatGPT and Reddit pass. Resy and Reddit now pass
   repeatedly (UI dumps report view ids and every shown process's windows; history, 2026-10-02).
   TikTok wedges under V8 memory pressure from two 4 GiB guest memories, not live content.
-- **Open:** a loopback media URL an app serves in-process (YouTube's
-  `http://localhost:32768/exocache`) goes to the dev server's `/proxy` instead of the guest.
+- **Done (platform):** loopback URLs reach the process's own listeners, and apps load the device's
+  shared libraries (YouTube's exocache answers). PdfDocument rasterises its pages. WebView
+  interface names travel with the load, so print snapshots work without site isolation. A serial
+  `bun test` passes (history, "the platform open items").
+- **Open:** without site isolation, `document.cookie` and JavaScript interface calls still block.
+  Two of 17 YouTube runs under heavy host load hit a `removeSyncBarrier` race in a resumed doFrame.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity
   (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
   capabilities stay this device's. Apps get the NotoColorEmoji update Google Play installed on the
@@ -680,7 +684,7 @@ hand-written TS in `src/android` + `src/jvm/natives` is 41,455 lines. Since then
 mapping follows the locale and `bun run fwtest` passes 30/30 (its nine failures were stale harness
 reads). Gradients and `drawColor` decode ColorLongs in their colour space. A serial `bun test` of the
 java-io, net, java-lang, serialization and data files no longer hangs (`bootApp` left StrictMode's
-death on network armed; history, 2026-10-02); a serial run of every file still shares one app.
+death on network armed; history, 2026-10-02); a serial run of every file passes, each file with its own package.
 
 ### Stage F handoff (2026-10-05): superseded TS removed
 
@@ -710,7 +714,7 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
 1. Done 2026-10-02: StatsEvent runs from bytecode; its stall was each realm's 4 GiB guest memory
    counting toward one isolate's global heap ceiling, and early non-movable arrays now stay in the
    JS heap (history). The baseline keeps three non-AOSP methods. WebView snapshots of an
-   isolated renderer time out on its `describe` bridge call (504) in Markor's preview.
+   isolated renderer work (the interface names travel with the load).
 2. Done 2026-10-02: Build runs from bytecode; zygoteInit waits for the process's bitness, which
    the page fixes from the install's central directories (no measured wait).
 3. Done 2026-10-02: host code continuing a Java chain carries it (Cpu loop, loader, JNI, `after`

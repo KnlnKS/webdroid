@@ -1838,6 +1838,47 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     as it does on the base: its injected script's synchronous `describe` bridge call times out
     (504) when Markor's preview loads, so the snapshot (and the base's direct `print` message) has
     no listener. Custom adapters that draw with PdfDocument still lack its natives.
+- 2026-10-02, the platform open items: WebView's bridge, PdfDocument, loopback URLs, shared
+  libraries and serial unit tests (branch `knlnks/open-platform`):
+  - The `describe` 504 needs no site isolation: Playwright's default launch drops it, as Safari and
+    Chrome on Android (for most sites) do, so the renderer frame shares the WebView owner's
+    thread, and its synchronous XHR blocked the thread that had to answer it until the bridge's
+    30 s timeout. With `--site-per-process` (the e2e driver's launch) it answered in 1-15 ms. The
+    interface names now travel in the load message. Unfixed limit: `document.cookie` and
+    JavaScript interface calls are synchronous by contract and still deadlock (30 s, then throw)
+    without site isolation. Markor's Share > Print / PDF then wrote a 2-page letter PDF of the page
+    (PDFKit read it; the blob reached the print frame) with and without site isolation.
+  - PdfDocument records each page as a picture does and rasterises it at 300 dpi on writeTo. A
+    vector writer was rejected: CanvasKit 0.38 has no SkPDF, and a display list holds Path2D,
+    gradient and deferred-replay objects a PDF writer cannot read back, so it would need its own
+    Canvas interpreter with font embedding. Two letter pages took 173 ms and 122 KB (Flate, CPU
+    canvas); a GPU canvas spent 360 ms reading back the first page. PdfRenderer is unimplemented:
+    only ChatGPT references it, for attachment thumbnails, and it would need a PDF renderer
+    (PDFium on the device).
+  - Loopback URLs: host code (MediaPlayer, HttpURLConnection, WebView's proxy) sent every http URL
+    to the dev server, which looked for YouTube's `localhost:32768/exocache` on the host (502). It
+    now connects to the process's own listener without a guest descriptor and speaks HTTP/1.1; the
+    proxy refuses a guest address unless a remap names one (the fuzz probe's adb-reverse origin).
+    Listeners in other processes are not reachable (one socket table per realm). MediaPlayer
+    reads such a body whole before playing (4.1 MB for one Short). No hosted downloads provider
+    exists, so DownloadManager fetches nothing on the host.
+  - The exocache server then died on NoClassDefFoundError: YouTube declares `<uses-library
+    org.apache.http.legacy>`, and the device's shared libraries were never loaded; TS stand-ins for
+    a few Apache HTTP classes answered with no-ops. ApplicationInfo now carries the
+    SharedLibraryInfos (SystemConfig's /system jars, mirrored by gen-framework, plus the implicit
+    Apache and android.test.base libraries for old targets), and a PathClassLoader asks its shared
+    library loaders before its own classes. The app's dex loads at boot, before its loader exists,
+    so a class the app bundles that a library also defines still resolves to the library's.
+    /system_ext and /product libraries (androidx.window.extensions, sidecar) are not mirrored.
+    With both changes the exocache answered 200 with the mp4 its URL names and the Short played.
+    YouTube `--live` passed 15 of 17 runs; two runs under host load 25-30 hit
+    `removeSyncBarrier`'s IllegalStateException from a resumed Choreographer.doFrame, which 4 base
+    runs did not show. Unresolved: whether the newly working in-process server and preview
+    playback only expose an existing suspension race in doFrame.
+  - `bootApp` in a serial `bun test`: a file asking for another package takes the process over
+    (identity, name, app host, an Application from its own LoadedApk, ActivityThread's current
+    application and bound package). The notification order assertion depended on the uid, which
+    install order decides. Serial runs of every file pass 1098/1098.
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator
