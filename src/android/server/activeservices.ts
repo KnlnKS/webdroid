@@ -46,14 +46,14 @@ interface StartItem extends Omit<StartState, "intent"> { intent: JObj | null; da
 interface ServiceRecord {
   key: string; info: JObj; intent: JObj; data: ParcelData; token: JObj; created: boolean;
   startRequested: boolean; stopIfKilled: boolean; lastStartId: number; pendingStarts: StartItem[]; deliveredStarts: StartItem[];
-  bindings: Binding[]; foregroundId: number;
+  bindings: Binding[]; foregroundId: number; isForeground: boolean;
 }
 const services = new Map<string, ServiceRecord>();
 const byToken = (token: JObj) => [...services.values()].find((s) => s.token === token) ?? null;
 /** the broker's copy of a created service's start state, as it changes */
 function report(s: ServiceRecord): void {
   const state: ServiceState | null = services.get(s.key) === s && s.created ? { intent: s.data, startRequested: s.startRequested, stopIfKilled: s.stopIfKilled,
-    lastStartId: s.lastStartId, starts: [...s.deliveredStarts, ...s.pendingStarts].map(({ data, ...si }) => ({ ...si, intent: data })) } : null;
+    lastStartId: s.lastStartId, starts: [...s.deliveredStarts, ...s.pendingStarts].map(({ data, ...si }) => ({ ...si, intent: data })), foreground: s.isForeground } : null;
   try { serviceTransport.record(getDeclared<string>(s.info, SI, "name"), state); } catch (error) { console.error("[services]", error); }
 }
 function* startItem(id: number, intent: JObj | null, data: ParcelData | null = null): Gen<StartItem> {
@@ -95,7 +95,7 @@ function* record(t: Target, intent: JObj, data: ParcelData | null = null): Gen<S
   if (!services.has(key)) {
     const token: JObj = yield newObj("android/os/Binder", "()V"), encoded = data ?? (yield* awaited(encodeIntent(intent)));
     if (!services.has(key)) services.set(key, { key, info: t.info, intent, data: encoded, token, created: false, startRequested: false,
-      stopIfKilled: false, lastStartId: 0, pendingStarts: [], deliveredStarts: [], bindings: [], foregroundId: 0 });
+      stopIfKilled: false, lastStartId: 0, pendingStarts: [], deliveredStarts: [], bindings: [], foregroundId: 0, isForeground: false });
   }
   return services.get(key)!;
 }
@@ -377,6 +377,8 @@ export const activeServiceMethods = {
     driven(function* (_name: JObj, token: JObj, id: number, notification: JObj | null, flags: number) {
       const s = byToken(token);
       if (!s) return;
+      s.isForeground = id !== 0;
+      report(s);
       if (id) { s.foregroundId = id; yield startForegroundNotification(id, notification); return; }
       const posted = s.foregroundId;
       if (!posted) return;

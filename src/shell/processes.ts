@@ -18,7 +18,8 @@ import type { PackageDataChange } from "./packagedata";
 import { after, systemUncaught, logUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
-import { ServiceRecords, type ServiceBinding, type ServiceRestart, type ServiceState } from "./servicerecords";
+import { BIND_AUTO_CREATE, ServiceRecords, type Death, type ServiceBinding, type ServiceRestart, type ServiceState } from "./servicerecords";
+import { lastExit, REASON_CRASH, REASON_CRASH_NATIVE } from "../android/server/appexitinfo";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
@@ -149,7 +150,10 @@ class ProcessBroker {
   private services = new ServiceRecords((pkg, process, restart) => {
     const entry = this.connect(pkg, process);
     detached(this.request(entry, (endpoint) => endpoint.service({ kind: "restart", ...restart })));
-  }, (binding) => this.connection(binding, null, true));
+  }, (binding) => this.connection(binding, null, true), (pkg, process, cls, binding) => {
+    const entry = this.byName.get(pkg + "/" + process);
+    if (entry) detached(this.request(entry, (endpoint) => endpoint.service({ kind: "bind", cls, intent: binding.intent, key: binding.key, flags: binding.flags })));
+  }, (pkg) => { const owner = packages.get(pkg); return !!owner?.system && owner.flag(owner.application, "persistent", false); });
 
   /** sent from the page's realm, which is up at boot */
   async boot(): Promise<void> {
@@ -327,7 +331,7 @@ class ProcessBroker {
     return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry };
   }
   ready(pid: number, endpoint: ProcessEndpoint): void { this.entry(pid).resolve(endpoint); }
-  fail(pid: number, message: string): void {
+  fail(pid: number, message: string, death?: Death): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
@@ -339,7 +343,7 @@ class ProcessBroker {
       const host = this.byName.get(binding.pkg + "/" + binding.process);
       if (host && !host.dead) detached(this.request(host, (endpoint) => endpoint.service({ kind: "unbind", key: binding.key })));
     }
-    this.services.processDied(entry.pkg, entry.process);
+    this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
@@ -373,11 +377,11 @@ class ProcessBroker {
     for (const { data, targets } of broadcasts) await this.broadcast(null, data, targets, [], false);
   }
   /** a process ended: ActivityManagerService.appDiedLocked's notice, from the process itself */
-  died(pid: number, status: ExitStatus): void {
+  died(pid: number, status: ExitStatus, death: Death): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     console.warn(`[process] ${entry.process} (pid ${pid}) has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`);
-    this.fail(pid, "Process has died");
+    this.fail(pid, "Process has died", death);
   }
   /** whether a process shown on screen, or one serving such a process, waits on `pid`: as binder
    *  calls inherit their caller's priority and a service bound from the top app runs in its
@@ -409,10 +413,12 @@ class ProcessBroker {
     if (request.kind === "bind" || request.kind === "unbind") request = { ...request, key: pid + "/" + request.key };
     if (request.kind === "unbind") this.services.unbind(request.key);
     if (request.kind === "stop") this.services.stop(pkg, request.cls);
-    // only a start, a bind or a pending operation brings up the service's process
-    const entry = request.kind === "unbind" || request.kind === "stop" || request.kind === "peek" ? this.byName.get(pkg + "/" + process) : this.connect(pkg, process);
-    if (!entry || entry.dead) return null;
+    // only a start, an auto-create bind or a pending operation brings up the service's process; a
+    // binding without BIND_AUTO_CREATE waits for it (bindServiceLocked, attachApplicationLocked)
+    const waits = request.kind === "unbind" || request.kind === "stop" || request.kind === "peek" || request.kind === "bind" && !(request.flags & BIND_AUTO_CREATE);
+    const live = this.byName.get(pkg + "/" + process), entry = waits ? live && !live.dead ? live : null : this.connect(pkg, process);
     if (request.kind === "bind") this.services.bind(pkg, process, request.cls, { client: pid ?? 0, key: request.key, intent: request.intent, flags: request.flags });
+    if (!entry) return null;
     const sent = request;
     try {
       const result = await this.inherit(caller, entry, () => this.request(entry, endpoint => endpoint.service(sent)));
@@ -529,7 +535,8 @@ async function remote<T>(pending: Promise<T>): Promise<T> {
 }
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
-  onProcessExit((status) => broker.died(PROCESS_PID, status));
+  onProcessExit((status) => broker.died(PROCESS_PID, status, {
+    crashed: lastExit?.reason === REASON_CRASH || lastExit?.reason === REASON_CRASH_NATIVE, repeated: !!lastExit?.dialog }));
   processTransport.signal = (pid, signal) => broker.signal(PROCESS_PID, pid, signal);
   clipboardTransport.set = data => broker.setClipboard(PROCESS_PID, data);
   clipboardTransport.get = () => broker.getClipboard(PROCESS_PID);

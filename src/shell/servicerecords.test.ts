@@ -3,13 +3,13 @@ import { ServiceRecords, type ServiceRestart, type ServiceState } from "./servic
 import { uptimeMillis } from "../guest-clock";
 
 const intent = { bytes: new Uint8Array(0), objects: [] };
-const state = (s: Partial<ServiceState>): ServiceState => ({ intent, startRequested: true, stopIfKilled: false, lastStartId: 1, starts: [], ...s });
+const state = (s: Partial<ServiceState>): ServiceState => ({ intent, startRequested: true, stopIfKilled: false, lastStartId: 1, starts: [], foreground: false, ...s });
 function records() {
-  const restarts: ServiceRestart[] = [], gone: string[] = [];
-  const r = new ServiceRecords((_pkg, _process, restart) => restarts.push(restart), (binding) => gone.push(binding.key));
+  const restarts: ServiceRestart[] = [], gone: string[] = [], attached: string[] = [];
+  const r = new ServiceRecords((_pkg, _process, restart) => restarts.push(restart), (binding) => gone.push(binding.key), (_pkg, _process, cls, binding) => attached.push(cls + " " + binding.key));
   const record = (cls: string) => (r as any).records.get("p/" + cls);
   const delay = (cls: string) => Math.round((record(cls).nextRestart - uptimeMillis()) / 100) * 100;
-  return { r, restarts, gone, record, delay, dispose: () => { for (const x of (r as any).records.values()) clearTimeout(x.timer); } };
+  return { r, restarts, gone, attached, record, delay, dispose: () => { for (const x of (r as any).records.values()) clearTimeout(x.timer); } };
 }
 
 test("a killed process's services restart as killServicesLocked decides, spaced and backed off", () => {
@@ -57,5 +57,39 @@ test("a force stop brings the package's services down for good", () => {
   r.processDied("p", "p");
   r.processStarted("p", "p");
   expect([record("Sticky"), restarts.length, gone]).toEqual([undefined, 0, ["2/a"]]);
+  dispose();
+});
+
+test("crashes count against a process's services until they stop being restarted", () => {
+  const { r, record, delay, dispose } = records();
+  r.report("p", "p", "Sticky", state({}));
+  r.report("p", "p", "Foreground", state({ foreground: true }));
+  r.processDied("p", "p", { crashed: true, repeated: false });
+  expect([record("Sticky").crashCount, delay("Sticky")]).toEqual([1, 1000]);
+  // a crash again within MIN_CRASH_INTERVAL of the restart: BOUND_SERVICE_CRASH_RESTART_DURATION per crash
+  r.processStarted("p", "p");
+  r.processDied("p", "p", { crashed: true, repeated: false });
+  expect([record("Sticky").crashCount, delay("Sticky")]).toEqual([2, 30 * 60_000]);
+  // AppErrors' repeated crash removes the process without restarts, unless a foreground service was started
+  r.processStarted("p", "p");
+  r.report("p", "p", "Sticky", state({}));
+  r.processDied("p", "p", { crashed: true, repeated: true });
+  expect(record("Sticky").timer).not.toBeNull();
+  for (let crashes = record("Foreground").crashCount; crashes < 16; crashes++) {
+    r.processStarted("p", "p");
+    r.processDied("p", "p", { crashed: true, repeated: true });
+  }
+  expect([record("Foreground"), record("Sticky")]).toEqual([undefined, undefined]);
+  dispose();
+});
+
+test("a process starting takes the bindings waiting on its services, as they were left", () => {
+  const { r, attached, record, dispose } = records();
+  r.bind("p", "p", "Lazy", { client: 2, key: "2/a", intent, flags: 0 });
+  r.processStarted("p", "p");
+  r.processDied("p", "p");
+  r.processStarted("p", "p");
+  expect(attached).toEqual(["Lazy 2/a", "Lazy 2/a"]);
+  expect(record("Lazy").bindings.size).toBe(1);
   dispose();
 });
