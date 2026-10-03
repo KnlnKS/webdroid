@@ -4,7 +4,7 @@
 import type { DocumentCookie } from "../webcookies";
 import { installClientHints } from "./clienthints";
 import { setDocumentCookie } from "./cookie";
-import { routeSubframes, webFormRequest } from "./frames";
+import { routeSubframes } from "./frames";
 import { installWebHistory } from "./history";
 import { installWebLocation } from "./location";
 import { snapshotDocument } from "./snapshot";
@@ -37,7 +37,9 @@ function start(config: PageConfig | undefined) {
     send(data, [channel.port2]);
   });
   if (config.fonts) installWebFonts(config.fonts);
-  const subframes = config.frames ? routeSubframes(config.frames, (url, init) => ask({ kind: "subframe", url, ...init })) : null;
+  // the page's links, forms and navigations: into a frame of the page, or to the app
+  if (config.frames) routeSubframes(config.frames, (url, init) => ask({ kind: "subframe", url, ...init }), () => config.page,
+    (url, init) => send(init?.method === "POST" ? { kind: "submit", url, ...init } : { kind: "navigate", url }));
   // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
   // them keeps the embedding page from reporting them as its own exceptions.
   const consoleMessage = (data: { message: string; source: string; line: number }) => send({ kind: "console", ...data });
@@ -109,40 +111,9 @@ function start(config: PageConfig | undefined) {
   }
   installWebLocation(config, (url, replace) => send({ kind: "navigate", url, replace }));
   addEventListener("hashchange", (event) => { if (event.isTrusted) send({ kind: "fragment", url: config.page }); });
-  type Navigate = Event & { cancelable: boolean; hashChange: boolean; downloadRequest: string | null; formData: FormData | null; destination: { url: string; sameDocument: boolean } };
-  (window as { navigation?: EventTarget }).navigation?.addEventListener("navigate", (e) => {
-    const event = e as Navigate;
-    if (!event.cancelable || event.destination.sameDocument || event.hashChange || event.formData || event.downloadRequest) return;
-    const url = new URL(event.destination.url);
-    // the parent page's navigation of this frame to where the app routed it
-    if (url.origin === location.origin || url.href === (window as unknown as Record<symbol, unknown>)[Symbol.for("wd.routed")]) return;
-    event.preventDefault(); send({ kind: "navigate", url: url.href });
-  });
   addEventListener("load", () => send({ kind: "loaded", url: config.page ?? document.querySelector<HTMLMetaElement>('meta[name="wd-proxy-url"]')?.content,
     error: document.querySelector<HTMLMetaElement>('meta[name="wd-proxy-error"]')?.content, title: document.title,
     width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
-  document.addEventListener("click", (event) => {
-    const a = (event.target as Element).closest?.<HTMLAnchorElement>("a[href]");
-    if (!a || /^javascript:/i.test(a.href)) return;
-    if (a.hash && a.href.split("#")[0] === document.baseURI.split("#")[0]) return;
-    event.preventDefault();
-    // a link into a frame of the page navigates that frame
-    const frame = subframes?.frameFor(a);
-    if (frame) subframes!.go(frame, a.href); else send({ kind: "navigate", url: a.href });
-  }, true);
-  const submitForm = (form: HTMLFormElement, submitter: HTMLElement | null) => {
-    const frame = subframes?.frameFor(form, submitter);
-    void webFormRequest(form, submitter, config.page).then((request) => {
-      if (request && frame) subframes!.go(frame, request.url, request);
-      else if (request) send({ kind: request.method === "GET" ? "navigate" : "submit", ...request });
-    });
-  };
-  window.addEventListener("submit", (event) => {
-    if (event.defaultPrevented || !(event.target instanceof HTMLFormElement)) return;
-    event.preventDefault();
-    submitForm(event.target, event.submitter);
-  });
-  HTMLFormElement.prototype.submit = function (this: HTMLFormElement) { submitForm(this, null); };
   const receive = (data: AppMessage) => {
     if (data.kind === "eval") {
       let value = "null";

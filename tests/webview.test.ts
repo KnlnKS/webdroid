@@ -526,7 +526,7 @@ describe("WebView isolation", () => {
         (await import(URL.createObjectURL(new Blob([routing], { type: "text/javascript" })))).routeSubframes(`http://routed.localhost:${port}`, (url: string) => {
           asked.push(url);
           return Promise.resolve(url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : url.startsWith("data:") ? url : null);
-        });
+        }, () => location.href, () => {});
         document.body.insertAdjacentHTML("beforeend", `<iframe src="${direct}/direct"></iframe>`);
         const made = document.createElement("iframe");
         made.src = `${direct}/made`;
@@ -585,7 +585,7 @@ describe("WebView isolation", () => {
         (await import(URL.createObjectURL(new Blob([routing], { type: "text/javascript" })))).routeSubframes(`http://routed.localhost:${port}`, (url: string, init?: { method?: string }) => {
           asked.push(url.startsWith("blob:") ? "blob" : url + (init?.method ? " " + init.method : ""));
           return Promise.resolve(/override/.test(url) ? null : url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : url);
-        });
+        }, () => location.href, () => {});
         const loads: Record<string, number> = {};
         const frame = (label: string, setup: (f: HTMLIFrameElement) => void) => {
           const f = document.createElement("iframe");

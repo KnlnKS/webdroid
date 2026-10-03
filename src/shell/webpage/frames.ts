@@ -108,12 +108,13 @@ type NavigateEvent = Event & { cancelable: boolean; hashChange: boolean; downloa
 /** each frame of the page that loads through the app (any URL but about: and javascript:) loads where
  *  `route` says: its web origin's renderer, the URL itself (data:, blob:), or nowhere. The page's src,
  *  setAttribute, Attr and HTML parsing entry points hold such a frame's URL before its navigation
- *  starts, and navigations of a frame's document (a named target, window.open, a same-origin frame's
- *  own) go the same way, here and in each same-origin frame's realm. `renderers`, the renderer origins,
- *  are the only sites a frame may load from otherwise. `src` reads what the page set; the frame's
- *  initial document, which Chromium never shows, fires no load event. Returns the named-target
- *  lookup and navigation the page's own link and form handling use. */
-export function routeSubframes(renderers: string, route: (url: string, init?: FrameInit) => Promise<unknown>) {
+ *  starts, and navigations of a frame's document (a link or form targeting it, window.open, a
+ *  same-origin frame's own) go the same way, here and in each same-origin frame's realm. A navigation
+ *  of this document (at `page`) goes to the app: `leave`. `renderers`, the renderer origins, are the
+ *  only sites a frame may load from otherwise. `src` reads what the page set; the frame's initial
+ *  document, which Chromium never shows, fires no load event. */
+export function routeSubframes(renderers: string, route: (url: string, init?: FrameInit) => Promise<unknown>,
+  page: () => string | null, leave: (url: string, init?: FrameInit) => void): void {
   const policy = document.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";
   policy.content = "frame-src 'self' data: blob: " + renderers;
@@ -409,16 +410,22 @@ export function routeSubframes(renderers: string, route: (url: string, init?: Fr
       go(frame, href);
       return contentWindow(frame);
     } });
-    if (win === window) return;
-    // a same-origin frame's own navigations; the page's main document has its own
-    const submit = win.HTMLFormElement.prototype.submit;
-    win.HTMLFormElement.prototype.submit = function (this: HTMLFormElement) { if (!submitInto(this, null)) submit.call(this); };
+    // the realm's own navigations: this document's go to the app (its forms' through `submitted`),
+    // but for the app's own routing of it; a same-origin frame's route its frame
+    const top = win === window, submit = win.HTMLFormElement.prototype.submit;
+    win.HTMLFormElement.prototype.submit = function (this: HTMLFormElement) { if (!submitted(this, null)) submit.call(this); };
     win.navigation?.addEventListener("navigate", (event) => {
       const nav = event as NavigateEvent, url = nav.destination.url;
-      if (!nav.cancelable || nav.destination.sameDocument || nav.hashChange || nav.downloadRequest !== null || direct(url)) return;
+      if (!nav.cancelable || nav.destination.sameDocument || nav.hashChange || nav.downloadRequest !== null) return;
+      if (top) {
+        if (nav.formData || URL.parse(url)?.origin === location.origin || url === (window as unknown as Record<symbol, unknown>)[Symbol.for("wd.routed")]) return;
+        nav.preventDefault();
+        leave(url);
+        return;
+      }
       let frame: Element | null = null;
       try { frame = win.frameElement; } catch {}
-      if (!frame) return;
+      if (!frame || direct(url)) return;
       // the app's own answer, to the frame's src or to a navigation of it
       const entry = frames.get(frame);
       if (expected.get(frame) === url) { expected.delete(frame); return; }
@@ -428,12 +435,15 @@ export function routeSubframes(renderers: string, route: (url: string, init?: Fr
       go(frame, url, fields ? { method: "POST", body: new TextEncoder().encode(fields.toString()).buffer, contentType: "application/x-www-form-urlencoded" } : undefined);
     });
   };
-  // a same-origin frame's form into a frame
-  const submitInto = (form: HTMLFormElement, submitter: HTMLElement | null) => {
-    const method = (submitter?.getAttribute("formmethod") || form.method).toLowerCase();
+  // a form (with its submitter) into the frame it targets; one targeting none is the realm's own:
+  // this document's goes to the app, a same-origin frame's submits as the browser would
+  const submitted = (form: HTMLFormElement, submitter: HTMLElement | null) => {
+    const top = form.ownerDocument === document, method = (submitter?.getAttribute("formmethod") || form.method).toLowerCase();
     const frame = method === "dialog" ? null : frameFor(form, submitter);
-    if (!frame) return false;
-    void webFormRequest(form, submitter, form.ownerDocument.URL).then((request) => { if (request) go(frame, request.url, request); });
+    if (!frame && !top) return false;
+    void webFormRequest(form, submitter, top ? page() : form.ownerDocument.URL).then((request) => {
+      if (request && frame) go(frame, request.url, request); else if (request) leave(request.url, request);
+    });
     return true;
   };
   // a frame's initial document while the app answers, and a renderer's bootstrap document, which
@@ -456,19 +466,21 @@ export function routeSubframes(renderers: string, route: (url: string, init?: Fr
     // a same-origin frame's document (srcdoc, about:blank) the page did not reach into
     doc.addEventListener("load", (event) => { if (isFrame(event.target)) adopt(event.target); }, true);
     doc.querySelectorAll("iframe, frame").forEach((frame) => { if (isFrame(frame)) visit(frame); });
-    if (view === window) return;
-    // a same-origin frame's links and forms into a frame, itself included, once the page's handlers ran
+    // links and forms into a frame, itself included, and this document's own. A same-origin frame's
+    // wait for the page's handlers; this document hands every link but an in-page one to the app
+    // before them, as the app decides where it loads.
+    const top = view === window;
     doc.addEventListener("click", (event) => {
-      const link = event.defaultPrevented ? null : (event.target as Element).closest?.("a[href], area[href]") as HTMLAnchorElement | null;
-      const frame = link && frameFor(link);
-      if (!frame || direct(link!.href)) return;
+      const link = event.defaultPrevented ? null : (event.target as Element).closest?.<HTMLAnchorElement>("a[href], area[href]");
+      if (!link || direct(link.href) || link.hash && link.href.split("#")[0] === doc.baseURI.split("#")[0]) return;
+      const frame = frameFor(link);
+      if (!frame && !top) return;
       event.preventDefault();
-      go(frame, link!.href);
-    });
-    doc.addEventListener("submit", (event) => {
-      if (!event.defaultPrevented && event.target instanceof view.HTMLFormElement && submitInto(event.target, (event as SubmitEvent).submitter)) event.preventDefault();
+      if (frame) go(frame, link.href); else leave(link.href);
+    }, top);
+    (top ? view : doc).addEventListener("submit", (event) => {
+      if (!event.defaultPrevented && event.target instanceof view.HTMLFormElement && submitted(event.target, (event as SubmitEvent).submitter)) event.preventDefault();
     });
   };
   install(window);
-  return { frameFor, go };
 }
