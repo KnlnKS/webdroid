@@ -1,7 +1,6 @@
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread, appNativeAbi, mainThread } from "../jvm/natives/jlang";
+import { curThread, mainThread } from "../jvm/natives/jlang";
 import { currentStrand, inStrand } from "../jvm/suspend";
-import { setNativeMemorySizer } from "../jvm/natives/jnio";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
 import { dlInit, loadModule, modulePath, modules, resolveGlobalOrNull } from "./dl";
@@ -53,12 +52,6 @@ function nativeInit(abi: string): void {
  *  The ELF loader, the dynamic linker's own lib search and System.loadLibrary's choice all read it. */
 const NATIVE_ABIS = [...ABIS_64, ...ABIS_32];
 rt.nativeAbis = NATIVE_ABIS;
-setNativeMemorySizer(() => {
-  const abi = appNativeAbi();
-  if (!abi || !NATIVE_ABIS.includes(abi)) return false;
-  nativeInit(abi);
-  return true;
-});
 
 let bionic: Promise<void> | null = null;
 /** a 64-bit process's libc: bionic's libraries load and initialize before the first image that needs them */

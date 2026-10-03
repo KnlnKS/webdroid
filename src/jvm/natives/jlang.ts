@@ -1119,14 +1119,6 @@ export function libraryAbi(names: Iterable<string>): string | null {
   const dirs = new Set([...names].flatMap((name) => /^lib\/([^/]+)\/[^/]+\.so$/.exec(name)?.[1] ?? []));
   return dirs.size ? pickAbi((a) => dirs.has(a)) : null;
 }
-const appAbis = new WeakMap<Runtime, string | null>();
-/** the ABI the app's own libraries load from, when it ships any */
-export function appNativeAbi(owner: Runtime = rt): string | null {
-  if (appAbis.has(owner)) return appAbis.get(owner)!;
-  const abi = libraryAbi(owner.classpathNames());
-  appAbis.set(owner, abi);
-  return abi;
-}
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7a", 0x3e: "x86_64", 0x03: "x86" };
 /** Runtime.nativeLoad: `file` is a path (ClassLoader.findLibrary's, System.load's) or a bare name
  *  from the loader's class path; null once the library is loaded, else the linker's error */

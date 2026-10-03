@@ -6,7 +6,7 @@ import { vcall, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { isExternal, mapExternal, memoryAt, physical, unmapExternal } from "./jmemory";
+import { isExternal, mapExternal, memoryAt, physical, unmapExternal, writeAt } from "./jmemory";
 import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
@@ -108,7 +108,7 @@ function ioStatus(n: number, reading: boolean): number {
 /** a read into native memory: the bytes land once it completes, since guest memory may move meanwhile */
 function readInto(address: bigint, len: number, read: (target: Uint8Array) => number | Promise<number>): number | Promise<number> {
   const scratch = new Uint8Array(len);
-  return after(read(scratch), (n) => { if (n > 0) mem.write(physical(address), scratch.subarray(0, n)); return ioStatus(n, true); });
+  return after(read(scratch), (n) => { if (n > 0) writeAt(address, scratch.subarray(0, n)); return ioStatus(n, true); });
 }
 /** iovec i of an IOVecWrapper array: its base, a native address, and its length */
 function iovec(iov: bigint, i: number): [bigint, number] {

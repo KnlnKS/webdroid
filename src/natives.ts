@@ -70,7 +70,6 @@ import "./android/wifi";
 import "./android/appwidget";
 import "./android/localsocket";
 import "./android/clipboard";
-import "./android/statsevent";
 import "./android/urigrants";
 import "./android/game";
 import "./android/vibrator";

@@ -1,25 +1,4 @@
 {
- "android/util/StatsEvent": [
-  "reimplements getAtomId()I",
-  "reimplements getBytes()[B",
-  "reimplements getNumBytes()I",
-  "reimplements release()V",
-  "reimplements static newBuilder()Landroid/util/StatsEvent$Builder;"
- ],
- "android/util/StatsEvent$Builder": [
-  "reimplements addBooleanAnnotation(BZ)Landroid/util/StatsEvent$Builder;",
-  "reimplements addIntAnnotation(BI)Landroid/util/StatsEvent$Builder;",
-  "reimplements build()Landroid/util/StatsEvent;",
-  "reimplements setAtomId(I)Landroid/util/StatsEvent$Builder;",
-  "reimplements usePooledBuffer()Landroid/util/StatsEvent$Builder;",
-  "reimplements writeBoolean(Z)Landroid/util/StatsEvent$Builder;",
-  "reimplements writeByteArray([B)Landroid/util/StatsEvent$Builder;",
-  "reimplements writeFloat(F)Landroid/util/StatsEvent$Builder;",
-  "reimplements writeInt(I)Landroid/util/StatsEvent$Builder;",
-  "reimplements writeLong(J)Landroid/util/StatsEvent$Builder;",
-  "reimplements writeLongArray([J)Landroid/util/StatsEvent$Builder;",
-  "reimplements writeString(Ljava/lang/String;)Landroid/util/StatsEvent$Builder;"
- ],
  "java/lang/reflect/AccessibleObject": [
   "missing trySetAccessible()Z"
  ],

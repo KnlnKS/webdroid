@@ -7,6 +7,7 @@ import { device } from "../../shell/config";
 import { mem } from "../../native/mem";
 import { handle } from "../../android/handles";
 import { nonMovableBytes } from "./jnio";
+import { hostAddress } from "./jmemory";
 import { BOOT_JAR_PATHS } from "../bootclasspath";
 
 function newArrayOf(cls: JClass | null, len: number): unknown {
@@ -57,10 +58,10 @@ rt.register({
     "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
     "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) =>
       len >= 0 && classDesc(cls) === "B" ? nonMovableBytes(len) : newArrayOf(cls, len),
-    // a byte[] in guest memory is at its address there; another non-movable array's address is
-    // the handle JNI implementations dereference it by
+    // a byte[] in guest memory is at its address there, a host one where jmemory resolves it;
+    // another non-movable array's address is the handle JNI implementations dereference it by
     "addressOf(Ljava/lang/Object;)J": (array: object) =>
-      array instanceof Int8Array && array.buffer === mem.buf ? BigInt(mem.va(array.byteOffset)) : handle(array),
+      array instanceof Int8Array && array.buffer === mem.buf ? BigInt(mem.va(array.byteOffset)) : hostAddress(array) ?? handle(array),
     "getTargetSdkVersion()I": () => targetSdk,
     "is64Bit()Z": () => +is64BitProcess(),
     "setTargetSdkVersion(I)V": setTargetSdkVersion,

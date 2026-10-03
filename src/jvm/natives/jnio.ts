@@ -1,7 +1,7 @@
 // java.nio's buffers and charset coders are libcore's. This is their native boundary: NativeConverter
 // and CharsetUtils over charset.ts's converters, MappedByteBuffer's natives, and how TS reads a
-// buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or an external
-// read-only mapping, jmemory.ts), else a heap buffer's array from its offset.
+// buffer's memory, as NIOAccess does: a direct buffer's `address` (guest memory, or outside it a
+// read-only mapping or an early non-movable array, jmemory.ts), else a heap buffer's array.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
 import { after, scall, newObj } from "./jlang";
@@ -11,7 +11,7 @@ import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
 import { handle, deref, release } from "../../android/handles";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical } from "./jmemory";
+import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes } from "./jmemory";
 import { BytesFile, type FileSource } from "../../shell/lazyfile";
 export { isExternal };
 
@@ -72,7 +72,7 @@ export function resident(b: JBuffer): Promise<void> | null {
   const address = addressOf(b);
   return address && isExternal(address) ? pagesIn(address, capacity(b) << elementShift(b)) : null;
 }
-/** GetDirectBufferAddress: 0 for a heap buffer; an external mapping moves into guest memory */
+/** GetDirectBufferAddress: 0 for a heap buffer or a host array; an external mapping moves into guest memory */
 export function directAddress(b: JBuffer): number | bigint | Promise<number | bigint> {
   const address = addressOf(b);
   if (isExternal(address)) return guestAddress(address);
@@ -121,16 +121,14 @@ function readOnlyMapping(source: FileSource, offset: number, size: number, fd: J
 }
 export const readOnlyBuffer = (bytes: Uint8Array): JBuffer | Promise<JBuffer> => readOnlyMapping(new BytesFile(bytes), 0, bytes.length);
 
-/** sizes guest memory for the app's native ABI before its first library loads; false when it
- *  ships none (the native tier sets it) */
-let sizeNativeMemory = (): boolean => false;
-export function setNativeMemorySizer(sizer: () => boolean): void { sizeNativeMemory = sizer; }
 const guestArrays = new FinalizationRegistry<number>((address) => mem.free(address));
 /** VMRuntime.newNonMovableArray's byte[]: guest memory, as ART's non-moving space is the memory
- *  native code sees, so the array and its address are the same bytes. Memory is sized for the
- *  app's native ABI first, since growing it later would detach the array. */
+ *  native code sees, so the array and its address are the same bytes. Until native code sizes the
+ *  memory (a grow would detach the array) it is a host array instead: committing a native ABI's
+ *  whole memory in every process that makes one (StatsEvent's buffer) puts the page's realms past
+ *  V8's global heap limit, which then marks without pause. */
 export function nonMovableBytes(n: number): Int8Array {
-  if (!mem.sized()) sizeNativeMemory();
+  if (!mem.sized()) return hostBytes(n);
   const address = mem.calloc(1, Math.max(1, n));
   if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", `Failed to allocate a ${n} byte allocation in the non-moving space`);
   const array = new Int8Array(mem.buf, address, n);

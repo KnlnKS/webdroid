@@ -9,8 +9,7 @@ import { handle, ownedHandle, weakHandle, deref, release } from "../../android/h
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers";
 import { type JBuffer, remainingBytes, resident, addressOf, limit, position, directAddress } from "./jnio";
-import { physical } from "./jmemory";
-import { mem } from "../../native/mem";
+import { memoryAt } from "./jmemory";
 import { after, scall } from "./jlang";
 import { concat, i8, jarray, u8 } from "../abi";
 import {
@@ -64,8 +63,6 @@ nc("get_cipher_names(Ljava/lang/String;)[Ljava/lang/String;", (selector: string)
   return Object.assign(CIPHER_NAMES.slice(), { $t: "Ljava/lang/String;" });
 });
 nc("getDirectBufferAddress(Ljava/nio/Buffer;)J", (b: JBuffer) => after(directAddress(b ?? rt.npe()), BigInt));
-/** a direct buffer's bytes by address, as the *Direct natives read them */
-const guest = (address: bigint, len: number) => mem.bytes(physical(address), len);
 nc("RAND_bytes([B)V", (b: Int8Array | null) => {
   if (!b) throw rt.mkThrowable("java/lang/NullPointerException", null);
   for (let i = 0; i < b.length; i += 65536) crypto.getRandomValues(b.subarray(i, i + 65536));
@@ -518,9 +515,9 @@ function digestSignInit(signing: boolean) {
 }
 nc("EVP_DigestSignInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", digestSignInit(true));
 nc("EVP_DigestVerifyInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", digestSignInit(false));
-const directUpdate = (ref: JObj, address: bigint, len: number) => { liveHash(ref).update(guest(address, len)); };
+const directUpdate = (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveHash(ref).update(b); });
 for (const n of ["EVP_DigestUpdateDirect", "EVP_DigestSignUpdateDirect", "EVP_DigestVerifyUpdateDirect"]) nc(`${n}(Lcom/android/org/conscrypt/NativeRef\$EVP_MD_CTX;JI)V`, directUpdate);
-nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", (ref: JObj, address: bigint, len: number) => { liveMac(ref).update(guest(address, len)); });
+nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", (ref: JObj, address: bigint, len: number) => after(memoryAt(address, len), (b) => { liveMac(ref).update(b); }));
 const saltFor = (p: RsaParams, hLen: number, emLen: number) => p.saltLen === -1 ? hLen : p.saltLen === -2 ? emLen - hLen - 2 : p.saltLen;
 nc("EVP_DigestSignFinal(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;)[B", (ref: JObj) => {
   const c = ptr<SignCtx>(ref), s = c.sign;
