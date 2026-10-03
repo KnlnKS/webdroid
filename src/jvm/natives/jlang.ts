@@ -1,7 +1,7 @@
 // java.lang.* natives. Convention: Java booleans are 0/1 numbers, longs are BigInt,
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
-import { awaited, rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
+import { awaited, getDeclared, rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, coldFrameStack, type ColdMethod } from "../cold";
@@ -1489,10 +1489,18 @@ rt.intrinsic("java/lang/Enum", {
 const THREAD_STATES = ["NEW", "RUNNABLE", "BLOCKED", "WAITING", "TIMED_WAITING", "TERMINATED"];
 /** debug: each live thread as Thread.getState reads it, with the object it parked on
  *  (wd.threads; the e2e harness records it when a step's phase hangs) */
-export const threadStates = (): { name: string; state: string; blocker?: string }[] => [...liveThreads].map((t) => ({
+export const threadStates = (): { name: string; state: string; blocker?: string; owner?: string }[] => [...liveThreads].map((t) => ({
   name: t.jname, state: THREAD_STATES[rt.monitors.isBlocked(t) ? 2 : t.parked || 1],
   blocker: (t.parkBlocker as { constructor?: { $i?: ClassInfo } } | null)?.constructor?.$i?.name,
+  owner: t.parkBlocker ? blockerOwner(t.parkBlocker) : undefined,
 }));
+/** the thread a parked thread waits for, where its blocker names one: a FutureTask's runner, a lock's owner */
+function blockerOwner(blocker: unknown): string | undefined {
+  for (const [cls, field] of [["java/util/concurrent/FutureTask", "runner"], ["java/util/concurrent/locks/AbstractOwnableSynchronizer", "exclusiveOwnerThread"]]) {
+    try { const t = getDeclared<JThread | null>(blocker, cls, field); if (t !== undefined) return t?.jname ?? "none"; } catch { /* not loaded */ }
+  }
+  return undefined;
+}
 
 class JRef extends JObj { referent: unknown = null; queue: JRefQueue | null = null; state = 0; }
 class JRefQueue extends JObj { items: JRef[] = []; waiters = new Set<() => void>(); }

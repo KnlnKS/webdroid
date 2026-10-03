@@ -37,7 +37,8 @@ targets, unreached states, wedged main loops, missing process diagnostics, timeo
 checkpoints that presented no frames and aborted flows fail it; an exception in one flow is
 recorded as that flow's failure and never discards the others. For live flows, missing APIs,
 native requirements, runtime errors and browser errors are reported as observed gaps. Inspect
-`actual-fast/<flow>/run.json` and each step's `.ui.json` after a failure; the quick pass does
+`actual-fast/<flow>/run.json` and each step's `.ui.json` after a failure (a wedged step's `hang`
+holds its threads, what each parked one waits for, and `stalledMs` until the loop answered); the quick pass does
 not rerun a failed flow. It defaults to at most five jobs and starts longer flows first using
 prior run durations when available. `actual-fast/summary.json` distinguishes `compared`,
 `smoke`, `observed`, `failed` and `not-selected`.

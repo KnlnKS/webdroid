@@ -41,7 +41,8 @@ export type StepSpec = {
   timing: "controlled" | "real";
 };
 
-export type Hang = { phase: string; afterMs: number; looper: unknown; threads: unknown };
+/** `native`: the guest threads not parked; `stalledMs`: how long a wedged main loop took to answer (null: not within 30 s) */
+export type Hang = { phase: string; afterMs: number; looper: unknown; threads: unknown; native?: unknown; stalledMs?: number | null };
 /** how the wait ended, how long it took, and how many polls each reason kept it waiting */
 export type Settled = { how: "idle" | "pixels" | "timeout" | "snapshot" | "state"; ms: number; busy: Record<string, number> };
 
@@ -340,9 +341,13 @@ function installProbe(cfg: ProbeConfig): void {
     const late = new Promise<"late">((r) => { id = rawSetTimeout(() => r("late"), ms); });
     const out = await Promise.race([work, late]).finally(() => rawClearTimeout(id));
     if (out !== "late") return out as T;
-    const within = <U>(p: Promise<U>) => Promise.race([p, new Promise<string>((r) => rawSetTimeout(() => r("no answer in 3 s"), 3000))]);
-    hangs.push({ phase, afterMs: ms, looper: await within(Promise.resolve().then(() => g.wd.looperDump())).catch(String), threads: g.wd.threads?.() });
+    hangs.push(await hangOf(phase, ms));
     return fallback;
+  };
+  const hangOf = async (phase: string, afterMs: number): Promise<Hang> => {
+    const within = <U>(p: Promise<U>) => Promise.race([p, new Promise<string>((r) => rawSetTimeout(() => r("no answer in 3 s"), 3000))]);
+    const native = g.wd.native?.regs?.().filter((c: { state: string }) => c.state && c.state !== "park").map((c: { name: string; pc: string }) => `${c.name} ${c.pc}`);
+    return { phase, afterMs, looper: await within(Promise.resolve().then(() => g.wd.looperDump())).catch(String), threads: g.wd.threads?.(), native };
   };
   const step = async (spec: StepSpec): Promise<StepResult> => {
     const wd = g.wd, hangs: Hang[] = [];
@@ -368,6 +373,12 @@ function installProbe(cfg: ProbeConfig): void {
     const alive = wd.alive(spec.aliveMs);
     const wedged = !(controlled ? await wd.guestClock.drive(alive, spec.aliveMs) : await alive);
     const livenessMs = performance.now() - aliveAt;
+    // a wedged main loop: where its threads are, then how long until it answers
+    if (wedged && !controlled) {
+      const hang = await hangOf("alive", spec.aliveMs), from = performance.now();
+      hang.stalledMs = await wd.alive(30_000) ? Math.round(performance.now() - from + spec.aliveMs) : null;
+      hangs.unshift(hang);
+    }
     shooting = false;
     const captureAt = performance.now();
     const png = spec.capture ? await bounded("capture", capture(), PHASE_BOUND_MS, null, hangs) : null;
