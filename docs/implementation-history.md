@@ -2731,6 +2731,50 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     dispatch), so no non-live flow passed despite one; fitnotes, mihon-onboarding, komikku,
     doodlejump and reddit `--live` pass with no uncaught exception and no crash. Other live flows
     were not run and may report uncaught exceptions as gaps; those now end the app.
+- **2026-10-02, calls into hosted services cross a parcel; reopening starts a new process**
+  (branch `knlnks/open-relaunch`):
+  - The service manager and every reply hand an app a BinderProxy for a binder hosted on
+    system_server's behalf (the `webdroid/` classes); its transactions run Binder.execTransact
+    over a copy of the data parcel on the calling thread (as a transaction from this process, the
+    thread's identity, StrictMode policy and work source restored after), and the caller reads a
+    copy of the reply. Extras changed after startService are not seen by the service, extras are
+    no longer `==`, and a data parcel or reply past BINDER_VM_SIZE fails as signalExceptionForError
+    reports it (TransactionTooLargeException over 200 KB). Blobs, bitmaps and cursor windows a
+    device would send in ashmem count as descriptors. What the copy exposed: AMS asked for
+    providers with GET_META_DATA, so microG's publishContentProviders was 1.4 MB (each holder
+    carried 120 KB of application meta-data; AOSP's query has none); MediaSession's two binders and
+    the print callbacks shared one spec constructor and so one Stub supertype; SurfaceControl,
+    its Transaction, InputChannel and OverlayProperties had no parcel natives (a released
+    SurfaceControl writes nothing after its 0). Cost (bun): a trivial call +6 us, getDisplayInfo
+    +27 us, relayout +58 us; FitNotes makes about 140 hosted calls to its first frame and 5-90 per
+    tap. System-to-app calls (IApplicationThread, IServiceConnection) still pass objects directly.
+  - Doodle Jump then wedged every run in its known lock-order race. The billing bind answered in
+    0.7 s in some base runs and 7-8 s in others: the bound service's onBind ran after the bind
+    request, at background priority under the game's decode. A process now runs in the scheduling
+    group of a foreground client bound to it (OomAdjuster; not for BIND_NOT_FOREGROUND or
+    BIND_WAIVE_PRIORITY): the bind answers in 0.8 s and doodlejump passes 3/3.
+  - ActiveServices: a death carries ApplicationExitInfo's crash and AppErrors' repeat-crash
+    verdict; crashes count against the services the process ran (reset after MIN_CRASH_INTERVAL
+    from their start), a repeat crash restarts none unless a started service is in the foreground,
+    later quick crashes wait BOUND_SERVICE_CRASH_RESTART_DURATION per crash, and at
+    BOUND_SERVICE_MAX_CRASH_RETRY (16) the service is brought down; a persistent system package's
+    services restart at once. A binding without BIND_AUTO_CREATE no longer starts the process; the
+    broker keeps it and a process starting for any reason takes it (attachApplicationLocked).
+    Not modelled: procIsBoundForeground in the crash retry, and AppErrors' bad-process mark.
+  - "Open again" starts a new process for the package in a frame (the home screen's launch: it
+    starts its launcher activity, at the top app's priority until shown); the tab, the broker and
+    microG's processes live on, and a relaunched process that dies opens again the same way
+    (`bun run relaunch`). FitNotes' relaunch draws 0.87-1.0 s after the click (lat-style harness,
+    warm), against 1.1-1.3 s for a warm page load, which also ended every realm.
+  - Evaluated, not done: the first launch in a frame too. A prototype that installed in the page
+    and launched FitNotes in a frame drew at 1735-1802 ms from navigation against 1596-1611 ms in
+    the page (3 cold runs each), as the frame's zygote no longer overlaps the download. Taps on
+    lat's fitnotes and calculatorm scenarios answered in 6-68 ms in a frame against 3-43 ms in the
+    page (all under 150 ms); the frame presents once per vsync as the page does (239 vs 262
+    presentations over the same pager taps); pointer input reaches the frame's canvas directly.
+    It also needs the e2e probe, lat and textcmp, which hook the page realm's canvas and timers,
+    to follow the app's frame, and the page's system Java work (provisioning, BOOT_COMPLETED) a
+    JVM. A frame started at page load, booting its zygote during the download, could close the gap.
 - **2026-10-02, GL errors, signal defaults, TLS unload, WebView's UA** (branch `knlnks/open-gl2`):
   - Lichess's getError time is Skia's allocation bracket (bind, glGetError, glBufferData or
     glTexStorage2D, glGetError): about 600 queries in 12 s. Most cost under 0.3 ms, but the first

@@ -817,7 +817,11 @@ grid) for measurement, TextRunShaper and drawing;
    pointers fail with EFAULT, ARM32 addresses past 2 GiB and stores to unbacked pages fault as
    SIGSEGV, and traces carry source files and lines. Done (history "system_server's work outlives
    app processes"): AMS restarts of sticky and bound services, and broker work after the page's app
-   dies. Open: ANR detection, loads into unbacked space below 2 GiB.
+   dies. Done (history "calls into hosted services cross a parcel"): same-process calls into hosted
+   services copy through a parcel with TransactionTooLargeException, crash counts stop restarts,
+   bindings wait for a later process, and reopening an app starts a new process frame instead of
+   reloading the tab. Open: ANR detection, loads into unbacked space below 2 GiB, the first launch in
+   a frame (+150 ms measured), system-to-app calls without a parcel.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 
