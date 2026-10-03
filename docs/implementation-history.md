@@ -2071,6 +2071,50 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Text into bitmaps went through CanvasKit's unshaped drawText (no kerning, ligatures faked with
     Unicode presentation forms); it draws minikin's glyph runs with drawGlyphs.
   - The corpus's one native requirement was `sched_getattr` (Nulls Royale), then `sched_setattr`.
+- **2026-10-02, the kernel's open Stage E items** (sockets, process creation, mremap, planes).
+  A survey of every arm64/armv7 library in `apks/` (dynamic imports, read from `.dynsym`) set
+  what evidence each item had:
+  - fork 45 libraries (crash reporters, cronet, flutter, TikTok's security SDKs), popen 15
+    (getprop and /proc probes), system 3, vfork 2 (libarchive), execvp/execve after a fork only.
+    A tab holds one process, so clone without CLONE_THREAD (bionic's fork, vfork, posix_spawn)
+    and the ARM32 libc's fork/vfork answer EAGAIN, the kernel's process-limit answer, rather
+    than ENOSYS, which no Android kernel gives for them; wait/waitpid answer ECHILD, and
+    libcore's forkAndExec throws "error=11, Try again" instead of claiming the program is
+    missing. Emulating `sh -c` would fabricate a child process; none of the observed paths
+    needs one to proceed.
+  - Native sockets read and write sockaddr_in6 over the socket core libcore already used for
+    AF_INET6: IPv4-mapped peers, IPV6_V6ONLY (ENETUNREACH for a mapped peer, EINVAL to bind
+    one), scope ids, and the family check Linux makes (EAFNOSUPPORT for a sockaddr of the other
+    family, except a datagram an AF_INET6 socket sends to an IPv4 address). The relay has no
+    IPv6 route, so a UDP connect to a non-loopback IPv6 address is ENETUNREACH as a send was;
+    a UDP connect had succeeded, which would have let Chromium's IPv6 reachability probe
+    believe the network had IPv6. dnsproxyd and the ARM32 resolver answer AF_INET6 hints
+    (numeric IPv6, ip6-localhost; names stay A-only).
+  - sendmsg/recvmsg were ENETUNREACH for every socket while 40/53 libraries import them
+    (Chromium's unconnected UDP receive, Dart, WebRTC). They move iovecs and msg_name; control
+    data on send is EINVAL and msg_controllen reads 0. recvfrom on a stream with an address
+    buffer reports length 0 rather than ENOTCONN.
+  - AF_UNIX: socketpair ends were not AF_UNIX sockets (getsockname, getsockopt, shutdown failed
+    on them) and SOCK_DGRAM/SEQPACKET pairs merged messages. Sockets keep their type; message
+    sockets read one message (MSG_TRUNC reports its length); a datagram socket sends to and
+    connects to one bound in the process (EPROTOTYPE across types, the sender's name in
+    recvfrom). Not modelled: SCM_RIGHTS/credentials, SO_RCVTIMEO on AF_UNIX (accepted), EPIPE
+    for a peer that closed, and a bound pathname leaving a socket file.
+  - mremap (46 libraries, SQLite among them: `unixRemapfile` remaps its MAP_SHARED database
+    mapping with MREMAP_MAYMOVE and turns mmap off when that fails) grows in place through the
+    core's `extend_va`, honours MREMAP_FIXED (as MAP_FIXED: only over mapped or reserved
+    space), and moves or grows a shared file mapping with its file range and the file's bytes.
+    A private file mapping's growth still reads zeros rather than the file.
+  - dlclose stays a reference count: 165 libraries import it, mostly closing probes of system
+    libraries, and no app was found reloading a library for fresh static state.
+  - Planes can move while a host operation waits. `anchor(p)` in mem.ts keeps the guest address
+    and answers the current offset; the existing va/guestAt pairs use it, and the holders that
+    kept a raw offset across an await now do (readv/writev's iovec array, inotify's read wait,
+    Java mmap's read, AMediaExtractor_readSampleData, AMediaCodec_dequeueOutputBuffer,
+    AAudioStream_waitForStateChange). rt_sigtimedwait read its info argument twice and took
+    sigsetsize as the timeout. The ARM32 libc's holders (qsort, bsearch, fgets, scandir, its
+    pthread waits) were left: a 2 GiB process has no planes. Lichess (Flutter, cronet) passed
+    15/15 live afterwards.
 
 ## App investigations and remaining limits
 
