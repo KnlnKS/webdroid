@@ -4,7 +4,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml";
 import { webScript } from "../src/shell/webscript";
 import { proxyRequest } from "../src/shell/proxy";
-import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, webViewBrands } from "../src/shell/webinject";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, routeSubframes, webViewBrands } from "../src/shell/webinject";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -487,6 +487,32 @@ describe("WebView isolation", () => {
         await drive({ kind: "storage", op: "data" });
         return [written, usage, afterOrigin, await read(false), await drive({ kind: "storage", op: "usage" })];
       }, { origin: `http://store.localhost:${server.port}`, sandbox: WEB_FRAME_SANDBOX })).toEqual([["v", ["db"]], true, ["v", []], [null, []], { usage: 0, quota: expect.any(Number) }]);
+    } finally { await page.close(); await server.stop(true); }
+  });
+
+  test("a page's subframes load where the app routes them, never straight from their site", async () => {
+    const hits: string[] = [];
+    const server = Bun.serve({ port: 0, fetch: (req) => {
+      const url = new URL(req.url);
+      hits.push(url.host + url.pathname);
+      return new Response(url.pathname === "/" ? "<!doctype html><head></head><body>page" : "frame", { headers: { "content-type": "text/html" } });
+    } });
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://page.localhost:${server.port}/`);
+      expect(await page.evaluate(async ({ port, route }) => {
+        (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string) => Promise.resolve(`http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url)));
+        document.body.insertAdjacentHTML("beforeend", `<iframe src="http://127.0.0.1:${port}/direct"></iframe>`);
+        const made = document.createElement("iframe");
+        made.src = `http://127.0.0.1:${port}/made`;
+        document.body.append(made);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return [...document.querySelectorAll("iframe")].map((f) => [f.src, f.getAttribute("src")]);
+      }, { port: server.port, route: routeSubframes.toString() })).toEqual([
+        [`http://127.0.0.1:${server.port}/direct`, `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(`http://127.0.0.1:${server.port}/direct`)],
+        [`http://127.0.0.1:${server.port}/made`, `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(`http://127.0.0.1:${server.port}/made`)],
+      ]);
+      expect(hits.filter((h) => !h.startsWith("page.localhost"))).toEqual([`routed.localhost:${server.port}/frame`, `routed.localhost:${server.port}/frame`]);
     } finally { await page.close(); await server.stop(true); }
   });
 });

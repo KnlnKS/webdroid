@@ -79,6 +79,42 @@ export function setDocumentCookie(cookies: { text: string; expires: number }[], 
   return expires < 0 ? kept : [...kept, { text, expires }];
 }
 
+/** each http(s) frame of the page loads where `route` says (its web origin's renderer); `renderers`,
+ *  the renderer origins, are the only sites a frame may load from meanwhile. `src` reads what the
+ *  page set. */
+export function routeSubframes(renderers: string, route: (url: string) => Promise<unknown>): void {
+  const policy = document.createElement("meta");
+  policy.httpEquiv = "Content-Security-Policy";
+  policy.content = "frame-src 'self' data: blob: " + renderers;
+  document.head.insertBefore(policy, document.head.firstChild);
+  const routed = new WeakMap<Element, { url: string; src: string }>();
+  const visit = (frame: Element) => {
+    const raw = frame.getAttribute("src");
+    if (raw === null || routed.get(frame)?.src === raw) return;
+    const url = URL.parse(raw, document.baseURI);
+    if (!url || !/^https?:$/.test(url.protocol)) return;
+    void route(url.href).then((src) => {
+      if (typeof src !== "string" || frame.getAttribute("src") !== raw) return;
+      routed.set(frame, { url: url.href, src });
+      frame.setAttribute("src", src);
+    });
+  };
+  const added = (node: Node) => {
+    if (node instanceof HTMLIFrameElement || node instanceof HTMLFrameElement) visit(node);
+    if (node instanceof Element || node instanceof DocumentFragment) node.querySelectorAll("iframe, frame").forEach(visit);
+  };
+  new MutationObserver((records) => {
+    for (const record of records) if (record.type === "attributes") added(record.target); else record.addedNodes.forEach(added);
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["src"] });
+  for (const proto of [HTMLIFrameElement.prototype, HTMLFrameElement.prototype]) {
+    const src = Object.getOwnPropertyDescriptor(proto, "src")!;
+    Object.defineProperty(proto, "src", { ...src, get(this: Element) {
+      const r = routed.get(this);
+      return r && this.getAttribute("src") === r.src ? r.url : src.get!.call(this);
+    } });
+  }
+}
+
 export const WEB_INJECT = `<script>(function(){
 // Wrangler can insert __name into functions embedded through toString().
 const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
@@ -92,9 +128,20 @@ if (ua) {
 if (config?.clientHints) (${installClientHints.toString()})(config.clientHints);
 const id = config?.id;
 if (!id) return;
+// a subframe's page reaches the app through its frame's port, a main frame's through its parent
+const send = (data, transfer = []) => config.post ? config.post({bridge: id, ...data}, transfer) : parent.postMessage({bridge: id, ...data}, "*", transfer);
+const ask = data => new Promise(resolve => {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = event => { channel.port1.close(); resolve(event.data); };
+  send(data, [channel.port2]);
+});
+// Chromium loads a page's subframes through the WebView's network stack: each frame of a web
+// origin renders on that origin's renderer, which the app hands out. Until then the policy keeps
+// the frame from loading straight from its site.
+if (config.frames) (${routeSubframes.toString()})(config.frames, url => ask({kind: "subframe", url}));
 // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
 // them keeps the embedding page from reporting them as its own exceptions.
-const consoleMessage = data => parent.postMessage({bridge: id, kind: "console", ...data}, "*");
+const consoleMessage = data => send({kind: "console", ...data});
 {
   addEventListener("error", event => {
     if (!event.isTrusted || !(event instanceof ErrorEvent)) return;
@@ -120,7 +167,6 @@ function call(body) {
   if (result.error) throw Error(result.error);
   return result.value;
 }
-const send = data => parent.postMessage({bridge: id, ...data}, "*");
 // Chromium reports the content's size as it changes: a WebView measured by it lays out again
 let width = -1, height = -1;
 new ResizeObserver(() => {
@@ -254,7 +300,8 @@ const loaded = async event => {
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
     const context = {id, page: params.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, cookies: event.data.cookies,
-      clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: params.get("__wd_intercept") === "1"};
+      clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: params.get("__wd_intercept") === "1",
+      sub: params.has("__wd_sub"), frames: event.data.frames};
     // the document's own response may set cookies before it is written
     addEventListener("message", event => { if (event.source === owner && event.data?.bridge === id && event.data.kind === "cookies") context.cookies = event.data.list; });
     const stop = Event.prototype.stopImmediatePropagation;
@@ -292,7 +339,8 @@ const loaded = async event => {
       html = /^\\s*<!doctype[^>]*>/i.test(html)
         ? html.replace(/^(\\s*<!doctype[^>]*>)/i, "$1" + inject) : inject + html;
     }
-    window.__wdWebView = context;
+    // a subframe's page talks to the app through its port: its parent is the page that framed it
+    window.__wdWebView = {...context, post: context.sub ? send : null};
     document.open(); document.write(html); document.close();
   } catch { post({kind: "loaded", error: "WebView document transport failed"}); }
 };
@@ -306,7 +354,7 @@ addEventListener("message", event => {
     (${storageOp.toString()})(event.data.op).then(answer => port.postMessage(answer), () => port.postMessage({}));
   }
 });
-post({kind: "ready"});
+post({kind: "ready", sub: params.get("__wd_sub")});
 })()</script>`;
 
 export const WEB_PROXY_WORKER = `
@@ -329,7 +377,7 @@ function message(client, data) {
 }
 async function context(client) {
   const url = new URL(client.url), config = url.searchParams;
-  if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua"), intercept: config.get("__wd_intercept") === "1"};
+  if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua"), intercept: config.get("__wd_intercept") === "1", sub: config.has("__wd_sub")};
   const key = client.id + client.url;
   let value = contexts.get(key);
   if (!value) {
@@ -363,7 +411,7 @@ self.addEventListener("fetch", event => {
     if (!client) return fetch(request);
     // the shell's own pages (its Java networking) are no WebView: nothing to rewrite
     if (!client.url.includes("__wd_bridge") && ["/", "/process"].includes(new URL(client.url).pathname)) return fetch(request);
-    const {page, agent, id, intercept} = await context(client), isolated = !!id;
+    const {page, agent, id, intercept, sub} = await context(client), isolated = !!id;
     const headers = new Headers();
     // client hints describe the host browser, not the WebView the user agent names
     request.headers.forEach((value, name) => { if (!name.startsWith("sec-ch-")) headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value); });
@@ -391,7 +439,7 @@ self.addEventListener("fetch", event => {
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
+      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
       const values = response.headers.get("x-wd-set-cookie");
       if (include && values) await message(client, {kind: "webcookies", url: target, values: JSON.parse(values)});
       const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");

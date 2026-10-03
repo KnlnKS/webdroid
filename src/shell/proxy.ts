@@ -59,7 +59,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
       return new Response(empty ? null : Uint8Array.fromBase64(value.body), { status: value.status, statusText: value.reason, headers: value.headers });
     };
     let intercepted = bridge && query.get("intercept") === "1"
-      ? await bridged({ kind: "request", url, method: request.method, main: frame, headers: Object.fromEntries(headers) }) : null;
+      ? await bridged({ kind: "request", url, method: request.method, main: frame && query.get("sub") !== "1", headers: Object.fromEntries(headers) }) : null;
     // the device's own address: the WebView's process serves it, and nothing else unless a remap
     // (adb reverse's role) names a host server
     if (!intercepted && url === requested && isGuestHost(new URL(url).hostname)) {

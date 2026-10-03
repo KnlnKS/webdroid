@@ -26,11 +26,15 @@ export class WebCookies {
       return true;
     } catch { return false; }
   }
+  /** whether `url` is of the site of the page at `site`: its cookies are first-party there */
+  sameSite(url: string, site: string): boolean {
+    const target = URL.parse(url), source = URL.parse(site);
+    const domain = (u: URL) => getPublicSuffix(u.hostname, { ignoreError: true }) ?? u.hostname;
+    return !!target && !!source && target.protocol === source.protocol && domain(target) === domain(source);
+  }
   network(url: string, site: string, values: string[], thirdParty: boolean): string {
     try {
-      const target = new URL(url), source = new URL(site);
-      const domain = (u: URL) => getPublicSuffix(u.hostname, { ignoreError: true }) ?? u.hostname;
-      const same = target.protocol === source.protocol && domain(target) === domain(source);
+      const same = this.sameSite(url, site);
       if (!same && !thirdParty) return "";
       for (const value of values) this.set(url, value);
       return this.jar.getCookieStringSync(url, { sameSiteContext: same ? "strict" : "none" });
