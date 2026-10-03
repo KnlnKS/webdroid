@@ -74,6 +74,7 @@ type ActivityRequest = { kind: "launch"; id: number; component: string; intent: 
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
 const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
+const BIND_NOT_FOREGROUND = 4, BIND_WAIVE_PRIORITY = 0x20;
 /** splits: the installed config/feature split apks beside the base, which only the running app has */
 type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; splits: FileSource[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 type ProcessEndpoint = {
@@ -401,10 +402,18 @@ class ProcessBroker {
     console.warn(`[process] ${entry.process} (pid ${pid}) has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`);
     this.fail(pid, "Process has died", death);
   }
-  /** whether a process shown on screen, or one serving such a process, waits on `pid`: as binder
-   *  calls inherit their caller's priority and a service bound from the top app runs in its
-   *  scheduling group, process start included */
-  servesForeground(pid: number): boolean { return (this.entries.get(pid)?.foregroundClients ?? 0) > 0; }
+  /** whether a process shown on screen, or one serving such a process, waits on `pid` (process
+   *  start included) or binds a service it runs: as binder calls inherit their caller's priority,
+   *  and OomAdjuster gives a service its clients' scheduling group unless they bind it
+   *  BIND_NOT_FOREGROUND or BIND_WAIVE_PRIORITY */
+  servesForeground(pid: number, seen = new Set<number>()): boolean {
+    const entry = this.entries.get(pid);
+    if (!entry || entry.dead || seen.has(pid)) return false;
+    if (entry.foregroundClients > 0) return true;
+    seen.add(pid);
+    return this.services.clients(entry.pkg, entry.process).some((b) => !(b.flags & (BIND_NOT_FOREGROUND | BIND_WAIVE_PRIORITY))
+      && (this.shownPids.has(b.client) && this.alive(b.client) || this.servesForeground(b.client, seen)));
+  }
   /** `work` for `caller` on `target`, at the caller's priority */
   private inherit<T>(caller: Entry | null, target: Entry, work: () => Promise<T>): Promise<T> {
     if (!caller || !(this.shownPids.has(caller.pid) || caller.foregroundClients > 0)) return work();

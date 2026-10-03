@@ -61,6 +61,10 @@ export class ServiceRecords {
   bindingsOf(client: number): (ServiceBinding & { pkg: string; process: string })[] {
     return [...this.byKey.keys()].map((key) => this.binding(key)!).filter((b) => b.client === client);
   }
+  /** the bindings to services `process` runs */
+  clients(pkg: string, process: string): ServiceBinding[] {
+    return [...this.records.values()].filter((r) => r.running && r.pkg === pkg && r.process === process).flatMap((r) => [...r.bindings.values()]);
+  }
   /** stopService of a service waiting to restart: its explicit start is gone */
   stop(pkg: string, cls: string): void {
     const r = this.records.get(pkg + "/" + cls);
