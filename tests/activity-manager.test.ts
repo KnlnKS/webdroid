@@ -18,6 +18,8 @@ test("the activity manager drives a process's services and ordered receivers thr
     unbound: ["unbind"], staleStop: 0, stop: 1, down: ["stop"],
     ordered: { calls: ["receive a", "receive b", "receive abort"], code: 3, data: "ababort", aborted: true },
     foreign: [],
+    copied: { proxy: "android/app/IActivityManager$Stub$Proxy", same: false, size: 0 },
+    tooLarge: "android/os/TransactionTooLargeException: data parcel size 2097512 bytes",
   });
 }, 120_000);
 

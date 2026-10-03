@@ -4,7 +4,7 @@ const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 await import(W + "/tests/platform");
 const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
-const { newObj, vcall } = await import(W + "/src/jvm/natives/jlang");
+const { newObj, vcall, scall } = await import(W + "/src/jvm/natives/jlang");
 const { setAppHost } = await import(W + "/src/android/apphost");
 const { testAppHost } = await import(W + "/tests/java");
 const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");
@@ -24,7 +24,7 @@ const S = "Ljava/lang/String;", INTENT = "Landroid/content/Intent;", BINDER = "L
 const BIND = `(${APP}${BINDER}${INTENT}${S}Landroid/app/IServiceConnection;J${S}${S}I)I`;
 
 const calls: string[] = [], connected: string[] = [];
-let token: JObj | null = null;
+let token: JObj | null = null, delivered: JObj | null = null;
 rt.register({ name: "webdroid/test/AppThread", ctor: class extends JObj {}, sup: "android/app/IApplicationThread$Stub", methods: {
   "bindApplication(Ljava/lang/String;Landroid/content/pm/ApplicationInfo;Ljava/lang/String;Ljava/lang/String;ZLandroid/content/pm/ProviderInfoList;Landroid/content/ComponentName;Landroid/app/ProfilerInfo;Landroid/os/Bundle;Landroid/app/IInstrumentationWatcher;Landroid/app/IUiAutomationConnection;IZZZZLandroid/content/res/Configuration;Landroid/content/res/CompatibilityInfo;Ljava/util/Map;Landroid/os/Bundle;Ljava/lang/String;Landroid/content/AutofillOptions;Landroid/content/ContentCaptureOptions;[J[JLandroid/os/SharedMemory;JJ)V": () => {},
   "scheduleCreateService(Landroid/os/IBinder;Landroid/content/pm/ServiceInfo;Landroid/content/res/CompatibilityInfo;I)V": (t: JObj, info: JObj) => {
@@ -32,6 +32,7 @@ rt.register({ name: "webdroid/test/AppThread", ctor: class extends JObj {}, sup:
   },
   "scheduleServiceArgs(Landroid/os/IBinder;Landroid/content/pm/ParceledListSlice;)V": async (_t: JObj, slice: JObj) => {
     const args = await vcall(await vcall(slice, "getList", "()Ljava/util/List;"), "get", "(I)Ljava/lang/Object;", 0);
+    delivered = Reflect.get(args, declaredField("android/app/ServiceStartArgs", "args")) as JObj;
     calls.push("args " + Reflect.get(args, declaredField("android/app/ServiceStartArgs", "startId")));
   },
   "scheduleBindService(Landroid/os/IBinder;Landroid/content/Intent;ZIJ)V": (_t: JObj, _i: JObj, rebind: number) => { calls.push("bind " + rebind); },
@@ -105,5 +106,21 @@ out.ordered = { calls: calls.splice(0), code: result.code, data: result.data, ab
 await deliverBroadcast(await newIntent("org.webdroid.test.PING"), null, false, { code: 0, data: null, extras: null, aborted: false }, { uid: 10999, pkg: "other" });
 await settle();
 out.foreign = calls.splice(0);
+
+// the app reaches the activity manager through a parcel, as it reaches system_server: the started
+// service gets a copy of the extras, and a start too large for the binder buffer fails
+const proxy = await scall("android/app/ActivityManager", "getService", "()Landroid/app/IActivityManager;") as JObj;
+const START = `(${APP}${INTENT}${S}Z${S}${S}I)Landroid/content/ComponentName;`;
+const list = await newObj("java/util/ArrayList"), withList = await serviceIntent();
+await vcall(withList, "putStringArrayListExtra", `(${S}Ljava/util/ArrayList;)${INTENT}`, "list", list);
+await vcall(proxy, "startService", START, app, withList, null, 0, PKG, null, 0);
+await vcall(list, "add", "(Ljava/lang/Object;)Z", "late");
+await settle();
+const copy = await vcall(delivered!, "getStringArrayListExtra", `(${S})Ljava/util/ArrayList;`, "list") as JObj;
+out.copied = { proxy: (proxy.constructor as unknown as { $i: { name: string } }).$i.name, same: copy === list, size: await vcall(copy, "size", "()I") };
+const big = await serviceIntent();
+await vcall(big, "putExtra", `(${S}[B)${INTENT}`, "big", new Int8Array(2 << 20));
+out.tooLarge = await Promise.resolve().then(() => vcall(proxy, "startService", START, app, big, null, 0, PKG, null, 0))
+  .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
 console.log(JSON.stringify(out));
 process.exit(0);

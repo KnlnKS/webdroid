@@ -7,7 +7,7 @@ import { exitProcess, processExited } from "../process-exit";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
-import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, readInt, readString, writeInt, writeString, createByteArray } from "./parcel";
+import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel";
 import { jarray, mangleMethod, mangleStaticField, i8, u8 } from "../jvm/abi";
 import { handle, release, FINALIZER } from "./handles";
 
@@ -62,8 +62,30 @@ function proxyFor(key: string, h: BinderHandle): JObj | Promise<JObj> {
 }
 export function importBinder(h: BinderHandle | null): JObj | null | Promise<JObj> {
   if (!h) return null;
-  if (h.pid === PROCESS_PID) return local.get(h.id) ?? null;
+  if (h.pid === PROCESS_PID) return appView(local.get(h.id) ?? null) as JObj | null | Promise<JObj>;
   return proxyFor(h.pid + ":" + h.id, h);
+}
+/** binders hosted here on system_server's behalf, the webdroid/ classes: its services and the binders they hand out */
+const systemClasses = new WeakMap<object, boolean>();
+function isSystemBinder(o: unknown): o is JObj {
+  if (!(o instanceof JObj)) return false;
+  let system = systemClasses.get(o.constructor);
+  if (system === undefined) {
+    system = !!(o.constructor as { $i?: { name: string } }).$i?.name.startsWith("webdroid/") && !!rt.iof(o, "android/os/Binder");
+    systemClasses.set(o.constructor, system);
+  }
+  return system;
+}
+/** a system binder as an app holds it: a proxy, whose calls cross a parcel as they do into system_server */
+function appView(o: unknown): unknown {
+  if (!isSystemBinder(o)) return o;
+  const h = exportBinder(o)!;
+  return proxyFor(h.pid + ":" + h.id, h);
+}
+/** a binder as system_server reads it from an app's parcel: its own binder for a proxy to one */
+function systemView(o: unknown): unknown {
+  const h = o instanceof JObj ? proxyData.get(o)?.handle : undefined, binder = h?.pid === PROCESS_PID ? local.get(h.id) : undefined;
+  return binder && isSystemBinder(binder) ? binder : o;
 }
 /** a binder system_server owns, as a client process holds it: a proxy, which AOSP tells apart
  *  from a local Binder (ActivityThread relaunches only activities whose token is not local) */
@@ -207,6 +229,7 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
       let handled = 0;
       try { handled = yield vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
       catch (error) { reportException(error, "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)"); } // the caller sees UNKNOWN_TRANSACTION
+      if (!(request.flags & FLAG_ONEWAY)) checkBuffer(reply, false, request.data.bytes.length);
       return { handled, data: yield* awaited(exportParcel(reply)) };
     } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
   }()));
@@ -298,10 +321,51 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
 } });
 
 const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
-const proxyAlive = function (this: JObj) { return +binderTransport.alive(proxyOf(this).handle.pid); };
+const pidAlive = (pid: number) => pid === PROCESS_PID || binderTransport.alive(pid);
+const proxyAlive = function (this: JObj) { return +pidAlive(proxyOf(this).handle.pid); };
+/** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
+const BINDER_VM_SIZE = (1 << 20) - 2 * 4096, FLAG_ONEWAY = 1;
+/** a transaction or reply the target's buffer cannot take fails, as signalExceptionForError reports
+ *  FAILED_TRANSACTION for the data parcel's size */
+function checkBuffer(p: NativeParcel, oneway: boolean, dataSize: number): void {
+  if (transactionSize(p) <= (oneway ? BINDER_VM_SIZE / 2 : BINDER_VM_SIZE)) return;
+  console.error(`!!! FAILED BINDER TRANSACTION !!!  (parcel size = ${dataSize})`);
+  throw dataSize > 200 * 1024 ? rt.mkThrowable("android/os/TransactionTooLargeException", `data parcel size ${dataSize} bytes`)
+    : rt.mkThrowable("android/os/DeadObjectException", "Transaction failed on small parcel; remote process probably died, but this could also be caused by running out of binder buffer space");
+}
+/** a parcel's copy, its binders as `view` makes them and its descriptors duplicated, as the driver delivers one */
+const copyParcel = driven(function* copyParcel(from: NativeParcel, to: NativeParcel, view: (o: unknown) => unknown): Gen<void> {
+  const objects: [number, unknown][] = [];
+  for (const [at, o] of from.objects) objects.push([at, o instanceof OwnedFd ? new OwnedFd(javaDupFd(o.fd)) : yield view(o)]);
+  setParcelBytes(to, from.buf.subarray(0, from.size), objects);
+  for (const [at, len] of from.ashmem) to.ashmem.set(at, len);
+});
+/** a call from this process into a service it hosts for system_server: the stub reads a copy of
+ *  the caller's parcel and the caller a copy of the reply, as across processes. It runs on the
+ *  calling thread as a transaction from this process; the thread's own identity, StrictMode policy
+ *  and work source come back after it. */
+const localTransact = driven(function* localTransact(binder: JObj, code: number, data: NativeParcel, reply: NativeParcel | null, flags: number): Gen<number> {
+  const request = new NativeParcel(), answer = new NativeParcel(), dataPtr = handle(request), replyPtr = handle(answer);
+  const thread = curThread, caller = callers.get(thread), policy = strictModePolicies.get(thread), source = workSources.get(thread);
+  callers.set(thread, systemThreads.has(thread) ? SYSTEM_CALLER : { pid: PROCESS_PID, uid: PROCESS_UID });
+  try {
+    yield copyParcel(data, request, systemView);
+    const handled: number = yield vcall(binder, "execTransact", "(IJJI)Z", code, dataPtr, replyPtr, flags);
+    if (reply) { checkBuffer(answer, false, data.size); yield copyParcel(answer, reply, appView); }
+    return handled;
+  } finally {
+    if (caller === undefined) callers.delete(thread); else callers.set(thread, caller);
+    if (policy === undefined) strictModePolicies.delete(thread); else strictModePolicies.set(thread, policy);
+    if (source === undefined) workSources.delete(thread); else workSources.set(thread, source);
+    freeData(request); freeData(answer); release(dataPtr); release(replyPtr);
+  }
+});
 /** BpBinder::transact: the data parcel's bytes go whole; the reply is read from its start */
-const transact = driven(function* transact(target: BinderHandle, code: number, data: ParcelData, reply: NativeParcel | null, flags: number): Gen<number> {
-  const result = yield* awaited(binderTransport.transact({ handle: target, code, data, flags, system: systemThreads.has(curThread) }));
+const transact = driven(function* transact(target: BinderHandle, code: number, data: NativeParcel, reply: NativeParcel | null, flags: number): Gen<number> {
+  checkBuffer(data, (flags & FLAG_ONEWAY) !== 0, data.size);
+  const binder = target.pid === PROCESS_PID ? local.get(target.id) : undefined;
+  if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
+  const result = yield* awaited(binderTransport.transact({ handle: target, code, data: yield* awaited(exportParcel(data)), flags, system: systemThreads.has(curThread) }));
   if (reply) yield fillParcel(reply, result.data);
   return result.handled;
 });
@@ -311,16 +375,16 @@ rt.registerJnis("android/os/BinderProxy", {
   "isBinderAlive()Z": proxyAlive,
   "getExtension()Landroid/os/IBinder;": () => null,
   "transactNative(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": function (this: JObj, code: number, data: JObj | null, reply: JObj | null, flags: number) {
-    return after(exportParcel(nativeParcel(data ?? rt.npe())), (exported) => transact(proxyOf(this).handle, code, exported, reply && nativeParcel(reply), flags));
+    return transact(proxyOf(this).handle, code, nativeParcel(data ?? rt.npe()), reply && nativeParcel(reply), flags);
   },
   "getInterfaceDescriptor()Ljava/lang/String;": driven(function* (this: JObj): Gen<string | null> {
     const reply = new NativeParcel();
-    yield transact(proxyOf(this).handle, INTERFACE_TRANSACTION, yield* awaited(exportParcel(new NativeParcel())), reply, 0);
+    yield transact(proxyOf(this).handle, INTERFACE_TRANSACTION, new NativeParcel(), reply, 0);
     return readString(reply);
   }),
   "linkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JObj, recipient: unknown) {
     const { handle: target, deaths } = proxyOf(this);
-    if (!binderTransport.alive(target.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
+    if (!pidAlive(target.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
     if (!deaths.has(recipient)) deaths.set(recipient, binderTransport.watch(target.pid, () => {
       deaths.delete(recipient);
       // binderDied arrives on a binder thread
@@ -370,8 +434,8 @@ export function hostedService(name: string): JObj | Promise<JObj> | null {
 }
 rt.register({ name: "webdroid/ServiceManager", ctor: JServiceManager, ifaces: ["android/os/IServiceManager"], methods: {
   "asBinder()Landroid/os/IBinder;": function (this: JServiceManager) { return this.binder; },
-  "getService(Ljava/lang/String;)Landroid/os/IBinder;": hostedService,
-  "checkService(Ljava/lang/String;)Landroid/os/IBinder;": hostedService,
+  "getService(Ljava/lang/String;)Landroid/os/IBinder;": (name: string) => after(hostedService(name), appView),
+  "checkService(Ljava/lang/String;)Landroid/os/IBinder;": (name: string) => after(hostedService(name), appView),
   "isDeclared(Ljava/lang/String;)Z": (name: string) => binderServices.has(name) ? 1 : 0,
   "listServices(I)[Ljava/lang/String;": () => jarray([...binderServices.keys()], "Ljava/lang/String;"),
   "addService(Ljava/lang/String;Landroid/os/IBinder;ZI)V": () => {
