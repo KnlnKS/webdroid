@@ -60,8 +60,9 @@ await exercise("Font, FontFamily, FontFileUtil (device values)", async () => {
     await scall("android/graphics/fonts/FontFileUtil", "isPostScriptType1Font", `(${BB}I)I`, buffer, 0)], [196936, "Roboto-Regular", 0]);
 });
 
-// Expected values are the reference AVD's (API 35), whose Roboto is one variable font: every
-// weight has Roboto-Regular's metrics.
+// Expected values are the reference AVD's app process (API 35), whose Roboto is one variable font:
+// every weight has Roboto-Regular's metrics. An alias deserialized from the system font map is its
+// own Typeface, so arial is not DEFAULT.
 await exercise("Typeface (system font map, styles, weights, builders; device values)", async () => {
   await loadSystemFonts();
   const T = "Landroid/graphics/Typeface;", info = await linkInit("android/graphics/Typeface");
@@ -77,7 +78,7 @@ await exercise("Typeface (system font map, styles, weights, builders; device val
     families.push(`${name} ${await d(t)} ${await d(await named(name, 1))} ${await d(await named(name, 2))} ${t === DEFAULT}`);
   }
   same("families", families, ["sans-serif-medium 0/500 1/800 2/500 false", "sans-serif-light 0/300 1/600 2/300 false",
-    "sans-serif-thin 0/100 1/400 2/100 false", "sans-serif-black 0/900 1/1000 2/900 false", "arial 0/400 1/700 2/400 true",
+    "sans-serif-thin 0/100 1/400 2/100 false", "sans-serif-black 0/900 1/1000 2/900 false", "arial 0/400 1/700 2/400 false",
     "no-such-family 0/400 1/700 2/400 true"]);
   same("exact weights", [await d(await weighted(null, 550, true)), await d(await weighted(DEFAULT, 650, false)), await d(await weighted(DEFAULT, 0, false)),
     await d(await weighted(DEFAULT, 1000, false))], ["2/550", "1/650", "0/1", "1/1000"]);
@@ -85,7 +86,7 @@ await exercise("Typeface (system font map, styles, weights, builders; device val
   same("derived", [await d(await weighted(medium, 300, false)), await d(await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, medium, 3)),
     await d(await scall("android/graphics/Typeface", "defaultFromStyle", `(I)${T}`, 3))], ["0/300", "3/800", "3/700"]);
   same("identity", [await vcall(await named("arial", 0), "equals", "(Ljava/lang/Object;)Z", DEFAULT),
-    await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, DEFAULT, 1) === BOLD], [1, true]);
+    await scall("android/graphics/Typeface", "create", `(${T}I)${T}`, DEFAULT, 1) === BOLD], [0, true]);
 
   const paint = await newObj("android/graphics/Paint", "()V");
   same("a new Paint's typeface", await vcall(paint, "getTypeface", `()${T}`), null);
@@ -151,7 +152,17 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   // the flags font has only bitmaps: its advances are unhinted, its descent its strike's (27 px at 109 ppem)
   await shaped("office fifty", "177 -37.109375 9.765625 | 84@0 Roboto-Regular.ttf | 1836@23 | 72@57 | 74@78 | 5@99 | 1834@109 | 75@131 | 89@145 | 94@158");
   await shaped("é ñ", "53 -37.109375 9.765625 | 2292@0 Roboto-Regular.ttf | 5@21 | 2299@31");
+  // an app's emoji are the update GMS installed in place of the image's NotoColorEmoji.ttf, whose
+  // Unicode 16 additions (fingerprint, face with bags under eyes, harp, splatter) the image lacks
   await shaped("a👍🏽b👨‍👩‍👧🇨🇦", "193.80469 -37.109375 9.9082575 | 70@0 Roboto-Regular.ttf | 571@22 NotoColorEmoji.ttf | 71@72 Roboto-Regular.ttf | 856@94 NotoColorEmoji.ttf | 65@144 NotoColorEmojiFlags.ttf");
+  same("the emoji font", await vcall(await vcall(await vcall(glyphs, "getFont", `(I)${F}`, 1), "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"),
+    "/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf");
+  const available: string[] = [];
+  for (const f of await vcall(await scall("android/graphics/fonts/SystemFonts", "getAvailableFonts", "()Ljava/util/Set;"), "toArray", "()[Ljava/lang/Object;"))
+    available.push(await vcall(await vcall(f, "getFile", "()Ljava/io/File;"), "getPath", "()Ljava/lang/String;"));
+  same("available emoji fonts", available.filter((p) => p.includes("Emoji")).sort().join(" "),
+    "/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf /system/fonts/NotoColorEmojiFlags.ttf");
+  await shaped("🫆🫩🪉🫟", "200 -37.109375 9.765625 | 3254@0 NotoColorEmoji.ttf | 3280@50 | 3183@100 | 3270@150");
   await set("setTextSize", "(F)V", 20);
   await set("setLetterSpacing", "(F)V", 0.1);
   await shaped("AB AB", "65 -18.554688 4.8828125 | 38@1 Roboto-Regular.ttf | 39@16 | 5@30 | 38@37 | 39@52");

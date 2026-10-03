@@ -1,6 +1,7 @@
 // The native half of android.graphics.fonts and Typeface: minikin's Font, FontFamily and
 // FontCollection, and hwui's Typeface. A font is one face of a font file: an app's bytes, or one of
-// the reference build's /system/fonts, whose glyphs load when first shaped or drawn. A collection is
+// the reference build's /system/fonts or the device's updates of them, whose glyphs load when first
+// shaped or drawn. A collection is
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
 import { rt, awaited, declaredField, type Gen, type JObj } from "../jvm/runtime";
@@ -9,6 +10,7 @@ import { mkFd } from "../jvm/natives/jio";
 import { ashmemFd } from "./os";
 import { OS_CONSTANTS } from "./os-constants";
 import { PLATFORM_DATA } from "../jvm/bootclasspath";
+import { FONT_UPDATES } from "./font-updates";
 import { vfs } from "../shell/vfs";
 import { pageShared } from "../shell/pageshared";
 import { deref, handle } from "./handles";
@@ -34,7 +36,7 @@ export function fontNatives<T extends Record<string, (...args: never[]) => unkno
   for (const [name, f] of Object.entries(natives)) out[name] = function (this: unknown, ...args: never[]) { return withFonts(() => f.apply(this, args)); };
   return out as T;
 }
-/** one font file: its bytes in memory, or a reference-build file under /system/fonts read whole on
+/** one font file: its bytes in memory, or a reference-build font file (isPlatformFont) read whole on
  *  first use. A platform file is the tab's: its realms share its bytes, and so HarfBuzz's face of it. */
 class FontFile {
   private loading?: Promise<void>;
@@ -49,8 +51,11 @@ class FontFile {
 }
 /** throws FontPending for `wait` */
 export const pending = (wait: Promise<unknown>): never => { throw new FontPending(wait); };
-/** whether `path` is a reference-build font file, which loads lazily */
-export const isPlatformFont = (path: string) => path.startsWith("/system/fonts/") && path in PLATFORM_DATA;
+/** whether `path` is a reference-build font file, or an update of one, which loads lazily */
+export const isPlatformFont = (path: string) => /^\/(system\/fonts|data\/fonts\/files)\//.test(path) && path in PLATFORM_DATA;
+/** the file the device serves for a system font named without a PostScript name: its update, found
+ *  by the name FontListParser derives from the file's (findUpdatedFontFile) */
+export const servedFont = (path: string) => FONT_UPDATES.postScriptMap[path.slice(path.lastIndexOf("/") + 1, path.lastIndexOf("."))] ?? path;
 declare global { interface Window { __wdFontFiles?: Map<string, FontFile> } }
 function platformFile(path: string): FontFile {
   const files = pageShared("__wdFontFiles", () => new Map<string, FontFile>());
@@ -260,17 +265,32 @@ export function* preloadFonts(): Gen<void> {
   [fontIndex] = yield* awaited(Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]));
   yield rt.initClass(rt.link("android/graphics/Typeface"));
 }
-/** the serialized system font map bindApplication receives, as FontManagerService shares it; null
- *  where the index carries none (a headless realm), and Typeface parses the configuration itself */
-export function systemFontMap(): JObj | Promise<JObj> | null {
-  if (!fontIndex?.fontMap) return null;
-  const bytes = Uint8Array.fromBase64(fontIndex.fontMap);
-  return after(mkFd(ashmemFd(bytes, OS_CONSTANTS.PROT_READ)), (fd) => newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", fd));
+let fontMapMemory: JObj | undefined;
+/** the serialized system font map bindApplication receives, as FontManagerService shares it: the
+ *  index's, or one serialized here where the index carries none (a headless realm); none in a realm
+ *  that loaded no fonts */
+export function* systemFontMap(): Gen<JObj | null> {
+  if (!fontIndex) return null;
+  return fontMapMemory ??= fontIndex.fontMap
+    ? yield newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", yield mkFd(ashmemFd(Uint8Array.fromBase64(fontIndex.fontMap), OS_CONSTANTS.PROT_READ)))
+    : yield* serializeSystemFontMap();
+}
+/** FontManagerService.serializeFontMap over its system font configuration: the preinstalled one with
+ *  each font an update replaces, by PostScript name, read from the update's file
+ *  (UpdatableFontDir.getSystemFontConfig) */
+function* serializeSystemFontMap(): Gen<JObj> {
+  const SF = "android/graphics/fonts/SystemFonts", CONFIG = "Landroid/text/FontConfig;", files = yield newObj("android/util/ArrayMap", "()V");
+  for (const [name, path] of Object.entries(FONT_UPDATES.postScriptMap))
+    yield vcall(files, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", name, yield newObj("java/io/File", "(Ljava/lang/String;)V", path));
+  const config = yield scall(SF, "getSystemFontConfig", `(Ljava/util/Map;JI)${CONFIG}`, files, BigInt(FONT_UPDATES.lastModifiedDate), FONT_UPDATES.configVersion);
+  const fallback = yield scall(SF, "buildSystemFallback", `(${CONFIG}Landroid/util/ArrayMap;)Ljava/util/Map;`, config, yield newObj("android/util/ArrayMap", "()V"));
+  const typefaces = yield scall(SF, "buildSystemTypefaces", `(${CONFIG}Ljava/util/Map;)Ljava/util/Map;`, config, fallback);
+  return yield scall("android/graphics/Typeface", "serializeFontMap", "(Ljava/util/Map;)Landroid/os/SharedMemory;", typefaces);
 }
 /** the zygote's preload and the font map bindApplication sets, for a realm that binds no application */
 export function* loadSystemFontMap(): Gen<void> {
   yield* preloadFonts();
-  yield scall("android/graphics/Typeface", "setSystemFontMap", "(Landroid/os/SharedMemory;)V", yield systemFontMap());
+  yield scall("android/graphics/Typeface", "setSystemFontMap", "(Landroid/os/SharedMemory;)V", yield* systemFontMap());
 }
 
 // minikin's FontCollection::writeVector and readVector: typefaces over shared collections and families

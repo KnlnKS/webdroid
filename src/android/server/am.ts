@@ -59,7 +59,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
     "IZZZZLandroid/content/res/Configuration;Landroid/content/res/CompatibilityInfo;Ljava/util/Map;Landroid/os/Bundle;Ljava/lang/String;" +
     "Landroid/content/AutofillOptions;Landroid/content/ContentCaptureOptions;[J[JLandroid/os/SharedMemory;JJ)V",
     process, info, null, null, 0, providers, null, null, null, null, null, 0, 0, 0, 0, 0, global, compat, null,
-    yield newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), yield systemFontMap(), now, now);
+    yield newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), yield* systemFontMap(), now, now);
   if (launcher) yield startMainActivity(app, pkg);
 });
 

@@ -6,6 +6,7 @@ import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
 import { pageShared } from "../shell/pageshared";
 import { after } from "../jvm/natives/jlang";
+import { servedFont } from "./fonts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -18,7 +19,7 @@ let surfaceWidth = 0, surfaceHeight = 0;
 let bitmap: OffscreenCanvasRenderingContext2D | null = null;
 let emojiClips = new Map<number, [number, number]>();
 /** the system faces this draws text in */
-export const SKIA_TEXT_FACE = "/system/fonts/Roboto-Regular.ttf", SKIA_EMOJI_FACE = "/system/fonts/NotoColorEmoji.ttf";
+export const SKIA_TEXT_FACE = servedFont("/system/fonts/Roboto-Regular.ttf"), SKIA_EMOJI_FACE = servedFont("/system/fonts/NotoColorEmoji.ttf");
 /** SkPathFillType by value: CanvasKit's binding names the two plain types, SkPath takes all four */
 let fillTypes: FillType[] = [];
 

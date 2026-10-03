@@ -163,6 +163,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
     "/vendor/aosp/boot/:file": (req) => serveFile("vendor/aosp/boot", req.params.file, { "cache-control": IMMUTABLE }),
     "/vendor/aosp/apex/*": devicePath,
     "/vendor/aosp/system/*": devicePath,
+    "/vendor/aosp/data/*": devicePath,
     "/vendor/microg/:file": (req) => {
       const file = req.params.file;
       const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };
