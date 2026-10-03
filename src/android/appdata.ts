@@ -6,7 +6,7 @@ import { awaited, driven, rt, JObj, type Gen } from "../jvm/runtime";
 import { scall, vcall, newObj, after } from "../jvm/natives/jlang";
 import { binderUncaught, callingIdentity, type ParcelData } from "./binder";
 import { encodeIntent } from "./intentipc";
-import { putExtra, registerSystemActivity, type JIntent } from "./intent";
+import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent";
 import { longVersionCode, queryReceivers } from "./pm";
 import { packages } from "./packages";
 import { checkUidPermission } from "./permissions";
@@ -45,7 +45,7 @@ export const clearUserData = driven(function* (pkg: string, fromApp: boolean, ke
   return { done };
 });
 
-const DELETE_SUCCEEDED = 1, DELETE_FAILED_INTERNAL_ERROR = -1, DELETE_FAILED_ABORTED = -5;
+const RESULT_FIRST_USER = 1, DELETE_SUCCEEDED = 1, DELETE_FAILED_INTERNAL_ERROR = -1, DELETE_FAILED_ABORTED = -5;
 /** deletePackageX for a package the user installed: its processes die, it goes with all its data,
  *  and ACTION_PACKAGE_REMOVED and ACTION_PACKAGE_FULLY_REMOVED go out. A system package answers
  *  DELETE_FAILED_INTERNAL_ERROR, as one without an update does. */
@@ -106,8 +106,8 @@ rt.register({ name: "webdroid/PackageDeleteObserverAdapter", ctor: JDeleteObserv
 
 /** UninstallerActivity, which an app's ACTION_DELETE or the installer's ACTION_UNINSTALL_PACKAGE
  *  starts: the shell asks the user, then the package is deleted and the installer's callback hears
- *  the result. A result the starter asked for is RESULT_OK on success. */
-const uninstaller = driven(function* (intent: JIntent): Gen<JIntent | null> {
+ *  the result. A result the starter asked for is RESULT_OK on success, else RESULT_FIRST_USER. */
+const uninstaller = driven(function* (intent: JIntent): Gen<SystemResult> {
   const uri: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
   const pkg: string | null = uri && (yield vcall(uri, "getSchemeSpecificPart", `()${S}`));
   const callback: JObj | null = yield vcall(intent, "getParcelableExtra", `(${S})Landroid/os/Parcelable;`, EXTRA + "CALLBACK");
@@ -117,11 +117,11 @@ const uninstaller = driven(function* (intent: JIntent): Gen<JIntent | null> {
     const label = record.application && attr(record.application, "label"), name = label ? label.str ?? resString(record.res, label.data) : "";
     code = globalThis.confirm?.(`${name || record.pkg}\n\nDo you want to uninstall this app?`) ? yield* awaited(deletePackage(record.pkg)) : DELETE_FAILED_ABORTED;
   }
-  if (callback) yield vcall(callback, "onUninstallComplete", `(${S}I${S})V`, pkg, code, null);
-  if (code !== DELETE_SUCCEEDED || !(yield vcall(intent, "getBooleanExtra", `(${S}Z)Z`, "android.intent.extra.RETURN_RESULT", 0))) return null;
+  if (callback) yield vcall(callback, "onUninstallComplete", `(${S}I${S})V`, pkg, code, code === DELETE_FAILED_ABORTED ? "Cancelled by user" : null);
+  if (!(yield vcall(intent, "getBooleanExtra", `(${S}Z)Z`, "android.intent.extra.RETURN_RESULT", 0))) return null;
   const result: JIntent = yield newObj("android/content/Intent", "()V");
   yield putExtra(result, "android.intent.extra.INSTALL_RESULT", code, "I");
-  return result;
+  return code === DELETE_SUCCEEDED ? result : { resultCode: RESULT_FIRST_USER, data: result };
 });
 registerSystemActivity("android.intent.action.UNINSTALL_PACKAGE", uninstaller, ["package"]);
 registerSystemActivity("android.intent.action.DELETE", uninstaller, ["package"]);

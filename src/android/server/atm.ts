@@ -11,7 +11,7 @@ import { configurations, resizeWindows, setClientVisible } from "./wm";
 import { notifyDisplayChanged } from "../display";
 import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
-import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler } from "../intent";
+import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler, type SystemResult } from "../intent";
 import { grantResultUris } from "../urigrants";
 import { thisApp, userLaunched, pms, runsHere } from "./am";
 
@@ -307,9 +307,10 @@ const RESULT_OK = -1;
 /** an activity the platform package answers over the browser (DocumentsUI's pickers, share, the
  *  browser): it covers its caller, which resumes with any result it asked for */
 function* runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Gen<void> {
-  let data: JObj | null = null;
-  try { data = yield* awaited(run(intent)); } catch (error) { logUncaught(error); }
-  yield* deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data);
+  let result: SystemResult = null;
+  try { result = yield* awaited(run(intent)); } catch (error) { logUncaught(error); }
+  const { resultCode, data } = result && "resultCode" in result ? result : { resultCode: result ? RESULT_OK : RESULT_CANCELED, data: result };
+  yield* deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, resultCode, data);
 }
 /** a result from an activity that covered `to` elsewhere (the browser, another process): the
  *  caller takes it as it resumes */
