@@ -319,7 +319,7 @@ function colorLongArgb(color: bigint, space: NativeColorSpace | null): number {
  *  the decoder for every native that receives a ColorLong (Paint, Canvas, gradients, Bitmap) */
 export const colorLongAt = (color: bigint, cs: bigint) => colorLongArgb(color, cs ? deref<NativeColorSpace>(cs) : null);
 const COLOR_SPACE = "android/graphics/ColorSpace";
-const namedSpace = (index: number) => scall(COLOR_SPACE, "get", "(I)Landroid/graphics/ColorSpace;", index);
+export const namedSpace = (index: number) => scall(COLOR_SPACE, "get", "(I)Landroid/graphics/ColorSpace;", index);
 /** GraphicsJNI::getColorSpace: a named space where the pixels' space is one, else the match or an "Unknown" Rgb */
 function javaColorSpace(b: NativeBitmap): unknown {
   if (b.config === ALPHA_8) return null;

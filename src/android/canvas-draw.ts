@@ -116,7 +116,7 @@ function drawDoubleRoundRect(nc: NativeCanvas, ol: number, ot: number, or: numbe
 }
 /** android_graphics_Canvas: an offset/count pair outside the array draws nothing and throws */
 function checkPts(pts: Float32Array, off: number, n: number) {
-  if (!pts) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (!pts) rt.npe();
   if ((off | n) < 0 || off + n > pts.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
 }
 /** SkDraw::drawPoints' lines through a path effect: each a path, always stroked */

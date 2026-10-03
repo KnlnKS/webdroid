@@ -14,7 +14,7 @@ import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat } from "../jvm/abi";
 import { javaFdBytes, javaSeekFd } from "../native/fs";
 import { assetBytes } from "./assetmanager";
-import { NativeBitmap, bitmapAt, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
+import { NativeBitmap, bitmapAt, namedSpace, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { decodeHeif } from "./heif";
 import { edges, setEdges } from "./graphics";
 import { bitmapCanvas } from "./canvas";
@@ -296,14 +296,13 @@ const setOuts = driven(function* setOuts(options: Options, w: number, h: number,
   const o = opt();
   options[o.outWidth] = w; options[o.outHeight] = h; options[o.outMimeType] = mime;
   options[o.outConfig] = yield javaConfig(config);
-  options[o.outColorSpace] = config === ALPHA_8 ? null : yield srgbSpace();
+  options[o.outColorSpace] = config === ALPHA_8 ? null : yield namedSpace(0);
 });
 let configInt = "";
 /** GraphicsJNI::getNativeBitmapColorType: a Bitmap.Config's legacy number, 0 for none */
 const nativeConfig = (config: object | null): number =>
   config ? (config as Record<string, number>)[configInt ||= declaredField("android/graphics/Bitmap$Config", "nativeInt")] : 0;
 const javaConfig = (config: number) => scall("android/graphics/Bitmap$Config", "nativeToConfig", "(I)Landroid/graphics/Bitmap$Config;", config);
-const srgbSpace = () => scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 0);
 
 /** The decoded pixels as a bitmap: the reused one reconfigured to hold them, or a new one (HARDWARE
  *  for a hardware 8888 decode). Pixels the browser could not decode leave it empty. */
@@ -398,7 +397,7 @@ rt.registerJnis("android/graphics/BitmapRegionDecoder", {
   "nativeNewInstance(J)Landroid/graphics/BitmapRegionDecoder;": driven(function* (asset: bigint): Gen { return regionDecoder(yield* awaited(assetBytes(asset))); }),
   "nativeGetWidth(J)I": (h: bigint) => encodedAt(h).header.width,
   "nativeGetHeight(J)I": (h: bigint) => encodedAt(h).header.height,
-  "nativeClean(J)V": (h: bigint) => release(h),
+  "nativeClean(J)V": release,
   // SkBitmapRegionDecoder::decodeRegion: the output is the requested rectangle, sampled; the
   // part outside the image stays transparent
   "nativeDecodeRegion(JIIIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;":
@@ -469,8 +468,8 @@ rt.registerJnis(DECODER, {
   },
   "nGetPadding(JLandroid/graphics/Rect;)V": (h: bigint, pad: object) => setPadding(pad, encodedAt(h).header.patch),
   "nGetMimeType(J)Ljava/lang/String;": (h: bigint) => encodedAt(h).header.mime,
-  "nGetColorSpace(J)Landroid/graphics/ColorSpace;": () => srgbSpace(),
-  "nClose(J)V": (h: bigint) => release(h),
+  "nGetColorSpace(J)Landroid/graphics/ColorSpace;": () => namedSpace(0),
+  "nClose(J)V": release,
   // ImageDecoder.cpp's nDecodeBitmap: the whole image scaled to the desired size, then cropped
   "nDecodeBitmap(JLandroid/graphics/ImageDecoder;ZIILandroid/graphics/Rect;ZIZZZJZ)Landroid/graphics/Bitmap;":
     driven(function* (h: bigint, jdecoder: object, postProcess: number, w: number, ht: number, cropRect: object | null, mutable: number, allocator: number,
