@@ -17,7 +17,7 @@ function newArrayOf(cls: JClass | null, len: number): unknown {
 
 function newMultiArray(cls: JClass | null, dims: Int32Array, i: number): unknown {
   if (i === dims.length - 1) return newArrayOf(cls, dims[i]);
-  const a = rt.oa(dims[i], "[".repeat(dims.length - 1 - i) + classDesc(cls)) as unknown[];
+  const a = rt.oa(dims[i], "[".repeat(dims.length - 1 - i) + classDesc(cls));
   for (let k = 0; k < a.length; k++) a[k] = newMultiArray(cls, dims, i + 1);
   return a;
 }
@@ -27,11 +27,7 @@ rt.registerJnis("java/lang/reflect/Array", {
   "createMultiArray(Ljava/lang/Class;[I)Ljava/lang/Object;": (cls: JClass | null, dims: Int32Array) => newMultiArray(cls, dims, 0),
 });
 
-// ── dalvik.system.VMRuntime: the allocator libcore and the framework grow arrays through.
-// ArrayUtils.newUnpaddedObjectArray and every growable collection in android.util reach it, so
-// it is the first thing framework bytecode wants that has nothing to do with the framework.
-// "Unpadded" is a request for the slack a real heap has at the end of a block; there is no such
-// slack here, so the array is exactly the length asked for — which the contract allows.
+// "Unpadded" allows using heap alignment slack; these arrays have exactly the requested length.
 class JVMRuntime extends JObj {}
 const theVmRuntime = new JVMRuntime();
 /** whether the process runs arm64 code: an app shipping only armeabi-v7a libraries runs as a 32-bit process */

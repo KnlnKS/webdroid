@@ -4,9 +4,8 @@ import { classDesc, type JClass } from "./jlang";
 import { mem } from "../../native/mem";
 import { physical } from "./jmemory";
 
-// ── Unsafe: sun.misc's for kotlinx-coroutines' artificial stack frames, and jdk.internal.misc's for
-// libcore's atomics, CAS loops and LockSupport. A realm is one thread, so every memory order is
-// plain and a read-modify-write is a read then a write.
+// Java threads share one cooperative realm, so these non-suspending Unsafe operations
+// need no host synchronization.
 class JUnsafe extends JObj {}
 const unsafe = new JUnsafe();
 const sunMethods: NativeSpec["methods"] = {
@@ -123,8 +122,6 @@ rt.register({ name: "sun/misc/Unsafe", ctor: JUnsafe, statics: { theUnsafe: unsa
 }
 // Unsafe "offsets" index this table of fields, with a stride of 8 so the word arithmetic
 // protobuf's Android accessor applies to them (offset & ~3, (offset & 3) << 3) is an identity.
-// An access wider or narrower than the field's own type moves the bits, as memory would: that
-// same accessor reads a double as getLong and a float as getInt.
 /** A field's accessors, compiled with its property name so each access stays monomorphic. An
  *  int or long access to a float or double field moves its bits. Reads of a field a TS object
  *  never set see its zero. */
