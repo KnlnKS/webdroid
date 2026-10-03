@@ -643,11 +643,13 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
    PDF-producing WebView adapter) are the desccheck backlog.
 2. Done 2026-10-02: Build runs from bytecode; zygoteInit waits for the process's bitness, which
    the page fixes from the install's central directories (no measured wait).
-3. `.then`/timer callbacks the runtime check only catches when they run; MediaDataSource.readAt
-   runs from a host read callback.
-4. Class-init re-entry is judged by JThread identity while main-loop jobs share mainThread.
-5. Stage F's sql.js patch rebuilds each checkout's `vendor/sql.js/dist` on its first bun command,
-   so give a worktree its own dist rather than a symlink to a shared one.
+3. Done 2026-10-02: host code continuing a Java chain carries it (Cpu loop, loader, JNI, `after`
+   through `caller()`); conscrypt's BIO readers and WebView interception are driven; MediaDataSource
+   reads run on a binder thread. No static check: the real cases entered Java through helpers.
+4. Done 2026-10-02: class-init re-entry needs the initializing thread and call chain; another chain
+   on that thread waits with the timed escape (history). Monitors are still per JThread.
+5. Done 2026-10-02: sql.js builds are cached per patch and script under `~/.cache/webdroid`, so a new
+   checkout copies one instead of rebuilding.
 
 ### Stage E handoff (2026-10-01): Stage E is complete
 

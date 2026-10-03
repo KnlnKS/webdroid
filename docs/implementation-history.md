@@ -1607,8 +1607,8 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     the importer closes its last descriptor; a raw pipe or socket throws instead of crossing.
   - SystemClock.<clinit> reads System.nanoTime, so the main loop's first SystemClock read started
     System.<clinit> on a JThread that other jobs share; one judged it re-entry and read null
-    properties. startMainLooper initialises System first, as the zygote does. The hazard (init
-    re-entry judged by JThread identity while jobs share mainThread) remains.
+    properties. startMainLooper initialises System first, as the zygote does. Re-entry is judged
+    by call chain since 2026-10-02 (below).
   - Build keeps a fields-only spec: its <clinit> reads ro.* properties in zygoteInit, before the
     app's ABI is known, so ARM32-only apps would see an arm64 CPU_ABI. It needs per-ABI zygote state.
   - SQLiteConnection's natives run over sql.js (rebuilt with the C API they call,
@@ -1736,6 +1736,30 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   notification, keystore (unchunked spread), webkit, sqlite, framework and proxy; framework-res
   lookups through `getSystem().getIdentifier` repeat in notification, services, storage and
   vibrator. Both want an owner outside these files.
+- 2026-10-02, class-init re-entry by call chain (Stage F open items 3 and 4). JLS 12.4.2's
+  recursive request was judged by JThread alone, and main-loop jobs and host turns share
+  mainThread, so a job interleaved while another's `<clinit>` was suspended proceeded with partial
+  statics. A request is now recursive when it comes from the initializing thread *and* call chain.
+  The chain is `suspend.ts`'s strand: every suspension records the chain that made it and `unwind`
+  resumes as it; a host turn's chain gets an identity when it enters `callOn`, starts a `<clinit>`
+  or first suspends. Another chain on the same thread now waits with the 60 ms timed escape (it was
+  unreachable before: same-thread requests returned at once); other threads still wait untimed.
+  The escape stays because host code that continues a chain without carrying it, or a `<clinit>`
+  awaiting work only the waiting chain would deliver, cannot be told from a wait that never ends.
+  - Host code that continues a chain must carry it, or its Java waits the escape out: the first run
+    caught Komikku's `ImageDecoder.<clinit>`, whose System.loadLibrary ran JNI_OnLoad from
+    `loadNativeLib`'s awaits and JNI calls that awaited class initialization. `Cpu.call` now carries
+    its caller's chain into every slice it resumes, `caller()` (jlang) captures thread and chain for
+    host continuations (`after`, nativeLoad, JNI Call*/NewObject/AllocObject), and conscrypt's BIO
+    readers and WebView's shouldInterceptRequest are driven generators. A MediaDataSource is read
+    on a binder thread, as the media server reads it through IDataSource. All seven local fast flows
+    then ran with no clinit wait timeout, `[webdroid unowned]` or failed `<clinit>`.
+  - A static check for Java entered from `.then`, timer or post-`await` code was prototyped over
+    `src/` and found only calls already wrapped in a local `callOn` alias; every real case (Cpu
+    loop, loader, JNI) entered Java through a helper, so it was not added.
+  - Monitors are still owned by JThread: two chains interleaved on mainThread share a lock's
+    ownership. Same-thread waits that outlast 60 ms (a heavy `<clinit>` suspended past it) still
+    proceed with partial statics and mark the class reentrant for every later request.
 
 ## Java, storage and framework semantics
 
