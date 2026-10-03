@@ -582,13 +582,48 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 
 ## 9. Progress and handoff
 
-Last updated 2026-10-05 (Stage E: 2026-10-01). Stage F is merged into `knlnks/bytecode` (not pushed);
-For this performance branch, read the §4 performance follow-up first. For the platform
+Last updated 2026-10-02 on `knlnks/ef-followup` (not pushed), which merges `knlnks/bytecode`. Read
+"E/F follow-up handoff" first. For performance, read the §4 performance follow-up; for the platform
 migration, read "Stage F handoff", then "Latest handoff".
 The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings. Stage E is complete on this branch: its handoff is "Stage E handoff" below.
+
+### E/F follow-up handoff (2026-10-02): branch `knlnks/ef-followup`, start here
+
+Stage E and F's open items, worked from `304c0529` and merged with `knlnks/bytecode` at `784677aa`.
+Each item's mechanism is in the implementation history's 2026-10-02 entries; the Stage E and F
+"Open" lists below mark what is done.
+
+- **Done:** Build runs from bytecode over the reference device's recorded properties
+  (`gen-framework --properties`), with the zygote choosing its bitness from the install's central
+  directory. Class-init re-entry is judged by call chain (`suspend.ts` strands): forks such as
+  `callUncaught` get their own chain, and the same-thread escape fires only on a stalled chain.
+  Host code continuing Java carries its chain. StatsLog and print run from bytecode, the latter
+  with a hosted IPrintManager.
+- **Done (kernel):** AF_INET6, sendmsg/recvmsg (msghdr by process ABI), AF_UNIX message sockets,
+  mremap growth, `anchor` for guest buffers across awaits, fork answering EAGAIN. UDP replies
+  name the source the guest dialed, so QUIC through the relay works (YouTube).
+- **Done (text):** applications get the serialized system font map, and minikin's hyphenation
+  runs over the reference `.hyb` patterns.
+- **Done (scheduling):** a realm serving a presented process runs at its priority, as binder
+  calls inherit priority. A background billing service starved this, which let DoodleJump's
+  lock-order race close.
+- **Done (cleanup):** base64 through `Uint8Array`, one `systemResource`, field helpers, and test
+  pruning (1,182 → 1,097 tests, about 11 → 6 s); sql.js builds are cached per checkout.
+- **Gates on the merge:** typecheck, `bun run test` (1097), FitNotes smoke, `fwtest` 30/30,
+  `textcmp` 72/72, fast e2e 7/7, and `lat` cold and warm (worst gated tap 123 ms). Live flows,
+  run one at a time: YouTube (3/3 after its flow taps the film by text, since a sponsored card
+  can cover the old point), Lichess, Harmonic, ChatGPT and Reddit pass. TikTok and Resy fail on
+  live content, as they do at `304c0529`.
+- **Open:** a loopback media URL an app serves in-process (YouTube's
+  `http://localhost:32768/exocache`) goes to the dev server's `/proxy` instead of the guest.
+- **Decisions open for the user:** the device now reports the reference AVD's identity
+  (sdk_gphone64_arm64, dev-keys), which emulator checks recognise. The AVD serves a GMS-installed
+  emoji font from `/data/fonts` while the page keeps the image's. Both are in the history.
+- **Rejected:** lazy guest-memory commit (`knlnks/lazy-guest-mem-experiment`) and early sizing.
+  Neither removes StatsEvent's GC stall, and V8's late-grow behaviour is recorded.
 
 ### §4 performance follow-up (2026-10-02): reuse idle work and retained state
 
