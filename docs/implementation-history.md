@@ -2262,6 +2262,49 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     0.43-0.49 ms against the base. Gates: 1,133 tests, FitNotes smoke, fwtest, fast e2e 7/7, lat
     cold and warm (Mihon dark-warm 118 and 96 ms, load 6-19).
 
+- 2026-10-03, the Android services and process layer's structural review (branch
+  `knlnks/refactor-android`, behaviour kept):
+  - Service start state has one owner, the broker's ServiceRecords. The hosting process's
+    ActiveServices changes it through `starts()` (created, start, deliver, done, stopSelf,
+    foreground, destroyed) instead of mirroring a local copy with report() snapshots, so a restart
+    reads what the process last changed; it keeps only its tokens, IntentBindRecords and the
+    Intents of starts not yet delivered. A realm the broker does not know (the activity-manager
+    fixture) keeps a standalone ServiceRecords. ServiceRecords takes one port (send, connected,
+    persistent) and owns the binding-key namespacing, the client-death unbind and the
+    BIND_AUTO_CREATE wait rule; a sticky restart's null-intent start is queued by
+    performServiceRestartLocked's side. A local oneway binder call stays synchronous, which keeps
+    the driver's per-binder order (only the caller waits where a device's would not).
+  - Death: appexitinfo owns `Death`/`deathOf`; the broker's `fail(pid, message, death)` hands the
+    death to watchers, so the exited screen watches the page process as it watches a relaunched
+    one, and only a death before the page process registers (its package registers late in
+    bootApk) comes from the realm's own exit. A frame failure now logs `[process] ... (pid N):
+    <message>` as an exit does, and an exit's DeadObjectException carries its signal or status.
+  - Harness: `realmWd()` gives every realm the same uiTree, testFrame and tap, so a tap in a
+    relaunched frame is the page's 60 ms press; the page adds the realms of
+    `activities.shownWindows()` (the layers show() last applied) instead of scanning and z-sorting
+    iframes. Per-package state is one table of owners (clear, remove, packages) next to their
+    storage; `wd.reset()` takes the union of `packages()`; a removal runs clear then each remove
+    once (the cookie jar is emptied once, its key then dropped).
+  - Binder: one execTransact harness for remote and local transactions; a thread's caller,
+    explicit flag, StrictMode policy, work source and system identity are one record. A trivial
+    hosted call (isUserAMonkey, bun, interleaved runs) measured 2.38 us before and after.
+  - MediaCodec definitions carry their bitstream (key frames; AVC/HEVC Annex B SPS codec strings)
+    and audio codec strings and rates as data; vectors pin AVC, HEVC, VP8, VP9 and AV1 readings.
+    gen-framework shares adb/pull/runDex and one generated-file writer (bootclasspath.ts has one
+    writer, which --fonts reuses); recordIdentity is `scripts/identity.ts`. Regenerating the
+    recorded files from their current values reproduced them byte for byte; no recording was rerun.
+  - ActivityStack and `shell/process-endpoint.ts` leave the broker (processes.ts 677 -> 380 lines).
+  - Verified against `b92f4956` with the same probes: clear data then uninstall of FitNotes leave
+    identical state (`wd.uninstall` of the running page app never answers on either: the
+    deletion kills the realm whose main loop would answer); killing microG's processes rebinds a
+    BIND_AUTO_CREATE client of AuthProxyService 2 s later and restarts McsService in a new
+    `:persistent` process on both. Gates: typecheck, 1,135 tests, FitNotes smoke, fwtest,
+    `gen-framework --verify`, relaunch, fast e2e 7/7 (doodlejump wedged once in a loaded parallel
+    run and passed 3/3 alone and in the next full run), reddit and youtube `--live` (youtube's
+    controls step failed once on live content, then passed), lat cold (load 8.5; warm not run).
+  - Not reduced: the source grew by about 200 lines net (module headers, the ports' contracts, the
+    bitstream vectors and the servicerecords tests of the start operations).
+
 ## Java, storage and framework semantics
 
 - Collection views remain live. Copying `subList` or map views broke Compose

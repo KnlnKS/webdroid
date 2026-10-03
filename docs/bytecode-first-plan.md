@@ -598,6 +598,15 @@ codecache's `bodyAt`, `aot.ts`, jlang split into jentry/jthrowable/jstring/jthre
 Open: finding 1 (one way to continue a chain, then a first-class Strand), which touches the native
 loader, dl, JNI and Cpu and waits for the native refactor to merge.
 
+### Android structural refactor (2026-10-03): branch `knlnks/refactor-android`
+
+The android review's findings 1-8 and its nits are done with behaviour kept (history, "the Android
+services and process layer's structural review"): service start state only in ServiceRecords,
+one death path, `realmWd()` with `activities.shownWindows()`, a table of per-package state owners,
+one binder execTransact harness, codec bitstream traits, gen-framework plumbing with
+`scripts/identity.ts`, and ActivityStack/process-endpoint split out of the broker. Open: none of
+its own; `wd.uninstall` of the running page app still never answers (as before).
+
 ### E/F follow-up handoff (2026-10-02): branch `knlnks/ef-followup`, start here
 
 Stage E and F's open items, worked from `304c0529` and merged with `knlnks/bytecode` at `784677aa`.
