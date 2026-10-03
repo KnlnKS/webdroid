@@ -2,9 +2,9 @@
 // neither delegated to (yield*), driven (rt.drive), nor returned by a plain function to a caller
 // that drives it. A callback handed to callUncaught, after or onMain has its result consumed as a
 // value, so a generator it returns runs nothing either. Also a pending Java result memoised with
-// `??=`, whose suspension every awaiting frame would share. Whether Java is entered from a turn a
-// thread owns is checked at run time (jlang's strictThreadOwnership). And per-process ABI state
-// read as a module loads.
+// `??=`, whose suspension every awaiting frame would share, and a Java entry whose result is
+// dropped. Whether Java is entered from a turn a thread owns is checked at run time (jlang's
+// strictThreadOwnership). And per-process ABI state read as a module loads.
 //   bun scripts/generators.ts
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -105,8 +105,28 @@ export function loadTimeAbiReads(): string[] {
   return out;
 }
 
+/** `void vcall(…)` or a bare `vcall(…);`: a Java entry nothing waits for, which, suspended, would
+ *  go on as the running chain while that chain runs past it. callUncaught gives it a chain. */
+export function discardedEntries(): string[] {
+  const out: string[] = [];
+  for (const [file, source] of sources()) {
+    const visit = (n: ts.Node) => {
+      if (ts.isCallExpression(n) && (JAVA.has(n.expression.getText()) || n.expression.getText() === "rt.drive")) {
+        let p: ts.Node = n.parent;
+        while (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isNonNullExpression(p)) p = p.parent;
+        if (ts.isExpressionStatement(p) || ts.isVoidExpression(p)) out.push(`${file}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}: ${n.expression.getText()}`);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(source);
+  }
+  return out;
+}
+
 if (import.meta.main) {
   for (const line of sharedSuspensions()) console.log("shared suspension: " + line);
+  for (const line of discardedEntries()) console.log("discarded: " + line);
+  for (const line of loadTimeAbiReads()) console.log("load-time ABI read: " + line);
   for (const line of undelegatedGenerators()) console.log("not run: " + line);
   for (const line of loadTimeAbiReads()) console.log("ABI read at load: " + line);
 }

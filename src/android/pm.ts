@@ -161,7 +161,7 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
     splitSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
     splitPublicSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
     nativeLibraryDir: "/lib", dataDir: `/data/data/${pkg}`, credentialProtectedDataDir: `/data/data/${pkg}`,
-    deviceProtectedDataDir: `/data/user_de/0/${pkg}`, storageUuid: uuidDefault(),
+    deviceProtectedDataDir: `/data/user_de/0/${pkg}`, storageUuid: yield uuidDefault(),
     enabled: record.enabled ? 1 : 0, enabledSetting: 0, category: intAttr(app, "appCategory", -1),
     networkSecurityConfigRes: intAttr(app, "networkSecurityConfig", 0),
     targetSandboxVersion: intAttr(record.root, "targetSandboxVersion", 1), installLocation: intAttr(record.root, "installLocation", -1),

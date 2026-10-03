@@ -1,12 +1,10 @@
-import { JObj, rt } from "../runtime";
-import { after, scall, vcall } from "./jlang";
+import type { JObj } from "../runtime";
+import { after, scall, vcall, newObj } from "./jlang";
 
 /** a java.util.UUID parsed from its canonical text */
-export function uuidFromString(s: string): JObj {
+export function uuidFromString(s: string): JObj | Promise<JObj> {
   const h = s.split("-").map((p) => BigInt("0x" + p));
-  const u = rt.make("java/util/UUID");
-  vcall(u, "<init>", "(JJ)V", BigInt.asIntN(64, (h[0] << 32n) | (h[1] << 16n) | h[2]), BigInt.asIntN(64, (h[3] << 48n) | h[4]));
-  return u;
+  return newObj("java/util/UUID", "(JJ)V", BigInt.asIntN(64, (h[0] << 32n) | (h[1] << 16n) | h[2]), BigInt.asIntN(64, (h[3] << 48n) | h[4]));
 }
 
 /** a java.util.Locale, which libcore implements; native code reads one through its Java API */

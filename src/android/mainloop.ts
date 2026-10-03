@@ -7,7 +7,7 @@
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
 import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
-import { curThread, mainThread, scall, newObj, vcall, callOn, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
+import { curThread, mainThread, scall, newObj, vcall, callOn, callUncaught, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
@@ -151,7 +151,7 @@ export const postRunnable = (r: unknown, delay = 0, handler = mainHandler()): un
 /** post `fn` to a Handler as a Runnable */
 export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable {
   const r = fnRunnable(fn);
-  void postRunnable(r, delay, handler);
+  callUncaught(() => postRunnable(r, delay, handler));
   return r;
 }
 

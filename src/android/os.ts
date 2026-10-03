@@ -6,6 +6,7 @@ import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings";
 import { awaited, rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { i8, jarray, utf8 } from "../jvm/abi";
+import { once } from "../jvm/suspend";
 import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
@@ -207,8 +208,7 @@ export const pfdContents = driven(function* pfdContents(pfd: JObj): Gen<Uint8Arr
 // filesystem backs everything here), in 4K blocks.
 const BLK = 4096n;
 // the internal storage volume, identified by the platform's default UUID (StorageManager.UUID_DEFAULT)
-let storageUuid: ReturnType<typeof uuidFromString> | null = null;
-export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+export const uuidDefault = once(() => uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69"));
 export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   try {
     const e = yield* awaited(navigator.storage?.estimate?.());

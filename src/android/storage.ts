@@ -19,7 +19,7 @@ const storageVolume = driven(function* storageVolume$(): Gen<JObj> {
   return newObj("android/os/storage/StorageVolume",
     "(Ljava/lang/String;Ljava/io/File;Ljava/io/File;Ljava/lang/String;ZZZZZJLandroid/os/UserHandle;Ljava/util/UUID;Ljava/lang/String;Ljava/lang/String;)V",
     "emulated;0", yield* awaited(newFile(SHARED)), yield* awaited(newFile(SHARED)), yield systemResource("string", "storage_internal", "getString", "(I)Ljava/lang/String;"),
-    1, 0, 1, 0, 0, 0n, yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", USER), uuidDefault(), null, "mounted");
+    1, 0, 1, 0, 0, 0n, yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", USER), yield uuidDefault(), null, "mounted");
 });
 const volumeInfo = driven(function* volumeInfo$(): Gen<JObj> {
   const statics = (yield* awaited(linkInit(VI))).ctor as Record<string, number>, flag = (name: string) => statics[mangleStaticField(name)];

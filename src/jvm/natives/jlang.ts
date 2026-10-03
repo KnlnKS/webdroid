@@ -370,18 +370,10 @@ const classPathHandler = driven(function* (archive: string): Gen {
   return classPathHandlers.get(archive);
 });
 const packages = new Map<string, unknown>();
-/** libcore's Package for `name`, one per name as a class loader keeps them. Package's initializer
- *  and constructor never suspend, so a caller does not suspend on its first package either. */
+/** libcore's Package for `name`, one per name as a class loader keeps them */
 export function packageNamed(name: string): unknown {
-  const known = packages.get(name);
-  if (known) return known;
-  const info = rt.link("java/lang/Package"), pending = rt.initClass(info);
-  if (pending) return pending.then(() => packageNamed(name));
-  const p = new info.ctor();
-  vcall(p, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V",
-    name, null, null, null, null, null, null, null, null);
-  packages.set(name, p);
-  return p;
+  return packages.get(name) ?? after(newObj("java/lang/Package", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V",
+    name, null, null, null, null, null, null, null, null), (p) => { if (!packages.has(name)) packages.set(name, p); return packages.get(name); });
 }
 const loaderPackages = new WeakMap<Runtime, { classes: number; names: Set<string> }>();
 /** the packages whose classes a loader's runtime can define */

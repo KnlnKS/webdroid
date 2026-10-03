@@ -5,7 +5,7 @@ import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
-import { vcall, after, scall, newObj } from "../jvm/natives/jlang";
+import { vcall, after, scall, newObj, callUncaught } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues";
 import { mkPfd } from "./os";
@@ -117,7 +117,7 @@ export function applyApplicationLocales(list: Locales): boolean {
   if (sameTags(next, theConfig.locales)) return false;
   setLocales(theConfig, next);
   setResourceLocale(configLang(theConfig), theConfig.screenLayout & 0xc0);
-  void scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", theConfig.locale);
+  callUncaught(() => scall("java/util/Locale", "setDefault", "(Ljava/util/Locale;)V", theConfig.locale));
   return true;
 }
 export const localesFromTags = driven(function* localesFromTags(tags: string): Gen<Locales> {
