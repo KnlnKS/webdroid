@@ -2513,6 +2513,28 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     madvise does not block) measured no gain and was left out. Still open for the first realm: a
     TS intrinsic for addLikelySubtags (§4.7, differential against ICU4J) or a page-shared
     likely-subtags table; a precomputed FontConfig would replace a method's bytecode for ~15 ms.
+- **2026-10-02, the first realm's Typeface.<clinit>.**
+  - Bitness never delays the zygote: the install fixes it from the central directory in 30-90 ms,
+    before the platform is even linked (130-430 ms), so starting the text preload before
+    `processBitness` would gain nothing. Prefetching the likely-subtags table at zygote start
+    measured 3 ms (noise) and was left out; ICU's 8 page faults in the clinit took 1-6 ms each warm.
+  - The clinit's parts, warm with persisted code: LikelySubtags.<clinit> 39-53 ms (Data.load: ICU's
+    bundle infrastructure, the langInfo pages, LSR.decodeInts, UScript names), the legacy fonts.xml
+    parse 30-40 ms, the family loop ~20 ms. Skipping the clinit's lookups alone only moved the
+    decode: Calendar.getRegionForSupplementalData calls addLikelySubtags during the app's launch.
+  - `ULocale.addLikelySubtags` is now a §4.7 intrinsic over a page-shared decode of langInfo.res's
+    "likely" table (jicu.ts: a ResB reader and BytesTrie, LikelySubtags.maximize; ULocale's parsing,
+    UScript names and Region types stay ICU4J's). No realm initializes LikelySubtags by its first
+    frame. Interleaved A/B, FitNotes warm: first realm 88 -> 75 ms (cold 162 -> 132), the first
+    process realm 61-109 -> 17-21 ms; Mihon first realm 110 -> 87 warm, 167 -> 146 cold. A
+    process realm's Promise is not `after`'s: the realm keeps its own promise over the page's.
+  - First frame did not measurably move (FitNotes warm ~970 ms either way with provisioning
+    deferred). The large variance is elsewhere: `provisionServices` starts microG's process realm
+    right after bootApk, and when its boot lands before the app's first frame that frame slips
+    ~400 ms (warm FitNotes 1.26-1.3 s vs 1.5-1.9 s, bimodal). Deferring provisioning to the first
+    frame gave 945-998 ms in 8/8 runs (experiment only, not committed; an ordering decision for the
+    process broker). Still open: the fonts.xml parse (~35 ms, bytecode) and UScript's pnames load
+    (~6 ms) in the first realm.
 
 ## App investigations and remaining limits
 

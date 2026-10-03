@@ -780,9 +780,11 @@ grid) for measurement, TextRunShaper and drawing;
 5. Text (2026-10-02, history "Stage E2 follow-up" and "the text open items"): bindApplication
    receives the serialized font map from `/font-index.json`; hyphenation matches the device's
    recorded layouts and glyphs; advances follow FreeType (whole-pixel layout size, HVAR rounded
-   to units, 26.6 hinted rounding) across wght 100-900. Realms share the platform data's pages, so
-   Typeface.<clinit> takes 42-80 ms in a process realm. Open: the first realm's clinit (92-162 ms:
-   fonts.xml parse and ICU's likely-subtags data). Apps get the Google Play emoji update.
+   to units, 26.6 hinted rounding) across wght 100-900. Realms share the platform data's pages and
+   a decoded likely-subtags table (the addLikelySubtags intrinsic), so Typeface.<clinit> takes
+   17-21 ms in a process realm and 75 ms warm in the first. Open: the first realm's fonts.xml parse
+   (~35 ms), and microG's provisioning realm racing the app's first frame (history "the first
+   realm's Typeface.<clinit>"). Apps get the Google Play emoji update.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 
