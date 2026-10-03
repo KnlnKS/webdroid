@@ -103,6 +103,7 @@ try {
     const rec = manifest?.steps.find((s) => s.id === step.id);
     const started = performance.now();
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
+    if (hit === false) throw new Error(`Setup ${step.id}: text target missing; wait for the intended screen before measuring`);
     const actionMs = performance.now() - started;
     const horizonMs = waitHorizonMs(step.wait);
     await page.waitForTimeout(Math.max(Number(values["setup-min-wait"]), setupSettleCap === undefined ? horizonMs : Math.min(horizonMs, setupSettleCap)));
@@ -133,7 +134,8 @@ try {
   if (startStep) {
     const a = actOf(flow, startStep, manifest?.steps.find((step) => step.id === startStep.id));
     if (a.type === "tap") a.repeat = 1;
-    await foreground.evaluate(performAction, { a, screen, deadlineMs: 5000 });
+    const hit = await foreground.evaluate(performAction, { a, screen, deadlineMs: 5000 });
+    if (hit === false) throw new Error(`Start ${startStep.id}: text target missing`);
     if (startState === undefined) await page.waitForTimeout(100);
   }
   const inspectedFrame = foreground;
@@ -275,7 +277,9 @@ try {
       }
       const action = actions[index % actions.length];
       acting = true; inputs++; awaitingInput = performance.now(); issuedOffsets.push(awaitingInput - t0);
-      void act({ a: action, screen, deadlineMs: 5000 }).catch((e) => actionErrors.push(String(e))).finally(() => { acting = false; });
+      void act({ a: action, screen, deadlineMs: 5000 }).then((hit) => {
+        if (hit === false) actionErrors.push(`Input ${index}: text target missing`);
+      }).catch((e) => actionErrors.push(String(e))).finally(() => { acting = false; });
     };
     const timer = !firstAction || offsets !== null ? undefined : setInterval(() => fire(inputs), intervalMs);
     const scheduled = offsets?.map((offset, index) => setTimeout(() => fire(index), offset)) ?? [];
@@ -318,12 +322,17 @@ try {
   const tree = await foreground.evaluate(() => globalThis.wd.uiTree());
   const processes = await readProcesses(page);
   const jvmProfile = values["jvm-profile"] ? await foreground.evaluate(() => globalThis.wd.jvmProfile()) : undefined;
+  const invalid = [...result.actionErrors];
+  if (!alive) invalid.push("Main looper did not answer");
+  if (result.hidden || !result.ticks) invalid.push("Display was hidden or did not advance");
+  if (result.inputs !== result.plannedInputs || result.actionInFlight) invalid.push("Interaction window did not complete every planned input");
+  if (result.inputs && !result.presentCount) invalid.push("No frame presented during interaction");
   await mkdir(dirname(values.out), { recursive: true });
   const cpuProfilePath = cpuProfile ? artifactPath(".cpuprofile") : undefined;
   if (cpuProfile && cpuProfilePath) await Bun.write(cpuProfilePath, JSON.stringify(cpuProfile));
   await page.screenshot({ path: artifactPath(".png") });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
-    gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
+    gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, valid: !invalid.length, invalid, tree, metrics, heapBefore, heapAfter, processes, errors,
     ...(jvmProfile ? { jvmProfile } : {}), ...(traceTotals ? { traceTotals } : {}),
     ...(cpuProfilePath ? { cpuProfilePath } : {}), ...(nativeProfile ? { nativeProfile } : {}),
     stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
@@ -331,5 +340,6 @@ try {
     ...(values["align-presentation"] ? { alignPresentation: true } : {}), ...(interval !== undefined ? { interval } : {}), ...(values["exercise-once"] ? { exerciseOnce: true } : {}) };
   await Bun.write(values.out, JSON.stringify(output, null, 2));
   console.log(JSON.stringify({ output: values.out, glFps: result.perf.glFrames * 1000 / result.ms,
-    presentFps: result.presentCount * 1000 / result.ms, ticks: result.ticks, hidden: result.hidden, alive, errors }));
+    presentFps: result.presentCount * 1000 / result.ms, ticks: result.ticks, hidden: result.hidden, alive, valid: !invalid.length, invalid, errors }));
+  if (invalid.length) process.exitCode = 1;
 } finally { await browser.close(); }
