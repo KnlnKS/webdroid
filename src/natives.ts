@@ -115,6 +115,7 @@ import "./android/server/wm";
 import "./android/server/content";
 import "./android/settings";
 import "./android/keystore";
+import "./android/hyphenator";
 import "./android/minikin";
 import "./android/shaping";
 import "./android/assetmanager";

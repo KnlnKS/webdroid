@@ -72,11 +72,11 @@ if (!process.argv.includes("--verify")) {
   sh("shell", `/apex/com.android.art/bin/profman --profile-file=/system/etc/boot-image.prof ${bootJars.map((j) => `--apk=${j} --dex-location=${j}`).join(" ")}` +
     " --dump-classes-and-methods > /data/local/tmp/boot-image-profile.txt");
   pull("/data/local/tmp/boot-image-profile.txt", "boot-image-profile.txt");
-  // ICU data, the time zone module's files, the system fonts and their configuration, and
-  // bionic's libraries, at their device paths
+  // ICU data, the time zone module's files, the system fonts and their configuration, the
+  // hyphenation patterns, and bionic's libraries, at their device paths
   const data: Record<string, number> = {};
   const { DEVICE_LIBS } = await import("../src/native/bionic");
-  const files = sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "/system/fonts", "-type", "f").split(/\s+/);
+  const files = sh("shell", "find", "/apex/com.android.i18n/etc", "/apex/com.android.tzdata/etc", "/system/fonts", "/system/usr/hyphen-data", "-type", "f").split(/\s+/);
   for (const src of [...files, "/system/etc/fonts.xml", "/system/etc/font_fallback.xml", ...DEVICE_LIBS]) {
     await Bun.$`mkdir -p ${`${OUT}${src.slice(0, src.lastIndexOf("/"))}`}`.quiet();
     pull(src, src.slice(1));
@@ -93,7 +93,7 @@ if (!process.argv.includes("--verify")) {
     `export const PLATFORM_JARS = ${JSON.stringify(jars, null, 1).replace(/\n\s*/g, " ")};\n` +
     `/** where each of those jars lives on the device */\n` +
     `export const BOOT_JAR_PATHS = ${JSON.stringify(bootJars, null, 1).replace(/\n\s*/g, " ")};\n` +
-    `/** the ICU and time zone files and bionic's libraries, by device path (mirrored under vendor/aosp), with their sizes */\n` +
+    `/** the ICU and time zone files, fonts, hyphenation patterns and bionic's libraries, by device path (mirrored under vendor/aosp), with their sizes */\n` +
     `export const PLATFORM_DATA: Record<string, number> = ${JSON.stringify(data)};\n`);
   // its own process: it boots the class path just written, which the verification below loads apart
   if (Bun.spawnSync(["bun", "scripts/gen-framework.ts", "--settings"], { stdout: "inherit", stderr: "inherit" }).exitCode) throw new Error("recording settings failed");

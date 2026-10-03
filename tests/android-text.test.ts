@@ -215,6 +215,30 @@ describe("tts-span", () => {
 });
 
 describe("minikin", () => {
+  test("hyphenation points are minikin's over the reference build's patterns", async () => {
+    const { initHyphenators, hyphenatorFor, hyphenate } = await import("../src/android/hyphenator");
+    initHyphenators();
+    const types = async (lang: string, word: string) =>
+      Array.from(await rt.drive(function* () { return yield* hyphenate(word, yield* hyphenatorFor(lang)); }()) as Uint8Array);
+    // minikin's HyphenatorTest, each case under the language the registry maps it to
+    expect(await types("en-US", "table")).toEqual([0, 0, 1, 0, 0]);
+    expect(await types("ml", "കകകകക")).toEqual([0, 0, 5, 5, 0]);
+    expect(await types("ca", "ll·ll")).toEqual([0, 0, 0, 6, 0]);
+    expect(await types("ca", "l·l")).toEqual([0, 0, 0]);
+    expect(await types("pl", "x‐y")).toEqual([0, 0, 7]);
+    expect(await types("pl", "α‐α")).toEqual([0, 0, 5]);
+    expect(await types("pl", "x–y")).toEqual([0, 0, 5]);
+    expect(await types("sl", "x‐y")).toEqual([0, 0, 7]);
+    expect(await types("en-US", "x­y")).toEqual([0, 0, 1]);
+    expect(await types("en-US", "­y")).toEqual([0, 0]);
+    expect(await types("en-US", "ക­ക")).toEqual([0, 0, 5]);
+    expect(await types("en-US", "ա­ա")).toEqual([0, 0, 2]);
+    expect(await types("en-US", "ᐁ­ᐁ")).toEqual([0, 0, 4]);
+    // HyphenatorMapTest: aliases, dropped subtags and script fallbacks
+    const same = async (a: string, b: string) => expect(await rt.drive(hyphenatorFor(a))).toBe(await rt.drive(hyphenatorFor(b)));
+    await same("en-AS", "en-US"); await same("en-Latn-US", "en-US"); await same("en-CA", "en-GB"); await same("de", "de-1996");
+    await same("de-LI-1901", "de-CH-1901"); await same("no", "nb"); await same("ti", "und-Ethi"); await same("sa-Deva", "hi");
+  });
   test("line breaking over the reference device's advances breaks where the device does", async () => {
     await loadLibcore();
     const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin");
@@ -230,13 +254,13 @@ describe("minikin", () => {
     const mismatches: string[] = [];
     for (const row of rows.filter((r) => /^\d/.test(r))) {
       const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
-      // line breaking reads only the size and spacing of a run's style
-      const style = { size, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0 } as TextStyle;
+      // line breaking reads only the size, scale and spacing of a run's style
+      const style = { size, scaleX: 1, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0 } as TextStyle;
       const breaks: number[] = [];
       // StaticLayout breaks each paragraph, its newline included, on its own
       for (let start = 0; start < text.length;) {
         const end = text.indexOf("\n", start) + 1 || text.length, para = text.slice(start, end);
-        const m = { text: para, widths: adv.slice(start, end), extents: new Float32Array(para.length * 2), runs: [{ start: 0, end: para.length, style, width: 0, lang: "en-US", lbStyle: 0, lbWordStyle: 0 }] };
+        const m = { text: para, widths: adv.slice(start, end), extents: new Float32Array(para.length * 2), runs: [{ start: 0, end: para.length, style, width: 0, lang: "en-US", lbStyle: 0, lbWordStyle: 0, hyphenate: false }], hyphenBreaks: [] };
         const b = { strategy: +strategy, frequency: 0, justified: false, indents: new Float32Array(0), useBounds: false };
         const result = await computeBreaks(b, m, para.length, new LineWidth(width, 1, width, b.indents, 0), new TabStops(null, 20));
         breaks.push(...result.breaks.map((o) => o + start));

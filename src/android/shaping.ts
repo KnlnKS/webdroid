@@ -17,6 +17,7 @@ import { cssFace } from "./cssfonts";
 import { type NativePaint, paintAt } from "./paint";
 import { type HarfBuzz, type Font, harfBuzz, loadedHarfBuzz, HB_DIRECTION_INVALID, HB_DIRECTION_LTR, HB_DIRECTION_RTL } from "./harfbuzz";
 import type { Ctx2D } from "./recording";
+import { END_REPLACE_WITH_HYPHEN, startHyphenString, endHyphenString } from "./hyphenator";
 import type { NativePath } from "./path";
 import { emptyBox, type Box } from "./graphics";
 
@@ -205,17 +206,43 @@ function advanceOf(hb: HarfBuzz, run: ShapedRun, glyph: number, advance: number)
 /** one LayoutSplitter piece as minikin measures it: each glyph's advance on its cluster's first
  *  code unit (Layout::doLayoutRun, before letter spacing), and the extent of the fonts it used */
 export interface Piece { advances: Float32Array; ascent: number; descent: number }
-/** a piece laid out in the direction HarfBuzz guesses from its script */
-export function measurePiece(piece: string, style: ShapeStyle): Piece {
+/** a piece laid out in the direction HarfBuzz guesses from its script, with hyphen edits at its
+ *  start and end (addToHbBuffer): the hyphens are shaped in the edge font runs, their advances on
+ *  the first character and on the last one's cluster, a replaced last character dropped */
+export function measurePiece(piece: string, style: ShapeStyle, startEdit = 0, endEdit = 0): Piece {
   const hb = loadedHarfBuzz(), advances = new Float32Array(piece.length), extent = { ascent: 0, descent: 0 };
-  hb.setText(piece, 0, piece.length);
-  const runs = itemize(hb, style.tf.collection.families, piece, 0, piece.length, style.lang);
-  for (let r = 0; r + 2 < runs.length; r += 2) {
-    const run = shapeRun(hb, runs[r + 1] as NativeFamily, style, runs[r] as number, (runs[r + 2] as number) - (runs[r] as number), HB_DIRECTION_INVALID, extent);
+  const body = endEdit === END_REPLACE_WITH_HYPHEN ? piece.slice(0, -1) : piece, families = style.tf.collection.families;
+  const runs = body ? itemize(hb, families, body, 0, body.length, style.lang) : [0, familyFor(hb, families, 0x2010, 0, style.lang), 0];
+  const pre = hyphenIn(runs[1] as NativeFamily, startHyphenString(startEdit), style), post = hyphenIn(runs[runs.length - 2] as NativeFamily, endHyphenString(endEdit), style);
+  const text = pre + body + post, last = runs.length - 3;
+  hb.setText(text, 0, text.length);
+  for (let r = 0; r <= last; r += 2) {
+    const a = r ? (runs[r] as number) + pre.length : 0, b = r === last ? text.length : (runs[r + 2] as number) + pre.length;
+    const run = shapeRun(hb, runs[r + 1] as NativeFamily, style, a, b - a, HB_DIRECTION_INVALID, extent);
     const w = hb.words(), info = hb.infos(), pos = hb.positions();
-    for (let i = 0; i < run.n; i++) advances[w[info + i * 5 + 2]] += advanceOf(hb, run, w[info + i * 5], w[pos + i * 5]);
+    let lastCluster = 0;
+    for (let i = 0; i < run.n; i++) { const c = w[info + i * 5 + 2] - pre.length; if (c < body.length) lastCluster = Math.max(lastCluster, c); }
+    for (let i = 0; i < run.n; i++) {
+      const c = w[info + i * 5 + 2] - pre.length;
+      advances[c < 0 ? 0 : c < body.length || c >= piece.length ? Math.min(c, lastCluster) : c] += advanceOf(hb, run, w[info + i * 5], w[pos + i * 5]);
+    }
   }
   return { advances, ...extent };
+}
+/** determineHyphenChar for each of `chars` in the font `family` matches the style to: a hyphen it
+ *  lacks falls back to U+2010, and U+2010 to U+002D */
+function hyphenIn(family: NativeFamily, chars: string, style: ShapeStyle): string {
+  if (!chars) return chars;
+  const font = family.match(style.tf.weight, style.tf.italic).font;
+  return chars.replace(/[֊־᐀‐]/g, (h) => font.covers(h.charCodeAt(0)) ? h : font.covers(0x2010) ? "‐" : "-");
+}
+/** text as a run drawn with the paint's hyphen edits shows it */
+export function hyphenEdited(text: string, p: NativePaint): string {
+  const style = shapeStyle(p), families = style.tf.collection.families, hb = loadedHarfBuzz();
+  const body = p.endHyphenEdit === END_REPLACE_WITH_HYPHEN ? text.slice(0, -1) : text;
+  const edge = (at: number) => at >= 0 ? familyFor(hb, families, body.codePointAt(at)!, 0, style.lang) : families[0];
+  const last = body.length - (isTrail(body.charCodeAt(body.length - 1)) && body.length > 1 ? 2 : 1);
+  return hyphenIn(edge(body ? 0 : -1), startHyphenString(p.startHyphenEdit), style) + body + hyphenIn(edge(last), endHyphenString(p.endHyphenEdit), style);
 }
 /** the text of glyph i's cluster: from its cluster to the next cluster in logical order */
 function clusterText(text: string, ctxStart: number, w: Int32Array, info: number, i: number, n: number, runEnd: number): string {

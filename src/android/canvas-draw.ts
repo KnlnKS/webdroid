@@ -11,7 +11,7 @@ import { deref } from "./handles";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap";
-import { drawGlyphs, cssFont, shapeTextRun } from "./shaping";
+import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited } from "./shaping";
 import { fontNatives } from "./fonts";
 import { paintAdvance } from "./minikin";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
@@ -252,9 +252,10 @@ function skiaFace(p: NativePaint): boolean {
   const f = p.primary(), fvar = f.font.fvarAxes;
   return f.font.path === SKIA_TEXT_FACE && !f.fakery && f.weight === 400 && f.italic !== 1 && f.font.axes.every((a) => fvar.find((x) => x.tag === a.tag)?.def === a.value);
 }
-/** Canvas::drawText; its fonts are loaded first (throwing FontPending), before the canvas is touched */
-function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint) {
-  const font = cssFont(s, p);
+/** Canvas::drawText with the paint's hyphen edits; its fonts are loaded first (throwing
+ *  FontPending), before the canvas is touched */
+function drawText(nc: NativeCanvas, text: string, x: number, y: number, p: NativePaint) {
+  const s = p.startHyphenEdit || p.endHyphenEdit ? hyphenEdited(text, p) : text, font = cssFont(s, p);
   if (tryDrawBitmapText(nc, s, x, y, p)) return;
   const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
   const blend = p.compositeOp(), prev = blend ? ctx.globalCompositeOperation : null;
@@ -279,7 +280,7 @@ function drawText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePa
     if (warped) ctx.restore();
     // Canvas::drawTextDecorations: rects at least a pixel thick across the run's advance
     if (p.underline || p.strikeThru) {
-      const w = paintAdvance(p, s);
+      const w = paintAdvance(p, text);
       const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
       nc.prep(p, false);
       if (p.underline) ctx.fillRect(sx, y + underlinePosition(p), w, Math.max(1, underlineThickness(p)));

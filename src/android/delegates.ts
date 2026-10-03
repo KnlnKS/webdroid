@@ -679,9 +679,9 @@ delegate("android/os/SystemProperties", {
 
 /** What the zygote sets up in a forked process before app code runs: libcore's MIME table is
  *  framework.jar's, System.out and System.err reach logcat, the default time zone follows
- *  persist.sys.timezone, java.util.logging reaches logcat with the default HTTP user agent set, the JCA providers are installed and warmed, and the
- *  system font map is loaded; the device's languages are set and the text paint classes, whose
- *  constructors read them, initialized. */
+ *  persist.sys.timezone, java.util.logging reaches logcat with the default HTTP user agent set, the JCA providers are installed and warmed,
+ *  Typeface is initialized and the hyphenators registered; the device's languages are set and the
+ *  text paint classes, whose constructors read them, initialized. The font map is bindApplication's. */
 export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
   // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
   yield asZygote(() => rt.initClass(rt.link("java/lang/System")));
@@ -698,6 +698,7 @@ export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, (
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
   yield scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
   yield* preloadFonts();
+  yield scall("com/android/internal/os/ZygoteInit", "preloadTextResources", "()V");
   yield initDeviceLocales();
   yield preloadPaint();
   // ActivityThread.main, once the process is forked

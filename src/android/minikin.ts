@@ -6,17 +6,22 @@
 //     on its first code unit and 0 on the rest, as HarfBuzz reports them;
 //   - line break opportunities are ICU's line iterator (ICU4J over the reference ICU data, where
 //     the device runs ICU4C over the same data) with WordBreaker's rules on top;
-//   - GreedyLineBreaker and OptimalLineBreaker are ported as they are.
-// Hyphenation is unsupported: the page has no hyphenation patterns, so every paragraph breaks as
-// under HYPHENATION_FREQUENCY_NONE. Glyph bounds are not known either, so no run overhangs.
+//   - GreedyLineBreaker and OptimalLineBreaker are ported as they are;
+//   - hyphenation points are hyphenator.ts' over the reference build's patterns, measured with
+//     their hyphens as MeasuredText and the greedy breaker measure them.
+// Glyph bounds are not known, so no run overhangs.
 
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
-import { scall, vcall } from "../jvm/natives/jlang";
+import { scall, vcall, after } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { perf } from "../perf";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";
-import { type NativeTypeface, fontNatives } from "./fonts";
+import { type NativeTypeface, fontNatives, withFonts } from "./fonts";
+import {
+  type Hyphenator, hyphenatorFor, hyphenate, intProperty, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
+  endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
+} from "./hyphenator";
 import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING } from "./shaping";
 import { setEdges } from "./graphics";
 
@@ -25,17 +30,18 @@ import { setEdges } from "./graphics";
 // words), so the cache is capped and cleared wholesale rather than evicted per entry.
 const PIECES_MAX = 20000;
 let pieces = new WeakMap<NativeTypeface, Map<string, Map<string, Piece>>>(), pieceCount = 0;
-function pieceOf(s: TextStyle, piece: string): Piece {
+function pieceOf(s: TextStyle, piece: string, startEdit = 0, endEdit = 0): Piece {
   let byTf = pieces.get(s.tf);
   if (!byTf) pieces.set(s.tf, byTf = new Map());
   let byStyle = byTf.get(s.key);
   if (!byStyle) byTf.set(s.key, byStyle = new Map());
-  let out = byStyle.get(piece);
+  const key = startEdit || endEdit ? `\0${startEdit}${endEdit}${piece}` : piece;
+  let out = byStyle.get(key);
   if (out) return out;
   perf.measureTextMiss++;
-  out = measurePiece(piece, s);
+  out = measurePiece(piece, s, startEdit, endEdit);
   if (++pieceCount > PIECES_MAX) { pieces = new WeakMap([[s.tf, byTf = new Map([[s.key, byStyle = new Map()]])]]); pieceCount = 1; }
-  byStyle.set(piece, out);
+  byStyle.set(key, out);
   return out;
 }
 
@@ -52,11 +58,13 @@ const CONTROL = /[\0-\x08\x0a-\x1f\x7f-\x9f]/;
 /** MinikinUtils::measureText: the advances of text[start,end) into out[at...], and their sum.
  *  Letter spacing is added to every other cluster, as minikin's layout does, and word spacing to
  *  every space (isWordSpace: U+0020 and U+00A0). `extents` takes each character's piece's ascent
- *  and descent, two values a character, from `at`. */
-export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0, extents: Float32Array | null = null): number {
+ *  and descent, two values a character, from `at`. Hyphen edits apply to the first and last piece. */
+export function advances(style: TextStyle, text: string, start: number, end: number, out: Float32Array | null = null, at = 0,
+  extents: Float32Array | null = null, startEdit = 0, endEdit = 0): number {
   let total = 0;
   for (let i = start; i < end;) {
-    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e), p = pieceOf(style, piece), w = p.advances;
+    const e = Math.min(pieceEnd(text, i, end), end), piece = text.slice(i, e);
+    const p = pieceOf(style, piece, i === start ? startEdit : 0, e === end ? endEdit : 0), w = p.advances;
     if (extents) for (let k = (at + i - start) * 2; k < (at + e - start) * 2; k += 2) { extents[k] = p.ascent; extents[k + 1] = p.descent; }
     const ls = JOINING.test(piece) ? 0 : style.letterSpacing, controls = CONTROL.test(piece);
     for (let j = 0; j < w.length; j++) {
@@ -73,7 +81,7 @@ export function advances(style: TextStyle, text: string, start: number, end: num
 /** the advance of `text` under `p`: what Paint.measureText answers and hwui draws the run across */
 export function paintAdvance(p: NativePaint, text: string): number {
   perf.measureText++;
-  return advances(styleOf(p), text, 0, text.length);
+  return advances(styleOf(p), text, 0, text.length, null, 0, null, p.startHyphenEdit, p.endHyphenEdit);
 }
 
 // ── grapheme breaks ───────────────────────────────────────────────────────────────────────
@@ -178,8 +186,6 @@ class Tracker {
 }
 
 const EMOJI = /\p{Emoji}/u, EMOJI_MODIFIER = /\p{Emoji_Modifier}/u, EMOJI_BASE = /\p{Emoji_Modifier_Base}/u;
-const lineBreakingHyphen = (c: number) => c === 0x2d || c === 0x58a || c === 0x5be || c === 0x1400 || c === 0x2010
-  || c === 0x2013 || c === 0x2027 || c === 0x2e17 || c === 0x2e40;
 const cpBefore = (s: string, i: number) => { const c = s.charCodeAt(i - 1); return isTrail(c) && i > 1 && isLead(s.charCodeAt(i - 2)) ? s.codePointAt(i - 2)! : c; };
 const isChar = (re: RegExp, cp: number) => re.test(String.fromCodePoint(cp));
 
@@ -206,7 +212,7 @@ class WordBreaker {
     const text = this.text;
     if (i === -1 || i === text.length) return true;
     let before = cpBefore(text, i);
-    if (lineBreakingHyphen(before) || before === 0xad || before === 0x1039) return false;
+    if (isLineBreakingHyphen(before) || before === 0xad || before === 0x1039) return false;
     const after = text.codePointAt(i)!;
     if (before === 0x200d && isChar(EMOJI, after)) return false;
     if (isChar(EMOJI_MODIFIER, after)) {
@@ -255,13 +261,40 @@ class WordBreaker {
     return this.current = r;
   }
   breakBadness(): number { return this.inEmailOrUrl && this.current < this.scanOffset ? 1 : 0; }
+  /** wordRange: the current word less leading opening punctuation and quotes (line break classes
+   *  OP and QU) and trailing spaces, punctuation and controls; empty in an email address or URL */
+  *wordRange(): Gen<[number, number]> {
+    if (this.inEmailOrUrl) return [this.last, this.last];
+    const text = this.text;
+    let start = this.last, end = this.current;
+    while (start < this.current) {
+      const c = text.codePointAt(start)!;
+      if (!PUNCT_OR_SYMBOL.test(String.fromCodePoint(c))) break;
+      const lb = yield* awaited(intProperty(c, LINE_BREAK));
+      if (lb !== LB_OPEN_PUNCTUATION && lb !== LB_QUOTATION) break;
+      start += c > 0xffff ? 2 : 1;
+    }
+    while (end > this.last) {
+      const c = cpBefore(text, end);
+      if (!WORD_END_STRIPPED.test(String.fromCodePoint(c))) break;
+      end -= c > 0xffff ? 2 : 1;
+    }
+    return start < end ? [start, end] : [end, end];
+  }
 }
+// ICU's UProperty.LINE_BREAK and the classes wordStart strips, which only punctuation and symbols have
+const LINE_BREAK = 0x1008, LB_OPEN_PUNCTUATION = 20, LB_QUOTATION = 23;
+const PUNCT_OR_SYMBOL = /[\p{P}\p{S}]/u, WORD_END_STRIPPED = /[\p{Zs}\p{P}\p{Cc}]/u;
 
 // ── MeasuredText ──────────────────────────────────────────────────────────────────────────
 /** a style run has a style; a replacement run (a ReplacementSpan) has only its width */
-export interface Run { start: number; end: number; style: TextStyle | null; width: number; lang: string; lbStyle: number; lbWordStyle: number }
-/** a paragraph's measurement: each character's advance, and its piece's ascent and descent */
-interface Measured { text: string; runs: Run[]; widths: Float32Array; extents: Float32Array }
+export interface Run { start: number; end: number; style: TextStyle | null; width: number; lang: string; lbStyle: number; lbWordStyle: number; hyphenate: boolean }
+/** HyphenBreak: a hyphenation point, and the widths of the word's pieces before it (with the
+ *  hyphen) and after it */
+interface HyphenBreak { offset: number; type: number; first: number; second: number }
+/** a paragraph's measurement: each character's advance, its piece's ascent and descent, and the
+ *  hyphenation points when they were asked for */
+interface Measured { text: string; runs: Run[]; widths: Float32Array; extents: Float32Array; hyphenBreaks: HyphenBreak[] }
 const measured = (h: bigint) => deref<Measured>(h);
 
 /** MeasuredText::getExtent: the extent of the pieces over [start,end) of ascent, descent pairs */
@@ -280,22 +313,59 @@ function sum(advances: Float32Array, start = 0, end = advances.length): number {
 rt.registerJnis("android/graphics/text/MeasuredText$Builder", fontNatives({
   "nInitBuilder()J": () => handle([] as Run[]),
   "nFreeBuilder(J)V": release,
-  "nAddStyleRun(JJIIZIIZ)V": (h: bigint, p: bigint, lbStyle: number, lbWordStyle: number, _hyphenate: number, start: number, end: number) => {
+  "nAddStyleRun(JJIIZIIZ)V": (h: bigint, p: bigint, lbStyle: number, lbWordStyle: number, canHyphenate: number, start: number, end: number) => {
     const paint = paintAt(p);
-    deref<Run[]>(h).push({ start, end, style: styleOf(paint), width: 0, lang: paint.language, lbStyle, lbWordStyle });
+    deref<Run[]>(h).push({ start, end, style: styleOf(paint), width: 0, lang: paint.language, lbStyle, lbWordStyle, hyphenate: !!canHyphenate });
   },
   "nAddReplacementRun(JJIIF)V": (h: bigint, p: bigint, start: number, end: number, width: number) => {
-    deref<Run[]>(h).push({ start, end, style: null, width, lang: paintAt(p).language, lbStyle: LB_NONE, lbWordStyle: LW_NONE });
+    deref<Run[]>(h).push({ start, end, style: null, width, lang: paintAt(p).language, lbStyle: LB_NONE, lbWordStyle: LW_NONE, hyphenate: false });
   },
-  "nBuildMeasuredText(JJ[CZZZZ)J": (h: bigint, _hint: bigint, chars: Uint16Array) => {
+  "nBuildMeasuredText(JJ[CZZZZ)J": (h: bigint, _hint: bigint, chars: Uint16Array, computeHyphenation: number, _layout: number, _bounds: number, fast: number) => {
     const text = charsToString(chars, 0, chars.length), runs = deref<Run[]>(h), widths = new Float32Array(text.length), extents = new Float32Array(text.length * 2);
     for (const r of runs) {
       if (r.style) advances(r.style, text, r.start, r.end, widths, r.start, extents);
       else if (r.end > r.start) widths[r.start] = r.width;
     }
-    return handle({ text, runs, widths, extents } as Measured);
+    const m: Measured = { text, runs, widths, extents, hyphenBreaks: [] };
+    return computeHyphenation ? after(hyphenBreaks(m, !!fast), () => handle(m)) : handle(m);
   },
 }));
+
+/** MeasuredText::measure's hyphenation points: each word of a style run hyphenated in its locale,
+ *  each point's pieces measured with their hyphens, or under fast hyphenation summed from the
+ *  advances with the hyphens measured alone */
+const hyphenBreaks = driven(function* hyphenBreaks(m: Measured, fast: boolean): Gen<void> {
+  const text = m.text, wb = new WordBreaker(text), tracker = new Tracker(text, false);
+  let nextWord = 0, prevWord = 0, hyphenator: Hyphenator | null = null;
+  for (const run of m.runs) {
+    const style = run.style;
+    if (!style) continue;
+    const restarted = yield* tracker.update(wb, run);
+    if (restarted !== -1) { nextWord = restarted; hyphenator = yield* hyphenatorFor(run.lang); }
+    for (let i = run.start; i < run.end; i++) {
+      if (i === nextWord) { prevWord = nextWord; nextWord = wb.next(); }
+      if (i + 1 !== nextWord) continue;
+      const [ws, we] = yield* wb.wordRange();
+      if (run.start > prevWord || nextWord > run.end || ws < prevWord || we > nextWord) continue;
+      const types = yield* hyphenate(text.slice(ws, we), hyphenator!);
+      for (let k = ws; k < we; k++) {
+        const type = types[k - ws];
+        if (type === DONT_BREAK) continue;
+        const end = editForThisLine(type), start = editForNextLine(type);
+        const [first, second] = yield* awaited(withFonts(() => fast ? [
+          Math.fround(sum(m.widths, prevWord, k) + (end ? measureAlone(style, endHyphenString(end)) : 0)),
+          Math.fround(sum(m.widths, k, nextWord) + (start ? measureAlone(style, startHyphenString(start)) : 0)),
+        ] : [hyphenPiece(style, text, prevWord, k, START_NO_EDIT, end), hyphenPiece(style, text, k, nextWord, start, END_NO_EDIT)]));
+        m.hyphenBreaks.push({ offset: k, type, first, second });
+      }
+    }
+  }
+});
+/** StyleRun::measureHyphenPiece: text[start,end) measured on its own with hyphen edits at its ends */
+const hyphenPiece = (style: TextStyle, text: string, start: number, end: number, startEdit: number, endEdit: number) =>
+  advances(style, text.slice(start, end), 0, end - start, null, 0, null, startEdit, endEdit);
+/** StyleRun::measureText: a hyphen's advance */
+const measureAlone = (style: TextStyle, s: string) => advances(style, s, 0, s.length);
 
 rt.registerJnis("android/graphics/text/MeasuredText", {
   "nGetReleaseFunc()J": () => FINALIZER,
@@ -347,16 +417,17 @@ const letterSpacingOf = (r: Run) => r.style?.letterSpacing ?? 0;
 type Breaking = Gen<[BreakResult, boolean]>;
 const NOWHERE = -1;
 
-/** GreedyLineBreaker, without hyphenation */
-function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabStops, useBounds: boolean, forcePhrase: boolean): Breaking {
-  const text = m.text, widths = m.widths, points: { offset: number; width: number }[] = [];
-  let lineNum = 0, limit = lineWidth.getAt(0), line = 0, sum = 0;
+/** GreedyLineBreaker */
+function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabStops, b: Breaker, forcePhrase: boolean): Breaking {
+  const text = m.text, widths = m.widths, points: { offset: number; width: number; edit: number }[] = [];
+  const hyphenation = b.frequency !== HYPHENATION_NONE;
+  let lineNum = 0, limit = lineWidth.getAt(0), line = 0, sum = 0, startEdit = START_NO_EDIT;
   let prevWord = NOWHERE, lineAtPrevWord = 0, sumAtPrevWord = 0, prevWordInEmailOrUrl = false;
-  let lineStartLS = 0, currentLS = 0;
+  let lineStartLS = 0, currentLS = 0, hyphenator: Hyphenator | null = null;
   const prevBreak = () => points.length ? points[points.length - 1].offset : 0;
-  const breakAt = (offset: number, width: number, nextLine: number, nextSum: number) => {
-    points.push({ offset, width: width - (lineStartLS + currentLS) / 2 });
-    limit = lineWidth.getAt(++lineNum); line = nextLine; sum = nextSum;
+  const breakAt = (offset: number, width: number, nextLine: number, nextSum: number, endEdit = END_NO_EDIT, nextStartEdit = START_NO_EDIT) => {
+    points.push({ offset, width: width - (lineStartLS + currentLS) / 2, edit: packHyphenEdit(startEdit, endEdit) });
+    limit = lineWidth.getAt(++lineNum); line = nextLine; sum = nextSum; startEdit = nextStartEdit;
     prevWord = NOWHERE; lineAtPrevWord = sumAtPrevWord = 0; prevWordInEmailOrUrl = false;
     lineStartLS = currentLS;
   };
@@ -395,6 +466,36 @@ function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabS
     breakAt(prev, before, line - before, sum - before);
     return true;
   };
+  /** tryLineBreakWithHyphenation: the word in [start,end) broken at its last hyphenation point
+   *  that fits, again for what is left while that is too wide; false when it cannot be hyphenated */
+  function* breakAtHyphens(start: number, end: number): Gen<boolean> {
+    if (!hyphenation || !hyphenator) return false;
+    let target: Run | null = null;
+    for (const r of m.runs) if (r.start <= start && end <= r.end) target = r;
+    if (!target) return false;
+    const [ws, we] = yield* wb.wordRange();
+    if (ws < start || we > end || !target.hyphenate) return false;
+    const style = target.style!, types = yield* hyphenate(text.slice(ws, we), hyphenator);
+    const piece = (a: number, z: number, se: number, ee: number) => awaited(withFonts(() => hyphenPiece(style, text, a, z, se, ee)));
+    let from = start, prevOffset = NOWHERE, prevWidth = 0;
+    const breakAtPrev = function* (): Gen<void> {
+      if (prevOffset === NOWHERE) { breakAtGraphemes(from, end); return; }
+      const type = types[prevOffset - ws], nextStart = editForNextLine(type), rest = yield* piece(prevOffset, end, nextStart, END_NO_EDIT);
+      breakAt(prevOffset, prevWidth, rest - (sum - line), rest, editForThisLine(type), nextStart);
+    };
+    for (let i = ws; i < we; i++) {
+      const type = types[i - ws] ?? DONT_BREAK;
+      if (type === DONT_BREAK) continue;
+      const width = yield* piece(from, i, startEdit, editForThisLine(type));
+      if (width <= limit) { prevOffset = i; prevWidth = width; continue; }
+      yield* breakAtPrev();
+      if (line <= limit) return true;
+      i = from = prevBreak();
+      prevOffset = NOWHERE;
+    }
+    yield* breakAtPrev();
+    return true;
+  }
 
   const wb = new WordBreaker(text), tracker = new Tracker(text, forcePhrase);
   let nextWord = 0;
@@ -403,7 +504,7 @@ function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabS
     currentLS = letterSpacingOf(run);
     if (r === 0) lineStartLS = currentLS;
     const restarted = yield* tracker.update(wb, run);
-    if (restarted !== -1) nextWord = restarted;
+    if (restarted !== -1) { nextWord = restarted; if (hyphenation) hyphenator = yield* hyphenatorFor(run.lang); }
     const canBreak = !!run.style;
     for (let i = run.start; i < Math.min(run.end, len); i++) {
       const c = text.charCodeAt(i);
@@ -414,6 +515,7 @@ function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabS
         const offset = i + 1;
         while (line - (lineStartLS + currentLS) * 0.5 > limit) {
           if (prevWord !== NOWHERE) { breakAt(prevWord, lineAtPrevWord, line - sumAtPrevWord, sum - sumAtPrevWord); continue; }
+          if (canBreak && (yield* breakAtHyphens(prevBreak(), offset))) continue;
           if (breakAtFallback(prevBreak(), offset, tracker.plain)) continue;
           if (breakAtGraphemes(prevBreak(), offset)) break processLineBreak;
         }
@@ -430,7 +532,7 @@ function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabS
   const out = emptyResult();
   let from = 0;
   for (const p of points) {
-    pushLine(out, m, from, p.offset, p.width, useBounds, text.slice(from, p.offset).includes("\t") ? TAB_BIT : 0);
+    pushLine(out, m, from, p.offset, p.width, b.useBounds, (text.slice(from, p.offset).includes("\t") ? TAB_BIT : 0) | p.edit);
     from = p.offset;
   }
   return [out, tracker.retry];
@@ -438,27 +540,27 @@ function* breakGreedy(m: Measured, len: number, lineWidth: LineWidth, tabs: TabS
 
 const SCORE_INFTY = 3.4028234663852886e38, SCORE_OVERFULL = 1e12, SCORE_DESPERATE = 1e10, SCORE_FALLBACK = 1e6;
 const LAST_LINE_PENALTY_MULTIPLIER = 4, LINE_PENALTY_MULTIPLIER = 2, SHRINK_PENALTY_MULTIPLIER = 4, SHRINKABILITY = 1 / 3;
-const BREAK_STRATEGY_BALANCED = 2, HYPHENATION_NORMAL = 1;
-interface Candidate { offset: number; preBreak: number; postBreak: number; penalty: number; preSpaces: number; postSpaces: number }
+const BREAK_STRATEGY_BALANCED = 2, HYPHENATION_NONE = 0, HYPHENATION_NORMAL = 1;
+interface Candidate { offset: number; preBreak: number; postBreak: number; penalty: number; preSpaces: number; postSpaces: number; type: number }
 
-/** OptimalLineBreaker (populateCandidates, then LineBreakOptimizer::computeBreaks), without hyphenation,
- *  in float arithmetic as minikin's: near-equal scores tie-break as they do there */
+/** OptimalLineBreaker (populateCandidates, then LineBreakOptimizer::computeBreaks), in float
+ *  arithmetic as minikin's: near-equal scores tie-break as they do there */
 const F = Math.fround;
 function* breakOptimal(m: Measured, len: number, lineWidth: LineWidth, b: Breaker, forcePhrase: boolean): Breaking {
   const text = m.text, widths = m.widths, minLineWidth = lineWidth.getMin(), candidates: Candidate[] = [];
-  const push = (offset: number, preBreak: number, postBreak: number, penalty: number, preSpaces: number, postSpaces: number, ls: number) =>
-    candidates.push({ offset, preBreak: F(preBreak + ls * 0.5), postBreak: F(postBreak - ls * 0.5), penalty, preSpaces, postSpaces });
+  const push = (offset: number, preBreak: number, postBreak: number, penalty: number, preSpaces: number, postSpaces: number, ls: number, type = DONT_BREAK) =>
+    candidates.push({ offset, preBreak: F(preBreak + ls * 0.5), postBreak: F(postBreak - ls * 0.5), penalty, preSpaces, postSpaces, type });
   push(0, 0, 0, 0, 0, 0, m.runs.length ? letterSpacingOf(m.runs[0]) : 0);
   // CharProcessor's state
   let rawSpaces = 0, effectiveSpaces = 0, sum = 0, effectiveWidth = 0, sumAtPrevWord = 0, nextWord = 0, prevWord = 0;
-  let spaceWidth = 0, maxCharWidth = 0, linePenalty = 0;
+  let spaceWidth = 0, maxCharWidth = 0, linePenalty = 0, hy = 0;
   const wb = new WordBreaker(text), tracker = new Tracker(text, forcePhrase);
   for (const run of m.runs) {
     const ls = letterSpacingOf(run), style = run.style;
     let hyphenPenalty = 0;
     if (style) {
       // computePenalties: "a heuristic that seems to perform well"
-      hyphenPenalty = F(0.5 * style.size * lineWidth.getAt(0) * (b.frequency === HYPHENATION_NORMAL ? 4 : 1));
+      hyphenPenalty = F(0.5 * style.size * style.scaleX * lineWidth.getAt(0) * (b.frequency === HYPHENATION_NORMAL ? 4 : 1));
       if (b.justified) hyphenPenalty = F(hyphenPenalty * 0.25);
       else linePenalty = Math.max(linePenalty, F(hyphenPenalty * LINE_PENALTY_MULTIPLIER));
     }
@@ -475,6 +577,10 @@ function* breakOptimal(m: Measured, len: number, lineWidth: LineWidth, b: Breake
       maxCharWidth = Math.max(maxCharWidth, w);
       if (!isLineEndSpace(c)) { effectiveSpaces = rawSpaces; effectiveWidth = sum; }
       if (i + 1 !== nextWord) continue;
+      const beginHy = hy;
+      while (hy < m.hyphenBreaks.length && m.hyphenBreaks[hy].offset < nextWord) hy++;
+      const endHy = b.frequency !== HYPHENATION_NONE && run.hyphenate ? hy : beginHy;
+      const desperate: number[] = [];
       if (F(effectiveWidth - sumAtPrevWord) > minLineWidth) {
         // populateDesperatePoints, with phrase_strict_fallback's plain line breaks scored lower
         const start = prevWord, end = nextWord, fb = new WordBreaker(text);
@@ -485,9 +591,20 @@ function* breakOptimal(m: Measured, len: number, lineWidth: LineWidth, b: Breake
           const wj = widths[j];
           if (wj === 0) continue;
           const atFallback = useFallback && j === fallback;
-          push(j, F(sumAtPrevWord + width), F(sumAtPrevWord + width), atFallback ? SCORE_FALLBACK : SCORE_DESPERATE, effectiveSpaces, effectiveSpaces, ls);
+          desperate.push(j, width, atFallback ? SCORE_FALLBACK : SCORE_DESPERATE);
           if (atFallback) { fallback = fb.next(); if (!(fallback >= start && fallback < end)) break; }
           width = F(width + wj);
+        }
+      }
+      // appendWithMerging: a desperate break before a hyphenation point at the same offset
+      for (let d = 0, k = beginHy; k < endHy || d < desperate.length;) {
+        if (d < desperate.length && (k === endHy || desperate[d] <= m.hyphenBreaks[k].offset)) {
+          const at = F(sumAtPrevWord + desperate[d + 1]);
+          push(desperate[d], at, at, desperate[d + 2], effectiveSpaces, effectiveSpaces, ls, BREAK_AND_DONT_INSERT_HYPHEN);
+          d += 3;
+        } else {
+          const h = m.hyphenBreaks[k++];
+          push(h.offset, F(sum - h.second), F(sumAtPrevWord + h.first), hyphenPenalty, effectiveSpaces, effectiveSpaces, ls, h.type);
         }
       }
       // no break between the zero-width characters of a replacement span
@@ -532,7 +649,7 @@ function* breakOptimal(m: Measured, len: number, lineWidth: LineWidth, b: Breake
   const out = emptyResult();
   for (let k = lines.length - 1; k >= 0; k--) {
     const c = candidates[lines[k]], p = candidates[prev[lines[k]]];
-    pushLine(out, m, p.offset, c.offset, F(c.postBreak - p.preBreak), b.useBounds, 0);
+    pushLine(out, m, p.offset, c.offset, F(c.postBreak - p.preBreak), b.useBounds, packHyphenEdit(editForNextLine(p.type), editForThisLine(c.type)));
   }
   return [out, tracker.retry];
 }
@@ -549,7 +666,7 @@ interface Breaker { strategy: number; frequency: number; justified: boolean; ind
 export const computeBreaks = driven(function* computeBreaks(b: Breaker, m: Measured, len: number, lineWidth: LineWidth, tabs: TabStops): Gen<BreakResult> {
   if (!len) return emptyResult();
   const greedy = b.strategy === 0 || m.text.slice(0, len).includes("\t");
-  const pass = (forcePhrase: boolean) => greedy ? breakGreedy(m, len, lineWidth, tabs, b.useBounds, forcePhrase) : breakOptimal(m, len, lineWidth, b, forcePhrase);
+  const pass = (forcePhrase: boolean) => greedy ? breakGreedy(m, len, lineWidth, tabs, b, forcePhrase) : breakOptimal(m, len, lineWidth, b, forcePhrase);
   const [result, retry] = yield* pass(false);
   if (!retry || result.breaks.length >= LBW_AUTO_HEURISTICS_LINE_COUNT) return result;
   const [phrase] = yield* pass(true);
@@ -592,7 +709,7 @@ const LEFT_EDGE = 0x2000, RIGHT_EDGE = 0x4000;
  *  edge loses half its letter spacing there (Layout::measureText's adjustAdvanceLetterSpacingEdge). */
 function measure(h: bigint, text: string, start: number, count: number): Float32Array {
   const p = paintAt(h), style = styleOf(p), out = new Float32Array(count);
-  advances(style, text, start, start + count, out, 0);
+  advances(style, text, start, start + count, out, 0, null, p.startHyphenEdit, p.endHyphenEdit);
   const half = Math.fround(style.letterSpacing * 0.5), edge = (i: number) => {
     const cp = text.codePointAt(start + i)!;
     if (out[i] === 0 || cp < 0x20 || cp >= 0x7f && cp <= 0x9f) return false;
