@@ -1,5 +1,6 @@
 import "./natives";
-import { processBroker, connectProcess, processPresentation } from "./shell/processes";
+import { processBroker } from "./shell/processes";
+import { connectProcess, processPresentation } from "./shell/process-endpoint";
 import { bootApk, startZygote, setScreenCanvas, SCREEN_W, SCREEN_H, pressBack } from "./shell/device";
 import { loadSkia } from "./android/skia";
 import { setProcessIdentity } from "./android/os";

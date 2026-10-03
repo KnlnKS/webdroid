@@ -12,7 +12,7 @@ import { native } from "../native/debug";
 import { processExited } from "../process-exit";
 import { dumpWindows } from "./uiautomator";
 import { dispatchPointer, testFrame } from "./device";
-import { processPresentation } from "./processes";
+import { processPresentation } from "./process-endpoint";
 
 export type RealmWd = ReturnType<typeof realmWd>;
 export function realmWd() {

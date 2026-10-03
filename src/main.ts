@@ -35,7 +35,8 @@ import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
-import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
+import { processBroker } from "./shell/processes";
+import { connectProcess, registerForegroundProcess, processPresentation } from "./shell/process-endpoint";
 import { guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
@@ -50,7 +51,7 @@ configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(par
 configureJvmCoverage(params.get("fuzzCoverage") === "1");
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
-const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack(); };
+const back = () => { if (!processBroker().activities.back(PROCESS_PID)) return pressBack(); };
 const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });
 const { canvas, kbd } = shell;
 setScreenCanvas(canvas);
@@ -152,13 +153,13 @@ async function boot(file: string, local?: File) {
 
 const local = realmWd();
 /** the realms of the processes the broker shows in frames above this one, bottom to top */
-const framed = (): RealmWd[] => processBroker().shownWindows().flatMap((w) => {
+const framed = (): RealmWd[] => processBroker().activities.shownWindows().flatMap((w) => {
   const child = w === window ? undefined : (w as unknown as { wd?: RealmWd }).wd;
   return child ? [child] : [];
 });
 // the process on top takes the tap, as it takes the browser's own pointer events
 const tap = (x: number, y: number): Promise<void> => {
-  const top = processBroker().shownWindows().at(-1);
+  const top = processBroker().activities.shownWindows().at(-1);
   return (top && top !== window ? (top as unknown as { wd: RealmWd }).wd : local).tap(x, y);
 };
 
@@ -175,7 +176,7 @@ const wd = {
   code: () => ({ ...codeStats(), offered: offeredCount(), deferred: pendingCompilations() }),
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
-  background: (ms = 1000) => processBroker().background(ms),
+  background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),

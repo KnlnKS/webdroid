@@ -1,0 +1,158 @@
+// ActivityTaskManager's part the broker plays across processes: the activities each launch stacks
+// on its caller's, which process is in front, which are shown beneath a translucent one, and their
+// visibility changes, made one at a time. The shown processes' frames are layered to match.
+import type { ParcelData } from "../android/binder";
+import { guestSleep } from "../guest-clock";
+import type { ActivityRequest, Entry } from "./processes";
+
+/** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
+const PAUSE_TIMEOUT_MS = 500, STOP_TIMEOUT_MS = 11_000;
+/** an activity a process launched in another: `previous` was in front, `request` is the caller's */
+type Activity = { id: number; pid: number; caller: number; previous: number; request: number };
+/** the broker's processes: `entry` throws for a dead one; `activity` sends one a request */
+export type StackPort = {
+  entry(pid: number): Entry;
+  alive(pid: number): boolean;
+  entries(): Iterable<Entry>;
+  connect(pkg: string, process: string): Entry;
+  activity(entry: Entry, request: ActivityRequest): Promise<void>;
+};
+
+export class ActivityStack {
+  private activities: Activity[] = [];
+  private queue: Promise<void> = Promise.resolve();
+  private nextId = 1;
+  private top = 0;
+  private shownPids = new Set<number>();
+  /** the shown processes as show() last layered their frames, bottom to top */
+  private layers: number[] = [];
+  constructor(private port: StackPort) {}
+
+  get foreground(): number { return this.top; }
+  shown(pid: number): boolean { return this.shownPids.has(pid); }
+  /** the page's own process, in front from its boot */
+  setForeground(pid: number): void { this.top = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }
+  /** the windows of the processes on screen, bottom to top: their frames, or the page for its own process */
+  shownWindows(): Window[] {
+    return this.layers.flatMap((pid) => this.port.alive(pid) ? [this.port.entry(pid).frame?.contentWindow ?? window.parent] : []);
+  }
+  presentation(pid: number, translucent: boolean): void {
+    const entry = this.port.entry(pid);
+    if (entry.translucent === translucent) return;
+    entry.translucent = translucent;
+    if (pid === this.top) void this.enqueue(() => pid === this.top ? this.show(pid) : Promise.resolve());
+  }
+  launch(caller: number, pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null = null): Promise<void> {
+    const source = this.port.entry(caller);
+    const target = this.port.connect(pkg, process), activity = { id: this.nextId++, pid: target.pid, caller, previous: 0, request };
+    return this.enqueue(async () => {
+      const previous = this.port.entry(this.top || caller); activity.previous = previous.pid;
+      await this.visibility(previous, "pause", PAUSE_TIMEOUT_MS);
+      this.activities.push(activity);
+      try {
+        await this.port.activity(target, { kind: "launch", id: activity.id, component, intent, caller: callingClass ? { pkg: source.pkg, cls: callingClass } : null });
+        await this.show(target.pid);
+      } catch (error) {
+        this.activities.splice(this.activities.indexOf(activity), 1);
+        await this.restore(activity, 0, null);
+        throw error;
+      }
+    });
+  }
+  finish(pid: number, id: number, code: number, data: ParcelData | null): Promise<void> {
+    return this.enqueue(async () => {
+      const index = this.activities.findIndex((a) => a.pid === pid && a.id === id);
+      if (index < 0) return;
+      const [activity] = this.activities.splice(index, 1);
+      if (index === this.activities.length) await this.restore(activity, code, data);
+      else if (this.port.alive(activity.caller)) await this.result(activity, code, data);
+    });
+  }
+  /** a dead process's activities finish */
+  processDied(pid: number): void {
+    for (const activity of this.activities.filter((a) => a.pid === pid)) void this.finish(pid, activity.id, 0, null);
+  }
+  back(caller: number): boolean {
+    if (!this.top || this.top === caller) return false;
+    void this.enqueue(() => this.port.activity(this.port.entry(this.top), { kind: "back" }));
+    return true;
+  }
+  background(ms: number): Promise<void> {
+    const pid = this.top;
+    if (!pid) return Promise.resolve();
+    return this.enqueue(async () => {
+      const entry = this.port.entry(pid);
+      await this.visibility(entry, "pause", PAUSE_TIMEOUT_MS);
+      for (const shown of this.shownPids) if (this.port.alive(shown)) await this.visibility(this.port.entry(shown), "stop", STOP_TIMEOUT_MS);
+      this.shownPids.clear();
+      await guestSleep(ms);
+      await this.port.activity(entry, { kind: "visibility", phase: "resume" });
+      await this.show(pid);
+    });
+  }
+  /** a process the home screen started, in front once the one there has paused */
+  bringToFront(pid: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      void this.enqueue(async () => {
+        if (this.port.alive(this.top) && this.top !== pid) await this.visibility(this.port.entry(this.top), "pause", PAUSE_TIMEOUT_MS);
+        await this.show(pid).then(resolve, reject);
+      });
+    });
+  }
+  /**
+   * The previous activity gets PAUSE_TIMEOUT / STOP_TIMEOUT to answer, as on AOSP, and the
+   * launch goes ahead without it: a process whose main thread is blocked in a binder call —
+   * one the new activity exists to answer, as when a service asks the user for a permission —
+   * would otherwise hold the launch forever. Its late answer still lands, and a dead process
+   * answers nothing.
+   */
+  private visibility(entry: Entry, phase: "pause" | "stop" | "visible", timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      this.port.activity(entry, { kind: "visibility", phase })
+        .catch((error) => { if (!entry.dead) console.error("[activity process]", error); })
+        .finally(() => { clearTimeout(timer); resolve(); });
+    });
+  }
+  private enqueue(run: () => Promise<void>): Promise<void> {
+    this.queue = this.queue.then(run).catch((error) => console.error("[activity process]", error));
+    return this.queue;
+  }
+  private async restore(activity: Activity, code: number, data: ParcelData | null): Promise<void> {
+    const target = this.port.alive(activity.previous) ? activity.previous : activity.caller;
+    if (this.port.alive(target)) {
+      await this.port.activity(this.port.entry(target), { kind: "visibility", phase: "resume" });
+      await this.show(target);
+    }
+    if (this.port.alive(activity.caller)) await this.result(activity, code, data);
+  }
+  private result(activity: Activity, code: number, data: ParcelData | null): Promise<void> {
+    return this.port.activity(this.port.entry(activity.caller), { kind: "result", request: activity.request, code, data });
+  }
+  private async show(pid: number): Promise<void> {
+    this.top = pid;
+    const visible = new Set<number>();
+    let current = pid, index = this.activities.length;
+    while (this.port.alive(current) && !visible.has(current)) {
+      visible.add(current);
+      if (!this.port.entry(current).translucent) break;
+      do { index--; } while (index >= 0 && this.activities[index].pid !== current);
+      if (index < 0) break;
+      current = this.activities[index].previous;
+    }
+    for (const covered of this.shownPids) {
+      if (!visible.has(covered) && this.port.alive(covered)) await this.visibility(this.port.entry(covered), "stop", STOP_TIMEOUT_MS);
+    }
+    for (const shown of visible) {
+      if (!this.shownPids.has(shown)) await this.visibility(this.port.entry(shown), "visible", STOP_TIMEOUT_MS);
+    }
+    this.shownPids = visible;
+    const layers = this.layers = [...visible].reverse();
+    for (const entry of this.port.entries()) {
+      if (!entry.frame) continue;
+      entry.frame.hidden = !visible.has(entry.pid);
+      entry.frame.style.zIndex = String(layers.indexOf(entry.pid) + 1);
+      entry.frame.style.pointerEvents = entry.pid === pid ? "auto" : "none";
+    }
+  }
+}
