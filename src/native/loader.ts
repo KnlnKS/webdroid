@@ -16,6 +16,7 @@ import { bitmapInit } from "./bitmap";
 import { cpuFor, cpuOf, cpus, setA64, isA64, type Cpu } from "./cpu";
 import { procMemory } from "../shell/procfs";
 import { bootBionic } from "./bionic";
+import { ABIS_32, ABIS_64 } from "../shell/properties";
 
 const hex = (n: number) => n.toString(16).padStart(8, "0");
 /** /proc/self/maps: each image, then each thread's stack, the main thread's named as the kernel names it */
@@ -31,7 +32,7 @@ function nativeInit(abi: string): void {
     return;
   }
   setA64(wide);
-  rt.nativeAbis = NATIVE_ABIS.filter(a => (a === "arm64-v8a") === wide);
+  rt.nativeAbis = wide ? ABIS_64 : ABIS_32;
   inited = true;
   kernelInit();
   if (!wide) libcInit();
@@ -47,14 +48,13 @@ function nativeInit(abi: string): void {
   resolveByExport(resolveGlobalOrNull);
 }
 
-/** The ABIs this tier can execute, most-preferred first. The one place that knows: the ELF
- *  loader, the dynamic linker's own lib search and System.loadLibrary's choice all read it, and
- *  adding a backend is one edit here. */
-const NATIVE_ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi"] as const;
+/** The ABIs this tier can execute, most-preferred first: the device's (ro.product.cpu.abilist).
+ *  The ELF loader, the dynamic linker's own lib search and System.loadLibrary's choice all read it. */
+const NATIVE_ABIS = [...ABIS_64, ...ABIS_32];
 rt.nativeAbis = NATIVE_ABIS;
 setNativeMemorySizer(() => {
   const abi = appNativeAbi();
-  if (!abi || !(NATIVE_ABIS as readonly string[]).includes(abi)) return false;
+  if (!abi || !NATIVE_ABIS.includes(abi)) return false;
   nativeInit(abi);
   return true;
 });
@@ -75,7 +75,7 @@ export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): 
 }
 
 export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt, thread: JThread = curThread): Promise<void> {
-  if (!(NATIVE_ABIS as readonly string[]).includes(abi)) {
+  if (!NATIVE_ABIS.includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
   // the ABI decides the pointer width the JNI tables are laid out at, so it has to be known

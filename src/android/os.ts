@@ -1,7 +1,7 @@
 // android.os.* + android.util.* natives.
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
-import { appUserName, procIdentity, processTid, sysconf } from "../shell/procfs";
+import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { awaited, rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
@@ -406,7 +406,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "getpwuid(I)Landroid/system/StructPasswd;": (uid: number) =>
       newObj("android/system/StructPasswd", "(Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V", appUserName(uid), uid, uid, "/data", "/system/bin/sh"),
     "uname()Landroid/system/StructUtsname;": () => setDeclared(rt.make("android/system/StructUtsname"), "android/system/StructUtsname",
-      { sysname: "Linux", nodename: "localhost", release: "5.10.0-webdroid", version: "#1 SMP PREEMPT", machine: is64BitProcess() ? "aarch64" : "armv7l" }),
+      (({ domainname: _, ...fields }) => fields)(uname(is64BitProcess()))),
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "strerror(I)Ljava/lang/String;": strerror,
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {

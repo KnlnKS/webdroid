@@ -5,6 +5,7 @@ import { vcall, newObj } from "../src/jvm/natives/jlang";
 import { canvasOver, canvasOf } from "../src/android/canvas";
 import type { WebViewChromium } from "../src/android/webkit";
 import { scall, loadLibcore, loadFrameworkJar, preloadTextPaint } from "./java";
+import { UNAME } from "../src/shell/device-properties";
 
 // framework drawables construct Paints, which take the device's languages
 beforeAll(preloadTextPaint);
@@ -12,13 +13,13 @@ beforeAll(preloadTextPaint);
 describe("android-surface-state", () => {
   rt.linkNatives();
 
-  test("uname reports the emulated Linux ABI", async () => {
+  test("uname reports the reference kernel", async () => {
     await loadLibcore();
     const uts = await scall("android/system/Os", "uname", "()Landroid/system/StructUtsname;");
     const field = (name: string) => getDeclared<string>(uts, "android/system/StructUtsname", name);
     expect(field("sysname")).toBe("Linux");
-    expect(field("release")).toContain("webdroid");
-    expect(["aarch64", "armv7l"]).toContain(field("machine"));
+    expect(field("release")).toBe(UNAME.release);
+    expect(field("machine")).toBe("aarch64");
   });
 });
 

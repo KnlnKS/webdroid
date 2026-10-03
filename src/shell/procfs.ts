@@ -1,6 +1,9 @@
 import { device } from "./config";
+import { DEVICE_PROPERTIES, UNAME } from "./device-properties";
 
 export const procIdentity = { pid: 1000, uid: 10001, name: "" };
+/** uname(2): the reference kernel's, whose machine is what an arm64 kernel reports a 64-bit or a compat task */
+export const uname = (wide: boolean) => ({ ...UNAME, machine: wide ? "aarch64" : "armv8l" });
 /** bionic's passwd name for a uid: u<user>_a<app> for application ids, root and system by name, else the number. */
 export function appUserName(uid: number): string {
   const appId = uid % 100000;
@@ -71,7 +74,7 @@ export function procText(path: string): string | null {
     for (let i = 0; i < device.cpu.cores; i++) {
       text += `processor\t: ${i}\nmodel name\t: ARMv7 Processor rev 0 (v7l)\nBogoMIPS\t: 38.40\nFeatures\t: ${device.cpu.features}\nCPU implementer\t: 0x41\nCPU architecture: 7\nCPU variant\t: 0x0\nCPU part\t: 0xc07\nCPU revision\t: 0\n\n`;
     }
-    return text + `Hardware\t: ${device.cpu.hardware}\nRevision\t: 0000\nSerial\t\t: 0000000000000000\n`;
+    return text + `Hardware\t: ${DEVICE_PROPERTIES["ro.hardware"]}\nRevision\t: 0000\nSerial\t\t: 0000000000000000\n`;
   }
   if (path === "/sys/devices/system/cpu/present" || path === "/sys/devices/system/cpu/possible" || path === "/sys/devices/system/cpu/online") return cpuList();
   if (path === "/proc/meminfo") return `MemTotal:        ${device.cpu.memKb} kB\nMemFree:         ${device.cpu.memKb >> 1} kB\nBuffers:               0 kB\nCached:                0 kB\n`;

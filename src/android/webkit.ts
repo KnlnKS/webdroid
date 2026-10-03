@@ -12,6 +12,7 @@ import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
 import { device } from "../shell/config";
+import { propertyValue } from "../shell/properties";
 import { onMain } from "./mainloop";
 import { mkUri } from "./net";
 import { appHost } from "./apphost";
@@ -28,7 +29,7 @@ const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
 // ── WebViewFactory: the provider package is this one, versioned as the Chromium the UA names
 const WEBVIEW_PACKAGE = "com.android.webview", WEBVIEW_VERSION = "120.0";
-const UA = `Mozilla/5.0 (Linux; Android 13; webdroid) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${WEBVIEW_VERSION} Mobile Safari/537.36`;
+const UA = `Mozilla/5.0 (Linux; Android ${propertyValue("ro.build.version.release")}; ${propertyValue("ro.product.model")}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${WEBVIEW_VERSION} Mobile Safari/537.36`;
 const FACTORY = "webdroid/WebViewFactoryProvider";
 /** the provider package's PackageInfo */
 const webViewPackage = driven(function* webViewPackage$(): Gen<JObj> {

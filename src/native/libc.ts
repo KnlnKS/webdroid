@@ -18,7 +18,7 @@ import { localeInit } from "./locale";
 import { PROC_SYSCALLS, procInit, abortMessageOr } from "./proc";
 import { NET_SYSCALLS, netInit } from "./net";
 import { device } from "../shell/config";
-import { procIdentity, sysconf } from "../shell/procfs";
+import { procIdentity, sysconf, uname } from "../shell/procfs";
 import { guestNow, wallMillis } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
@@ -229,7 +229,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   setpriority: () => 0, getpriority: () => 0,
   uname: (_c, a) => {
     const p = a.p();
-    const f = ["Linux", "localhost", "3.10.0", "#1 SMP PREEMPT", PTR === 8 ? "aarch64" : "armv7l", "localdomain"];
+    const u = uname(PTR === 8), f = [u.sysname, u.nodename, u.release, u.version, u.machine, u.domainname];
     for (let i = 0; i < f.length; i++) mem.putCstr(p + i * UTSNAME_FIELD, f[i], UTSNAME_FIELD);
     return 0;
   },

@@ -1,8 +1,9 @@
 /**
  * The one device profile. The screen is resolved at module init: `?screen=` / `WEBDROID_SCREEN`
- * pin one for a run and the shell's settings panel persists one. This file imports nothing and
- * treats every host global as optional, because bun scripts import it too.
+ * pin one for a run and the shell's settings panel persists one. This file imports only recorded
+ * data and treats every host global as optional, because bun scripts import it too.
  */
+import { DEVICE_PROPERTIES } from "./device-properties";
 
 /** AOSP DisplayMetrics.DENSITY_DEFAULT: the dpi at which one dp is one px. */
 const DENSITY_DEFAULT = 160;
@@ -83,8 +84,8 @@ export const device = {
   /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
   scrollUnitDp: 64,
   battery: { level: 80, status: 2 },
-  sdk: 35,
-  release: "15",
+  sdk: Number(DEVICE_PROPERTIES["ro.build.version.sdk"]),
+  release: DEVICE_PROPERTIES["ro.build.version.release"],
   lang: "en",
   region: "US",
   /** persist.sys.locale: the BCP 47 tag of the device's one language */
@@ -100,8 +101,8 @@ export const device = {
     "android.hardware.faketouch", "android.hardware.screen.portrait", "android.hardware.screen.landscape", "android.hardware.wifi",
     "android.hardware.location", "android.hardware.location.gps", "android.hardware.location.network",
     "android.software.webview", "android.software.input_methods", "android.software.home_screen", "android.software.app_widgets"],
-  /** CPU and memory descriptors shared by procfs and uname. */
-  cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 neon tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
+  /** CPU and memory descriptors shared by procfs and sysconf. */
+  cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 neon tls", memKb: 2 * 1024 * 1024 },
   get statusBar(): number { return Math.round(this.statusBarDp * this.density); },
   get navBar(): number { return Math.round(this.navBarDp * this.density); },
   get touchSlop(): number { return Math.round(this.touchSlopDp * this.density); },

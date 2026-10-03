@@ -1,24 +1,38 @@
-// System properties, one store for Java's SystemProperties and native libc. A property is ABSENT
-// unless the device profile (config.ts) answers it, so other reads get the caller's own default:
-// what a device that has not set one reports, rather than a made-up answer a library will branch on.
+// System properties, one store for Java's SystemProperties and native libc: the reference build's
+// (device-properties.ts), what follows from the native tier, and the live device profile's
+// (config.ts). Any other property is ABSENT, so its reader gets its own default: what a device that
+// has not set one reports, rather than a made-up answer a library will branch on.
 import { device } from "./config";
+import { DEVICE_PROPERTIES } from "./device-properties";
 import { utf8 } from "../jvm/abi";
 
-const properties: Record<string, () => string> = {
+/** The ABIs the device runs, most-preferred first, which are those the native tier executes
+ *  (src/native/loader.ts): arm64 and 32-bit arm, as on a device whose ro.zygote is zygote64_32. */
+export const ABIS_64: readonly string[] = ["arm64-v8a"], ABIS_32: readonly string[] = ["armeabi-v7a", "armeabi"];
+const abiLists = (prefix: string) => ({
+  [`${prefix}abilist`]: [...ABIS_64, ...ABIS_32].join(","), [`${prefix}abilist32`]: ABIS_32.join(","), [`${prefix}abilist64`]: ABIS_64.join(","),
+});
+const fixed: Record<string, string> = {
+  // ART's 32-bit target, unless the build names one, configured as the build configures arm64's
+  "dalvik.vm.isa.arm.variant": DEVICE_PROPERTIES["dalvik.vm.isa.arm64.variant"],
+  "dalvik.vm.isa.arm.features": DEVICE_PROPERTIES["dalvik.vm.isa.arm64.features"],
+  ...DEVICE_PROPERTIES,
+  "ro.zygote": "zygote64_32", "ro.product.cpu.abi": ABIS_64[0],
+  ...abiLists("ro.product.cpu."), ...abiLists("ro.system.product.cpu."), ...abiLists("ro.vendor.product.cpu."),
+  // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
+  // mode) rather than over a FileBridge socket, which needs a server thread there is none of
+  "fw.revocable_fd": "true",
+  // a product without a camera disables cameraserver, so CameraManager lists no camera
+  "config.disable_cameraservice": "true",
+};
+const live: Record<string, () => string> = {
   "persist.sys.timezone": () => device.timezone,
   // DisplayMetrics.DENSITY_DEVICE
   "ro.sf.lcd_density": () => String(device.densityDpi),
-  // the reference AVD's heap limits, which ActivityManager reports as the memory classes
-  "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
-  // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
-  // mode) rather than over a FileBridge socket, which needs a server thread there is none of
-  "fw.revocable_fd": () => "true",
-  // a product without a camera disables cameraserver, so CameraManager lists no camera
-  "config.disable_cameraservice": () => "true",
 };
 
-export const hasProperty = (key: string): boolean => key in properties;
-export const propertyValue = (key: string): string | null => properties[key]?.() ?? null;
+export const hasProperty = (key: string): boolean => key in live || key in fixed;
+export const propertyValue = (key: string): string | null => live[key]?.() ?? fixed[key] ?? null;
 /** bionic's bound on a value, its terminator included */
 export const PROP_VALUE_MAX = 92;
 
@@ -41,12 +55,14 @@ export const PROPERTY_AREA_PATH = "/dev/__properties__";
 // records; offsets are from the end of the header, objects 4-byte aligned
 const HEADER = 128, PROP_AREA_MAGIC = 0x504f5250, PROP_AREA_VERSION = 0xfc6ed0ab;
 const BT_PROP = 4, BT_LEFT = 8, BT_RIGHT = 12, BT_CHILDREN = 16, BT_NAME = 20, INFO_NAME = 4 + PROP_VALUE_MAX;
+const LONG_FLAG = 1 << 16, LONG_ERROR_SIZE = 56, LONG_LEGACY_ERROR = utf8.enc.encode("Must use __system_property_read_callback() to read");
 
 /** every property, as bionic's ContextsPreSplit reads /dev/__properties__ */
 export function propertyArea(): Uint8Array {
-  const entries = Object.keys(properties).map((key) => [utf8.enc.encode(key), utf8.enc.encode(propertyValue(key)!)] as const);
-  // at most a node per segment and a record per key, each padded by under 4 bytes
-  const bound = entries.reduce((n, [k]) => n + (k.filter((c) => c === 46).length + 1) * (BT_NAME + 4) + 2 * k.length + INFO_NAME + 4, BT_NAME);
+  const entries = Object.keys({ ...fixed, ...live }).map((key) => [utf8.enc.encode(key), utf8.enc.encode(propertyValue(key)!)] as const);
+  // at most a node per segment, a record per key and a long value, each padded by under 4 bytes
+  const bound = entries.reduce((n, [k, v]) => n + (k.filter((c) => c === 46).length + 1) * (BT_NAME + 4) + 2 * k.length + INFO_NAME + 4 +
+    (v.length < PROP_VALUE_MAX ? 0 : v.length + 4), BT_NAME);
   const bytes = new Uint8Array(HEADER + bound), view = new DataView(bytes.buffer);
   let used = BT_NAME;
   const alloc = (n: number) => { const off = used; used += (n + 3) & ~3; return off; };
@@ -73,7 +89,6 @@ export function propertyArea(): Uint8Array {
     return bt;
   };
   for (const [key, value] of entries) {
-    if (value.length >= PROP_VALUE_MAX) throw new Error(`property ${utf8.dec.decode(key)}: value too long`);
     let bt = 0, start = 0;
     for (let dot = key.indexOf(46); ; dot = key.indexOf(46, start)) {
       bt = child(bt, key.subarray(start, dot < 0 ? key.length : dot));
@@ -81,9 +96,19 @@ export function propertyArea(): Uint8Array {
       start = dot + 1;
     }
     const info = alloc(INFO_NAME + key.length + 1);
-    set32(info, value.length << 24);                                   // serial: the value's length, generation 0
-    bytes.set(value, HEADER + info + 4);
     bytes.set(key, HEADER + info + INFO_NAME);
+    if (value.length < PROP_VALUE_MAX) {
+      set32(info, value.length << 24);                                 // serial: the value's length, generation 0
+      bytes.set(value, HEADER + info + 4);
+    } else {
+      // a long (ro.) value follows its record, which holds the error a legacy read gets and the
+      // value's offset from the record
+      const at = alloc(value.length + 1);
+      bytes.set(value, HEADER + at);
+      set32(info, LONG_LEGACY_ERROR.length << 24 | LONG_FLAG);
+      bytes.set(LONG_LEGACY_ERROR, HEADER + info + 4);
+      set32(info + 4 + LONG_ERROR_SIZE, at - info);
+    }
     set32(bt + BT_PROP, info);
   }
   view.setUint32(0, used, true);
