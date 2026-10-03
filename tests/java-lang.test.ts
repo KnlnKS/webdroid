@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, type JClassLoader } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { scall, loadLibcore, mountApexData } from "./java";
@@ -541,5 +541,41 @@ describe("system-properties", () => {
     let error: unknown;
     try { await vcallAsync(rt.link("java/lang/System").ctor, "loadLibrary", "(Ljava/lang/String;)V", "absent"); } catch (e) { error = e; }
     expect((error as { msg?: string })?.msg).toBe('dlopen failed: library "libabsent.so" not found');
+  });
+  test("Runtime.exec tokenizes the program and reports that processes cannot start", async () => {
+    const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
+    await expect(vcallAsync(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
+      .rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor, msg: expect.stringContaining('"getprop"') });
+  });
+});
+
+describe("dex-class-loaders", () => {
+  test("path loaders are BaseDexClassLoaders that extract their native libraries", async () => {
+    const { vfs } = await import("../src/shell/vfs");
+    for (const name of ["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "webdroid/PackageClassLoader"]) {
+      expect(rt.iof(rt.make(name), "dalvik/system/BaseDexClassLoader")).toBe(1);
+    }
+    const loader = rt.make("dalvik/system/PathClassLoader") as JClassLoader;
+    loader.runtime = rt.fork();
+    loader.runtime.classpath["lib/arm64-v8a/libfixture.so"] = new Uint8Array([1, 2, 3]);
+    loader.runtime.classpathLocations.set("lib/arm64-v8a/libfixture.so", "/data/fixture.apk");
+    const path = await vcall(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", "fixture");
+    expect(vfs.read(path)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await vcall(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", "absent")).toBeNull();
+    vfs.delete(path);
+  });
+
+  test("in-memory DEX loaders read the buffer window and preserve defining-loader identity", async () => {
+    const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
+    const padded = new Int8Array(bytes.length + 16);
+    padded.set(bytes, 8);
+    const buffer = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);
+    const load = () => newObj("dalvik/system/InMemoryDexClassLoader", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V", buffer, null);
+    const first = await load(), second = await load();
+    const cls = await vcall(first, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe");
+    expect(await vcall(first, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).toBe(cls);
+    expect(await vcall(second, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).not.toBe(cls);
+    expect(await vcall(cls, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
+    expect([await vcall(buffer, "position", "()I"), await vcall(buffer, "limit", "()I")]).toEqual([8, 8 + bytes.length]);
   });
 });

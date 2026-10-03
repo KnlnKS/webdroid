@@ -166,4 +166,11 @@ describe("conscrypt-natives", () => {
     expect(s.length).toBe(64);
     expect(await secret(b, a)).toBe(s);
   });
+
+  test("PBKDF2 derives RFC 6070's key through PBEKeySpec", async () => {
+    const spec = await newObj("javax/crypto/spec/PBEKeySpec", "([C[BII)V", Uint16Array.from("password", (c) => c.charCodeAt(0)), bytes("73616c74"), 1, 160);
+    const factory = await getInstance("javax/crypto/SecretKeyFactory", "PBKDF2WithHmacSHA1");
+    const key = await vcall(factory, "generateSecret", "(Ljava/security/spec/KeySpec;)Ljavax/crypto/SecretKey;", spec);
+    expect(hex(await vcall(key, "getEncoded", "()[B"))).toBe("0c60c80f961f0e71f3a9b524af6012062fe037a6");
+  });
 });

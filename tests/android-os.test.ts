@@ -6,7 +6,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
-import { setProcessIdentity, setProcessName } from "../src/android/os";
+import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { binderTransport, importBinder } from "../src/android/binder";
 
 describe("bundle-parcel", () => {
@@ -88,10 +88,14 @@ describe("looper", () => {
     expect(performance.now() - t0).toBeGreaterThanOrEqual(30);
   });
 
-  test("a HandlerThread loops on its own thread until it quits", async () => {
+  test("a HandlerThread loops on its own thread, with a tid of its own, until it quits", async () => {
     await loadLibcore(); await loadFrameworkJar(); rt.linkNatives();
     const thread = await newObj("android/os/HandlerThread", "(Ljava/lang/String;)V", "worker");
+    expect(await vcall(thread, "getThreadId", "()I")).toBe(-1);
     await vcall(thread, "start", "()V");
+    const tid = await vcall(thread, "getThreadId", "()I");
+    expect(tid).not.toBe(await scall("android/os/Process", "myTid", "()I"));
+    expect(await scall("android/os/Process", "myTid", "()I")).toBe(PROCESS_PID);
     const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", await vcall(thread, "getLooper", "()Landroid/os/Looper;"));
     const ran = new Promise<unknown>((resolve) => postTo(handler, () => resolve(curThread)));
     expect(await ran).toBe(thread);
