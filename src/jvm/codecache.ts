@@ -36,7 +36,7 @@ let later: string[] | null = null;
 let compact = false;
 /** bodies compiled in this launch and not yet written */
 const pending = new Map<string, { source: string; phase: Phase }>();
-/** methods that ran without a hot body: theirs is emitted in idle time, so the next launch runs it hot */
+/** reached methods whose bodies are emitted in idle time, installed within budget and persisted */
 const deferred = new Map<string, () => string>();
 /** the phase of each method's first call, by entry key: a startup method promoted later is still startup */
 const firstUse = new Map<string, Phase>();
@@ -85,7 +85,7 @@ function record(key: string, source: string, form: "e" | "r"): void {
   idle();
 }
 
-/** a body a method has not compiled yet but the next launch will want; `make` emits it */
+/** a reached body to prepare in idle time; `make` emits it and may install it for this launch */
 export function recordLater(key: string, make: () => string): void {
   if (claim(key) || loaded[key] || pending.has(key)) return;
   deferred.set(key, make);

@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Runtime, JObj, stubs, isPlaceholderMethod } from "../src/jvm/runtime";
 import { DexFile } from "../src/jvm/dex";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 import { setLazyMethods } from "../src/jvm/compiler";
 import { perf } from "../src/perf";
+import * as codecache from "../src/jvm/codecache";
 import { configureJvm, jvmProfiler } from "../src/jvm/profile";
 
 const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
@@ -262,4 +263,41 @@ test("persisted bodies install hot from the first call and behave as compiled on
     expect(await call(9007199254740993n)).toBe(expected);
     expect(perf.coldCalls).toBe(cold);
   } finally { useCode({}); }
+});
+
+test("idle emission installs reached bodies without disturbing suspended frames or the code budget", async () => {
+  const deferred = new Map<string, () => string>();
+  const record = spyOn(codecache, "recordLater").mockImplementation((key, make) => { deferred.set(key, make); });
+  const flush = () => { for (const [key, make] of deferred) { deferred.delete(key); make(); } };
+  try {
+    const f = await fixture("cold"), call = f.fn("suspended", "(II)I");
+    f.park();
+    const first = call(1, 7), pending = await f.next();
+    expect(deferred.size).toBeGreaterThanOrEqual(2);
+    flush();
+    pending.resolve(7);
+    expect(await first).toBe(8);
+    const read = spyOn(f.R.link("JvmTierProbe").dex!, "code");
+    try {
+      const cold = perf.coldCalls, second = call(1, 8);
+      (await f.next()).resolve(8);
+      expect(await second).toBe(9);
+      expect(perf.coldCalls).toBe(cold);
+      expect(read).not.toHaveBeenCalled();
+      expect(f.thread()).toBe(f.main);
+    } finally { read.mockRestore(); }
+    const reserved = await fixture("cold"), wide = reserved.fn("wide", "(J)J");
+    reserved.R.hotSourceBytes = 24 * 1024 * 1024;
+    wide(1n);
+    flush();
+    const cold = perf.coldCalls;
+    wide(1n);
+    expect(perf.coldCalls).toBe(cold + 1);
+    expect(reserved.R.hotSourceBytes).toBe(24 * 1024 * 1024);
+    for (let i = 0; i < 31; i++) wide(1n);
+    const promoted = perf.coldCalls;
+    wide(1n);
+    expect(perf.coldCalls).toBe(promoted);
+    expect(reserved.R.hotSourceBytes).toBeGreaterThan(24 * 1024 * 1024);
+  } finally { record.mockRestore(); }
 });

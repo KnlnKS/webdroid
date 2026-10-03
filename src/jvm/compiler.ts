@@ -153,6 +153,8 @@ function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
 // time and keeps running cold, so a burst of first calls (an interaction's recomposition) does not
 // stall the frame that answers it. Without idle callbacks (Bun, tests) every promotion is immediate.
 const PROMOTE_BUDGET_MS = 4, PROMOTE_WINDOW_MS = 50;
+const HOT_SOURCE_LIMIT = 32 * 1024 * 1024;
+const IDLE_SOURCE_LIMIT = HOT_SOURCE_LIMIT - 8 * 1024 * 1024;
 let windowStart = -Infinity, windowSpent = 0;
 const waiting = new Set<() => unknown>();
 function promoteWithinBudget(promote: () => JvmFunction | undefined): JvmFunction | undefined {
@@ -209,11 +211,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const bind = (factory: Factory, $R?: unknown) => factory(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
   let resumable: ResumeBody | undefined;
   /** The body that continues a suspended frame: only built once a frame actually suspends. */
-  const resume = (prepared = prepare): ResumeBody => {
+  const resume = (prepared = prepare, emitted?: string): ResumeBody => {
     if (resumable) return resumable;
     const persisted = persist ? persistedBody(resumeKey) : undefined;
     if (persisted) return resumable = bind(persisted) as ResumeBody;
-    const body = `${resumableSource(R, dex, info, rec.m, prepared())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`;
+    const body = emitted ?? `${resumableSource(R, dex, info, rec.m, prepared())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`;
     if (persist) recordBody(resumeKey, body, "r");
     return resumable = new Function("C", "D", "R", "S", "P", "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
   };
@@ -247,15 +249,10 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
     .compileCold(prepared, coldInstructions(code, prepared));
-  if (persist) {
-    recordLater(entryKey, () => source(prepare(), false));
-    // a method whose cold frames suspend will suspend hot next launch too: persist that body as well
-    cold.suspended = () => recordLater(resumeKey, () => resumableSource(R, dex, info, rec.m, prepare()));
-  }
   let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
-  const promote = (prepared = prepare): JvmFunction | undefined => {
+  const promote = (prepared = prepare, emitted?: string): JvmFunction | undefined => {
     if (hot) return hot;
     // a body the compile worker emitted since this method first ran
     const offered = persist ? persistedBody(entryKey) : undefined;
@@ -265,9 +262,9 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     }
     // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
     // every cold method costs substantially more heap than the saved promotion work.
-    const start = performance.now(), src = source(prepared(), false);
+    const start = performance.now(), src = emitted ?? source(prepared(), false);
     if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
-    if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
+    if (owner.hotSourceBytes + src.length > HOT_SOURCE_LIMIT) {
       calls = -Infinity;
       cold!.promote = undefined;
       perf.compileMs += performance.now() - start;
@@ -285,6 +282,22 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     retarget(invoke, fn);
     return fn;
   };
+  if (persist) {
+    // Reuse idle emission in this launch, reserving source capacity for later demand promotion.
+    recordLater(entryKey, () => {
+      const src = source(prepare(), false);
+      if (jvmProfiler.tier !== "cold" && owner.hotSourceBytes + src.length <= IDLE_SOURCE_LIMIT) promote(prepare, src);
+      return src;
+    });
+    cold.suspended = () => recordLater(resumeKey, () => {
+      const body = resumableSource(R, dex, info, rec.m, prepare());
+      if (jvmProfiler.tier !== "cold" && owner.hotSourceBytes + body.length <= IDLE_SOURCE_LIMIT) {
+        resume(prepare, body);
+        owner.hotSourceBytes += body.length;
+      }
+      return body;
+    });
+  }
   if (jvmProfiler.tier !== "cold") {
     // On-stack replacement: the hot body resumes the cold frame at its backedge.
     cold.promote = (frame: ColdFrame, receiver: unknown) => {
