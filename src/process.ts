@@ -103,7 +103,7 @@ try {
   const endpoint = connectProcess();
   if (!boot) throw new Error("Process package unavailable");
   await loadSkia();
-  await bootApk(boot, () => {}, "", data.process);
+  await bootApk(boot, () => {}, data.launcher?.assetKey ?? "", data.launcher ? null : data.process);
   broker.ready(pid, endpoint);
 } catch (error) {
   console.error("[process]", pid, error);

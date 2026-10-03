@@ -39,8 +39,9 @@ import { connectProcess, registerForegroundProcess, processPresentation, process
 import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
-import { onProcessExit } from "./process-exit";
+import { onProcessExit, processExited } from "./process-exit";
 import { lastExit, REASON_CRASH, REASON_CRASH_NATIVE } from "./android/server/appexitinfo";
+import type { Death } from "./shell/servicerecords";
 
 strictThreadOwnership();
 const params = new URLSearchParams(location.search);
@@ -93,7 +94,7 @@ window.addEventListener("error", (e) => logBuf.push("window.error: " + e.message
 window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejection: " + ((e.reason as any)?.message ?? (e.reason as any)?.msg ?? String(e.reason)) + "\n" + ((e.reason as any)?.stack ?? "").slice(0, 600)));
 
 let booting = false;
-// App classes remain in this realm; a second boot needs a page reload.
+// this realm runs one app; it opens again in a process of its own
 let runtimeStarted = false;
 async function boot(file: string, local?: File) {
   if (booting || runtimeStarted) return;
@@ -116,13 +117,21 @@ async function boot(file: string, local?: File) {
     runtimeStarted = true;
     let shown = file;
     // the task goes with its process (ActivityRecord.handleAppDied removes an activity with no saved
-    // state) and the launcher returns, under AppErrors' crash dialog when it showed one. The app's
-    // classes stay linked in this page, so opening it again starts a fresh one.
+    // state) and the launcher returns, under AppErrors' crash dialog when it showed one. Opening the
+    // app again starts a new process for it, in a frame: the other processes and the broker live on.
+    const exited = (death: Death) => {
+      const pkg = appHost?.pkg;
+      shell.setState({ kind: "exited", file, label: shown, crashed: death.crashed, crashDialog: death.crashed && death.repeated, retry: pkg ? () => relaunch(pkg) : null });
+    };
+    const relaunch = (pkg: string) => {
+      shell.setState({ kind: "loading", file, stage: "Starting app…" });
+      const broker = processBroker(), started = broker.launch(pkg, assets?.key ?? file);
+      broker.watch(started.pid, () => exited(broker.death(started.pid) ?? { crashed: false, repeated: false }));
+      started.shown.then(() => shell.setState({ kind: "running", file, label: shown }), (error) => shell.setState({ kind: "failed", file, error, retry: () => relaunch(pkg) }));
+    };
     onProcessExit(() => {
       processPresentation.visible = false;
-      const reopen = () => { const url = new URL(location.href); url.searchParams.set("apk", file); location.replace(url.href); };
-      const crashed = lastExit?.reason === REASON_CRASH || lastExit?.reason === REASON_CRASH_NATIVE;
-      shell.setState({ kind: "exited", file, label: shown, crashed, crashDialog: crashed && !!lastExit?.dialog, retry: local ? null : reopen });
+      exited({ crashed: lastExit?.reason === REASON_CRASH || lastExit?.reason === REASON_CRASH_NATIVE, repeated: !!lastExit?.dialog });
     });
     const label = shown = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
     // a device's Play services are up before an app launches: here their realm boots after the
@@ -172,7 +181,8 @@ const wd = {
   // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
   // absolute device px with the status bar included, which is the space a tap is expressed in.
   uiTree: async (): Promise<Awaited<ReturnType<typeof dumpWindows>>> => {
-    const nodes = await onMain(dumpWindows);
+    // a process that has ended shows no window; its own main loop answers nothing
+    const nodes = processExited() ? [] : await onMain(dumpWindows);
     // the processes the broker shows stack above this one in their frames, as their windows do on a display
     const shown = [...document.querySelectorAll("iframe")].filter((f) => !f.hidden && new URL(f.src, location.href).origin === location.origin)
       .sort((a, b) => Number(a.style.zIndex) - Number(b.style.zIndex));

@@ -95,6 +95,10 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
   foregroundClients: number;
+  /** the home screen started it, so it starts its launcher activity as the user's app does */
+  launcher: { assetKey: string } | null;
+  /** how it ended, once it has */
+  death: Death | null;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 class ProcessBroker {
   readonly files = new PrivateFiles();
@@ -301,7 +305,7 @@ class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, launcher: null, death: null, watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -320,7 +324,21 @@ class ProcessBroker {
     this.services.processStarted(pkg, process);
     return entry;
   }
-  async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[] }> {
+  /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
+   *  launcher activity and is shown, at the top app's priority while it starts */
+  launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
+    const entry = this.connect(pkg, pkg);
+    entry.launcher = { assetKey }; entry.foregroundClients++;
+    const shown = entry.ready.then(() => new Promise<void>((resolve, reject) => {
+      void this.queueActivity(async () => {
+        if (this.alive(this.foregroundPid) && this.foregroundPid !== entry.pid) await this.visibility(this.entry(this.foregroundPid), "pause", PAUSE_TIMEOUT_MS);
+        await this.show(entry.pid).then(resolve, reject);
+      });
+    })).finally(() => { entry.foregroundClients--; });
+    return { pid: entry.pid, shown };
+  }
+  death(pid: number): Death | null { return this.entries.get(pid)?.death ?? null; }
+  async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[]; launcher: Entry["launcher"] }> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     const registry = await Promise.all([...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map(async (record) => {
       const source = packedArchives.get(record.path) ?? await vfs.readFile(record.path);
@@ -328,14 +346,14 @@ class ProcessBroker {
       const splits = record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : [];
       return { pkg: record.pkg, source, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     }));
-    return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry };
+    return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry, launcher: entry.launcher };
   }
   ready(pid: number, endpoint: ProcessEndpoint): void { this.entry(pid).resolve(endpoint); }
   fail(pid: number, message: string, death?: Death): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
-    entry.dead = true; entry.reject(error);
+    entry.dead = true; entry.death = death ?? null; entry.reject(error);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     for (const binding of this.services.bindingsOf(pid)) {
