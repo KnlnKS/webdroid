@@ -1810,6 +1810,42 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     as it does on the base: its injected script's synchronous `describe` bridge call times out
     (504) when Markor's preview loads, so the snapshot (and the base's direct `print` message) has
     no listener. Custom adapters that draw with PdfDocument still lack its natives.
+- 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
+  fixes it (Stage F open 1):
+  - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator
+    took the lowest free run (images bottom-up, ARM64 pool units from plane 0's free pages) and the
+    core grew the wasm memory in 64 MiB steps where pages came into use, notifying the host to
+    rebuild its views. Mihon, Komikku and doodlejump then stayed at 256 MiB committed (4, 4 and
+    2 GiB before). Non-movable byte arrays had to pin the memory (committed whole, never grown
+    again: a grow detaches the Int8Arrays Java holds), so StatsEvent's direct buffer still
+    committed 4 GiB and still stalled, and a process pinned before sizing gets ENOMEM past 256 MiB.
+  - `toResizableBuffer` does not keep such arrays attached usefully in Chrome 153: Web APIs
+    reject views over a resizable buffer (TextDecoder.decode, encodeInto, getRandomValues, Blob,
+    WebGL bufferData, ImageData: "must not be resizable"), and V8 reads them 4x (typed arrays) to
+    13x (DataView) slower. A shared memory keeps views attached across a grow, but TextDecoder,
+    getRandomValues and Blob reject shared views and other browsers need cross-origin isolation.
+  - In isolation (Chrome 153, ~600 MB retained heap, 3e7 allocations) the committed size alone
+    costs nothing and a grow after the heap is built does, non-monotonically:
+
+    | wasm memory                                   | loop        |
+    |-----------------------------------------------|-------------|
+    | 256 MiB                                       | 129–135 ms  |
+    | 4 GiB committed before the heap is built      | 127–131 ms  |
+    | one grow after it to 384 MiB, 1 or 2 GiB      | 128–137 ms  |
+    | one grow after it to 512 or 768 MiB, or 4 GiB | 206–219 ms  |
+    | 64 MiB steps separated by allocation, to 2 GiB| 128–133 ms  |
+
+  - In the app the timing does not carry over. Mihon onboarding theme taps (perf-browser, 15 s,
+    `--trace`): the base sizes to 4 GiB a few seconds into launch (heap ~350 MB) and spends ~80 ms
+    in incremental marking and ~35 ms in major GC. Sizing at `fixProcessBitness` (329 ms, heap
+    144 MB, before zygoteInit) stalls with TS StatsEvent as well as bytecode: 5.0–5.5 s of
+    incremental marking and 3.4–3.9 s of major GC, no scavenges, the CPU profile 10 of 17 s in GC.
+    Bytecode StatsEvent on the base (pinned or sized at its first event) stalls the same way, even
+    with JS-heap arrays in place of guest views and without the finalization registry; JS-heap
+    arrays at 256 MiB do not. V8's trigger is history-dependent and not yet identified, so
+    StatsEvent stays TS and memory is sized as before.
+  - Unchanged on both: e2e doodlejump wedges at its title (perf-browser reaches play), and microg's
+    ServiceTrigger throws a NullPointerException in komikku, mihon-app and the games.
 
 ## Java, storage and framework semantics
 

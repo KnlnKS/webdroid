@@ -640,9 +640,10 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
    6/6, Resy 15/15, ChatGPT 24/24, YouTube 16/16 and TikTok 13/13 (one earlier TikTok run wedged
    from step 06 under live content and passed on rerun), with no `[webdroid unowned]` entry.
 1. StatsEvent is the desccheck backlog (2026-10-02; StatsLog and print run from bytecode): its
-   pooled buffer is a direct ByteBuffer, which sizes guest memory early, and with 2–4 GiB of Wasm
-   memory committed Chrome keeps incremental marking running (history). The fix is lazy guest
-   memory commit in the native tier, which every native app needs. WebView snapshots of an
+   pooled direct ByteBuffer sizes guest memory at its first event, and Chrome then keeps
+   incremental marking running (~10 of 17 s in GC). Neither lazy commit (non-movable arrays pin
+   it; `knlnks/lazy-guest-mem-experiment`) nor sizing at fixProcessBitness (stalls even with TS
+   StatsEvent) fixes it; V8's trigger depends on when the grow happens (history). WebView snapshots of an
    isolated renderer time out on its `describe` bridge call (504) in Markor's preview.
 2. Done 2026-10-02: Build runs from bytecode; zygoteInit waits for the process's bitness, which
    the page fixes from the install's central directories (no measured wait).
