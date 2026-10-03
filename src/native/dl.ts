@@ -5,7 +5,11 @@
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
 import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host";
-import { cpuFor, cpus, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
+import { cpuFor, cpus, setSymbolizeHook, setBacktraceHook, setTombstoneHook, setA64, isA64, SIGNAL_NAMES, type Cpu } from "./cpu";
+import { tombstoneProto, signalCodeName, type TombstoneFrame } from "./tombstone";
+import { propertyValue } from "../shell/properties";
+import { procIdentity } from "../shell/procfs";
+import { wallMillis } from "../guest-clock";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
@@ -172,16 +176,38 @@ export function symbolizePc(pc: number): string {
   return symbolize(modules, pc);
 }
 
-/** the frame-pointer chain from x29: what called what, as module+offset (a debugging aid) */
-setBacktraceHook((cpu) => backtrace(cpu));
-export function backtrace(cpu: Cpu, max = 24): string[] {
-  const out = [symbolizePc(cpu.pc), symbolizePc(cpu.lr >>> 0)];
+/** the frame-pointer chain from x29: the pc, lr and each saved return address */
+function backtracePcs(cpu: Cpu, max = 24): number[] {
+  const out = [cpu.pc >>> 0, cpu.lr >>> 0];
   let fp = cpu.w[58] >>> 0;
   for (let i = 0; i < max && fp; i++) {
-    try { out.push(symbolizePc(Number(mem.ld64(fp + 8) & 0xffffffffn))); fp = Number(mem.ld64(fp) & 0xffffffffn); } catch { break; }
+    try { out.push(Number(mem.ld64(fp + 8) & 0xffffffffn)); fp = Number(mem.ld64(fp) & 0xffffffffn); } catch { break; }
   }
   return out;
 }
+/** what called what, as module+offset (a debugging aid) */
+setBacktraceHook((cpu) => backtrace(cpu));
+export const backtrace = (cpu: Cpu, max = 24): string[] => backtracePcs(cpu, max).map(symbolizePc);
+/** a frame as debuggerd's unwinder names it: the image's path and the nearest symbol */
+function tombstoneFrame(pc: number): TombstoneFrame {
+  const m = moduleOf(pc), s = m && nearestSymbol(m, pc);
+  // a host body stands for the library function of its name
+  if (!m) return { pc, relPc: pc, file: "", fn: isTrampPc(pc) ? slotName(trampSlot(pc)) : "", fnOffset: 0 };
+  return { pc, relPc: pc - m.base, file: m.path ?? m.name, fn: s?.name ?? "", fnOffset: s ? pc - s.addr : 0 };
+}
+const REGS32 = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr"];
+setTombstoneHook((cpu, sig, info, abort) => {
+  const reg = (i: number) => (cpu.a64 ? BigInt(cpu.w[2 * i + 1] >>> 0) << 32n : 0n) | BigInt(cpu.w[2 * i] >>> 0);
+  const names = cpu.a64 ? [...Array(29)].map((_, i) => `x${i}`).concat(["x29", "lr", "sp"]) : REGS32;
+  return tombstoneProto({
+    a64: cpu.a64, fingerprint: propertyValue("ro.build.fingerprint") ?? "", timestamp: wallMillis(), pid: cpu.pid, tid: cpu.osTid,
+    uid: procIdentity.uid, command: procIdentity.name, uptimeS: performance.now() / 1000,
+    signal: sig, signalName: SIGNAL_NAMES[sig] ?? "", code: info?.code ?? 0, codeName: signalCodeName(sig, info?.code ?? 0),
+    faultAddress: info?.addr ?? null, abort, threadName: cpu.name,
+    registers: [...names.map((name, i): [string, bigint] => [name, reg(i)]), ["pc", BigInt(cpu.pc >>> 0)]],
+    frames: backtracePcs(cpu).map(tombstoneFrame),
+  });
+});
 
 function handleOf(h: Handle): number {
   const i = handles.findIndex((x) => x && h && (("mod" in x && "mod" in h && x.mod === h.mod) || ("lib" in x && "lib" in h && x.lib === h.lib)));

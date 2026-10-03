@@ -38,6 +38,7 @@ import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
 import { onProcessExit } from "./process-exit";
+import { lastExit, REASON_CRASH, REASON_CRASH_NATIVE } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
 const params = new URLSearchParams(location.search);
@@ -113,12 +114,13 @@ async function boot(file: string, local?: File) {
     runtimeStarted = true;
     let shown = file;
     // the task goes with its process (ActivityRecord.handleAppDied removes an activity with no saved
-    // state; a first crash shows no dialog) and the launcher returns. The app's classes stay
-    // linked in this page, so opening it again starts a fresh one.
-    onProcessExit((status) => {
+    // state) and the launcher returns, under AppErrors' crash dialog when it showed one. The app's
+    // classes stay linked in this page, so opening it again starts a fresh one.
+    onProcessExit(() => {
       processPresentation.visible = false;
       const reopen = () => { const url = new URL(location.href); url.searchParams.set("apk", file); location.replace(url.href); };
-      shell.setState({ kind: "exited", file, label: shown, crashed: status.signal !== undefined && status.signal !== 9, retry: local ? null : reopen });
+      const crashed = lastExit?.reason === REASON_CRASH || lastExit?.reason === REASON_CRASH_NATIVE;
+      shell.setState({ kind: "exited", file, label: shown, crashed, crashDialog: crashed && !!lastExit?.dialog, retry: local ? null : reopen });
     });
     const label = shown = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
     // a device's Play services are up before an app launches: here their realm boots after the

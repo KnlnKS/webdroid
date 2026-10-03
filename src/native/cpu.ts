@@ -108,6 +108,9 @@ export function isA64(): boolean { return A64; }
 export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: string[]; frames: string[] } | null; msg: string } = { regs: null, msg: "" };
 let backtraceHook: (cpu: Cpu) => string[] = () => [];
 export function setBacktraceHook(f: (cpu: Cpu) => string[]): void { backtraceHook = f; }
+/** debuggerd's tombstone protobuf for a crash (tombstone.ts, with dl.ts's unwinding) */
+let tombstoneHook: (cpu: Cpu, sig: number, info: SigInfo | null, abort: string) => Uint8Array | undefined = () => undefined;
+export function setTombstoneHook(f: typeof tombstoneHook): void { tombstoneHook = f; }
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
 /** a run loop taking its thread for a turn it resumes in, and handing it back where it parks */
 interface LoopTurn { own(): void; release(): void }
@@ -887,7 +890,7 @@ const signalBits = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | 1n
 // signal(7)'s default actions. Stop signals are ignored: nothing here could continue the process.
 const DEFAULT_IGNORED = signalBits(17, 18, 19, 20, 21, 22, 23, 28);  // SIGCHLD SIGCONT, stops, SIGURG SIGWINCH
 const DUMPS_CORE = signalBits(3, 4, 5, 6, 7, 8, 11, 24, 25, 31);
-const SIGNAL_NAMES = ["", "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1", "SIGSEGV",
+export const SIGNAL_NAMES = ["", "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1", "SIGSEGV",
   "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG",
   "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH", "SIGIO", "SIGPWR", "SIGSYS"];
 const has = (bits: bigint, sig: number): boolean => !!(bits >> BigInt(sig - 1) & 1n);
@@ -903,8 +906,10 @@ export const abortMessageSource = { text: (): string => "" };
 export function dieOfSignal(cpu: Cpu, sig: number, info: SigInfo | null = null): Promise<never> {
   if (!processExited()) {
     const name = SIGNAL_NAMES[sig] ?? "?", process = `pid ${cpu.pid} (${procIdentity.name})`, code = info ? `, code ${info.code}` : "";
+    let tombstone: Uint8Array | undefined;
     if (has(DUMPS_CORE, sig)) {
       const abort = abortMessageSource.text();
+      tombstone = tombstoneHook(cpu, sig, info, abort);
       console.error([`Fatal signal ${sig} (${name})${code} in tid ${cpu.osTid} (${cpu.name}), ${process}`,
         "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***",
         `pid: ${cpu.pid}, tid: ${cpu.osTid}, name: ${cpu.name}  >>> ${procIdentity.name} <<<`,
@@ -912,7 +917,7 @@ export function dieOfSignal(cpu: Cpu, sig: number, info: SigInfo | null = null):
         ...(abort ? [`Abort message: '${abort}'`] : []),
         "backtrace:", ...backtraceHook(cpu).map((frame, i) => `  #${String(i).padStart(2, "0")} ${frame}`)].join("\n"));
     } else console.warn(`[native] ${process} killed by signal ${sig} (${name})`);
-    exitProcess({ signal: sig });
+    exitProcess({ signal: sig, tombstone });
   }
   return never();
 }

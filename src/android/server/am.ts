@@ -16,6 +16,11 @@ import { systemProviderHolder } from "../systemproviders";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
 import { uriText, type JUri } from "../net";
 import { systemFontMap } from "../fonts";
+import { appCrashed, exitRecords, noteApplicationFlags, setProcessStateSummary, unbase64, type ExitRecord } from "./appexitinfo";
+import { callingIdentity, newStub, parceledList } from "../binder";
+import { packages } from "../packages";
+import { checkUidPermission } from "../permissions";
+import { mkPfd } from "../os";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 /** the package manager, as system_server's services reach it */
@@ -47,6 +52,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
   appThread = app;
   const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
+  noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
   const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, GET_META_DATA, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
     slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
@@ -140,7 +146,52 @@ export const activityManagerMethods = {
   // Log.wtf's report, which RuntimeInit sends after logging it: with Settings.Global wtf_is_fatal
   // unset, ActivityManagerService records it and the process lives
   "handleApplicationWtf(Landroid/os/IBinder;Ljava/lang/String;ZLandroid/app/ApplicationErrorReport$ParcelableCrashInfo;I)Z": () => 0,
+  // KillApplicationHandler's report before the process kills itself
+  "handleApplicationCrash(Landroid/os/IBinder;Landroid/app/ApplicationErrorReport$ParcelableCrashInfo;)V": (_app: JObj | null, info: JObj | null) => {
+    const field = <T>(name: string) => (info ? getDeclared<T>(info, CRASH_INFO, name) : null);
+    appCrashed({ exceptionClassName: field("exceptionClassName"), exceptionMessage: field("exceptionMessage"),
+      throwFileName: field("throwFileName"), throwLineNumber: field<number>("throwLineNumber") ?? 0 }, false);
+  },
+  "setProcessStateSummary([B)V": (state: Int8Array | null) => {
+    if (state && state.length > MAX_STATE_SUMMARY) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Data size is too large");
+    setProcessStateSummary(state && new Uint8Array(state.buffer, state.byteOffset, state.length));
+  },
+  "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": driven(function* (pkg: string | null, pid: number, maxNum: number): Gen<JObj> {
+    const uid = callingIdentity().uid;
+    const owner = pkg === null ? uid : packages.get(pkg)?.uid;
+    if (owner === undefined) return yield parceledList();
+    if (owner !== uid && (yield* awaited(checkUidPermission(DUMP, uid))) !== 0)
+      throw rt.mkThrowable("java/lang/SecurityException", `Only package ${pkg} or a caller holding ${DUMP} may read its exit reasons`);
+    const names = pkg !== null ? [pkg] : [...packages.values()].filter((p) => p.uid === uid).map((p) => p.pkg);
+    let records = names.flatMap(exitRecords).filter((r) => r.uid === owner && (pid <= 0 || r.pid === pid)).sort((a, b) => b.timestamp - a.timestamp);
+    if (maxNum > 0) records = records.slice(0, maxNum);
+    const infos: JObj[] = [];
+    for (const r of records) infos.push(yield* awaited(exitInfo(r)));
+    return yield parceledList(infos);
+  }),
 };
+const CRASH_INFO = "android/app/ApplicationErrorReport$CrashInfo", EXIT_INFO = "android/app/ApplicationExitInfo";
+const DUMP = "android.permission.DUMP";
+/** ActivityManagerService's limit on a process state summary */
+const MAX_STATE_SUMMARY = 128;
+/** a record as ApplicationExitInfo, with a native crash's tombstone behind its retriever */
+const exitInfo = driven(function* (r: ExitRecord): Gen<JObj> {
+  const info: JObj = yield newObj(EXIT_INFO, "()V");
+  setDeclared(info, EXIT_INFO, { mPid: r.pid, mRealUid: r.uid, mPackageUid: r.uid, mDefiningUid: r.uid, mProcessName: r.process, mPackageName: r.pkg,
+    mReason: r.reason, mStatus: r.status, mImportance: r.importance, mTimestamp: BigInt(r.timestamp), mDescription: r.description,
+    mState: r.state && new Int8Array(unbase64(r.state).buffer) });
+  if (r.tombstone) {
+    const retriever = (yield* awaited(newStub("webdroid/TombstoneRetriever"))) as JTombstoneRetriever;
+    retriever.tombstone = unbase64(r.tombstone);
+    setDeclared(info, EXIT_INFO, { mNativeTombstoneRetriever: retriever });
+  }
+  return info;
+});
+/** NativeTombstoneManager's retriever: a descriptor on the tombstone's protobuf */
+class JTombstoneRetriever extends JObj { tombstone: Uint8Array = new Uint8Array(0); }
+rt.register({ name: "webdroid/TombstoneRetriever", ctor: JTombstoneRetriever, sup: "android/app/IParcelFileDescriptorRetriever$Stub", methods: {
+  "getPfd()Landroid/os/ParcelFileDescriptor;": function (this: JTombstoneRetriever) { return mkPfd(this.tombstone); },
+} });
 
 /** ActivityThread.main for this process: its thread attaches to the activity manager, which binds
  *  the application and, for the app the user launched, its launcher activity. A process started

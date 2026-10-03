@@ -53,8 +53,7 @@ const activityManager: NativeSpec["methods"] = {
   }),
   // ActiveServices does not report its records as RunningServiceInfo
   "getServices(II)Ljava/util/List;": () => newArrayList(),
-  // no exits or starts are recorded, and nothing restricts this app or drives it as a monkey
-  "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
+  // no starts are recorded, and nothing restricts this app or drives it as a monkey
   "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
   "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,

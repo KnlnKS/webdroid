@@ -2,8 +2,9 @@
 // dead realm runs nothing further: native run loops park at their next turn, suspended Java frames
 // never resume, and yields, guest timers and entries from host code never return.
 
-/** how the process ended, as wait(2) tells it: an exit status, or the signal that killed it */
-export type ExitStatus = { code: number; signal?: undefined } | { signal: number; code?: undefined };
+/** how the process ended, as wait(2) tells it: an exit status, or the signal that killed it (with
+ *  debuggerd's tombstone when it crashed) */
+export type ExitStatus = { code: number; signal?: undefined } | { signal: number; code?: undefined; tombstone?: Uint8Array };
 let status: ExitStatus | null = null;
 const listeners: ((status: ExitStatus) => void)[] = [];
 export const processExited = (): boolean => status !== null;

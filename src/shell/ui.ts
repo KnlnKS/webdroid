@@ -5,7 +5,7 @@ type SessionState =
   | { kind: "running"; file: string; label: string }
   | { kind: "failed"; file: string; error: unknown; retry: (() => void) | null }
   /** the app's process ended: on a device the launcher returns; its classes stay in this page */
-  | { kind: "exited"; file: string; label: string; crashed: boolean; retry: (() => void) | null };
+  | { kind: "exited"; file: string; label: string; crashed: boolean; crashDialog: boolean; retry: (() => void) | null };
 
 export function errorText(error: unknown): string {
   if (typeof error === "object" && error !== null) {
@@ -126,7 +126,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       retry.hidden = !ended || !next.retry;
       retry.textContent = next.kind === "exited" ? "Open again" : "Try again";
       status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running"
-        : next.kind === "exited" ? (next.crashed ? "The app stopped" : "The app closed") : "Couldn’t open this app";
+        : next.kind === "exited" ? (next.crashDialog ? `${next.label} keeps stopping` : next.crashed ? "The app stopped" : "The app closed") : "Couldn’t open this app";
       if (next.kind === "exited") hint.textContent = next.retry ? "Its process ended. Open it again in a fresh session." : "Its process ended. Reload to start a fresh session, then choose your package again.";
       if (failed) {
         hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
