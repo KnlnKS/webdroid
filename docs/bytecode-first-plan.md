@@ -792,9 +792,9 @@ grid) for measurement, TextRunShaper and drawing;
    realm's Typeface.<clinit>"). Apps get the Google Play emoji update.
 6. Done 2026-10-02 (history "process death and synchronous fault signals"): process death ends the
    whole realm and reaches the broker; guest faults reach SIGSEGV/SIGBUS/SIGILL/SIGTRAP handlers with
-   siginfo and ucontext, behind the linker's debuggerd handler. Open: AMS restarts of sticky and
-   bound services, uncaught Java exceptions killing the process, and broker Java work after the
-   page's app dies.
+   siginfo and ucontext, behind the linker's debuggerd handler. Open: uncaught Java exceptions
+   killing the process. Done (history "system_server's work outlives app processes"): AMS restarts
+   of sticky and bound services, and broker work after the page's app dies.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 
@@ -925,8 +925,8 @@ not been run in D-mode.
 
 **Known limits in D-mode:**
 - **Activities:** single task per process; no recents; startActivityForResult between apps relies
-  on the broker; the resolver/chooser activity is browser-backed. Service timeouts, START_STICKY
-  restarts and app-sent sticky broadcasts are missing.
+  on the broker; the resolver/chooser activity is browser-backed. Service timeouts and app-sent
+  sticky broadcasts are missing.
 - **IME:** zero-height insets (the browser keyboard sits outside the canvas, so adjustResize never
   shrinks); back with the keyboard shown reaches the app; no auto-show for SOFT_INPUT_STATE_VISIBLE;
   no hardware keys beyond Enter.

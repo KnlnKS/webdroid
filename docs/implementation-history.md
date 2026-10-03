@@ -2448,6 +2448,46 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     noise (3 alternating runs each); DoodleJump executes the same 10.97 G guest instructions, and
     its native-ms varies with presented frames (GL calls run inside slices), in both builds.
     doodlejump, flappybird, komikku and lichess (`--live`) pass.
+- **2026-10-02, system_server's work outlives app processes** (branch `knlnks/open-sysserver`):
+  - The broker is JS in the page's window, but its broadcasts (intent decode, receiver query),
+    PendingIntent matching (filterEquals, replaceExtras), alarm timers and unbinds on a client's
+    death ran on the page realm's JVM, guest timers or `callUncaught`, which a dead process never
+    resumes. Probe: GmsClient's page app SIGKILLed, then a broadcast and a PendingIntent creation
+    replayed as microG's realm: no answer after 10 s at base, answered at once now. The sender
+    resolves its intent's manifest receivers and the broker checks export and permission from its
+    own registry; the creator's realm runs the PendingIntent codec (failing if it dies); alarms
+    and service restarts use system timers (`setSystemTimeout`) that no process death stops.
+  - No dedicated system realm: one process realm (microG's) takes 0.6-0.7 s of main-thread time
+    from frame to ready and about 75 MiB of JS heap (FitNotes, 2 runs), and the broker needs no JVM
+    of its own, only a live requester's. Launch is unchanged (launch-profile, load 6-8): FitNotes
+    first draw cold 1533-1729 ms at base vs 1626-1680 (one 2010 after a server start), warm
+    1129-1483 vs 1157-1265; GmsClient cold 1164/1190 vs 1173/1192, warm 958/927 vs 908/915.
+  - Service restarts: the hosting realm keeps ServiceRecord's start items (delivery and done
+    counts, onStartCommand's result via serviceDoneExecuting, stopSelf(startId) trimming) and
+    reports each created service's start state to the broker (`shell/servicerecords.ts`), which
+    also holds every cross-process binding under a client-scoped key. On the host's death it applies
+    killServicesLocked/scheduleServiceRestartLocked: unfinished starts are redelivered with
+    START_FLAG_RETRY/REDELIVERY after twice their run time (at most 3 deliveries, 6 done), a
+    sticky start returns with a null intent, auto-create bindings are rebound, other services are
+    brought down and their connections hear `connected(null, dead)`; delays start at 1 s, grow 4x
+    within a minute of the last restart and stay 10 s apart, and a process starting runs its
+    waiting restarts at once (attachApplicationLocked). Bindings now hear their binder pushed through
+    the broker on every publish. Probes: SIGKILL of microG while GmsClient is bound to its location
+    service restarts it 1 s later in a new process, the client library reconnects and re-registers
+    its request, and the app runs on; killing the persistent process redelivers McsService's
+    unfinished CONNECT start after 4.2 s. fitnotes, mihon-onboarding and reddit (`--live`) pass.
+  - The shared JVM: hosted services are the app's own IActivityManager Stubs, so same-process
+    starts get the caller's objects. ATM and ActiveServices copy the Intent (`new Intent(intent)`),
+    whose extras Bundle shares its values: a mutable extra changed after startActivity or
+    startService is seen by the started component, `==` holds, and an extra that would fail to
+    parcel (or exceed a transaction) does not fail. A parcel round trip at that boundary would
+    match a device. Calling identity inside a hosted method is the app's, as system_server sees
+    it; hosted state lives in TS modules per realm, and no app class is loaded on the system's
+    behalf, so no static or class loader effect was found.
+  - Limits: reopening the page's app reloads the tab, ending every realm and the broker with it;
+    a process started later does not take a stopped service's non-auto-create bindings; crash
+    counts (BOUND_SERVICE_MAX_CRASH_RETRY) are not modelled; the page app's own sticky services
+    restart in a process frame while the page shows it exited, as a device would.
 - **2026-10-02, GL errors, signal defaults, TLS unload, WebView's UA** (branch `knlnks/open-gl2`):
   - Lichess's getError time is Skia's allocation bracket (bind, glGetError, glBufferData or
     glTexStorage2D, glGetError): about 600 queries in 12 s. Most cost under 0.3 ms, but the first
