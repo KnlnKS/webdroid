@@ -6,7 +6,9 @@ import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, P
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8 } from "../jvm/abi";
-import { curThread, caller, JClass, stackTraceText } from "../jvm/natives/jlang";
+import { curThread, caller } from "../jvm/natives/jentry";
+import { stackTraceText } from "../jvm/natives/jthrowable";
+import { JClass } from "../jvm/natives/jlang";
 import { currentStrand, inStrand } from "../jvm/suspend";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { addressOf, capacity, directAddress, isBuffer, newDirectBuffer } from "../jvm/natives/jnio";

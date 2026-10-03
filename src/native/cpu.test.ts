@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jentry";
 import { Cpu, setA64, sigHandlers, slice } from "./cpu";
 import { defineHost } from "./host";
 import { mem } from "./mem";
@@ -422,7 +422,7 @@ test("an unhandled terminating signal ends the process once unblocked; ignored o
   const code = `
     import { Cpu, setA64, ignoredSignals } from "${import.meta.dir}/cpu";
     import { processExited } from "${import.meta.dir}/../process-exit";
-    import { JThread } from "${import.meta.dir}/../jvm/natives/jlang";
+    import { JThread } from "${import.meta.dir}/../jvm/natives/jentry";
     setA64(true);
     const cpu = new Cpu(new JThread(), "victim"), turn = () => new Promise((r) => setTimeout(r, 0));
     cpu.signalMask = 0n;

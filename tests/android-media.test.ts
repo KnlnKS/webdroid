@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { loadFrameworkJar, bootApp, packageRecord } from "./java";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, scall, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, scall, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";

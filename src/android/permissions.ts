@@ -3,7 +3,7 @@
 // IPermissionManager over them.
 import { awaited, JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, sameBytes } from "../jvm/abi";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jentry";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { type XmlNode, attrStr, attr } from "./axml";
 import { appHost } from "./apphost";

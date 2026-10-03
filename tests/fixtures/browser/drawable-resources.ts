@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { loadFramework, loadPlatformDex } from "../../../src/android/framework";
 import { rt } from "../../../src/jvm/runtime";
-import { vcall, newObj, scall } from "../../../src/jvm/natives/jlang";
+import { vcall, newObj, scall } from "../../../src/jvm/natives/jentry";
 import { canvasOver } from "../../../src/android/canvas";
 import { edges } from "../../../src/android/graphics";
 import { mountPlatformData } from "../../../src/shell/apex";

@@ -1,7 +1,7 @@
 import { rt } from "../runtime";
 import { parkTimeout, unparkTimeout, wakeSoon } from "../yield";
 import { wallMillis } from "../../guest-clock";
-import { JThread, curThread } from "./jlang";
+import { JThread, curThread } from "./jentry";
 
 // A parked thread wakes on its permit, its deadline, or an interrupt, which leaves the interrupt
 // status set rather than throwing (LockSupport.park). The wake is a macrotask so the unparker's

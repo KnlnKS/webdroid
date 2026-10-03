@@ -4,7 +4,7 @@ const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const { rt } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
 const { loadLibcore, mountApexData } = await import(W + "/tests/java");
-const { vcall, newObj } = await import(W + "/src/jvm/natives/jlang");
+const { vcall, newObj } = await import(W + "/src/jvm/natives/jentry");
 const { boxInt } = await import(W + "/src/jvm/natives/jbox");
 await loadLibcore();
 await mountApexData();

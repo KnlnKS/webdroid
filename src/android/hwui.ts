@@ -4,7 +4,7 @@
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall, scall, callOn, JThread, detached } from "../jvm/natives/jlang";
+import { vcall, scall, callOn, JThread } from "../jvm/natives/jentry";
 import { handle, deref, release } from "./handles";
 import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
 import { textureLayerNatives } from "./texturelayer";
@@ -17,6 +17,7 @@ import { perf } from "../perf";
 import { resetDrawn } from "./webfunctor";
 import type { NativeBitmap } from "./bitmap";
 import { hostStub } from "./binder";
+import { detached } from "../jvm/natives/jthrowable";
 
 const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
 

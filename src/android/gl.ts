@@ -1,7 +1,7 @@
 // android.opengl.* → WebGL2. GL int handles ↔ WebGL objects via id tables.
 
 import { rt } from "../jvm/runtime";
-import { curThread, threadSwitch } from "../jvm/natives/jlang";
+import { curThread, threadSwitch } from "../jvm/natives/jentry";
 import { type JBuffer, remainingBytes, bufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
 import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap";
 import { gles1String } from "../native/gles1";

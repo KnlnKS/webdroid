@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, scall, vcall } from "../src/jvm/natives/jlang";
+import { newObj, scall, vcall } from "../src/jvm/natives/jentry";
 import { boxDesc, boxInt } from "../src/jvm/natives/jbox";
 import { bufferBytes, limit, position } from "../src/jvm/natives/jnio";
 import { jarray, mangleField, mangleMethod, splitSig } from "../src/jvm/abi";
@@ -422,7 +422,7 @@ test("Math's intrinsics match their AOSP bodies", async () => {
 });
 
 test("ThreadLocal's intrinsics match their AOSP bodies, each on its own thread", async () => {
-  const { JThread, callOn } = await import("../src/jvm/natives/jlang");
+  const { JThread, callOn } = await import("../src/jvm/natives/jentry");
   const [[get, getBase], [set, setBase]] = await Promise.all(["get()Ljava/lang/Object;", "set(Ljava/lang/Object;)V"].map((sig) => pair("java/lang/ThreadLocal", sig)));
   const locals = await Promise.all(Array.from({ length: 40 }, (_, i) => newObj(i % 3 ? "java/lang/ThreadLocal" : "java/lang/InheritableThreadLocal")));
   const threads = [new JThread(), new JThread()];

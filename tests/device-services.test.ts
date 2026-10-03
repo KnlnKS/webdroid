@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jlang";
+import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
 import { bootApp, packageRecord, thrown } from "./java";

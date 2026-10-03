@@ -4,7 +4,8 @@
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, newObj, vcall, scall, logUncaught, staticField, detached } from "../../jvm/natives/jlang";
+import { after, newObj, vcall, scall, staticField } from "../../jvm/natives/jentry";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable";
 import { once, shareable } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows, setClientVisible } from "./wm";

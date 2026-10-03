@@ -5,7 +5,7 @@
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
 import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { after, newObj, vcall, detached } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { asSystem } from "./binder";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel";
@@ -15,6 +15,7 @@ import { uptimeMillis } from "../guest-clock";
 import { frameDrawn } from "./vsync";
 import type { GlSurface } from "./glsurface";
 import { drawnOn, deviceRect, intersect, placeFunctors, type Rect } from "./webfunctor";
+import { detached } from "../jvm/natives/jthrowable";
 
 // SurfaceControl.Builder's creation flags
 const HIDDEN = 0x4, FX_SURFACE_EFFECT = 0x20000, FX_SURFACE_MASK = 0xf0000;

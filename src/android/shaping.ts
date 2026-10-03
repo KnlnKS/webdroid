@@ -10,7 +10,7 @@
 
 import { rt } from "../jvm/runtime";
 import { charsToString } from "../jvm/abi";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { handle, deref, FINALIZER } from "./handles";
 import { type NativeFont, type NativeFamily, type NativeTypeface, FakedFont, resolveDefault, FAKE_BOLD, FAKE_ITALIC, WGHT, ITAL, fontOf, wrapFont, withFonts } from "./fonts";
 import { cssFace } from "./cssfonts";

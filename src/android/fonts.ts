@@ -5,7 +5,7 @@
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
 import { rt, awaited, declaredField, type Gen, type JObj } from "../jvm/runtime";
-import { scall, vcall, after, newObj } from "../jvm/natives/jlang";
+import { scall, vcall, after, newObj } from "../jvm/natives/jentry";
 import { mkFd } from "../jvm/natives/jio";
 import { ashmemFd } from "./os";
 import { OS_CONSTANTS } from "./os-constants";

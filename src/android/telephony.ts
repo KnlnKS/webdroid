@@ -4,7 +4,7 @@
 // it; with no active modem validatePhoneId fails, so a listener is never notified and only meets
 // TelephonyRegistry.checkListenerPermission (decoded from the reference AVD's services.jar).
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jentry";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
 

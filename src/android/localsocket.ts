@@ -4,7 +4,7 @@
 // writes carry SCM_RIGHTS as its recvmsg/sendmsg do: what arrives with the bytes becomes
 // inboundFileDescriptors, and outboundFileDescriptors goes with each write.
 import { rt, type JObj, awaited, driven, getDeclared, setDeclared, type Gen } from "../jvm/runtime";
-import { newObj } from "../jvm/natives/jlang";
+import { newObj } from "../jvm/natives/jentry";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { jarray, u8 } from "../jvm/abi";
 import { strerror } from "../native/abi";

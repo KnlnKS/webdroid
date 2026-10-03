@@ -4,7 +4,7 @@
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
 import { JObj, rt, declaredField } from "../jvm/runtime";
 import { utf8, u8 } from "../jvm/abi";
-import { scall } from "../jvm/natives/jlang";
+import { scall } from "../jvm/natives/jentry";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { javaCloseFd, javaDupFd } from "../native/fs";
 import { ownedHandle, deref, release } from "./handles";

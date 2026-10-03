@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mainThread } from "../jvm/natives/jlang";
+import { mainThread } from "../jvm/natives/jentry";
 import { vfs } from "../shell/vfs";
 import { Cpu, setA64 } from "./cpu";
 import { defineHost, lookupHost, stp, type HostFn } from "./host";

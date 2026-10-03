@@ -1,7 +1,7 @@
 // SoundPool's native half over Web Audio: a decoded AudioBuffer per sample id (null while
 // decoding), and a one-shot source + gain node per stream id.
 import { rt, type JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { fdInt } from "../jvm/natives/jio";
 import { readFully } from "../shell/lazyfile";
 import { audioContext, setSounding } from "./audio-output";

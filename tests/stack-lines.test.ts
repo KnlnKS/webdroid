@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcall } from "../src/jvm/natives/jentry";
 import { rt } from "../src/jvm/runtime";
 import { scall, loadLibcore } from "./java";
 

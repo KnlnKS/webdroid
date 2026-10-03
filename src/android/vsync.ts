@@ -4,7 +4,7 @@
 // thread wakes its fd there.
 import { rt, type JObj } from "../jvm/runtime";
 import { mangleField } from "../jvm/abi";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jentry";
 import { handle, deref, FINALIZER } from "./handles";
 import { type NativeLooper, mainLooper } from "./mainloop";
 import { perf } from "../perf";

@@ -4,7 +4,7 @@ import { mimeOf, MIME_EXT } from "../mime";
 import { sqliteStore } from "./sqlite";
 import { clipUris } from "./net";
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jentry";
 import { strArray } from "../jvm/abi";
 import { serviceContext } from "./binder";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent";

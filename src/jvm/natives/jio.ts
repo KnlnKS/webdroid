@@ -2,7 +2,7 @@
 
 import { awaited, rt, JObj, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
 import { concat } from "../abi";
-import { vcall, after, newObj } from "./jlang";
+import { vcall, after, newObj } from "./jentry";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";

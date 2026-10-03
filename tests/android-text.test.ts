@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { mangleMethod } from "../src/jvm/abi";
 import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
 import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";

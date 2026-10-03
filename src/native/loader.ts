@@ -1,5 +1,5 @@
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread, mainThread } from "../jvm/natives/jlang";
+import { curThread, mainThread } from "../jvm/natives/jentry";
 import { currentStrand, inStrand } from "../jvm/suspend";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";

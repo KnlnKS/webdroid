@@ -2,7 +2,7 @@
 // and the device configuration they take.
 
 import { awaited, driven, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime";
-import { newObj, vcall, scall } from "../jvm/natives/jlang";
+import { newObj, vcall, scall } from "../jvm/natives/jentry";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration, javaLocales } from "./resnative";
 import { device } from "../shell/config";
 

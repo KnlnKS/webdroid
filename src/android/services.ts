@@ -6,7 +6,7 @@
 import { once } from "../jvm/suspend";
 import { awaited, JObj, rt, noops, stubs, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
-import { newObj, vcall, scall, linkInit, staticField, after } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, staticField, after } from "../jvm/natives/jentry";
 import { postMain } from "./mainloop";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 import { newArrayList } from "../jvm/natives/jcoll";

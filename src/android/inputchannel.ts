@@ -3,7 +3,7 @@
 // looper (NativeInputEventReceiver's handleEvent) and finishes it by sequence number, which settles
 // the publisher's wait.
 import { rt, type JObj } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jentry";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel";
 import { mangleField } from "../jvm/abi";

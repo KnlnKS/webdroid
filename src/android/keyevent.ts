@@ -4,7 +4,7 @@
 
 import { rt, JObj, declaredField } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { after, newObj, scall } from "../jvm/natives/jlang";
+import { after, newObj, scall } from "../jvm/natives/jentry";
 import { ownedHandle, deref } from "./handles";
 import { type NativeParcel, nativeParcel, readInt, writeInt, readCString, writeCString } from "./parcel";
 import { keyCodes } from "./keycodes";

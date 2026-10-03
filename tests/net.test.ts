@@ -1,7 +1,8 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { systemClassLoader } from "../src/jvm/natives/jlang";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { scall, mountApexData, loadFrameworkJar } from "./java";
 import { vfs } from "../src/shell/vfs";

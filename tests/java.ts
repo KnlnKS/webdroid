@@ -1,9 +1,9 @@
 import { rt, type JObj } from "../src/jvm/runtime";
-import { scall } from "../src/jvm/natives/jlang";
+import { scall } from "../src/jvm/natives/jentry";
 import type { AppHost } from "../src/android/apphost";
 import type { Resources } from "../src/android/res";
 
-export { scall } from "../src/jvm/natives/jlang";
+export { scall } from "../src/jvm/natives/jentry";
 
 /** the Java exception `call` throws, synchronously or as a rejection, as "class: message", or null */
 export const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
@@ -39,7 +39,7 @@ let fontMap: Promise<void> | null = null;
 export function loadSystemFonts(): Promise<void> {
   return fontMap ??= (async () => {
     const { loadSystemFontMap } = await import("../src/android/fonts");
-    const { callOn, mainThread } = await import("../src/jvm/natives/jlang");
+    const { callOn, mainThread } = await import("../src/jvm/natives/jentry");
     await mountApexData();
     await callOn(mainThread, () => rt.drive(loadSystemFontMap()));
     await preloadTextPaint();
@@ -115,7 +115,7 @@ export async function bootApp(record: import("../src/android/packages").PackageR
   const { setAppHost } = await import("../src/android/apphost");
   const { onMain } = await import("../src/android/mainloop");
   const { vfs } = await import("../src/shell/vfs");
-  const { vcall, staticField } = await import("../src/jvm/natives/jlang");
+  const { vcall, staticField } = await import("../src/jvm/natives/jentry");
   const { getDeclared, setDeclared } = await import("../src/jvm/runtime");
   const AT = "android/app/ActivityThread", BIND = "android/app/ActivityThread$AppBindData";
   let entry = booted.get(record.pkg);

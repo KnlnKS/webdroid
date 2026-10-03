@@ -3,7 +3,7 @@
 // same data. Each follows what AOSP's C++ computes; the charset and regex natives are separate.
 
 import { rt, driven, type Gen } from "../runtime";
-import { vcall, newObj, after, scall } from "./jlang";
+import { vcall, newObj, after, scall } from "./jentry";
 import { once } from "../suspend";
 import { jarray, mangleField, mangleMethod, mangleStaticField } from "../abi";
 import { BytesTrie, ResBundle, cString, icuItem, icuRead } from "./icudata";

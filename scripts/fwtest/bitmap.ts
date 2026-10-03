@@ -1,5 +1,5 @@
 import { declaredField } from "../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
 import { mangleStaticField } from "../../src/jvm/abi";
 import { exercise, same, thrown, statics, listener, ltrb } from "./harness";
 

@@ -1,6 +1,6 @@
 // android.graphics against the reference AVD: Matrix, the color filters, Paint and its effects, Path,
 // Region, Camera, RenderNode, the interpolators, NinePatch, PathParser and SurfaceTexture.
-import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
 import { deref } from "../../src/android/handles";
 import { presentSurface, surfaceTextureOf } from "../../src/android/glsurface";
 import { loadSystemFonts } from "../../tests/java";

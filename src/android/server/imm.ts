@@ -5,7 +5,8 @@
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
 import { once } from "../../jvm/suspend";
 import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, scall, staticField, newObj, vcall, detached, logUncaught } from "../../jvm/natives/jlang";
+import { after, scall, staticField, newObj, vcall } from "../../jvm/natives/jentry";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
 import { postMain } from "../mainloop";

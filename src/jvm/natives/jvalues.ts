@@ -1,5 +1,5 @@
 import type { JObj } from "../runtime";
-import { after, scall, vcall, newObj } from "./jlang";
+import { after, scall, vcall, newObj } from "./jentry";
 
 /** a java.util.UUID parsed from its canonical text */
 export function uuidFromString(s: string): JObj | Promise<JObj> {

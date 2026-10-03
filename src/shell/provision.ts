@@ -7,7 +7,7 @@ import { resString } from "../android/res";
 import { vfs } from "./vfs";
 import { packages, signaturePermissions, componentState } from "../android/packages";
 import { mkComponentName, newIntent, putExtra } from "../android/intent";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jentry";
 import { awaited, rt, type Gen } from "../jvm/runtime";
 import { asSystem } from "../android/binder";
 import { serviceTransport } from "../android/server/activeservices";

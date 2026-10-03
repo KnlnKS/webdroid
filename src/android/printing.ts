@@ -3,7 +3,7 @@
 // service answers with; the dialog asks the adapter for its PDF and prints it in the browser.
 import { JObj, rt, driven, awaited, type Gen } from "../jvm/runtime";
 import { jarray, i8 } from "../jvm/abi";
-import { after, newObj, vcall, scall, staticField } from "../jvm/natives/jlang";
+import { after, newObj, vcall, scall, staticField } from "../jvm/natives/jentry";
 import { csText } from "../jvm/natives/jchars";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { wallMillis } from "../guest-clock";

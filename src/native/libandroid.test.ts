@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../natives";
 import { NativeLooper } from "../android/mainloop";
-import { JThread } from "../jvm/natives/jlang";
+import { JThread } from "../jvm/natives/jentry";
 import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { ndkInit, nativeWindowFor } from "./libandroid";

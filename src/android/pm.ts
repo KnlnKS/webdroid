@@ -7,7 +7,8 @@ import { awaited, JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/
 import { jarray, strArray, intBitsToFloat, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault } from "./os";
-import { vcall, after, newObj, detached, logUncaught } from "../jvm/natives/jlang";
+import { vcall, after, newObj } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";

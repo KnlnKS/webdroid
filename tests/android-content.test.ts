@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
 import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";

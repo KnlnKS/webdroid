@@ -3,7 +3,8 @@
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { awaited, JObj, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, detached, logUncaught } from "../../jvm/natives/jlang";
+import { newObj, vcall } from "../../jvm/natives/jentry";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable";
 import { notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";

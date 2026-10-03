@@ -4,7 +4,7 @@
 // read-only mapping or an early non-movable array, jmemory.ts), else a heap buffer's array.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
-import { after, scall, newObj } from "./jlang";
+import { after, scall, newObj } from "./jentry";
 import { intrinsicCompiler } from "./jbox";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";

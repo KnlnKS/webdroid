@@ -7,7 +7,7 @@
 import { once } from "../jvm/suspend";
 import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
-import { after, newObj, scall } from "../jvm/natives/jlang";
+import { after, newObj, scall } from "../jvm/natives/jentry";
 import { unbox } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
 import { PROCESS_UID } from "./os";

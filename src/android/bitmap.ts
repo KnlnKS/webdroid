@@ -13,7 +13,7 @@
 
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
-import { newObj, scall, vcall, after } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, after } from "../jvm/natives/jentry";
 import { writeThrough } from "../jvm/natives/jio";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";

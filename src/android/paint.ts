@@ -4,7 +4,7 @@
 
 import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
-import { after, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { handle, deref, FINALIZER } from "./handles";
 import { device } from "../shell/config";
 import { type NativeTypeface, type FakedFont, resolveDefault } from "./fonts";

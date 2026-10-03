@@ -4,7 +4,7 @@
 // for the next append. External entities are not fetched, as expat does not by default.
 
 import { rt, driven, type Gen } from "../runtime";
-import { vcall } from "./jlang";
+import { vcall } from "./jentry";
 import { charsToString } from "../abi";
 
 interface Name { uri: string; local: string; qName: string }

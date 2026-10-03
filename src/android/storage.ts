@@ -4,7 +4,7 @@
 // AVD mounts /storage/emulated/0 over /data/media. Space answers follow the browser's estimate.
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleStaticField } from "../jvm/abi";
-import { newObj, scall, linkInit } from "../jvm/natives/jlang";
+import { newObj, scall, linkInit } from "../jvm/natives/jentry";
 import { systemResource } from "./resnative";
 import { newFile } from "../jvm/natives/jio";
 import { hostStub } from "./binder";

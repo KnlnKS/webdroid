@@ -1,9 +1,10 @@
 import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
-import { JThread, toThread } from "../jvm/natives/jlang";
+import { JThread } from "../jvm/natives/jentry";
 import { Cpu, bindCpu } from "./cpu";
 import { processExited } from "../process-exit";
 import { hostLib, stp, ptr, type HostFn } from "./host";
 import { mem, anchor } from "./mem";
+import { toThread } from "../jvm/natives/jthrowable";
 
 const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
 const AAUDIO_STREAM_STATE_OPEN = 2, AAUDIO_STREAM_STATE_STARTED = 4, AAUDIO_STREAM_STATE_PAUSED = 6, AAUDIO_STREAM_STATE_FLUSHED = 8,

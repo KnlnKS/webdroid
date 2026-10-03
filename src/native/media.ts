@@ -3,7 +3,7 @@ import { fdSlice } from "../android/media-native";
 import { MediaExtractor } from "../android/media-extractor";
 import { createCodec, type Codec, type Info } from "../android/media-codec";
 import { capacity, directAddress, directCopy, directReady } from "../jvm/natives/jnio";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import type { FileSource } from "../shell/lazyfile";
 import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./fs";
 import { windowOf } from "./libandroid";

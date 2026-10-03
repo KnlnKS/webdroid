@@ -9,7 +9,8 @@
 // than be told a comforting lie.
 import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
-import { newObj, vcall, scall, after, checkFromIndexSize } from "./jlang";
+import { newObj, vcall, scall, after } from "./jentry";
+import { checkFromIndexSize } from "./jlang";
 import { strArray, u8, mangleMethod } from "../abi";
 import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";

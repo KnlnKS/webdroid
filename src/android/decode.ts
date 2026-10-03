@@ -8,7 +8,7 @@
 
 import { awaited, rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, ownedHandle, deref, release } from "./handles";
-import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, after } from "../jvm/natives/jentry";
 import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat, unshared } from "../jvm/abi";

@@ -3,7 +3,7 @@
 // here), bound by the platform itself.
 
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jentry";
 import { once } from "../jvm/suspend";
 import { newArrayList } from "../jvm/natives/jcoll";
 import type { JLocale } from "../jvm/natives/jvalues";

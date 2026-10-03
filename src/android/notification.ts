@@ -7,11 +7,12 @@
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
 import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, stringHash, detached, logUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, scall } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
-import { jarray } from "../jvm/abi";
+import { jarray, stringHash } from "../jvm/abi";
 import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { postMain } from "./mainloop";

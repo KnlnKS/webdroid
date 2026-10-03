@@ -2,7 +2,7 @@
 // through their Java API with the helpers here. The activities the platform answers through the
 // browser (pickers, share, VIEW) register here too.
 import { awaited, JObj, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jentry";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { mkUri } from "./net";
 

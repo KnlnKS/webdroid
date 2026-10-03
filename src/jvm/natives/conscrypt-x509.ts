@@ -4,7 +4,7 @@
 import { rt, driven, type Gen, type JObj } from "../runtime";
 import { ownedHandle, handle, weakHandle, deref, release } from "../../android/handles";
 import { concat, i8, jarray, u8 } from "../abi";
-import { vcall } from "./jlang";
+import { vcall } from "./jentry";
 import { boxInt } from "./jbox";
 import { nc, region, sslError, keyOf, newKey, parsing, type Key } from "./conscrypt";
 import { parseX509, X509, bitBooleans, basicConstraints, exFlags, generalNames, extKeyUsage, tbsWithout, nameRfc2253,

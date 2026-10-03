@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { JThread } from "../jvm/natives/jlang";
+import { JThread } from "../jvm/natives/jentry";
 import { Cpu, setA64 } from "./cpu";
 import { defineHost, lookupHost } from "./host";
 import { LIBC_SYSCALLS, libcInit } from "./libc";

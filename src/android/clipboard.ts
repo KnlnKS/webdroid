@@ -1,7 +1,7 @@
 // IClipboard, the TS half of AOSP's ClipboardManager. The clip itself is the broker's, shared by
 // every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jentry";
 import { parcelled, unparcelled, type ParcelData } from "./binder";
 import { postMain } from "./mainloop";
 

@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { rt } from "../src/jvm/runtime";
 import { vfs } from "../src/shell/vfs";
 import { scall, loadLibcore } from "./java";

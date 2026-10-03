@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit } from "../../../src/jvm/natives/jlang";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit } from "../../../src/jvm/natives/jentry";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
 import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";

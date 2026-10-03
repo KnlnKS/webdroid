@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 
 import { rt, declaredField, JObj } from "../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
 import { Arsc } from "../../src/android/arsc";
 import { Resources } from "../../src/android/res";
 import { PackageRecord, packages } from "../../src/android/packages";

@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, scall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../src/jvm/natives/jentry";
 import { packages, type PackageRecord } from "../src/android/packages";
 import { setProcessIdentity } from "../src/android/os";
 import { locationTransport } from "../src/android/locationmanager";

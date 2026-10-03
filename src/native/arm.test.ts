@@ -3,7 +3,7 @@ import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
 import { core, jitStats, JIT_HEAT } from "./core";
 import { finish, pattern, sweep } from "./a64.testkit";
-import { mainThread } from "../jvm/natives/jlang";
+import { mainThread } from "../jvm/natives/jentry";
 import { RET_SENTINEL } from "./abi";
 
 let shared: Cpu | null = null;

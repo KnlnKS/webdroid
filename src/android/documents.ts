@@ -10,7 +10,7 @@
  */
 
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jentry";
 import { uriParts, uriText } from "./net";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";

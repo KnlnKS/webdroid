@@ -1,6 +1,6 @@
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { concat } from "../jvm/abi";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { fdInt } from "../jvm/natives/jio";
 import type { FileSource } from "../shell/lazyfile";
 import { NativeBitmap, javaBitmap } from "./bitmap";

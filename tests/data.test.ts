@@ -2,7 +2,7 @@ import { expect, test, jest, describe, beforeAll } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
 import { useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/shell/vfs";

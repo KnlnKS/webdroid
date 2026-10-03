@@ -1,4 +1,4 @@
-import { curThread } from "../jvm/natives/jlang";
+import { curThread } from "../jvm/natives/jentry";
 import { gl, setGL, selectGL } from "../android/gl";
 import type { EglContext } from "../android/glsurface";
 

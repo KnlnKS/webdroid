@@ -7,7 +7,7 @@ import { expect } from "bun:test";
 import { mem } from "./mem";
 import { Cpu } from "./cpu";
 import { core, jitStats, JIT_HEAT } from "./core";
-import { mainThread } from "../jvm/natives/jlang";
+import { mainThread } from "../jvm/natives/jentry";
 import { RET_SENTINEL } from "./abi";
 
 export const RET = 0xd65f03c0;

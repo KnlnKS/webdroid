@@ -2,7 +2,8 @@
 // vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall, detached, logUncaught } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { systemResource } from "./resnative";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { settingsStore } from "./settings";

@@ -5,7 +5,7 @@
 // is not shared (HostBytes).
 import { mem } from "../../native/mem";
 import { rt } from "../runtime";
-import { after } from "./jlang";
+import { after } from "./jentry";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 import { pageShared } from "../../shell/pageshared";
 

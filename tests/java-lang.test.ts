@@ -2,11 +2,14 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, type JClassLoader, curThread, JThread, park, detached } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, curThread, JThread } from "../src/jvm/natives/jentry";
+import { park } from "../src/jvm/natives/jthread";
+import { type JClassLoader } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt, type ClassInfo } from "../src/jvm/runtime";
 import { inStrand, newStrand } from "../src/jvm/suspend";
 import { scall, loadLibcore, mountApexData } from "./java";
+import { detached } from "../src/jvm/natives/jthrowable";
 
 rt.linkNatives();
 await loadLibcore();
@@ -468,7 +471,7 @@ describe("java-math-boundary", () => {
 
 describe("invocation-target", () => {
   test("Method.invoke wraps what the target threw, and a stack trace prints it as the cause", async () => {
-    const { stackTraceText } = await import("../src/jvm/natives/jlang");
+    const { stackTraceText } = await import("../src/jvm/natives/jthrowable");
     const method = await vcallAsync(rt.classFor("java/lang/Integer"), "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
       "parseInt", jarray([rt.classFor("java/lang/String")], "Ljava/lang/Class;"));
     const e = await vcallAsync(method, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", null, jarray(["x"], "Ljava/lang/Object;")).then(() => null, (x) => x);

@@ -2,7 +2,7 @@
 // A package's dynamic shortcuts, validated, ranked and capped per activity as ShortcutService does.
 // There is no launcher here: nothing can be pinned, and none is persisted past the process.
 import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { after, vcall } from "../jvm/natives/jlang";
+import { after, vcall } from "../jvm/natives/jentry";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { hostStub, parceledList } from "./binder";

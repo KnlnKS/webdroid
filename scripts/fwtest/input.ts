@@ -4,7 +4,7 @@
 import { rt } from "../../src/jvm/runtime";
 import { DexFile } from "../../src/jvm/dex";
 import { jarray, mangleStaticField } from "../../src/jvm/abi";
-import { newObj, scall, vcall } from "../../src/jvm/natives/jlang";
+import { newObj, scall, vcall } from "../../src/jvm/natives/jentry";
 import { exercise, statics } from "./harness";
 
 /** event ids are random; the AVD has input devices beyond the two this host models */

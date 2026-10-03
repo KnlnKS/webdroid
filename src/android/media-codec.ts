@@ -3,7 +3,7 @@
 // MediaCodec's buffer-index protocol, which libmediandk's AMediaCodec shares.
 import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
-import { after, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio";
 import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, formatFromJava, formatToJava } from "./media-format";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";

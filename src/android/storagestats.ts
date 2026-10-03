@@ -3,7 +3,7 @@
 // AVD's services.jar): another uid's or the user's stats need PACKAGE_USAGE_STATS, which an app
 // has only through its GET_USAGE_STATS app op; an unknown package is NameNotFoundException.
 import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
 import { mimeOf } from "../mime";

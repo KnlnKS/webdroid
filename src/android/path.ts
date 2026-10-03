@@ -8,7 +8,7 @@
 import { rt, declaredField } from "../jvm/runtime";
 import { deref, handle, release } from "./handles";
 import { type Mat, mapPoint, snap } from "./matrix";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { type PathCommands, pathOp as skiaPathOp } from "./skia";
 import type { Box } from "./graphics";
 

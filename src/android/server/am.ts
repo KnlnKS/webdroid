@@ -3,7 +3,7 @@
 // configuration) and, for the package's own process, starts its launcher activity, as the home
 // screen's launch would.
 import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry";
 import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService } from "../binder";

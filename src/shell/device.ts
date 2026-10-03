@@ -25,7 +25,7 @@ import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain, postMain } from "../android/mainloop";
-import { after, mainThread, toThread } from "../jvm/natives/jlang";
+import { after, mainThread } from "../jvm/natives/jentry";
 import { deliverVsync } from "../android/vsync";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
@@ -38,6 +38,7 @@ import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server
 import { startActivityThread } from "../android/server/am";
 import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
+import { toThread } from "../jvm/natives/jthrowable";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 let displayChanged = () => {};

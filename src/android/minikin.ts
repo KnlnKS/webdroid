@@ -13,7 +13,7 @@
 
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { charsToString, mangleMethod } from "../jvm/abi";
-import { scall, vcall, after } from "../jvm/natives/jlang";
+import { scall, vcall, after } from "../jvm/natives/jentry";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { perf } from "../perf";
 import { type NativePaint, paintAt, fontTop, fontBottom, setFontMetrics } from "./paint";

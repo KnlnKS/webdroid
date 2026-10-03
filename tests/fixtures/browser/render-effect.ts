@@ -1,5 +1,5 @@
 import "../../../src/natives";
-import { newObj, vcall, scall } from "../../../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../../../src/jvm/natives/jentry";
 import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";
 import { bootWithFonts } from "./boot";

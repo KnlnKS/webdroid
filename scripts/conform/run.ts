@@ -84,7 +84,8 @@ if (one) {
   const { dexesIn } = await import("../../src/jvm/dex");
   const { loadPlatformJar } = await import("../../src/android/framework");
   const { PLATFORM_JARS } = await import("../../src/jvm/provenance");
-  const { vcallAsync, stackTraceText, scall } = await import("../../src/jvm/natives/jlang");
+  const { vcallAsync, scall } = await import("../../src/jvm/natives/jentry");
+  const { stackTraceText } = await import("../../src/jvm/natives/jthrowable");
   await (await import("../lib")).mountLocalPlatformData();
   for (const f of readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort())
     for (const d of dexesIn(new Uint8Array(await Bun.file(`${dexDir}/${f}`).arrayBuffer()), f)) rt.loadDex(d);

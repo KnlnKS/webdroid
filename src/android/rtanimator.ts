@@ -6,12 +6,13 @@
 // the frame's time and reports a finish to the Java listener.
 
 import { rt } from "../jvm/runtime";
-import { scall, detached } from "../jvm/natives/jlang";
+import { scall } from "../jvm/natives/jentry";
 import { deref, handle, ownedHandle, take } from "./handles";
 import { type NativePaint } from "./paint";
 import { NativeRenderNode, prop as canvasProperty } from "./rendernode";
 import { interpolatePaths, PathData } from "./pathparser";
 import { type Tree, type Group, type FullPath, type VPath, node } from "./vectordrawable";
+import { detached } from "../jvm/natives/jthrowable";
 
 // ── Interpolator.cpp
 export type Interpolator = (t: number) => number;

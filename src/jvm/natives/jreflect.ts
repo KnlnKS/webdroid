@@ -1,8 +1,9 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
 import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
-import { mangleMethod, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, splitSig } from "../abi";
-import { vcall, packageNamed, stringHash, idHash, JClass, classpathStream, after, enclosingClass, newObj, classDesc } from "./jlang";
+import { mangleMethod, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, splitSig, stringHash, idHash } from "../abi";
+import { vcall, after, newObj } from "./jentry";
+import { packageNamed, JClass, classpathStream, enclosingClass, classDesc } from "./jlang";
 import { fieldOffset } from "./junsafe";
 import { box, boxObject, unbox, type BoxDesc } from "./jbox";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";

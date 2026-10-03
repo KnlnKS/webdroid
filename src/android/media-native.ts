@@ -1,7 +1,7 @@
 // What the media classes' native halves share: the peer a JNI keeps for a Java object, events
 // posted back through postEventFromNative, and the sources a native half reads.
 import { rt, setDeclared, type JObj } from "../jvm/runtime";
-import { after, callOn, scall, vcall } from "../jvm/natives/jlang";
+import { after, callOn, scall, vcall } from "../jvm/natives/jentry";
 import { binderThread } from "./binder";
 import { javaFdSource } from "../native/fs";
 import { SliceFile, type FileSource } from "../shell/lazyfile";

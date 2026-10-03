@@ -249,3 +249,21 @@ export function frameOf(line: string): [string, string, number] | null {
   const unescape = (s: string) => s.replace(/_([0-9a-f]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
   return [unescape(m[1]), unescape(m[2]), m[3] === undefined ? -1 : Number(m[3])];
 }
+
+let hashCounter = 1;
+const hashes = new WeakMap<object, number>();
+/** System.identityHashCode: a string's String.hashCode, else a hash an object keeps for life */
+export function idHash(o: unknown): number {
+  if (o === null || o === undefined) return 0;
+  if (typeof o === "string") return stringHash(o);
+  if (typeof o !== "object" && typeof o !== "function") return stringHash(String(o));
+  let h = hashes.get(o as object);
+  if (h === undefined) { h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff); hashes.set(o as object, h); }
+  return h;
+}
+/** String.hashCode */
+export function stringHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h;
+}

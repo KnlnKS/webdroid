@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall, newObj } from "../src/jvm/natives/jlang";
+import { vcall, newObj } from "../src/jvm/natives/jentry";
 import { scall, mountApexData } from "./java";
 
 rt.linkNatives();

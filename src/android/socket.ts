@@ -1,7 +1,7 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // model native code shares (src/native/net.ts): a descriptor from either side is the same socket.
 import { awaited, rt, JObj, getDeclared, setDeclared, driven } from "../jvm/runtime";
-import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
+import { vcall, scall, newObj, after } from "../jvm/natives/jentry";
 import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";

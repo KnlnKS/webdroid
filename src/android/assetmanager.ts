@@ -8,7 +8,7 @@
 
 import { awaited, rt, driven, declaredField, getDeclared, setDeclared, type Gen } from "../jvm/runtime";
 import { handle, deref, release, FINALIZER } from "./handles";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jentry";
 import { i8, u8, jarray } from "../jvm/abi";
 import {
   Resources, NativeTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,

@@ -3,7 +3,7 @@ import { serviceContext } from "../android/binder";
 import { pfdContents } from "../android/os";
 import { uriText } from "../android/net";
 import { awaited, driven, type Gen, type JObj } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jentry";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 

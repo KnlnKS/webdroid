@@ -5,7 +5,7 @@
 // sets its motion ranges and the events' precision.
 
 import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { once } from "../jvm/suspend";
 import { hostStub } from "./binder";
 import { device } from "../shell/config";

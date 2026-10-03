@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../natives";
 import { rt, JObj } from "../jvm/runtime";
 import { type ClassDef, type DexFile } from "../jvm/dex";
-import { JThread, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { JThread, curThread, mainThread, setCurThread } from "../jvm/natives/jentry";
 import { cpuFor, setA64 } from "./cpu";
 import { defineHost, retD, PTR, ldp, cstr } from "./host";
 import { javaVM, jniInit, resolveByExport } from "./jni";

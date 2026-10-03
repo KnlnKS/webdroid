@@ -1,5 +1,5 @@
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jentry";
 import { boxBool } from "../jvm/natives/jbox";
 import type { WebCookies } from "../shell/webcookies";
 import { appHost } from "./apphost";

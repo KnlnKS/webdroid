@@ -8,7 +8,8 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { vcall, scall, staticField, newObj, detached, logUncaught } from "../jvm/natives/jlang";
+import { vcall, scall, staticField, newObj } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
 import { once } from "../jvm/suspend";

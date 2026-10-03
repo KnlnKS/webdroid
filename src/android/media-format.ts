@@ -1,7 +1,7 @@
 // A format as the media natives keep one (stagefright's AMessage), and its crossing to and from
 // the Map<String, Object> Java's MediaFormat wraps, its values tagged with MediaFormat's types.
 import { driven, type Gen, type JObj } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jentry";
 import { boxDesc, boxFloat, boxInt, boxLong, unbox } from "../jvm/natives/jbox";
 import { isBuffer, remainingBytes, type JBuffer } from "../jvm/natives/jnio";
 

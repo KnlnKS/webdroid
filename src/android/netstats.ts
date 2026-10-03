@@ -2,7 +2,7 @@
 // no kernel accounting records traffic here, so every counter is UNSUPPORTED, every session's summary
 // is empty and every history has no buckets.
 import { JObj, rt, noops } from "../jvm/runtime";
-import { newObj } from "../jvm/natives/jlang";
+import { newObj } from "../jvm/natives/jentry";
 import { uptimeMillis } from "../guest-clock";
 import { hostStub, newStub } from "./binder";
 import { strArray } from "../jvm/abi";

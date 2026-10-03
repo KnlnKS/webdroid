@@ -5,7 +5,7 @@ const W = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 await import(W + "/tests/platform");
 const { rt, JObj, declaredField } = await import(W + "/src/jvm/runtime");
 await import(W + "/src/natives");
-const { newObj, vcall, scall } = await import(W + "/src/jvm/natives/jlang");
+const { newObj, vcall, scall } = await import(W + "/src/jvm/natives/jentry");
 const { setAppHost } = await import(W + "/src/android/apphost");
 const { testAppHost, loadPlatform } = await import(W + "/tests/java");
 const { packages, PackageRecord, packageUid } = await import(W + "/src/android/packages");

@@ -11,7 +11,7 @@ import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCiphe
 import { type JBuffer, remainingBytes, resident, addressOf, limit, position, directAddress } from "./jnio";
 import { memoryAt } from "./jmemory";
 import { randomBytes } from "../../native/libc";
-import { after, scall } from "./jlang";
+import { after, scall } from "./jentry";
 import { concat, i8, jarray, u8 } from "../abi";
 import {
   CURVES, curveByName, curveOfParams, G, mul, onCurve, randomScalar, bitLength, ecdsaSign, ecdsaVerify, equal, x25519, X25519_BASE,

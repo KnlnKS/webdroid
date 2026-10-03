@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { TV } from "../src/android/axml";
-import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
+import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread } from "../src/jvm/natives/jentry";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";

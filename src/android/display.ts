@@ -4,11 +4,12 @@
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleField, jarray } from "../jvm/abi";
-import { after, newObj, scall, vcall, staticField, detached } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall, staticField } from "../jvm/natives/jentry";
 import { hostStub, binderEscape } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
 import { nativeParcel, readInt, writeInt } from "./parcel";
 import { device } from "../shell/config";
+import { detached } from "../jvm/natives/jthrowable";
 
 const INFO = "android/view/DisplayInfo";
 /** a Display.Mode for the panel, in its natural (portrait) orientation */

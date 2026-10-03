@@ -11,7 +11,7 @@ import { NativeRenderNode } from "../src/android/rendernode";
 import { about, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
-import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
+import { newObj, linkInit, vcall } from "../src/jvm/natives/jentry";
 import { parsePackageArchive } from "../src/android/packagearchive";
 import { appResources, loadFrameworkJar, loadSystemFonts, scall, thrown } from "./java";
 

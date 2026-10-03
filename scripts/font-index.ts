@@ -11,7 +11,7 @@ const { rt, awaited } = await import("../src/jvm/runtime");
 await import("../src/natives");
 await loadFrameworkJar();
 const { platformFontIndex, preloadFonts, systemFontMap } = await import("../src/android/fonts");
-const { vcall, callOn, mainThread } = await import("../src/jvm/natives/jlang");
+const { vcall, callOn, mainThread } = await import("../src/jvm/natives/jentry");
 const { fdInt } = await import("../src/jvm/natives/jio");
 const { fdContents } = await import("../src/android/os");
 const fontMap = await callOn(mainThread, () => rt.drive(function* () {

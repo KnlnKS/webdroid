@@ -2,7 +2,7 @@
 // frames (computed by AOSP's own WindowLayout, as the server's DisplayPolicy does), the insets the
 // device's bars give, a surface per window on the display's layer tree, and an input channel each.
 import { awaited, rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, callOn, newObj, vcall, scall, JThread } from "../../jvm/natives/jlang";
+import { after, callOn, newObj, vcall, scall, JThread } from "../../jvm/natives/jentry";
 import { hostStub } from "../binder";
 import { device } from "../../shell/config";
 import { uptimeMillis } from "../../guest-clock";

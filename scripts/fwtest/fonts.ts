@@ -1,6 +1,6 @@
 // Fonts and shaping: Font, FontFamily, FontFileUtil, Typeface and TextRunShaper over the reference
 // build's /system/fonts.
-import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit } from "../../src/jvm/natives/jentry";
 import { familyOf, typefaceOf } from "../../src/android/fonts";
 import { loadSystemFonts } from "../../tests/java";
 import { exercise, same, thrown, fontMetrics, ltrb } from "./harness";

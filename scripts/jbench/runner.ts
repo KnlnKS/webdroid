@@ -5,7 +5,7 @@ import "../../src/natives";
 import { dexesIn } from "../../src/jvm/dex";
 import { loadPlatformJar } from "../../src/android/framework";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { scall, vcallAsync } from "../../src/jvm/natives/jlang";
+import { scall, vcallAsync } from "../../src/jvm/natives/jentry";
 import { mountPlatformData } from "../../src/shell/apex";
 
 const keep = setInterval(() => {}, 1 << 30); // the yield channel is unref'd

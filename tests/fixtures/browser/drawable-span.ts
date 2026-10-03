@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
-import { newObj, vcall } from "../../../src/jvm/natives/jlang";
+import { newObj, vcall } from "../../../src/jvm/natives/jentry";
 import { newPaint, setFontMetrics } from "../../../src/android/paint";
 import { declaredField } from "../../../src/jvm/runtime";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";

@@ -1,5 +1,5 @@
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, after } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, after } from "../jvm/natives/jentry";
 import { type JIntent, newIntent, putExtra } from "./intent";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
 import { exportBinder, importBinder, type ParcelData } from "./binder";

@@ -23,7 +23,7 @@ import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
 import { NativeBitmap, colorLongAt } from "./bitmap";
-import { vcall, scall, after, callOn, mainThread } from "../jvm/natives/jlang";
+import { vcall, scall, after, callOn, mainThread } from "../jvm/natives/jentry";
 import { asZygote } from "./os";
 import { hasProperty, propertyValue as propValue } from "../shell/properties";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path";

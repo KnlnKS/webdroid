@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
 import { mangleMethod } from "../../../src/jvm/abi";
-import { vcall, scall } from "../../../src/jvm/natives/jlang";
+import { vcall, scall } from "../../../src/jvm/natives/jentry";
 import { canvasOver } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { mountPlatformData } from "../../../src/shell/apex";

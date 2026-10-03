@@ -3,7 +3,7 @@ import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { appHost } from "./apphost";
 import { type JUri, mkUri, uriText, clipUris } from "./net";
 import { PROCESS_UID } from "./os";
-import { newObj, vcall, after } from "../jvm/natives/jlang";
+import { newObj, vcall, after } from "../jvm/natives/jentry";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { packages } from "./packages";
 type PersistedUriGrant = { uri: string; flags: number; time: number };

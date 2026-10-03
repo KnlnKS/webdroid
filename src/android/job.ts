@@ -4,7 +4,8 @@
 // through the service's IJobService, and hear back through the IJobCallback its parameters carry.
 
 import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall, detached, logUncaught } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { bindAsSystem } from "./server/activeservices";
 import { asSystem, hostStub, parceledList } from "./binder";
 import { batteryLow, netUp } from "./services";

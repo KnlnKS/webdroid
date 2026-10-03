@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import "../src/natives";
-import { newObj, vcall, scall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, scall } from "../src/jvm/natives/jentry";
 import { rt } from "../src/jvm/runtime";
 import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";

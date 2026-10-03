@@ -7,7 +7,8 @@
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
 import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
-import { curThread, mainThread, scall, newObj, vcall, callOn, detached, dispatchUncaught, toThread, type Escape, type JThread } from "../jvm/natives/jlang";
+import { curThread, mainThread, scall, newObj, vcall, callOn, type JThread } from "../jvm/natives/jentry";
+import { dispatchUncaught, detached, toThread, type Escape } from "../jvm/natives/jthrowable";
 import { processExited } from "../process-exit";
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";

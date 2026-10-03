@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mkPfd, pfdBackingBytes } from "../src/android/os";
 import { parcelled, unparcelled } from "../src/android/binder";
-import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";

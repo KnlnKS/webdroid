@@ -15,7 +15,7 @@
 import { rt, driven, type Gen } from "../runtime";
 import { jarray, mangleField, mangleMethod } from "../abi";
 import { javaClassSets } from "../regex-sets";
-import { after, newObj } from "./jlang";
+import { after, newObj } from "./jentry";
 import { handle, deref, release } from "../../android/handles";
 
 interface Derived { find: RegExp; sticky: RegExp; whole: RegExp }

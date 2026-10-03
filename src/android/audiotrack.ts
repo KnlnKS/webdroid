@@ -2,7 +2,7 @@
 // shared AudioContext. The periodic position event is what streaming mixers (a native engine's
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
 import { rt, type JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { type JBuffer, bufferBytes } from "../jvm/natives/jnio";
 import { uptimeMillis } from "../guest-clock";
 import { PCM_BYTES, PcmOutput, type PcmConfig, audioContext, minFrames, newAudioSessionId, outputSampleRate } from "./audio-output";

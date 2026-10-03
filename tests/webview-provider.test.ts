@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { vcall, newObj } from "../src/jvm/natives/jlang";
+import { vcall, newObj } from "../src/jvm/natives/jentry";
 import { onMain } from "../src/android/mainloop";
 import type { WebViewChromium } from "../src/android/webkit";
 import { loadFrameworkJar } from "./java";

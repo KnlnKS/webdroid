@@ -1,7 +1,8 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, scall, vcall, after, linkInit, logUncaught, newObj, detached, type Escape } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, scall, vcall, after, linkInit, newObj } from "../jvm/natives/jentry";
+import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable";
 import { exitProcess, processExited } from "../process-exit";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";

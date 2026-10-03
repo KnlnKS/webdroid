@@ -1,6 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jentry";
 import { bootWithFonts } from "./boot";
 import { deref } from "../../../src/android/handles";
 import { NativeShader, NativeGradient, NativeBitmapShader, NativeComposeShader } from "../../../src/android/graphics";

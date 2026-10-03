@@ -5,7 +5,7 @@
 // on that origin reports or deletes what it holds.
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, vcall, scall } from "../jvm/natives/jlang";
+import { newObj, vcall, scall } from "../jvm/natives/jentry";
 import { boxLong } from "../jvm/natives/jbox";
 import { installTime } from "./packages";
 import { onMain } from "./mainloop";

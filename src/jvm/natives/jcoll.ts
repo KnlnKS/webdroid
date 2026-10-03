@@ -1,9 +1,9 @@
 // java.util's collections run from libcore. TS builds and reads the ones it exchanges with Java
 // through these helpers: ArrayList by its own fields, anything else through its Java API.
-import { jarray, mangleField } from "../abi";
+import { jarray, mangleField, stringHash } from "../abi";
 import { rt, driven, type Gen } from "../runtime";
 import { intrinsicCompiler } from "./jbox";
-import { vcall, scall, stringHash } from "./jlang";
+import { vcall, scall } from "./jentry";
 
 const AL = "java/util/ArrayList", HM = "java/util/HashMap", NODE = "java/util/HashMap$Node", ITR = "java/util/ArrayList$Itr";
 const DATA = mangleField(AL, "elementData"), SIZE = mangleField(AL, "size"), MOD = mangleField("java/util/AbstractList", "modCount");

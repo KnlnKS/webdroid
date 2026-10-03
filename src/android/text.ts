@@ -1,6 +1,6 @@
 // android.text: AndroidCharacter's natives.
 import { rt, driven, type Gen } from "../jvm/runtime";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { uchar } from "../jvm/natives/jicu";
 
 // android_text_AndroidCharacter.cpp: u_charDirection, u_getIntPropertyValue(UCHAR_EAST_ASIAN_WIDTH)

@@ -12,7 +12,7 @@ import { procIdentity } from "../shell/procfs";
 import { wallMillis } from "../guest-clock";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread } from "../jvm/natives/jlang";
+import { curThread } from "../jvm/natives/jentry";
 import { currentStrand, inStrand } from "../jvm/suspend";
 import { vfs } from "../shell/vfs";
 

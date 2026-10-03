@@ -1,7 +1,7 @@
 // What every fwtest exercise shares: the runner that reports what the real bytecode reached, and
 // the comparisons against values the reference AVD printed for the same calls.
 import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { vcall, linkInit } from "../../src/jvm/natives/jlang";
+import { vcall, linkInit } from "../../src/jvm/natives/jentry";
 import { mangleMethod } from "../../src/jvm/abi";
 
 const reached: string[] = [];

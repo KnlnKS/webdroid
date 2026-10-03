@@ -7,7 +7,7 @@
 // or toggle: a scan fails and setWifiEnabled is refused.
 import { awaited, JObj, setDeclared, rt, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jentry";
 import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
 import { checkUidPermission } from "./permissions";
 import { packages } from "./packages";

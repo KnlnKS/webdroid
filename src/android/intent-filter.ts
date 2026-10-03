@@ -2,7 +2,7 @@
 // parseData and parseRelRefGroup), matched as PackageManagerService's IntentResolver matches it:
 // with AOSP's own IntentFilter.
 import type { JObj, Gen } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jentry";
 import { newLinkedHashSet } from "../jvm/natives/jcoll";
 import { attr, attrStr, TV, type XmlNode } from "./axml";
 import { mkUri } from "./net";

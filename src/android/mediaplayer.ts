@@ -2,7 +2,7 @@
 // call in the wrong state with INVALID_OPERATION, which the JNI throws as IllegalStateException;
 // events reach Java through postEventFromNative, as the player's listener posts them.
 import { rt, driven, getDeclared, setDeclared, type JObj, type Gen } from "../jvm/runtime";
-import { after, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { fdInt } from "../jvm/natives/jio";
 import { readFully, type FileSource } from "../shell/lazyfile";
 import { presentSurface, windowSurface, type GlSurface } from "./glsurface";

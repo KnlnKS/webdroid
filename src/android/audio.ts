@@ -6,7 +6,7 @@
 // AVD's for its output (the speaker).
 import { rt, JObj, noops, stubs, declaredField, driven } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall } from "../jvm/natives/jentry";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { hostStub, oneway } from "./binder";
 import { isMusicActive, newAudioSessionId, outputSampleRate } from "./audio-output";

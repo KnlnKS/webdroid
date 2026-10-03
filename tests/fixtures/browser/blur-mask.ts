@@ -1,6 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jlang";
+import { newObj, vcall, scall, linkInit } from "../../../src/jvm/natives/jentry";
 import { tintedBmp } from "../../../src/android/graphics";
 import { newPaint } from "../../../src/android/paint";
 import { canvasOver } from "../../../src/android/canvas";

@@ -5,7 +5,7 @@ import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
 import { pageShared } from "../shell/pageshared";
-import { after } from "../jvm/natives/jlang";
+import { after } from "../jvm/natives/jentry";
 import { servedFont, platformFontBytes } from "./fonts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;

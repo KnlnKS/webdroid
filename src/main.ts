@@ -11,7 +11,8 @@ import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
 import { rt } from "./jvm/runtime";
-import { newObj, vcall, scall, strictThreadOwnership, threadStates } from "./jvm/natives/jlang";
+import { newObj, vcall, scall, strictThreadOwnership } from "./jvm/natives/jentry";
+import { threadStates } from "./jvm/natives/jthread";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
 import { bootApk, firstPresented, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";

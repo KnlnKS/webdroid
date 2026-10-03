@@ -2,7 +2,7 @@
 // device, but this one lacks FEATURE_DEVICE_ADMIN, so it answers as with mHasFeature false (decoded
 // from the reference AVD's services.jar): no admin, owner or policy is ever in force.
 import { JObj, rt } from "../jvm/runtime";
-import { staticField } from "../jvm/natives/jlang";
+import { staticField } from "../jvm/natives/jentry";
 import { hostStub } from "./binder";
 
 const CN = "Landroid/content/ComponentName;";

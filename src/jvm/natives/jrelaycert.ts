@@ -6,7 +6,7 @@
 // a pinned key does not match it.
 import { jarray } from "../abi";
 import { driven, type Gen } from "../runtime";
-import { newObj, vcall, scall } from "./jlang";
+import { newObj, vcall, scall } from "./jentry";
 import { vfs } from "../../shell/vfs";
 import { BytesFile } from "../../shell/lazyfile";
 import { md5, sha1, sha256 } from "./digest";

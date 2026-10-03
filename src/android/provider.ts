@@ -2,7 +2,7 @@
 // pickers, the photo picker, the chooser, sharing and viewing), over the browser's own.
 
 import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall } from "../jvm/natives/jlang";
+import { newObj, vcall, scall } from "../jvm/natives/jentry";
 import { serviceContext } from "./binder";
 import { startActivityFor } from "./server/atm";
 import { thisApp } from "./server/am";

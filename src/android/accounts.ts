@@ -5,7 +5,8 @@
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
 import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall, logUncaught, after, detached } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, after } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { boxInt } from "../jvm/natives/jbox";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";

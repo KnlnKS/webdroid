@@ -9,7 +9,7 @@
 
 import { awaited, rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod, jarray, PRIM_ARRAYS, type PrimElem } from "../jvm/abi";
-import { after, vcall, scall, callOn, newObj, staticField, JThread } from "../jvm/natives/jlang";
+import { after, vcall, scall, callOn, newObj, staticField, JThread } from "../jvm/natives/jentry";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { boxBool } from "../jvm/natives/jbox";

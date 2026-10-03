@@ -5,7 +5,8 @@
 // outlives this process: each created service's start state, reported here as it changes, and
 // other processes' bindings, which it recreates in a restarted process.
 import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { newObj, vcall, detached, logUncaught } from "../../jvm/natives/jlang";
+import { newObj, vcall } from "../../jvm/natives/jentry";
+import { logUncaught, detached } from "../../jvm/natives/jthrowable";
 import { notConnected, parceledList, type ParcelData, binderEscape } from "../binder";
 import { encodeIntent, decodeIntent } from "../intentipc";
 import { PROCESS_PID, PROCESS_UID } from "../os";

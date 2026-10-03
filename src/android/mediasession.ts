@@ -2,7 +2,7 @@
 // keep sessions: a record holds what its session last set, relays a controller's transport calls
 // to the session's ISessionCallback, and tells registered ISessionControllerCallbacks of changes.
 import { awaited, JObj, rt, driven, noops, type Gen } from "../jvm/runtime";
-import { after, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall } from "../jvm/natives/jentry";
 import { lambda } from "../jvm/natives/jlambda";
 import { hostStub, newStub, oneway } from "./binder";
 import { setStreamVolume, streamMaxVolume, streamVolume } from "./audio";

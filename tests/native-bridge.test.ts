@@ -3,7 +3,7 @@ import "../src/natives";
 import { driven, type Gen, rt, JObj } from "../src/jvm/runtime";
 import { Cpu, setA64 } from "../src/native/cpu";
 import { mem } from "../src/native/mem";
-import { mainThread, newObj, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jlang";
+import { mainThread, newObj, curThread, JThread, setCurThread, vcall } from "../src/jvm/natives/jentry";
 import { RET_SENTINEL, PAGE_SIZE, STACK_SIZE } from "../src/native/abi";
 import { lookupHost, hostFn, type ArgReader, hostLib, vaList } from "../src/native/host";
 import { libcInit } from "../src/native/libc";

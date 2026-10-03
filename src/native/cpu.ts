@@ -3,7 +3,7 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { Runtime } from "../jvm/runtime";
-import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../jvm/natives/jlang";
+import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../jvm/natives/jentry";
 import { currentStrand, enterStrand } from "../jvm/suspend";
 import { NativeFault, BadAddress, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";

@@ -5,12 +5,13 @@ import { awaited, rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { setResourceLocale, setResourceNight, setResourceOrientation } from "./res";
 import { sizeClass } from "./arsc";
-import { vcall, after, scall, newObj, detached } from "../jvm/natives/jlang";
+import { vcall, after, scall, newObj } from "../jvm/natives/jentry";
 import { jarray } from "../jvm/abi";
 import { type JLocale, localeTag, localeForTag, tagDirection } from "../jvm/natives/jvalues";
 import { mkPfd } from "./os";
 import { appHost } from "./apphost";
 import { hostStub } from "./binder";
+import { detached } from "../jvm/natives/jthrowable";
 
 /** framework-res's `type`/`name` as Resources.getSystem() reads it with `read`, or its id without one */
 export const systemResource = driven(function* systemResource$(type: string, name: string, read?: string, desc?: string, ...args: unknown[]): Gen<unknown> {

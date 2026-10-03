@@ -1,7 +1,8 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync, stringHash } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
+import { stringHash } from "../src/jvm/abi";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
 import { bootApp, packageRecord } from "./java";

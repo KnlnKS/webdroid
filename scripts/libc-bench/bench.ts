@@ -10,7 +10,7 @@ await import("../../src/jvm/natives/jlang");
 const { loadNativeLib } = await import("../../src/native/loader");
 const { modules } = await import("../../src/native/dl");
 const { cpuFor } = await import("../../src/native/cpu");
-const { curThread } = await import("../../src/jvm/natives/jlang");
+const { curThread } = await import("../../src/jvm/natives/jentry");
 const { perf } = await import("../../src/perf");
 rt.classpath = {};
 await mountLocalPlatformData();

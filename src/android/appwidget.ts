@@ -6,7 +6,7 @@
 // unsupported.
 import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { newObj, scall, staticField, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry";
 import { callingIdentity, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
 

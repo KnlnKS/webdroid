@@ -3,7 +3,7 @@
 // in screen pixels. The e2e harness diffs this against the device's dump.
 import { awaited, rt, declaredField, driven, type Gen, type JObj } from "../jvm/runtime";
 import { windowZOf } from "../android/server/wm";
-import { vcall, scall, newObj } from "../jvm/natives/jlang";
+import { vcall, scall, newObj } from "../jvm/natives/jentry";
 import { csText } from "../jvm/natives/jchars";
 import { edges } from "../android/graphics";
 

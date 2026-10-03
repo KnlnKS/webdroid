@@ -2,7 +2,8 @@
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
 import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { scall, vcall, after, newObj, detached, logUncaught } from "../jvm/natives/jlang";
+import { scall, vcall, after, newObj } from "../jvm/natives/jentry";
+import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";

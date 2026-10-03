@@ -1,7 +1,8 @@
 // System services and binder-ish plumbing, and FileObserver's inotify.
 
 import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, logUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jentry";
+import { logUncaught } from "../jvm/natives/jthrowable";
 import { utf8 } from "../jvm/abi";
 import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch, javaReadFd } from "../native/fs";
 import { newArrayList } from "../jvm/natives/jcoll";
