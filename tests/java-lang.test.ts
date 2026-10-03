@@ -5,7 +5,7 @@ import type { DexFile, EncAnnotation } from "../src/jvm/dex";
 import { vcall, newObj, vcallAsync, vcallOn, callOn, callUncaught, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
-import { yieldAs } from "../src/jvm/suspend";
+import { inStrand, newStrand, yieldAs } from "../src/jvm/suspend";
 import { scall, loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
@@ -519,6 +519,23 @@ describe("thread-state", () => {
     await vcall(thread, "join", "()V");
     expect(await state(thread)).toBe("TERMINATED");
     await expect(vcallAsync(thread, "start", "()V")).rejects.toBeDefined();
+  });
+
+  test("a monitor excludes another call chain on its thread and admits its own", async () => {
+    const lock = {}, a = newStrand(), b = newStrand();
+    inStrand(a, () => { rt.me(lock); rt.me(lock); });
+    let entered = false;
+    const blocked = inStrand(b, () => rt.me(lock));
+    void Promise.resolve(blocked).then(() => { entered = true; });
+    expect(blocked).toBeInstanceOf(Promise);
+    expect(() => inStrand(b, () => rt.mx(lock))).toThrow();
+    inStrand(a, () => rt.mx(lock));
+    await Promise.resolve();
+    expect(entered).toBe(false);
+    inStrand(a, () => rt.mx(lock));
+    await blocked;
+    expect(entered).toBe(true);
+    inStrand(b, () => rt.mx(lock));
   });
 
   test("Thread states expose monitor contention, timed parking, wakeup and interruption", async () => {

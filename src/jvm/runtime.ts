@@ -193,15 +193,19 @@ export class Runtime {
   su: (t: unknown) => void = () => {};
   monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
   /** monitor-enter and monitor-exit, given the monitor the compiled site loaded from the object: a
-   *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call */
+   *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call.
+   *  The holder is a thread as one call chain (Monitors' chainHolds, inlined) */
   me(obj: object | string | null | 0, m?: Monitor) {
-    const thread = this.th();
-    if (m !== undefined && (m.depth === 0 || m.owner === thread)) { m.owner = thread; m.depth++; return; }
-    return this.monitors.enter(obj, thread);
+    const thread = this.th(), s = currentStrand();
+    if (m !== undefined && (m.depth === 0 || (m.owner === thread && (m.strand === s || m.strand === 0 || s === 0)))) {
+      if (m.depth++ === 0) { m.owner = thread; m.strand = s; }
+      return;
+    }
+    return this.monitors.enter(obj, thread, s);
   }
   mx(obj: object | string | null | 0, m?: Monitor) {
-    const thread = this.th();
-    if (m !== undefined && m.owner === thread && (m.depth > 1 || m.entrants.length === 0)) {
+    const thread = this.th(), s = currentStrand();
+    if (m !== undefined && m.owner === thread && (m.strand === s || m.strand === 0 || s === 0) && (m.depth > 1 || m.entrants.length === 0)) {
       if (--m.depth === 0) m.owner = null;
       return;
     }
