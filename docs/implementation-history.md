@@ -2447,3 +2447,80 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   A compact display-list rewrite remains unproven: first measure argument-array
   allocation and command distributions. Moving individual Canvas2D commands to
   Wasm would add crossings; a renderer rewrite needs a batched rendering boundary.
+
+- JVM allocation and tiering pass (2026-10-02, base `304c0529`). Short UTF-16
+  conversion reuses numeric scratch arrays by length below 128 code units; typed
+  reads cannot re-enter Java and the cache retains no caller objects. A V8 probe
+  of 40M conversions reduced scavenges from 16,466 to 8,425, with only 0–5% timing
+  improvement. Cold-frame pooling was removed after V8 probes slowed by 1.6–2.0x;
+  clearing registers and managing pools outweighed fresh allocations. Replacing
+  superclass `.call` with `super` was neutral: V8 already inlined the existing
+  call shape. Static live-register analysis suggested only 8–15% fewer saved
+  slots in the inspected DEX sets, insufficient evidence for an OSR/liveness rewrite.
+- Idle code emission previously persisted source for the next launch while this
+  launch continued interpreting it. It now binds that same source and retargets
+  method cells during idle time; resumable code is prepared only after a cold
+  frame actually suspends. Existing suspended frames retain their method state.
+  The existing 32 MiB source allowance reserves 8 MiB for demand promotion; idle
+  installation cannot disable a method's later demand promotion. The allowance
+  accounts for source, not total heap; persisted/worker bodies already follow
+  a separate path. A 16 MiB idle limit lost much of the benefit to startup code;
+  24 MiB is measured tuning, not a universal optimum. An idle callback still
+  cannot preempt one large compilation. The core tier test covers a suspended
+  frame crossing installation, source reuse and demand promotion after the idle
+  allowance fills. A bulk worker experiment emitting every baseline-profile
+  resumable body was removed: Mihon added 44.6 MB to 32.1 MB of entry source,
+  retaining unused offered bodies. See [performance boundaries](decisions/0003-performance-boundaries.md)
+  for the architecture audit and remaining Wasm/batching experiments.
+- Performance capture validation (2026-10-02). The first Mihon scrolling sample
+  missed More/Settings during its splash, then reported advancing ticks with no
+  presentations on a static library screen. It was discarded. `perf-browser`
+  now fails missing setup targets and marks hidden/stalled, incomplete-input or
+  zero-presentation interaction windows invalid while preserving their reports.
+  Explicit setup readiness produced valid settings scrolls. Never interpret
+  shell ticks as FPS or an invalid window as a faster implementation.
+
+- Final performance samples (2026-10-02, `8e00b97d`). The cold latency gate
+  passed with per-app maxima of 71 ms (Calculator), 26 ms (FitNotes), 131 ms
+  (Mihon); the warm gate passed at 84/28/150 ms. The initial baseline cold gate
+  peaked at 97 ms and a later baseline Mihon run at 130 ms. These are individual
+  shared-host samples, not evidence of a wall-time speedup. The user explicitly
+  approved continuing while another checkout ran browser tests. During a later
+  scrolling sample, external parallel Bun workers consumed hundreds of percent
+  CPU; no unrelated processes were stopped. Cold-call reductions are clearer:
+  final FitNotes repeated date navigation had zero versus 1,666–2,408 baseline;
+  Mihon's repeated theme switches had 2,913/2,183 versus 8,448/6,002 in the later
+  baseline run (the initial baseline was itself variable at 1,284/5,879).
+  Final scrolling samples were valid but noisy: candidate 32.00, baseline 38.58,
+  candidate repeat 62.58 presentations/s, following the earlier 69.91/69.66 pair
+  before idle installation. All completed 11/11 inputs with visible advancing
+  ticks, presentations and healthy process diagnostics. The final repeat retained
+  25,573,689 source bytes versus baseline 4,471,890; post-GC heap was 610.5 versus
+  617.7 MiB, one sample each. Do not infer a general memory or FPS improvement.
+  Reports are under ignored `webdroid-shots/performance/`; reproduce scrolling
+  with `perf-browser --flow mihon-app --after settings --exercise
+  settings-scroll,settings-scroll-back --interval 1000 --ms 12000
+  --setup-min-wait 6500`, alternating immutable revisions on private ports.
+
+  Lichess tools/home interaction likewise completed 11/11 inputs using SwiftShader:
+  the earlier baseline was 16.67 presentations/s, final candidate 14.75, following
+  baseline repeat 10.25. All three processes answered diagnostics; the existing
+  `androidx/window/sidecar/SidecarProvider` missing class was unchanged, with no
+  native requirements or runtime errors. This variability does not isolate a
+  native FPS gain. Candidate cold calls fell to 470 from the initial baseline's
+  4,432, but guest execution remained the dominant cost. The candidate's tools
+  screen and Mihon's scrolled settings screen were visually inspected.
+
+- Verification for the performance pass: final typecheck and all 1,183 unit tests
+  passed (76,148 assertions). FitNotes (4,213 classes), Mihon (21,918) and Lichess
+  (3,300) smoke-compiled with zero method failures; framework checks passed 30/30.
+  Both baseline and candidate completed all seven serialized quick flows, 105
+  steps each, with every process's diagnostics available and no new missing APIs,
+  native requirements or runtime errors. Komikku's 11 existing SQLite diagnostic
+  messages were identical. Three Android visual checkpoint scores matched exactly.
+  The initial baseline FitNotes PNG caught a spinner despite the same UI tree as
+  the candidate's completed workout; repeating baseline FitNotes produced a PNG
+  byte-identical to the candidate. Goldens were unchanged. This covers the local
+  reproducible lane and the measured Lichess interaction, not the full live/corpus
+  matrix or arbitrary APK compatibility. Cold/warm latency gates pass, but the
+  shared host prevents a reliable overall FPS conclusion.
