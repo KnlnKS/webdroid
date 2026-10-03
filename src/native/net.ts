@@ -1041,8 +1041,8 @@ function gaiStrerror(code: number): number {
   return address;
 }
 
-/** struct msghdr's fields, pointer-sized after msg_namelen */
-const MSG = { name: 0, nameLength: PTR, iov: 2 * PTR, iovLength: 3 * PTR, control: 4 * PTR, controlLength: 5 * PTR, flags: 6 * PTR };
+/** struct msghdr's fields, pointer-sized after msg_namelen (PTR is the process ABI's, set after load) */
+const MSG = { name: 0, nameLength: 1, iov: 2, iovLength: 3, control: 4, controlLength: 5, flags: 6 };
 const UIO_MAXIOV = 1024;
 
 export const NET_SYSCALLS: Record<string, HostFn> = {
@@ -1084,19 +1084,19 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   sendmsg: (cpu, args) => {
     const fd = args.i(), msg = args.p();
     if (!isNativeSocket(fd) && !isUnixSocket(fd)) return notSocket(cpu, fd);
-    const count = ldLong(msg + MSG.iovLength);
+    const count = ldLong(msg + MSG.iovLength * PTR);
     if (count < 0 || count > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
-    if (ldp(msg + MSG.control) && ldLong(msg + MSG.controlLength)) return fail(cpu, E.INVAL);
-    return nativeSendTo(cpu, fd, gather(ldp(msg + MSG.iov), count), ldp(msg + MSG.name), mem.ld32(msg + MSG.nameLength));
+    if (ldp(msg + MSG.control * PTR) && ldLong(msg + MSG.controlLength * PTR)) return fail(cpu, E.INVAL);
+    return nativeSendTo(cpu, fd, gather(ldp(msg + MSG.iov * PTR), count), ldp(msg + MSG.name * PTR), mem.ld32(msg + MSG.nameLength * PTR));
   },
   recvmsg: (cpu, args) => {
     const fd = args.i(), msg = args.p(), flags = args.i();
     if (!isNativeSocket(fd) && !isUnixSocket(fd)) return notSocket(cpu, fd);
-    const iov = ldp(msg + MSG.iov), count = ldLong(msg + MSG.iovLength);
+    const iov = ldp(msg + MSG.iov * PTR), count = ldLong(msg + MSG.iovLength * PTR);
     if (count < 0 || count > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
     const buffers = Array.from({ length: count }, (_, i) => guestBuffer(ldp(iov + i * 2 * PTR), ldLong(iov + i * 2 * PTR + PTR)));
-    stLong(msg + MSG.controlLength, 0);
-    return nativeReceive(cpu, fd, buffers, flags, ldp(msg + MSG.name), msg + MSG.nameLength, msg + MSG.flags);
+    stLong(msg + MSG.controlLength * PTR, 0);
+    return nativeReceive(cpu, fd, buffers, flags, ldp(msg + MSG.name * PTR), msg + MSG.nameLength * PTR, msg + MSG.flags * PTR);
   },
   shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, isUnixSocket(fd) ? javaShutdownFd(fd, how) : socketShutdown(fd, how)); },
   setsockopt: (cpu, args) => nativeSetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.u()),

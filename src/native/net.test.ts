@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
-import { ldp, lookupHost } from "./host";
+import { defineHost, ldp, lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
 import { mem } from "./mem";
-import { netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, AF_INET, AF_INET6, SOL_SOCKET } from "./net";
+import { NET_SYSCALLS, netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, AF_INET, AF_INET6, SOL_SOCKET } from "./net";
 import { E } from "./abi";
+import { FS_SYSCALLS } from "./fs";
 
 test("a loopback TCP connection stays in the process, with Linux's errors", async () => {
   const SOCK_STREAM = 1, SOCK_NONBLOCK = 0x800, SO_ERROR = 4, any6 = new Array(16).fill(0);
@@ -82,4 +83,33 @@ test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpac
     expect([...mem.bytes(data + 16, 3), mem.ld32(msg + 24)]).toEqual([1, 2, 3, 0x20 /* MSG_TRUNC */]);
     for (const fd of [client, accepted, server, mem.ld32(pair), mem.ld32(pair + 4)]) expect(await call("close", fd)).toBe(0);
   } finally { mem.free(scratch); cpu.dispose(); }
+});
+
+test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and recvmsg", async () => {
+  setA64(true); kernelInit();
+  const cpu = new Cpu(mainThread, "msghdr-test"), scratch = mem.malloc(512);
+  const call = (name: string, ...args: number[]) => cpu.call(defineHost(name, { ...NET_SYSCALLS, ...FS_SYSCALLS }[name]), args);
+  const sockaddr = scratch, length = scratch + 32, msg = scratch + 64, iov = scratch + 128, data = scratch + 160, from = scratch + 224;
+  const message = (name: number, nameLength: number, base: number, size: number) => {
+    mem.memset(msg, 0, 56);
+    mem.st64(msg, BigInt(name)); mem.st32(msg + 8, nameLength); mem.st64(msg + 16, BigInt(iov)); mem.st64(msg + 24, 1n);
+    mem.st64(iov, BigInt(base)); mem.st64(iov + 8, BigInt(size));
+  };
+  try {
+    const receiver = await call("socket", AF_INET, 2 | 0x800, 0), sender = await call("socket", AF_INET, 2, 0);
+    mem.memset(sockaddr, 0, 16); mem.st16(sockaddr, AF_INET); mem.write(sockaddr + 4, [127, 0, 0, 1]);
+    expect(await call("bind", receiver, sockaddr, 16)).toBe(0);
+    mem.st32(length, 16);
+    expect(await call("getsockname", receiver, sockaddr, length)).toBe(0);
+    message(0, 0, data, 4);
+    expect(await call("recvmsg", receiver, msg, 0)).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(E.AGAIN);
+    mem.write(data, [9, 8, 7, 6]);
+    message(sockaddr, 16, data, 4);
+    expect(await call("sendmsg", sender, msg, 0)).toBe(4);
+    message(from, 16, data + 8, 8);
+    expect(await call("recvmsg", receiver, msg, 0)).toBe(4);
+    expect([...mem.bytes(data + 8, 4), mem.ld32(msg + 8), mem.ld16u(from)]).toEqual([9, 8, 7, 6, 16, AF_INET]);
+    for (const fd of [receiver, sender]) expect(await call("close", fd)).toBe(0);
+  } finally { mem.free(scratch); cpu.dispose(); setA64(false); }
 });
