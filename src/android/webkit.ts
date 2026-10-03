@@ -6,7 +6,7 @@
 // runs that renderer on this thread gets only the calls that return nothing, posted.
 
 import { awaited, rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
-import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod, jarray, PRIM_ARRAYS, type PrimElem } from "../jvm/abi";
 import { after, vcall, callOn, newObj, staticField, JThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
@@ -201,7 +201,18 @@ function win(v: WebViewChromium): Window | null {
 }
 const toJava = (d: string, x: unknown): unknown =>
   d === "J" ? BigInt(Math.trunc(Number(x)) || 0) : d === "Z" ? (x ? 1 : 0) : d === "F" || d === "D" ? Number(x)
-  : d === "C" ? String(x).charCodeAt(0) | 0 : d.length === 1 ? Number(x) | 0 : x;
+  : d === "C" ? String(x).charCodeAt(0) | 0 : d.length === 1 ? Number(x) | 0 : d[0] === "[" ? toJavaArray(d.slice(1), x) : x;
+/** a JavaScript array as Chromium's bridge passes it for an array parameter: primitive and String
+ *  elements convert, and any other array type, or a value that is no array, is null */
+function toJavaArray(elem: string, x: unknown): unknown {
+  if (!Array.isArray(x)) return null;
+  if (elem in PRIM_ARRAYS) {
+    const out = new PRIM_ARRAYS[elem as PrimElem](x.length) as unknown as unknown[];
+    x.forEach((v, i) => { out[i] = toJava(elem, v); });
+    return out;
+  }
+  return elem === "Ljava/lang/String;" ? jarray(x.map((v) => typeof v === "string" ? v : null), elem) : null;
+}
 const fromJava = (d: string, r: unknown): unknown => d === "J" ? Number(r) : d === "Z" ? !!r : d === "V" ? undefined : r;
 function bridge(o: JObj, thread: JThread): WebInterfaces[string] {
   const out: WebInterfaces[string] = Object.create(null);
