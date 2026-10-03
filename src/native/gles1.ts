@@ -8,7 +8,7 @@ import { mem } from "./mem";
 import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host";
 import type { Cpu } from "./cpu";
 import { glCommon, glProbe, readGuestPixels, pixelStore, vertexTypeBytes, guestIndices, indexBounds } from "./gles3";
-import { gl, invert } from "../android/gl";
+import { gl, invert, takeError, untracked } from "../android/gl";
 import { perf } from "../perf";
 import { activateEglCurrent } from "./egl-current";
 
@@ -286,6 +286,7 @@ export function gles1Init(): void {
     activateEglCurrent(cpu.jthread);
     const c = cur();
     if (!c) { noCtx(); return 0; }
+    untracked();
     const r = fn(c, a, cpu);
     if (glProbe) { const e = c.gl.getError(); if (e) { perf.glErrors++; console.warn("[gles1] error", e.toString(16), "after", name); } }
     return r === undefined ? 0 : r;
@@ -497,7 +498,7 @@ export function gles1Init(): void {
     glClearDepthx: W("glClearDepthx", (c, a) => c.gl.clearDepth(Xa(a))),
     glPolygonOffsetx: W("glPolygonOffsetx", (c, a) => c.gl.polygonOffset(Xa(a), Xa(a))),
     glSampleCoveragex: W("glSampleCoveragex", (c, a) => c.gl.sampleCoverage(Xa(a), !!(a.i() & 255))),
-    glGetError: W("glGetError", (c) => { const e = c.err || c.gl.getError(); c.err = 0; return e; }),
+    glGetError: W("glGetError", (c) => { const e = c.err || takeError(); c.err = 0; return e; }),
     glGetString: W("glGetString", (c, a) => {
       const value = gles1String(c.gl, a.i());
       if (value === null) { c.err = 0x500; return 0; }

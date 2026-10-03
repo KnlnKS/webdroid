@@ -6,7 +6,7 @@
 
 import { mem, wrote } from "./mem";
 import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host";
-import { gl as current, tables as T, put } from "../android/gl";
+import { gl as current, tables as T, put, takeError } from "../android/gl";
 import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
 import { rewriteTextureSwizzles, visibleUniforms, type SwizzleRewrite, type VisibleUniforms } from "./swizzle";
@@ -17,7 +17,8 @@ export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 
 type GL = WebGL2RenderingContext;
 const g = (): GL => { if (!current) throw new Error("GL call without a current context"); return current as GL; };
-let err = 0;                                  // an error we raised ourselves; glGetError reports it before WebGL's
+/** an error GL raises that WebGL would not: kept until glGetError, the first one winning as in GL */
+const raise = (e: number): void => { const t = T(); t.err ||= e; };
 const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target
 
 const TEXTURE0 = 0x84c0, ACTIVE_TEXTURE = 0x84e0, CURRENT_PROGRAM = 0x8b8d;
@@ -34,7 +35,10 @@ function glForTextureFormat(format: number): GL {
   return gl;
 }
 const shaderRecs = new WeakMap<WebGLShader, { original: string; rewrite: SwizzleRewrite }>();
-interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean }
+/** `target`: 0 until first bound when glGenTextures made it, -1 when made elsewhere (unknown);
+ *  an immutable texture's storage is `levels` of `format` from width x height */
+interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean; target: number; immutable: boolean;
+  format: number; width: number; height: number; levels: number }
 const texRecs = new WeakMap<WebGLTexture, TexRec>();
 interface SamplerBinding { target: number; units: Int32Array }
 interface ProgramMap { binding: SamplerBinding; location: WebGLUniformLocation; pending: Int32Array; uploaded: Int32Array }
@@ -64,6 +68,12 @@ interface ContextState {
   /** the buffers client vertex arrays and indices are streamed into at each draw */
   streams: WebGLBuffer[];
   indexStream: WebGLBuffer | null;
+  /** the bound renderbuffer, undefined when unknown */
+  renderbuffer: WebGLRenderbuffer | null | undefined;
+  /** transform feedback has run, which WebGL restricts buffer writes around */
+  feedback: boolean;
+  /** MAX_COMBINED_TEXTURE_IMAGE_UNITS, MAX_TEXTURE_SIZE, MAX_CUBE_MAP_TEXTURE_SIZE, MAX_RENDERBUFFER_SIZE */
+  limits: Int32Array;
 }
 interface ClientArray { size: number; type: number; normalized: boolean; stride: number; ptr: number; integer: boolean }
 const contextStates = new WeakMap<GL, ContextState>();
@@ -75,7 +85,8 @@ function contextState(): ContextState {
     const active = gl.getParameter(ACTIVE_TEXTURE) as number;
     const attribs = gl.getParameter(0x8869) as number;                         // MAX_VERTEX_ATTRIBS
     state = { activeUnit: Math.max(0, active - TEXTURE0), bindings: new Map(), revision: 0, program: null, buffers: new Map(), elements: new Map(), vao: null,
-      clients: new Map(), enabled: new Uint8Array(attribs), divisors: new Uint32Array(attribs), streams: [], indexStream: null };
+      clients: new Map(), enabled: new Uint8Array(attribs), divisors: new Uint32Array(attribs), streams: [], indexStream: null, renderbuffer: undefined, feedback: false,
+      limits: Int32Array.from([0x8b4d, 0x0d33, 0x851c, 0x84e8], (pname) => gl.getParameter(pname) as number) };
     contextStates.set(gl, state);
   }
   return state;
@@ -83,7 +94,7 @@ function contextState(): ContextState {
 
 function textureRec(texture: WebGLTexture): TexRec {
   let rec = texRecs.get(texture);
-  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false }; texRecs.set(texture, rec); }
+  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false, target: -1, immutable: false, format: 0, width: 0, height: 0, levels: 0 }; texRecs.set(texture, rec); }
   return rec;
 }
 
@@ -243,13 +254,13 @@ export function pixelStore(gl: WebGLRenderingContext | WebGL2RenderingContext, p
 const pixelParam = (gl: WebGLRenderingContext | WebGL2RenderingContext, pname: number): number =>
   pixelStores.get(gl)?.get(pname) ?? (pname === 0x0cf5 || pname === 0x0d05 ? 4 : 0);
 type PixelDimensions = readonly [width: number, height: number] | readonly [width: number, height: number, depth: number];
-// Bound uploads to the bytes WebGL may read; a guest-memory-sized view stalls getError after each frame.
-function uploadPixels(type: number, p: number, format: number, dimensions: PixelDimensions): ArrayBufferView {
+/** the bytes an upload reads from its pointer under the unpack state, -1 when not computable */
+function uploadExtent(type: number, format: number, dimensions: PixelDimensions): number {
   const [width, height] = dimensions;
   const bytes = pixelByteSize(format, type);
   const layers = dimensions.length === 3 ? dimensions[2] : 1;
-  if (!bytes || width < 0 || height < 0 || layers < 0) return pixels(type, p);
-  const gl = g(), K = pixelArray(type);
+  if (!bytes || width < 0 || height < 0 || layers < 0) return -1;
+  const gl = g();
   const rowLength = pixelParam(gl, 0x0cf2) || width;
   const { stride, extent } = pixelRows(width, height, bytes, pixelParam(gl, 0x0cf5), rowLength, pixelParam(gl, 0x0cf3), pixelParam(gl, 0x0cf4));
   let required = extent;
@@ -257,7 +268,12 @@ function uploadPixels(type: number, p: number, format: number, dimensions: Pixel
     const imageHeight = pixelParam(gl, 0x806e) || height;
     required += (pixelParam(gl, 0x806d) + dimensions[2] - 1) * imageHeight * stride;
   }
-  if (!Number.isSafeInteger(required) || required < 0) return pixels(type, p);
+  return Number.isSafeInteger(required) && required >= 0 ? required : -1;
+}
+// Bound uploads to the bytes WebGL may read; a guest-memory-sized view stalls getError after each frame.
+function uploadPixels(type: number, p: number, format: number, dimensions: PixelDimensions): ArrayBufferView {
+  const required = uploadExtent(type, format, dimensions), K = pixelArray(type);
+  if (required < 0) return pixels(type, p);
   return view(K, p, Math.floor(Math.min(required, mem.u8.length - p) / K.BYTES_PER_ELEMENT));
 }
 export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingContext, x: number, y: number, w: number, h: number, format: number, type: number, p: number): void {
@@ -295,13 +311,14 @@ const st32 = (a: number, v: number) => mem.st32(a, v), stf = (a: number, v: numb
 const st64 = (a: number, v: number) => mem.st64(a, BigInt(Math.trunc(v)));
 const H = <O extends object>(tbl: (O | null)[], h: number): O | null => (h ? tbl[h] ?? null : null);
 const U = (h: number) => (h < 0 ? null : T().uniforms[h] ?? null);
-function gen(tbl: (object | null)[], n: number, p: number, make: () => object | null): void { for (let i = 0; i < n; i++) mem.st32(p + 4 * i, put(tbl, make())); }
+function gen(tbl: (object | null)[], n: number, p: number, make: () => object | null): void { if (n < 0) raise(0x501); for (let i = 0; i < n; i++) mem.st32(p + 4 * i, put(tbl, make())); }
 function del(tbl: (object | null)[], n: number, p: number, kill: (o: never) => void): void {
   for (let i = 0; i < n; i++) { const h = mem.ld32(p + 4 * i), o = tbl[h]; if (o) { kill(o as never); tbl[h] = null; } }
 }
 
 // ── buffer records: kind (element or not) decided at the first typed bind, data shadowed until then
-interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number }
+/** `size`: the data store's bytes as WebGL holds them, -1 when not known */
+interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number; size: number }
 const COPY_READ = 0x8f36, COPY_WRITE = 0x8f37, ELEM = 0x8893, ARRAY = 0x8892;
 const recOf = new WeakMap<object, BufRec>();
 const rec = (h: number): BufRec | null => { const o = H(T().buffers, h); return o ? recOf.get(o) ?? null : null; };
@@ -374,6 +391,94 @@ function syncVertexBuffer(r: BufRec | null | undefined): void {
   gl.bindBuffer(ARRAY, boundStorage(ARRAY)); gl.bindBuffer(ELEM, boundStorage(ELEM));
 }
 
+// ── calls WebGL accepts without raising an error keep the context clean for glGetError
+// (android/gl.ts takeError); for anything else, or an argument not recognized here, WebGL judges
+const unsure = (): void => { T().clean = false; };
+const TEXTURE_TARGETS = new Set([0x0de1, 0x8513, 0x806f, 0x8c1a]);
+const BUFFER_TARGETS = new Set([ARRAY, ELEM, COPY_READ, COPY_WRITE, PACK, UNPACK, 0x8a11]);
+const USAGES = new Set([0x88e0, 0x88e1, 0x88e2, 0x88e4, 0x88e5, 0x88e6, 0x88e8, 0x88e9, 0x88ea]);
+// sized formats WebGL 2 stores without an extension
+const STORAGE_FORMATS = new Set([0x8058, 0x8051, 0x8229, 0x822b, 0x8d62, 0x8056, 0x8057, 0x8c43, 0x8059, 0x881a, 0x881b, 0x822d, 0x822f,
+  0x822e, 0x8230, 0x8814, 0x8815, 0x8c3a, 0x8c3d, 0x81a5, 0x81a6, 0x8cac, 0x88f0, 0x8cad]);
+const RENDERBUFFER_FORMATS = new Set([0x8056, 0x8d62, 0x8057, 0x81a5, 0x8d48, 0x8058, 0x8051, 0x88f0, 0x81a6, 0x8cac, 0x8cad, 0x8c43, 0x8229, 0x822b]);
+// texImage2D's (internalformat, format, type) combinations from ES 3.0's table 3.2, byte and packed 16-bit
+const IMAGE_FORMATS = new Set(["6408 6408 5121", "6407 6407 5121", "6410 6410 5121", "6409 6409 5121", "6406 6406 5121", "32856 6408 5121",
+  "32849 6407 5121", "33321 6403 5121", "33323 33319 5121", "6407 6407 33635", "36194 6407 33635", "36194 6407 5121", "6408 6408 32819",
+  "32854 6408 32819", "32854 6408 5121", "6408 6408 32820", "32855 6408 32820", "32855 6408 5121"]);
+const mipLevels = (size: number): number => Math.floor(Math.log2(size)) + 1;
+/** the texture bound at the active unit for `target`, undefined when not tracked */
+const knownTexture = (state: ContextState, target: number): WebGLTexture | null | undefined => state.bindings.get(state.activeUnit)?.get(target);
+/** the record of the texture bound for `target` while its state is tracked */
+function trustedTexture(state: ContextState, target: number): TexRec | null {
+  const texture = knownTexture(state, target), rec = texture && texRecs.get(texture);
+  return rec && rec.target > 0 && !rec.deleted ? rec : null;
+}
+/** a call WebGL may reject changed that texture: its state is no longer known */
+function untrust(target: number): void {
+  unsure();
+  const texture = knownTexture(contextState(), target), rec = texture && texRecs.get(texture);
+  if (rec) rec.target = -1;
+}
+function texParamAccepted(target: number, pname: number, v: number): boolean {
+  if (!TEXTURE_TARGETS.has(target) || !trustedTexture(contextState(), target)) return false;
+  switch (pname) {
+    case 0x2800: return v === 0x2600 || v === 0x2601;                                       // MAG_FILTER
+    case 0x2801: return v === 0x2600 || v === 0x2601 || (v >= 0x2700 && v <= 0x2703);       // MIN_FILTER
+    case 0x2802: case 0x2803: case 0x8072: return v === 0x2901 || v === 0x812f || v === 0x8370; // WRAP_S/T/R
+    case 0x813c: case 0x813d: return v >= 0;                                                // BASE/MAX_LEVEL
+    case 0x884c: return v === 0 || v === 0x884e;                                            // COMPARE_MODE
+    case 0x884d: return v >= 0x0200 && v <= 0x0207;                                         // COMPARE_FUNC
+    case 0x813a: case 0x813b: return true;                                                  // MIN/MAX_LOD
+    default: return false;
+  }
+}
+function storageAccepted(target: number, levels: number, format: number, w: number, h: number): TexRec | null {
+  if (target !== 0x0de1 && target !== 0x8513) return null;
+  const state = contextState(), rec = trustedTexture(state, target), max = state.limits[target === 0x8513 ? 2 : 1];
+  if (!rec || rec.immutable || !STORAGE_FORMATS.has(format)) return null;
+  return levels >= 1 && w >= 1 && h >= 1 && w <= max && h <= max && (target !== 0x8513 || w === h) && levels <= mipLevels(Math.max(w, h)) ? rec : null;
+}
+function imageAccepted(target: number, level: number, internal: number, w: number, h: number, border: number, format: number, type: number, p: number): boolean {
+  const cube = target >= 0x8515 && target <= 0x851a;
+  if (target !== 0x0de1 && !cube) return false;
+  const state = contextState(), rec = trustedTexture(state, cube ? 0x8513 : target), max = state.limits[cube ? 2 : 1];
+  if (!rec || rec.immutable || border !== 0 || pbo(UNPACK) || !IMAGE_FORMATS.has(`${internal} ${format} ${type}`)) return false;
+  if (level < 0 || level >= mipLevels(max) || w < 0 || h < 0 || w > max >> level || h > max >> level || (cube && w !== h)) return false;
+  return pixelSourceAccepted(type, format, w, h, p);
+}
+// the (format, type) pairs ES 3.0's table 3.2 accepts for a sized format's byte and packed 16-bit uploads
+const SUB_FORMATS = new Map<number, string[]>([[0x8058, ["6408 5121"]], [0x8051, ["6407 5121"]], [0x8229, ["6403 5121"]], [0x822b, ["33319 5121"]],
+  [0x8c43, ["6408 5121"]], [0x8d62, ["6407 5121", "6407 33635"]], [0x8056, ["6408 5121", "6408 32819"]], [0x8057, ["6408 5121", "6408 32820"]]]);
+/** texSubImage2D into a tracked immutable texture */
+function subImageAccepted(target: number, level: number, x: number, y: number, w: number, h: number, format: number, type: number, p: number): boolean {
+  const cube = target >= 0x8515 && target <= 0x851a;
+  if (target !== 0x0de1 && !cube) return false;
+  const rec = trustedTexture(contextState(), cube ? 0x8513 : target);
+  if (!rec?.immutable || pbo(UNPACK) || !SUB_FORMATS.get(rec.format)?.includes(`${format} ${type}`)) return false;
+  if (level < 0 || level >= rec.levels || x < 0 || y < 0 || w < 0 || h < 0 || x + w > Math.max(1, rec.width >> level) || y + h > Math.max(1, rec.height >> level)) return false;
+  return pixelSourceAccepted(type, format, w, h, p);
+}
+/** the unpack state and guest memory hold the rows an upload reads */
+function pixelSourceAccepted(type: number, format: number, w: number, h: number, p: number): boolean {
+  const gl = g(), rowLength = pixelParam(gl, 0x0cf2);
+  if (rowLength && pixelParam(gl, 0x0cf4) + w > rowLength) return false;
+  if (!p || !w || !h) return true;
+  const extent = uploadExtent(type, format, [w, h]);
+  return extent >= 0 && p + extent <= mem.u8.length;
+}
+function pixelStoreAccepted(pname: number, v: number): boolean {
+  if (pname === 0x0cf5 || pname === 0x0d05) return ALIGNMENTS.includes(v);
+  return v >= 0 && [0x0cf2, 0x0cf3, 0x0cf4, 0x806d, 0x806e, 0x0d02, 0x0d03, 0x0d04].includes(pname);
+}
+/** the entry points that call unsure() themselves when WebGL may reject them; every other one
+ *  leaves the context unsure. glGen and glDelete pass only this context's objects (deleting an
+ *  active transform feedback is an error, so that one is left to WebGL). */
+const TRACKED = new Set(["glGetError", "glGetString", "glGetStringi", "glFlush", "glWaitSync", "glDeleteSync", "glPixelStorei", "glActiveTexture",
+  "glBindTexture", "glTexParameteri", "glTexParameteriv", "glTexParameterf", "glTexParameterfv", "glTexStorage2D", "glTexImage2D",
+  "glTexSubImage2D", "glFenceSync", "glBindBuffer", "glBufferData", "glBufferSubData", "glBindRenderbuffer", "glRenderbufferStorage", "glDeleteShader", "glDeleteProgram",
+  "glGenTransformFeedbacks", ...["Buffers", "Textures", "VertexArrays", "Samplers", "Framebuffers", "Renderbuffers", "Queries"].flatMap((k) => [`glGen${k}`, `glDelete${k}`]),
+  ...["Buffer", "Texture", "Shader", "Program", "VertexArray", "Sampler", "Framebuffer", "Renderbuffer", "Query", "TransformFeedback", "Sync"].map((k) => `glIs${k}`)]);
+
 function syncFeedback(): void {
   const n = g().getParameter(0x8c8b);
   for (let i = 0; i < n; i++) { const buffer = g().getIndexedParameter(0x8c8f, i); syncVertexBuffer(buffer && recOf.get(buffer)); }
@@ -404,7 +509,7 @@ function vertexAttribPointer(integer: boolean, i: number, size: number, type: nu
     if (integer) gl.vertexAttribIPointer(i, size, type, stride, ptr); else gl.vertexAttribPointer(i, size, type, normalized, stride, ptr);
     return;
   }
-  if (state.vao) { err ||= 0x502; return; }                                    // ES 3.0 keeps client arrays to the default vertex array
+  if (state.vao) { raise(0x502); return; }                                    // ES 3.0 keeps client arrays to the default vertex array
   // WebGL validates the format against no buffer at offset 0; each draw binds the streamed data
   if (integer) gl.vertexAttribIPointer(i, size, type, stride, 0); else gl.vertexAttribPointer(i, size, type, normalized, stride, 0);
   if (i < state.enabled.length && size >= 1 && size <= 4 && stride >= 0) state.clients.set(i, { size, type, normalized, stride, ptr, integer });
@@ -468,7 +573,7 @@ function drawClientArrays(state: ContextState, first: number, count: number, ins
 function drawClientElements(state: ContextState, count: number, type: number, p: number, instances: number,
   range: readonly [number, number] | null, drawAt: (offset: number) => void): void {
   const gl = g(), elements = state.elements.get(null);
-  if (count < 0 || instances < 0) { err ||= 0x501; return; }
+  if (count < 0 || instances < 0) { raise(0x501); return; }
   if (!count || !instances) return;
   const indices = elements ? null : guestIndices(type, p, count), use = clientUse(state);
   if (use) {
@@ -595,7 +700,7 @@ export function gles3Init(): void {
     glGetInteger64i_v: (_c, a) => { const t = a.i(), i = a.i(); out(g().getIndexedParameter(t, i), a.p(), st64, 8); },
     glGetInternalformativ: (_c, a) => {
       const t = a.i(), f = a.i(), pn = a.i(), size = a.i(), p = a.p();
-      if (size < 0) { err ||= 0x501; return; }
+      if (size < 0) { raise(0x501); return; }
       const values: unknown = g().getInternalformatParameter(t, f, pn === 0x9380 ? 0x80a9 : pn);
       if (!(values instanceof Int32Array) || !size) return;
       if (pn === 0x9380) mem.st32(p, values.length);
@@ -605,7 +710,7 @@ export function gles3Init(): void {
       const f = g().getShaderPrecisionFormat(a.i(), a.i()), range = a.p(), prec = a.p();
       if (f) { mem.st32(range, f.rangeMin); mem.st32(range + 4, f.rangeMax); mem.st32(prec, f.precision); }
     },
-    glGetError: () => { const e = err; err = 0; return e || (current ? current.getError() : 0); },
+    glGetError: () => takeError(),
     glIsEnabled: (_c, a) => (g().isEnabled(a.i()) ? 1 : 0),
     glEnable: (_c, a) => g().enable(a.i()), glDisable: (_c, a) => g().disable(a.i()),
     glHint: (_c, a) => g().hint(a.i(), a.i()),
@@ -615,7 +720,7 @@ export function gles3Init(): void {
     glClearBufferfi: (_c, a) => g().clearBufferfi(a.i(), a.i(), a.f(), a.i()),
     glStencilFuncSeparate: (_c, a) => g().stencilFuncSeparate(a.i(), a.i(), a.i(), a.i()), glStencilOpSeparate: (_c, a) => g().stencilOpSeparate(a.i(), a.i(), a.i(), a.i()),
     glStencilMaskSeparate: (_c, a) => g().stencilMaskSeparate(a.i(), a.i()),
-    glPixelStorei: (_c, a) => pixelStore(g(), a.i(), a.i()),
+    glPixelStorei: (_c, a) => { const pn = a.i(), v = a.i(); if (!pixelStoreAccepted(pn, v)) unsure(); pixelStore(g(), pn, v); },
 
     // ── shaders and programs
     glCreateShader: (_c, a) => put(T().shaders, g().createShader(a.i())),
@@ -640,7 +745,7 @@ export function gles3Init(): void {
     glGetShaderInfoLog: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && g().getShaderInfoLog(s)) ?? "", a.i(), a.p(), a.p()); },
     glGetShaderSource: (_c, a) => { const s = H(T().shaders, a.i()); outStr((s && (shaderRecs.get(s)?.original ?? g().getShaderSource(s))) ?? "", a.i(), a.p(), a.p()); },
     glReleaseShaderCompiler: () => {},
-    glShaderBinary: () => { err = 0x500; },                                       // INVALID_ENUM: no binary formats
+    glShaderBinary: () => { raise(0x500); },                                       // INVALID_ENUM: no binary formats
     glCreateProgram: () => put(T().programs, g().createProgram()),
     glDeleteProgram: (_c, a) => { const h = a.i(), p = T().programs[h]; if (p) { g().deleteProgram(p); T().programs[h] = null; } },
     glIsProgram: (_c, a) => (H(T().programs, a.i()) ? 1 : 0),
@@ -652,8 +757,8 @@ export function gles3Init(): void {
     glGetProgramiv: (_c, a) => { const p = H(T().programs, a.i()), pn = a.i(); out(p ? progParam(p, pn) : 0, a.p(), st32, 4); },
     glGetProgramInfoLog: (_c, a) => { const p = H(T().programs, a.i()); outStr((p && g().getProgramInfoLog(p)) ?? "", a.i(), a.p(), a.p()); },
     glProgramParameteri: () => {},
-    glGetProgramBinary: (_c, a) => { a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 0); err = 0x502; },  // INVALID_OPERATION
-    glProgramBinary: () => { err = 0x500; },
+    glGetProgramBinary: (_c, a) => { a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 0); raise(0x502); },  // INVALID_OPERATION
+    glProgramBinary: () => { raise(0x500); },
     glGetAttachedShaders: (_c, a) => {
       const p = H(T().programs, a.i()); const max = a.i(), countp = a.p(), outp = a.p();
       const sh = (p && g().getAttachedShaders(p)) ?? [];
@@ -704,7 +809,7 @@ export function gles3Init(): void {
     glTransformFeedbackVaryings: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), mode = a.i(); if (p) g().transformFeedbackVaryings(p, names(pp, n), mode); },
 
     // ── buffers
-    glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4 }); return o; }); },
+    glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4, size: 0 }); return o; }); },
     glDeleteBuffers: (_c, a) => {
       const n = a.i(), state = contextState();
       del(T().buffers, n, a.p(), (o) => {
@@ -721,6 +826,7 @@ export function gles3Init(): void {
     glBindBuffer: (_c, a) => {
       const t = a.i(), h = a.i();
       const r = rec(h);
+      if (!BUFFER_TARGETS.has(t) || contextState().feedback) unsure();
       bindRec(t, r);
       if (t === COPY_READ || t === COPY_WRITE) return;
       g().bindBuffer(t, realize(t, r, h));
@@ -728,11 +834,18 @@ export function gles3Init(): void {
     glBindBufferBase: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(), r = rec(h); bindRec(t, r); g().bindBufferBase(t, i, realize(t, r, h)); },
     glBindBufferRange: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(), r = rec(h); bindRec(t, r); const gl = realize(t, r, h); g().bindBufferRange(t, i, gl, a.i(), a.i()); },
     glBufferData: (_c, a) => {
-      const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t);
-      if (r) { r.shadow = new Uint8Array(n); if (p) r.shadow.set(u8(p, n)); r.usage = usage; }
-      else { const r = recAt(t); if (r) r.usage = usage; writeBuffers(t, (tt) => { if (p) g().bufferData(tt, u8(p, n), usage); else g().bufferData(tt, n, usage); }); }
+      const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t), bound = recAt(t), data = p ? u8(p, n) : null;
+      const accepted = BUFFER_TARGETS.has(t) && !!bound && n >= 0 && USAGES.has(usage) && !contextState().feedback;
+      if (!accepted) unsure();
+      if (bound) bound.size = accepted ? data?.length ?? n : -1;
+      if (r) { r.shadow = new Uint8Array(n); if (data) r.shadow.set(data); r.usage = usage; }
+      else { if (bound) bound.usage = usage; writeBuffers(t, (tt) => { if (data) g().bufferData(tt, data, usage); else g().bufferData(tt, n, usage); }); }
     },
-    glBufferSubData: (_c, a) => { const t = a.i(), off = a.i(), n = a.i(), p = a.p(); writeBack(t, off, u8(p, n)); },
+    glBufferSubData: (_c, a) => {
+      const t = a.i(), off = a.i(), n = a.i(), p = a.p(), r = recAt(t), data = u8(p, n);
+      if (!BUFFER_TARGETS.has(t) || !r || r.size < 0 || off < 0 || n < 0 || off + data.length > r.size || contextState().feedback) unsure();
+      writeBack(t, off, data);
+    },
     glCopyBufferSubData: (_c, a) => {
       const rt = a.i(), wt = a.i(), roff = a.i(), woff = a.i(), n = a.i(), rs = shadowed(rt);
       const src = rs ? rs.shadow!.subarray(roff, roff + n) : withTarget(rt, (tt) => { const d = new Uint8Array(n); g().getBufferSubData(tt, roff, d); return d; });
@@ -741,7 +854,7 @@ export function gles3Init(): void {
     // a mapping is a guest copy of the range: read in on map, written back on unmap or flush
     glMapBufferRange: (_c, a) => {
       const t = a.i(), off = a.i(), len = a.i(), access = a.i(), b = recAt(t);
-      if (!b) { err = 0x502; return 0; }
+      if (!b) { raise(0x502); return 0; }
       const ptr = mem.malloc(len), r = shadowed(t);
       if (access & 1) { if (r) u8(ptr, len).set(r.shadow!.subarray(off, off + len)); else withTarget(t, (tt) => g().getBufferSubData(tt, off, u8(ptr, len))); }
       mapped.set(b, { ptr, off, len, access });
@@ -805,8 +918,12 @@ export function gles3Init(): void {
     },
 
     // ── textures and samplers
-    glActiveTexture: (_c, a) => { const texture = a.i(); g().activeTexture(texture); if (texture >= TEXTURE0) contextState().activeUnit = texture - TEXTURE0; },
-    glGenTextures: (_c, a) => { const n = a.i(); gen(T().textures, n, a.p(), () => { const texture = g().createTexture(); if (texture) textureRec(texture); return texture; }); },
+    glActiveTexture: (_c, a) => {
+      const texture = a.i(), state = contextState();
+      g().activeTexture(texture);
+      if (texture >= TEXTURE0 && texture < TEXTURE0 + state.limits[0]) state.activeUnit = texture - TEXTURE0; else unsure();
+    },
+    glGenTextures: (_c, a) => { const n = a.i(); gen(T().textures, n, a.p(), () => { const texture = g().createTexture(); if (texture) textureRec(texture).target = 0; return texture; }); },
     glDeleteTextures: (_c, a) => {
       const n = a.i(), p = a.p(), state = contextState();
       del(T().textures, n, p, (texture) => {
@@ -820,12 +937,28 @@ export function gles3Init(): void {
     glBindTexture: (_c, a) => {
       const target = textureTarget(a.i()), texture = H(T().textures, a.i()), state = contextState();
       g().bindTexture(target, texture);
+      const rec = texture && texRecs.get(texture);
       let unit = state.bindings.get(state.activeUnit);
       if (!unit) { unit = new Map(); state.bindings.set(state.activeUnit, unit); }
+      // a texture takes its target at its first bind; WebGL refuses another one
+      if (!TEXTURE_TARGETS.has(target) || (texture && (!rec || rec.deleted || (rec.target !== 0 && rec.target !== target)))) {
+        unsure();
+        if (unit.delete(target)) state.revision++;
+        return;
+      }
+      if (rec && !rec.target) rec.target = target;
       if (unit.get(target) !== texture) { unit.set(target, texture); state.revision++; }
     },
-    glTexImage2D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage2D as Function)(t, l, f, w, h, b, fmt, ty, texData(ty, a.p(), fmt, [w, h])); },
-    glTexSubImage2D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage2D as Function)(t, l, x, y, w, h, fmt, ty, texData(ty, a.p(), fmt, [w, h])); },
+    glTexImage2D: (_c, a) => {
+      const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(), p = a.p();
+      if (!imageAccepted(t, l, f, w, h, b, fmt, ty, p)) untrust(t >= 0x8515 && t <= 0x851a ? 0x8513 : t);
+      (g().texImage2D as Function)(t, l, f, w, h, b, fmt, ty, texData(ty, p, fmt, [w, h]));
+    },
+    glTexSubImage2D: (_c, a) => {
+      const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), ty = a.i(), p = a.p();
+      if (!subImageAccepted(t, l, x, y, w, h, fmt, ty, p)) unsure();
+      (g().texSubImage2D as Function)(t, l, x, y, w, h, fmt, ty, texData(ty, p, fmt, [w, h]));
+    },
     glTexImage3D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), d = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage3D as Function)(t, l, f, w, h, d, b, fmt, ty, texData(ty, a.p(), fmt, [w, h, d])); },
     glTexSubImage3D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), z = a.i(), w = a.i(), h = a.i(), d = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage3D as Function)(t, l, x, y, z, w, h, d, fmt, ty, texData(ty, a.p(), fmt, [w, h, d])); },
     glCompressedTexImage2D: (_c, a) => {
@@ -850,6 +983,8 @@ export function gles3Init(): void {
     },
     glTexStorage2D: (_c, a) => {
       const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), gl = glForTextureFormat(format);
+      const rec = storageAccepted(target, levels, format, width, height);
+      if (rec) Object.assign(rec, { immutable: true, format, width, height, levels }); else untrust(target);
       gl.texStorage2D(target, levels, format, width, height);
     },
     glTexStorage3D: (_c, a) => {
@@ -876,8 +1011,16 @@ export function gles3Init(): void {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), ty = a.i(), p = a.p();
       if (pbo(PACK)) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(recAt(PACK)); } else readGuestPixels(g(), x, y, w, h, f, ty, p);
     },
-    glBindRenderbuffer: (_c, a) => g().bindRenderbuffer(a.i(), H(T().rbos, a.i())),
-    glRenderbufferStorage: (_c, a) => g().renderbufferStorage(a.i(), a.i(), a.i(), a.i()),
+    glBindRenderbuffer: (_c, a) => {
+      const t = a.i(), rbo = H(T().rbos, a.i());
+      if (t === 0x8d41) contextState().renderbuffer = rbo; else unsure();
+      g().bindRenderbuffer(t, rbo);
+    },
+    glRenderbufferStorage: (_c, a) => {
+      const t = a.i(), f = a.i(), w = a.i(), h = a.i(), state = contextState(), max = state.limits[3];
+      if (t !== 0x8d41 || !state.renderbuffer || !RENDERBUFFER_FORMATS.has(f) || w < 0 || h < 0 || w > max || h > max) unsure();
+      g().renderbufferStorage(t, f, w, h);
+    },
     glRenderbufferStorageMultisample: (_c, a) => g().renderbufferStorageMultisample(a.i(), a.i(), a.i(), a.i(), a.i()),
     glGetRenderbufferParameteriv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getRenderbufferParameter(t, pn), a.p(), st32, 4); },
 
@@ -886,7 +1029,7 @@ export function gles3Init(): void {
     glEndQuery: (_c, a) => g().endQuery(a.i()),
     glGetQueryiv: (_c, a) => { const t = a.i(), pn = a.i(); out(g().getQuery(t, pn), a.p(), st32, 4); },
     glGetQueryObjectuiv: (_c, a) => { const q = H(T().queries, a.i()); const pn = a.i(); out(q && g().getQueryParameter(q, pn), a.p(), st32, 4); },
-    glFenceSync: (_c, a) => put(T().syncs, g().fenceSync(a.i(), a.i())),
+    glFenceSync: (_c, a) => { const condition = a.i(), flags = a.i(); if (condition !== 0x9117 || flags) unsure(); return put(T().syncs, g().fenceSync(condition, flags)); },
     glIsSync: (_c, a) => (H(T().syncs, a.i()) ? 1 : 0),
     glDeleteSync: (_c, a) => { const h = a.i(), s = T().syncs[h]; if (s) { g().deleteSync(s); T().syncs[h] = null; } },
     glWaitSync: (_c, a) => { const s = H(T().syncs, a.i()); if (s) g().waitSync(s, 0, -1); },
@@ -901,7 +1044,7 @@ export function gles3Init(): void {
     },
     glGetSynciv: (_c, a) => { const s = H(T().syncs, a.i()); const pn = a.i(); a.i(); const lenp = a.p(); if (lenp) mem.st32(lenp, 1); out(s && g().getSyncParameter(s, pn), a.p(), st32, 4); },
     glBindTransformFeedback: (_c, a) => g().bindTransformFeedback(a.i(), H(T().tfs, a.i())),
-    glBeginTransformFeedback: (_c, a) => g().beginTransformFeedback(a.i()), glEndTransformFeedback: () => { g().endTransformFeedback(); syncFeedback(); },
+    glBeginTransformFeedback: (_c, a) => { contextState().feedback = true; g().beginTransformFeedback(a.i()); }, glEndTransformFeedback: () => { g().endTransformFeedback(); syncFeedback(); },
     glPauseTransformFeedback: () => { g().pauseTransformFeedback(); syncFeedback(); }, glResumeTransformFeedback: () => g().resumeTransformFeedback(),
   };
   const objects = [["VertexArray", "VertexArrays", "vaos", "createVertexArray", "deleteVertexArray"], ["Sampler", "Samplers", "samplers", "createSampler", "deleteSampler"],
@@ -912,6 +1055,7 @@ export function gles3Init(): void {
     G[`glDelete${many}`] = (_c, a) => { const n = a.i(); del(T()[key], n, a.p(), (o) => g()[remove](o)); };
     G[`glIs${one}`] = (_c, a) => (H(T()[key], a.i()) ? 1 : 0);
   }
+  G.glDeleteRenderbuffers = (_c, a) => { const n = a.i(); del(T().rbos, n, a.p(), (o: WebGLRenderbuffer) => g().deleteRenderbuffer(o)); contextState().renderbuffer = undefined; };
   G.glDeleteVertexArrays = (_c, a) => {
     const n = a.i(), state = contextState();
     // deleting the bound vertex array rebinds the default one, with its element binding
@@ -961,12 +1105,19 @@ export function gles3Init(): void {
   // libEGL turns a call with no current context into a logged no-op; it never faults the thread
   // (MapLibre deletes its textures on a GLThread whose context is already released)
   const noContext = new WeakSet<object>();
-  for (const [name, fn] of Object.entries(G)) G[name] = (cpu, args) => {
+  for (const [name, fn] of Object.entries(G)) G[name] = TRACKED.has(name) ? (cpu, args) => {
     activateEglCurrent(cpu.jthread);
     if (current) return fn(cpu, args);
+    return noCurrent(cpu, name);
+  } : (cpu, args) => {
+    activateEglCurrent(cpu.jthread);
+    if (current) { T().clean = false; return fn(cpu, args); }
+    return noCurrent(cpu, name);
+  };
+  function noCurrent(cpu: Parameters<HostFn>[0], name: string): number {
     if (!noContext.has(cpu.jthread)) { noContext.add(cpu.jthread); console.warn(`[gl] ${name}: call to OpenGL ES API with no current context`); }
     return 0;
-  };
+  }
   // the probe: after each entry point, count and name a GL error
   if (glProbe) for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;
@@ -983,19 +1134,21 @@ export function gles3Init(): void {
 }
 function texParam(t: number, pn: number, v: number): void {
   if (pn >= 0x8e42 && pn <= 0x8e45) { setSwizzle(t, pn, v); return; }
+  if (!texParamAccepted(t, pn, v)) unsure();
   g().texParameteri(t, pn, v);
 }
 
 function texParamf(t: number, pn: number, v: number): void {
   if (pn >= 0x8e42 && pn <= 0x8e45) { setSwizzle(t, pn, Math.trunc(v)); return; }
+  unsure();
   g().texParameterf(t, pn, v);
 }
 
 function setSwizzle(target: number, pname: number, value: number): void {
   const selector = value === 0 ? 4 : value === 1 ? 5 : value >= 0x1903 && value <= 0x1906 ? value - 0x1903 : -1;
-  if (selector < 0) { err = 0x500; return; }                                     // INVALID_ENUM
+  if (selector < 0) { raise(0x500); return; }                                     // INVALID_ENUM
   const state = contextState(), texture = boundTexture(state, state.activeUnit, target);
-  if (!texture) { err = 0x502; return; }                                         // INVALID_OPERATION
+  if (!texture) { raise(0x502); return; }                                         // INVALID_OPERATION
   const rec = textureRec(texture), channel = pname - 0x8e42;
   if (rec.channels[channel] === selector) return;
   rec.channels[channel] = selector;
@@ -1006,7 +1159,7 @@ function setSwizzle(target: number, pname: number, value: number): void {
 function texParameter(target: number, pname: number): unknown {
   if (pname < 0x8e42 || pname > 0x8e45) return g().getTexParameter(target, pname);
   const state = contextState(), texture = boundTexture(state, state.activeUnit, target);
-  if (!texture) { err = 0x502; return 0; }
+  if (!texture) { raise(0x502); return 0; }
   const selector = textureRec(texture).channels[pname - 0x8e42];
   return selector < 4 ? 0x1903 + selector : selector === 4 ? 0 : 1;
 }

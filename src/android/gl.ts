@@ -22,9 +22,13 @@ type Tables = {
   vaos: (WebGLVertexArrayObject | null)[]; fbos: (WebGLFramebuffer | null)[]; rbos: (WebGLRenderbuffer | null)[];
   samplers: (WebGLSampler | null)[]; queries: (WebGLQuery | null)[]; syncs: (WebGLSync | null)[]; tfs: (WebGLTransformFeedback | null)[];
   ids: WeakMap<object, number>; // object → handle, for the *_BINDING queries
+  /** the context's error flags: one raised host-side, reported before WebGL's; `clean` while WebGL
+   *  has latched none since it last answered NO_ERROR; `mixed` once a caller outside gles3 (whose
+   *  state tracking proves calls error-free) has used it */
+  err: number; clean: boolean; mixed: boolean;
 };
 const freshTables = (): Tables => ({ programs: [null], shaders: [null], buffers: [null], textures: [null], uniforms: [null],
-  vaos: [null], fbos: [null], rbos: [null], samplers: [null], queries: [null], syncs: [null], tfs: [null], ids: new WeakMap() });
+  vaos: [null], fbos: [null], rbos: [null], samplers: [null], queries: [null], syncs: [null], tfs: [null], ids: new WeakMap(), err: 0, clean: false, mixed: false });
 const tablesOf = new WeakMap<GL, Tables>();
 let T: Tables = freshTables();
 export const tables = (): Tables => T;
@@ -41,6 +45,28 @@ export function selectGL(ctx: GL | null) {
   let t = tablesOf.get(ctx);
   if (!t) tablesOf.set(ctx, t = freshTables());
   T = t;
+}
+/**
+ * glGetError. WebGL's getError waits for every queued GPU command (after a present, the whole
+ * frame), so while the context is clean NO_ERROR is answered here. GL lets OUT_OF_MEMORY surface
+ * late, and WebGL keeps its flags latched until asked, so an allocation that gles3 validated as
+ * WebGL does reports a real OOM at the next query that reaches WebGL; Chrome usually loses the
+ * context instead, which is always asked.
+ */
+export function takeError(): number {
+  const e = T.err;
+  if (e) { T.err = 0; return e; }
+  if (!gl || (T.clean && !gl.isContextLost())) return 0;
+  const w = gl.getError();
+  T.clean = w === 0 && !T.mixed;
+  return w;
+}
+/** a call gles3 does not track reached the current context */
+export function untracked(): void { T.clean = false; T.mixed = true; }
+/** the Java bindings' natives, each marking the context untracked */
+function bindings(table: Record<string, (...a: never[]) => unknown>): Record<string, (...a: never[]) => unknown> {
+  return Object.fromEntries(Object.entries(table).map(([sig, fn]) => [sig, sig === "glGetError()I" || sig === "_nativeClassInit()V" ? fn
+    : (...a: never[]) => { untracked(); return fn(...a); }]));
 }
 export function put<O extends object>(tbl: (O | null)[], obj: O | null): number {
   tbl.push(obj);
@@ -109,11 +135,11 @@ function streamClientArrays(g: GL): void {
   g.bindBuffer(g.ARRAY_BUFFER, prev);
 }
 
-rt.registerJnis("android/opengl/GLES10", {
+rt.registerJnis("android/opengl/GLES10", bindings({
   "_nativeClassInit()V": () => {},
   "glGetString(I)Ljava/lang/String;": (name: number) => gl ? gles1String(gl, name) : null,
-});
-rt.registerJnis("android/opengl/GLES20", {
+}));
+rt.registerJnis("android/opengl/GLES20", bindings({
   "_nativeClassInit()V": () => {},
   "glViewport(IIII)V": (x: number, y: number, w: number, h: number) => gl?.viewport(x, y, w, h),
   "glClearColor(FFFF)V": (r: number, g: number, b: number, a: number) => gl?.clearColor(r, g, b, a),
@@ -263,7 +289,7 @@ rt.registerJnis("android/opengl/GLES20", {
     const b = bytesFrom(buf);
     if (b) getIntegers(name, new Int32Array(b.buffer, b.byteOffset, b.byteLength / 4), 0);
   },
-  "glGetError()I": () => gl?.getError() ?? 0,
+  "glGetError()I": takeError,
   "glFinish()V": () => gl?.finish(),
   "glFlush()V": () => gl?.flush(),
   "glStencilMask(I)V": (mask: number) => gl?.stencilMask(mask),
@@ -284,7 +310,7 @@ rt.registerJnis("android/opengl/GLES20", {
   "glCullFace(I)V": (m: number) => gl?.cullFace(m),
   "glFrontFace(I)V": (m: number) => gl?.frontFace(m),
   "glGenerateMipmap(I)V": (t: number) => gl?.generateMipmap(t),
-});
+}));
 function glParamToInt(v: unknown): number {
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "number") return v;
@@ -307,7 +333,7 @@ function upload(bmp: object, internal: number, type: number, call: (g: WebGLRend
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
   return 0;
 }
-rt.registerJnis("android/opengl/GLUtils", {
+rt.registerJnis("android/opengl/GLUtils", bindings({
   "native_getInternalFormat(Landroid/graphics/Bitmap;)I": (bmp: object) => formatOf(bmp, 0),
   "native_getType(Landroid/graphics/Bitmap;)I": (bmp: object) => formatOf(bmp, 1),
   "native_texImage2D(IIILandroid/graphics/Bitmap;II)I": (target: number, level: number, internal: number, bmp: object, type: number) => {
@@ -319,7 +345,7 @@ rt.registerJnis("android/opengl/GLUtils", {
     if (format < 0) format = pixelFormat(formatOf(bmp, 0));
     return upload(bmp, format, type, (g, src) => g.texSubImage2D(target, level, x, y, format, type, src));
   },
-});
+}));
 
 /** a 4x4 column-major inverse into inv; 0 when singular */
 export function invert(inv: Float32Array, io: number, src: Float32Array, so: number) {

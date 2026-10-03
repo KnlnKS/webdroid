@@ -207,6 +207,51 @@ describe("native-egl-thread-current", () => {
   });
 });
 
+describe("native-gles-errors", () => {
+  test("glGetError reaches WebGL only when a call since its last NO_ERROR may have failed, per context", () => {
+    const limits: Record<number, number> = { 0x84e0: 0x84c0, 0x8869: 16, 0x8b4d: 32, 0x0d33: 4096, 0x851c: 4096, 0x84e8: 4096 };
+    const make = () => {
+      const queued: number[] = [];
+      return { queries: 0, queued, isContextLost: () => false, getParameter: (p: number) => limits[p] ?? 0, createTexture: () => ({}),
+        bindTexture() {}, texParameteri() {}, texStorage2D() {}, drawArrays() {},
+        getError() { this.queries++; return queued.shift() ?? 0; } };
+    };
+    const glA = make(), glB = make();
+    const contextA = Object.assign(Object.create(EglContext.prototype), { gl: glA, target: null, major: 3 });
+    const contextB = Object.assign(Object.create(EglContext.prototype), { gl: glB, target: null, major: 3 });
+    const cpuA = { jthread: {} } as Cpu, cpuB = { jthread: {} } as Cpu;
+    gles3Init();
+    bindEglCurrent(cpuA.jthread, contextA);
+    bindEglCurrent(cpuB.jthread, contextB);
+    const call = (cpu: Cpu, name: string, ints: number[] = []) => hostFn("libGLESv2.so", name)!(cpu, args(ints));
+    const names = mem.malloc(4);
+
+    expect(call(cpuA, "glGetError")).toBe(0);
+    expect(glA.queries).toBe(1);
+    call(cpuA, "glGenTextures", [1, names]);
+    call(cpuA, "glBindTexture", [0x0de1, mem.ld32(names)]);
+    call(cpuA, "glTexParameteri", [0x0de1, 0x2801, 0x2601]);
+    call(cpuA, "glTexStorage2D", [0x0de1, 1, 0x8058, 64, 64]);
+    expect(call(cpuA, "glGetError")).toBe(0);
+    expect(glA.queries).toBe(1);
+
+    // the same storage again is an error WebGL raises, so it is asked
+    glA.queued.push(0x502);
+    call(cpuA, "glTexStorage2D", [0x0de1, 1, 0x8058, 64, 64]);
+    expect(call(cpuA, "glGetError")).toBe(0x502);
+    expect(call(cpuA, "glGetError")).toBe(0);
+    expect(glA.queries).toBe(3);
+    call(cpuA, "glDrawArrays", [4, 0, 3]);
+    call(cpuA, "glGetError");
+    expect(glA.queries).toBe(4);
+
+    // an error GL raises host-side stays with its context
+    call(cpuB, "glShaderBinary");
+    expect(call(cpuA, "glGetError")).toBe(0);
+    expect(call(cpuB, "glGetError")).toBe(0x500);
+  });
+});
+
 describe("native-mapped-residency", () => {
   test("reserved native mappings become resident on commit and disappear on unmap", () => {
     setA64(true);

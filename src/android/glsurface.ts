@@ -6,7 +6,7 @@ import { mangleStaticField } from "../jvm/abi";
 import { vcall, JThread, curThread, scall, after, callUncaught } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { uptimeMillis } from "../guest-clock";
-import { gl, tables } from "./gl";
+import { gl, tables, untracked } from "./gl";
 import { vsync } from "./vsync";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
@@ -153,6 +153,7 @@ export class NativeSurfaceTexture {
   private bind(frame: ImageBitmap | VideoFrame | null): void {
     if (!gl) return;
     const texture = tables().textures[this.texName] ?? null;
+    untracked();
     gl.bindTexture(gl.TEXTURE_2D, texture);
     if (texture && frame) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
   }
