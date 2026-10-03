@@ -166,9 +166,6 @@ export class Resources {
     const a = this.tbl(resId);
     return a ? a.typeName((resId >> 16) & 0xff, resId & 0xffff, resId >>> 24) : "?";
   }
-  idName(resId: number): string {
-    return this.tbl(resId)?.entry(resId)?.key ?? "0x" + resId.toString(16);
-  }
 
   /** simple value for resId (no bag). */
   value(resId: number, selected?: { density: number }): RV {
