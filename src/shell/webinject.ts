@@ -121,6 +121,14 @@ function call(body) {
   return result.value;
 }
 const send = data => parent.postMessage({bridge: id, ...data}, "*");
+// Chromium reports the content's size as it changes: a WebView measured by it lays out again
+let width = -1, height = -1;
+new ResizeObserver(() => {
+  const root = document.documentElement;
+  if (root.scrollWidth === width && root.scrollHeight === height) return;
+  width = root.scrollWidth; height = root.scrollHeight;
+  send({kind: "size", width, height});
+}).observe(document.documentElement);
 // The renderer may share the app's thread (no site isolation), which cannot answer a synchronous call
 // while the page waits. document.cookie reads the cookies the app sends this document; a write
 // applies here and reaches the jar in order, whose answer replaces them once it has every write.

@@ -288,8 +288,11 @@ export class WebViewChromium extends JObj {
   readonly size = { w: 0, h: 0, place: (rect: Rect | null) => this.ref.deref()?.place(rect) };
   background: string | null = null;
   private remoteOrigin = "";
+  /** the page's content size, in CSS pixels */
   remoteWidth = 0;
   remoteHeight = 0;
+  /** the last measure's terms: whether the width is the content's, and the height's limit (-1 when exact) */
+  private measured = { width: true, height: Infinity };
   private nextEval = 0;
   private evaluations = new Map<number, (value: string) => void>();
   private nextSnapshot = 0;
@@ -358,7 +361,8 @@ export class WebViewChromium extends JObj {
       const entry = { url: data.url, src: srcFor(data.url, this) };
       if (this.idx >= 0) this.hist[this.idx] = entry;
       this.go(entry, false, data.html);
-    } else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
+    } else if (data.kind === "size" && typeof data.width === "number" && typeof data.height === "number") this.contentSized(data.width, data.height);
+    else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
     else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
     else if (data.kind === "submit" && typeof data.url === "string" && typeof data.method === "string" && data.body instanceof ArrayBuffer)
       this.go({ url: data.url, src: srcFor(data.url, this), method: data.method, body: data.body,
@@ -425,9 +429,8 @@ export class WebViewChromium extends JObj {
     const el = this.hold.el = document.createElement("iframe");
     el.referrerPolicy = "no-referrer";
     el.setAttribute("sandbox", WEB_FRAME_SANDBOX);
-    el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1))";
+    el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1));visibility:hidden";
     if (this.background) el.style.background = this.background;
-    el.hidden = true;
     layer.appendChild(el);
     collected.register(this, this.hold, this.hold);
     live.add(this);
@@ -439,8 +442,9 @@ export class WebViewChromium extends JObj {
     if (!el) return;
     const was = this.rect;
     this.rect = rect;
-    if (!rect) { if (was) el.hidden = true; return; }
-    if (!was) el.hidden = false;
+    // hidden, the page keeps its layout, which its content size reports
+    if (!rect) { if (was) el.style.visibility = "hidden"; return; }
+    if (!was) el.style.visibility = "visible";
     if (was && was[0] === rect[0] && was[1] === rect[1] && was[2] === rect[2] && was[3] === rect[3]) return;
     const [l, t, r, b] = rect, s = el.style;
     s.left = l / device.width * 100 + "%"; s.top = t / device.height * 100 + "%";
@@ -619,13 +623,23 @@ export class WebViewChromium extends JObj {
       return 1;
     }());
   }
-  contentWidth() { return this.remoteWidth; }
-  contentHeight() { return this.remoteHeight; }
+  /** AwLayoutSizer.onContentSizeChanged: a layout when the view's measure took the size that changed */
+  private contentSized(width: number, height: number) {
+    const { measured } = this, limit = (h: number) => h * device.density > measured.height;
+    const relayout = measured.width && width !== this.remoteWidth
+      || measured.height >= 0 && height !== this.remoteHeight && !(limit(height) && limit(this.remoteHeight));
+    this.remoteWidth = width; this.remoteHeight = height;
+    if (relayout) void onMain(() => vcall(this.view, "requestLayout", "()V"));
+  }
   /** AwLayoutSizer.onMeasure: the given size unless unspecified, the content's height unless the
    *  height is exact or the content exceeds its limit */
   measure(ws: number, hs: number): Promise<unknown> {
     const wMode = ws & MS_MODE, hMode = hs & MS_MODE, wSize = ws & ~MS_MODE, hSize = hs & ~MS_MODE;
-    const cw = Math.round(this.contentWidth() * device.density), ch = Math.round(this.contentHeight() * device.density);
+    const cw = Math.round(this.remoteWidth * device.density), ch = Math.round(this.remoteHeight * device.density);
+    this.measured = { width: wMode !== MS_EXACTLY, height: hMode === MS_EXACTLY ? -1 : hMode === MS_AT_MOST ? hSize : Infinity };
+    // until it shows, the page lays out at the width it is measured at, its height its content's
+    const el = this.hold.el;
+    if (el && !this.rect && wMode) { el.style.width = wSize / device.density + "px"; el.style.height = hMode === MS_EXACTLY ? hSize / device.density + "px" : "0"; }
     let w = wMode === 0 ? cw : wSize, h = hMode === MS_EXACTLY || hMode === MS_AT_MOST && ch > hSize ? hSize : ch;
     if (w < cw) w |= MEASURED_STATE_TOO_SMALL;
     if (h < ch) h |= MEASURED_STATE_TOO_SMALL;
@@ -702,8 +716,8 @@ rt.register({
     },
     "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: P, o: JObj, name: string) { this.ifaces[name] = bridge(o, this.bridgeThread); },
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: P, name: string) { delete this.ifaces[name]; },
-    "getContentHeight()I": function (this: P) { return this.contentHeight(); },
-    "getContentWidth()I": function (this: P) { return this.contentWidth(); },
+    "getContentHeight()I": function (this: P) { return this.remoteHeight; },
+    "getContentWidth()I": function (this: P) { return this.remoteWidth; },
     "getScale()F": () => device.density,
     "pageUp(Z)Z": page(-1),
     "pageDown(Z)Z": page(1),
