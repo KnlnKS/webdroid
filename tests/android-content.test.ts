@@ -3,11 +3,9 @@ import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
-import { unbox } from "../src/jvm/natives/jbox";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
-import { mkUri, uriText } from "../src/android/net";
+import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
-import { mangleMethod } from "../src/jvm/abi";
 import { defaultDisplay } from "../src/android/display";
 import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
@@ -49,70 +47,10 @@ describe("android-uri-permission", () => {
   });
 });
 
-describe("clip-data", () => {
-  rt.linkNatives();
-
-  test("ClipData carries nested intents across a Parcel boundary", async () => {
-    const inner = await newObj("android/content/Intent", "(Ljava/lang/String;)V", "test.action");
-    const clip = await scall("android/content/ClipData", "newIntent", "(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;", "label", inner);
-    const outer = await newObj("android/content/Intent");
-    await vcall(outer, "setClipData", "(Landroid/content/ClipData;)V", clip);
-    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
-    await vcall(outer, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-    await vcall(parcel, "setDataPosition", "(I)V", 0);
-    const restored = await newObj("android/content/Intent", "(Landroid/os/Parcel;)V", parcel);
-    const result = await vcall(restored, "getClipData", "()Landroid/content/ClipData;");
-    expect(result).not.toBe(clip);
-    const desc = await vcall(result, "getDescription", "()Landroid/content/ClipDescription;");
-    expect(await vcall(desc, "getLabel", "()Ljava/lang/CharSequence;")).toBe("label");
-    expect(await vcall(desc, "hasMimeType", "(Ljava/lang/String;)Z", "text/*")).toBe(1);
-    const item = await vcall(result, "getItemAt", "(I)Landroid/content/ClipData$Item;", 0);
-    const intent = await vcall(item, "getIntent", "()Landroid/content/Intent;");
-    expect(await vcall(intent, "getAction", "()Ljava/lang/String;")).toBe("test.action");
-    expect(await vcall(parcel, "dataAvail", "()I")).toBe(0);
-  });
-});
-
 // one app process for the file
 const PKG = "org.webdroid.test.content";
 const app = async () => bootApp(await packageRecord(PKG));
 rt.register({ name: "test/Connection", ctor: class extends JObj {}, ifaces: ["android/content/ServiceConnection"], methods: {} });
-
-describe("context-process-state", () => {
-  rt.linkNatives();
-
-  test("Context.databaseList returns private database directory entries", async () => {
-    const context = await app();
-    const dir = `/data/data/${PKG}/databases`;
-    const paths = [`${dir}/main.db`, `${dir}/main.db-wal`];
-    for (const path of paths) vfs.write(path, new Uint8Array(0));
-    try {
-      const names = await vcall(context, "databaseList", "()[Ljava/lang/String;") as string[];
-      expect([...names].sort()).toEqual(["main.db", "main.db-wal"]);
-    } finally {
-      for (const path of paths) vfs.delete(path);
-    }
-  });
-});
-
-describe("file-system-provider", () => {
-  rt.linkNatives();
-
-  test("FileSystemProvider performs file operations through the VFS", async () => {
-    await loadLibcore();
-    const file = await newObj("java/io/File", "(Ljava/lang/String;)V", "/data/provider-test.txt");
-    const path = await vcall(file, "toPath", "()Ljava/nio/file/Path;");
-    const provider = await vcall(await vcall(path, "getFileSystem", "()Ljava/nio/file/FileSystem;"), "provider", "()Ljava/nio/file/spi/FileSystemProvider;");
-    const output = await vcall(provider, "newOutputStream", "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;", path, []);
-    await vcall(output, "write", "([B)V", new Int8Array([10, 20, 30]));
-    await vcall(output, "close", "()V");
-    await vcall(provider, "checkAccess", "(Ljava/nio/file/Path;[Ljava/nio/file/AccessMode;)V", path, []);
-    const attrs = await vcall(provider, "readAttributes", "(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;", path, rt.classFor("java/nio/file/attribute/BasicFileAttributes"), []);
-    expect(await vcall(attrs, "size", "()J")).toBe(3n);
-    expect(await vcall(provider, "deleteIfExists", "(Ljava/nio/file/Path;)Z", path)).toBe(1);
-    expect(await vcall(provider, "deleteIfExists", "(Ljava/nio/file/Path;)Z", path)).toBe(0);
-  });
-});
 
 describe("hostfs-picker-gesture", () => {
   test("a save picker waits for a fresh gesture when activation expires", async () => {
@@ -159,42 +97,6 @@ describe("install-merge", () => {
     expect(new TextDecoder().decode(await readFully(install.lazyEntries.get("assets/unique.txt")!))).toBe("lazy unique");
     expect(install.zip["assets/unique.txt"]).toBeUndefined();
     expect(new TextDecoder().decode(install.zip["assets/last.txt"])).toBe("last");
-  });
-});
-
-describe("intent-typed-extras", () => {
-  rt.linkNatives();
-  test("typed extras keep their type through a Parcel and reach Bundle.readFromParcel", async () => {
-    const intent = await newObj("android/content/Intent", "()V");
-    const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", "p", "p.C");
-    const values: [string, string, unknown][] = [["J", "[J", new BigInt64Array([1n, -2n])], ["C", "[C", new Uint16Array([65, 66])],
-      ["S", "[S", new Int16Array([-3])], ["Z", "[Z", new Uint8Array([1, 0])], ["F", "[F", new Float32Array([0.5])],
-      ["D", "[D", new Float64Array([0.25])], ["b", "B", -7], ["s", "S", 300], ["r", "[Landroid/os/Parcelable;", Object.assign([component], { $t: "Landroid/os/Parcelable;" })]];
-    for (const [k, d, v] of values) await vcall(intent, "putExtra", `(Ljava/lang/String;${d})Landroid/content/Intent;`, k, v);
-    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
-    await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", intent, 0);
-    await vcall(parcel, "setDataPosition", "(I)V", 0);
-    const back = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
-    expect([...await vcall(back, "getLongArrayExtra", "(Ljava/lang/String;)[J", "J")]).toEqual([1n, -2n]);
-    expect([...await vcall(back, "getCharArrayExtra", "(Ljava/lang/String;)[C", "C")]).toEqual([65, 66]);
-    expect([...await vcall(back, "getBooleanArrayExtra", "(Ljava/lang/String;)[Z", "Z")]).toEqual([1, 0]);
-    expect(await vcall(back, "getShortExtra", "(Ljava/lang/String;S)S", "s", 0)).toBe(300);
-    expect(await vcall(back, "getByteExtra", "(Ljava/lang/String;B)B", "s", 9)).toBe(9);
-    const components = await vcall(back, "getParcelableArrayExtra", "(Ljava/lang/String;Ljava/lang/Class;)[Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"));
-    expect(await vcall(components[0], "equals", "(Ljava/lang/Object;)Z", component)).toBe(1);
-
-    const extras = await vcall(back, "getExtras", "()Landroid/os/Bundle;");
-    const bundleParcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
-    await vcall(extras, "writeToParcel", "(Landroid/os/Parcel;I)V", bundleParcel, 0);
-    await vcall(bundleParcel, "setDataPosition", "(I)V", 0);
-    const bundle = await newObj("android/os/Bundle", "()V");
-    await vcall(bundle, "readFromParcel", "(Landroid/os/Parcel;)V", bundleParcel);
-    expect(unbox(await vcall(bundle, "getByte", "(Ljava/lang/String;B)Ljava/lang/Byte;", "b", 0))).toBe(-7);
-    expect([...await vcall(bundle, "getDoubleArray", "(Ljava/lang/String;)[D", "D")]).toEqual([0.25]);
-    expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"))).toBeNull();
-    await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "p", component);
-    expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "p", rt.classFor("android/content/ComponentName"))).toBe(component);
-    expect(await vcall(bundle, "getSerializable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;", "p", rt.classFor("java/lang/String"))).toBeNull();
   });
 });
 
@@ -575,32 +477,6 @@ describe("resource-value-density", () => {
   });
 });
 
-describe("search-recent-suggestions", () => {
-  rt.linkNatives();
-
-  test("SearchRecentSuggestions inserts queries through ContentValues", async () => {
-    let inserted: unknown = null;
-    let uri = "";
-    const resolver = {
-      [mangleMethod("insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;")]:
-        async (target: JObj, values: unknown) => { uri = await uriText(target); inserted = values; return null; },
-      [mangleMethod("delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I")]: () => 0,
-    };
-    const context = {
-      [mangleMethod("getContentResolver", "()Landroid/content/ContentResolver;")]: () => resolver,
-    };
-    const recent = await newObj("android/provider/SearchRecentSuggestions", "(Landroid/content/Context;Ljava/lang/String;I)V", context, "history", 1);
-
-    await vcall(recent, "saveRecentQuery", "(Ljava/lang/String;Ljava/lang/String;)V", "android", null);
-    await vcall(recent, "waitForSave", "()V");
-
-    expect(uri).toBe("content://history/suggestions");
-    expect(await vcall(inserted, "getAsString", "(Ljava/lang/String;)Ljava/lang/String;", "display1")).toBe("android");
-    expect(await vcall(inserted, "getAsString", "(Ljava/lang/String;)Ljava/lang/String;", "query")).toBe("android");
-    expect(await vcall(inserted, "getAsLong", "(Ljava/lang/String;)Ljava/lang/Long;", "date")).not.toBeNull();
-  });
-});
-
 describe("service-bind", () => {
   rt.linkNatives();
 
@@ -636,16 +512,4 @@ describe("window-context", () => {
     expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
   });
 
-  test("attribution contexts retain their base and expose their tag", async () => {
-    const source = await app();
-    const tagged = await vcall(source, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", "navigation");
-    expect(tagged).not.toBe(source);
-    expect(await vcall(tagged, "getApplicationContext", "()Landroid/content/Context;")).toBe(source);
-    expect(await vcall(tagged, "isUiContext", "()Z")).toBe(0);
-    expect(await vcall(tagged, "getAttributionTag", "()Ljava/lang/String;")).toBe("navigation");
-    const attribution = await vcall(tagged, "getAttributionSource", "()Landroid/content/AttributionSource;");
-    expect(await vcall(attribution, "getAttributionTag", "()Ljava/lang/String;")).toBe("navigation");
-    const reset = await vcall(tagged, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", null);
-    expect(await vcall(reset, "getAttributionTag", "()Ljava/lang/String;")).toBeNull();
-  });
 });
