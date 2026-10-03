@@ -110,9 +110,13 @@ async function resolveDoc(docId: string): Promise<FileSystemHandle | null> {
   return h ?? null;
 }
 
-async function rowOf(id: string, h: FileSystemHandle): Promise<DocRow> {
+/** a document's row; null once it is gone, as one another call removed (UniFile renames by copy and
+ *  delete) while it was being listed or looked up */
+async function rowOf(id: string, h: FileSystemHandle): Promise<DocRow | null> {
   if (h.kind === "directory") return { id, name: h.name, mime: DIR_MIME, size: 0, modified: 0, flags: DIR_FLAGS };
-  const f = await (h as FileSystemFileHandle).getFile();
+  let f: File;
+  try { f = await (h as FileSystemFileHandle).getFile(); }
+  catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; cache.delete(id); return null; }
   return { id, name: h.name, mime: f.type || mimeOf(h.name) || "application/octet-stream", size: f.size, modified: f.lastModified, flags: FILE_FLAGS };
 }
 
@@ -127,9 +131,8 @@ async function docChildren(docId: string): Promise<DocRow[]> {
   const [vol, segs] = split(docId);
   const out: DocRow[] = [];
   for await (const [name, child] of (h as FileSystemDirectoryHandle).entries()) {
-    const id = join(vol, [...segs, name]);
-    cache.set(id, child);
-    out.push(await rowOf(id, child));
+    const id = join(vol, [...segs, name]), row = await rowOf(id, child);
+    if (row) { cache.set(id, child); out.push(row); }
   }
   return out;
 }
@@ -137,7 +140,8 @@ async function docChildren(docId: string): Promise<DocRow[]> {
 async function docRead(docId: string): Promise<Uint8Array> {
   const h = await resolveDoc(docId);
   if (h?.kind !== "file") throw rt.mkThrowable("java/io/FileNotFoundException", docId);
-  return new Uint8Array(await (await (h as FileSystemFileHandle).getFile()).arrayBuffer());
+  try { return new Uint8Array(await (await (h as FileSystemFileHandle).getFile()).arrayBuffer()); }
+  catch (e) { if ((e as DOMException).name !== "NotFoundError") throw e; cache.delete(docId); throw rt.mkThrowable("java/io/FileNotFoundException", docId); }
 }
 
 async function docWrite(docId: string, bytes: Uint8Array): Promise<void> {
