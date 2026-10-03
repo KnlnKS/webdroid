@@ -5,7 +5,7 @@
 // kept (decoded from the AVD's service-wifi.jar): ACCESS_WIFI_STATE to read, CHANGE_WIFI_STATE to
 // change, location access to see the network's identity or scan results. There is no radio to scan
 // or toggle: a scan fails and setWifiEnabled is refused.
-import { awaited, JObj, declaredField, rt, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, setDeclared, rt, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { after, staticField, newObj, scall, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, enforceCallingOrSelfPermission, hostStub } from "./binder";
@@ -58,7 +58,7 @@ rt.register({ name: "webdroid/WifiService", ctor: class extends JObj {}, sup: "a
   [`getDhcpInfo(${S})Landroid/net/DhcpInfo;`]: driven(function* () {
     yield enforceAccess();
     const info = yield newObj("android/net/DhcpInfo");
-    if (netUp()) (info as unknown as Record<string, number>)[declaredField("android/net/DhcpInfo", "dns1")] = inet4(DNS_SERVER);
+    if (netUp()) setDeclared(info, "android/net/DhcpInfo", { dns1: inet4(DNS_SERVER) });
     return info;
   }),
   // this device never scans: no results, and a scan request fails
