@@ -502,3 +502,25 @@ test("FloatingDecimal's dtoa matches its AOSP body over doubles and floats", asy
   }
   expect(mismatches.slice(0, 5)).toEqual([]);
 }, 60_000);
+
+test("ULocale.addLikelySubtags matches its AOSP body over fonts.xml's languages and generated locales", async () => {
+  const UL = "Landroid/icu/util/ULocale;", [likely, base] = await pair("android/icu/util/ULocale", `static addLikelySubtags(${UL})${UL}`);
+  const fonts = [...(await Bun.file(new URL("../vendor/aosp/system/etc/fonts.xml", import.meta.url)).text()).matchAll(/lang="([^"]*)"/g)].flatMap((m) => m[1].split(","));
+  const languages = ["", "und", "en", "zh", "sr", "pa", "az", "ha", "uz", "iw", "in", "mo", "sh", "tl", "no", "nb", "ja", "ko", "yue", "aaa", "ar", "es", "pt", "x", "e1"];
+  const scripts = ["", "Latn", "Cyrl", "Hans", "Hant", "Arab", "Zzzz", "Deva", "Qaaa", "Zsye"];
+  const regions = ["", "US", "ZZ", "419", "001", "150", "QO", "EU", "CN", "TW", "XA", "840", "DD", "BU", "IN", "PK", "MO", "AQ"];
+  const tags = [...fonts, "en-US", "zh-Hant", "x-private", "en-US-POSIX", "de-DE-u-co-phonebk", "sr-Latn-RS-x-y", "und-x-foo", "en-Latn-US", "ja-JP-u-ca-japanese",
+    "zh-TW", "zh-HK", "zh-MO", "art-lojban", "i-klingon", "ar-XB", "en-XA", "@x=abc", "en_US@calendar=buddhist", "_US", "__POSIX", "123", "en-u-rg-gbzzzz",
+    ...languages.flatMap((l) => regions.map((r) => [l, r].filter(Boolean).join("-"))),
+    ...Array.from({ length: 400 }, () => [languages[random(languages.length)], scripts[random(scripts.length)], regions[random(regions.length)]].filter(Boolean).join("-"))];
+  const name = (l: unknown) => vcall(l, "getName", "()Ljava/lang/String;");
+  const mismatches: unknown[] = [];
+  for (const tag of tags) for (const make of [() => scall("android/icu/util/ULocale", "forLanguageTag", `(Ljava/lang/String;)${UL}`, tag), () => newObj("android/icu/util/ULocale", "(Ljava/lang/String;)V", tag)]) {
+    const loc = await make();
+    const [mine, theirs] = await Promise.all([outcome(likely, null, [loc]), outcome(base, null, [loc])]) as { value?: unknown }[];
+    const summary = async (o: { value?: unknown }) => o.value === undefined ? o : [await name(o.value), o.value === loc];
+    if (JSON.stringify(await summary(mine)) !== JSON.stringify(await summary(theirs))) mismatches.push([tag, await name(loc), await summary(mine), await summary(theirs)]);
+  }
+  expect(mismatches.slice(0, 5)).toEqual([]);
+  expect(await outcome(likely, null, [null])).toEqual(await outcome(base, null, [null]));
+}, 60_000);

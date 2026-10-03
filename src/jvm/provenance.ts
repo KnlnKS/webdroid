@@ -64,6 +64,7 @@ export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${str
   "dalvik/system/": "vm: dex files, class loaders, VMRuntime and VMStack",
   "libcore/util/NativeAllocationRegistry": "vm: native allocations released with their owner",
   "java/net/HttpURLConnection": "boundary: HTTP over the fetch proxy",
+  "android/icu/util/ULocale": "intrinsic: addLikelySubtags over a page-shared decode of langInfo's table, so no realm decodes LikelySubtags.Data (Typeface.<clinit> warm: first realm 88 -> 75 ms, a process realm 61-109 -> 17-21 ms; §4.7, tests/intrinsics.test.ts)",
   "javax/net/ssl/": "boundary: TLS at the relay",
   "com/android/okhttp/HttpHandler": "boundary: HTTP over the fetch proxy",
   "com/android/okhttp/HttpsHandler": "boundary: HTTPS over the fetch proxy",
