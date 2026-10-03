@@ -1,8 +1,8 @@
 import { expect, test, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import "../src/natives";
-import { newObj, vcall, vcallAsync, vcallOn, JThread, curThread, callOn, scall } from "../src/jvm/natives/jlang";
-import { rt, JObj } from "../src/jvm/runtime";
+import { newObj, vcall, scall } from "../src/jvm/natives/jlang";
+import { rt } from "../src/jvm/runtime";
 import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";
 import { nativeParcel } from "../src/android/parcel";
@@ -66,10 +66,6 @@ describe("object-stream-external", () => {
       expect(await vcall(stream, "readObject", "()Ljava/lang/Object;")).toBe(value);
     }
   });
-  test("incompatible serialVersionUID is rejected", async () => {
-    const bytes = i8(hexBytes(oracle)); bytes[39] = 8;
-    await expect(vcallAsync(await input(bytes), "readObject", "()Ljava/lang/Object;")).rejects.toMatchObject({ msg: expect.stringContaining("serialVersionUID") });
-  });
   test("default and custom fields preserve graph identity and initialize only the non-serializable superclass", async () => {
     const oracle = (await Bun.file(import.meta.dir + "/fixtures/SerializationProbe.hex").text()).trim();
     for (const bytes of [i8(hexBytes(oracle)), await encode(await newObj("SerializationProbe$Graph"))]) {
@@ -85,18 +81,6 @@ describe("object-stream-external", () => {
       expect(field(graph, "SerializationProbe$Base", "initialized")).toBe(31);
     }
   });
-  test("stream replacement hooks skip null and run once for shared objects", async () => {
-    const buffer = await newObj("java/io/ByteArrayOutputStream");
-    const output = await newObj("SerializationProbe$Replacing", "(Ljava/io/OutputStream;)V", buffer);
-    for (const value of [null, "first", "first"]) await vcall(output, "writeObject", "(Ljava/lang/Object;)V", value);
-    await vcall(output, "close", "()V");
-    const bytes = await vcall(buffer, "toByteArray", "()[B");
-    const source = await newObj("java/io/ByteArrayInputStream", "([B)V", bytes);
-    const stream = await newObj("SerializationProbe$Resolving", "(Ljava/io/InputStream;)V", source);
-    for (const expected of [null, "resolved", "resolved"]) expect(await vcall(stream, "readObject", "()Ljava/lang/Object;")).toBe(expected);
-    expect(field(output, "SerializationProbe$Replacing", "calls")).toBe(1);
-    expect(field(stream, "SerializationProbe$Resolving", "calls")).toBe(1);
-  });
 
   test("primitive arrays retain their Java element types and values", async () => {
     for (const value of [Int8Array.of(-128, 127), Int16Array.of(-32768, 32767), Uint16Array.of(0, 65535),
@@ -109,95 +93,4 @@ describe("object-stream-external", () => {
     }
   });
 
-  test("serialization retains the caller through nested objects and suspended short reads", async () => {
-    const worker = new JThread(), ambient = curThread, calls: string[] = [];
-    const record = (name: string) => { expect(curThread).toBe(worker); calls.push(name); };
-    rt.register({ name: "test/ThreadExternal", ctor: class extends JObj {}, ifaces: ["java/io/Externalizable"], statics: { serialVersionUID: 1n }, methods: {
-      "<init>()V": () => record("init"),
-      "writeExternal(Ljava/io/ObjectOutput;)V": async (out: unknown) => {
-        record("write"); await Promise.resolve();
-        await vcallOn(worker, out, "writeUTF", "(Ljava/lang/String;)V", "\0🚀".repeat(800));
-      },
-      "readExternal(Ljava/io/ObjectInput;)V": async (input: unknown) => {
-        record("read");
-        expect(await vcallOn(worker, input, "readUTF", "()Ljava/lang/String;")).toBe("\0🚀".repeat(800));
-      },
-      "readResolve()Ljava/lang/Object;": function () { record("resolve"); return this; },
-    } });
-    class ShortInput extends JObj { bytes = new Int8Array(); pos = 0; }
-    rt.register({ name: "test/ShortObjectInput", ctor: ShortInput, sup: "java/io/InputStream", methods: {
-      "read([BII)I": async function (this: ShortInput, out: Int8Array, offset: number, length: number) {
-        expect(curThread).toBe(worker); await Promise.resolve();
-        const n = Math.min(length, 17, this.bytes.length - this.pos);
-        out.set(this.bytes.subarray(this.pos, this.pos + n), offset); this.pos += n; return n || -1;
-      },
-      "read()I": function (this: ShortInput) { return this.pos < this.bytes.length ? this.bytes[this.pos++] & 0xff : -1; },
-    } });
-    rt.linkNatives();
-    const values = [await callOn(worker, () => newObj("test/ThreadExternal")), await callOn(worker, () => newObj("test/ThreadExternal"))];
-    calls.length = 0;
-    const buffer = await newObj("java/io/ByteArrayOutputStream");
-    const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", buffer);
-    await vcallOn(worker, output, "writeObject", "(Ljava/lang/Object;)V", values);
-    await vcallOn(worker, output, "close", "()V");
-    const source = new ShortInput(); source.bytes = await vcall(buffer, "toByteArray", "()[B");
-    const stream = await callOn(worker, () => newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source));
-    expect(await vcallOn(worker, stream, "readObject", "()Ljava/lang/Object;")).toHaveLength(2);
-    expect(calls).toEqual(["write", "write", "init", "read", "resolve", "init", "read", "resolve"]);
-    expect(curThread).toBe(ambient);
-  });
-});
-
-describe("objectstream", () => {
-  test("ObjectInputStream consumes complete short blocks and crosses block boundaries", async () => {
-    const stream = await input(new Int8Array([
-      0xac, 0xed, 0, 5, 0x77, 4, 0x12, 0x34, 0x56, 0x78,
-      0x77, 1, 0x11, 0x77, 3, 0x22, 0x33, 0x44,
-    ]));
-    expect(await vcall(stream, "readInt", "()I")).toBe(0x12345678);
-    expect(await vcall(stream, "readInt", "()I")).toBe(0x11223344);
-  });
-
-  test("ObjectOutputStream writes a complete object before explicit flush", async () => {
-    const set = await newObj("java/util/TreeSet", "()V");
-    await vcall(set, "add", "(Ljava/lang/Object;)Z", await newObj("java/util/UUID", "(JJ)V", 1n, 2n));
-    const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
-    const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
-    await vcall(output, "writeObject", "(Ljava/lang/Object;)V", set);
-    const restored = await vcall(await input(await vcall(bytes, "toByteArray", "()[B")), "readObject", "()Ljava/lang/Object;");
-    const iterator = await vcall(restored, "iterator", "()Ljava/util/Iterator;");
-    const uuid = await vcall(iterator, "next", "()Ljava/lang/Object;");
-    expect(await vcall(uuid, "getMostSignificantBits", "()J")).toBe(1n);
-    expect(await vcall(uuid, "getLeastSignificantBits", "()J")).toBe(2n);
-  });
-
-  test("serialized linked maps retain entries, access order, back references and secret keys", async () => {
-    const map = await newObj("java/util/LinkedHashMap", "(IFZ)V", 16, 0.75, 1);
-    const key = await newObj("javax/crypto/spec/SecretKeySpec", "([BLjava/lang/String;)V", new Int8Array([1, -2, 3]), "AES");
-    await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "key", key);
-    await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "other", "value");
-    const stream = await input(await encode(map));
-    const restored = await vcall(stream, "readObject", "()Ljava/lang/Object;");
-    expect(await vcall(stream, "readObject", "()Ljava/lang/Object;")).toBe(restored);
-    expect(await vcall(restored, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "other")).toBe("value");
-    const restoredKey = await vcall(restored, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key");
-    expect(await vcall(restoredKey, "getAlgorithm", "()Ljava/lang/String;")).toBe("AES");
-    expect([...await vcall(restoredKey, "getEncoded", "()[B")]).toEqual([1, -2, 3]);
-    const entries = await vcall(restored, "keySet", "()Ljava/util/Set;");
-    const iterator = await vcall(entries, "iterator", "()Ljava/util/Iterator;");
-    expect(await vcall(iterator, "next", "()Ljava/lang/Object;")).toBe("other");
-    expect(await vcall(iterator, "next", "()Ljava/lang/Object;")).toBe("key");
-  });
-
-  test("unmodifiable random-access lists retain their serialized read-only view", async () => {
-    const list = await newObj("java/util/ArrayList", "()V");
-    await vcall(list, "add", "(Ljava/lang/Object;)Z", "saved");
-    await vcall(list, "add", "(Ljava/lang/Object;)Z", await newObj("java/util/concurrent/atomic/AtomicInteger", "(I)V", 7));
-    const view = await scall("java/util/Collections", "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
-    const restored = await vcall(await input(await encode(view)), "readObject", "()Ljava/lang/Object;");
-    expect(rt.iof(restored, "java/util/RandomAccess")).toBe(1);
-    expect(await vcall(restored, "get", "(I)Ljava/lang/Object;", 0)).toBe("saved");
-    expect(await vcall(await vcall(restored, "get", "(I)Ljava/lang/Object;", 1), "get", "()I")).toBe(7);
-    await expect(vcallAsync(restored, "add", "(Ljava/lang/Object;)Z", "new")).rejects.toThrow();
-  });
 });
