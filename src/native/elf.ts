@@ -13,11 +13,18 @@ export interface Module {
   name: string;
   base: number;
   end: number;
+  /** where the image's reservation starts (base plus its lowest PT_LOAD page) */
+  start: number;
   /** an AArch64 image: its code needs the A64 emitter, and its ABI is LP64 */
   w64: boolean;
   exports: Map<string, number>;
   initArray: number[];
   init: number;
+  /** DT_FINI_ARRAY and DT_FINI, which dlclose runs when it unloads the image */
+  finiArray: number[];
+  fini: number;
+  /** DF_1_NODELETE, or dlopen's RTLD_NODELETE: the image stays once loaded */
+  nodelete: boolean;
   needed: string[];
   exidx: { addr: number; count: number };
   symbols: { addr: Uint32Array; names: string[] };
@@ -195,7 +202,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   const phdr = mem.hostAlloc(phnum * f.phEnt, 8);
   mem.u8.set(bytes.subarray(phoff, phoff + phnum * f.phEnt), phdr);
   const mod: Module = {
-    name, base, end: base + hi, w64: cls === 2, exports: new Map(), initArray: [], init: 0, needed: [],
+    name, base, end: base + hi, start: base + lo, w64: cls === 2, exports: new Map(), initArray: [], init: 0, finiArray: [], fini: 0, nodelete: false, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },
     refs: 1, inited: false, phdr, phnum, tls, tlsDescriptors: [], tpOffset: null, ifuncs: new Map(), locals: new Map(),
   };
@@ -205,7 +212,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   // pair of variables holds it either way.
   let strtab = 0, symtab = 0, hash = 0, gnuHash = 0, rel = 0, relsz = 0, androidRel = 0, androidRelSz = 0;
   let relr = 0, relrSz = 0, relrEnt = 0;
-  let androidRela: boolean | null = null, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0;
+  let androidRela: boolean | null = null, jmprel = 0, pltrelsz = 0, initArr = 0, initArrSz = 0, finiArr = 0, finiArrSz = 0;
   const neededOffs: number[] = [];
   for (let p = base + dynOff; p < base + dynOff + dynSz; p += f.dynEnt) {
     const tag = mem.i32[p >>> 2], val = mem.u32[(p + f.ptr) >>> 2];
@@ -223,6 +230,10 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       case 0x60000011: androidRel = val; androidRela = true; break;
       case 0x60000012: androidRelSz = val; break;
       case 12: mod.init = base + val; break;
+      case 13: mod.fini = base + val; break;
+      case 26: finiArr = val; break;
+      case 28: finiArrSz = val; break;
+      case 0x6ffffffb: mod.nodelete = !!(val & 8); break;
       case 23: jmprel = val; break;
       case 25: initArr = val; break;
       case 27: initArrSz = val; break;
@@ -334,6 +345,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   if (rel) apply(rel, relsz);
   if (jmprel) apply(jmprel, pltrelsz);
   for (let i = 0; i < initArrSz; i += f.ptr) mod.initArray.push(mem.u32[(base + initArr + i) >>> 2]);
+  for (let i = 0; i < finiArrSz; i += f.ptr) mod.finiArray.push(mem.u32[(base + finiArr + i) >>> 2]);
   };
   return { mod, relocate };
 }

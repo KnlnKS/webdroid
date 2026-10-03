@@ -77,6 +77,8 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
       mods.push(await loadModule(path.slice(path.lastIndexOf("/") + 1), undefined, true, undefined, cpu));
     }
   } finally { linkerHooks.placeTls = null; }
+  // the executable's libraries are its global group, which dlclose never unloads
+  for (const mod of mods) mod.nodelete = true;
   bionicTls = (cursor + 15) & -16;
   tlsSize = bionicTls + BIONIC_TLS_SIZE;
   writeTlsLayout();
@@ -102,6 +104,11 @@ export async function bootBionic(cpu: Cpu): Promise<void> {
     },
   });
   linkerHooks.linked = (mod, c) => cfiAdd([mod], c);
+  // CFIShadowWriter::BeforeUnload: the granules only the image covered are invalid again
+  linkerHooks.unloading = (mod) => {
+    const granule = 2 ** CFI_SHADOW_ALIGN, begin = Math.ceil(mod.start / granule) * granule, end = Math.floor(mod.end / granule) * granule;
+    if (cfiShadow && begin < end) cfiFill(begin, end, () => 0);
+  };
   // abort_msg_t {size, msg[]}, which android_set_abort_message maps for the crash reporter
   abortMessageSource.text = () => { const m = mem.ld64(globals + G_ABORT_MSG); return m ? mem.cstr(mem.txVa(m) + 8) : ""; };
   await cfiAdd(mods, cpu);
@@ -230,6 +237,6 @@ function loaderExports(): Record<string, HostFn> {
     __loader_cfi_fail: (cpu, a) => { a.l(); const target = a.p(); return cpu.fault(`CFI check failed for an indirect call to 0x${target.toString(16)}`); },
     __loader_android_get_application_target_sdk_version: () => targetSdkVersion(),
     // a module's thread_local destructors keep it loaded; nothing here unloads a module
-    __loader_add_thread_local_dtor: () => 0, __loader_remove_thread_local_dtor: () => 0,
+    __loader_add_thread_local_dtor: dl.addThreadLocalDtor, __loader_remove_thread_local_dtor: dl.removeThreadLocalDtor,
   };
 }

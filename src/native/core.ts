@@ -39,6 +39,7 @@ interface Core {
   drop_va(va: bigint, n: bigint): number;
   decommit_va(va: bigint, n: bigint): void;
   reserve(size: number, align: number): number;
+  release_image(base: number, size: number): void;
   alloc_stack(size: number): number;
   free_stack(base: number, size: number): void;
   host_alloc(n: number, align: number): number;

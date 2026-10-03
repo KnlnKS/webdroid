@@ -14,10 +14,12 @@ import { vfs } from "../shell/vfs";
 export const modules: Module[] = [];
 const byName = new Map<string, Module>();
 
-type Handle = { mod: Module } | { lib: string };
+/** a dlopen handle: a module, a host library, or one dlclose unloaded */
+type Handle = { mod: Module } | { lib: string } | null;
 const handles: Handle[] = [];
 /** dlopen handles start here: 0, -1 and 1 (the main program) mean the global scope to dlsym */
 const HANDLE_BASE = 0x100;
+const RTLD_NOLOAD = 4, RTLD_NODELETE = 0x1000;
 let dlerrorMsg: string | null = null;
 let dlerrorBuf = 0;
 const inflight = new Map<string, Promise<Module>>();
@@ -31,7 +33,9 @@ export const linkerHooks: {
   placeTls: ((mod: Module) => void) | null; hwcap: bigint; deviceLib: (name: string) => string | null;
   /** a module is linked and about to be initialized */
   linked: (mod: Module, cpu: Cpu) => Promise<void> | void;
-} = { placeTls: null, hwcap: 0n, deviceLib: () => null, linked: () => {} };
+  /** a module's image is about to be unmapped */
+  unloading: (mod: Module) => void;
+} = { placeTls: null, hwcap: 0n, deviceLib: () => null, linked: () => {}, unloading: () => {} };
 
 function basename(p: string): string { return p.slice(p.lastIndexOf("/") + 1); }
 
@@ -61,8 +65,13 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     else if (mod.w64 !== isA64()) throw new Error(`${name}: ${mod.w64 ? "64" : "32"}-bit image in a ${isA64() ? "64" : "32"}-bit process`);
     modules.push(mod);
     byName.set(name, mod);
-    // dependencies that are real modules load (and initialise) first; host libs need nothing
-    for (const n of mod.needed) if (!hostLibNames().includes(n) && !byName.has(n) && libSource(n, owner)) await loadModule(n, undefined, link, owner, cpu);
+    // dependencies that are real modules load (and initialise) first, each holding a reference;
+    // host libs need nothing
+    for (const n of mod.needed) {
+      const have = byName.get(n);
+      if (have) have.refs++;
+      else if (!hostLibNames().includes(n) && libSource(n, owner)) await loadModule(n, undefined, link, owner, cpu);
+    }
     await resolveIfuncs(mod, cpu);
     if (mod.tls) linkerHooks.placeTls?.(mod);
     relocate(resolveGlobal);
@@ -113,6 +122,33 @@ export async function runInit(mod: Module, cpu: Cpu): Promise<void> {
   for (const f of mod.initArray) if (f && f !== 0xffffffff && f !== RET_SENTINEL) await cpu.call(f);
 }
 
+/** dlclose's release of a reference, bionic's soinfo_unload: when an image's last goes, it and the
+ *  dependencies only it held run DT_FINI_ARRAY (in reverse) and DT_FINI, root first, before any
+ *  image is unmapped and its symbols leave the scope, so a later dlopen loads it fresh. NODELETE
+ *  images stay, as do images with TLS, whose blocks threads keep. */
+async function unload(root: Module, cpu: Cpu): Promise<void> {
+  const gone: Module[] = [];
+  const release = (m: Module) => {
+    if (m.refs > 0 && --m.refs > 0 || m.nodelete || m.tls || gone.includes(m)) return;
+    gone.push(m);
+    for (const n of m.needed) { const dep = byName.get(n); if (dep) release(dep); }
+  };
+  release(root);
+  for (const m of gone) if (m.inited) {
+    for (const f of [...m.finiArray].reverse()) if (f && f !== 0xffffffff && f !== RET_SENTINEL) await cpu.call(f);
+    if (m.fini) await cpu.call(m.fini);
+  }
+  for (const m of gone) {
+    linkerHooks.unloading(m);
+    modules.splice(modules.indexOf(m), 1);
+    byName.delete(m.name);
+    nameStrs.delete(m);
+    handles.forEach((h, i) => { if (h && "mod" in h && h.mod === m) handles[i] = null; });
+    for (const at of tlsDescriptors.keys()) if (at >= m.base && at < m.end) tlsDescriptors.delete(at);
+    mem.releaseImage(m.start, m.end - m.start);
+  }
+}
+
 function resolveGlobal(sym: string, weak: boolean, from: Module): number {
   const h = resolveGlobalOrNull(sym, from.needed);
   if (h !== undefined) return h;
@@ -143,7 +179,7 @@ export function backtrace(cpu: Cpu, max = 24): string[] {
 }
 
 function handleOf(h: Handle): number {
-  const i = handles.findIndex((x) => ("mod" in x && "mod" in h && x.mod === h.mod) || ("lib" in x && "lib" in h && x.lib === h.lib));
+  const i = handles.findIndex((x) => x && h && (("mod" in x && "mod" in h && x.mod === h.mod) || ("lib" in x && "lib" in h && x.lib === h.lib)));
   if (i >= 0) return HANDLE_BASE + i;
   handles.push(h);
   return HANDLE_BASE + handles.length - 1;
@@ -165,13 +201,15 @@ const findExidx: HostFn = (_cpu, a) => {
  *  caller-address argument is unread) */
 export const libdl: Record<string, HostFn> = {
   dlopen: async (cpu, a) => {
-    const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
+    const path = a.p(), flags = a.i(), name = path ? basename(mem.cstr(path)) : "";
     if (!name) return 1; // the main program
     if (hostLibNames().includes(name)) return handleOf({ lib: name });
     const have = byName.get(name);
-    if (have) { have.refs++; return handleOf({ mod: have }); }
+    const opened = (mod: Module) => { if (flags & RTLD_NODELETE) mod.nodelete = true; return handleOf({ mod }); };
+    if (have) { have.refs++; return opened(have); }
+    if (flags & RTLD_NOLOAD) { dlerrorMsg = `dlopen failed: library "${name}" wasn't loaded and RTLD_NOLOAD prevented it`; return 0; }
     if (!libSource(name, cpu.nativeRuntime ?? rt)) { dlerrorMsg = `dlopen failed: library "${name}" not found`; return 0; }
-    try { return handleOf({ mod: await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu) }); }
+    try { return opened(await loadModule(name, undefined, false, cpu.nativeRuntime ?? rt, cpu)); }
     catch (e) { dlerrorMsg = String((e as Error).message ?? e); return 0; }
   },
   dlsym: (_cpu, a) => {
@@ -190,7 +228,16 @@ export const libdl: Record<string, HostFn> = {
     }
     return probeHost(sym, hd.lib);
   },
-  dlclose: (_cpu, a) => { const hd = handles[a.i() - HANDLE_BASE]; if (hd && "mod" in hd) hd.mod.refs--; return 0; },
+  dlclose: async (cpu, a) => {
+    const h = a.i(), hd = handles[h - HANDLE_BASE];
+    if (h === 1) return 0;
+    if (!hd) { dlerrorMsg = `invalid handle: 0x${(h >>> 0).toString(16)}`; return -1; }
+    if ("mod" in hd) await unload(hd.mod, cpu);
+    return 0;
+  },
+  // a thread_local's destructor holds its image until the destructor has run
+  addThreadLocalDtor: (_cpu, a) => { const m = moduleOf(a.p()); if (m) m.refs++; return 0; },
+  removeThreadLocalDtor: async (cpu, a) => { const m = moduleOf(a.p()); if (m) await unload(m, cpu); return 0; },
   dlerror: () => {
     if (dlerrorMsg === null) return 0;
     mem.putCstr(dlerrorBuf, dlerrorMsg, 256);

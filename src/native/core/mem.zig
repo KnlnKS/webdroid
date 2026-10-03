@@ -719,6 +719,16 @@ pub export fn reserve(size: u32, alignment: u32) u32 {
         last_err = 4;
         return 0;
     }
+    if (image_holes != 0) {
+        const hole = imageHole(size, alignment);
+        if (hole != 0) {
+            const a = pageOf(hole);
+            const b = a + ((size + PAGE_SIZE - 1) >> PAGE_SHIFT);
+            @memset(pages[a..b], IMAGE);
+            image_holes -= b - a;
+            return hole;
+        }
+    }
     const base = (module_bot - size) & ~(alignment - 1);
     if (pool_base != 0) {
         const keep = (base - pool_base) / UNIT;
@@ -765,6 +775,37 @@ pub export fn reserve(size: u32, alignment: u32) u32 {
     @memset(pages[pageOf(base)..pageOf(module_bot)], IMAGE);
     module_bot = base;
     return base;
+}
+
+/// free pages among the module images, which dlclose left
+var image_holes: u32 = 0;
+fn imageHole(size: u32, alignment: u32) u32 {
+    const n = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
+    const al = @max(alignment / PAGE_SIZE, 1);
+    const end = pageOf(mem_size);
+    var s = (pageOf(module_bot) + al - 1) & ~(al - 1);
+    while (s + n <= end) {
+        var j = s;
+        while (j < s + n and pages[j] == FREE) j += 1;
+        if (j == s + n) return s * PAGE_SIZE;
+        s = (j + al) & ~(al - 1);
+    }
+    return 0;
+}
+/// dlclose's unmapping of a module image: its pages leave module space for a later image, and once
+/// the images below them are gone too they return to the arena (or the pool) under the rest
+export fn release_image(base: u32, size: u32) void {
+    const a = pageOf(base);
+    const b = pageOf(base +% size +% (PAGE_SIZE - 1));
+    if (base < module_bot or b > pageOf(mem_size) or a >= b) return;
+    cpu.invalidate_range(base, (b - a) * PAGE_SIZE);
+    fill(base, 0, (b - a) * PAGE_SIZE);
+    @memset(pages[a..b], FREE);
+    image_holes += b - a;
+    while (module_bot < mem_size and pages[pageOf(module_bot)] == FREE) {
+        module_bot += PAGE_SIZE;
+        image_holes -= 1;
+    }
 }
 
 var free_stacks: [64][2]u32 = undefined;
@@ -821,6 +862,7 @@ export fn host_alloc(n: u32, alignment: u32) u32 {
 export fn mem_init(size: u32) void {
     mem_size = size;
     module_bot = size;
+    image_holes = 0;
     pool_base = if (size > abi.POOL_BASE) abi.POOL_BASE else 0;
     owner_len = if (pool_base != 0) @min(owner.len, (size - pool_base) / UNIT) else 0;
     @memset(&owner, -1);

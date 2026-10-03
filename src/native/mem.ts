@@ -149,6 +149,8 @@ export const mem = {
     const e = core.err(), why = e & 0x100 ? `the pool holds plane ${e & 255}` : e === 2 ? "the pool reaches the images" : `${(mem.stats().free / 1048576).toFixed(1)} free`;
     throw new NativeFault(`[native] out of module address space (${(size / 1048576).toFixed(1)} MiB wanted, ${why})`);
   },
+  /** an unloaded image's space, which the next reserve may reuse */
+  releaseImage: (base: number, size: number): void => core.release_image(base >>> 0, size >>> 0),
   allocStack(size: number): { base: number; top: number } {
     const base = core.alloc_stack(size >>> 0) >>> 0;
     if (!base) throw new NativeFault("[native] out of stack address space");
