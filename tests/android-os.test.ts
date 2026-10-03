@@ -248,3 +248,9 @@ describe("remotecallbacklist", () => {
     } finally { Object.assign(binderTransport, saved); }
   });
 });
+
+describe("stats-log", () => {
+  test("FrameworkStatsLog.write reaches libstats_jni, which StatsLog.<clinit> loads", async () => {
+    await scall("com/android/internal/util/FrameworkStatsLog", "write", "(IIJII)V", 228, 10123, 123n, 1, 3);
+  });
+});

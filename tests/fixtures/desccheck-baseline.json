@@ -34,9 +34,6 @@
   "reimplements writeLongArray([J)Landroid/util/StatsEvent$Builder;",
   "reimplements writeString(Ljava/lang/String;)Landroid/util/StatsEvent$Builder;"
  ],
- "android/util/StatsLog": [
-  "reimplements static write(Landroid/util/StatsEvent;)V"
- ],
  "java/lang/reflect/AccessibleObject": [
   "missing trySetAccessible()Z"
  ],

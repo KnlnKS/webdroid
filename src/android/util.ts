@@ -1,4 +1,4 @@
-// android.util natives: Log and EventLog.
+// android.util natives: Log, EventLog and StatsLog.
 
 import { rt } from "../jvm/runtime";
 import { unbox as boxedValue } from "../jvm/natives/jbox";
@@ -43,3 +43,6 @@ rt.registerJnis("android/util/EventLog", {
   "writeEvent(ILjava/lang/String;)I": (tag: number, value: string | null) => writeEvent(tag, value ?? "NULL"),
   "writeEvent(I[Ljava/lang/Object;)I": (tag: number, values: unknown[] | null) => writeEvent(tag, values ? [...values] : "NULL"),
 });
+// libstats_jni (the statsd apex's): with no statsd socket, libstatssocket drops the event
+rt.claimNativeLib("stats_jni");
+rt.registerJni("android/util/StatsLog", "writeImpl([BII)V", () => {});

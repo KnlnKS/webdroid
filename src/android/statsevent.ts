@@ -1,6 +1,7 @@
-// StatsEvent and StatsLog stay TS while a measured regression stands: with AOSP's bytecode, the
-// first FrameworkStatsLog.write (ChangeReporter's) leaves mihon's main thread in GC for the rest
-// of a lat run (~12 s of 20 s) and its theme taps take 170-540 ms instead of ~55 ms.
+// StatsEvent stays TS: AOSP's Builder takes its buffer from ByteBuffer.allocateDirect, whose
+// non-movable array sizes guest memory for an app shipping native code (Mihon: 4 GiB) before any of
+// it loads, and with that much Wasm memory committed Chrome keeps incremental marking running:
+// Mihon's main thread spent ~11 s of 23 in GC and its theme taps took 200-370 ms.
 import { JObj, rt } from "../jvm/runtime";
 import { i8, utf8 } from "../jvm/abi";
 import { uptimeMillis } from "../guest-clock";
@@ -85,8 +86,4 @@ rt.register({ name: "android/util/StatsEvent$Builder", ctor: JStatsBuilder, meth
     this.bytes[1] = this.count;
     rt.link("android/util/StatsEvent"); return Object.assign(new JStatsEvent(), { atom: this.atom, bytes: i8(this.bytes.slice(0, this.pos)) });
   },
-} });
-rt.register({ name: "android/util/StatsLog", ctor: class extends JObj {}, methods: {
-  // With no statsd socket, Android's fire-and-forget telemetry write is dropped.
-  "static write(Landroid/util/StatsEvent;)V": () => {},
 } });
