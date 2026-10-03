@@ -1,7 +1,8 @@
-// Build what bun entry points load before any of them does: the wasm core and the vendored
-// sql.js. Each is a no-op once its output exists.
+// Build what bun entry points load before any of them does: the wasm core, the WebView renderer's
+// programs and the vendored sql.js. Each is a no-op once its output exists.
 import { existsSync, readFileSync } from "node:fs";
 import { ensureCore } from "./build-core";
+import { ensureWebPages } from "./build-web";
 
 const sqljs = new URL("../vendor/sql.js/", import.meta.url).pathname;
 
@@ -14,4 +15,4 @@ async function ensureSqlJs(): Promise<void> {
   }
 }
 
-await Promise.all([ensureCore(), ensureSqlJs()]);
+await Promise.all([ensureCore(), ensureWebPages(), ensureSqlJs()]);

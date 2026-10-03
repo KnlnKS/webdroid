@@ -22,6 +22,7 @@ scripts/simd-oracle/build/
 src/native/core.wasm.ts
 src/native/core.safe.wasm.ts
 src/native/native-core.wasm
+src/shell/webpage.gen.ts
 dist/
 .wrangler/
 worker-configuration.d.ts

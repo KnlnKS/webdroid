@@ -4,10 +4,15 @@ import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml";
 import { webScript } from "../src/shell/webscript";
 import { proxyRequest } from "../src/shell/proxy";
-import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, holdFrames, routeSubframes, webFormRequest, webViewBrands } from "../src/shell/webinject";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER } from "../src/shell/webinject";
+import { holdFrames } from "../src/shell/webpage/frames";
+import { webViewBrands } from "../src/shell/webpage/clienthints";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
+/** the page's frame routing as a module a page imports */
+const framesModule = Bun.build({ entrypoints: [new URL("../src/shell/webpage/frames.ts", import.meta.url).pathname], target: "browser" })
+  .then((built) => built.outputs[0].text());
 afterAll(async () => { await browser?.close(); });
 
 const renderer = "http://renderer.example:8443";
@@ -516,12 +521,12 @@ describe("WebView isolation", () => {
       await page.goto(`http://page.localhost:${server.port}/`);
       const routed = (url: string) => `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(url);
       const direct = `http://127.0.0.1:${server.port}`;
-      expect(await page.evaluate(async ({ direct, port, route, hold, form }) => {
+      expect(await page.evaluate(async ({ direct, port, routing }) => {
         const asked: string[] = [];
-        (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string) => {
+        (await import(URL.createObjectURL(new Blob([routing], { type: "text/javascript" })))).routeSubframes(`http://routed.localhost:${port}`, (url: string) => {
           asked.push(url);
           return Promise.resolve(url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : url.startsWith("data:") ? url : null);
-        }, (0, eval)(`(${hold})`), (0, eval)(`(${form})`));
+        });
         document.body.insertAdjacentHTML("beforeend", `<iframe src="${direct}/direct"></iframe>`);
         const made = document.createElement("iframe");
         made.src = `${direct}/made`;
@@ -547,7 +552,7 @@ describe("WebView isolation", () => {
         // the page reads the src it set; the attribute the frame loads is the app's
         const frames = (doc: Document) => [...doc.querySelectorAll("iframe")].map((f) => [f.src, Element.prototype.getAttribute.call(f, "src")]);
         return [asked.sort(), frames(document), frames(srcdoc.contentDocument!), frames(blank.contentDocument!), srcdoc.contentDocument!.body.firstChild!.textContent];
-      }, { direct, port: server.port, route: routeSubframes.toString(), hold: holdFrames.toString(), form: webFormRequest.toString() })).toEqual([
+      }, { direct, port: server.port, routing: await framesModule })).toEqual([
         [`${direct}/direct`, `${direct}/made`, "gmsg://mobileads.google.com/x", "gmsg://mobileads.google.com/kept", "data:text/html,<p>data</p>", `${direct}/in-blank`, `${direct}/in-srcdoc`].sort(),
         [[`${direct}/direct`, routed(`${direct}/direct`)], [`${direct}/made`, routed(`${direct}/made`)], ["gmsg://mobileads.google.com/kept", null],
           ["", null], ["", null], ["data:text/html,<p>data</p>", "data:text/html,<p>data</p>"]],
@@ -574,13 +579,13 @@ describe("WebView isolation", () => {
     try {
       await page.goto(`http://page.localhost:${server.port}/`);
       const direct = `http://127.0.0.1:${server.port}`;
-      const result = await page.evaluate(async ({ direct, port, route, hold, form }) => {
+      const result = await page.evaluate(async ({ direct, port, routing }) => {
         const asked: string[] = [];
         // the client claims URLs naming "override"; data: and blob: load as they are
-        (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string, init?: { method?: string }) => {
+        (await import(URL.createObjectURL(new Blob([routing], { type: "text/javascript" })))).routeSubframes(`http://routed.localhost:${port}`, (url: string, init?: { method?: string }) => {
           asked.push(url.startsWith("blob:") ? "blob" : url + (init?.method ? " " + init.method : ""));
           return Promise.resolve(/override/.test(url) ? null : url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : url);
-        }, (0, eval)(`(${hold})`), (0, eval)(`(${form})`));
+        });
         const loads: Record<string, number> = {};
         const frame = (label: string, setup: (f: HTMLIFrameElement) => void) => {
           const f = document.createElement("iframe");
@@ -633,7 +638,7 @@ describe("WebView isolation", () => {
         await settle();
         return { asked: asked.sort(), loads, opened, parsedSrc, blob: blob.contentDocument?.body.textContent, script: (written.contentWindow as unknown as { s: string }).s,
           written: [...doc.querySelectorAll("iframe")].map((f) => f.src) };
-      }, { direct, port: server.port, route: routeSubframes.toString(), hold: holdFrames.toString(), form: webFormRequest.toString() });
+      }, { direct, port: server.port, routing: await framesModule });
       const paths = ["attr-node", "attr-value", "clicked", "named-item", "opened", "parsed", "pushed", "routed", "self", "split", "static-srcdoc", "target"];
       expect(result).toEqual({
         asked: [...paths.map((p) => `${direct}/${p}`), `${direct}/posted POST`, "blob", "data:text/html,<p>data", "gmsg://override/x"].sort(),
