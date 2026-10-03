@@ -303,7 +303,7 @@ test("a bad pointer fails a system call with EFAULT and faults a libc body with 
   setA64(true); kernelInit();
   const cpu = new Cpu(new JThread(), "bad-pointer"), at = mem.reserve(4096, 4096), seen: bigint[] = [];
   mem.u32.set([0xd2801408, 0xd4000001, 0xd65f03c0], at >>> 2);                         // uname(x0) by svc
-  const libcSyscall = defineHost("test.bad.syscall", syscallEntry);
+  const libcSyscall = defineHost("syscall", syscallEntry);
   const userRead = defineHost("test.bad.read", (_c, a) => mem.ld32(a.p()));
   const handler = defineHost("test.bad.segv", (_c, a) => {
     a.i(); const info = a.p(), ctx = a.p();

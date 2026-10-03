@@ -5,7 +5,7 @@
 
 import { mem, anchor } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
-import { calledMissing, kernelEntries, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
+import { calledMissing, syscallWrappers, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
 import { cpuByOsTid, exitGroup, setRawSyscall, type Cpu } from "./cpu";
 import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
@@ -164,6 +164,17 @@ const A32: Record<number, HostFn> = {
   334: A64[48],
 };
 
+/** bionic's functions that hand their pointers straight to the kernel, so a bad one fails with
+ *  EFAULT: its syscall stubs and the functions that only tail-call them (from the reference
+ *  libc.so's code), and the few whose C body passes the pointer through untouched (open, creat,
+ *  chmod, readlink, statfs, connect). Only those with a host body are listed. */
+const WRAPPERS = ("access bind capget chdir chmod chown connect creat epoll_ctl epoll_pwait epoll_wait faccessat fchmodat fchown " +
+  "fdatasync flock fstat fstat64 fstatat fstatat64 fstatfs fsync ftruncate ftruncate64 futimens getpeername getrlimit getsockname " +
+  "getsockopt inotify_add_watch inotify_rm_watch link listen lstat lstat64 madvise mkdir mkdirat mkfifo mlock mmap mmap64 mprotect " +
+  "mremap msync munlock munmap nanosleep open openat prctl pread pread64 prlimit64 pwrite pwrite64 read readlink readlinkat readv " +
+  "recv recvfrom rename renameat rmdir sched_getparam sched_setaffinity sched_setscheduler sendfile setgroups setrlimit setsockopt " +
+  "stat stat64 statfs symlink sysinfo timerfd_gettime timerfd_settime times truncate uname unlink unlinkat utimensat write writev").split(" ");
+
 let table: (HostFn | undefined)[] = [];
 
 /** The kernel every process has, whichever libc it runs: the process ABI's struct layouts, its
@@ -178,7 +189,7 @@ export function kernelInit(): void {
     table[+nr] = byName[name];
   }
   for (const [nr, fn] of Object.entries(wide ? A64 : A32)) table[+nr] = fn;
-  for (const fn of [...Object.values(byName), syscallEntry]) kernelEntries.add(fn);
+  for (const name of [...Object.keys(byName), ...WRAPPERS, "syscall"]) syscallWrappers.add(name);
   setRawSyscall(rawSyscall);
   installDebuggerdHandlers();
   fsInit();

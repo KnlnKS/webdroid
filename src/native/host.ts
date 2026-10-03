@@ -199,13 +199,13 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   hostReturn(cpu, ret);
 }
 
-/** the bodies of system calls (syscall.ts), under libc's wrappers and syscall(2) */
-export const kernelEntries = new Set<HostFn>();
+/** libc's system call wrappers by name (syscall.ts): their pointers reach only the kernel */
+export const syscallWrappers = new Set<string>();
 /** a host body that met a bad guest pointer, synchronously or once its call resumed: a system
  *  call's wrapper fails with EFAULT; anything else faults as bionic's own code would */
 export function badPointer(cpu: Cpu, slot: number, e: unknown): HostRet {
   if (!(e instanceof BadAddress)) throw e;
-  if (kernelEntries.has(fns[slot])) { mem.st32(cpu.errnoAddr, E.FAULT); return -1; }
+  if (syscallWrappers.has(names[slot])) { mem.st32(cpu.errnoAddr, E.FAULT); return -1; }
   cpu.raiseBadAddress(e);
   return NORET;
 }
