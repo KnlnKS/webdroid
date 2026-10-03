@@ -6,7 +6,7 @@ import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, javaSocketPair, javaShutdownFd, javaIsSocketFd, unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName } from "../native/fs";
+import { javaDup2Fd, unixSocketPair, javaShutdownFd, unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption } from "../native/fs";
 import { sunPath, sunPathBytes, unixConnectPath } from "../native/unix";
 import {
   AF_UNIX, AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
@@ -79,16 +79,9 @@ function bind(d: JObj | null, ep: Endpoint) { sys("bind", socketBind(fdInt(d), e
 function sendto(d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, ep: Endpoint | null) {
   return writeBytes(buffer, offset, count, (bytes) => ioResult("sendto", socketSend(fdInt(d), bytes, ep)));
 }
-/** a socketpair end's options: an AF_UNIX stream socket, which the socket core does not model */
-function unixOption(fd: number, level: number, name: number): number {
-  if (!javaIsSocketFd(fd)) return -E.BADF;
-  // SO_TYPE, SO_DOMAIN; SO_ERROR and SO_LINGER (off) read 0
-  if (level !== SOL_SOCKET) return -E.NOPROTOOPT;
-  return name === 3 ? 1 : name === 39 ? 1 : name === 4 || name === 13 ? 0 : -E.NOPROTOOPT;
-}
 const intOption = (fn: string, d: JObj | null, level: number, name: number) => {
   const fd = fdInt(d);
-  return ioResult(fn, isNativeSocket(fd) ? socketOption(fd, level, name) : unixOption(fd, level, name));
+  return ioResult(fn, isNativeSocket(fd) ? socketOption(fd, level, name) : unixSocketOption(fd, level, name));
 };
 const setIntOption = (fn: string, d: JObj | null, level: number, name: number, value: number) => sys(fn, setSocketOption(fdInt(d), level, name, value));
 /** getaddrinfo's EAI_* as android.system.GaiException */
@@ -113,8 +106,10 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     return mkFd(fd);
   },
   [`socketpair(III${FD}${FD})V`]: (domain: number, type: number, _protocol: number, a: JObj | null, b: JObj | null) => {
-    if (domain !== 1 /* AF_UNIX */) throw errno("socketpair", E.AFNOSUPPORT);
-    const [x, y] = javaSocketPair(type);
+    if (domain !== AF_UNIX) throw errno("socketpair", E.AFNOSUPPORT);
+    const pair = unixSocketPair(type);
+    if (typeof pair === "number") throw errno("socketpair", -pair);
+    const [x, y] = pair;
     setField(a!, "java/io/FileDescriptor", "descriptor", x);
     setField(b!, "java/io/FileDescriptor", "descriptor", y);
   },

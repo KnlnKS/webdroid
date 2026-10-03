@@ -49,3 +49,37 @@ test("getifaddrs exposes the same loopback interface as Java networking", async 
     await call("freeifaddrs", entry);
   } finally { mem.free(result); cpu.dispose(); }
 });
+
+test("native AF_INET6 sockets take IPv4-mapped peers, and recvmsg keeps a seqpacket message whole", async () => {
+  setA64(false); kernelInit(); libcInit(); netInit();
+  const cpu = new Cpu(mainThread, "inet6-test"), scratch = mem.malloc(256);
+  const call = (name: string, ...args: number[]) => cpu.call(lookupHost(name, "libc.so")!, args);
+  const sockaddr = scratch, length = scratch + 32, pair = scratch + 40, msg = scratch + 64, iov = scratch + 96, data = scratch + 128;
+  try {
+    const server = await call("socket", AF_INET6, 1, 0);
+    mem.memset(sockaddr, 0, 28); mem.st16(sockaddr, AF_INET6);
+    expect(await call("bind", server, sockaddr, 28)).toBe(0);
+    expect(await call("listen", server, 1)).toBe(0);
+    mem.st32(length, 28);
+    expect(await call("getsockname", server, sockaddr, length)).toBe(0);
+    expect([mem.ld32(length), mem.ld16u(sockaddr)]).toEqual([28, AF_INET6]);
+    const port = mem.bytes(sockaddr + 2, 2).slice();
+    const client = await call("socket", AF_INET, 1, 0);
+    mem.memset(sockaddr, 0, 16); mem.st16(sockaddr, AF_INET); mem.write(sockaddr + 2, port); mem.write(sockaddr + 4, [127, 0, 0, 1]);
+    expect(await call("connect", client, sockaddr, 16)).toBe(0);
+    mem.st32(length, 28);
+    const accepted = await call("accept", server, sockaddr, length);
+    expect(accepted).toBeGreaterThan(0);
+    expect(mem.ld32(length)).toBe(28);
+    expect([...mem.bytes(sockaddr + 8, 16)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 127, 0, 0, 1]);
+
+    expect(await call("socketpair", 1, 5 /* SOCK_SEQPACKET */, 0, pair)).toBe(0);
+    mem.write(data, [1, 2, 3, 4, 5]);
+    expect(await call("send", mem.ld32(pair), data, 5, 0)).toBe(5);
+    mem.memset(msg, 0, 28); mem.st32(msg + 8, iov); mem.st32(msg + 12, 1);
+    mem.st32(iov, data + 16); mem.st32(iov + 4, 3);
+    expect(await call("recvmsg", mem.ld32(pair + 4), msg, 0)).toBe(3);
+    expect([...mem.bytes(data + 16, 3), mem.ld32(msg + 24)]).toEqual([1, 2, 3, 0x20 /* MSG_TRUNC */]);
+    for (const fd of [client, accepted, server, mem.ld32(pair), mem.ld32(pair + 4)]) expect(await call("close", fd)).toBe(0);
+  } finally { mem.free(scratch); cpu.dispose(); }
+});

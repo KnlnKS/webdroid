@@ -9,7 +9,7 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, logLine } from "./libc";
 import { attachUnixPeer, isUnixSocket, unixConnectListener } from "./fs";
-import { AF_INET, AF_UNIX, resolveHost, hostOf } from "./net";
+import { AF_INET, AF_INET6, AF_UNIX, resolveHost, hostOf, sockaddrOf, parseIpv6 } from "./net";
 import { parseIpv4 } from "../shell/relay";
 
 type Daemon = (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void;
@@ -39,11 +39,10 @@ class Reply {
   done(): Uint8Array { return Uint8Array.from(this.parts); }
 }
 const failed = (error: number) => new Reply().code(OPERATION_FAILED).be32(error).done();
-/** a sockaddr_in as the struct lies in memory: family in host order, port and address big-endian */
-const sockaddrIn = (address: number[], port: number) => [AF_INET & 255, AF_INET >> 8, port >>> 8, port & 255, ...address, 0, 0, 0, 0, 0, 0, 0, 0];
+const familyOf = (address: number[]) => address.length === 4 ? AF_INET : AF_INET6;
 /** getaddrinfo's answers for its hints: one per socket type when none is asked for, as libc's explore table gives */
 function addrinfo(node: string, service: string, flags: number, family: number, socktype: number, protocol: number): Uint8Array | Promise<Uint8Array> {
-  if (family !== -1 && family !== 0 && family !== AF_INET) return failed(EAI_FAMILY);
+  if (family !== -1 && family !== 0 && family !== AF_INET && family !== AF_INET6) return failed(EAI_FAMILY);
   const port = service === "^" ? 0 : /^\d+$/.test(service) ? Number(service) : -1;
   if (port < 0 || port > 65535) return failed(EAI_SERVICE);
   const kinds = [[SOCK_STREAM, IPPROTO_TCP], [SOCK_DGRAM, IPPROTO_UDP], [SOCK_RAW, 0]]
@@ -53,19 +52,19 @@ function addrinfo(node: string, service: string, flags: number, family: number, 
     if (typeof found === "number") return failed(found);
     const r = new Reply().code(QUERY_RESULT);
     for (const address of found) for (const [type, proto] of kinds) {
-      const addr = sockaddrIn(address, port);
-      r.be32(1).be32(flags < 0 ? 0 : flags).be32(AF_INET).be32(type).be32(proto).be32(addr.length).bytes(addr);
+      const addr = sockaddrOf(familyOf(address), { address, port });
+      r.be32(1).be32(flags < 0 ? 0 : flags).be32(familyOf(address)).be32(type).be32(proto).be32(addr.length).bytes(addr);
       if (flags > 0 && flags & 2) r.str(node); else r.be32(0);              // AI_CANONNAME
     }
     return r.be32(0).done();
   };
-  const found = resolveHost(node, 0, flags < 0 ? 0 : flags);
+  const found = resolveHost(node, family < 0 ? 0 : family, flags < 0 ? 0 : flags);
   return found instanceof Promise ? found.then(answer) : answer(found);
 }
 /** android_read_hostent's serialization: name, aliases, type, length, addresses */
 function hostent(name: string, addresses: number[][]): Uint8Array {
-  const r = new Reply().code(QUERY_RESULT).str(name).be32(0).be32(AF_INET).be32(4);
-  for (const a of addresses) r.be32(4).bytes(a);
+  const length = addresses[0].length, r = new Reply().code(QUERY_RESULT).str(name).be32(0).be32(familyOf(addresses[0])).be32(length);
+  for (const a of addresses) r.be32(length).bytes(a);
   return r.be32(0).done();
 }
 const HOST_NOT_FOUND = 1;
@@ -77,13 +76,13 @@ function query(line: string): Uint8Array | Promise<Uint8Array> {
   }
   if (command === "gethostbyname") {
     const [, name, af] = args;
-    if (Number(af) !== AF_INET) return failed(HOST_NOT_FOUND);
-    const found = resolveHost(name, AF_INET, 0);
+    if (Number(af) !== AF_INET && Number(af) !== AF_INET6) return failed(HOST_NOT_FOUND);
+    const found = resolveHost(name, Number(af), 0);
     const answer = (f: number[][] | number) => (typeof f === "number" ? failed(HOST_NOT_FOUND) : hostent(name, f));
     return found instanceof Promise ? found.then(answer) : answer(found);
   }
   if (command === "gethostbyaddr") {
-    const address = parseIpv4(args[0]), name = address && hostOf(address);
+    const address = parseIpv4(args[0]) ?? parseIpv6(args[0]), name = address && hostOf(address);
     return address && name ? hostent(name, [address]) : failed(HOST_NOT_FOUND);
   }
   return failed(E.NOSYS);

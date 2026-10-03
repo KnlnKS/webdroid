@@ -204,6 +204,13 @@ export const mem = {
   },
 };
 export const guestAt = (base: number | bigint, offset = 0): number => (typeof base === "bigint" ? mem.txVa(base + BigInt(offset)) : base + offset);
+/** a buffer offset an await may outlive, since a plane can move under it: called, the offset it
+ *  has now (0 stays 0) */
+export function anchor(p: number): (offset?: number) => number {
+  if (!p) return () => 0;
+  const va = mem.va(p);
+  return (offset = 0) => guestAt(va, offset);
+}
 views();
 core.mem_init(MEM_SIZE_INITIAL);
 SPAN = MEM_SIZE_INITIAL - LOW;

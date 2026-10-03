@@ -31,8 +31,8 @@ interface Fd {
   /** a writable /proc file, whose writes procWrite takes */
   proc?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
-  /** an AF_UNIX socket (unix.ts); a datagram one keeps each write whole */
-  unix?: boolean; dgram?: boolean;
+  /** an AF_UNIX socket's type (unix.ts): SOCK_DGRAM and SOCK_SEQPACKET keep each write whole */
+  unix?: number;
   /** a bound AF_UNIX socket's name, and once it listens the connections it has yet to accept */
   unixName?: string; unixPeer?: string; listener?: { pending: Fd[]; wake: (() => void)[] };
   /** run when the last descriptor sharing this open file closes it */
@@ -43,6 +43,10 @@ const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
 const newPipe = (writers: number): Pipe => ({ q: [], wake: [], writers, closed: false });
+const SOCK_STREAM = 1, SOCK_DGRAM = 2, SOCK_SEQPACKET = 5, MSG_PEEK = 2, MSG_DONTWAIT = 0x40;
+const messages = (f: Fd | undefined): boolean => f?.unix === SOCK_DGRAM || f?.unix === SOCK_SEQPACKET;
+/** the bound name a datagram was sent from, by the datagram */
+const senders = new WeakMap<Uint8Array, string>();
 /** named pipes (mkfifo) in this process, by the file that names them: every open shares the one
  *  pipe, which outlives its descriptors and goes with its file; Realm's interprocess condition
  *  variables signal through them */
@@ -246,10 +250,13 @@ export function javaShutdownFd(fd: number, how: number): number {
   }
   return 0;
 }
-/** socket(AF_UNIX): unconnected until unix.ts attaches the daemon it names */
+/** socket(AF_UNIX): unconnected until it connects or unix.ts attaches the daemon it names; a
+ *  datagram socket has its receive queue from the start. -errno for a type AF_UNIX lacks. */
 export function unixSocket(type: number): number {
+  const kind = (type & 15) === 3 ? SOCK_DGRAM : type & 15;                       // unix_create makes SOCK_RAW a datagram socket
+  if (kind !== SOCK_STREAM && kind !== SOCK_DGRAM && kind !== SOCK_SEQPACKET) return -E.SOCKTNOSUPPORT;
   const nb = !!(type & O_NONBLOCK);
-  return put({ ...fdBase("socketpair"), unix: true, dgram: (type & 15) === 2, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC));
+  return put({ ...fdBase("socketpair"), unix: kind, rpipe: kind === SOCK_DGRAM ? newPipe(1) : undefined, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC));
 }
 export const isUnixSocket = (fd: number): boolean => !!fds.get(fd)?.unix;
 /** connect a unix socket to an in-process peer: each write reaches `receive` whole, and what it
@@ -306,22 +313,92 @@ export function unixSocketName(fd: number, peer: boolean): string | number {
   if (peer && !f.wpipe) return -E.NOTCONN;
   return (peer ? f.unixPeer : f.unixName) ?? "";
 }
-/** connect(2) to an AF_UNIX socket bound and listening in this process; -errno otherwise */
+/** connect(2) to an AF_UNIX socket bound in this process: a stream or seqpacket one listening, or
+ *  a datagram socket, which becomes this datagram socket's default destination; -errno otherwise */
 export function unixConnectListener(fd: number, path: string): number {
   const f = fds.get(fd)!, server = unixNames.get(path);
-  if (!server?.listener) return -E.CONNREFUSED;
+  if (!server || f.unix !== SOCK_DGRAM && !server.listener) return -E.CONNREFUSED;
+  if (server.unix !== f.unix) return -E.PROTOTYPE;
+  if (f.unix === SOCK_DGRAM) { f.unixPeer = path; return 0; }
   if (f.wpipe) return -E.ISCONN;
   const up = newPipe(1), down = newPipe(1);
   f.wpipe = up; f.rpipe = down; f.unixPeer = path;
-  server.listener.pending.push({ ...fdBase("socketpair"), unix: true, rpipe: up, wpipe: down, statusFlags: 2 });
-  wakeAll(server.listener);
+  server.listener!.pending.push({ ...fdBase("socketpair"), unix: f.unix, rpipe: up, wpipe: down, statusFlags: 2 });
+  wakeAll(server.listener!);
   return 0;
 }
-/** socketpair(2): two connected descriptors, each reading what the other writes */
-export function javaSocketPair(type: number): [number, number] {
-  const ab = newPipe(1), ba = newPipe(1), nb = !!(type & O_NONBLOCK);
-  const end = (rpipe: Pipe, wpipe: Pipe) => put({ ...fdBase("socketpair"), rpipe, wpipe, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC));
-  return [end(ab, ba), end(ba, ab)];
+/** socketpair(2): two connected AF_UNIX sockets, each reading what the other writes; -errno for a type AF_UNIX lacks */
+export function unixSocketPair(type: number): [number, number] | number {
+  const a = unixSocket(type);
+  if (a < 0) return a;
+  const b = unixSocket(type), fa = fds.get(a)!, fb = fds.get(b)!;
+  fa.wpipe = fb.rpipe = newPipe(1);
+  fb.wpipe = fa.rpipe = newPipe(1);
+  return [a, b];
+}
+/** a datagram to the AF_UNIX datagram socket bound to `path`, from f */
+function sendDatagram(f: Fd, path: string | undefined, bytes: Uint8Array): number {
+  if (path === undefined) return -E.NOTCONN;
+  const target = unixNames.get(path);
+  if (!target) return path.startsWith("\0") ? -E.CONNREFUSED : -E.NOENT;
+  if (target.unix !== SOCK_DGRAM) return -E.PROTOTYPE;
+  const datagram = bytes.slice();
+  if (f.unixName !== undefined) senders.set(datagram, f.unixName);
+  target.rpipe!.q.push(datagram);
+  wakeAll(target.rpipe!);
+  return bytes.length;
+}
+/** send(2)/sendto(2) on an AF_UNIX socket: to its peer, or a datagram socket's to the socket bound to `path` */
+export function unixSend(fd: number, bytes: Uint8Array, path: string | null = null): number {
+  const f = fds.get(fd);
+  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
+  if (path !== null && f.unix === SOCK_DGRAM) return sendDatagram(f, path, bytes);
+  if (path !== null) return f.wpipe ? -E.ISCONN : -E.NOTSUP;
+  return writeBytes(null, f, bytes);
+}
+/** recv(2) into `target` on an AF_UNIX socket: the bytes queued for it, or a message socket's next
+ *  message cut to the target, answering its whole length. The sender's name is left in `from`. */
+export function unixReceive(fd: number, target: Uint8Array, flags: number, from?: { name: string }): number | Promise<number> {
+  const f = fds.get(fd);
+  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
+  const pipe = f.rpipe;
+  if (!pipe) return f.unix === SOCK_STREAM ? -E.INVAL : -E.NOTCONN;
+  const attempt = (): number | null => {
+    if (!pipe.q.length) return pipe.closed ? 0 : null;
+    if (from) from.name = (f.unix === SOCK_DGRAM ? senders.get(pipe.q[0]) : f.unixPeer) ?? "";
+    return takeQueued(f, target.length, (bytes, at) => target.set(bytes, at), !!(flags & MSG_PEEK));
+  };
+  const now = attempt();
+  if (now !== null) return now;
+  if (f.nonblock || flags & MSG_DONTWAIT) return -EAGAIN;
+  const wait = (): Promise<number> => new Promise<void>((resolve) => pipe.wake.push(resolve)).then(() => fds.get(fd) !== f ? -E.BADF : attempt() ?? wait());
+  return wait();
+}
+/** take up to n bytes of what is queued for f, handing put each piece and where it lands: a message
+ *  socket's next message whole, cut to n, answering the message's length */
+function takeQueued(f: Fd, n: number, put: (bytes: Uint8Array, at: number) => void, peek = false): number {
+  const q = f.rpipe!.q;
+  if (messages(f)) {
+    const message = peek ? q[0] : q.shift()!;
+    put(message.subarray(0, Math.min(n, message.length)), 0);
+    return message.length;
+  }
+  let k = 0;
+  for (let i = 0; k < n && i < q.length;) {
+    const c = q[i], take = Math.min(n - k, c.length);
+    put(c.subarray(0, take), k);
+    k += take;
+    if (peek) i++; else if (take === c.length) q.shift(); else q[0] = c.subarray(take);
+  }
+  return k;
+}
+/** getsockopt(2) for an AF_UNIX socket's int options: SO_TYPE, SO_DOMAIN, SO_ACCEPTCONN; SO_ERROR
+ *  and SO_LINGER (off) read 0 */
+export function unixSocketOption(fd: number, level: number, name: number): number {
+  const f = fds.get(fd);
+  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
+  if (level !== 1 /* SOL_SOCKET */) return -E.NOPROTOOPT;
+  return name === 3 ? f.unix : name === 39 ? 1 : name === 30 ? +!!f.listener : name === 4 || name === 13 ? 0 : -E.NOPROTOOPT;
 }
 /** the bytes behind a descriptor read at offsets: not a stream, a directory or /dev/random */
 const regularContent = (f: Fd | undefined): VfsFile | null =>
@@ -419,6 +496,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
     return n;
   }
   if (f.wpipe) { f.wpipe.q.push(bytes.slice()); wakeAll(f.wpipe); return n; }
+  if (f.unix === SOCK_DGRAM) { const r = sendDatagram(f, f.unixPeer, bytes); return r < 0 ? fail(cpu, -r) : r; }
   if (f.proc) return procWrite(f.path, dec.decode(bytes)) ? n : fail(cpu, E.INVAL);
   if (f.timer) return fail(cpu, E.INVAL);
   if (f.event) {
@@ -434,7 +512,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
   return n;
 }
 /** an iovec array's bytes as one buffer: what one datagram carries */
-function gather(iov: number, count: number): Uint8Array {
+export function gather(iov: number, count: number): Uint8Array {
   const parts: Uint8Array[] = [];
   for (let i = 0; i < count; i++) { const entry = iov + i * 2 * PTR; parts.push(mem.bytes(ldp(entry), mem.ld32(entry + PTR) >>> 0)); }
   return concat(parts);
@@ -508,10 +586,7 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
       return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, guestAt(dst), n));
     }
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st64(p, BigInt(c)); return 8; }
-    const q = f.rpipe!.q;
-    let k = 0;
-    while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.write(p + k, c.subarray(0, take)); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
-    return k;
+    return Math.min(n, takeQueued(f, n, (bytes, at) => mem.write(p + at, bytes)));
   }
   if (f.content.source) {
     const dst = mem.va(p);
@@ -869,7 +944,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   readv: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(cpu, fd, p, n)); },
   writev: (cpu, a) => {
     const fd = a.i(), iov = a.p(), count = a.i();
-    if (fds.get(fd)?.dgram) return writeBytes(cpu, fds.get(fd), gather(iov, count));
+    if (messages(fds.get(fd))) return writeBytes(cpu, fds.get(fd), gather(iov, count));
     return vectored(cpu, iov, count, (p, n) => fdWrite(cpu, fd, p, n));
   },
   pread64: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), Number(a.l())),
@@ -921,10 +996,12 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   inotify_init1: (cpu, a) => makeInotify(cpu, a.i()),
   inotify_add_watch: (cpu, a) => inotifyAddWatch(cpu, a.i(), a.str(), a.u()),
   inotify_rm_watch: (cpu, a) => inotifyRmWatch(cpu, a.i(), a.i()),
-  socketpair: (_c, a) => {
-    a.i(); const type = a.i(); a.i(); const sv = a.p();
-    const [first, second] = javaSocketPair(type);
-    mem.st32(sv, first); mem.st32(sv + 4, second);
+  socketpair: (cpu, a) => {
+    const domain = a.i(), type = a.i(); a.i(); const sv = a.p();
+    if (domain !== 1 /* AF_UNIX */) return fail(cpu, domain === 2 || domain === 10 ? E.NOTSUP : E.AFNOSUPPORT);
+    const pair = unixSocketPair(type);
+    if (typeof pair === "number") return fail(cpu, -pair);
+    mem.st32(sv, pair[0]); mem.st32(sv + 4, pair[1]);
     return 0;
   },
   timerfd_create: (cpu, a) => {

@@ -7,12 +7,12 @@
 import { ByteQueue, DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists, ipv4Key, ipv4Text, parseIpv4 } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
-import { mem, guestAt } from "./mem";
+import { hostLib, PTR, stp, ldp, ldLong, stLong, type HostFn, type HostRet, ptr } from "./host";
+import { mem, guestAt, anchor } from "./mem";
 import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
-import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName } from "./fs";
-import { unixAt, unixConnectPath, sockaddrUn } from "./unix";
+import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption, unixSend, unixReceive, gather, openFd, javaShutdownFd } from "./fs";
+import { unixAt, unixConnectPath, sockaddrUn, sunPath } from "./unix";
 const enc = new TextEncoder();
 
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
@@ -282,8 +282,10 @@ export function socketCreate(domain: number, type: number, protocol: number): nu
   return fd;
 }
 
-/** EAFNOSUPPORT for an IPv6 address on an IPv4 socket (libcore retries IPv4-mapped ones as IPv4) */
-const familyError = (socket: Socket, ep: Endpoint) => socket.family === AF_INET && ep.address.length === 16 ? -E.AFNOSUPPORT : 0;
+/** EAFNOSUPPORT for an IPv6 address on an IPv4 socket (libcore retries IPv4-mapped ones as IPv4);
+ *  ENETUNREACH for an IPv4(-mapped) one on an IPV6_V6ONLY socket */
+const familyError = (socket: Socket, ep: Endpoint) => socket.family === AF_INET && ep.address.length === 16 ? -E.AFNOSUPPORT
+  : socket.family === AF_INET6 && ep.address.length === 4 && option(socket, IPPROTO_IPV6, IPV6_V6ONLY) ? -E.NETUNREACH : 0;
 
 function portTaken(socket: Socket, ep: Endpoint): boolean {
   const set: Set<Socket> = bound[socket.kind];
@@ -300,7 +302,7 @@ function portTaken(socket: Socket, ep: Endpoint): boolean {
 function bindTo(socket: Socket, ep: Endpoint): number {
   if (socket.local) return -E.INVAL;
   const error = familyError(socket, ep);
-  if (error) return error;
+  if (error) return error === -E.NETUNREACH ? -E.INVAL : error;
   if (!isAny(ep.address) && !isLoopback(ep.address) && !isMulticast(ep.address)) return -E.ADDRNOTAVAIL;
   let port = ep.port;
   if (!port) {
@@ -362,7 +364,7 @@ export function socketConnect(fd: number, ep: Endpoint | null): number | Promise
   if (!socket) return -E.BADF;
   if (socket.kind === "datagram") {
     if (!ep) { socket.peer = null; socket.connected = false; return 0; }
-    const error = familyError(socket, ep);
+    const error = familyError(socket, ep) || (ep.address.length === 16 && !isLoopback(ep.address) && !isAny(ep.address) && !isMulticast(ep.address) ? -E.NETUNREACH : 0); // no IPv6 route, as send finds
     if (error) return error;
     if (!socket.local) { const r = bindTo(socket, { address: anyFor(socket), port: 0 }); if (r) return r; }
     socket.peer = ep;
@@ -706,7 +708,7 @@ function sysAsync(cpu: Cpu | null, r: number | Promise<number>): number | Promis
 }
 
 export function nativeSocketRead(cpu: Cpu | null, fd: number, destination: number, length: number, nonblock = false): number | Promise<number> {
-  return nativeReceive(cpu, fd, destination, length, nonblock ? MSG_DONTWAIT : 0, 0, 0);
+  return nativeReceive(cpu, fd, [guestBuffer(destination, length)], nonblock ? MSG_DONTWAIT : 0);
 }
 export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: number): number {
   return sys(cpu, socketSend(fd, mem.u8.subarray(source, source + length)));
@@ -763,13 +765,29 @@ export function pollEntries(entries: PollEntry[], timeout: number, signal?: Abor
 
 // ── bionic's socket functions over guest memory
 
-function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Endpoint | null {
-  if (!sockaddr || length < 8) { fail(cpu, E.INVAL); return null; }
-  if (mem.ld16u(sockaddr) !== AF_INET) { fail(cpu, E.AFNOSUPPORT); return null; }
-  return { port: (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3], address: Array.from(mem.u8.subarray(sockaddr + 4, sockaddr + 8)) };
+/** a sockaddr_in or sockaddr_in6 for a socket of `family`, or -errno: a datagram an AF_INET6 socket
+ *  sends may name an IPv4 destination, which it reaches as IPv4-mapped */
+function sockaddrEndpoint(family: number, sockaddr: number, length: number, send = false): Endpoint | number {
+  const given = sockaddr && length >= 2 ? mem.ld16u(sockaddr) : -1;
+  if (length < (given === AF_INET ? 16 : given === AF_INET6 ? 24 : 2)) return -E.INVAL;
+  if (given !== family && !(send && family === AF_INET6 && given === AF_INET)) return -E.AFNOSUPPORT;
+  const port = (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3];
+  return given === AF_INET ? { port, address: Array.from(mem.bytes(sockaddr + 4, 4)) }
+    : endpointOf(mem.bytes(sockaddr + 8, 16), port, length >= 28 ? mem.ld32(sockaddr + 24) : 0);
 }
-const sockaddrIn = ({ port, address }: Endpoint) =>
-  Uint8Array.of(AF_INET, 0, port >>> 8, port & 255, ...(address.length === 4 ? address : [0, 0, 0, 0]), 0, 0, 0, 0, 0, 0, 0, 0);
+function readEndpoint(cpu: Cpu, fd: number, sockaddr: number, length: number, send = false): Endpoint | null {
+  const ep = sockaddrEndpoint(socketOf(fd)!.family, sockaddr, length, send);
+  if (typeof ep === "number") { fail(cpu, -ep); return null; }
+  return ep;
+}
+/** an endpoint as a sockaddr of `family`: an AF_INET6 socket's IPv4 endpoint is IPv4-mapped */
+export function sockaddrOf(family: number, { port, address, scope = 0 }: Endpoint): Uint8Array {
+  if (family !== AF_INET6) return Uint8Array.of(AF_INET, 0, port >>> 8, port & 255, ...(address.length === 4 ? address : [0, 0, 0, 0]), 0, 0, 0, 0, 0, 0, 0, 0);
+  const sockaddr = Uint8Array.of(AF_INET6, 0, port >>> 8, port & 255, 0, 0, 0, 0, ...new Array(20).fill(0));
+  if (address.length === 4) sockaddr.set([255, 255, ...address], 18); else sockaddr.set(address, 8);
+  new DataView(sockaddr.buffer).setUint32(24, scope, true);
+  return sockaddr;
+}
 /** an address result: as much of `sockaddr` as `capacity` holds, and its whole length */
 function putSockaddr(sockaddr: Uint8Array, address: number, length: number, capacity: number): void {
   if (capacity > 0) mem.write(address, sockaddr.subarray(0, Math.min(capacity, sockaddr.length)));
@@ -805,11 +823,12 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
   const family = hints ? mem.ld32(hints + ADDRINFO.family) : AF_UNSPEC;
   const socktype = hints ? mem.ld32(hints + ADDRINFO.socktype) : 0;
   const protocol = hints ? mem.ld32(hints + ADDRINFO.protocol) : 0;
-  const node = nodePtr ? mem.cstr(nodePtr) : flags & AI_PASSIVE ? "0.0.0.0" : "127.0.0.1";
+  const v6 = family === AF_INET6;
+  const node = nodePtr ? mem.cstr(nodePtr) : flags & AI_PASSIVE ? v6 ? "::" : "0.0.0.0" : v6 ? "::1" : "127.0.0.1";
   const service = servicePtr ? mem.cstr(servicePtr) : "0";
   record(`getaddrinfo ${node}:${service} flags=${flags.toString(16)} family=${family} type=${socktype} protocol=${protocol}`);
   if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_ADDRCONFIG)) return EAI_BADFLAGS;
-  if (family !== AF_UNSPEC && family !== AF_INET) return EAI_FAMILY;
+  if (family !== AF_UNSPEC && family !== AF_INET && family !== AF_INET6) return EAI_FAMILY;
   if (socktype !== 0 && socktype !== SOCK_STREAM && socktype !== SOCK_DGRAM) return EAI_SOCKTYPE;
   if (protocol !== 0 && protocol !== IPPROTO_TCP && protocol !== IPPROTO_UDP) return EAI_PROTOCOL;
   if ((socktype === SOCK_STREAM && protocol === IPPROTO_UDP) || (socktype === SOCK_DGRAM && protocol === IPPROTO_TCP)) return EAI_SOCKTYPE;
@@ -818,60 +837,67 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
   if (!Number.isInteger(port) || port < 0 || port > 65535) return EAI_SERVICE;
   const resultType = socktype || (protocol === IPPROTO_UDP ? SOCK_DGRAM : SOCK_STREAM);
   const resultProtocol = protocol || (resultType === SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP);
+  const resultAt = anchor(result);
   const answer = (found: number[][] | number): number => {
     if (typeof found === "number") return found;
-    const bytes = found[0];
-    const sockaddr = ADDRINFO.size;
+    const address = found[0], addressFamily = address.length === 4 ? AF_INET : AF_INET6;
+    const sockaddr = sockaddrOf(addressFamily, { address, port });
     const canonBytes = flags & AI_CANONNAME ? enc.encode(node) : null;
-    const size = ADDRINFO.size + 16 + (canonBytes ? canonBytes.length + 1 : 0);
+    const size = ADDRINFO.size + sockaddr.length + (canonBytes ? canonBytes.length + 1 : 0);
     const allocation = mem.malloc(size);
     if (!allocation) { fail(cpu, E.NOMEM); return EAI_SYSTEM; }
     mem.memset(allocation, 0, size);
     mem.st32(allocation + ADDRINFO.flags, flags);
-    mem.st32(allocation + ADDRINFO.family, AF_INET);
+    mem.st32(allocation + ADDRINFO.family, addressFamily);
     mem.st32(allocation + ADDRINFO.socktype, resultType);
     mem.st32(allocation + ADDRINFO.protocol, resultProtocol);
-    mem.st32(allocation + ADDRINFO.addrlen, 16);
-    stp(allocation + ADDRINFO.addr, allocation + sockaddr);
-    stp(allocation + ADDRINFO.next, 0);
-    mem.st16(allocation + sockaddr, AF_INET);
-    mem.u8[allocation + sockaddr + 2] = port >>> 8;
-    mem.u8[allocation + sockaddr + 3] = port & 255;
-    mem.u8.set(bytes, allocation + sockaddr + 4);
+    mem.st32(allocation + ADDRINFO.addrlen, sockaddr.length);
+    stp(allocation + ADDRINFO.addr, allocation + ADDRINFO.size);
+    mem.write(allocation + ADDRINFO.size, sockaddr);
     if (canonBytes) {
-      const canon = allocation + sockaddr + 16;
+      const canon = allocation + ADDRINFO.size + sockaddr.length;
       mem.u8.set(canonBytes, canon);
       stp(allocation + ADDRINFO.canon, canon);
     }
-    stp(result, allocation);
-    record(`resolved ${node} -> ${ipv4Text(bytes)} result=${mem.va(allocation).toString()}`);
+    stp(resultAt(), allocation);
+    record(`resolved ${node} -> ${addressText(address)} result=${mem.va(allocation).toString()}`);
     return 0;
   };
-  const found = resolveHost(node, AF_INET, flags & AI_NUMERICHOST);
+  const found = resolveHost(node, family, flags & AI_NUMERICHOST);
   return found instanceof Promise ? found.then(answer) : answer(found);
 }
 
-function nativeReceive(cpu: Cpu | null, fd: number, destination: number, length: number, flags: number, source: number, sourceLength: number): number | Promise<number> {
-  const socket = socketOf(fd);
-  if (!socket) return fail(cpu, E.BADF);
-  if (socket.kind === "stream" && source) return fail(cpu, E.NOTCONN);
-  if (length && !destination) return fail(cpu, E.FAULT);
-  if (source && !sourceLength) return fail(cpu, E.FAULT);
-  if (source && mem.ld32(sourceLength) < 0) return fail(cpu, E.INVAL);
-  const destinationVa = destination ? mem.va(destination) : 0;
-  const sourceVa = source ? mem.va(source) : 0, sourceLengthVa = sourceLength ? mem.va(sourceLength) : 0;
-  // guest memory can move while a receive waits: the bytes land once they have arrived
-  const target = new Uint8Array(length), from = { source: null as Endpoint | null };
+/** a guest buffer an await may outlive */
+interface GuestBuffer { at: () => number; length: number }
+const guestBuffer = (p: number, length: number): GuestBuffer => ({ at: anchor(p), length });
+const NO_ADDRESS = new Uint8Array(0);
+/** recv(2)/recvfrom(2)/recvmsg(2) on any socket into the guest's buffers, which the bytes reach once
+ *  they arrive; the sender's address goes to `name` and its length to `nameLength`, and msg_flags to
+ *  `messageFlags` */
+function nativeReceive(cpu: Cpu | null, fd: number, buffers: GuestBuffer[], flags: number, name = 0, nameLength = 0, messageFlags = 0): number | Promise<number> {
+  const unix = isUnixSocket(fd), socket = socketOf(fd);
+  if (!unix && !socket) return fail(cpu, E.BADF);
+  if (name && !nameLength) return fail(cpu, E.FAULT);
+  if (name && mem.ld32(nameLength) < 0) return fail(cpu, E.INVAL);
+  const total = buffers.reduce((n, b) => n + b.length, 0), target = new Uint8Array(total);
+  const from = { source: null as Endpoint | null, name: "" }, nameAt = anchor(name), lengthAt = anchor(nameLength), flagsAt = anchor(messageFlags);
+  // a datagram's whole length, which tells a short buffer it was cut
+  const n = unix ? unixReceive(fd, target, flags, from) : socketReceive(fd, target, socket!.kind === "datagram" ? flags | MSG_TRUNC : flags, from);
   const land = (n: number): number => {
     if (n < 0) return fail(cpu, -n);
-    if (n) mem.write(guestAt(destinationVa), target.subarray(0, Math.min(n, length)));
-    if (sourceVa && sourceLengthVa && from.source) {
-      const currentLength = guestAt(sourceLengthVa);
-      putSockaddr(sockaddrIn(from.source), guestAt(sourceVa), currentLength, mem.ld32(currentLength));
+    const copied = Math.min(n, total);
+    for (let i = 0, at = 0; at < copied; i++) {
+      const k = Math.min(buffers[i].length, copied - at);
+      if (k) mem.write(buffers[i].at(), target.subarray(at, at + k));
+      at += k;
     }
-    return n;
+    if (name) {
+      const sockaddr = unix ? from.name ? sockaddrUn(from.name) : NO_ADDRESS : from.source ? sockaddrOf(socket!.family, from.source) : NO_ADDRESS;
+      putSockaddr(sockaddr, nameAt(), lengthAt(), mem.ld32(lengthAt()));
+    }
+    if (messageFlags) mem.st32(flagsAt(), n > total ? MSG_TRUNC : 0);
+    return flags & MSG_TRUNC ? n : copied;
   };
-  const n = socketReceive(fd, target, flags, from);
   return n instanceof Promise ? n.then(land) : land(n);
 }
 
@@ -882,14 +908,17 @@ function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number,
   const capacity = mem.ld32(length);
   if (capacity < 0) return fail(cpu, E.INVAL);
   if (capacity && !address) return fail(cpu, E.FAULT);
-  putSockaddr(typeof name === "string" ? sockaddrUn(name) : sockaddrIn(name), address, length, capacity);
+  putSockaddr(typeof name === "string" ? sockaddrUn(name) : sockaddrOf(socketOf(fd)!.family, name), address, length, capacity);
   return 0;
 }
+/** EBADF, or ENOTSOCK for a descriptor that is open but no socket */
+const notSocket = (cpu: Cpu | null, fd: number) => fail(cpu, openFd(fd) ? E.NOTSOCK : E.BADF);
 
 function nativeGetsockopt(cpu: Cpu, fd: number, level: number, name: number, value: number, length: number): number {
-  if (!sockets.has(fd)) return fail(cpu, E.BADF);
+  const unix = isUnixSocket(fd);
+  if (!unix && !sockets.has(fd)) return notSocket(cpu, fd);
   if (!value || !length || mem.ld32(length) < 4) return fail(cpu, E.FAULT);
-  const result = socketOption(fd, level, name);
+  const result = unix ? unixSocketOption(fd, level, name) : socketOption(fd, level, name);
   if (result < 0) return fail(cpu, -result);
   if (level === SOL_SOCKET && name === SO_LINGER && mem.ld32(length) >= 8) {
     mem.st32(value, +(result > 0)); mem.st32(value + 4, Math.max(0, result - 1)); mem.st32(length, 8);
@@ -900,9 +929,11 @@ function nativeGetsockopt(cpu: Cpu, fd: number, level: number, name: number, val
   return 0;
 }
 function nativeSetsockopt(cpu: Cpu, fd: number, level: number, name: number, value: number, length: number): number {
-  if (!sockets.has(fd)) return fail(cpu, E.BADF);
+  // an AF_UNIX socket keeps no option: its socket-level ones are accepted with nothing to observe
+  if (isUnixSocket(fd)) return level === SOL_SOCKET ? 0 : fail(cpu, E.NOPROTOOPT);
+  if (!sockets.has(fd)) return notSocket(cpu, fd);
   if (level === IPPROTO_IP && (name === IP_ADD_MEMBERSHIP || name === IP_DROP_MEMBERSHIP) && value && length >= 8)
-    return sys(cpu, socketGroup(fd, name === IP_ADD_MEMBERSHIP, Array.from(mem.u8.subarray(value, value + 4)), length >= 12 ? mem.ld32(value + 8) : 0));
+    return sys(cpu, socketGroup(fd, name === IP_ADD_MEMBERSHIP, Array.from(mem.bytes(value, 4)), length >= 12 ? mem.ld32(value + 8) : 0));
   if (level === SOL_SOCKET && name === SO_LINGER) return value && length >= 8 ? sys(cpu, setSocketOption(fd, level, name, mem.ld32(value) ? mem.ld32(value + 4) : -1)) : fail(cpu, E.INVAL);
   if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) {
     if (!value || length < 2 * PTR) return fail(cpu, E.INVAL);
@@ -915,6 +946,20 @@ function nativeSetsockopt(cpu: Cpu, fd: number, level: number, name: number, val
   return r === -E.NOPROTOOPT ? 0 : sys(cpu, r);
 }
 
+/** sendto(2)/sendmsg(2) of `bytes` on any socket, to the sockaddr at `destination` if there is one */
+function nativeSendTo(cpu: Cpu, fd: number, bytes: Uint8Array, destination: number, destinationLength: number): number {
+  const named = !!(destination || destinationLength);
+  if (isUnixSocket(fd)) {
+    if (!named) return sys(cpu, unixSend(fd, bytes));
+    if (!destination || destinationLength < 2 || mem.ld16u(destination) !== AF_UNIX) return fail(cpu, E.INVAL);
+    return sys(cpu, unixSend(fd, bytes, sunPath(mem.bytes(destination + 2, destinationLength - 2))));
+  }
+  if (!sockets.has(fd)) return notSocket(cpu, fd);
+  const endpoint = named ? readEndpoint(cpu, fd, destination, destinationLength, true) : null;
+  if (named && !endpoint) return -1;
+  return sys(cpu, socketSend(fd, bytes, endpoint));
+}
+
 function copyText(text: string, destination: number, capacity: number): boolean {
   const bytes = enc.encode(text);
   if (!destination) return capacity === 0;
@@ -925,12 +970,13 @@ function copyText(text: string, destination: number, capacity: number): boolean 
 }
 
 function nativeGetnameinfo(sockaddr: number, length: number, host: number, hostLength: number, service: number, serviceLength: number, flags = 0): number {
-  if (!sockaddr || length < 8 || mem.ld16u(sockaddr) !== AF_INET) return EAI_ADDRFAMILY;
-  const bytes = mem.u8.subarray(sockaddr + 4, sockaddr + 8);
-  const resolved = flags & NI_NUMERICHOST ? null : hostOf(bytes);
+  const family = sockaddr && length >= 2 ? mem.ld16u(sockaddr) : -1;
+  if (family !== AF_INET && family !== AF_INET6) return EAI_FAMILY;
+  const ep = sockaddrEndpoint(family, sockaddr, length);
+  if (typeof ep === "number") return EAI_FAMILY;
+  const resolved = flags & NI_NUMERICHOST ? null : hostOf(ep.address);
   if (!resolved && flags & NI_NAMEREQD) return EAI_NONAME;
-  const port = (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3];
-  return copyText(resolved ?? ipv4Text(bytes), host, hostLength) && copyText(String(port), service, serviceLength) ? 0 : EAI_OVERFLOW;
+  return copyText(resolved ?? addressText(ep.address), host, hostLength) && copyText(String(ep.port), service, serviceLength) ? 0 : EAI_OVERFLOW;
 }
 
 function nativeSend(cpu: Cpu, fd: number, source: number, length: number): number {
@@ -995,22 +1041,26 @@ function gaiStrerror(code: number): number {
   return address;
 }
 
+/** struct msghdr's fields, pointer-sized after msg_namelen */
+const MSG = { name: 0, nameLength: PTR, iov: 2 * PTR, iovLength: 3 * PTR, control: 4 * PTR, controlLength: 5 * PTR, flags: 6 * PTR };
+const UIO_MAXIOV = 1024;
+
 export const NET_SYSCALLS: Record<string, HostFn> = {
   socket: (cpu, args) => {
     const domain = args.i(), type = args.i(), protocol = args.i();
-    return domain === AF_INET ? sys(cpu, socketCreate(domain, type, protocol)) : domain === AF_UNIX ? unixSocket(type) : fail(cpu, E.AFNOSUPPORT);
+    return sys(cpu, domain === AF_INET || domain === AF_INET6 ? socketCreate(domain, type, protocol) : domain === AF_UNIX ? unixSocket(type) : -E.AFNOSUPPORT);
   },
   connect: (cpu, args) => {
     const fd = args.i(), sockaddr = args.p(), length = args.u();
-    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixAt(cpu, sockaddr, length, (path) => unixConnectPath(fd, path)) : fail(cpu, E.BADF);
+    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixAt(cpu, sockaddr, length, (path) => unixConnectPath(fd, path)) : notSocket(cpu, fd);
     if (sockaddr && length >= 2 && mem.ld16u(sockaddr) === AF_UNSPEC) return sys(cpu, socketConnect(fd, null) as number);
-    const endpoint = readEndpoint(cpu, sockaddr, length);
+    const endpoint = readEndpoint(cpu, fd, sockaddr, length);
     return endpoint ? sysAsync(cpu, socketConnect(fd, endpoint)) : -1;
   },
   bind: (cpu, args) => {
     const fd = args.i(), sockaddr = args.p(), length = args.u();
-    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixAt(cpu, sockaddr, length, (path) => unixBind(fd, path)) : fail(cpu, E.BADF);
-    const endpoint = readEndpoint(cpu, sockaddr, length);
+    if (!sockets.has(fd)) return isUnixSocket(fd) ? unixAt(cpu, sockaddr, length, (path) => unixBind(fd, path)) : notSocket(cpu, fd);
+    const endpoint = readEndpoint(cpu, fd, sockaddr, length);
     return endpoint ? sys(cpu, socketBind(fd, endpoint)) : -1;
   },
   listen: (cpu, args) => { const fd = args.i(); args.i(); return sys(cpu, isUnixSocket(fd) ? unixListen(fd) : socketListen(fd)); },
@@ -1019,21 +1069,36 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   sendto: (cpu, args) => {
     const fd = args.i(), source = args.p(), length = args.u();
     args.i(); const destination = args.p(), destinationLength = args.u();
-    if (!isNativeSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : nativeSend(cpu, fd, source, length);
+    if (!isNativeSocket(fd) && !isUnixSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : nativeSend(cpu, fd, source, length);
     if (length && !source) return fail(cpu, E.FAULT);
-    let endpoint: Endpoint | null = null;
-    if (destination || destinationLength) { endpoint = readEndpoint(cpu, destination, destinationLength); if (!endpoint) return -1; }
-    return sys(cpu, socketSend(fd, mem.u8.subarray(source, source + length), endpoint));
+    return nativeSendTo(cpu, fd, mem.bytes(source, length), destination, destinationLength);
   },
   recvfrom: (cpu, args) => {
     const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
     const source = args.p(), sourceLength = args.p();
-    if (isNativeSocket(fd)) return nativeReceive(cpu, fd, destination, length, flags, source, sourceLength);
+    if (isNativeSocket(fd) || isUnixSocket(fd)) return length && !destination ? fail(cpu, E.FAULT) : nativeReceive(cpu, fd, [guestBuffer(destination, length)], flags, source, sourceLength);
     if (source || sourceLength) return fail(cpu, E.NOTCONN);
     return nativeRead(cpu, fd, destination, length, !!(flags & MSG_DONTWAIT));
   },
-  sendmsg: (cpu) => fail(cpu, E.NETUNREACH), recvmsg: (cpu) => fail(cpu, E.NETUNREACH),
-  shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, socketShutdown(fd, how)); },
+  // no ancillary data: none is sent (SCM_RIGHTS included) and none is received
+  sendmsg: (cpu, args) => {
+    const fd = args.i(), msg = args.p();
+    if (!isNativeSocket(fd) && !isUnixSocket(fd)) return notSocket(cpu, fd);
+    const count = ldLong(msg + MSG.iovLength);
+    if (count < 0 || count > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
+    if (ldp(msg + MSG.control) && ldLong(msg + MSG.controlLength)) return fail(cpu, E.INVAL);
+    return nativeSendTo(cpu, fd, gather(ldp(msg + MSG.iov), count), ldp(msg + MSG.name), mem.ld32(msg + MSG.nameLength));
+  },
+  recvmsg: (cpu, args) => {
+    const fd = args.i(), msg = args.p(), flags = args.i();
+    if (!isNativeSocket(fd) && !isUnixSocket(fd)) return notSocket(cpu, fd);
+    const iov = ldp(msg + MSG.iov), count = ldLong(msg + MSG.iovLength);
+    if (count < 0 || count > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
+    const buffers = Array.from({ length: count }, (_, i) => guestBuffer(ldp(iov + i * 2 * PTR), ldLong(iov + i * 2 * PTR + PTR)));
+    stLong(msg + MSG.controlLength, 0);
+    return nativeReceive(cpu, fd, buffers, flags, ldp(msg + MSG.name), msg + MSG.nameLength, msg + MSG.flags);
+  },
+  shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, isUnixSocket(fd) ? javaShutdownFd(fd, how) : socketShutdown(fd, how)); },
   setsockopt: (cpu, args) => nativeSetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.u()),
   getsockopt: (cpu, args) => nativeGetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.p()),
   getsockname: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), false),
@@ -1045,7 +1110,7 @@ export function netInit(): void {
     send: (cpu, args) => { const fd = args.i(), source = args.p(), length = args.u(); args.i(); return nativeSend(cpu, fd, source, length); },
     recv: (cpu, args) => {
       const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
-      return isNativeSocket(fd) ? nativeReceive(cpu, fd, destination, length, flags, 0, 0) : nativeRead(cpu, fd, destination, length);
+      return isNativeSocket(fd) || isUnixSocket(fd) ? nativeReceive(cpu, fd, [guestBuffer(destination, length)], flags) : nativeRead(cpu, fd, destination, length);
     },
     getaddrinfo: (cpu, args) => nativeGetaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
     freeaddrinfo: (_cpu, args) => { const address = args.p(); if (address) mem.free(address); },
@@ -1053,8 +1118,20 @@ export function netInit(): void {
     freeifaddrs: (_cpu, args) => { const entry = args.p(); if (entry) mem.free(entry); },
     gai_strerror: (_cpu, args) => ptr(gaiStrerror(args.i())),
     getnameinfo: (_cpu, args) => nativeGetnameinfo(args.p(), args.u(), args.p(), args.u(), args.p(), args.u(), args.i()),
-    inet_pton: (_cpu, args) => { const family = args.i(), text = args.str(), out = args.p(); const bytes = parseIpv4(text); if (family !== AF_INET) return -1; if (!bytes) return 0; mem.write(out, bytes); return 1; },
-    inet_ntop: (_cpu, args) => { const family = args.i(), source = args.p(), destination = args.p(), length = args.u(); if (family !== AF_INET || !copyText(ipv4Text(mem.u8.subarray(source, source + 4)), destination, length)) return 0; return ptr(destination); },
+    inet_pton: (cpu, args) => {
+      const family = args.i(), text = args.str(), out = args.p();
+      if (family !== AF_INET && family !== AF_INET6) return fail(cpu, E.AFNOSUPPORT);
+      const bytes = family === AF_INET ? parseIpv4(text) : parseIpv6(text);
+      if (!bytes) return 0;
+      mem.write(out, bytes);
+      return 1;
+    },
+    inet_ntop: (cpu, args) => {
+      const family = args.i(), source = args.p(), destination = args.p(), length = args.u();
+      if (family !== AF_INET && family !== AF_INET6) { fail(cpu, E.AFNOSUPPORT); return 0; }
+      if (!copyText(addressText(mem.bytes(source, family === AF_INET ? 4 : 16)), destination, length)) { fail(cpu, E.NOSPC); return 0; }
+      return ptr(destination);
+    },
     poll: (cpu, args) => nativePoll(cpu, args.p(), args.u(), args.i()),
     select: (cpu, args) => {
       const count = args.i(), r = args.p(), w = args.p(), x = args.p(), timeout = args.p();
@@ -1068,20 +1145,21 @@ export function netInit(): void {
 }
 
 function nativeAccept(cpu: Cpu, fd: number, address: number, length: number, flags: number): HostRet | Promise<HostRet> {
-  const addressVa = address ? mem.va(address) : 0, lengthVa = length ? mem.va(length) : 0;
+  const addressAt = anchor(address), lengthAt = anchor(length);
   const land = (fd: number, peer: Uint8Array): number => {
-    if (addressVa && lengthVa) { const at = guestAt(lengthVa); putSockaddr(peer, guestAt(addressVa), at, mem.ld32(at)); }
+    if (address && length) { const at = lengthAt(); putSockaddr(peer, addressAt(), at, mem.ld32(at)); }
     return fd;
   };
   if (isUnixSocket(fd)) {
     const r = unixAccept(fd, flags), unix = (r: number) => r < 0 ? fail(cpu, -r) : land(r, sockaddrUn(""));   // an unnamed peer
     return r instanceof Promise ? r.then(unix) : unix(r);
   }
+  const family = socketOf(fd)?.family ?? AF_INET;
   const inet = (r: { fd: number; peer: Endpoint } | number): number => {
     if (typeof r === "number") return fail(cpu, -r);
     if (flags & SOCK_NONBLOCK) nativeSocketFcntl(cpu, r.fd, F_SETFL, O_NONBLOCK);
     if (flags & SOCK_CLOEXEC) sockets.get(r.fd)!.cloexec = true;
-    return land(r.fd, sockaddrIn(r.peer));
+    return land(r.fd, sockaddrOf(family, r.peer));
   };
   const r = socketAccept(fd);
   return r instanceof Promise ? r.then(inet) : inet(r);
