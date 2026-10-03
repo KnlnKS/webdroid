@@ -592,11 +592,11 @@ each unit's findings. Stage E is complete on this branch: its handoff is "Stage 
 
 ### JVM structural refactor (2026-10-03): branch `knlnks/refactor-jvm`
 
-The review's findings 2, 3, 5, 6 and 7 are done with behaviour kept (history, "the JVM runtime's
-structural review"): `detached`/`postMain` with Escape policies, positioned trace frames over
-codecache's `bodyAt`, `aot.ts`, jlang split into jentry/jthrowable/jstring/jthread, `clinit.ts`.
-Open: finding 1 (one way to continue a chain, then a first-class Strand), which touches the native
-loader, dl, JNI and Cpu and waits for the native refactor to merge.
+The review's findings are done with behaviour kept (history, "the JVM runtime's structural
+review"): `detached`/`postMain` with Escape policies, positioned trace frames over codecache's
+`bodyAt`, `aot.ts`, jlang split into jentry/jthrowable/jstring/jthread, `clinit.ts`. Host code
+continues a chain only through suspendWith (`after`, driven native loading and JNI), and the chain
+is a `Strand` carrying its thread in `rt.cur`: frames restore both with the one capture they make.
 
 ### Android structural refactor (2026-10-03): branch `knlnks/refactor-android`
 

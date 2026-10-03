@@ -2261,6 +2261,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     initialization to `clinit.ts` (1,224 -> 1,110 lines). jbench `monitors` medians stayed within
     0.43-0.49 ms against the base. Gates: 1,133 tests, FitNotes smoke, fwtest, fast e2e 7/7, lat
     cold and warm (Mihon dark-warm 118 and 96 ms, load 6-19).
+  - Chains (after the native refactor merged): `after` continues through suspendWith as a
+    suspended frame does, and nativeLoad, loadNativeLib, loadModule (ifunc resolvers and
+    initializers), JNI NewObject and guest-native calls are driven generators, so no host code
+    captures and re-enters a chain by hand; `caller()` and callOn's chain parameter are gone.
+  - The chain is then a `Strand` (suspend.ts) carrying its thread, held in `rt.cur`: compiled and
+    cold frames already captured `R.cur` per frame, so one restore covers thread and chain, and
+    unwind no longer switches chains. Monitor owners and class initializers are strands; a
+    thread's root strand stands for chain 0 (shares the thread's locks, records no waits). A Cpu
+    runs as its caller's strand when the caller is its own thread, else as its thread's root (a
+    pthread's start, chain 0 before). jbench `monitors` median 0.42-0.47 -> 0.33-0.37 ms;
+    initClass and linkInit fast paths unchanged (5M/1M calls, equal medians). Fast e2e 7/7 with no
+    wedged or timed-out step; lat --warm passed (Mihon dark-warm 92-102 ms, load 5-16).
 
 - 2026-10-03, the Android services and process layer's structural review (branch
   `knlnks/refactor-android`, behaviour kept):
