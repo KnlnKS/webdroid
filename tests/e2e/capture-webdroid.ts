@@ -105,7 +105,7 @@ export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act 
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
     case "tapText": return { type: "tapText", text: a.text, fallback: a.optional ? undefined : rec?.resolved };
-    case "tapAt": return { type: "tap", x: a.x, y: a.y, repeat: a.repeat, everyMs: a.everyMs, whileText: a.whileText, unlessResource: a.unlessResource };
+    case "tapAt": return { type: "tap", x: a.x, y: a.y, repeat: a.repeat, everyMs: a.everyMs, whileText: a.whileText, appearMs: a.appearMs, unlessResource: a.unlessResource };
     case "typeInto": return { type: "type", x: a.x, y: a.y, text: a.text };
     case "back": return { type: "back" };
     case "enter": return { type: "enter" };

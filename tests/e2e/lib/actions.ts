@@ -66,13 +66,13 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
         node.bounds[0] < s.width && node.bounds[1] < s.height)) return;
       if (a.whileText) {
         const maxTaps = a.repeat ?? 1;
-        const interval = a.everyMs ?? 500;
-        const end = performance.now() + Math.max(1500, maxTaps * interval + 800);
+        const interval = a.everyMs ?? 500, start = performance.now(), appearMs = a.appearMs ?? 0;
+        const end = start + appearMs + Math.max(1500, maxTaps * interval + 800);
         let taps = 0, absentAt = 0;
         while (performance.now() < end) {
           if (!await query(wd.locateText(a.whileText), "locateText")) {
             absentAt ||= performance.now();
-            if (performance.now() - absentAt >= 400) break;
+            if (performance.now() - absentAt >= 400 && (taps || performance.now() - start >= appearMs)) break;
             await sleep(50);
           } else {
             absentAt = 0;

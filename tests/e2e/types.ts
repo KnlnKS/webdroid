@@ -16,8 +16,9 @@ type Action =
   /** An optional anchor is a no-op when absent and never replays a recorded coordinate. */
   | { type: "tapText"; text: string; optional?: boolean }
   /** Normalized 0..1 tap. Used directly when no stable text anchor exists. `repeat` taps the
-   *  same point N times, `everyMs` apart, as ONE step — a burst with no capture in between. */
-  | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; unlessResource?: string }
+   *  same point N times, `everyMs` apart, as ONE step — a burst with no capture in between.
+   *  `whileText` taps only while that text shows, first waiting up to `appearMs` for it. */
+  | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; appearMs?: number; unlessResource?: string }
   /**
    * Focus a field and type into it as ONE step. Kept atomic on purpose: dismissing the soft
    * keyboard between focus and typing clears editor focus on the emulator, so the text would
