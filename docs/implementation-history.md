@@ -1725,6 +1725,17 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     12960925:userdebug/dev-keys, ro.build.characteristics emulator. These are recognizably an
     emulator's; recording a production device's build instead is a gen-framework input change.
     GL_VENDOR/EGL_VENDOR still read "webdroid".
+- 2026-10-02, cleanup of the graphics, input, service and server natives (`src/android` −75 lines
+  net). Local `declaredField` wrappers now use `getDeclared`/`setDeclared`, the server files share
+  `pms` and `runsHere` from am.ts, and pm, decode, socket, path and the CanvasProperty readers use
+  their owners' helpers. Three faults turned up: addAccountExplicitly read `Set.toArray()` through
+  `toJsArray`, which asked the JS array for an iterator and threw for any extras or visibility;
+  a float `<meta-data>` value was decoded from int bits twice, so 1.5 became a denormal; and
+  vectordrawable registered `VirtualRefBasePtr` a second time, a reference count the app never
+  ran because rendernode's registration loads later and wins. Open: base64 is hand-rolled in
+  notification, keystore (unchunked spread), webkit, sqlite, framework and proxy; framework-res
+  lookups through `getSystem().getIdentifier` repeat in notification, services, storage and
+  vibrator. Both want an owner outside these files.
 
 ## Java, storage and framework semantics
 
