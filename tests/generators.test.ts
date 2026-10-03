@@ -5,7 +5,7 @@ test("every driven generator a native calls is run", () => {
   expect(undelegatedGenerators()).toEqual([]);
 });
 
-test("no pending Java result is memoised with ??=, which shares its suspension", () => {
+test("no pending Java result is kept in a cache, which shares its suspension", () => {
   expect(sharedSuspensions()).toEqual([]);
 });
 

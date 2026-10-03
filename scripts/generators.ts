@@ -1,9 +1,8 @@
 // Calls of a driven-style generator (one declared to return Gen) whose generator nothing runs: one
 // neither delegated to (yield*), driven (rt.drive), nor returned by a plain function to a caller
 // that drives it. A callback handed to callUncaught, after or onMain has its result consumed as a
-// value, so a generator it returns runs nothing either. Also a pending Java result memoised with
-// `??=`, whose suspension every awaiting frame would share, and a Java entry whose result is
-// dropped. Whether Java is entered from a turn a thread owns is checked at run time (jlang's
+// value, so a generator it returns runs nothing either. Also a pending Java result kept in a cache,
+// whose suspension every awaiting frame would share, and a Java entry whose result is dropped. Whether Java is entered from a turn a thread owns is checked at run time (jlang's
 // strictThreadOwnership). And per-process ABI state read as a module loads.
 //   bun scripts/generators.ts
 import { readFileSync } from "node:fs";
@@ -64,22 +63,41 @@ export function undelegatedGenerators(): string[] {
   return out;
 }
 
-/** `x ??= <Java entry or rt.drive>`: a pending result is a suspension that every frame awaiting it
- *  joins (src/jvm/suspend.ts), so a second caller resumes inside the first one's stack. `once`
- *  shares an in-flight computation instead. */
+/** A pending Java entry or rt.drive result kept past the call that made it: memoised with `??=`,
+ *  stored in a Map, an object property or an element, or assigned to a variable the function does
+ *  not own. A pending result is a suspension that every frame awaiting it joins
+ *  (src/jvm/suspend.ts), so a later caller resumes inside the first one's stack, and it settles only
+ *  when the first caller's whole chain ends. `once` shares an in-flight computation instead. A local
+ *  bound to such a result counts as one when it is stored. */
 export function sharedSuspensions(): string[] {
   const out: string[] = [];
+  const unwrap = (e: ts.Expression): ts.Expression => {
+    while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) ||
+      ts.isCallExpression(e) && e.expression.getText() === "Promise.resolve" && e.arguments.length) e = ts.isCallExpression(e) ? e.arguments[0] : e.expression;
+    return e;
+  };
+  const isEntry = (e: ts.Expression) => { e = unwrap(e); return ts.isCallExpression(e) && (JAVA.has(e.expression.getText()) || e.expression.getText() === "rt.drive"); };
   for (const [file, source] of sources()) {
-    const visit = (n: ts.Node) => {
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken) {
-        let value: ts.Expression = n.right;
-        while (ts.isCallExpression(value) && value.expression.getText() === "Promise.resolve" && value.arguments.length) value = value.arguments[0];
-        const callee = ts.isCallExpression(value) ? value.expression.getText() : "";
-        if (JAVA.has(callee) || callee === "rt.drive") out.push(`${file}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}: ${n.left.getText()}`);
-      }
-      ts.forEachChild(n, visit);
+    const report = (n: ts.Node, what: string) => out.push(`${file}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}: ${what}`);
+    const scan = (fn: ts.Node) => {
+      const own = ts.isSourceFile(fn) ? new Set<string>() : locals(fn), pending = new Set<string>();
+      const pendingValue = (e: ts.Expression) => isEntry(e) || ts.isIdentifier(unwrap(e)) && pending.has((unwrap(e) as ts.Identifier).text);
+      const visit = (n: ts.Node) => {
+        if (n !== fn && ts.isFunctionLike(n)) { scan(n); return; }
+        if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && isEntry(n.initializer)) pending.add(n.name.text);
+        if (ts.isBinaryExpression(n)) {
+          const op = n.operatorToken.kind, left = n.left;
+          if (op === ts.SyntaxKind.EqualsToken && ts.isIdentifier(left) && own.has(left.text) && isEntry(n.right)) pending.add(left.text);
+          else if ((op === ts.SyntaxKind.QuestionQuestionEqualsToken || op === ts.SyntaxKind.BarBarEqualsToken ||
+            op === ts.SyntaxKind.EqualsToken && (!ts.isIdentifier(left) || !own.has(left.text))) && pendingValue(n.right)) report(n, left.getText());
+        }
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "set" &&
+          n.arguments.length === 2 && pendingValue(n.arguments[1])) report(n, n.expression.getText());
+        ts.forEachChild(n, visit);
+      };
+      ts.forEachChild(fn, visit);
     };
-    visit(source);
+    scan(source);
   }
   return out;
 }
