@@ -4,7 +4,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml";
 import { webScript } from "../src/shell/webscript";
 import { proxyRequest } from "../src/shell/proxy";
-import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, routeSubframes, webViewBrands } from "../src/shell/webinject";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, holdFrames, routeSubframes, webViewBrands } from "../src/shell/webinject";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -497,22 +497,52 @@ describe("WebView isolation", () => {
       hits.push(url.host + url.pathname);
       return new Response(url.pathname === "/" ? "<!doctype html><head></head><body>page" : "frame", { headers: { "content-type": "text/html" } });
     } });
-    const page = await browser.newPage();
+    const page = await browser.newPage(), errors: string[] = [];
+    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     try {
       await page.goto(`http://page.localhost:${server.port}/`);
-      expect(await page.evaluate(async ({ port, route }) => {
-        (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string) => Promise.resolve(`http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url)));
-        document.body.insertAdjacentHTML("beforeend", `<iframe src="http://127.0.0.1:${port}/direct"></iframe>`);
+      const routed = (url: string) => `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(url);
+      const direct = `http://127.0.0.1:${server.port}`;
+      expect(await page.evaluate(async ({ direct, port, route, hold }) => {
+        const asked: string[] = [];
+        (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string) => {
+          asked.push(url);
+          return Promise.resolve(url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : null);
+        }, (0, eval)(`(${hold})`));
+        document.body.insertAdjacentHTML("beforeend", `<iframe src="${direct}/direct"></iframe>`);
         const made = document.createElement("iframe");
-        made.src = `http://127.0.0.1:${port}/made`;
+        made.src = `${direct}/made`;
         document.body.append(made);
+        // a scheme the client handles never loads; frames that need no request load as they are
+        const message = document.createElement("iframe");
+        message.src = "gmsg://mobileads.google.com/x";
+        document.body.append(message);
+        message.remove();
+        const kept = document.createElement("iframe");
+        kept.src = "gmsg://mobileads.google.com/kept";
+        document.body.append(kept);
+        const srcdoc = document.createElement("iframe");
+        srcdoc.srcdoc = `<p>doc</p><iframe src="${direct}/in-srcdoc"></iframe>`;
+        document.body.append(srcdoc);
+        const blank = document.createElement("iframe");
+        document.body.append(blank);
+        blank.contentDocument!.write(`<iframe src="${direct}/in-blank"></iframe>`);
+        const data = document.createElement("iframe");
+        data.setAttribute("src", "data:text/html,<p>data</p>");
+        document.body.append(data);
         await new Promise((resolve) => setTimeout(resolve, 500));
-        return [...document.querySelectorAll("iframe")].map((f) => [f.src, f.getAttribute("src")]);
-      }, { port: server.port, route: routeSubframes.toString() })).toEqual([
-        [`http://127.0.0.1:${server.port}/direct`, `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(`http://127.0.0.1:${server.port}/direct`)],
-        [`http://127.0.0.1:${server.port}/made`, `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(`http://127.0.0.1:${server.port}/made`)],
+        const frames = (doc: Document) => [...doc.querySelectorAll("iframe")].map((f) => [f.src, f.getAttribute("src")]);
+        return [asked, frames(document), frames(srcdoc.contentDocument!), frames(blank.contentDocument!), srcdoc.contentDocument!.body.firstChild!.textContent];
+      }, { direct, port: server.port, route: routeSubframes.toString(), hold: holdFrames.toString() })).toEqual([
+        [`${direct}/direct`, `${direct}/made`, "gmsg://mobileads.google.com/x", "gmsg://mobileads.google.com/kept", `${direct}/in-blank`, `${direct}/in-srcdoc`],
+        [[`${direct}/direct`, routed(`${direct}/direct`)], [`${direct}/made`, routed(`${direct}/made`)], ["gmsg://mobileads.google.com/kept", null],
+          ["", null], ["", null], ["data:text/html,<p>data</p>", "data:text/html,<p>data</p>"]],
+        [[`${direct}/in-srcdoc`, routed(`${direct}/in-srcdoc`)]],
+        [[`${direct}/in-blank`, routed(`${direct}/in-blank`)]],
+        "doc",
       ]);
-      expect(hits.filter((h) => !h.startsWith("page.localhost"))).toEqual([`routed.localhost:${server.port}/frame`, `routed.localhost:${server.port}/frame`]);
+      expect(hits.filter((h) => !h.startsWith("page.localhost"))).toEqual(Array(4).fill(`routed.localhost:${server.port}/frame`));
+      expect(errors).toEqual([]);
     } finally { await page.close(); await server.stop(true); }
   });
 });

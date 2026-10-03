@@ -88,40 +88,152 @@ export function installWebFonts(fonts: { faces: { family: string; path: string; 
   document.head.insertBefore(style, document.head.firstChild);
 }
 
-/** each http(s) frame of the page loads where `route` says (its web origin's renderer); `renderers`,
- *  the renderer origins, are the only sites a frame may load from meanwhile. `src` reads what the
- *  page set. */
-export function routeSubframes(renderers: string, route: (url: string) => Promise<unknown>): void {
+/** `html` with each frame's src that loads through the app renamed to data-wd-frame-src, so the
+ *  parser inserts the frame without a navigation; about:, javascript:, data: and blob: frames load as
+ *  Chromium loads them, without the client */
+export function holdFrames(html: string): string {
+  if (!/<i?frame[\s/>]/i.test(html)) return html;
+  const tag = /<(\/?)([a-z][^\s/>]*)/iy, attr = /[\s/]*([^\s/>][^\s/>=]*)(?:\s*=\s*("[^"]*"?|'[^']*'?|[^\s>]*))?/y;
+  const raw = /^(script|style|xmp|iframe|noembed|noframes|noscript|textarea|title)$/;
+  let out = "", from = 0, i = 0;
+  while ((i = html.indexOf("<", i)) >= 0) {
+    if (html.startsWith("<!--", i) || html[i + 1] === "!" || html[i + 1] === "?") {
+      const comment = html.startsWith("<!--", i), end = comment ? html.indexOf("-->", i + 4) : html.indexOf(">", i);
+      if (end < 0) break;
+      i = end + (comment ? 3 : 1); continue;
+    }
+    tag.lastIndex = i;
+    const m = tag.exec(html);
+    if (!m) { i++; continue; }
+    const name = m[2].toLowerCase();
+    // the first src counts; a duplicate of a held one is held too, so it cannot take its place
+    let src = !m[1] && (name === "iframe" || name === "frame") ? 0 : -1, at = tag.lastIndex;
+    for (;;) {
+      attr.lastIndex = at;
+      const a = attr.exec(html);
+      if (!a?.[0]) break;
+      at = attr.lastIndex;
+      if (src < 0 || a[1].toLowerCase() !== "src") continue;
+      if (!src && /^\s*$|^\s*(about|javascript|data|blob):/i.test((a[2] ?? "").replace(/^["']|["']$/g, ""))) { src = -1; continue; }
+      src = 1;
+      const start = a.index + a[0].search(/[^\s/]/);
+      out += html.slice(from, start) + "data-wd-frame-src";
+      from = start + 3;
+    }
+    const close = html.indexOf(">", at);
+    if (close < 0) break;
+    i = close + 1;
+    if (m[1]) continue;
+    if (name === "plaintext") break;
+    if (raw.test(name)) {
+      const end = new RegExp("</" + name + "[\\s/>]", "ig");
+      end.lastIndex = i;
+      i = end.exec(html)?.index ?? html.length;
+    }
+  }
+  return out + html.slice(from);
+}
+
+/** each frame of the page whose src loads through the app (http(s) and other schemes the client sees)
+ *  loads where `route` says: its web origin's renderer, or nowhere. The page's src, setAttribute and
+ *  HTML parsing entry points hold such a frame's URL before its navigation starts, here and in each
+ *  same-origin frame's realm; `renderers`, the renderer origins, are the only sites a frame may load
+ *  from otherwise. `src` reads what the page set. */
+export function routeSubframes(renderers: string, route: (url: string) => Promise<unknown>, hold: (html: string) => string): void {
   const policy = document.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";
   policy.content = "frame-src 'self' data: blob: " + renderers;
   document.head.insertBefore(policy, document.head.firstChild);
-  const routed = new WeakMap<Element, { url: string; src: string }>();
+  const element = Element.prototype, getAttr = element.getAttribute, setAttr = element.setAttribute, removeAttr = element.removeAttribute;
+  const direct = (raw: string) => /^\s*$|^\s*(about|javascript|data|blob):/i.test(raw);
+  // the URL the page gave each frame, and the src attribute it was given meanwhile or by the route
+  const frames = new WeakMap<Element, { raw: string; native: string | null; url?: string }>();
+  const realms = new WeakSet<object>();
   const visit = (frame: Element) => {
-    const raw = frame.getAttribute("src");
-    if (raw === null || routed.get(frame)?.src === raw) return;
-    const url = URL.parse(raw, document.baseURI);
-    if (!url || !/^https?:$/.test(url.protocol)) return;
+    const held = getAttr.call(frame, "data-wd-frame-src");
+    if (held !== null) {
+      removeAttr.call(frame, "data-wd-frame-src");
+      if (direct(held)) setAttr.call(frame, "src", held); else frames.set(frame, { raw: held, native: getAttr.call(frame, "src") });
+    }
+    const native = getAttr.call(frame, "src");
+    let entry = frames.get(frame);
+    if (!entry || entry.native !== native) {
+      if (native === null || direct(native)) return;
+      frames.set(frame, entry = { raw: native, native });
+    }
+    if (entry.url !== undefined) return;
+    const url = URL.parse(entry.raw, frame.ownerDocument.baseURI);
+    if (!url) return;
+    const asked = entry;
+    asked.url = url.href;
     void route(url.href).then((src) => {
-      if (typeof src !== "string" || frame.getAttribute("src") !== raw) return;
-      routed.set(frame, { url: url.href, src });
-      frame.setAttribute("src", src);
+      if (typeof src !== "string" || frames.get(frame) !== asked) return;
+      asked.native = src;
+      setAttr.call(frame, "src", src);
     });
   };
-  const added = (node: Node) => {
-    if (node instanceof HTMLIFrameElement || node instanceof HTMLFrameElement) visit(node);
-    if (node instanceof Element || node instanceof DocumentFragment) node.querySelectorAll("iframe, frame").forEach(visit);
+  // a frame given a URL that loads through the app takes no src until the app answers
+  const request = (frame: Element, raw: string) => {
+    if (direct(raw)) { frames.delete(frame); return false; }
+    frames.set(frame, { raw, native: getAttr.call(frame, "src") });
+    if (frame.isConnected) visit(frame);
+    return true;
   };
-  new MutationObserver((records) => {
-    for (const record of records) if (record.type === "attributes") added(record.target); else record.addedNodes.forEach(added);
-  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["src"] });
-  for (const proto of [HTMLIFrameElement.prototype, HTMLFrameElement.prototype]) {
-    const src = Object.getOwnPropertyDescriptor(proto, "src")!;
-    Object.defineProperty(proto, "src", { ...src, get(this: Element) {
-      const r = routed.get(this);
-      return r && this.getAttribute("src") === r.src ? r.url : src.get!.call(this);
-    } });
-  }
+  const added = (node: Node) => {
+    if (node.nodeName === "IFRAME" || node.nodeName === "FRAME") visit(node as Element);
+    if ("querySelectorAll" in node) (node as ParentNode).querySelectorAll("iframe, frame").forEach(visit);
+  };
+  const native = (target: object, name: string) => Object.getOwnPropertyDescriptor(target, name)!;
+  const windows = { IFRAME: native(HTMLIFrameElement.prototype, "contentWindow").get!, FRAME: native(HTMLFrameElement.prototype, "contentWindow").get! };
+  const adopt = (frame: Element) => {
+    // a routed frame's window is another origin's
+    const src = getAttr.call(frame, "src");
+    if (src !== null && !direct(src)) return;
+    try {
+      const win = windows[frame.nodeName as keyof typeof windows]?.call(frame) as (Window & typeof globalThis) | null;
+      if (win?.document && !realms.has(win.HTMLIFrameElement.prototype)) install(win);
+    } catch {}
+  };
+  const wrap = (target: object, name: string, change: (native: PropertyDescriptor) => PropertyDescriptor) =>
+    Object.defineProperty(target, name, change(native(target, name)));
+  const parsed = (set: PropertyDescriptor["set"]) => function (this: Element, value: unknown) { set!.call(this, typeof value === "string" ? hold(value) : value); };
+  const install = (win: Window & typeof globalThis) => {
+    realms.add(win.HTMLIFrameElement.prototype);
+    for (const proto of [win.HTMLIFrameElement.prototype, win.HTMLFrameElement.prototype]) {
+      wrap(proto, "src", (src) => ({ ...src, get(this: Element) {
+        const r = frames.get(this);
+        return r?.url !== undefined && getAttr.call(this, "src") === r.native ? r.url : src.get!.call(this);
+      }, set(this: Element, value: unknown) { if (!request(this, String(value))) src.set!.call(this, value); } }));
+      if (proto === win.HTMLIFrameElement.prototype) wrap(proto, "srcdoc", (srcdoc) => ({ ...srcdoc, set: parsed(srcdoc.set) }));
+      // the page reaches a same-origin frame's realm through these before it can parse into it
+      for (const name of ["contentWindow", "contentDocument"])
+        wrap(proto, name, (content) => ({ ...content, get(this: Element) { adopt(this); return content.get!.call(this); } }));
+      Object.defineProperty(proto, "setAttribute", { configurable: true, writable: true, value(this: Element, name: string, value: string) {
+        const key = String(name).toLowerCase();
+        if (key === "src" && request(this, String(value))) return;
+        setAttr.call(this, name, key === "srcdoc" ? hold(String(value)) : value);
+      } });
+    }
+    wrap(win.Element.prototype, "innerHTML", (inner) => ({ ...inner, set(this: Element, value: unknown) {
+      inner.set!.call(this, typeof value === "string" && !/^(script|style|textarea|title|xmp|noscript|plaintext)$/.test(this.localName) ? hold(value) : value);
+    } }));
+    wrap(win.Element.prototype, "outerHTML", (outer) => ({ ...outer, set: parsed(outer.set) }));
+    wrap(win.ShadowRoot.prototype, "innerHTML", (inner) => ({ ...inner, set: parsed(inner.set) }));
+    for (const [target, name] of [[win.Element.prototype, "insertAdjacentHTML"], [win.Element.prototype, "setHTMLUnsafe"], [win.ShadowRoot.prototype, "setHTMLUnsafe"],
+      [win.Range.prototype, "createContextualFragment"], [win.Document.prototype, "write"], [win.Document.prototype, "writeln"]] as const) {
+      if (name in target) wrap(target, name, (fn) => ({ ...fn, value(this: unknown, ...args: unknown[]) {
+        return fn.value.apply(this, args.map((arg) => typeof arg === "string" ? hold(arg) : arg));
+      } }));
+    }
+    const doc = win.document;
+    new win.MutationObserver((records) => {
+      for (const record of records) if (record.type === "attributes") added(record.target); else record.addedNodes.forEach(added);
+    }).observe(doc, { subtree: true, childList: true, attributes: true, attributeFilter: ["src", "data-wd-frame-src"] });
+    // a same-origin frame's document (srcdoc, about:blank) the page did not reach into
+    doc.addEventListener("load", (event) => adopt(event.target as Element), true);
+    doc.querySelectorAll("iframe, frame").forEach(visit);
+  };
+  install(window);
 }
 
 export const WEB_INJECT = `<script>(function(){
@@ -146,9 +258,10 @@ const ask = data => new Promise(resolve => {
 });
 if (config.fonts) (${installWebFonts.toString()})(config.fonts);
 // Chromium loads a page's subframes through the WebView's network stack: each frame of a web
-// origin renders on that origin's renderer, which the app hands out. Until then the policy keeps
-// the frame from loading straight from its site.
-if (config.frames) (${routeSubframes.toString()})(config.frames, url => ask({kind: "subframe", url}));
+// origin renders on that origin's renderer, which the app hands out, and the client sees one of
+// another scheme first. The page holds the frame until then; the policy stops any direct load the
+// holding missed.
+if (config.frames) (${routeSubframes.toString()})(config.frames, url => ask({kind: "subframe", url}), ${holdFrames.toString()});
 // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
 // them keeps the embedding page from reporting them as its own exceptions.
 const consoleMessage = data => send({kind: "console", ...data});
@@ -353,6 +466,8 @@ const loaded = async event => {
       html = /^\\s*<!doctype[^>]*>/i.test(html)
         ? html.replace(/^(\\s*<!doctype[^>]*>)/i, "$1" + inject) : inject + html;
     }
+    // its frames load through the app: the parser must not start their navigations
+    if (context.frames) html = (${holdFrames.toString()})(html);
     // a subframe's page talks to the app through its port: its parent is the page that framed it
     window.__wdWebView = {...context, post: context.sub ? send : null,
       listen: context.sub ? receive => { port.onmessage = event => { if (event.data) receive(event.data); }; } : null};

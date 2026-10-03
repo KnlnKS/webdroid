@@ -480,9 +480,23 @@ export class WebViewChromium extends JObj {
     };
     return channel;
   }
-  /** a frame's page asks where its subframe of `url` loads: a frame on that web origin's renderer */
+  /** a frame's page asks where its subframe of `url` loads: a frame on that web origin's renderer, or none */
   private answerSubframe(url: string, port: MessagePort) {
-    void this.subframe({ url, src: srcFor(url, this) }).then((src) => port.postMessage(src), () => port.postMessage(null)).finally(() => port.close());
+    void this.subframeSrc({ url, src: srcFor(url, this) }).then((src) => port.postMessage(src), () => port.postMessage(null)).finally(() => port.close());
+  }
+  /** Chromium's navigation throttle asks the client about a subframe navigation of a scheme other than
+   *  http(s), about: and javascript:, and fails one of a scheme it cannot load. data: and blob: frames
+   *  load in the page without asking (a revoked blob: URL would not survive the round trip). */
+  private async subframeSrc(entry: Entry): Promise<string | null> {
+    if (/^https?:/i.test(entry.url)) return this.subframe(entry);
+    const request = mkRequest(entry.url);
+    request.main = false;
+    if (await onMain(() => vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, request))) return null;
+    if (entry.src !== entry.url) return this.subframe(entry);
+    const error = inst<JWebErr>("webdroid/WebResourceError");
+    error.code = -10; error.desc = "net::ERR_UNKNOWN_URL_SCHEME";
+    void onMain(() => vcall(this.client, "onReceivedError", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V", this.view, request, error));
+    return null;
   }
   private async subframe(entry: Entry): Promise<string> {
     const remote = this.hold.remote;
@@ -541,7 +555,7 @@ export class WebViewChromium extends JObj {
         contentType: typeof data.contentType === "string" ? data.contentType : undefined });
   }
   private subframeNavigate(win: Window, entry: Entry) {
-    void this.subframe(entry).then((src) => win.location.replace(src), () => {});
+    void this.subframeSrc(entry).then((src) => { if (src) win.location.replace(src); }, () => {});
   }
   send(data: object, transfer: Transferable[] = []) { if (this.remoteOrigin) this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
   async bitmapSnapshot(): Promise<ImageBitmap> {
