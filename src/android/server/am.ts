@@ -23,7 +23,10 @@ import { checkUidPermission } from "../permissions";
 import { mkPfd } from "../os";
 import { clearUserData } from "../appdata";
 
-const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
+const GET_SHARED_LIBRARY_FILES = 0x400n;
+/** ContentProviderHelper.generateApplicationProvidersLocked's query: STOCK_PM_FLAGS, GET_URI_PERMISSION_PATTERNS and
+ *  MATCH_DIRECT_BOOT_AUTO, without meta-data (a provider asks for its own) */
+const APP_PROVIDER_FLAGS = GET_SHARED_LIBRARY_FILES | 0x800n | 0x10000000n;
 /** the package manager, as system_server's services reach it */
 export const pms = () => hostedService("package") as Promise<JObj>;
 /** a component of `pkg` in `process` runs in this process */
@@ -54,7 +57,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
   const pm = yield* awaited(pms());
   const info = yield vcall(pm, "getApplicationInfo", "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", pkg, GET_SHARED_LIBRARY_FILES, 0);
   noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
-  const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, GET_META_DATA, null);
+  const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, APP_PROVIDER_FLAGS, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
     slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
   const { global } = yield* awaited(configurations());
