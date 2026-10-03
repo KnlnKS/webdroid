@@ -7,7 +7,7 @@ import { after } from "../jvm/natives/jlang";
 import type { FileSource } from "../shell/lazyfile";
 import { javaCloseFd, javaDupFd, javaFdSource, javaOpenFd } from "./fs";
 import { windowOf } from "./libandroid";
-import { mem } from "./mem";
+import { mem, anchor } from "./mem";
 import { cstr, hostData, hostLib, PTR, ptr, stp, stpVa, stLong, type HostFn } from "./host";
 import type { Cpu } from "./cpu";
 
@@ -105,8 +105,8 @@ export function mediaInit(): void {
     AMediaExtractor_advance: (_cpu, a) => +(extractors.get(a.p())?.value.advance() ?? false),
     AMediaExtractor_seekTo: (_cpu, a) => { const extractor = extractors.get(a.p()), time = Number(a.l()), mode = a.i(); if (!extractor || mode < 0 || mode > 2) return INVALID; extractor.value.seek(time, mode); return 0; },
     AMediaExtractor_readSampleData: async (cpu, a) => {
-      const extractor = extractors.get(a.p()), out = a.p(), capacity = a.u(); if (!extractor?.source) return -1;
-      try { const data = await extractor.value.read(extractor.source(cpu)); if (!data) return -1; if (data.length > capacity) return INVALID; mem.bytes(out, data.length).set(data); return data.length; } catch { return IO; }
+      const extractor = extractors.get(a.p()), out = anchor(a.p()), capacity = a.u(); if (!extractor?.source) return -1;
+      try { const data = await extractor.value.read(extractor.source(cpu)); if (!data) return -1; if (data.length > capacity) return INVALID; mem.write(out(), data); return data.length; } catch { return IO; }
     },
     AMediaDataSource_new: () => { const handle = nextHandle++; sources.set(handle, new DataSource()); return handle; },
     AMediaDataSource_delete: async (cpu, a) => { const handle = a.p(), source = sources.get(handle); sources.delete(handle); await source?.close(cpu); },
@@ -125,8 +125,9 @@ export function mediaInit(): void {
     AMediaCodec_getOutputBuffer: (_cpu, a) => { const buffer = codecs.get(a.p())?.run?.outputBuffer(a.u()) ?? null, size = a.p(); sizeOut(size, buffer ? capacity(buffer) : 0); return buffer ? directAddress(buffer) : 0; },
     AMediaCodec_dequeueInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), timeout = a.l(); if (!codec) return BAD_OBJECT; try { const result = codec.running().dequeueInput(timeout); return result instanceof Promise ? result.catch(() => INVALID) : result; } catch { return INVALID; } },
     AMediaCodec_dequeueOutputBuffer: (_cpu, a) => {
-      const codec = codecs.get(a.p()), out = a.p(), timeout = a.l(); if (!codec || !out) return INVALID;
-      const done = ([index, info]: [number, Info | null]) => { if (info) { mem.st32(out, info.offset); mem.st32(out + 4, info.size); mem.st64(out + 8, info.time); mem.st32(out + 16, info.flags); } return index; };
+      const codec = codecs.get(a.p()), info = a.p(), timeout = a.l(); if (!codec || !info) return INVALID;
+      const at = anchor(info);
+      const done = ([index, info]: [number, Info | null]) => { if (info) { const out = at(); mem.st32(out, info.offset); mem.st32(out + 4, info.size); mem.st64(out + 8, info.time); mem.st32(out + 16, info.flags); } return index; };
       try { const result = codec.running().dequeueOutput(timeout); return result instanceof Promise ? result.then(done, () => INVALID) : done(result); } catch { return INVALID; }
     },
     AMediaCodec_queueInputBuffer: (_cpu, a) => {

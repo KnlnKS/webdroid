@@ -2,7 +2,7 @@
 // eventfd, epoll, inotify, timerfd and unix socket ends, shared by a raw syscall, the ARM32
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
-import { mem, guestAt } from "./mem";
+import { mem, guestAt, anchor } from "./mem";
 import { type HostFn, PTR, stp, ldp, ARG0 } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
@@ -521,9 +521,10 @@ export function gather(iov: number, count: number): Uint8Array {
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
 function vectored(cpu: Cpu, iov: number, count: number, op: (p: number, n: number, moved: number) => number | Promise<number>): number | Promise<number> {
   if (count < 0 || count > 1024) return fail(cpu, E.INVAL);
+  const at = anchor(iov);
   const from = (i: number, done: number): number | Promise<number> => {
     for (; i < count; i++) {
-      const entry = iov + i * 2 * PTR, len = mem.ld32(entry + PTR) >>> 0;
+      const entry = at(i * 2 * PTR), len = mem.ld32(entry + PTR) >>> 0;
       if (!len) continue;
       const r = op(ldp(entry), len, done);
       if (r instanceof Promise) return r.then((n) => n < 0 ? done || n : n < len ? done + n : from(i + 1, done + n));
@@ -547,8 +548,8 @@ function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): nu
   try { value = contentAt(f.content, off, n); }
   catch { return fail(cpu, E.IO); }
   if (!(value instanceof Promise)) { mem.write(p, value); return value.length; }
-  const dst = mem.va(p);
-  return value.then((bytes) => { mem.write(guestAt(dst), bytes); return bytes.length; }, () => fail(cpu, E.IO));
+  const dst = anchor(p);
+  return value.then((bytes) => { mem.write(dst(), bytes); return bytes.length; }, () => fail(cpu, E.IO));
 }
 /** up to `n` bytes of a file at `off`: a view of its data, or what its lazy source reads */
 function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
@@ -566,7 +567,8 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
     const q = f.inotify.pipe.q;
     if (!q.length) {
       if (f.nonblock) return fail(cpu, EAGAIN);
-      return new Promise<void>((resolve) => f.inotify!.pipe.wake.push(resolve)).then(() => fdRead(cpu, fd, p, n));
+      const at = anchor(p);
+      return new Promise<void>((resolve) => f.inotify!.pipe.wake.push(resolve)).then(() => fdRead(cpu, fd, at(), n));
     }
     if (n < q[0].length) return fail(cpu, E.INVAL);
     let done = 0;
@@ -582,16 +584,16 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
     if (!ready(f)) {
       if (f.rpipe?.closed) return 0;
       if (f.nonblock) return fail(cpu, EAGAIN);
-      const dst = mem.va(p);
-      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, guestAt(dst), n));
+      const dst = anchor(p);
+      return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, dst(), n));
     }
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st64(p, BigInt(c)); return 8; }
     return Math.min(n, takeQueued(f, n, (bytes, at) => mem.write(p + at, bytes)));
   }
   if (f.content.source) {
-    const dst = mem.va(p);
+    const dst = anchor(p);
     const read = (f.readQueue ?? Promise.resolve()).then(async () => {
-      const result = await fdReadAt(cpu, f, guestAt(dst), n, f.pos);
+      const result = await fdReadAt(cpu, f, dst(), n, f.pos);
       if (result > 0) f.pos += result;
       return result;
     });
@@ -603,10 +605,10 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
   return result instanceof Promise ? result.then(advance) : advance(result);
 }
 async function readLoop(dst: number, n: number, read: (p: number, k: number, done: number) => number | Promise<number>): Promise<number> {
-  const target = mem.va(dst);
+  const target = anchor(dst);
   let total = 0;
   while (total < n) {
-    const r = await read(guestAt(target, total), n - total, total);
+    const r = await read(target(total), n - total, total);
     if (r <= 0) return total || r;
     total += r;
   }

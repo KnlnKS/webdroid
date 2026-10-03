@@ -1,8 +1,8 @@
 import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
 import { Cpu, bindCpu, hasProcessExited } from "./cpu";
-import { hostLib, stp, type HostFn } from "./host";
-import { mem } from "./mem";
+import { hostLib, stp, ptr, type HostFn } from "./host";
+import { mem, anchor } from "./mem";
 
 const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
 const AAUDIO_STREAM_STATE_OPEN = 2, AAUDIO_STREAM_STATE_STARTED = 4, AAUDIO_STREAM_STATE_PAUSED = 6, AAUDIO_STREAM_STATE_FLUSHED = 8,
@@ -12,7 +12,7 @@ class Builder {
   SampleRate = 0; ChannelCount = 0; Format = 0; Direction = 0; SharingMode = 1;
   BufferCapacityInFrames = 0; FramesPerDataCallback = 0; PerformanceMode = 10;
   DeviceId = 0; SessionId = -1;
-  callback = 0; context = 0;
+  callback = 0; context: number | bigint = 0;
 }
 class Stream {
   readonly track: PcmOutput;
@@ -69,8 +69,8 @@ class Stream {
     this.cpu.jthread.alive = 0; this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
     streams.delete(this.handle); return 0;
   }
-  wait(input: number, out: number, nanos: bigint): number | Promise<number> {
-    const done = () => { if (out) mem.st32(out, this.state); return this.state === input ? -885 : 0; };
+  wait(input: number, out: () => number, nanos: bigint): number | Promise<number> {
+    const done = () => { const at = out(); if (at) mem.st32(at, this.state); return this.state === input ? -885 : 0; };
     if (this.state !== input || nanos <= 0n) return done();
     return new Promise(resolve => {
       const wake = () => { clearTimeout(timer); this.waiters.delete(wake); resolve(done()); };
@@ -93,14 +93,14 @@ export function aaudioInit(): void {
       if (b.FramesPerDataCallback > 1000000 || b.BufferCapacityInFrames > 1000000) return -882;
       const p = mem.malloc(4), stream = new Stream(p, { ...b }, cpu); streams.set(p, stream); stp(out, p); return 0;
     },
-    AAudioStreamBuilder_setDataCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.callback = a.p(); b.context = a.p(); } },
+    AAudioStreamBuilder_setDataCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.callback = a.p(); b.context = ptr(a.p()); } },
     AAudioStreamBuilder_setErrorCallback: () => {},
     AAudioStream_close: (_cpu, a) => streams.get(a.p())?.close() ?? INVALID_HANDLE,
     AAudioStream_requestStart: (_cpu, a) => streams.get(a.p())?.start() ?? INVALID_HANDLE,
     AAudioStream_requestStop: (_cpu, a) => streams.get(a.p())?.stop() ?? INVALID_HANDLE,
     AAudioStream_requestPause: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; s.track.pause(); s.change(AAUDIO_STREAM_STATE_PAUSED); return 0; },
     AAudioStream_requestFlush: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; if (s.state === AAUDIO_STREAM_STATE_STARTED) return INVALID_STATE; s.track.flush(); s.change(AAUDIO_STREAM_STATE_FLUSHED); return 0; },
-    AAudioStream_waitForStateChange: (_cpu, a) => { const s = streams.get(a.p()), input = a.i(), out = a.p(), timeout = a.l(); return s?.wait(input, out, timeout) ?? INVALID_HANDLE; },
+    AAudioStream_waitForStateChange: (_cpu, a) => { const s = streams.get(a.p()), input = a.i(), out = a.p(), timeout = a.l(); return s?.wait(input, anchor(out), timeout) ?? INVALID_HANDLE; },
     AAudioStream_setBufferSizeInFrames: (_cpu, a) => { const s = streams.get(a.p()), size = a.i(); if (!s) return INVALID_HANDLE; if (size < 0) return -882; s.size = Math.max(s.frames, Math.min(size, s.capacity)); s.pump(); return s.size; },
   };
   const settings: Setting[] = ["SampleRate", "ChannelCount", "Format", "Direction", "SharingMode", "BufferCapacityInFrames", "FramesPerDataCallback", "PerformanceMode", "DeviceId", "SessionId"];

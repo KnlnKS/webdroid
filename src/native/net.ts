@@ -8,7 +8,7 @@ import { ByteQueue, DatagramRelay, Relay, syntheticAddress, syntheticHost, nameE
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, ldp, ldLong, stLong, type HostFn, type HostRet, ptr } from "./host";
-import { mem, guestAt, anchor } from "./mem";
+import { mem, anchor } from "./mem";
 import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
 import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption, unixSend, unixReceive, gather, openFd, javaShutdownFd } from "./fs";
@@ -991,9 +991,9 @@ function nativeRead(cpu: Cpu, fd: number, destination: number, length: number, n
 export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: number, signal?: AbortSignal): number | Promise<number> {
   const entries: PollEntry[] = [];
   for (let i = 0; i < count; i++) entries.push({ fd: mem.ld32(pollfds + i * 8), events: mem.ld16u(pollfds + i * 8 + 4), revents: 0 });
-  const target = mem.va(pollfds);
+  const target = anchor(pollfds);
   const land = (n: number) => {
-    const at = guestAt(target);
+    const at = target();
     for (let i = 0; i < count; i++) mem.st16(at + i * 8 + 6, entries[i].revents);
     return n;
   };
@@ -1017,10 +1017,10 @@ export function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet:
     if (fdIsSet(exceptSet, fd)) events |= POLLPRI;
     if (events) entries.push({ fd, events, revents: 0 });
   }
-  const setVas = [readSet, writeSet, exceptSet].map((set) => set ? mem.va(set) : 0);
+  const anchored = [readSet, writeSet, exceptSet].map(anchor);
   const finish = (): number => {
     if (entries.some((e) => e.revents & POLLNVAL)) return fail(cpu, E.BADF);
-    const sets = setVas.map((set) => set ? guestAt(set) : 0);
+    const sets = anchored.map((set) => set());
     for (const set of sets) if (set && setBytes) mem.memset(set, 0, setBytes);
     let ready = 0;
     for (const { fd, events, revents } of entries) {

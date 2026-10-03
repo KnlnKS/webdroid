@@ -2,7 +2,7 @@
 // loopers, sensors, assets) and libOpenSLES (no engine, so audio takes the AudioTrack path).
 // A name they lack is NULL from dlsym, as on a device without it.
 
-import { mem, guestAt } from "./mem";
+import { mem, anchor } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
 import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface";
@@ -268,9 +268,9 @@ export function ndkInit(): void {
       const s = A(a); if (!s) return -1;
       const buf = a.p(), n = Math.min(a.i(), s.source.size - s.pos);
       if (!n) return 0;
-      const dst = mem.va(buf);
+      const dst = anchor(buf);
       const value = s.data ? s.data.subarray(s.pos, s.pos + n) : s.source.read(s.pos, n);
-      const done = (bytes: Uint8Array) => { mem.write(guestAt(dst), bytes); s.pos += bytes.length; return bytes.length; };
+      const done = (bytes: Uint8Array) => { mem.write(dst(), bytes); s.pos += bytes.length; return bytes.length; };
       return value instanceof Promise ? value.then(done) : done(value);
     },
     AAsset_seek: (_c, a) => { const s = A(a); return s ? seek(s, a.i(), a.i()) : -1; },

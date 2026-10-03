@@ -3,7 +3,7 @@
 // which answers the wrapper's way (-1 with errno set); Cpu.syscallReturn turns that into -errno.
 // The handlers here are the calls whose kernel shape differs from any wrapper's.
 
-import { mem, guestAt } from "./mem";
+import { mem, anchor } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { calledMissing, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
@@ -99,12 +99,13 @@ const A64: Record<number, HostFn> = {
   },
   130: (cpu, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; }, // tkill
   137: (cpu, a) => {                                                             // rt_sigtimedwait
-    const set = mem.ld64(a.p()), info = a.p() ? mem.va(a.p()) : 0, ms = millis(a.p());
+    const set = mem.ld64(a.p()), info = anchor(a.p()), ms = millis(a.p());
     const take = (): number => {
       const i = cpu.signals.findIndex((sig) => set & 1n << BigInt(sig - 1));
       if (i < 0) return 0;
       const sig = cpu.signals.splice(i, 1)[0];
-      if (info) { const at = guestAt(info); mem.memset(at, 0, 128); mem.st32(at, sig); }
+      const at = info();
+      if (at) { mem.memset(at, 0, 128); mem.st32(at, sig); }
       return sig;
     };
     const now = take();

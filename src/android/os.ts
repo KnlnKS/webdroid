@@ -332,7 +332,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       const address = mem.mapVa(size, prot === 0);
       if (!address) throw errno("mmap", E.NOMEM);
       try {
-        if (source && prot) mem.write(guestAt(address), yield* awaited(readFully(source, Number(offset), size)));
+        if (source && prot) { const bytes = yield* awaited(readFully(source, Number(offset), size)); mem.write(guestAt(address), bytes); }
       } catch {
         mem.unmapVa(BigInt(address), size);
         throw errno("mmap", E.IO);
