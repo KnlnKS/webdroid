@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml";
 import { webScript } from "../src/shell/webscript";
+import { webViewBrands } from "../src/shell/webinject";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -12,7 +13,7 @@ const renderer = "http://renderer.example:8443";
 
 /** A renderer page serving `html` as webdroid rewrites it for `upstream`, with the bridge context the
  *  shell injects. The bridge hides `__wdWebView`, so tests read the same object as `probeContext`. */
-async function rendererPage(path: string, html: string, upstream: string, context: { id: string | null; page: string }, isolated = false): Promise<Page> {
+async function rendererPage(path: string, html: string, upstream: string, context: { id: string | null; page: string; [key: string]: unknown }, isolated = false): Promise<Page> {
   const page = await browser.newPage();
   await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
     ? route.fulfill({ json: { value: {} } })
@@ -338,6 +339,25 @@ describe("WebView location", () => {
         return [new object.location(4).value, saved.hostname, doc === document, local];
       })()`)).toEqual([4, "upstream.example", true, 12]);
       expect(await evaluate(page, `with ({location: 12}) { location; }`)).toBe(12);
+    } finally { await page.close(); }
+  });
+});
+
+describe("WebView client hints", () => {
+  const upstream = "https://upstream.example/dir/page";
+  const hints = { brands: webViewBrands("131.0.6778.200", false), fullVersionList: webViewBrands("131.0.6778.200", true), uaFullVersion: "131.0.6778.200",
+    model: "Pixel 9", platformVersion: "15.0.0", architecture: "", bitness: "", wow64: false, formFactors: ["Mobile"] };
+
+  test.concurrent("navigator.userAgentData is Android WebView's", async () => {
+    const page = await rendererPage("/dir/page", "<!doctype html><p>page</p>", upstream, { id: "hints-probe", page: upstream, clientHints: hints }, true);
+    try {
+      expect(await page.evaluate(async () => {
+        const data = (navigator as unknown as { userAgentData: { brands: unknown; mobile: boolean; platform: string; getHighEntropyValues(h: string[]): Promise<unknown> } }).userAgentData;
+        return [data.brands, data.mobile, data.platform, await data.getHighEntropyValues(["model", "platformVersion", "fullVersionList"])];
+      })).toEqual([
+        [{ brand: "Android WebView", version: "131" }, { brand: "Chromium", version: "131" }, { brand: "Not_A Brand", version: "24" }], true, "Android",
+        { brands: hints.brands, mobile: true, platform: "Android", model: "Pixel 9", platformVersion: "15.0.0", fullVersionList: hints.fullVersionList },
+      ]);
     } finally { await page.close(); }
   });
 });

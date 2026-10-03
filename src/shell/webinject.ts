@@ -24,6 +24,40 @@ export async function webFormRequest(form: HTMLFormElement, submitter: HTMLEleme
     body: await request.arrayBuffer() };
 }
 
+/** Android WebView's User-Agent Client Hints brands at Chromium `version`, as Chromium's
+ *  GenerateBrandVersionList orders them: the GREASE brand and the order follow the major version */
+export function webViewBrands(version: string, full: boolean): { brand: string; version: string }[] {
+  const major = Number.parseInt(version) || 0, chars = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"];
+  const greased = ["8", "99", "24"][major % 3], own = full ? version : String(major);
+  const order = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]][major % 6], list: { brand: string; version: string }[] = [];
+  list[order[0]] = { brand: "Not" + chars[major % 11] + "A" + chars[(major + 1) % 11] + "Brand", version: full ? greased + ".0.0.0" : greased };
+  list[order[1]] = { brand: "Chromium", version: own };
+  list[order[2]] = { brand: "Android WebView", version: own };
+  return list;
+}
+
+/** the user agent metadata the WebView provider reports: getHighEntropyValues' hints */
+export type ClientHints = { brands: { brand: string; version: string }[]; fullVersionList: { brand: string; version: string }[];
+  uaFullVersion: string; model: string; platformVersion: string; architecture: string; bitness: string; wow64: boolean; formFactors: string[] };
+
+/** NavigatorUAData over the provider's metadata, in the page */
+export function installClientHints(hints: ClientHints): void {
+  const low = () => ({ brands: hints.brands.map((b) => ({ ...b })), mobile: true, platform: "Android" });
+  const high = ["architecture", "bitness", "formFactors", "fullVersionList", "model", "platformVersion", "uaFullVersion", "wow64"] as const;
+  const data = {
+    get brands() { return low().brands; },
+    mobile: true,
+    platform: "Android",
+    getHighEntropyValues(asked: Iterable<string>) {
+      const values: Record<string, unknown> = low(), wanted = [...asked];
+      for (const hint of high) if (wanted.includes(hint)) values[hint] = structuredClone(hints[hint]);
+      return Promise.resolve(values);
+    },
+    toJSON: low,
+  };
+  Object.defineProperty(navigator, "userAgentData", { value: data, configurable: true, enumerable: true });
+}
+
 export const WEB_INJECT = `<script>(function(){
 // Wrangler can insert __name into functions embedded through toString().
 const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
@@ -34,6 +68,8 @@ if (ua) {
   Object.defineProperty(navigator, "userAgent", {value: ua});
   Object.defineProperty(navigator, "appVersion", {value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua});
 }
+const hints = config?.clientHints || f?.__wdClientHints;
+if (hints) (${installClientHints.toString()})(hints);
 const id = config?.id;
 // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
 // them keeps the embedding page from reporting them as its own exceptions.
@@ -121,7 +157,7 @@ addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
-    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
+    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, clientHints: event.data.clientHints, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {
@@ -160,6 +196,12 @@ parent.postMessage({bridge: id, kind: "ready"}, "*");
 })()</script>`;
 
 export const WEB_PROXY_WORKER = `
+const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
+// Sec-CH-UA's defaults name Android WebView at the host's Chromium, as the page's userAgentData does
+const brands = (${webViewBrands.toString()})(self.navigator.userAgentData?.brands?.find(b => b.brand === "Chromium")?.version
+  ?? /Chrome\\/(\\d+)/.exec(self.navigator.userAgent)?.[1] ?? "120", false);
+const clientHints = [["x-wd-sec-ch-ua", brands.map(b => '"' + b.brand + '";v="' + b.version + '"').join(", ")],
+  ["x-wd-sec-ch-ua-mobile", "?1"], ["x-wd-sec-ch-ua-platform", '"Android"']];
 self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
 const contexts = new Map();
@@ -227,6 +269,8 @@ self.addEventListener("fetch", event => {
     }
     let method = request.method, body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
     for (let redirects = 0; redirects <= 20; redirects++) {
+      // a browser sends them to secure origins
+      for (const [name, value] of clientHints) if (new URL(target).protocol === "https:") headers.set(name, value); else headers.delete(name);
       const include = isolated && (localProxy || request.credentials === "include" || request.credentials === "same-origin" && page && new URL(page).origin === new URL(target).origin);
       headers.delete("x-wd-cookie");
       if (include) {

@@ -19,7 +19,7 @@ import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
-import { WEB_INJECT, webFormRequest } from "../shell/webinject";
+import { WEB_INJECT, webFormRequest, webViewBrands, type ClientHints } from "../shell/webinject";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
@@ -47,6 +47,13 @@ function defaultUserAgent(): string {
   const model = propertyValue("ro.product.model") ?? "", build = propertyValue("ro.build.id") ?? "";
   const info = (model ? `; ${model}` : "") + (build ? `${model ? "" : ";"} Build/${build}` : "");
   return `Mozilla/5.0 (Linux; Android ${propertyValue("ro.build.version.release")}${info}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/${providerVersion()} Mobile Safari/537.36`;
+}
+/** the user agent metadata AwContentClient reports with that user agent, from the same build */
+function clientHints(): ClientHints {
+  const version = providerVersion(), release = (propertyValue("ro.build.version.release") ?? "").split(".");
+  return { brands: webViewBrands(version, false), fullVersionList: webViewBrands(version, true), uaFullVersion: version,
+    model: propertyValue("ro.product.model") ?? "", platformVersion: [0, 1, 2].map((i) => release[i] || "0").join("."),
+    architecture: "", bitness: "", wow64: false, formFactors: ["Mobile"] };
 }
 const FACTORY = "webdroid/WebViewFactoryProvider";
 /** the provider package's PackageInfo */
@@ -325,7 +332,7 @@ export class WebViewChromium extends JObj {
       // shares this realm's thread, as one does without site isolation
       const interfaces = Object.fromEntries(Object.entries(this.pageIfaces ?? {}).map(([name, methods]) => [name, Object.keys(methods)]));
       this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body,
-        contentType: entry?.contentType, userAgent: this.settings.v.userAgentString, interfaces }, [channel.port2]);
+        contentType: entry?.contentType, userAgent: this.settings.v.userAgentString, interfaces, clientHints: clientHints() }, [channel.port2]);
     }
     else if (data.kind === "script-ready") {
       this.scriptReady = true;
@@ -414,7 +421,7 @@ export class WebViewChromium extends JObj {
     this.url = e.url; this.loaded = false; this.progress = 10; this.title = "";
     const g = ++this.gen, el = this.frame(), url = e.url;
     if (el) {
-      (el as unknown as { __wdUserAgent: unknown }).__wdUserAgent = this.settings.v.userAgentString;
+      Object.assign(el, { __wdUserAgent: this.settings.v.userAgentString, __wdClientHints: clientHints() });
       const load = () => {
         if (this.gen !== g) return;
         if (e.doc !== undefined) el.srcdoc = e.doc;
