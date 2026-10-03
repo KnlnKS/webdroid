@@ -590,6 +590,14 @@ Stage B or C, the newer ones supersede them. Each commit message states what it 
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings. Stage E is complete on this branch: its handoff is "Stage E handoff" below.
 
+### JVM structural refactor (2026-10-03): branch `knlnks/refactor-jvm`
+
+The review's findings 2, 3, 5, 6 and 7 are done with behaviour kept (history, "the JVM runtime's
+structural review"): `detached`/`postMain` with Escape policies, positioned trace frames over
+codecache's `bodyAt`, `aot.ts`, jlang split into jentry/jthrowable/jstring/jthread, `clinit.ts`.
+Open: finding 1 (one way to continue a chain, then a first-class Strand), which touches the native
+loader, dl, JNI and Cpu and waits for the native refactor to merge.
+
 ### E/F follow-up handoff (2026-10-02): branch `knlnks/ef-followup`, start here
 
 Stage E and F's open items, worked from `304c0529` and merged with `knlnks/bytecode` at `784677aa`.
@@ -599,7 +607,7 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
 - **Done:** Build runs from bytecode over the reference device's recorded properties
   (`gen-framework --properties`), with the zygote choosing its bitness from the install's central
   directory. Class-init re-entry is judged by call chain (`suspend.ts` strands): forks such as
-  `callUncaught` get their own chain, and the same-thread escape fires only on a stalled chain.
+  `detached` get their own chain, and the same-thread escape fires only on a stalled chain.
   Host code continuing Java carries its chain. StatsLog and print run from bytecode, the latter
   with a hosted IPrintManager.
 - **Done (kernel):** AF_INET6, sendmsg/recvmsg (msghdr by process ABI), AF_UNIX message sockets,

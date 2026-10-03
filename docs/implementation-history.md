@@ -2234,6 +2234,33 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     -> 600 MB; tap cold calls and latency unchanged (Komikku n=9, Mihon n=5).
   - Open: TikTok (no guest session on this host) is unmeasured; its swipe's 9,500-class message is
     class linking, which a worker's runtime cannot do for the page.
+- 2026-10-03, the JVM runtime's structural review (branch `knlnks/refactor-jvm`, behaviour kept):
+  - Detached calls: one `detached(call, escape)` with Escape policies (`toThread`, `logUncaught`,
+    `binderEscape`) replaces callUncaught, systemUncaught, binderUncaught and reportUncaught.
+    `postMain(job, escape)` replaces the twelve `…Uncaught(() => onMain(…))` sites: the outer chain
+    was unused (onMain enters through callOn), and a failed job now escapes the main thread, where
+    it ran, rather than whichever thread posted it.
+  - Traces: one cold stack of frames (`ColdFrame.method`); a throwable keeps each cold frame's method
+    and next instruction, and frames carry their position until a trace is read. A per-method script
+    is named by its code key (`bodyScript`, `wd/Class.method.js?<key>`), so codecache's `bodyAt`
+    maps a line of either a chunk or such a script to its body, and stacklines resolves the class
+    through the runtime that loaded the body's dex. The old root-runtime `link` by name could
+    auto-stub a forked loader's class (noting it missing); a frame without a body now looks only at
+    the classes its runtime linked. Thread traces still skip line lookup, as before.
+  - Ownership: `aot.ts` holds the page side of compile-ahead (worker, offered chunks, their sweep);
+    a claimed body is adopted into codecache, which keeps the persisted store and the line layout.
+    `wd.code()` reports `offered` beside `loaded`, which no longer counts unclaimed offers.
+  - Measured and not adopted: an intrinsic that only builds `LikelySubtags$Data` from the page's
+    decode and leaves maximize in bytecode. Each realm then runs LSR.decodeInts, LikelySubtags'
+    clinit and a cold maximize: the first addLikelySubtags in bun took 39-74 ms (2,599 cold calls)
+    against the port's 21-29 ms (1,312) and 59-69 ms (3,642) with neither. The port stays, with its
+    ResB and BytesTrie readers in `icudata.ts`.
+  - jlang.ts (1,564 lines) splits into jentry (the turn's thread and host entries), jthrowable,
+    jstring and jthread; JThread's shape stays with the entry state, so jentry imports no other
+    native module and each module evaluates first without a TDZ read. runtime.ts gives class
+    initialization to `clinit.ts` (1,224 -> 1,110 lines). jbench `monitors` medians stayed within
+    0.43-0.49 ms against the base. Gates: 1,133 tests, FitNotes smoke, fwtest, fast e2e 7/7, lat
+    cold and warm (Mihon dark-warm 118 and 96 ms, load 6-19).
 
 ## Java, storage and framework semantics
 
