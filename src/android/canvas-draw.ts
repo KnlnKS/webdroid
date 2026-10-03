@@ -231,7 +231,8 @@ function drawPatch(nc: NativeCanvas, bmp: NativeBitmap, chunk: NinePatchChunk, l
   }
   ctx.restore();
 }
-/** a plain run into a bitmap in the faces CanvasKit has, drawn as Skia draws minikin's glyphs */
+/** a plain run into a bitmap in the faces CanvasKit has, drawn as Skia draws minikin's glyphs (with
+ *  the paint's hyphen edits) */
 function tryDrawBitmapText(nc: NativeCanvas, s: string, x: number, y: number, p: NativePaint): boolean {
   if (!(nc.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
@@ -256,7 +257,7 @@ function skiaFace(p: NativePaint): boolean {
  *  FontPending), before the canvas is touched */
 function drawText(nc: NativeCanvas, text: string, x: number, y: number, p: NativePaint) {
   const s = p.startHyphenEdit || p.endHyphenEdit ? hyphenEdited(text, p) : text, font = cssFont(s, p);
-  if (tryDrawBitmapText(nc, s, x, y, p)) return;
+  if (tryDrawBitmapText(nc, text, x, y, p)) return;
   const ctx = nc.ctx, shaded = beginShaderAlpha(ctx, p), shadow = beginPaintShadow(ctx, p);
   const blend = p.compositeOp(), prev = blend ? ctx.globalCompositeOperation : null;
   // SkFont's scale and skew: the glyphs under [scaleX skewX; 0 1] at the origin of the run

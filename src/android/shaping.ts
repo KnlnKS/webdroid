@@ -164,13 +164,23 @@ export function shapeTextRun(text: string, start: number, count: number, ctxStar
   return shaped((hb) => layout(hb, text, start, start + count, ctxStart, ctxStart + ctxCount, rtl, p));
 }
 function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart: number, ctxEnd: number, rtl: boolean, p: NativePaint): Layout {
+  // the paint's hyphen edits at the run's ends (MinikinUtils::doLayout), each hyphen in the cluster
+  // of the character it stands by
+  let first = -1, last = Infinity;
+  if (p.startHyphenEdit || p.endHyphenEdit) {
+    const [pre, body, post] = hyphenParts(text.slice(start, end), p);
+    text = pre + body + post; start = ctxStart = 0; end = ctxEnd = text.length;
+    if (body) { first = pre.length; last = pre.length + body.length - 1; }
+  }
+  const clusterAt = (w: Int32Array, info: number, i: number) => Math.min(last, Math.max(first, w[info + i * 5 + 2]));
   const style = shapeStyle(p), families = style.tf.collection.families, extent = { ascent: 0, descent: 0 };
   const ids: number[] = [], xs: number[] = [], ys: number[] = [], fonts: FakedFont[] = [];
   const pieces: number[] = [];
   for (let i = start; i < end;) { const e = Math.min(pieceEnd(text, i, end), end); pieces.push(i, e); i = e; }
   hb.setText(text, ctxStart, ctxEnd);
-  let x = 0;
-  for (let k = 0; k < pieces.length; k += 2) {
+  // each piece laid out from 0 and appended at the advance so far (Layout::appendLayout)
+  let origin = 0, x = 0;
+  for (let k = 0; k < pieces.length; k += 2, origin = f32(origin + x), x = 0) {
     const piece = rtl ? pieces.length - 2 - k : k;
     const runs = itemize(hb, families, text, pieces[piece], pieces[piece + 1], style.lang);
     const nRuns = (runs.length - 1) / 2;
@@ -182,17 +192,17 @@ function layout(hb: HarfBuzz, text: string, start: number, end: number, ctxStart
       const w = hb.words(), info = hb.infos(), pos = hb.positions();
       const texts = font.face.color ? colorText.get(font) ?? colorText.set(font, new Map()).get(font)! : null;
       for (let i = 0; i < n; i++) {
-        const glyph = w[info + i * 5], cluster = w[info + i * 5 + 2], o = pos + i * 5;
-        if (ls && (i === 0 || w[info + (i - 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
+        const glyph = w[info + i * 5], cluster = clusterAt(w, info, i), o = pos + i * 5;
+        if (ls && (i === 0 || clusterAt(w, info, i - 1) !== cluster)) x = f32(x + ls / 2);
         ids.push(glyph); fonts.push(run.faked);
-        xs.push(x + grid(w[o + 2] * sx)); ys.push(-grid(w[o + 3] * s));
+        xs.push(f32(origin + f32(x + grid(w[o + 2] * sx)))); ys.push(-grid(w[o + 3] * s));
         x = f32(x + advanceOf(hb, run, glyph, w[o]));
-        if (ls && (i === n - 1 || w[info + (i + 1) * 5 + 2] !== cluster)) x = f32(x + ls / 2);
+        if (ls && (i === n - 1 || clusterAt(w, info, i + 1) !== cluster)) x = f32(x + ls / 2);
         if (texts && !texts.has(glyph)) texts.set(glyph, clusterText(text, ctxStart, w, info, i, n, b));
       }
     }
   }
-  return new Layout(Uint32Array.from(ids), Float32Array.from(xs), Float32Array.from(ys), fonts, f32(x), extent.ascent, extent.descent);
+  return new Layout(Uint32Array.from(ids), Float32Array.from(xs), Float32Array.from(ys), fonts, origin, extent.ascent, extent.descent);
 }
 // minikin runs HarfBuzz at 256 units per pixel over Skia's advances: Skia's advance (whole pixels
 // while hinting) is truncated to that grid, and HarfBuzz rounds its own adjustments (kerning, mark
@@ -258,12 +268,14 @@ function hyphenIn(family: NativeFamily, chars: string, style: ShapeStyle): strin
   return chars.replace(/[֊־᐀‐]/g, (h) => font.covers(h.charCodeAt(0)) ? h : font.covers(0x2010) ? "‐" : "-");
 }
 /** text as a run drawn with the paint's hyphen edits shows it */
-export function hyphenEdited(text: string, p: NativePaint): string {
+export const hyphenEdited = (text: string, p: NativePaint): string => hyphenParts(text, p).join("");
+/** the hyphen before, the text kept and the hyphen after */
+function hyphenParts(text: string, p: NativePaint): [string, string, string] {
   const style = shapeStyle(p), families = style.tf.collection.families, hb = loadedHarfBuzz();
   const body = p.endHyphenEdit === END_REPLACE_WITH_HYPHEN ? text.slice(0, -1) : text;
   const edge = (at: number) => at >= 0 ? familyFor(hb, families, body.codePointAt(at)!, 0, style.lang) : families[0];
   const last = body.length - (isTrail(body.charCodeAt(body.length - 1)) && body.length > 1 ? 2 : 1);
-  return hyphenIn(edge(body ? 0 : -1), startHyphenString(p.startHyphenEdit), style) + body + hyphenIn(edge(last), endHyphenString(p.endHyphenEdit), style);
+  return [hyphenIn(edge(body ? 0 : -1), startHyphenString(p.startHyphenEdit), style), body, hyphenIn(edge(last), endHyphenString(p.endHyphenEdit), style)];
 }
 /** the text of glyph i's cluster: from its cluster to the next cluster in logical order */
 function clusterText(text: string, ctxStart: number, w: Int32Array, info: number, i: number, n: number, runEnd: number): string {
