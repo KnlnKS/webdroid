@@ -38,8 +38,7 @@ export class WebBridge {
         try {
           const call: unknown = JSON.parse(body);
           if (!call || typeof call !== "object" || !("kind" in call)) throw new Error("Invalid bridge call");
-          if (call.kind === "describe") reply = { value: Object.fromEntries(Object.entries(ifaces).map(([name, methods]) => [name, Object.keys(methods)])) };
-          else if (call.kind === "request") {
+          if (call.kind === "request") {
             if (!("url" in call) || typeof call.url !== "string" || !("method" in call) || typeof call.method !== "string"
               || !("main" in call) || typeof call.main !== "boolean" || !("headers" in call) || !call.headers || typeof call.headers !== "object") throw new Error("Invalid WebView request");
             const headers: Record<string, string> = {};

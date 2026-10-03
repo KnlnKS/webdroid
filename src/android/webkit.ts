@@ -303,8 +303,11 @@ export class WebViewChromium extends JObj {
         ports[0].postMessage(jar.network(data.url, v.url ?? "", values, thirdPartyCookies.has(v.view))); ports[0].close();
       };
       const entry = this.hist[this.idx];
+      // the interfaces travel with the load: a synchronous call back would deadlock a renderer that
+      // shares this realm's thread, as one does without site isolation
+      const interfaces = Object.fromEntries(Object.entries(this.pageIfaces ?? {}).map(([name, methods]) => [name, Object.keys(methods)]));
       this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body,
-        contentType: entry?.contentType, userAgent: this.settings.v.userAgentString }, [channel.port2]);
+        contentType: entry?.contentType, userAgent: this.settings.v.userAgentString, interfaces }, [channel.port2]);
     }
     else if (data.kind === "script-ready") {
       this.scriptReady = true;

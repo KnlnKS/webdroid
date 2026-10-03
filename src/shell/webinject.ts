@@ -65,8 +65,7 @@ function call(body) {
   return result.value;
 }
 Object.defineProperty(document, "cookie", {get: () => call({kind: "cookie"}), set: value => call({kind: "cookie", value: String(value)})});
-const interfaces = call({kind: "describe"});
-for (const [name, methods] of Object.entries(interfaces)) {
+for (const [name, methods] of Object.entries(config.interfaces ?? {})) {
   const object = Object.create(null);
   for (const method of methods) object[method] = (...args) => call({kind: "invoke", object: name, method, args});
   Object.defineProperty(window, name, {value: object, configurable: true});
@@ -122,7 +121,7 @@ addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
-    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
+    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {
