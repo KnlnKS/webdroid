@@ -626,6 +626,11 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   AVD, as its FontManagerService serves it. Both are in the history.
 - **Rejected:** lazy guest-memory commit (`knlnks/lazy-guest-mem-experiment`) and early sizing.
   Neither removes StatsEvent's GC stall, and V8's late-grow behaviour is recorded.
+- **Done (knlnks/open-jvm):** StatsEvent's stall was every realm committing 4 GiB in one isolate,
+  past V8's global heap ceiling; early non-movable arrays live in the JS heap and StatsEvent runs
+  from bytecode. Monitors and class-init waits go by call chain (no timed escape; cycles only),
+  and fire-and-forget entries get their own chain. Open: two realms running native code still
+  cross the ceiling (history).
 
 ### §4 performance follow-up (2026-10-02): reuse idle work and retained state
 
@@ -702,19 +707,17 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
    After the merge the live flows run one at a time render Harmonic 14/14, Lichess 15/15, Reddit
    6/6, Resy 15/15, ChatGPT 24/24, YouTube 16/16 and TikTok 13/13 (one earlier TikTok run wedged
    from step 06 under live content and passed on rerun), with no `[webdroid unowned]` entry.
-1. StatsEvent is the desccheck backlog (2026-10-02; StatsLog and print run from bytecode): its
-   pooled direct ByteBuffer sizes guest memory at its first event, and Chrome then keeps
-   incremental marking running (~10 of 17 s in GC). Neither lazy commit (non-movable arrays pin
-   it; `knlnks/lazy-guest-mem-experiment`) nor sizing at fixProcessBitness (stalls even with TS
-   StatsEvent) fixes it; V8's trigger depends on when the grow happens (history). WebView snapshots of an
+1. Done 2026-10-02: StatsEvent runs from bytecode; its stall was each realm's 4 GiB guest memory
+   counting toward one isolate's global heap ceiling, and early non-movable arrays now stay in the
+   JS heap (history). The baseline keeps three non-AOSP methods. WebView snapshots of an
    isolated renderer time out on its `describe` bridge call (504) in Markor's preview.
 2. Done 2026-10-02: Build runs from bytecode; zygoteInit waits for the process's bitness, which
    the page fixes from the install's central directories (no measured wait).
 3. Done 2026-10-02: host code continuing a Java chain carries it (Cpu loop, loader, JNI, `after`
    through `caller()`); conscrypt's BIO readers and WebView interception are driven; MediaDataSource
    reads run on a binder thread. No static check: the real cases entered Java through helpers.
-4. Done 2026-10-02: class-init re-entry needs the initializing thread and call chain; another chain
-   on that thread waits with the timed escape (history). Monitors are still per JThread.
+4. Done 2026-10-02: class-init re-entry and monitors need the thread and call chain; other chains
+   wait, proceeding early only on a wait cycle (history).
 5. Done 2026-10-02: sql.js builds are cached per patch and script under `~/.cache/webdroid`, so a new
    checkout copies one instead of rebuilding.
 

@@ -1874,6 +1874,45 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     StatsEvent stays TS and memory is sized as before.
   - Unchanged on both: e2e doodlejump wedges at its title (perf-browser reaches play), and microg's
     ServiceTrigger throws a NullPointerException in komikku, mihon-app and the games.
+- 2026-10-02, StatsEvent's GC stall found and fixed; monitors, class-init waits and fire-and-forget
+  entries by call chain (Stage F open items 1 and 4):
+  - V8's trigger (`--trace-gc-nvp --trace-incremental-marking` in headless Chromium): every realm
+    of the page shares one isolate, and each committed Wasm memory counts in its global size as
+    external memory. Bytecode StatsEvent sized guest memory in every realm that wrote a stats event:
+    Mihon's and both of microG's GmsCore processes, 4 GiB each. Past V8's global ceiling (about
+    twice the old-generation maximum, 8.3 GB here) the global allocation limit sits at the current
+    size, so marking restarts as soon as it finishes ("Start (global allocation limit) ... global:
+    9056MB / 0MB / 6721MB"), with external-memory-pressure full GCs between. In isolation one 4 GiB
+    memory costs nothing and two make an allocation loop 18x slower; 1e5 registered views over one
+    memory cost nothing, so views and the finalization registry were not the trigger. This also
+    explains the earlier history-dependence: sizing at fixProcessBitness sized every realm.
+  - Fix: a non-movable byte[] made before native code sizes the memory is a JS-heap array at an
+    address outside guest memory (jmemory's HostBytes, beside the read-only mappings). Memory,
+    NIO, zlib, file I/O and conscrypt reach it by address; NIO's element intrinsics go through the
+    buffer's array, which AOSP keeps at its address (jbench fbLoop/dbInts/fbBulk match guest
+    memory). Native code cannot see it: GetDirectBufferAddress answers 0, JNI's "region undefined",
+    and Unsafe's raw accessors fault as they do on a read-only mapping. Memory is sized only when
+    native code initialises, so microG's realms stay at 256 MiB. Mihon theme taps (10, CPU profile):
+    GC 0.38-0.56 s of the run, against 21.0 s with bytecode StatsEvent before and 0.50 s with the
+    TS spec; taps 64-139 ms on a loaded host. StatsEvent's spec is deleted.
+  - Still open: more than one realm that runs native code commits 4 GiB each and crosses the same
+    ceiling, and on a machine whose V8 heap limit is 2 GB one realm does. Lazy commit needs
+    non-movable views that survive a grow, which Chrome cannot give without cross-origin isolation
+    (entry above); separate isolates for process realms (cross-site frames) would remove it.
+  - Monitors are owned by thread and call chain, as class initialization judges re-entry; chain 0
+    (Java no entry identified, in host tools) shares its thread's locks. In FitNotes the main
+    loop's MessageQueue.next() now waits for a chain suspended inside enqueueMessage's lock. jbench
+    `monitors` costs about 0.6 ns more a lock pair in steady state.
+  - The same-thread class-init escape is gone: waits record which chain each blocked chain waits
+    for (class initialization and contended locks), and a request proceeds with partial statics
+    only on a cycle through that graph. In the seven fast flows the one same-thread wait was the
+    main loop on Long$LongCache (22-445 ms, completed); no escape had fired. A host callback that
+    loses its chain would now hang rather than read partial statics.
+  - Fire-and-forget Java entries (postTo's post, Locale.setDefault on a locale change) enter
+    through callUncaught; `scripts/generators.ts` rejects a `void` or bare-statement entry.
+  - Komikku's restore step then failed 3 of 10 runs (0 of 5 at the base) on OPFS's NotFoundError
+    from a document removed while a listing or lookup read it; documents.ts answers such a
+    document as gone, and komikku passed 6 of 6. The failing operation itself was not captured.
 
 ## Java, storage and framework semantics
 
