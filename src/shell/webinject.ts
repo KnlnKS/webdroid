@@ -250,19 +250,21 @@ addEventListener("submit", event => {
   submitForm(event.target, event.submitter);
 });
 HTMLFormElement.prototype.submit = function() { submitForm(this, null); };
-addEventListener("message", event => {
-  if (event.source !== parent || event.data?.bridge !== id) return;
-  if (event.data.kind === "eval") {
+function receive(data) {
+  if (data.kind === "eval") {
     let value = "null";
-    try { value = JSON.stringify((0, eval)(event.data.script)) ?? "null"; } catch {}
-    send({kind: "evaluated", seq: event.data.seq, value});
-  } else if (event.data.kind === "stop") window.stop();
-  else if (event.data.kind === "cookies" && event.data.ack >= written) cookies = event.data.list;
-  else if (event.data.kind === "snapshot") {
-    (${snapshotDocument.toString()})(document).then(result => send({kind: "snapshot", seq: event.data.seq, ...result}),
-      error => send({kind: "snapshot", seq: event.data.seq, error: String(error)}));
+    try { value = JSON.stringify((0, eval)(data.script)) ?? "null"; } catch {}
+    send({kind: "evaluated", seq: data.seq, value});
+  } else if (data.kind === "stop") window.stop();
+  else if (data.kind === "cookies" && data.ack >= written) cookies = data.list;
+  else if (data.kind === "snapshot") {
+    (${snapshotDocument.toString()})(document).then(result => send({kind: "snapshot", seq: data.seq, ...result}),
+      error => send({kind: "snapshot", seq: data.seq, error: String(error)}));
   }
-});
+}
+// the app answers a subframe through its port too: its parent is the page that framed it
+if (config.listen) config.listen(receive);
+else addEventListener("message", event => { if (event.source === parent && event.data?.bridge === id) receive(event.data); });
 send({kind: "script-ready"});
 })()</script>`;
 
@@ -313,7 +315,9 @@ const loaded = async event => {
       clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: params.get("__wd_intercept") === "1",
       sub: params.has("__wd_sub"), frames: event.data.frames, fonts: event.data.fonts};
     // the document's own response may set cookies before it is written
-    addEventListener("message", event => { if (event.source === owner && event.data?.bridge === id && event.data.kind === "cookies") context.cookies = event.data.list; });
+    const early = data => { if (data?.kind === "cookies") context.cookies = data.list; };
+    if (context.sub) port.onmessage = event => early(event.data);
+    else addEventListener("message", event => { if (event.source === owner && event.data?.bridge === id) early(event.data); });
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {
@@ -350,7 +354,8 @@ const loaded = async event => {
         ? html.replace(/^(\\s*<!doctype[^>]*>)/i, "$1" + inject) : inject + html;
     }
     // a subframe's page talks to the app through its port: its parent is the page that framed it
-    window.__wdWebView = {...context, post: context.sub ? send : null};
+    window.__wdWebView = {...context, post: context.sub ? send : null,
+      listen: context.sub ? receive => { port.onmessage = event => { if (event.data) receive(event.data); }; } : null};
     document.open(); document.write(html); document.close();
   } catch { post({kind: "loaded", error: "WebView document transport failed"}); }
 };

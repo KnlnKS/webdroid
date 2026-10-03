@@ -271,6 +271,7 @@ class JWebErr extends JObj { code = -1; desc = ""; }
 interface Entry { url: string; src?: string; doc?: string; final?: string; base?: string; method?: string; body?: ArrayBuffer; contentType?: string }
 /** a subframe handed out to a page: what it loads, the renderer origin it loads on, and the page's bridge */
 interface Subframe { entry: Entry; origin: string; remote: WebBridge }
+interface SubframeCookies { sub: Subframe; port: MessagePort; ack: number; sent: string }
 /** the web origin whose storage a page of `e` keeps: the base URL's for a document the app wrote,
  *  the file scheme's for files, and none (opaque) otherwise */
 function webOrigin(e: Entry): string {
@@ -356,6 +357,8 @@ export class WebViewChromium extends JObj {
   /** the subframes handed out, by the token in their frame's URL, and the windows that loaded them */
   private subframes = new Map<string, Subframe>();
   private subframeWindows = new WeakMap<Window, Subframe>();
+  /** each loaded subframe's port and the document.cookie it was last sent */
+  private subframeCookies = new Map<Window, SubframeCookies>();
   /** whether the client intercepts requests, as the page loaded */
   private intercepting = false;
   /** the redirected document the next frame writes rather than fetching it again */
@@ -425,13 +428,23 @@ export class WebViewChromium extends JObj {
       }
     }
   }
-  /** the page's document.cookie, once the jar changed or answered its write `cookieAck` */
+  /** the page's document.cookie, once the jar changed or answered its write `cookieAck`, and each
+   *  subframe's */
   private sendCookies(jar: WebCookies, answer = false) {
     if (!this.remoteOrigin) return;
+    for (const frame of this.subframeCookies.values()) this.sendSubframeCookies(jar, frame);
     const list = jar.document(this.url ?? ""), sent = JSON.stringify(list);
     if (sent === this.cookiesSent && !answer) return;
     this.cookiesSent = sent;
     this.send({ kind: "cookies", list, ack: this.cookieAck });
+  }
+  /** a subframe's cookies are the jar's for its URL when they are first-party to the page or third-party ones are allowed */
+  private subframeSees(jar: WebCookies, url: string): boolean { return jar.sameSite(url, this.url ?? "") || thirdPartyCookies.has(this.view); }
+  private sendSubframeCookies(jar: WebCookies, frame: SubframeCookies, answer = false) {
+    const url = frame.sub.entry.url, list = this.subframeSees(jar, url) ? jar.document(url) : [], sent = JSON.stringify(list);
+    if (sent === frame.sent && !answer) return;
+    frame.sent = sent;
+    frame.port.postMessage({ kind: "cookies", list, ack: frame.ack });
   }
   /** what a frame loads a page of `url` with: the interfaces (and which methods return a value), as
    *  Chromium injects them per load, the cookies its document sees, and the renderer's settings. The
@@ -494,8 +507,11 @@ export class WebViewChromium extends JObj {
     if (!inside) return;
     this.subframeWindows.set(win, sub);
     const channel = this.channel({ sub, win }), { entry } = sub, g = this.gen;
-    void webCookies(appHost?.pkg ?? "").then((jar) => this.loadMessage(entry.url, jar.sameSite(entry.url, this.url ?? "") || thirdPartyCookies.has(this.view))).then((load) => {
-      if (this.gen === g) win.postMessage({ ...load, bridge: sub.remote.id, src: entry.src, doc: entry.doc, final: entry.final, method: entry.method,
+    void webCookies(appHost?.pkg ?? "").then((jar) => this.loadMessage(entry.url, this.subframeSees(jar, entry.url))).then((load) => {
+      if (this.gen !== g) return;
+      this.subframeCookies.get(win)?.port.close();
+      this.subframeCookies.set(win, { sub, port: channel.port1, ack: 0, sent: JSON.stringify(load.cookies) });
+      win.postMessage({ ...load, bridge: sub.remote.id, src: entry.src, doc: entry.doc, final: entry.final, method: entry.method,
         body: entry.body, contentType: entry.contentType }, sub.origin, [channel.port2]);
     });
   }
@@ -505,9 +521,15 @@ export class WebViewChromium extends JObj {
     if (!data || sub.remote !== this.hold.remote) return;
     if (data.kind === "console") this.consoleMessage(data);
     else if (data.kind === "loaded" && typeof data.url === "string") sub.entry.url = data.url;
-    else if (data.kind === "cookie" && typeof data.value === "string") {
-      const value = data.value, url = sub.entry.url;
-      void webCookies(appHost?.pkg ?? "").then((jar) => { if (jar.sameSite(url, this.url ?? "") || thirdPartyCookies.has(this.view)) jar.set(url, value, false); });
+    else if (data.kind === "cookie" && typeof data.value === "string" && typeof data.seq === "number") {
+      const value = data.value, seq = data.seq, url = sub.entry.url;
+      void webCookies(appHost?.pkg ?? "").then((jar) => {
+        const frame = this.subframeCookies.get(win);
+        if (!frame || frame.sub !== sub) return;
+        frame.ack = seq;
+        if (this.subframeSees(jar, url)) jar.set(url, value, false);
+        this.sendSubframeCookies(jar, frame, true);
+      });
     } else if (data.kind === "invoke") this.hold.remote?.post(data);
     else if (data.kind === "thread" && typeof data.shared === "boolean") sharedRenderer = data.shared;
     else if (data.kind === "navigate" && typeof data.url === "string" && !/^javascript:/i.test(data.url)) this.subframeNavigate(win, { url: data.url, src: srcFor(data.url, this) });
@@ -536,6 +558,8 @@ export class WebViewChromium extends JObj {
   }
   private closeBridge() {
     this.scriptReady = false; this.cookieAck = 0; this.cookiesSent = "";
+    for (const frame of this.subframeCookies.values()) frame.port.close();
+    this.subframeCookies.clear();
     unbridge(this.hold); this.remoteOrigin = "";
     for (const done of this.evaluations.values()) done("null");
     for (const pending of this.snapshots.values()) {
