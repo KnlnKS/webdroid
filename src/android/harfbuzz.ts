@@ -249,7 +249,7 @@ let ready: HarfBuzz | null = null;
 export function harfBuzz(): HarfBuzz | Promise<HarfBuzz> {
   return ready ?? pageShared("__wdHarfBuzz", load).then((hb) => ready = hb);
 }
-/** the tab's HarfBuzz, which loadSystemFontMap loaded with the realm's fonts: text is measured
+/** the tab's HarfBuzz, which preloadFonts loaded with the realm's fonts: text is measured
  *  synchronously */
 export function loadedHarfBuzz(): HarfBuzz {
   if (!ready) throw new Error("HarfBuzz is not loaded");

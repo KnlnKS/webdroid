@@ -13,7 +13,7 @@
 // there because that said so.
 
 import { startMainLooper } from "./mainloop";
-import { rt, JObj, stubs, noops, declaredField, type Gen } from "../jvm/runtime";
+import { rt, JObj, noops, declaredField, type Gen } from "../jvm/runtime";
 import { handle, weakHandle, ownedHandle, deref, release, take, FINALIZER } from "./handles";
 import { edges, setEdges, emptyBox, NativeColorFilter, BLEND_MODES, type NativeShader, NativeBitmapShader, gradient, scratch2d, composeShader } from "./graphics";
 import { Camera3D, identity, applyMatrix, matrixAt, localMatrix } from "./matrix";
@@ -33,7 +33,7 @@ import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./re
 import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
 import {
   type Axis, NativeFont, NativeFamily, NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont,
-  resolveDefault, setDefaultTypeface, loadSystemFontMap, withFonts,
+  resolveDefault, setDefaultTypeface, preloadFonts, withFonts, writeTypefaces, readTypefaces,
   createRelative, createAbsolute, createWithBaseWeight, createWithVariation, createFromFamilies, fontOf, wrapFont,
 } from "./fonts";
 import { sfntTables, T_CMAP, fontRevision, postScriptName, isPostScriptType1 } from "./sfnt";
@@ -199,9 +199,14 @@ delegate("android/graphics/Typeface", {
   "nativeAddFontCollections(J)V": (h: bigint) => addFontCollections(typefaceAt(h)),
   ...noops("nativeRegisterLocaleList(Ljava/lang/String;)V"),
   "nativeWarmUpCache(Ljava/lang/String;)V": (path: string) => warmUpCache(path),
-  // the font map a process shares with the system server; there is no other process
-  "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": () => null,
-  ...stubs(0, "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I"),
+  // the font map the system server serializes for applications (Typeface.serializeFontMap)
+  "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": (b: JBuffer, at: number) =>
+    after(resident(b), () => BigInt64Array.from(readTypefaces(bufferBytes(b).subarray(at)), handle)),
+  "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I": (b: JBuffer | null, at: number, typefaces: BigInt64Array) => {
+    const bytes = writeTypefaces(Array.from(typefaces, (h) => deref<NativeTypeface>(h)));
+    if (b) bufferBytes(b).set(bytes, at);
+    return bytes.length;
+  },
 });
 
 // ── android.graphics.fonts ─────────────────────────────────────────────────────────────
@@ -692,7 +697,7 @@ export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, (
     yield scall("com/android/internal/os/RuntimeInit", "getDefaultUserAgent", "()Ljava/lang/String;"));
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
   yield scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
-  yield* loadSystemFontMap();
+  yield* preloadFonts();
   yield initDeviceLocales();
   yield preloadPaint();
   // ActivityThread.main, once the process is forked

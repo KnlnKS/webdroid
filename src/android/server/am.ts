@@ -15,6 +15,7 @@ import { uptimeMillis } from "../../guest-clock";
 import { systemProviderHolder } from "../systemproviders";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
 import { uriText, type JUri } from "../net";
+import { systemFontMap } from "../fonts";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 /** the package manager, as system_server's services reach it */
@@ -58,7 +59,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
     "IZZZZLandroid/content/res/Configuration;Landroid/content/res/CompatibilityInfo;Ljava/util/Map;Landroid/os/Bundle;Ljava/lang/String;" +
     "Landroid/content/AutofillOptions;Landroid/content/ContentCaptureOptions;[J[JLandroid/os/SharedMemory;JJ)V",
     process, info, null, null, 0, providers, null, null, null, null, null, 0, 0, 0, 0, 0, global, compat, null,
-    yield newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), null, now, now);
+    yield newObj("android/os/Bundle", "()V"), "unknown", null, null, new BigInt64Array(0), new BigInt64Array(0), yield systemFontMap(), now, now);
   if (launcher) yield startMainActivity(app, pkg);
 });
 

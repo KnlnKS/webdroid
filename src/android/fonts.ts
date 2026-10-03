@@ -3,8 +3,11 @@
 // the reference build's /system/fonts, whose glyphs load when first shaped or drawn. A collection is
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
-import { awaited, declaredField, type Gen } from "../jvm/runtime";
-import { scall, vcall, after } from "../jvm/natives/jlang";
+import { rt, awaited, declaredField, type Gen, type JObj } from "../jvm/runtime";
+import { scall, vcall, after, newObj } from "../jvm/natives/jlang";
+import { mkFd } from "../jvm/natives/jio";
+import { ashmemFd } from "./os";
+import { OS_CONSTANTS } from "./os-constants";
 import { PLATFORM_DATA } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
 import { pageShared } from "../shell/pageshared";
@@ -59,11 +62,14 @@ function platformFile(path: string): FontFile {
 export const warmUpCache = (path: string): Promise<void> | void => isPlatformFont(path) ? platformFile(path).load() : undefined;
 
 // The device's system server hands apps a serialized font map holding each font's style and
-// coverage, so a process finds a family for a character without reading its fonts. The page's
-// equivalent is /font-index.json, built from the same files (platformFontIndex).
+// coverage, so a process finds a family for a character without reading its fonts or parsing the
+// font configuration. The page's equivalent is /font-index.json, built from the same files: each
+// face's FaceInfo (platformFontIndex) and Typeface.serializeFontMap's bytes (scripts/font-index.ts).
 type IndexedFace = Omit<FaceInfo, "coverage"> & { coverage: number[] };
-declare global { interface Window { __wdFontIndex?: Promise<Record<string, IndexedFace>> } }
-let fontIndex: Record<string, IndexedFace> | null = null;
+/** the faces by "path#ttcIndex", and the serialized system font map in base64 */
+export interface FontIndex { faces: Record<string, IndexedFace>; fontMap?: string }
+declare global { interface Window { __wdFontIndex?: Promise<FontIndex> } }
+let fontIndex: FontIndex | null = null;
 /** every reference-build face's FaceInfo by "path#ttcIndex", its coverage pairs delta-encoded */
 export async function platformFontIndex(): Promise<Record<string, IndexedFace>> {
   const index: Record<string, IndexedFace> = {};
@@ -78,14 +84,14 @@ export async function platformFontIndex(): Promise<Record<string, IndexedFace>> 
   }
   return index;
 }
-async function fetchFontIndex(): Promise<Record<string, IndexedFace>> {
-  if (typeof location === "undefined" || !location.protocol.startsWith("http")) return platformFontIndex();
+async function fetchFontIndex(): Promise<FontIndex> {
+  if (typeof location === "undefined" || !location.protocol.startsWith("http")) return { faces: await platformFontIndex() };
   const res = await fetch("/font-index.json");
   if (!res.ok) throw new Error(`font-index.json: ${res.status}`);
   return res.json();
 }
 function indexedFace(path: string, ttcIndex: number): FaceInfo {
-  const f = fontIndex?.[`${path}#${ttcIndex}`];
+  const f = fontIndex?.faces[`${path}#${ttcIndex}`];
   if (!f) throw new Error(`${path} #${ttcIndex} is not in the platform font index`);
   const coverage = new Uint32Array(f.coverage.length);
   for (let i = 0, at = 0; i < coverage.length; i++) coverage[i] = at += f.coverage[i];
@@ -247,11 +253,63 @@ let nativeInstance = "";
 export const typefaceOf = (t: object | null): NativeTypeface =>
   resolveDefault(t && deref<NativeTypeface>((t as Record<string, bigint>)[nativeInstance ||= declaredField("android/graphics/Typeface", "native_instance")]));
 
-/** the zygote's preload of the system font map (Typeface.DEFAULT and the named families) over the
- *  platform font index, with HarfBuzz and the default family's font loaded to measure text */
-export function* loadSystemFontMap(): Gen<void> {
+/** the zygote's share of text: the platform font index and HarfBuzz loaded, and Typeface's preloaded
+ *  class initialized (its default fonts read ahead). The system font map is the application's, from
+ *  bindApplication (systemFontMap). */
+export function* preloadFonts(): Gen<void> {
   [fontIndex] = yield* awaited(Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]));
-  yield scall("android/graphics/Typeface", "loadPreinstalledSystemFontMap", "()V");
+  yield rt.initClass(rt.link("android/graphics/Typeface"));
+}
+/** the serialized system font map bindApplication receives, as FontManagerService shares it; null
+ *  where the index carries none (a headless realm), and Typeface parses the configuration itself */
+export function systemFontMap(): JObj | Promise<JObj> | null {
+  if (!fontIndex?.fontMap) return null;
+  const bytes = Uint8Array.from(atob(fontIndex.fontMap), (c) => c.charCodeAt(0));
+  return after(mkFd(ashmemFd(bytes, OS_CONSTANTS.PROT_READ)), (fd) => newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", fd));
+}
+/** the zygote's preload and the font map bindApplication sets, for a realm that binds no application */
+export function* loadSystemFontMap(): Gen<void> {
+  yield* preloadFonts();
+  yield scall("android/graphics/Typeface", "setSystemFontMap", "(Landroid/os/SharedMemory;)V", yield systemFontMap());
+}
+
+// minikin's FontCollection::writeVector and readVector: typefaces over shared collections and families
+// of reference-build fonts, a font written as its path and style as MinikinFontSkia writes one. The
+// format is these natives' own: a length, then JSON.
+type SerializedFont = [path: string, ttcIndex: number, weight: number, italic: boolean, axes: [number, number][], locales: string];
+interface SerializedTypefaces {
+  fonts: SerializedFont[]; families: (readonly [fonts: number[], langTags: string, variant: number])[]; collections: number[][];
+  typefaces: [collection: number, baseWeight: number, apiStyle: number, weight: number, italic: boolean][];
+}
+/** Typeface.nativeWriteTypefaces' bytes */
+export function writeTypefaces(typefaces: readonly NativeTypeface[]): Uint8Array {
+  const out: SerializedTypefaces = { fonts: [], families: [], collections: [], typefaces: [] }, ids = new Map<object, number>();
+  const id = <T extends object, V>(o: T, list: V[], write: (o: T) => V): number => {
+    let i = ids.get(o);
+    if (i === undefined) { const v = write(o); ids.set(o, i = list.length); list.push(v); }
+    return i;
+  };
+  const font = (f: NativeFont): SerializedFont => {
+    if (!isPlatformFont(f.path)) throw new Error(`${f.path || "a font in memory"} is not a system font`);
+    return [f.path, f.ttcIndex, f.weight, f.italic, f.axes.map((a) => [a.tag, a.value]), f.locales];
+  };
+  const family = (f: NativeFamily) => [f.fonts.map((x) => id(x, out.fonts, font)), f.langTags, f.variant] as const;
+  const collection = (c: FontCollection) => c.families.map((f) => id(f, out.families, family));
+  for (const t of typefaces) out.typefaces.push([id(t.collection, out.collections, collection), t.baseWeight, t.apiStyle, t.weight, t.italic]);
+  const json = new TextEncoder().encode(JSON.stringify(out)), bytes = new Uint8Array(4 + json.length);
+  new DataView(bytes.buffer).setUint32(0, json.length);
+  bytes.set(json, 4);
+  return bytes;
+}
+/** Typeface.nativeReadTypefaces: the typefaces `bytes` begins with */
+export function readTypefaces(bytes: Uint8Array): NativeTypeface[] {
+  const n = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0);
+  const s: SerializedTypefaces = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + n)));
+  const fonts = s.fonts.map(([path, ttc, weight, italic, axes, locales]) =>
+    NativeFont.platform(path, ttc, weight, italic, axes.map(([tag, value]) => ({ tag, value })), locales));
+  const families = s.families.map(([members, langTags, variant]) => new NativeFamily(members.map((i) => fonts[i]), langTags, variant));
+  const collections = s.collections.map((c) => new FontCollection(c.map((i) => families[i])));
+  return s.typefaces.map(([c, baseWeight, apiStyle, weight, italic]) => new NativeTypeface(collections[c], baseWeight, apiStyle, weight, italic));
 }
 
 const fontSet = new Set<NativeFont>();
