@@ -641,7 +641,8 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
    from step 06 under live content and passed on rerun), with no `[webdroid unowned]` entry.
 1. StatsEvent (GC stall under bytecode, see history) and print (needs a hosted IPrintManager and a
    PDF-producing WebView adapter) are the desccheck backlog.
-2. Build's fields-only spec needs per-ABI zygote state before its <clinit> can run from bytecode.
+2. Done 2026-10-02: Build runs from bytecode; zygoteInit waits for the process's bitness, which
+   the page fixes from the install's central directories (no measured wait).
 3. `.then`/timer callbacks the runtime check only catches when they run; MediaDataSource.readAt
    runs from a host read callback.
 4. Class-init re-entry is judged by JThread identity while main-loop jobs share mainThread.
@@ -693,8 +694,9 @@ grid) for measurement, TextRunShaper and drawing;
    other than the daemons are unsupported; mremap cannot grow in place or move shared mappings.
 3. A host operation that keeps a plane buffer offset across an await breaks if the plane moves
    (why the per-unit memory model was rejected).
-4. The property store holds only what the device profile answers; recording the AVD's
-   properties (and Build's values with them) is Stage D/F work.
+4. Done 2026-10-02: `gen-framework --properties` records the AVD's app-readable, build-fixed
+   properties and uname (`src/shell/device-properties.ts`); the ABI lists follow the native tier.
+   The identity is the emulator build's (sdk_gphone64_arm64, dev-keys); see the history.
 5. Text: hyphenation (patterns in `/system/usr/hyphen-data`), the updatable emoji font under
    `/data/fonts`, FreeType's hinted advances at heavy variable weights, and each realm's zygote
    parsing `font_fallback.xml` (the boot image, §4.3, or the serialized font map would remove it).

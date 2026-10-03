@@ -1698,6 +1698,33 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - MediaPlayer.setPlaybackParams/getPlaybackParams follow MediaPlayer::setPlaybackSettings over
     the element's playbackRate (pitch is kept only at 1); YouTube's minimum frame rate went 0 → 10/s.
     ARM32 mmap64 read its off64_t from the padding slot; it now reads the aligned pair.
+- 2026-10-02, recorded system properties and Build from bytecode (Stage E open 4, Stage F open 2):
+  - `gen-framework --properties` records `src/shell/device-properties.ts`: of the properties in
+    areas untrusted_app may read (54 of 124 contexts, 628 properties, decided through
+    `/sys/fs/selinux/access` as root), the 208 read-only ones the build fixes. Dropped: runtime state
+    (init.svc.*, sys.*, gsm.*, dev.mnt.*), debug switches and server flags, ro.boot.*/ro.kernel.*/
+    ro.adb.* (AVD name, the host's adb key, qemu flags), the emulator's HAL/GPU/display selection,
+    ro.config.* media names and empty values. ro.debuggable and ro.boot.qemu are not app-readable on
+    the AVD, so Build.IS_DEBUGGABLE and IS_EMULATOR are false here as there.
+  - The AVD is zygote64 with no 32-bit ABI; this device runs armeabi-v7a, so the ABI lists, ro.zygote
+    (zygote64_32) and dalvik.vm.isa.arm.* are derived from the native tier's ABIs, which now live in
+    properties.ts. ro.build.version.known_codenames (302 bytes) needed bionic's long-property layout.
+  - Build, Build$VERSION and Build$VERSION_CODES have no TS spec. Bitness is per-zygote state on a
+    device: System.<clinit> takes os.arch from uname and Build.<clinit> CPU_ABI from
+    VMRuntime.is64Bit, and zygoteInit's first step runs System.<clinit>. So startZygote loads the
+    platform app-free and awaits the process's bitness before zygoteInit; the page fixes it from the
+    install's central directories. Measured (headless, port 4402): bitness fixed at 368-478 ms and
+    platform ready at 420-560 ms warm, 12.4 s vs 28.3 s with the network throttled to 40 Mbit/80 ms,
+    so zygoteInit never waited. Fixing it only in bootApk would have serialized zygoteInit (~0.4 s
+    warm, 2.5 s throttled) behind a download whenever the platform is cached and the apk is not.
+  - uname (both libcs and Os.uname) is the reference kernel's; a 32-bit process reports armv8l,
+    as an arm64 kernel reports compat tasks. flappybird and Cut the Rope (armeabi-v7a only) boot
+    with CPU_ABI armeabi-v7a, CPU_ABI2 armeabi.
+  - Identity now reported: MODEL/PRODUCT sdk_gphone64_arm64, DEVICE emu64a, BOARD goldfish_arm64,
+    HARDWARE/SOC_MODEL ranchu, FINGERPRINT google/sdk_gphone64_arm64/emu64a:15/AE3A.240806.043/
+    12960925:userdebug/dev-keys, ro.build.characteristics emulator. These are recognizably an
+    emulator's; recording a production device's build instead is a gen-framework input change.
+    GL_VENDOR/EGL_VENDOR still read "webdroid".
 
 ## Java, storage and framework semantics
 
