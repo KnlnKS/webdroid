@@ -11,7 +11,7 @@ interface UiNode {
   text: string; desc: string; cls: string; resId: string; bounds: [number, number, number, number];
   clickable: boolean; enabled: boolean; editable: boolean; scrollable: boolean;
 }
-const HOST_VIEW_ID = -1;
+const HOST_VIEW_ID = -1, FLAG_SERVICE_REQUESTS_REPORT_VIEW_IDS = 0x100;
 
 function* describe(node: JObj, rect: JObj): Gen<UiNode | null> {
   if (!(yield vcall(node, "isVisibleToUser", "()Z"))) return null;
@@ -60,15 +60,21 @@ function* walkView(view: JObj, rect: JObj, out: UiNode[]): Gen<void> {
 export const dumpWindows = driven(function* (): Gen<UiNode[]> {
   const global = yield scall("android/view/WindowManagerGlobal", "getInstance", "()Landroid/view/WindowManagerGlobal;");
   const views = yield vcall(global, "getWindowViews", "()Ljava/util/ArrayList;");
-  const count: number = yield vcall(views, "size", "()I"), roots: { view: JObj; z: number }[] = [];
+  const count: number = yield vcall(views, "size", "()I"), roots: { view: JObj; z: number; attach: Record<string, number> }[] = [];
   for (let i = 0; i < count; i++) {
     const view: JObj = yield vcall(views, "get", "(I)Ljava/lang/Object;", i);
     const root = (yield vcall(view, "getViewRootImpl", "()Landroid/view/ViewRootImpl;")) as Record<string, JObj> | null;
     const z = root ? windowZOf(root[declaredField("android/view/ViewRootImpl", "mWindow")]) : -Infinity;
-    // only windows the window manager holds are on screen
-    if (z > -Infinity) roots.push({ view, z });
+    // only windows the window manager shows are on screen
+    if (z > -Infinity) roots.push({ view, z, attach: root![declaredField("android/view/ViewRootImpl", "mAttachInfo")] as Record<string, number> });
   }
   const rect = yield newObj("android/graphics/Rect"), out: UiNode[] = [];
-  for (const { view } of roots.sort((a, b) => a.z - b.z)) yield* walkView(view, rect, out);
+  // UiAutomation's service reports view ids: AccessibilityInteractionController holds its fetch
+  // flags on the window's AttachInfo while it builds the nodes
+  const flags = declaredField("android/view/View$AttachInfo", "mAccessibilityFetchFlags");
+  for (const { view, attach } of roots.sort((a, b) => a.z - b.z)) {
+    attach[flags] = FLAG_SERVICE_REQUESTS_REPORT_VIEW_IDS;
+    try { yield* walkView(view, rect, out); } finally { attach[flags] = 0; }
+  }
   return out;
 });
