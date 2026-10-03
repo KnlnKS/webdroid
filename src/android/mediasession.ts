@@ -17,7 +17,9 @@ type Record = {
   queue: JObj | null; queueTitle: unknown; extras: JObj | null; ratingType: number;
   attributes: JObj | null; remote: { control: number; max: number; current: number; id: string | null } | null;
 };
-class JRecordBinder extends JObj { r!: Record; }
+/** a session's ISession or ISessionController over its Record; each class has its own ctor, which takes on its Stub as supertype */
+const recordBinder = () => class extends JObj { r!: Record; };
+type JRecordBinder = InstanceType<ReturnType<typeof recordBinder>>;
 
 const push = (r: Record, name: string, desc: string, ...args: unknown[]) => {
   for (const cb of r.callbacks) oneway(cb, name, desc, ...args);
@@ -55,7 +57,7 @@ const currentState = driven(function* currentState$(r: Record): Gen {
 });
 
 const R = <A extends unknown[], T>(f: (r: Record, ...a: A) => T) => function (this: JRecordBinder, ...a: A): T { return f(this.r, ...a); };
-rt.register({ name: "webdroid/MediaSessionRecord", ctor: JRecordBinder, sup: MS + "ISession$Stub", methods: {
+rt.register({ name: "webdroid/MediaSessionRecord", ctor: recordBinder(), sup: MS + "ISession$Stub", methods: {
   [`getController()L${MS}ISessionController;`]: R((r) => r.controller),
   "setFlags(I)V": R((r, flags: number) => { r.flags = BigInt(flags); }),
   "setLaunchPendingIntent(Landroid/app/PendingIntent;)V": R((r, intent: JObj | null) => { r.launch = intent; }),
@@ -102,7 +104,7 @@ const TRANSPORT: [string, string, string][] = [
   ["playFromUri", "onPlayFromUri", `Landroid/net/Uri;${B}`], ["prepareFromMediaId", "onPrepareFromMediaId", `${S}${B}`],
   ["prepareFromSearch", "onPrepareFromSearch", `${S}${B}`], ["prepareFromUri", "onPrepareFromUri", `Landroid/net/Uri;${B}`],
 ];
-rt.register({ name: "webdroid/MediaSessionController", ctor: JRecordBinder, sup: MS + "ISessionController$Stub", methods: {
+rt.register({ name: "webdroid/MediaSessionController", ctor: recordBinder(), sup: MS + "ISessionController$Stub", methods: {
   ...Object.fromEntries(TRANSPORT.map(([name, callback, rest]) => [`${name}(${S}${rest})V`, R((r, ...a: [string]) => relay(r, callback, rest, ...a))])),
   [`sendMediaButton(${S}Landroid/view/KeyEvent;)Z`]: driven(function* sendMediaButton$(this: JRecordBinder, pkg: string, event: JObj): Gen {
     const intent = yield newObj("android/content/Intent", `(${S})V`, "android.intent.action.MEDIA_BUTTON");

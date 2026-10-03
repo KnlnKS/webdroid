@@ -55,21 +55,23 @@ rt.register({ name: "webdroid/PrintManagerService", ctor: class extends JObj {},
 } });
 hostStub("print", "webdroid/PrintManagerService");
 
-/** an adapter callback's outcome: its result, null when canceled, or the failure's message */
-class JPrintCallback extends JObj {
+/** an adapter callback's outcome: its result, null when canceled, or the failure's message. Each
+ *  callback class has its own ctor, which takes on its Stub as supertype. */
+const printCallback = () => class extends JObj {
   settle: (outcome: unknown) => void = () => {};
   readonly done = new Promise<unknown>((resolve) => { this.settle = resolve; });
-}
+};
+type JPrintCallback = InstanceType<ReturnType<typeof printCallback>>;
 class PrintFailure { constructor(readonly message: string) {} }
 const failed = function (this: JPrintCallback, error: unknown) { return after(csText(error), (message) => this.settle(new PrintFailure(message))); };
 const canceled = function (this: JPrintCallback) { this.settle(null); };
-rt.register({ name: "webdroid/PrintLayoutCallback", ctor: JPrintCallback, sup: "android/print/ILayoutResultCallback$Stub", methods: {
+rt.register({ name: "webdroid/PrintLayoutCallback", ctor: printCallback(), sup: "android/print/ILayoutResultCallback$Stub", methods: {
   "onLayoutStarted(Landroid/os/ICancellationSignal;I)V": () => {},
   "onLayoutFinished(Landroid/print/PrintDocumentInfo;ZI)V": function (this: JPrintCallback, info: JObj) { this.settle(info); },
   "onLayoutFailed(Ljava/lang/CharSequence;I)V": failed,
   "onLayoutCanceled(I)V": canceled,
 } });
-rt.register({ name: "webdroid/PrintWriteCallback", ctor: JPrintCallback, sup: "android/print/IWriteResultCallback$Stub", methods: {
+rt.register({ name: "webdroid/PrintWriteCallback", ctor: printCallback(), sup: "android/print/IWriteResultCallback$Stub", methods: {
   "onWriteStarted(Landroid/os/ICancellationSignal;I)V": () => {},
   "onWriteFinished([Landroid/print/PageRange;I)V": function (this: JPrintCallback, pages: JObj[]) { this.settle(pages); },
   "onWriteFailed(Ljava/lang/CharSequence;I)V": failed,
