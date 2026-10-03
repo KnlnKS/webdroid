@@ -19,7 +19,7 @@ export type Act =
   | { type: "tap"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; appearMs?: number; unlessResource?: string }
   | { type: "tapText"; text: string; fallback?: { x: number; y: number } }
   | { type: "type"; text: string; x?: number; y?: number }
-  | { type: "back" }
+  | { type: "back"; whileText?: string; appearMs?: number }
   | { type: "enter" }
   | { type: "background"; ms: number }
   | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number; untilText?: string; maxSwipes?: number }

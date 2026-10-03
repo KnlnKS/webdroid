@@ -52,6 +52,24 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   );
   // queries need the main loop too: a wedged loop must fail the step, not hold the run
   const query = <T>(p: T | Promise<T>, what: string) => withDeadline(Promise.resolve(p), deadlineMs, what);
+  // act while `text` shows, first waiting up to appearMs for it, at most `times` times
+  const whileShown = async (text: string, appearMs = 0, times: number, interval: number, act: () => Promise<unknown>) => {
+    const start = performance.now(), end = start + appearMs + Math.max(1500, times * interval + 800);
+    let acted = 0, absentAt = 0;
+    while (performance.now() < end) {
+      if (!await query(wd.locateText(text), "locateText")) {
+        absentAt ||= performance.now();
+        if (performance.now() - absentAt >= 400 && (acted || performance.now() - start >= appearMs)) break;
+        await sleep(50);
+      } else {
+        absentAt = 0;
+        if (acted >= times) break;
+        await run(act());
+        acted++;
+        await sleep(interval);
+      }
+    }
+  };
   switch (a.type) {
     case "boot": await run(wd.boot(a.apk)); return;
     case "tapText": {
@@ -64,25 +82,8 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
       if (a.unlessResource && (await query(wd.uiTree(), "uiTree")).some((node: { resId: string; bounds: [number, number, number, number] }) =>
         node.resId === a.unlessResource && node.bounds[2] > 0 && node.bounds[3] > 0 &&
         node.bounds[0] < s.width && node.bounds[1] < s.height)) return;
-      if (a.whileText) {
-        const maxTaps = a.repeat ?? 1;
-        const interval = a.everyMs ?? 500, start = performance.now(), appearMs = a.appearMs ?? 0;
-        const end = start + appearMs + Math.max(1500, maxTaps * interval + 800);
-        let taps = 0, absentAt = 0;
-        while (performance.now() < end) {
-          if (!await query(wd.locateText(a.whileText), "locateText")) {
-            absentAt ||= performance.now();
-            if (performance.now() - absentAt >= 400 && (taps || performance.now() - start >= appearMs)) break;
-            await sleep(50);
-          } else {
-            absentAt = 0;
-            if (taps >= maxTaps) break;
-            await run(wd.tap(a.x * s.width, a.y * s.height));
-            taps++;
-            await sleep(interval);
-          }
-        }
-      } else for (let i = 0; i < (a.repeat ?? 1); i++) {
+      if (a.whileText) await whileShown(a.whileText, a.appearMs, a.repeat ?? 1, a.everyMs ?? 500, () => wd.tap(a.x * s.width, a.y * s.height));
+      else for (let i = 0; i < (a.repeat ?? 1); i++) {
         if (i) await sleep(a.everyMs ?? 500);
         await run(wd.tap(a.x * s.width, a.y * s.height));
       }
@@ -91,7 +92,10 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
       if (a.x !== undefined && a.y !== undefined) { await run(wd.tap(a.x * s.width, a.y * s.height)); await sleep(250); }
       await run(wd.type(a.text));
       return;
-    case "back": await run(wd.back()); return;
+    case "back":
+      if (a.whileText) await whileShown(a.whileText, a.appearMs, 1, 500, () => wd.back());
+      else await run(wd.back());
+      return;
     case "enter": await run(wd.enter()); return;
     case "background": await run(wd.background(a.ms)); return;
     case "swipe": {

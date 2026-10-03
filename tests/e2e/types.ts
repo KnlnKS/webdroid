@@ -25,7 +25,8 @@ type Action =
    * land nowhere.
    */
   | { type: "typeInto"; x: number; y: number; text: string }
-  | { type: "back" }
+  /** `whileText`/`appearMs` as for tapAt: back only while that text shows */
+  | { type: "back"; whileText?: string; appearMs?: number }
   /** The keyboard's action key on the focused field — Search/Go/Done on the soft keyboard, a
    *  hardware ENTER on the emulator; both reach TextView.onEditorAction. */
   | { type: "enter" }

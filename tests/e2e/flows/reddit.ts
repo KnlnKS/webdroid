@@ -6,6 +6,7 @@
 import { wait, type Flow, Screen } from "../types";
 
 const SCREEN: Screen = { width: 1080, height: 2160, densityDpi: 480 };
+const ONE_TAP = "Add Google account";
 const tap = (x: number, y: number) => ({ type: "tapAt" as const, x: x / SCREEN.width, y: y / SCREEN.height });
 
 export const reddit: Flow = {
@@ -17,11 +18,14 @@ export const reddit: Flow = {
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "live",
   steps: [
-    // the launch ends under microG's "Add Google account" sheet in its own process; the main
-    // realm's welcome activity is stopped beneath it
+    // the welcome screen asks for One Tap sign-in, and microG answers with its "Add Google
+    // account" sheet from its own process, seconds later here: until it shows, taps still reach
+    // the paused welcome screen, so the sheet is awaited and dismissed before any tap
     { id: "launch", label: "Launch — welcome behind the One Tap sheet", action: { type: "launch" }, wait: wait.live(25000), fastWait: wait.state({ kind: "text", text: "Get Started" }, 0, 18_000),
       fastEvidence: { kind: "visual", maxContentDiffPct: 4 } },
-    { id: "dismiss-one-tap", label: "Back dismisses the One Tap sheet — welcome screen", action: { type: "back" }, fastAction: { type: "settle" }, wait: wait.live(5000), fastWait: wait.state({ kind: "text", text: "Get Started" }, 0, 4_000) },
+    { id: "dismiss-one-tap", label: "Back dismisses the One Tap sheet — welcome screen", action: { type: "back" },
+      fastAction: { type: "back", whileText: ONE_TAP, appearMs: 15_000 }, wait: wait.live(5000),
+      fastWait: wait.state({ kind: "all", conditions: [{ kind: "text", text: "Get Started" }, { kind: "text-absent", text: ONE_TAP }] }, 0, 4_000) },
     { id: "get-started", label: "Get Started — sign-up sheet", action: tap(540, 1837), wait: wait.live(4000), fastWait: wait.state({ kind: "text", text: "Continue with phone number" }, 0, 6_000) },
     { id: "sign-up-back", label: "Back closes the sign-up sheet", action: { type: "back" }, wait: wait.live(3000), fastWait: wait.state({ kind: "text-absent", text: "Continue with phone number" }, 0, 4_000) },
     { id: "have-account", label: "I already have an account — login sheet", action: tap(540, 1983), wait: wait.live(4000), fastWait: wait.state({ kind: "text", text: "Use email or username" }, 0, 6_000) },
