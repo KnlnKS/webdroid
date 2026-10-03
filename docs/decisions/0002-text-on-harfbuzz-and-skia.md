@@ -55,7 +55,7 @@ implementation history's "Stage E2" entry.
   the device, 5 here), and hinted outlines lift some bounds a pixel.
 - CanvasKit 0.38's PathOps returns a whole conic arc as quads where the device's Skia keeps it.
 - The page draws `/system/fonts`' preinstalled emoji font, which the recorded device glyphs
-  match; an update under `/data/fonts` on the AVD is unconfirmed.
+  match; the AVD has since installed a NotoColorEmoji update under `/data/fonts` through GMS.
 - Hyphenation (minikin's Hyphenator over `/system/usr/hyphen-data`) has no device recording.
 - `fillText` positions glyphs by Chrome's unhinted advances, so a drawn run can drift from its
   hinted layout by a fraction of a pixel per glyph.

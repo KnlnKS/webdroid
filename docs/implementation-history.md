@@ -2196,8 +2196,11 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     and 856 of `NotoColorEmoji.ttf` with the preinstalled font's advances, which the page
     reproduces, and nothing recorded points at `/data/fonts`. The image supports updatable fonts
     (an API 35 device has fs-verity; `/system/etc/security/fsverity` holds the release cert), but
-    without evidence of an installed update the page keeps `/system/fonts`. `adb shell ls
-    /data/fonts/files` on the AVD would settle it.
+    without evidence of an installed update the page keeps `/system/fonts`. Checked afterwards:
+    the AVD holds an update installed on 2026-09-30 (`/data/fonts/files/<dir>/NotoColorEmoji.ttf`,
+    2,813,064 bytes against the image's 2,779,576), and `dumpsys font` serves it; it arrived through
+    GMS after the image booted, so whether the reference is the image or the updated device is
+    still to decide.
   - FreeType's heavy-weight advances (fwtest "Blk": the device's `l` at wght 900, 20 px is 6, the
     page's 5): HVAR and the gvar phantom points agree (5.498 px), so the variation source is not
     the cause. Roboto's variable face is unhinted (no fpgm/prep or glyph programs), so FreeType

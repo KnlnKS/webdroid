@@ -704,8 +704,8 @@ grid) for measurement, TextRunShaper and drawing;
 5. Text (2026-10-02, history "Stage E2 follow-up"): bindApplication receives the serialized font
    map from `/font-index.json` and hyphenation runs on the reference patterns. Open: each realm's
    Typeface.<clinit> (legacy `fonts.xml`, ICU likely subtags; 130-500 ms) needs the boot image
-   (§4.3); hyphenated layouts have no device recording (extend textcmp's probe); the emoji font
-   stays `/system/fonts`' until the AVD shows a `/data/fonts` update; FreeType's 6 px `l` at wght
+   (§4.3); hyphenated layouts have no device recording (extend textcmp's probe); the AVD serves a
+   GMS-installed NotoColorEmoji update from `/data/fonts` while the page keeps the image's; FreeType's 6 px `l` at wght
    900 matches neither unhinted nor auto-hinted FreeType here and needs a device probe.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
