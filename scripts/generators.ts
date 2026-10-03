@@ -12,6 +12,8 @@ import ts from "typescript";
 const root = resolve(import.meta.dir, "..");
 /** helpers that take a callback's result as a value, never running a generator it returns */
 const CONSUMERS = new Set(["callUncaught", "after", "onMain"]);
+/** driven-style generators every module imports, whose calls are checked in each file */
+const SHARED = ["awaited"];
 /** helpers that enter Java and may return a pending result */
 const JAVA = new Set(["vcall", "vcallAsync", "vcallOn", "scall", "newObj", "linkInit", "staticField", "callOn"]);
 /** the source files under src, parsed */
@@ -39,7 +41,7 @@ export function undelegatedGenerators(): string[] {
   const isGen = (n: ts.Node): n is ts.FunctionDeclaration | ts.MethodDeclaration =>
     (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) && !!n.asteriskToken && /^Gen\b/.test(n.type?.getText() ?? "");
   for (const [file, source] of sources()) {
-    const functions = new Set<string>(), methods = new Set<string>();
+    const functions = new Set<string>(SHARED), methods = new Set<string>();
     const collect = (n: ts.Node) => { if (isGen(n)) (ts.isMethodDeclaration(n) ? methods : functions).add(n.name!.getText()); ts.forEachChild(n, collect); };
     collect(source);
     const visit = (n: ts.Node) => {

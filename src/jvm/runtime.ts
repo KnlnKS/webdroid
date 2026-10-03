@@ -57,6 +57,8 @@ export interface NativeSpec {
 
 /** A native written as a generator yields each Java result, value or Promise (Runtime.drive). */
 export type Gen<T = any> = Generator<unknown, T, any>;
+/** the value of `v` once it settles, typed: `yield* awaited(x)` where `yield x` is any */
+export function* awaited<T>(v: T | Promise<T>): Gen<T> { return yield v; }
 /** makes a method's TS body from its AOSP body; `C` is the class, not yet holding instances */
 export type Intrinsic = (base: (this: any, ...args: any[]) => any, C?: any) => (this: any, ...args: any[]) => any;
 
