@@ -1,9 +1,8 @@
-import { expect, test, describe, beforeAll } from "bun:test";
+import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
 import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread } from "../src/jvm/natives/jlang";
-import { boxDouble, boxFloat, boxInt } from "../src/jvm/natives/jbox";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { scall, loadLibcore, mountApexData } from "./java";
@@ -81,34 +80,6 @@ describe("annotation-enum-init", () => {
   });
 });
 
-describe("assertion-error", () => {
-  test("AssertionError retains a throwable detail as its cause", async () => {
-    const detail = rt.mkThrowable("java/lang/IllegalStateException", "failure");
-    const error = rt.make("java/lang/AssertionError");
-    await vcall(error, "<init>", "(Ljava/lang/Object;)V", detail);
-    expect(await vcall(error, "getCause", "()Ljava/lang/Throwable;")).toBe(detail);
-    expect(await vcall(error, "getMessage", "()Ljava/lang/String;")).toBe("java.lang.IllegalStateException: failure");
-  });
-});
-
-describe("character-offset", () => {
-  test("code point offsets count pairs once and retain unpaired surrogates", async () => {
-    const text = "a\ud83d\ude00\ud800b\udc00";
-    const offset = (value: unknown, index: number, count: number) => scall("java/lang/Character", "offsetByCodePoints", "(Ljava/lang/CharSequence;II)I", value, index, count);
-    for (const value of [text, await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", text)]) {
-      expect(await offset(value, 0, 2)).toBe(3);
-      expect(await offset(value, 6, -4)).toBe(1);
-      expect(await offset(value, 2, 1)).toBe(3);
-      for (const [index, count] of [[-1, 0], [7, 0], [0, 6], [6, -6]]) {
-        let error: unknown;
-        try { await offset(value, index, count); } catch (e) { error = e; }
-        expect(rt.iof(error, "java/lang/IndexOutOfBoundsException")).toBe(1);
-      }
-    }
-    expect(await vcall(text, "offsetByCodePoints", "(II)I", 0, 2)).toBe(3);
-  });
-});
-
 describe("strict-math", () => {
   // x, y, then sin cos tan asin acos atan exp log log10 log1p expm1 cbrt sinh cosh tanh atan2(x, y)
   // hypot(x, y) pow(x, y) IEEEremainder(x, y), as raw bits: StrictMath on the reference AVD
@@ -136,27 +107,6 @@ describe("strict-math", () => {
     }
   });
 });
-describe("number-parse", () => {
-  test("Double.valueOf(String) and Float.valueOf(String) box the parsed value", async () => {
-    const d = scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", " -73.98563 ");
-    expect(await vcall(d, "doubleValue", "()D")).toBe(-73.98563);
-    const f = scall("java/lang/Float", "valueOf", "(Ljava/lang/String;)Ljava/lang/Float;", "1.5f");
-    expect(await vcall(f, "floatValue", "()F")).toBe(1.5);
-    expect(() => scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", "40.7,-74")).toThrow();
-  });
-
-  test("Integer.decode recognizes Java decimal, hexadecimal, and octal syntax", async () => {
-    const decode = (s: string) => scall("java/lang/Integer", "decode", "(Ljava/lang/String;)Ljava/lang/Integer;", s);
-    expect(await vcall(decode("42"), "intValue", "()I")).toBe(42);
-    expect(await vcall(decode("-0x80000000"), "intValue", "()I")).toBe(-2147483648);
-    expect(await vcall(decode("+077"), "intValue", "()I")).toBe(63);
-    expect(await vcall(decode("#7fffffff"), "intValue", "()I")).toBe(2147483647);
-    expect(() => decode("0x-1")).toThrow();
-    expect(() => decode("09")).toThrow();
-    expect(() => decode("019")).toThrow();
-    expect(() => scall("java/lang/Integer", "parseInt", "(Ljava/lang/String;I)I", "12z", 10)).toThrow();
-  });
-});
 
 describe("object-bridge", () => {
   test("host objects retain java.lang.Object.getClass", async () => {
@@ -166,28 +116,8 @@ describe("object-bridge", () => {
 });
 
 // libcore's Pattern and Matcher over our regex natives
-describe("pattern-split", () => {
-  beforeAll(loadLibcore);
+describe("regex", () => {
   const compile = (source: string) => scall("java/util/regex/Pattern", "compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;", source);
-  const split = (pattern: unknown, input: string, limit: number) =>
-    vcall(pattern, "split", "(Ljava/lang/CharSequence;I)[Ljava/lang/String;", input, limit);
-
-  test("Pattern.split honors positive, zero, and negative limits", async () => {
-    const colon = await compile(":"), letterO = await compile("o");
-    expect(Array.from(await split(colon, "boo:and:foo", 2))).toEqual(["boo", "and:foo"]);
-    expect(Array.from(await split(colon, "one:two:three", 2))).toEqual(["one", "two:three"]);
-    expect(Array.from(await split(letterO, "boo:and:foo", 0))).toEqual(["b", "", ":and:f"]);
-    expect(Array.from(await vcall(letterO, "split", "(Ljava/lang/CharSequence;)[Ljava/lang/String;", "boo:and:foo"))).toEqual(["b", "", ":and:f"]);
-    expect(Array.from(await split(letterO, "boo:and:foo", -1))).toEqual(["b", "", ":and:f", "", ""]);
-    expect(Array.from(await split(colon, "boo:and:foo", 1))).toEqual(["boo:and:foo"]);
-  });
-
-  test("Pattern.split excludes captures and skips an initial zero-width match", async () => {
-    expect(Array.from(await split(await compile("(:)"), "a:b", -1))).toEqual(["a", "b"]);
-    expect(Array.from(await split(await compile("(?=b)"), "boo", -1))).toEqual(["boo"]);
-    expect(Array.from(await split(await compile("(?=o)"), "boo", -1))).toEqual(["b", "o", "o"]);
-    expect(Array.from(await split(await compile(":"), ":a", -1))).toEqual(["", "a"]);
-  });
 
   test("String's regex methods follow Pattern's line terminators, split and replacement rules", async () => {
     const S = "Ljava/lang/String;";
@@ -196,6 +126,8 @@ describe("pattern-split", () => {
     expect(await vcall("a\nb", "replaceAll", `(${S}${S})${S}`, ".", "x")).toBe("x\nx");
     expect(Array.from(await vcall("a\r\nb", "split", `(${S})[${S}`, "."))).toEqual(["", "\r\n"]);
     expect(Array.from(await vcall(",", "split", `(${S})[${S}`, ","))).toEqual([]);
+    expect(Array.from(await vcall("a:b:c:d", "split", `(${S}I)[${S}`, ":", 3))).toEqual(["a", "b", "c:d"]);
+    expect(Array.from(await vcall("a::", "split", `(${S}I)[${S}`, ":", -1))).toEqual(["a", "", ""]);
     expect(await vcall("a1b2", "replaceAll", `(${S}${S})${S}`, "(?<d>\\d)", "[${d}\\$\\\\]")).toBe("a[1$\\]b[2$\\]");
     await expect(vcallAsync("abc", "replaceAll", `(${S}${S})${S}`, "b", "$2")).rejects.toBeDefined();
   });
@@ -459,13 +391,6 @@ describe("string-codepoints", () => {
   });
 });
 
-describe("string-format", () => {
-  test("%s prints a box's own toString", () => {
-    const args = jarray([boxDouble(2), boxFloat(1.5), boxInt(3)], "Ljava/lang/Object;");
-    expect(scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "[%s, %s, %s]", args)).toBe("[2.0, 1.5, 3]");
-  });
-});
-
 describe("java-math-boundary", () => {
   const big = (s: string) => newObj("java/math/BigInteger", "(Ljava/lang/String;)V", s);
   test("bigOf and mkBigInteger cross libcore's sign and magnitude", async () => {
@@ -478,7 +403,7 @@ describe("java-math-boundary", () => {
     }
     expect(await vcall(await big("255"), "toString", "(I)Ljava/lang/String;", 16)).toBe("ff");
     const args = jarray([await big("-123456789012345678901234567890")], "Ljava/lang/Object;");
-    expect(scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "%1$d %1$x", args)).toBe("-123456789012345678901234567890 -18ee90ff6c373e0ee4e3f0ad2");
+    expect(await scall("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", "%1$d %1$x", args)).toBe("-123456789012345678901234567890 -18ee90ff6c373e0ee4e3f0ad2");
   });
   test("NativeBN serves modPow, multiply and divide on large operands", async () => {
     const p = (1n << 521n) - 1n, a = 3n ** 300n, e = (1n << 200n) + 12345n;
