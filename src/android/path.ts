@@ -220,9 +220,10 @@ class VerbSink implements Sink {
   bezierCurveTo(a: number, b: number, c: number, d: number, x: number, y: number) { this.verbs.push([CUBIC, this.x, this.y, a, b, c, d, x, y]); this.x = x; this.y = y; }
   closePath() { this.verbs.push([CLOSE]); }
 }
+function walkOps(ops: PathOp[], pen: Pen) { for (const op of ops) pen.op(op); }
 function pathVerbs(ops: PathOp[]): Verb[] {
-  const sink = new VerbSink(), pen = new Pen(sink);
-  for (const op of ops) pen.op(op);
+  const sink = new VerbSink();
+  walkOps(ops, new Pen(sink));
   return sink.verbs;
 }
 /** the inverse of pathVerbs: a flattened path back as ops */
@@ -312,7 +313,7 @@ export class NativePath {
   private replaceOps(ops: PathOp[]) {
     this.ops = ops;
     this.pen.clear();
-    for (const op of ops) this.pen.op(op);
+    walkOps(ops, this.pen);
     this.changed();
   }
 
@@ -416,8 +417,8 @@ export class NativePath {
   }
   /** SkPath::getBounds: every stored point, conic control points included */
   bounds(): Box {
-    const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity }, pen = new Pen(null, box);
-    for (const op of this.ops) pen.op(op);
+    const box = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+    walkOps(this.ops, new Pen(null, box));
     return box.left === Infinity ? { left: 0, top: 0, right: 0, bottom: 0 } : box;
   }
   /** SkPath::isRect: one contour of axis-aligned lines turning four right angles, closed or implicitly */
@@ -464,16 +465,13 @@ export class NativePath {
 }
 const SIMPLE: Record<string, true> = { m: true, l: true, q: true, c: true, z: true };
 /** a path's verbs, as SkPath stores them, into `sink` */
-export function walkPath(path: NativePath, sink: Sink) {
-  const pen = new Pen(sink);
-  for (const op of path.ops) pen.op(op);
-}
+export const walkPath = (path: NativePath, sink: Sink) => walkOps(path.ops, new Pen(sink));
 
 export const pathAt = (h: bigint) => deref<NativePath>(h);
 let mNativePath = "";
 /** the geometry behind a Java Path */
 export const nativePathOf = (p: object): NativePath =>
-  deref<NativePath>((p as Record<string, bigint>)[mNativePath ||= declaredField("android/graphics/Path", "mNativePath")]);
+  pathAt((p as Record<string, bigint>)[mNativePath ||= declaredField("android/graphics/Path", "mNativePath")]);
 
 // ── Path.op: SkPathOps, through the tab's CanvasKit
 /** the path as CanvasKit's commands */
@@ -901,13 +899,14 @@ export class VerbIterator {
 // ── androidx.graphics.path (Compose/Material3 below API 34): its JNI walks Skia's verb and
 // point arrays, as PathIterator does. Arcs come out as cubics rather than conics, so the
 // conic-evaluation mode and tolerance have nothing to convert and Conic never appears.
-const pjni = (sig: string, fn: (...a: never[]) => unknown) => rt.registerJni("androidx/graphics/path/PathIteratorPreApi34Impl", sig, fn);
 const iter = (h: bigint) => deref<VerbIterator>(h);
-pjni("createInternalPathIterator(Landroid/graphics/Path;IF)J", (p: object) => handle(new VerbIterator(nativePathOf(p))));
-pjni("destroyInternalPathIterator(J)V", release);
-pjni("internalPathIteratorHasNext(J)Z", (h: bigint) => (iter(h).peek() !== DONE ? 1 : 0));
-pjni("internalPathIteratorPeek(J)I", (h: bigint) => iter(h).peek());
-pjni("internalPathIteratorNext(J[FI)I", (h: bigint, pts: Float32Array, off: number) => iter(h).next(pts, off));
-pjni("internalPathIteratorSize(J)I", (h: bigint) => iter(h).verbs.length);
-pjni("internalPathIteratorRawSize(J)I", (h: bigint) => iter(h).verbs.length);
+rt.registerJnis("androidx/graphics/path/PathIteratorPreApi34Impl", {
+  "createInternalPathIterator(Landroid/graphics/Path;IF)J": (p: object) => handle(new VerbIterator(nativePathOf(p))),
+  "destroyInternalPathIterator(J)V": release,
+  "internalPathIteratorHasNext(J)Z": (h: bigint) => (iter(h).peek() !== DONE ? 1 : 0),
+  "internalPathIteratorPeek(J)I": (h: bigint) => iter(h).peek(),
+  "internalPathIteratorNext(J[FI)I": (h: bigint, pts: Float32Array, off: number) => iter(h).next(pts, off),
+  "internalPathIteratorSize(J)I": (h: bigint) => iter(h).verbs.length,
+  "internalPathIteratorRawSize(J)I": (h: bigint) => iter(h).verbs.length,
+});
 rt.claimNativeLib("androidx.graphics.path");
