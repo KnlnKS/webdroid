@@ -2568,3 +2568,56 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   four visual checkpoint scores exactly matched the pre-fix capture; Komikku's
   existing SQLite messages were unchanged. Goldens remain unchanged. Review logs
   and captures are under ignored `webdroid-shots/performance/review-*`.
+
+- Branch maintainability review (2026-10-02, against `main`, working baseline
+  `4123b7b7`). The review began with 576 changed files; the parallel audit concentrated
+  on JVM resolution/persistence, native networking and Android service boundaries.
+  `DexLink` now owns per-DEX resolution caches with shared prototype methods,
+  replacing a duplicate interface and ten closures per DEX. Defining-runtime
+  ownership, initialization and tier-retargeting remain unchanged. `runtime.ts`
+  falls from 1,321 to 1,218 lines; its coupled class linking/initialization and
+  runtime-bound String constructors remain a decomposition concern, not an
+  unconditional approval of the file's size.
+- Network address parsing, resolution, interfaces and constants now have one
+  owner, `native/net-address.ts`, which both the socket core and netd adapter use.
+  This removes the direct `net.ts`/`unix.ts` cycle and brings `net.ts` from 1,088
+  to 997 lines. The two sockaddr serializers were left separate because their
+  behavior differs for non-IPv4 inputs. Android account, widget and notification
+  code uses the canonical declared-field helpers; notification ordering reuses
+  Java's string hash. The vsync receiver Set is now its sole scheduling state,
+  eliminating the mirrored boolean. Widget provider metadata parsing remains
+  outside the existing device-service tests' exercised paths.
+- Two correctness findings were fixed at their shared owners. System property
+  lookup used an ordinary object, so `toString` fabricated a value, `constructor`
+  returned an object and `__proto__` threw. A Map now represents exactly the
+  configured properties; one Java-facing regression test covers absent names.
+  Code-cache saves cleared pending source before asynchronous storage succeeded.
+  They now retain a snapshot until all writes succeed and remove only its matching
+  entries, preserving concurrent additions and failed writes for the existing
+  save triggers. A temporary failure-injection probe reproduced the starting
+  revision's loss and verified open/put failure, recovery and concurrent additions;
+  no retry loop was added. The probe is saved with the ignored review artifacts.
+- Review validation: typecheck, 30 framework checks, and FitNotes/Mihon smoke
+  compilation passed (4,213/21,918 classes, zero method failures). The final
+  uninstrumented suite passed 1,184 tests / 76,274 assertions; the clean starting
+  revision passed 1,183 / 76,265. An earlier candidate run failed five concurrent
+  browser probes with SyntaxErrors. Instrumented repeats received byte-identical
+  bundles and passed, as did isolated browser runs. The original failure's cause
+  remains unisolated; a matching baseline failure was not reproduced, and the
+  harness, timeouts and expectations were not changed.
+- The first serialized quick matrix reached 6/7 flows: Mihon onboarding parked
+  during Java main-queue dispatch with no reported exception or missing/native
+  requirement. Vsync had posted and host ticks advanced, but queued Java messages
+  stopped draining. A matched starting-revision onboarding run passed, followed
+  by a candidate repeat with a byte-identical checkpoint PNG. The second complete
+  serialized matrix passed all 7 flows / 105 steps: 311 process snapshots answered,
+  every step rendered, shell ticks advanced, and no missing APIs, native requirements,
+  layout/draw/GL errors, timeouts or wedges were observed. Komikku retained its
+  11 configured expected SQLite diagnostics. The first wedge remains an unisolated
+  intermittent failure; neither the passing repeat nor the baseline pass explains
+  its cause. Goldens are unchanged. Captures and logs live under ignored
+  `webdroid-shots/quality-review/`; the full live/corpus matrix was not rerun.
+- Cold and warm latency gates passed. Per-app maxima for Calculator/FitNotes/Mihon
+  were 40/24/146 ms cold and 61/23/97 ms warm. Mihon's cold sample has little
+  margin against 150 ms. These are gate samples without a matched performance
+  baseline, not evidence of a general speedup or FPS gain.
