@@ -82,7 +82,7 @@ function* metaData$(node: XmlNode | null | undefined, res: Resources): Gen<JObj 
     const v = direct.t === TV.REFERENCE ? res.resolveRefs(direct) : direct;
     if (v.t === TV.STRING) yield put("putString", "Ljava/lang/String;", key, v.s ?? null);
     else if (v.t === TV.BOOLEAN) yield put("putBoolean", "Z", key, v.d ? 1 : 0);
-    else if (v.t === TV.FLOAT) yield put("putFloat", "F", key, new Float32Array(Int32Array.of(v.d).buffer)[0]);
+    else if (v.t === TV.FLOAT) yield put("putFloat", "F", key, v.d);
     else yield put("putInt", "I", key, v.d);
   }
   return bundle;
