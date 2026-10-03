@@ -389,7 +389,7 @@ export class WebViewChromium extends JObj {
           body: entry?.body, contentType: entry?.contentType }, [channel.port2]);
       });
     }
-    else if (data.kind === "subframe" && typeof data.url === "string" && event.ports[0]) this.answerSubframe(data.url, event.ports[0]);
+    else if (data.kind === "subframe" && typeof data.url === "string" && event.ports[0]) this.answerSubframe(data, event.ports[0]);
     else if (data.kind === "script-ready") {
       this.scriptReady = true;
       for (const [seq, script] of this.pendingScripts) this.send({ kind: "eval", seq, script });
@@ -475,28 +475,48 @@ export class WebViewChromium extends JObj {
       } else if (data?.kind === "webcookies" && port && typeof data.url === "string") {
         const values = Array.isArray(data.values) ? data.values.filter((value: unknown): value is string => typeof value === "string") : [];
         port.postMessage((await jar).network(data.url, v.url ?? "", values, thirdPartyCookies.has(v.view))); port.close();
-      } else if (data?.kind === "subframe" && port && typeof data.url === "string") v.answerSubframe(data.url, port);
+      } else if (data?.kind === "subframe" && port && typeof data.url === "string") v.answerSubframe(data, port);
       else if (sub) v.subframePage(sub, data);
     };
     return channel;
   }
-  /** a frame's page asks where its subframe of `url` loads: a frame on that web origin's renderer, or none */
-  private answerSubframe(url: string, port: MessagePort) {
-    void this.subframeSrc({ url, src: srcFor(url, this) }).then((src) => port.postMessage(src), () => port.postMessage(null)).finally(() => port.close());
+  /** a frame's page asks where its subframe of `url` loads (a form's POST with its body): a frame on
+   *  a renderer, the URL itself, or none */
+  private answerSubframe(data: Record<string, unknown>, port: MessagePort) {
+    const url = String(data.url);
+    void this.subframeSrc({ url, src: srcFor(url, this), method: typeof data.method === "string" ? data.method : undefined,
+      body: data.body instanceof ArrayBuffer ? data.body : undefined, contentType: typeof data.contentType === "string" ? data.contentType : undefined })
+      .then((src) => port.postMessage(src), () => port.postMessage(null)).finally(() => port.close());
   }
-  /** Chromium's navigation throttle asks the client about a subframe navigation of a scheme other than
-   *  http(s), about: and javascript:, and fails one of a scheme it cannot load. data: and blob: frames
-   *  load in the page without asking (a revoked blob: URL would not survive the round trip). */
+  /** Chromium's navigation throttle offers a subframe navigation of any scheme but http(s), about: and
+   *  javascript: to shouldOverrideUrlLoading. Then a blob: loads; any other goes to shouldInterceptRequest
+   *  (as http(s) does through the proxy), whose response loads; otherwise a data: URL loads and an
+   *  unknown scheme fails with ERR_UNKNOWN_URL_SCHEME and an error page. */
   private async subframeSrc(entry: Entry): Promise<string | null> {
     if (/^https?:/i.test(entry.url)) return this.subframe(entry);
     const request = mkRequest(entry.url);
     request.main = false;
     if (await onMain(() => vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, request))) return null;
+    if (/^blob:/i.test(entry.url)) return entry.url;
     if (entry.src !== entry.url) return this.subframe(entry);
+    const response = this.intercepting ? await this.intercept({ url: entry.url, method: "GET", main: false, headers: {} }) : null;
+    if (response) return this.interceptedFrame(entry.url, response);
+    if (/^data:/i.test(entry.url)) return entry.url;
     const error = inst<JWebErr>("webdroid/WebResourceError");
     error.code = -10; error.desc = "net::ERR_UNKNOWN_URL_SCHEME";
     void onMain(() => vcall(this.client, "onReceivedError", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;Landroid/webkit/WebResourceError;)V", this.view, request, error));
-    return null;
+    // in place of Chromium's error page: a document the page cannot read, with its load event
+    return "data:text/html,";
+  }
+  /** a client's response for a subframe: an HTML document on the opaque renderer, which carries the
+   *  page script, or the bytes as they are */
+  private interceptedFrame(url: string, response: WebResponse): Promise<string> | string {
+    const type = Object.entries(response.headers).find(([name]) => name.toLowerCase() === "content-type")?.[1] ?? "text/html";
+    if (!/^\s*text\/html\b/i.test(type)) return "data:" + type.replace(/\s+/g, "") + ";base64," + response.body;
+    const bytes = Uint8Array.fromBase64(response.body), charset = /charset=([^;\s]+)/i.exec(type)?.[1] ?? "utf-8";
+    let html: string;
+    try { html = new TextDecoder(charset).decode(bytes); } catch { html = new TextDecoder().decode(bytes); }
+    return this.subframe({ url, doc: srcdoc(html, null, /^data:/i.test(url) ? null : url) });
   }
   private async subframe(entry: Entry): Promise<string> {
     const remote = this.hold.remote;

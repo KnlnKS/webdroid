@@ -4,7 +4,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml";
 import { webScript } from "../src/shell/webscript";
 import { proxyRequest } from "../src/shell/proxy";
-import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, holdFrames, routeSubframes, webViewBrands } from "../src/shell/webinject";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, holdFrames, routeSubframes, webFormRequest, webViewBrands } from "../src/shell/webinject";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -385,6 +385,19 @@ describe("WebView cookies", () => {
   });
 });
 
+describe("WebView frame holding", () => {
+  test("document.write's chunks hold a frame however they split its tag", () => {
+    const html = '<p a="<iframe src=x>">t</p><!-- <iframe src=c> --><script>var s = "<iframe src=s>";</script><IFRAME id=f SRC="https://a/" name=n></IFRAME>'
+      + "<iframe src='about:blank'></iframe><iframe src=gmsg://m/x>";
+    const whole = holdFrames(html);
+    expect(whole.match(/data-wd-frame-src/g)).toHaveLength(2);
+    for (let i = 0; i <= html.length; i++) for (let j = i; j <= html.length; j += 7) {
+      const carry = { raw: "", tail: "" };
+      expect(holdFrames(html.slice(0, i), carry) + holdFrames(html.slice(i, j), carry) + holdFrames(html.slice(j), carry) + carry.tail).toBe(whole);
+    }
+  });
+});
+
 describe("WebView isolation", () => {
   // the app's page and a renderer frame on a *.localhost site of its own, as the dev server serves them
   test("a WebView page reaches neither the app page's storage, cookies and window nor a frame of the app's origin", async () => {
@@ -503,12 +516,12 @@ describe("WebView isolation", () => {
       await page.goto(`http://page.localhost:${server.port}/`);
       const routed = (url: string) => `http://routed.localhost:${server.port}/frame?for=` + encodeURIComponent(url);
       const direct = `http://127.0.0.1:${server.port}`;
-      expect(await page.evaluate(async ({ direct, port, route, hold }) => {
+      expect(await page.evaluate(async ({ direct, port, route, hold, form }) => {
         const asked: string[] = [];
         (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string) => {
           asked.push(url);
-          return Promise.resolve(url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : null);
-        }, (0, eval)(`(${hold})`));
+          return Promise.resolve(url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : url.startsWith("data:") ? url : null);
+        }, (0, eval)(`(${hold})`), (0, eval)(`(${form})`));
         document.body.insertAdjacentHTML("beforeend", `<iframe src="${direct}/direct"></iframe>`);
         const made = document.createElement("iframe");
         made.src = `${direct}/made`;
@@ -531,10 +544,11 @@ describe("WebView isolation", () => {
         data.setAttribute("src", "data:text/html,<p>data</p>");
         document.body.append(data);
         await new Promise((resolve) => setTimeout(resolve, 500));
-        const frames = (doc: Document) => [...doc.querySelectorAll("iframe")].map((f) => [f.src, f.getAttribute("src")]);
-        return [asked, frames(document), frames(srcdoc.contentDocument!), frames(blank.contentDocument!), srcdoc.contentDocument!.body.firstChild!.textContent];
-      }, { direct, port: server.port, route: routeSubframes.toString(), hold: holdFrames.toString() })).toEqual([
-        [`${direct}/direct`, `${direct}/made`, "gmsg://mobileads.google.com/x", "gmsg://mobileads.google.com/kept", `${direct}/in-blank`, `${direct}/in-srcdoc`],
+        // the page reads the src it set; the attribute the frame loads is the app's
+        const frames = (doc: Document) => [...doc.querySelectorAll("iframe")].map((f) => [f.src, Element.prototype.getAttribute.call(f, "src")]);
+        return [asked.sort(), frames(document), frames(srcdoc.contentDocument!), frames(blank.contentDocument!), srcdoc.contentDocument!.body.firstChild!.textContent];
+      }, { direct, port: server.port, route: routeSubframes.toString(), hold: holdFrames.toString(), form: webFormRequest.toString() })).toEqual([
+        [`${direct}/direct`, `${direct}/made`, "gmsg://mobileads.google.com/x", "gmsg://mobileads.google.com/kept", "data:text/html,<p>data</p>", `${direct}/in-blank`, `${direct}/in-srcdoc`].sort(),
         [[`${direct}/direct`, routed(`${direct}/direct`)], [`${direct}/made`, routed(`${direct}/made`)], ["gmsg://mobileads.google.com/kept", null],
           ["", null], ["", null], ["data:text/html,<p>data</p>", "data:text/html,<p>data</p>"]],
         [[`${direct}/in-srcdoc`, routed(`${direct}/in-srcdoc`)]],
@@ -542,6 +556,93 @@ describe("WebView isolation", () => {
         "doc",
       ]);
       expect(hits.filter((h) => !h.startsWith("page.localhost"))).toEqual(Array(4).fill(`routed.localhost:${server.port}/frame`));
+      expect(errors).toEqual([]);
+    } finally { await page.close(); await server.stop(true); }
+  });
+
+  test("a page's frames reach the app however the page sets or navigates them, and fire only their routed load", async () => {
+    const hits: string[] = [];
+    const server = Bun.serve({ port: 0, fetch: (req) => {
+      const url = new URL(req.url);
+      hits.push(url.host + url.pathname + url.search);
+      // a routed frame's renderer document announces itself, then writes the page, as WEB_FRAME does
+      return new Response(url.pathname === "/" ? "<!doctype html><head></head><body>page" : `<script>parent.postMessage({wdFrame: "bootstrap"}, "*");
+        setTimeout(() => { document.open(); document.write("frame"); document.close(); }, 20)</script>`, { headers: { "content-type": "text/html" } });
+    } });
+    const page = await browser.newPage(), errors: string[] = [];
+    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    try {
+      await page.goto(`http://page.localhost:${server.port}/`);
+      const direct = `http://127.0.0.1:${server.port}`;
+      const result = await page.evaluate(async ({ direct, port, route, hold, form }) => {
+        const asked: string[] = [];
+        // the client claims URLs naming "override"; data: and blob: load as they are
+        (0, eval)(`(${route})`)(`http://routed.localhost:${port}`, (url: string, init?: { method?: string }) => {
+          asked.push(url.startsWith("blob:") ? "blob" : url + (init?.method ? " " + init.method : ""));
+          return Promise.resolve(/override/.test(url) ? null : url.startsWith("http") ? `http://routed.localhost:${port}/frame?for=` + encodeURIComponent(url) : url);
+        }, (0, eval)(`(${hold})`), (0, eval)(`(${form})`));
+        const loads: Record<string, number> = {};
+        const frame = (label: string, setup: (f: HTMLIFrameElement) => void) => {
+          const f = document.createElement("iframe");
+          f.addEventListener("load", () => { loads[label] = (loads[label] ?? 0) + 1; });
+          setup(f);
+          document.body.append(f);
+          return f;
+        };
+        const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+        frame("routed", (f) => { f.src = `${direct}/routed`; });
+        frame("overridden", (f) => { f.src = "gmsg://override/x"; });
+        frame("data", (f) => { f.src = "data:text/html,<p>data"; });
+        // a blob: URL revoked as soon as it is set still loads, as it would
+        const url = URL.createObjectURL(new Blob(["<p>blob</p>"], { type: "text/html" }));
+        const blob = frame("blob", (f) => { f.src = url; });
+        URL.revokeObjectURL(url);
+        const attr = document.createAttribute("src");
+        attr.value = `${direct}/attr-node`;
+        frame("attr", (f) => { f.setAttributeNode(attr); });
+        frame("named-item", (f) => {
+          const item = document.createAttribute("src");
+          item.value = `${direct}/named-item`;
+          f.attributes.setNamedItem(item);
+        });
+        frame("attr-value", (f) => { f.setAttribute("src", "about:blank"); f.getAttributeNode("src")!.value = `${direct}/attr-value`; });
+        document.body.insertAdjacentHTML("beforeend", `<iframe id=static srcdoc="<p>static</p><iframe src=&quot;${direct}/static-srcdoc&quot;></iframe>"></iframe>`);
+        const parsed = new DOMParser().parseFromString(`<iframe src="${direct}/parsed"></iframe>`, "text/html").querySelector("iframe")!;
+        const parsedSrc = [parsed.src, parsed.getAttribute("src")];
+        document.body.append(parsed);
+        // document.write's chunks split a frame's tag, and a script's string that looks like one
+        const written = frame("written", () => {});
+        const doc = written.contentDocument!;
+        doc.open();
+        doc.write("<p>w</p><ifr");
+        doc.write(`ame src="${direct}/split"></iframe><script>var s = "<ifr`);
+        doc.write(`ame src='${direct}/in-script'>";</scr`);
+        doc.write("ipt>");
+        doc.close();
+        frame("opened", (f) => { f.name = "t"; f.src = `${direct}/target`; });
+        frame("clicked", (f) => { f.name = "u"; });
+        const child = frame("child", (f) => { f.srcdoc = `<a target=u href="${direct}/clicked">x</a><form target=v method=post action="${direct}/posted"><input name=a value=1></form>`; });
+        frame("posted", (f) => { f.name = "v"; });
+        const pushed = frame("pushed", (f) => { f.srcdoc = "<p>pushed"; });
+        await settle();
+        const opened = window.open(`${direct}/opened`, "t") === document.querySelector<HTMLIFrameElement>("iframe[name=t]")!.contentWindow;
+        child.contentDocument!.querySelector("a")!.click();
+        child.contentDocument!.querySelector("form")!.requestSubmit();
+        (child.contentWindow as unknown as { eval(code: string): void }).eval(`location.href = "${direct}/self"`);
+        pushed.contentWindow!.location.href = `${direct}/pushed`;
+        await settle();
+        return { asked: asked.sort(), loads, opened, parsedSrc, blob: blob.contentDocument?.body.textContent, script: (written.contentWindow as unknown as { s: string }).s,
+          written: [...doc.querySelectorAll("iframe")].map((f) => f.src) };
+      }, { direct, port: server.port, route: routeSubframes.toString(), hold: holdFrames.toString(), form: webFormRequest.toString() });
+      const paths = ["attr-node", "attr-value", "clicked", "named-item", "opened", "parsed", "pushed", "routed", "self", "split", "static-srcdoc", "target"];
+      expect(result).toEqual({
+        asked: [...paths.map((p) => `${direct}/${p}`), `${direct}/posted POST`, "blob", "data:text/html,<p>data", "gmsg://override/x"].sort(),
+        // the overridden frame keeps its initial document without a load event, as Chromium's does
+        loads: { routed: 1, data: 1, blob: 1, attr: 1, "named-item": 1, "attr-value": 1, written: 2, opened: 2, clicked: 2, posted: 2, child: 2, pushed: 2 },
+        opened: true, parsedSrc: [`${direct}/parsed`, `${direct}/parsed`], blob: "blob", script: `<iframe src='${direct}/in-script'>`, written: [`${direct}/split`],
+      });
+      expect(hits.filter((h) => !h.startsWith("page.localhost")).sort()).toEqual([...paths, "posted"].map((p) =>
+        `routed.localhost:${server.port}/frame?for=` + encodeURIComponent(`${direct}/${p}`)).sort());
       expect(errors).toEqual([]);
     } finally { await page.close(); await server.stop(true); }
   });
