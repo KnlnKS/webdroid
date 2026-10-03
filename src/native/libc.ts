@@ -11,7 +11,7 @@ import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs";
 import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread";
-import { KLAYOUT, rawSyscall } from "./syscall";
+import { KLAYOUT, syscallEntry } from "./syscall";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
@@ -400,7 +400,7 @@ export function libcInit(): void {
     localeconv: () => localeConv,
     mmap64: mmapWith((a) => Number(a.l())),
     // the raw syscalls a runtime issues past libc: futex is the one that must block
-    syscall: (cpu, a) => rawSyscall(cpu, a.i(), a),
+    syscall: syscallEntry,
     cacheflush: (_c, a) => { const s = a.p(), e = a.p(); invalidateRange(s, e - s, "cacheflush"); return 0; },
     __aeabi_read_tp: (cpu) => cpu.tlsBase,
 

@@ -2,8 +2,8 @@
 // writers, virtual host libraries, and the logging stubs unresolved imports bind to.
 
 import type { Cpu } from "./cpu";
-import { mem, NativeFault } from "./mem";
-import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL } from "./abi";
+import { mem, NativeFault, BadAddress } from "./mem";
+import { trampAddr, TRAMP_BASE, TRAMP_END, RET_SENTINEL, E } from "./abi";
 import { perf } from "../perf";
 import { core, CORE_LIBC } from "./core";
 
@@ -186,16 +186,28 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
   let ret: HostRet | Promise<HostRet>;
   try { ret = served === 0 ? ARG0 : fn(cpu, a); }
   catch (e) {
-    // a host body tripping over a bad guest pointer (a JS Error, not a Java throwable or a fault
-    // already placed) is a fault of the guest call: name the block and caller as one
-    if (e instanceof Error && !("msg" in e) && !(e instanceof NativeFault && e.pc)) cpu.fault(`${e.message.replace(/^\[native\] /, "")} in ${names[slot]}`);
-    throw e;
+    if (e instanceof BadAddress) { ret = badPointer(cpu, slot, e); }
+    // any other JS Error (not a Java throwable or a fault already placed) is a fault of the
+    // guest call: name the block and caller as one
+    else if (e instanceof Error && !("msg" in e) && !(e instanceof NativeFault && e.pc)) cpu.fault(`${e.message.replace(/^\[native\] /, "")} in ${names[slot]}`);
+    else throw e;
   }
   const dt = slowMs ? performance.now() - t0 : 0;
   if (slowMs && dt > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.w[0] >>> 0).toString(16)},${(cpu.w[2] >>> 0).toString(16)},${(cpu.w[4] >>> 0).toString(16)}) ${dt.toFixed(0)}ms`);
   if (ret instanceof Promise) { cpu.pending = ret; return; }
   if (traced) hostTrace.ring[hostTrace.ring.length - 1] += `=${typeof ret === "number" ? (ret >>> 0).toString(16) : String(ret)}`;
   hostReturn(cpu, ret);
+}
+
+/** the bodies of system calls (syscall.ts), under libc's wrappers and syscall(2) */
+export const kernelEntries = new Set<HostFn>();
+/** a host body that met a bad guest pointer, synchronously or once its call resumed: a system
+ *  call's wrapper fails with EFAULT; anything else faults as bionic's own code would */
+export function badPointer(cpu: Cpu, slot: number, e: unknown): HostRet {
+  if (!(e instanceof BadAddress)) throw e;
+  if (kernelEntries.has(fns[slot])) { mem.st32(cpu.errnoAddr, E.FAULT); return -1; }
+  cpu.raiseBadAddress(e);
+  return NORET;
 }
 
 /** host calls and slices slower than this many ms are logged (debug: set __wdSlowMs before load) */

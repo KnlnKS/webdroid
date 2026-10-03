@@ -5,10 +5,10 @@
 import type { Runtime } from "../jvm/runtime";
 import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../jvm/natives/jlang";
 import { currentStrand, enterStrand } from "../jvm/suspend";
-import { NativeFault, mem } from "./mem";
+import { NativeFault, BadAddress, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
-import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
+import { Args, Args64, type ArgReader, badPointer, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64, E } from "./abi";
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
@@ -636,14 +636,15 @@ export class Cpu {
         }
         if (ex === SliceExit.Suspend) {
           budgetStreak = 0;
-          const p = this.pending!;
+          const p = this.pending!, slot = this.exit;
           this.pending = null;
           const outerParked = this.parkedAt;                                        // a frame below may be parked in its own host call
           this.parkedAt = myDepth;
           this.pump();
           this.state = "park";
           turn.release();
-          const v = await p;
+          let v: unknown;
+          try { v = await p; } catch (e) { v = badPointer(this, slot, e); }
           // a handler delivered while we were parked may still be running on top of this frame,
           // parked in its own host call (sigsuspend): the flag is its until it finishes
           this.state = "idle";
@@ -654,6 +655,13 @@ export class Cpu {
           this.parkedAt = outerParked;
           turn.own();
           if (this.finished) return;
+          if (this.raised) {
+            const { sig, info } = this.raised;
+            this.raised = null;
+            this.deferredSignalDepths.delete(myDepth);
+            await this.deliverFromLoop(turn, sig, info);
+            continue;
+          }
           hostReturn(this, v as HostRet);
           this.deferredSignalDepths.delete(myDepth);
           continue;
@@ -699,7 +707,7 @@ export class Cpu {
           continue;
         case CoreExit.Host:
           hostDispatch(this, this.exit);
-          if (this.pending || this.finished) { jitDrain(); return this.pending ? SliceExit.Suspend : SliceExit.Exit; }
+          if (this.pending || this.finished || this.raised) { jitDrain(); return this.pending ? SliceExit.Suspend : this.raised ? SliceExit.Signal : SliceExit.Exit; }
           if (this.signals.length && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
           continue;
         case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
@@ -730,11 +738,12 @@ export class Cpu {
       if (!rawSyscall) this.fault(`syscall ${nr}`);
       const a = this.args;
       a.reset(this);
-      const ret = rawSyscall(this, nr, a);
+      let ret: HostRet | Promise<HostRet>;
+      try { ret = rawSyscall(this, nr, a); } catch (e) { ret = efault(e); }
       // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
       if (ret instanceof Promise) {
         if (nr === 124) this.deferSignalsUntilResume(); // sched_yield completes before a pending signal is delivered
-        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; });
+        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }, (e) => { this.syscallReturn(efault(e)); return NORET; });
         return;
       }
       this.syscallReturn(ret);
@@ -796,17 +805,13 @@ export class Cpu {
       case Fault.Brk: return { sig: SIGTRAP, info: { code: TRAP_BRKPT, addr: pc } };
       case Fault.MisalignedPc: return { sig: SIGBUS, info: { code: BUS_ADRALN, addr: pc } };
       case Fault.NullPage: return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr: this.faultAddress } };
-      case Fault.BadAddress: {
-        const addr = this.faultAddress, h = Number(addr >> 32n), lo = Number(addr & 0xffffffffn);
-        // no mapping, or one without the access; a plane-0 address past both is a misaligned access
-        if (h) return { sig: SIGSEGV, info: { code: core.plane_reserved(h) ? SEGV_ACCERR : SEGV_MAPERR, addr } };
-        if (!mem.backed(lo)) return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr } };
-        if (mem.writeProtected(lo)) return { sig: SIGSEGV, info: { code: SEGV_ACCERR, addr } };
-        return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
-      }
+      case Fault.BadAddress: return memoryFault(this.faultAddress);
     }
     return null;
   }
+  /** a host function's access through a bad pointer, as the libc code it stands for would make
+   *  it: the signal is raised at its entry, which a handler that returns runs again */
+  raiseBadAddress(e: BadAddress): void { this.raised = memoryFault(e.addr); }
   private get faultAddress(): bigint { return BigInt(this.u32[(OFF_ADDR >> 2) + 1]) << 32n | BigInt(this.u32[OFF_ADDR >> 2]); }
   /** the synchronous signal a slice ended on, for the run loop to deliver */
   raised: { sig: number; info: SigInfo } | null = null;
@@ -840,6 +845,20 @@ export class Cpu {
 
 /** the kernel's syscall dispatcher, installed by kernelInit: raw svc/swi numbers the core leaves to the host */
 let rawSyscall: ((cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>) | null = null;
+/** a system call's access through a bad user pointer fails as copy_from_user does */
+function efault(e: unknown): HostRet {
+  if (e instanceof BadAddress) return -E.FAULT;
+  throw e;
+}
+/** a data access fault at `addr`: no mapping, or one without the access; a plane-0 address
+ *  past both is a misaligned access */
+function memoryFault(addr: bigint): { sig: number; info: SigInfo } {
+  const h = Number(addr >> 32n), lo = Number(addr & 0xffffffffn);
+  if (h) return { sig: SIGSEGV, info: { code: core.plane_reserved(h) ? SEGV_ACCERR : SEGV_MAPERR, addr } };
+  if (!mem.backed(lo)) return { sig: SIGSEGV, info: { code: SEGV_MAPERR, addr } };
+  if (mem.writeProtected(lo)) return { sig: SIGSEGV, info: { code: SEGV_ACCERR, addr } };
+  return { sig: SIGBUS, info: { code: BUS_ADRALN, addr } };
+}
 export function setRawSyscall(fn: (cpu: Cpu, nr: number, a: ArgReader) => HostRet | Promise<HostRet>): void { rawSyscall = fn; }
 /** bionic's pthread_internal_t is under 0x200 bytes; a crash reporter scans it up to a page */
 const PTHREAD_SIZE = 0x200;

@@ -6,7 +6,7 @@ import { mem } from "./mem";
 import { futex } from "./pthread";
 import { E, RET_SENTINEL } from "./abi";
 import { jitStats, JIT_HEAT } from "./core";
-import { kernelInit, rawSyscall } from "./syscall";
+import { kernelInit, rawSyscall, syscallEntry } from "./syscall";
 
 for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 thread identity", () => {
   test("static TLS is initialized once per guest thread", () => {
@@ -296,6 +296,33 @@ test("an ARM32 store past 2 GiB or to space the memory does not yet back faults 
   } finally {
     if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
     cpu.dispose();
+  }
+});
+
+test("a bad pointer fails a system call with EFAULT and faults a libc body with SIGSEGV", async () => {
+  setA64(true); kernelInit();
+  const cpu = new Cpu(new JThread(), "bad-pointer"), at = mem.reserve(4096, 4096), seen: bigint[] = [];
+  mem.u32.set([0xd2801408, 0xd4000001, 0xd65f03c0], at >>> 2);                         // uname(x0) by svc
+  const libcSyscall = defineHost("test.bad.syscall", syscallEntry);
+  const userRead = defineHost("test.bad.read", (_c, a) => mem.ld32(a.p()));
+  const handler = defineHost("test.bad.segv", (_c, a) => {
+    a.i(); const info = a.p(), ctx = a.p();
+    seen.push(mem.ld64(info + 16));
+    mem.st64(ctx + 0xb8, 7n);
+    mem.st64(ctx + 0x1b8, mem.ld64(ctx + 0xb8 + 30 * 8));                              // return to the caller
+    return 0;
+  });
+  const previous = sigHandlers.get(11);
+  sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
+  try {
+    expect(await cpu.call(at, [8])).toBe(-E.FAULT);
+    expect(await cpu.call(libcSyscall, [160, 8])).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(E.FAULT);
+    expect(await cpu.call(userRead, [0x24])).toBe(7);
+    expect(seen).toEqual([0x24n]);
+  } finally {
+    if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
+    cpu.dispose(); setA64(false);
   }
 });
 

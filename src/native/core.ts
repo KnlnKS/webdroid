@@ -9,6 +9,11 @@ import { guestNow, wallMillis } from "../guest-clock";
 export class NativeFault extends Error {
   pc = 0;
 }
+/** a host access through a guest pointer to nothing mapped: copy_from_user's EFAULT under a
+ *  system call, the guest's own SIGSEGV under a libc function that reads it in user space */
+export class BadAddress extends NativeFault {
+  constructor(readonly addr: bigint, message: string) { super(message); }
+}
 
 interface Core {
   __heap_base: WebAssembly.Global;

@@ -2,9 +2,9 @@
 // allocator, page, plane and region calls forwarded to the core (mem.zig). See abi.ts for the
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
-import { core, memory, shared, NativeFault, onMemoryGrown } from "./core";
+import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core";
 import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
-export { NativeFault };
+export { NativeFault, BadAddress };
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
 /** the committed bytes past LOW: a host access beyond them is to no page in use */
@@ -19,7 +19,7 @@ const enc = new TextEncoder(), dec = new TextDecoder();
  *  the plane's writable pages under it) */
 function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
-  if (planes && !core.commit_phys(a >>> 0, n)) throw new NativeFault(`[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
+  if (planes && !core.commit_phys(a >>> 0, n)) throw new BadAddress(BigInt(mem.va(a >>> 0)), `[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
 }
 /** Notify after a host writes directly into a guest-provided buffer. */
 export function wrote(a: number, n: number): void {
@@ -28,7 +28,7 @@ export function wrote(a: number, n: number): void {
   for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & 1) { core.code_write(a >>> 0, n); return; }
 }
 function badAddr(a: number): never {
-  throw new NativeFault(`[native] bad address 0x${(a >>> 0).toString(16)}`);
+  throw new BadAddress(BigInt(a >>> 0), `[native] bad address 0x${(a >>> 0).toString(16)}`);
 }
 function views(): void {
   buf = memory.buffer;
@@ -118,7 +118,7 @@ export const mem = {
   /** plane h ≠ 0 address → buffer offset; past the committed prefix is a fault, as the page would be */
   tx(h: number, lo: number): number {
     const p = core.tx(h >>> 0, lo >>> 0) >>> 0;
-    if (!p) throw new NativeFault(`[native] bad address 0x${(h >>> 0).toString(16)}_${(lo >>> 0).toString(16).padStart(8, "0")} (plane ${h >>> 0}, ${core.plane_reserved(h) ? "not committed" : "unmapped"})`);
+    if (!p) throw new BadAddress(BigInt(h >>> 0) << 32n | BigInt(lo >>> 0), `[native] bad address 0x${(h >>> 0).toString(16)}_${(lo >>> 0).toString(16).padStart(8, "0")} (plane ${h >>> 0}, ${core.plane_reserved(h) ? "not committed" : "unmapped"})`);
     return p;
   },
   txVa(va: bigint): number { const [h, lo] = split(va); return h ? mem.tx(h, lo) : lo; },

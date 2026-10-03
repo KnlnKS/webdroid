@@ -5,7 +5,7 @@
 
 import { mem, anchor } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
-import { calledMissing, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
+import { calledMissing, kernelEntries, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
 import { cpuByOsTid, exitGroup, setRawSyscall, type Cpu } from "./cpu";
 import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
@@ -178,6 +178,7 @@ export function kernelInit(): void {
     table[+nr] = byName[name];
   }
   for (const [nr, fn] of Object.entries(wide ? A64 : A32)) table[+nr] = fn;
+  for (const fn of [...Object.values(byName), syscallEntry]) kernelEntries.add(fn);
   setRawSyscall(rawSyscall);
   installDebuggerdHandlers();
   fsInit();
@@ -190,3 +191,5 @@ export function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promis
   calledMissing.add("syscall " + nr);
   return fail(cpu, E.NOSYS);
 }
+/** libc's syscall(2) */
+export const syscallEntry: HostFn = (cpu, a) => rawSyscall(cpu, a.i(), a);
