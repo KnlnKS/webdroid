@@ -1,7 +1,7 @@
 // java.lang.* natives. Convention: Java booleans are 0/1 numbers, longs are BigInt,
 // Strings are JS string primitives (String.prototype carries mangled Java methods).
 
-import { rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
+import { awaited, rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
@@ -17,9 +17,9 @@ import { procIdentity, procTasks, processTid } from "../../shell/procfs";
 
 function* joinCharSequences(separator: unknown, parts: unknown[]): Gen<string> {
   if (separator == null || parts == null) rt.npe();
-  const text: string = yield csText(separator);
+  const text = yield* awaited(csText(separator));
   const values: string[] = [];
-  for (const part of parts) values.push(part == null ? "null" : yield csText(part));
+  for (const part of parts) values.push(part == null ? "null" : yield* awaited(csText(part)));
   return values.join(text);
 }
 
@@ -412,12 +412,12 @@ rt.register({
       return inherited || vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
     }),
     "findResources(Ljava/lang/String;)Ljava/util/Enumeration;": driven(function* (this: JClassLoader, path: string): Gen {
-      const { mkEnumeration } = yield import("./jcoll");
+      const { mkEnumeration } = yield* awaited(import("./jcoll"));
       const url = yield vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
       return mkEnumeration(url ? [url] : []);
     }),
     "getResources(Ljava/lang/String;)Ljava/util/Enumeration;": driven(function* (this: JClassLoader, path: string): Gen {
-      const { mkEnumeration } = yield import("./jcoll");
+      const { mkEnumeration } = yield* awaited(import("./jcoll"));
       const urls: unknown[] = [];
       const inherited = this.parent && (yield vcall(this.parent, "getResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path));
       if (inherited) while (yield vcall(inherited, "hasMoreElements", "()Z")) urls.push(yield vcall(inherited, "nextElement", "()Ljava/lang/Object;"));
@@ -436,7 +436,7 @@ rt.register({
       const archive = this.runtime.classpathLocations.get(entry) ?? apkPath();
       const path = `${archive}.lib/${abi}/lib${n}.so`;
       if (!vfs.exists(path)) {
-        const bytes = yield this.runtime.readClasspath(entry);
+        const bytes = yield* awaited(this.runtime.readClasspath(entry));
         if (!bytes) return null;
         vfs.write(path, bytes, false);
       }
@@ -557,7 +557,7 @@ rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, method
 } });
 
 const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen {
-  yield vcall(out, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
+  yield vcall(out, "println", "(Ljava/lang/String;)V", yield* awaited(stackTraceText(this)));
 });
 /** JVM-shaped stack trace text: header from the (overridable) toString, then the trace's frames. */
 export const stackTraceText = driven(function* (t: JThrowable): Gen<string> {
@@ -568,7 +568,7 @@ export const stackTraceText = driven(function* (t: JThrowable): Gen<string> {
   }
   let out = yield* described(t);
   const seen = new Set<JThrowable>([t]);
-  for (let c: JThrowable | null = yield causeOf(t); c && !seen.has(c); c = yield causeOf(c)) {
+  for (let c = yield* awaited(causeOf(t)); c && !seen.has(c); c = yield* awaited(causeOf(c))) {
     seen.add(c);
     out += "\nCaused by: " + (yield* described(c));
   }
@@ -1164,7 +1164,7 @@ rt.register({
     "static load(Ljava/lang/String;)V": driven(function* (path: string, owner: Runtime = rt): Gen {
       if (path === null) rt.npe();
       if (!path.startsWith("/")) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", "Expecting an absolute path of the library: " + path);
-      const error: string | null = yield nativeLoad(path, (owner.classLoader ?? null) as JClassLoader | null);
+      const error = yield* awaited(nativeLoad(path, (owner.classLoader ?? null) as JClassLoader | null));
       if (error !== null) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", error);
     }),
   },
@@ -1246,7 +1246,7 @@ rt.register({
     // AOSP's LoggingHandler prints the whole trace; the "Caused by" chain is what names the real
     // fault, and the JS stack locates one a native raised
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": driven(function* (_t: unknown, e: unknown): Gen {
-      if (e instanceof JThrowable) console.error("[uncaughtException]", yield stackTraceText(e), "\n" + e.jsStack);
+      if (e instanceof JThrowable) console.error("[uncaughtException]", yield* awaited(stackTraceText(e)), "\n" + e.jsStack);
       else console.error("[uncaughtException]", e);
     }),
   },

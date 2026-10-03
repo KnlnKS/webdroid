@@ -29,7 +29,8 @@ export function newArrayList(items: unknown[] = []): Obj {
   return l;
 }
 
-/** a Java Collection's elements, in its iteration order */
+/** a Java Collection's elements, in its iteration order; their type, which Java's generics erase,
+ *  is the caller's to assert */
 export function toJsArray(c: unknown): unknown[] | Promise<unknown[]> {
   if (c === null || c === undefined) return [];
   if ((c as Obj).constructor === arrayListCtor) return (c as Obj)[DATA].slice(0, (c as Obj)[SIZE]);

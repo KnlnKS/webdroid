@@ -1,6 +1,6 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { rt, JObj, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
+import { awaited, rt, JObj, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
 import { concat } from "../abi";
 import { vcall, vcallOn, curThread, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
@@ -138,7 +138,7 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
     let total = 0;
     for (let i = 0; i < count; i++) {
       const at = physical(iov) + i * 8, base = mem.ld32(at) >>> 0, len = mem.ld32(at + 4) >>> 0, scratch = new Uint8Array(len);
-      const n: number = yield javaReadFd(openFd(d), scratch);
+      const n = yield* awaited(javaReadFd(openFd(d), scratch));
       if (n < 0) { if (total) break; return BigInt(ioStatus(n, true)); }
       mem.write(base, scratch.subarray(0, n));
       total += n;

@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
+import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
 import { newObj, vcall, scall, after, checkFromIndexSize } from "./jlang";
 import { strArray, u8, mangleMethod } from "../abi";
@@ -154,7 +154,7 @@ rt.register({
     "<init>()V": function () {},
     "read()I": driven(function* (this: JSocketIn): Gen {
       const b = new Uint8Array(1);
-      const n = yield socketRead(this.s, b, 0, 1);
+      const n = yield* awaited(socketRead(this.s, b, 0, 1));
       return n < 0 ? -1 : b[0];
     }),
     "read([B)I": function (this: JSocketIn, out: Int8Array) {
@@ -196,7 +196,7 @@ rt.register({
     }),
     "connect(Ljava/net/SocketAddress;)V": function (this: JSSLSocket, a: unknown) { return vcall(this, "connect", "(Ljava/net/SocketAddress;I)V", a, 0); },
     "connect(Ljava/net/SocketAddress;I)V": driven(function* (this: JSSLSocket, a: JObj | null): Gen {
-      this.host = a === null ? "" : yield vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = yield socketPort(a);
+      this.host = a === null ? "" : yield vcall(a, "getHostString", "()Ljava/lang/String;"); this.port = yield* awaited(socketPort(a));
       yield this.open();
     }),
     "getInputStream()Ljava/io/InputStream;": function (this: JSSLSocket) {
@@ -387,13 +387,13 @@ class JHttpInputStream extends JObj {
   }
 }
 rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "java/io/InputStream", methods: {
-  "read()I": driven(function* (this: JHttpInputStream): Gen { return (yield this.fill()) ? this.bytes[this.offset++] : -1; }),
+  "read()I": driven(function* (this: JHttpInputStream): Gen { return (yield* awaited(this.fill())) ? this.bytes[this.offset++] : -1; }),
   "read([B)I": function (this: JHttpInputStream, out: Int8Array | null) { return this.read(out, 0, out?.length ?? 0); },
   "read([BII)I": function (this: JHttpInputStream, out: Int8Array | null, off: number, len: number) { return this.read(out, off, len); },
   "available()I": function (this: JHttpInputStream) { return this.bytes.length - this.offset; },
   "skip(J)J": driven(function* (this: JHttpInputStream, count: bigint): Gen {
     let left = count;
-    while (left > 0n && (yield this.fill())) {
+    while (left > 0n && (yield* awaited(this.fill()))) {
       const n = Number(left < BigInt(this.bytes.length - this.offset) ? left : BigInt(this.bytes.length - this.offset));
       this.offset += n; left -= BigInt(n);
     }
@@ -449,7 +449,7 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
   const agent: string | null = yield scall("java/lang/System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "http.agent");
   if (!base.has("x-wd-user-agent") && agent) base.set("x-wd-user-agent", agent);
   if (this.ifMod) base.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
-  const spec: string = yield urlText(this.url);
+  const spec = yield* awaited(urlText(this.url));
   // OkHttp's HttpUrl.getChecked
   if (!(yield vcall(this.url, "getHost", "()Ljava/lang/String;"))) throw rt.mkThrowable("java/net/UnknownHostException", "Invalid host: " + spec);
   let method = this.method, target = spec, r: Response, hdrs: [string, string][], length: string | null;
@@ -460,16 +460,16 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
     const cookies = yield scall("java/net/CookieHandler", "getDefault", "()Ljava/net/CookieHandler;");
     const uri = cookies && (yield cookieURI(target)), headers = new Headers(base);
     if (cookies) {
-      const offered = yield vcall(cookies, "get", "(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;", uri, yield headerMap(group(this.req)));
-      for (const e of (yield toJsArray(yield vcall(offered, "entrySet", "()Ljava/util/Set;"))) as unknown[]) {
+      const offered = yield vcall(cookies, "get", "(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;", uri, yield* awaited(headerMap(group(this.req))));
+      for (const e of yield* awaited(toJsArray(yield vcall(offered, "entrySet", "()Ljava/util/Set;")))) {
         const key: string | null = yield vcall(e, "getKey", "()Ljava/lang/Object;");
-        const values = (yield toJsArray(yield vcall(e, "getValue", "()Ljava/lang/Object;"))) as string[];
+        const values = (yield* awaited(toJsArray(yield vcall(e, "getValue", "()Ljava/lang/Object;")))) as string[];
         if (key && /^cookie2?$/i.test(key) && values.length) headers.set("x-wd-" + key, values.join("; "));
       }
     }
     arm(this.cto, "connect timed out");
     try {
-      r = yield fetch("/proxy?manual=1&url=" + encodeURIComponent(target), { method, headers, signal: ac.signal, body });
+      r = yield* awaited(fetch("/proxy?manual=1&url=" + encodeURIComponent(target), { method, headers, signal: ac.signal, body }));
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
       if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
@@ -478,7 +478,7 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
     // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
     if (r.status === 502 && !r.headers.get("x-wd-final-url")) {
       const { hostname, port, protocol } = new URL(target), kind = r.headers.get("x-wd-error");
-      const detail = (yield r.text()).replace(/^proxy error: /, "");
+      const detail = (yield* awaited(r.text())).replace(/^proxy error: /, "");
       if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
       if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
       throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
@@ -490,7 +490,7 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
     });
     length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
     if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
-    if (cookies) yield vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, yield headerMap(group(hdrs)));
+    if (cookies) yield vcall(cookies, "put", "(Ljava/net/URI;Ljava/util/Map;)V", uri, yield* awaited(headerMap(group(hdrs))));
     const status = Number(r.headers.get("x-wd-status")) || r.status, location = r.headers.get("location");
     if (!this.follow || ![301, 302, 303, 307, 308].includes(status) || !location) break;
     // OkHttp's MAX_FOLLOW_UPS
@@ -543,7 +543,7 @@ class JHttpURLConnection extends JObj {
 }
 /** an accessor that needs the response: connect first, then answer on the calling thread */
 function withRes<A extends unknown[], C extends JHttpURLConnection = JHttpURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
-  return driven(function* (this: C, ...a: A): Gen { return yield f.call(this, yield this.connect(), ...a); });
+  return driven(function* (this: C, ...a: A): Gen { return yield f.call(this, yield* awaited(this.connect()), ...a); });
 }
 /** URLConnection's checks before a request property changes */
 function checkRequestKey(c: JHttpURLConnection, k: string | null): asserts k is string {
@@ -651,7 +651,7 @@ rt.register({
     },
     "getErrorStream()Ljava/io/InputStream;": driven(function* (this: JHttpURLConnection): Gen {
       // AOSP connects here too, and answers null for any failure rather than throwing
-      try { return (yield this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }
+      try { return (yield* awaited(this.connect())).status >= 400 ? this.stream() : null; } catch { return null; }
     }),
     "disconnect()V": function (this: JHttpURLConnection) { this.res?.stream.close(); this.ac?.abort(); this.ac = null; },
     "usingProxy()Z": () => 0,
