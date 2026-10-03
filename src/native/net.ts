@@ -47,7 +47,7 @@ const UDP_QUEUE_PACKETS = 256, UDP_QUEUE_BYTES = 1 << 20;
 const RCVBUF_MIN = 2304, SNDBUF_MIN = 4608;
 
 // ── byte streams: a relay connection, or one end of an in-process loopback connection
-interface Stream {
+export interface Stream {
   /** no more bytes will arrive than are queued */
   readonly eof: boolean;
   available(): number;
@@ -255,7 +255,7 @@ function listenerFor(ep: Endpoint): StreamSocket | null {
   }
   return null;
 }
-function newStreamSocket(family: number, stream: Stream, local: Endpoint, peer: Endpoint): StreamSocket {
+function newStreamSocket(family: number, stream: Stream, local: Endpoint | null, peer: Endpoint): StreamSocket {
   return {
     family, protocol: IPPROTO_TCP, nonblock: false, connected: true, error: 0, waiters: new Set(), references: 1,
     peer, local, options: new Map(), kind: "stream", stream, connecting: false, backlog: null, readShut: false, writeShut: false,
@@ -338,6 +338,20 @@ export function socketConnect(fd: number, ep: Endpoint | null): number | Promise
   });
   if (socket.nonblock) return -E.INPROGRESS;
   return completion.then((r) => { if (r) socket.error = 0; return r; });
+}
+
+/** A connection to this process's listener at `ep` from outside its descriptor table, as another
+ *  process's client (the media server, WebView's network service) opens one; null when refused.
+ *  Its ephemeral port stays taken until `close`. */
+export function loopbackConnection(ep: Endpoint): { stream: Stream; close(): void } | null {
+  const listener = listenerFor(ep);
+  record(`connect host loopback :${ep.port} ${listener ? "accepted" : "refused"}`);
+  if (!listener) return null;
+  const [client, server] = Loopback.pair(), socket = newStreamSocket(listener.family, client, null, ep);
+  if (bindTo(socket, { address: ep.address.length === 4 ? V4_LOOPBACK : V6_LOOPBACK, port: 0 })) return null;
+  listener.backlog!.push(newStreamSocket(listener.family, server, ep, socket.local!));
+  wake(listener);
+  return { stream: client, close: () => { client.close(); bound.stream.delete(socket); } };
 }
 
 /** accept(2): the new descriptor and its peer */

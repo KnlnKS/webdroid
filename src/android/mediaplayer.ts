@@ -8,6 +8,8 @@ import { readFully, type FileSource } from "../shell/lazyfile";
 import { presentSurface, windowSurface, type GlSurface } from "./glsurface";
 import { newAudioSessionId, setSounding } from "./audio-output";
 import { dataSourceFile, fdSlice, nativePeer, postNativeEvent } from "./media-native";
+import { guestEndpoint } from "../native/net-address";
+import { proxyFetch } from "../native/loopback-http";
 
 const IDLE = 1, INITIALIZED = 2, PREPARING = 4, PREPARED = 8, STARTED = 16, PAUSED = 32, STOPPED = 64, COMPLETE = 128, ERROR = 0;
 const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, MEDIA_SET_VIDEO_SIZE = 5,
@@ -51,10 +53,12 @@ class Player {
     if (el) { el.pause(); setSounding(el, false); if (el.src.startsWith("blob:")) URL.revokeObjectURL(el.src); }
     this.media = null; this.rendering = false; this.prepared?.(1); this.prepared = null;
   }
-  load(src: string): void {
+  load(src: string | Promise<string>): void {
     this.require(IDLE);
     const el = this.media = document.createElement("video");
-    el.preload = "none"; el.src = src; el.loop = this.looping; el.volume = this.volume;
+    el.preload = "none"; el.loop = this.looping; el.volume = this.volume;
+    if (typeof src === "string") el.src = src;
+    else src.then((url) => { if (this.media === el) el.src = url; else URL.revokeObjectURL(url); }, () => el.onerror?.(new Event("error")));
     this.applyRate(el);
     this.seeks = 0;
     const live = (f: () => void) => () => { if (this.media === el) f(); };
@@ -107,6 +111,19 @@ const loadFrom = (p: Player, source: FileSource | null) => {
   if (!source?.size) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
   return after(readFully(source), (bytes) => p.load(URL.createObjectURL(new Blob([bytes as BlobPart]))));
 };
+/** a URL the device serves itself, read whole from the app's loopback server as the media server
+ *  reads it, after its redirects */
+async function ownSource(url: string, hops = 0): Promise<string> {
+  const response = await proxyFetch(url, { headers: new Headers() });
+  const status = Number(response.headers.get("x-wd-status")) || response.status, location = response.headers.get("location");
+  if (status >= 300 && status < 400 && location && hops < 20) {
+    await response.body?.cancel();
+    const next = new URL(location, url).href;
+    return guestEndpoint(next) ? ownSource(next, hops + 1) : "/proxy?url=" + encodeURIComponent(next);
+  }
+  if (status < 200 || status > 299) throw new Error(`HTTP ${status}`);
+  return URL.createObjectURL(await response.blob());
+}
 const position = (p: Player) => Math.round((p.media?.currentTime ?? 0) * 1000);
 rt.registerJnis(MP, {
   "native_init()V": () => {},
@@ -125,10 +142,10 @@ rt.registerJnis(MP, {
     p.require(IDLE);
     return after(dataSourceFile(source), (file) => loadFrom(p, file));
   }),
-  // a URL with a scheme other than file; only HTTP is fetched (through the proxy)
+  // a URL with a scheme other than file; only HTTP is fetched, through the proxy or from the app's own loopback server
   "nativeSetDataSource(Landroid/os/IBinder;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V": M((p, _http: unknown, path: string) => {
     if (!/^https?:/i.test(path)) throw rt.mkThrowable("java/io/IOException", "setDataSource failed.: status=0x80000000");
-    p.load("/proxy?url=" + encodeURIComponent(path));
+    p.load(guestEndpoint(path) ? ownSource(path) : "/proxy?url=" + encodeURIComponent(path));
   }),
   "_setVideoSurface(Landroid/view/Surface;)V": M((p, surface: JObj | null) => {
     p.surface = surface;

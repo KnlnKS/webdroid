@@ -1,5 +1,6 @@
 import { htmlAttribute, webDocument } from "./webhtml";
 import { webScript } from "./webscript";
+import { isGuestHost } from "../native/net-address";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
@@ -32,28 +33,32 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
     const headers = new Headers();
     request.headers.forEach((value, name) => { if (name.startsWith("x-wd-")) headers.set(name.slice(5), value); });
     const encoded = !frame && !isolated && headers.has("accept-encoding");
-    let intercepted: Response | null = null;
-    const bridge = query.get("bridge");
-    if (bridge) {
-      const callback = new Request(new URL(`/webview-call?id=${encodeURIComponent(bridge)}`, request.url), {
-        method: "POST", signal: request.signal,
-        body: JSON.stringify({ kind: "request", url, method: request.method, main: frame, headers: Object.fromEntries(headers) }),
-      });
-      const response = await options.bridgeCall(callback);
+    const bridge = query.get("bridge"), body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
+    /** the WebView's process answering `call`: its WebResourceResponse, or null for none */
+    const bridged = async (call: object): Promise<Response | null> => {
+      const response = await options.bridgeCall(new Request(new URL(`/webview-call?id=${encodeURIComponent(bridge!)}`, request.url), {
+        method: "POST", signal: request.signal, body: JSON.stringify(call),
+      }));
       if (!response.ok) throw new Error("WebView request callback unavailable");
       const reply = await response.json() as { error?: string; value?: { body: string; status: number; reason: string; headers: Record<string, string> } };
       if (reply.error) throw new Error(reply.error);
-      if (reply.value) {
-        const value = reply.value, empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
-        intercepted = new Response(empty ? null : Uint8Array.fromBase64(value.body), {
-          status: value.status, statusText: value.reason, headers: value.headers,
-        });
-      }
+      if (!reply.value) return null;
+      const value = reply.value, empty = request.method === "HEAD" || [204, 205, 304].includes(value.status);
+      return new Response(empty ? null : Uint8Array.fromBase64(value.body), { status: value.status, statusText: value.reason, headers: value.headers });
+    };
+    let intercepted = bridge && query.get("intercept") === "1"
+      ? await bridged({ kind: "request", url, method: request.method, main: frame, headers: Object.fromEntries(headers) }) : null;
+    // the device's own address: the WebView's process serves it, and nothing else unless a remap
+    // (adb reverse's role) names a host server
+    if (!intercepted && url === requested && isGuestHost(new URL(url).hostname)) {
+      intercepted = bridge ? await bridged({ kind: "loopback", url, method: request.method, headers: Object.fromEntries(headers),
+        body: body && new Uint8Array(body).toBase64() }) : null;
+      if (!intercepted) throw new Error(`ECONNREFUSED: nothing listens at ${new URL(url).host}`);
     }
     const init: RequestInit = {
       method: request.method, headers,
       // buffered: a redirect (307/308) must replay the body, which a stream cannot
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+      body,
       redirect: manual ? "manual" : "follow",
     };
     const upstream = intercepted ?? await (options.fetchUpstream?.(url, init, encoded) ?? fetch(url, init));

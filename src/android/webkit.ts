@@ -24,6 +24,7 @@ import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { createFunctor, releaseFunctor, drawFunctor, type Rect } from "./webfunctor";
+import { guestEndpoint } from "../native/net-address";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
@@ -411,7 +412,8 @@ export class WebViewChromium extends JObj {
         const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
         return jmethod(this.client, method) !== jmethod(base, method);
       });
-      if (intercept || Object.keys(ifaces).length || e.method === "POST") {
+      // the bridge also carries what the app's own loopback server answers
+      if (intercept || Object.keys(ifaces).length || e.method === "POST" || guestEndpoint(e.url)) {
         const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
           webCookies(appHost?.pkg ?? ""), () => ref.deref()?.url ?? null, intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined);
         bridges.set(remote.id, ref);

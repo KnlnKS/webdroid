@@ -15,6 +15,7 @@ import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
 import { abandonConnection } from "../../native/net";
+import { proxyFetch } from "../../native/loopback-http";
 
 /** a connected TLS socket; rt.make skips <init> */
 async function dial(host: string, port: number): Promise<JSSLSocket> {
@@ -321,8 +322,8 @@ rt.register({
   },
 });
 
-// ── java.net.URL and HttpURLConnection, over the dev server's /proxy route: a page cannot speak
-// raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
+// ── java.net.URL and HttpURLConnection, over the dev server's /proxy route (or this process's own
+// server for a loopback URL): a page cannot speak raw HTTP to another origin. The proxy forwards `x-wd-*` request headers with the prefix
 // stripped and, with manual=1, hands a redirect back with its status in x-wd-status.
 /** a URL's external form, through its Java API */
 const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/String;") as string | Promise<string>;
@@ -469,7 +470,7 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
     }
     arm(this.cto, "connect timed out");
     try {
-      r = yield* awaited(fetch("/proxy?manual=1&url=" + encodeURIComponent(target), { method, headers, signal: ac.signal, body }));
+      r = yield* awaited(proxyFetch(target, { method, headers, signal: ac.signal, body }));
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
       if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");

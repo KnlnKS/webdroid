@@ -8,7 +8,8 @@ import { mem } from "./mem";
 import { NET_SYSCALLS, netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, SOL_SOCKET } from "./net";
 import { E } from "./abi";
 import { FS_SYSCALLS } from "./fs";
-import { AF_INET, AF_INET6 } from "./net-address";
+import { AF_INET, AF_INET6, guestEndpoint } from "./net-address";
+import { loopbackFetch } from "./loopback-http";
 
 test("a loopback TCP connection stays in the process, with Linux's errors", async () => {
   const SOCK_STREAM = 1, SOCK_NONBLOCK = 0x800, SO_ERROR = 4, any6 = new Array(16).fill(0);
@@ -158,4 +159,28 @@ test("AF_UNIX passes descriptors and credentials, times out receives and breaks 
     expect(cpu.signals.includes(13)).toBe(true);
     for (const fd of [a, readEnd, received]) expect(await call("close", fd)).toBe(0);
   } finally { mem.free(scratch); cpu.dispose(); setA64(false); }
+});
+
+test("host HTTP to a loopback URL reaches this process's listener", async () => {
+  expect(["http://0.0.0.0/", "http://[::1]:8/", "http://127.0.0.2/", "https://localhost/"].map((url) => guestEndpoint(url)))
+    .toEqual([{ address: [127, 0, 0, 1], port: 80 }, { address: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], port: 8 },
+      { address: [127, 0, 0, 2], port: 80 }, { address: [127, 0, 0, 1], port: 443 }]);
+  expect(guestEndpoint("http://example.com/")).toBeNull();
+  const server = socketCreate(AF_INET, 1, 0);
+  expect(socketBind(server, { address: [0, 0, 0, 0], port: 0 })).toBe(0);
+  expect(socketListen(server)).toBe(0);
+  const { port } = socketName(server, false) as { port: number };
+  expect(await loopbackFetch(`http://localhost:${port + 1}/`)).toBeNull();
+  const response = loopbackFetch(`http://localhost:${port}/exocache?v=1`, { method: "POST", headers: new Headers({ "x-test": "1" }), body: Uint8Array.of(104, 105) });
+  const accepted = await socketAccept(server) as { fd: number }, buffer = new Uint8Array(4096);
+  let request = "";
+  while (!request.endsWith("hi")) {
+    const n = await socketReceive(accepted.fd, buffer);
+    request += new TextDecoder().decode(buffer.subarray(0, n as number));
+  }
+  expect(request).toBe(`POST /exocache?v=1 HTTP/1.1\r\nHost: localhost:${port}\r\nx-test: 1\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi`);
+  socketSend(accepted.fd, new TextEncoder().encode("HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"));
+  const answer = (await response)!;
+  expect([answer.status, answer.headers.get("x-wd-set-cookie"), await answer.text()]).toEqual([200, '["a=1"]', "abcde"]);
+  for (const fd of [accepted.fd, server]) socketClose(fd);
 });

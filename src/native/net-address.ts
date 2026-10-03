@@ -100,3 +100,19 @@ export const INTERFACES: Interface[] = [{
   addresses: [{ address: V6_LOOPBACK, prefix: 128 }, { address: V4_LOOPBACK, prefix: 8 }],
 }];
 
+
+/** a URL hostname (canonical, as URL gives it) the device itself serves: a loopback or unspecified
+ *  address, or a hosts-file name for one */
+export function isGuestHost(hostname: string): boolean {
+  return /^(localhost|ip6-localhost|ip6-loopback|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1?\])$/i.test(hostname);
+}
+/** where an http(s) URL the device serves itself connects: Linux takes an unspecified address as
+ *  the loopback one */
+export function guestEndpoint(url: string): Endpoint | null {
+  const u = URL.parse(url);
+  if (!u || !/^https?:$/.test(u.protocol) || !isGuestHost(u.hostname)) return null;
+  const host = u.hostname.toLowerCase();
+  const address = host.startsWith("[") || host.startsWith("ip6-") ? V6_LOOPBACK
+    : host === "localhost" || host === "0.0.0.0" ? V4_LOOPBACK : parseIpv4(host)!;
+  return { address, port: Number(u.port) || (u.protocol === "https:" ? 443 : 80) };
+}
