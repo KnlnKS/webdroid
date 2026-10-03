@@ -756,13 +756,15 @@ grid) for measurement, TextRunShaper and drawing;
 `/font-index.json`, which the dev server and `build-prod` serve.
 
 **Open:**
-1. Per-call costs above the HLE's core-served versions (snprintf, mutex, libm); act on a measured
-   frame or tap only (§4.7).
-2. Done 2026-10-02 (history "the kernel's open Stage E items"): native AF_INET6, sendmsg/recvmsg,
-   AF_UNIX socketpair/seqpacket/datagram sockets, and mremap growing in place, MREMAP_FIXED and
-   shared file mappings. fork/vfork/posix_spawn answer EAGAIN (one process per tab); dlclose
-   still does not unload (no evidence an app needs it). Open: SCM_RIGHTS, a private file
-   mapping's mremap growth reading the file.
+1. Measured 2026-10-02 (history "the kernel's second round"), no change: in Lichess's Flutter
+   frames and Stockfish game, libc is 1.6-2.8% of native samples (malloc/free only); snprintf,
+   mutex and libm do not appear. DoodleJump and FlappyBird are ARM32 (HLE libc). Revisit on a
+   frame where they show.
+2. Done 2026-10-02 (history "the kernel's open Stage E items" and "the kernel's second round"):
+   native AF_INET6, sendmsg/recvmsg, AF_UNIX sockets with SCM_RIGHTS/SCM_CREDENTIALS,
+   SO_PEERCRED, SO_RCVTIMEO and EPIPE/SIGPIPE; mremap and MAP_FIXED over free address space,
+   private file mappings growing with the file; dlclose unloads. fork/vfork/posix_spawn answer
+   EAGAIN (one process per tab).
 3. Done 2026-10-02: host operations hold guest buffers across awaits through `anchor` (mem.ts).
 4. Done 2026-10-02: `gen-framework --properties` records the AVD's app-readable, build-fixed
    properties and uname (`src/shell/device-properties.ts`); the ABI lists follow the native tier.

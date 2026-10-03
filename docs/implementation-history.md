@@ -2283,6 +2283,44 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     film, so the fixed tap at y=1350 opened the ad. The fast lane now taps the film's text
     anchor, and passed 4/4 with an ad above it each time. Logging every datagram to the console
     slowed boot past the 18 s launch bound, so instrument with counters only.
+- **2026-10-02, the kernel's second round** (branch `knlnks/open-kernel`):
+  - AF_UNIX: SCM_RIGHTS holds a reference on each open file (fs.ts's or net.ts's table) with the
+    bytes and installs it at the lowest free number on receipt, as scm_detach_fds does (partial
+    cmsg and MSG_CTRUNC when the buffer is short, MSG_CMSG_CLOEXEC); a stream read stops after
+    bytes that carried descriptors, a peek duplicates them, a reader's last close releases what it
+    never read. SO_PASSCRED/SCM_CREDENTIALS and SO_PEERCRED report this process (every peer is
+    in it); an explicit SCM_CREDENTIALS other than its own is EPERM. LocalSocketImpl reads and
+    writes through the same calls (outboundFileDescriptors goes with every write, as
+    socket_write_all never clears it).
+  - SO_RCVTIMEO is kept per AF_UNIX socket: recv/read/accept answer EAGAIN once the guest clock
+    passes it; socket, poll and SO_*TIMEO timers moved from setTimeout to the guest clock.
+    SO_SNDTIMEO is stored but nothing waits: sends are unbounded queues here (no sk_sndbuf).
+  - A pipe or socket whose reader closed (or shut down reading) answers EPIPE; a stream raises
+    SIGPIPE unless MSG_NOSIGNAL. Linux has no SO_NOSIGPIPE. The AVD's app threads block SIGQUIT,
+    SIGUSR1, SIGPIPE and 32 (`SigBlk 0x80001204`, ART's BlockSignals); Cpus now start with that
+    mask, so SIGPIPE stays pending as on the device. An unblocked, unhandled terminating signal
+    is still dropped rather than ending the process. Fifos keep their old reader semantics.
+  - mremap growing a private file mapping reads the file (private mappings record their range);
+    MAP_FIXED/MREMAP_FIXED over free space claim it through the core's map_fixed (free plane-0
+    pages, a free plane, or a plane's mapping widened, its prefix moved up when the range lies
+    below). The core's own regions stay ENOMEM. Java's Os.mmap still refuses MAP_FIXED.
+  - Unsafe.addressSize is the process's pointer width, so IOVecWrapper's iovecs carry 64-bit
+    addresses and readv0/writev0 translate them (direct buffers from scudo sit above 4 GiB).
+    The audit of module-level values computed from PTR/KLAYOUT/MEM_SIZE found none left;
+    `scripts/generators.ts` rejects a direct read at load (indirect reads through a called
+    function are not seen).
+  - dlclose follows soinfo_unload: fini_array (reverse) and DT_FINI, root first, then images go
+    back to module space (zeroed, decoded code invalidated, holes reused, the lowest returned),
+    and symbols, handles, TLS descriptors and CFI granules go. Each DT_NEEDED edge now holds a
+    reference. NODELETE (flag or RTLD_NODELETE), the bionic boot libraries and images with TLS
+    stay (dynamic TLS blocks are not released); thread_local destructors hold their image. An
+    image's phdr copy (host data, bump only) is not reclaimed.
+  - Item 9 measured before acting: Lichess board-editor frames (7.3 fps) sample libflutter 62%,
+    libapp 25%, libc 1.6%, host malloc 1.2%; its Stockfish game is 82% engine, libc 2.8% (free).
+    No snprintf, mutex or libm samples, so no change. Its V8 profile spends 1.2 s of 12 s in
+    WebGL getError, which is where software GL's queued work is waited on.
+  - FlappyBird under `?jit=0` reaches every checkpoint as the JIT does (same game-over screen).
+
 - **2026-10-02, Stage E2 follow-up: the serialized font map, hyphenation, emoji and heavy weights.**
   - Every realm loaded the system font map twice: the zygote ran `loadPreinstalledSystemFontMap`,
     and bindApplication, handed no map, called `setSystemFontMap(null)`, which parses
