@@ -31,7 +31,7 @@ export interface Module {
   /** dlopen handle bookkeeping */
   refs: number;
   inited: boolean;
-  /** the program headers, copied into guest memory for dl_iterate_phdr */
+  /** the loaded program headers, for dl_iterate_phdr */
   phdr: number;
   phnum: number;
   tls: { image: Uint8Array; size: number; align: number } | null;
@@ -48,7 +48,7 @@ export interface Module {
 
 type Resolver = (sym: string, weak: boolean, from: Module) => number;
 
-const PT_LOAD = 1, PT_DYNAMIC = 2, PT_TLS = 7, PT_ARM_EXIDX = 0x70000001;
+const PT_LOAD = 1, PT_DYNAMIC = 2, PT_PHDR = 6, PT_TLS = 7, PT_ARM_EXIDX = 0x70000001;
 
 interface Fmt {
   machine: number; ptr: 4 | 8;
@@ -172,7 +172,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
   if (machine !== f.machine) throw new Error(`${name}: e_machine 0x${machine.toString(16)} is not ${cls === 2 ? "AArch64" : "ARM"}`);
   const phoff = dv.getUint32(cls === 2 ? 32 : 28, true);
   const phentsize = dv.getUint16(cls === 2 ? 54 : 42, true), phnum = dv.getUint16(cls === 2 ? 56 : 44, true);
-  let lo = 0xffffffff, hi = 0, dynOff = 0, dynSz = 0, exidxAddr = 0, exidxSz = 0;
+  let lo = 0xffffffff, hi = 0, dynOff = 0, dynSz = 0, exidxAddr = 0, exidxSz = 0, phdrAddr = -1;
   let tls: Module["tls"] = null;
   const loads: { off: number; vaddr: number; filesz: number; memsz: number }[] = [];
   for (let i = 0; i < phnum; i++) {
@@ -184,6 +184,7 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
       lo = Math.min(lo, (vaddr & -PAGE_SIZE) >>> 0);
       hi = Math.max(hi, ((vaddr + memsz + PAGE_SIZE - 1) & -PAGE_SIZE) >>> 0);
     } else if (type === PT_DYNAMIC) { dynOff = vaddr; dynSz = memsz; }
+    else if (type === PT_PHDR) phdrAddr = vaddr;
     else if (type === PT_TLS) {
       const align = dv.getUint32(p + f.phAlign, true);
       if (filesz > memsz || off + filesz > bytes.length || align && (align & (align - 1))) throw new Error(`${name}: invalid PT_TLS`);
@@ -199,8 +200,11 @@ export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate
     mem.u8.set(bytes.subarray(l.off, l.off + l.filesz), base + l.vaddr);
     if (l.memsz > l.filesz) mem.u8.fill(0, base + l.vaddr + l.filesz, base + l.vaddr + l.memsz);
   }
-  const phdr = mem.hostAlloc(phnum * f.phEnt, 8);
-  mem.u8.set(bytes.subarray(phoff, phoff + phnum * f.phEnt), phdr);
+  // bionic's ElfReader::FindPhdr: PT_PHDR, else the headers in a first segment that maps the file's start
+  const tableSize = phnum * (phentsize || f.phEnt), first = loads[0];
+  if (phdrAddr < 0 && first.off === 0 && phoff + tableSize <= first.filesz) phdrAddr = first.vaddr + phoff;
+  if (phdrAddr < 0 || !loads.some((l) => phdrAddr >= l.vaddr && phdrAddr + tableSize <= l.vaddr + l.filesz)) throw new Error(`${name}: can't find loaded phdr`);
+  const phdr = base + phdrAddr;
   const mod: Module = {
     name, base, end: base + hi, start: base + lo, w64: cls === 2, exports: new Map(), initArray: [], init: 0, finiArray: [], fini: 0, nodelete: false, needed: [],
     exidx: { addr: base + exidxAddr, count: exidxSz >> 3 }, symbols: { addr: new Uint32Array(0), names: [] },

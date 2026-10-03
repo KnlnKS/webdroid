@@ -409,6 +409,13 @@ export class Cpu {
     core.cpu_free(this.base);
     return threadData;
   }
+  /** an unloaded image's TLS block */
+  releaseTls(key: object): void {
+    const p = this.staticTlsBlocks.get(key);
+    if (p === undefined) return;
+    mem.free(p);
+    this.staticTlsBlocks.delete(key);
+  }
   staticTls(key: object, image: Uint8Array, size: number, align: number): number {
     const existing = this.staticTlsBlocks.get(key);
     if (existing !== undefined) return existing;

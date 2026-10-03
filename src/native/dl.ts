@@ -5,7 +5,7 @@
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
 import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host";
-import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
+import { cpuFor, cpus, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
@@ -125,11 +125,12 @@ export async function runInit(mod: Module, cpu: Cpu): Promise<void> {
 /** dlclose's release of a reference, bionic's soinfo_unload: when an image's last goes, it and the
  *  dependencies only it held run DT_FINI_ARRAY (in reverse) and DT_FINI, root first, before any
  *  image is unmapped and its symbols leave the scope, so a later dlopen loads it fresh. NODELETE
- *  images stay, as do images with TLS, whose blocks threads keep. */
+ *  images stay; an image's dynamic TLS blocks go with it, as unregister_soinfo_tls retires its
+ *  module and each thread's dtv update frees the block. */
 async function unload(root: Module, cpu: Cpu): Promise<void> {
   const gone: Module[] = [];
   const release = (m: Module) => {
-    if (m.refs > 0 && --m.refs > 0 || m.nodelete || m.tls || gone.includes(m)) return;
+    if (m.refs > 0 && --m.refs > 0 || m.nodelete || m.tpOffset !== null || gone.includes(m)) return;
     gone.push(m);
     for (const n of m.needed) { const dep = byName.get(n); if (dep) release(dep); }
   };
@@ -145,6 +146,7 @@ async function unload(root: Module, cpu: Cpu): Promise<void> {
     nameStrs.delete(m);
     handles.forEach((h, i) => { if (h && "mod" in h && h.mod === m) handles[i] = null; });
     for (const at of tlsDescriptors.keys()) if (at >= m.base && at < m.end) tlsDescriptors.delete(at);
+    if (m.tls) for (const c of cpus) c.releaseTls(m);
     mem.releaseImage(m.start, m.end - m.start);
   }
 }
