@@ -14,6 +14,7 @@
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, deref, FINALIZER } from "./handles";
 import { newObj, scall, vcall, after } from "../jvm/natives/jlang";
+import { writeThrough } from "../jvm/natives/jio";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
@@ -402,12 +403,7 @@ rt.registerJnis(BITMAP, {
     const lossless = format === 4 || format === 2 && quality === 100;
     const blob = yield* awaited(b.raster().convertToBlob({ type, quality: lossless ? 1 : quality / 100 }));
     if (blob.type !== type) return 0;
-    const bytes = new Int8Array(yield* awaited(blob.arrayBuffer()));
-    for (let at = 0; at < bytes.length; at += storage.length) {
-      const n = Math.min(storage.length, bytes.length - at);
-      storage.set(bytes.subarray(at, at + n));
-      yield vcall(out, "write", "([BII)V", storage, 0, n);
-    }
+    yield* writeThrough(out, storage, new Uint8Array(yield* awaited(blob.arrayBuffer())));
     return 1;
   }),
   "nativeErase(JI)V": (h: bigint, c: number) => erase(bitmapAt(h), c),

@@ -36,6 +36,16 @@ export const readStreamFully = driven(function* (s: unknown): Gen<Uint8Array> {
   return concat(chunks);
 });
 
+/** `bytes` to an OutputStream through the caller's storage array, as CreateJavaOutputStreamAdaptor
+ *  writes for Bitmap.compress and PdfDocument.writeTo */
+export function* writeThrough(out: unknown, storage: Int8Array, bytes: Uint8Array): Gen {
+  for (let at = 0; at < bytes.length; at += storage.length) {
+    const n = Math.min(storage.length, bytes.length - at);
+    storage.set(new Int8Array(bytes.buffer, bytes.byteOffset + at, n));
+    yield vcall(out, "write", "([BII)V", storage, 0, n);
+  }
+}
+
 const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;
 /** a FileDescriptor's int, -1 for none (JNIHelp's jniGetFDFromFileDescriptor) */
 let descriptorProp: string | undefined;

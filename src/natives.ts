@@ -88,6 +88,7 @@ import "./android/mediadrm";
 import "./android/media-codec";
 import "./android/media-extractor";
 import "./android/media-retriever";
+import "./android/pdf";
 import "./android/printing";
 import "./android/webkit";
 import "./android/cookies";

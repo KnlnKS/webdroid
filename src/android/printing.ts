@@ -13,6 +13,7 @@ import { newIntent, registerSystemActivity, type JIntent } from "./intent";
 import { mkUri } from "./net";
 import { pendingTransport, intentSender } from "./pendingintent";
 import { encodeIntent } from "./intentipc";
+import { pdfFile, type PdfPage } from "./pdf";
 import type { WebViewChromium as JWebView } from "./webkit";
 
 const S = "Ljava/lang/String;", ID = "Landroid/print/PrintJobId;", PA = "Landroid/print/PrintAttributes;";
@@ -179,33 +180,12 @@ export const webPrintAdapter = driven(function* (view: JWebView, name: string): 
 /** a PDF of `image` cut into w×h pt pages across its width, each page a JPEG */
 async function pagedPdf(image: ImageBitmap, w: number, h: number): Promise<Uint8Array> {
   const width = image.width, height = Math.round(width * h / w), canvas = new OffscreenCanvas(width, height), ctx = canvas.getContext("2d")!;
-  const jpegs: Uint8Array[] = [];
+  const pages: PdfPage[] = [];
   for (let y = 0; y < image.height; y += height) {
     ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, width, height);
     ctx.drawImage(image, 0, -y);
-    jpegs.push(new Uint8Array(await (await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 })).arrayBuffer()));
+    const data = new Uint8Array(await (await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 })).arrayBuffer());
+    pages.push({ w, h, width, height, filter: "DCTDecode", data });
   }
-  const enc = new TextEncoder(), parts: Uint8Array[] = [], offsets: number[] = [];
-  let size = 0;
-  const put = (part: string | Uint8Array) => { const bytes = typeof part === "string" ? enc.encode(part) : part; parts.push(bytes); size += bytes.length; };
-  const obj = (n: number, body: string, stream?: Uint8Array) => {
-    offsets[n] = size;
-    put(`${n} 0 obj\n${body}`);
-    if (stream) { put(`stream\n`); put(stream); put(`\nendstream`); }
-    put(`\nendobj\n`);
-  };
-  put("%PDF-1.4\n");
-  const kids = jpegs.map((_, i) => `${3 + i * 3} 0 R`).join(" ");
-  obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
-  obj(2, `<< /Type /Pages /Kids [${kids}] /Count ${jpegs.length} >>`);
-  jpegs.forEach((jpeg, i) => {
-    const page = 3 + i * 3, draw = enc.encode(`q ${w} 0 0 ${h} 0 0 cm /Im Do Q`);
-    obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /XObject << /Im ${page + 2} 0 R >> >> /Contents ${page + 1} 0 R >>`);
-    obj(page + 1, `<< /Length ${draw.length} >>\n`, draw);
-    obj(page + 2, `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\n`, jpeg);
-  });
-  const xref = size, count = 3 + jpegs.length * 3;
-  put(`xref\n0 ${count}\n0000000000 65535 f \n${offsets.slice(1).map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`);
-  put(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
-  return new Uint8Array(await new Blob(parts as Uint8Array<ArrayBuffer>[]).arrayBuffer());
+  return pdfFile(pages);
 }
