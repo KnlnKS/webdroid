@@ -36,14 +36,12 @@ let later: string[] | null = null;
 let compact = false;
 /** bodies compiled in this launch and not yet written */
 const pending = new Map<string, { source: string; phase: Phase }>();
-/** reached methods whose bodies are emitted in idle time, installed within budget and persisted */
-const deferred = new Map<string, () => string>();
 /** the phase of each method's first call, by entry key: a startup method promoted later is still startup */
 const firstUse = new Map<string, Phase>();
 const entryOf = (key: string) => key.slice(0, -1) + "e";
 
 /** where this launch persists, what it loaded and what it has yet to write */
-export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) => !isPlatformKey(key)).length, pending: pending.size, deferred: deferred.size, later: later?.length ?? 0 });
+export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) => !isPlatformKey(key)).length, pending: pending.size, later: later?.length ?? 0 });
 
 export const codeKey = (dexId: string, methodIdx: number, form: "e" | "r") => `${dexId}:${methodIdx}:${form}`;
 
@@ -81,17 +79,11 @@ function record(key: string, source: string, form: "e" | "r"): void {
   const at = firstUse.get(entryOf(key)) ?? phase;
   if (form === "e") firstUse.set(key, at);
   pending.set(key, { source, phase: at });
-  deferred.delete(key);
   idle();
 }
 
-/** a reached body to prepare in idle time; `make` emits it and may install it for this launch */
-export function recordLater(key: string, make: () => string): void {
-  if (claim(key) || loaded[key] || pending.has(key)) return;
-  deferred.set(key, make);
-  if (!firstUse.has(key)) firstUse.set(key, phase);
-  idle();
-}
+/** The first call determines the persisted phase, even if compilation happens after startup. */
+export function recordUse(key: string): void { if (!firstUse.has(key)) firstUse.set(key, phase); }
 
 /** A compile worker's bodies (factory sources). Those the page has not compiled meanwhile import
  *  as a module, which V8 compiles off the main thread and finalizes there, and install like
@@ -189,27 +181,30 @@ let importChunk: (path: string) => Promise<Record<string, Factory>> = async () =
 export function startupDone(): void {
   if (phase === "l") return;
   phase = "l";
+  idle();
   const paths = later ?? [];
   void Promise.all(paths.map(importChunk)).then((modules) => {
     for (const bodies of modules) for (const key in bodies) loaded[key] ??= bodies[key];
     later = null;
+    if (compact) idle();
   }).catch((e) => console.warn("[webdroid] persisted code unavailable", e));
 }
 
 let idling = false;
-/** emit deferred bodies while the page is idle, then write what is pending */
+/** write new bodies outside the current Java call */
 function idle(): void {
   if (idling || !dir || typeof requestIdleCallback === "undefined") return;
   idling = true;
-  requestIdleCallback(function work(deadline) {
-    for (const [key, make] of deferred) {
-      if (deadline.timeRemaining() < 1) { requestIdleCallback(work); return; }
-      deferred.delete(key);
-      try { recordBody(key, make(), key.endsWith(":r") ? "r" : "e"); } catch { /* it compiles on demand instead */ }
+  requestIdleCallback(function work() {
+    if (!(pending.size || compact && !later)) { idling = false; return; }
+    const delay = phase === "l" && !lastSave ? 0 : 30_000 - (performance.now() - lastSave);
+    if (delay > 0) {
+      if (phase === "l") setTimeout(() => requestIdleCallback(work, { timeout: 60_000 }), delay);
+      else idling = false;
+      return;
     }
     idling = false;
-    // the first save follows startup, so a launch that ends early keeps it without a pagehide write
-    if (phase === "l" && !lastSave || performance.now() - lastSave > 30_000) void saveCode();
+    void saveCode();
   }, { timeout: 60_000 });
 }
 

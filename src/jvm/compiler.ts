@@ -7,10 +7,11 @@ import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { mangleMethod, directName, frameName, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
 import { ACC, JObj, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
-import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
+import { coldOp, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
-import { coverageProbeSource, jvmCoverage } from "./coverage";
-import { codeKey, persistedBody, recordBody, recordLater, type Factory } from "./codecache";
+import { coverageProbeSource } from "./coverage";
+import { codeKey } from "./codecache";
+import { addCell, retarget, compileTieredMethod, type Cells, type CompiledCtor, type JvmFunction } from "./tiering";
 import { type Flow, Go, structure } from "./structure";
 import { discardedTypes, holdsNoThrowable, transparentCall } from "./discard";
 import {
@@ -126,57 +127,6 @@ export function unsafeFallthrough(R: Runtime, info: ClassInfo, fn: unknown): boo
   return false;
 }
 
-export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
-type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
-/** Re-enters a suspended frame (Runtime.dfr) or an on-stack-replaced cold frame. */
-export type ResumeBody = (this: unknown, frame: object) => unknown;
-/** Direct-call caches (`D.dp`, and hot sites in `$ic`) holding an interim entry, as flat
- *  [cache, index] pairs: null until a cache holds it, undefined for a final entry. A platform
- *  fallthrough that cannot run is marked `$unsafe`. */
-export type Cells = { $c?: unknown[] | null; $unsafe?: boolean };
-/** record that `cache[key]` holds `fn`, if `fn` is an interim entry a later body replaces */
-export function addCell(fn: Cells, cache: unknown, key: unknown): void {
-  if (fn.$c !== undefined) (fn.$c ??= []).push(cache, key);
-}
-
-/** Point the direct-call caches holding `from` at `to`, so they stop paying for the indirection. */
-function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
-  const cells = from.$c;
-  if (cells === undefined) return;
-  from.$c = undefined;
-  if (!cells) return;
-  for (let k = 0; k < cells.length; k += 2) (cells[k] as unknown[])[cells[k + 1] as number] = to;
-  if (to.$c !== undefined) (to.$c ??= []).push(...cells);
-}
-
-// Promotion compiles synchronously within a budget per window; past it, a method waits for idle
-// time and keeps running cold, so a burst of first calls (an interaction's recomposition) does not
-// stall the frame that answers it. Without idle callbacks (Bun, tests) every promotion is immediate.
-const PROMOTE_BUDGET_MS = 4, PROMOTE_WINDOW_MS = 50;
-const HOT_SOURCE_LIMIT = 32 * 1024 * 1024;
-const IDLE_SOURCE_LIMIT = HOT_SOURCE_LIMIT - 8 * 1024 * 1024;
-let windowStart = -Infinity, windowSpent = 0;
-const waiting = new Set<() => unknown>();
-function promoteWithinBudget(promote: () => JvmFunction | undefined): JvmFunction | undefined {
-  const now = performance.now();
-  if (now - windowStart > PROMOTE_WINDOW_MS) { windowStart = now; windowSpent = 0; }
-  if (windowSpent >= PROMOTE_BUDGET_MS && typeof requestIdleCallback !== "undefined") {
-    if (!waiting.size) requestIdleCallback(promoteWaiting);
-    waiting.add(promote);
-    return undefined;
-  }
-  const compiled = promote();
-  windowSpent += performance.now() - now;
-  return compiled;
-}
-function promoteWaiting(deadline: IdleDeadline): void {
-  for (const promote of waiting) {
-    if (deadline.timeRemaining() < 2) { requestIdleCallback(promoteWaiting); return; }
-    waiting.delete(promote);
-    promote();
-  }
-}
-
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
   const info = C.$i, rec = info.lazy![i], dex = rec.dex;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
@@ -202,129 +152,12 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     }
   }
   const code = dex.code(rec.m.codeOff);
-  const prepare = () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName);
-  const source = (prepared: PreparedMethod, count: boolean) =>
-    emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}.${rec.name}.js`;
-  // instrumented bodies differ from plain ones, so only plain ones persist
-  const persist = !jvmProfiler.enabled && !jvmCoverage.enabled;
-  const entryKey = codeKey(dex.id, rec.m.methodIdx, "e"), resumeKey = codeKey(dex.id, rec.m.methodIdx, "r");
-  const bind = (factory: Factory, $R?: unknown) => factory(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
-  let resumable: ResumeBody | undefined;
-  /** The body that continues a suspended frame: only built once a frame actually suspends. */
-  const resume = (prepared = prepare, emitted?: string): ResumeBody => {
-    if (resumable) return resumable;
-    const persisted = persist ? persistedBody(resumeKey) : undefined;
-    if (persisted) return resumable = bind(persisted) as ResumeBody;
-    const body = emitted ?? `${resumableSource(R, dex, info, rec.m, prepared())}\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`;
-    if (persist) recordBody(resumeKey, body, "r");
-    return resumable = new Function("C", "D", "R", "S", "P", "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
-  };
-  const installed = (): JvmFunction => {
-    const fn = target[rec.mangled];
-    if (typeof fn !== "function") throw new Error("invalid compiled method");
-    if (rec.intrinsic) target[rec.mangled] = rec.intrinsic;
-    return fn as JvmFunction;
-  };
-  const compile = (src: string): JvmFunction => {
-    const started = jvmProfiler.enabled ? performance.now() : 0;
-    new Function("C", "D", "R", "S", "P", "$R", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
-    if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
-    if (persist) recordBody(entryKey, src, "e");
-    return installed();
-  };
-  const install = (fn: JvmFunction): JvmFunction => {
-    retarget(rec.stub, fn);
-    return fn;
-  };
-  // A body the last launch compiled runs hot from its first call: no preparation, cold tier or compile.
-  const persisted = persist && jvmProfiler.tier !== "cold" ? persistedBody(entryKey) : undefined;
-  if (persisted) {
-    bind(persisted, resume);
-    perf.hotMethods++;
-    return install(installed());
-  }
-  const prepared = prepare();
-  // Leaf methods cannot suspend and go straight to their only (sync) form.
-  if (prepared.sync) return install(compile(source(prepared, true)));
-  if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
-  let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
-    .compileCold(prepared, coldInstructions(code, prepared));
-  let calls = 0, hot: JvmFunction | undefined;
-  let owner = R;
-  while (owner.parent) owner = owner.parent;
-  const promote = (prepared = prepare, emitted?: string): JvmFunction | undefined => {
-    if (hot) return hot;
-    // a body the compile worker emitted since this method first ran
-    const offered = persist ? persistedBody(entryKey) : undefined;
-    if (offered) {
-      bind(offered, resume);
-      return hot = settle(installed());
-    }
-    // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
-    // every cold method costs substantially more heap than the saved promotion work.
-    const start = performance.now(), src = emitted ?? source(prepared(), false);
-    if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
-    if (owner.hotSourceBytes + src.length > HOT_SOURCE_LIMIT) {
-      calls = -Infinity;
-      cold!.promote = undefined;
-      perf.compileMs += performance.now() - start;
-      return undefined;
-    }
-    hot = compile(src);
-    owner.hotSourceBytes += src.length;
-    perf.compileMs += performance.now() - start;
-    return settle(hot);
-  };
-  const settle = (fn: JvmFunction): JvmFunction => {
-    perf.hotMethods++;
-    if (jvmProfiler.enabled) jvmProfiler.promoted(profileName);
-    cold = null;
-    retarget(invoke, fn);
-    return fn;
-  };
-  if (persist) {
-    // Reuse idle emission in this launch, reserving source capacity for later demand promotion.
-    recordLater(entryKey, () => {
-      const src = source(prepare(), false);
-      if (jvmProfiler.tier !== "cold" && owner.hotSourceBytes + src.length <= IDLE_SOURCE_LIMIT) promote(prepare, src);
-      return src;
-    });
-    cold.suspended = () => recordLater(resumeKey, () => {
-      const body = resumableSource(R, dex, info, rec.m, prepare());
-      if (jvmProfiler.tier !== "cold" && owner.hotSourceBytes + body.length <= IDLE_SOURCE_LIMIT) {
-        resume(prepare, body);
-        owner.hotSourceBytes += body.length;
-      }
-      return body;
-    });
-  }
-  if (jvmProfiler.tier !== "cold") {
-    // On-stack replacement: the hot body resumes the cold frame at its backedge.
-    cold.promote = (frame: ColdFrame, receiver: unknown) => {
-      let prepared: PreparedMethod | undefined;
-      const once = () => prepared ??= prepare();
-      if (!promote(once)) return undefined;
-      perf.osrMethods++;
-      return { value: resume(once).call(receiver, frame) };
-    };
-  }
-  const invoke: JvmFunction & Cells = function(this: unknown, ...args: unknown[]) {
-    if (hot) return hot.apply(this, args);
-    if (++calls < 32 || jvmProfiler.tier === "cold") {
-      if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
-      return runCold(cold!, this, args);
-    }
-    const compiled = promoteWithinBudget(promote);
-    if (compiled) return compiled.apply(this, args);
-    if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
-    return runCold(cold!, this, args);
-  };
-  invoke.$c = null;
-  if (rec.intrinsic) return install(invoke);
-  if (!jvmCoverage.enabled) return install(target[rec.mangled] = invoke);
-  return install(target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
-    jvmCoverage.hit(profileName);
-    return invoke.apply(this, args);
+  return compileTieredMethod(R, C, rec, {
+    prepare: () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName),
+    entry: (prepared, count) => emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}.${rec.name}.js`,
+    resume: (prepared) => resumableSource(R, dex, info, rec.m, prepared) + `\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`,
+    cold: (prepared) => new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
+      .compileCold(prepared, coldInstructions(code, prepared)),
   });
 }
 
