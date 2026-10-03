@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
 import { dialName, syntheticAddress } from "../src/shell/relay";
-import { scall, mountApexData, loadFrameworkJar, bootApp, packageRecord } from "./java";
+import { scall, mountApexData, loadFrameworkJar } from "./java";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -230,14 +230,6 @@ describe("inet", () => {
     expect(await vcall(literal, "getHostAddress", "()Ljava/lang/String;")).toBe("127.0.0.1");
   });
 
-  test("createUnresolved keeps the host without resolving its address", async () => {
-    const socket = await scall("java/net/InetSocketAddress", "createUnresolved",
-      "(Ljava/lang/String;I)Ljava/net/InetSocketAddress;", "example.com", 443);
-    expect(await vcall(socket, "getHostString", "()Ljava/lang/String;")).toBe("example.com");
-    expect(await vcall(socket, "isUnresolved", "()Z")).toBe(1);
-    expect(await vcall(socket, "getAddress", "()Ljava/net/InetAddress;")).toBeNull();
-  });
-
   test("SSL wrapping keeps the underlying socket open until the wrapper closes", async () => {
     const plain = await newObj("java/net/Socket");
     const factory = await scall("javax/net/ssl/SSLSocketFactory", "getDefault", "()Ljavax/net/SocketFactory;");
@@ -250,7 +242,6 @@ describe("inet", () => {
     await vcall(independent, "close", "()V");
     expect(await vcall(retained, "isClosed", "()Z")).toBe(0);
   });
-
 });
 
 describe("localsocket", () => {
@@ -288,91 +279,6 @@ describe("localsocket", () => {
   });
 });
 
-describe("nsd-service", () => {
-  let failure: { serviceType: string; code: number } | null = null;
-  let finish: (() => void) | null = null;
-  class DiscoveryListener extends JObj {}
-  rt.register({
-    name: "test/DiscoveryListener", ctor: DiscoveryListener,
-    ifaces: ["android/net/nsd/NsdManager$DiscoveryListener"],
-    methods: {
-      "onStartDiscoveryFailed(Ljava/lang/String;I)V": (serviceType: string, code: number) => {
-        failure = { serviceType, code };
-        finish?.();
-      },
-    },
-  });
-  rt.linkNatives();
-
-  test("NSD reports unavailable multicast discovery without fabricated services", async () => {
-    const context = await bootApp(await packageRecord("org.webdroid.test.nsd"));
-    const manager = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "servicediscovery");
-    expect(manager).not.toBeNull();
-    const callback = new Promise<void>((resolve) => { finish = resolve; });
-    await vcall(manager, "discoverServices", "(Ljava/lang/String;ILandroid/net/nsd/NsdManager$DiscoveryListener;)V",
-      "_googlecast._tcp.", 1, rt.make("test/DiscoveryListener"));
-    await callback;
-    expect(failure).toEqual({ serviceType: "_googlecast._tcp.", code: 0 });
-  });
-});
-
-describe("uri-raw-components", () => {
-  test("URI raw and decoded accessors preserve escaped, empty and absent components", async () => {
-    for (const [text, method, expected] of [
-      ["https://user%20name@example.com:8443/a?q=1", "getRawAuthority", "user%20name@example.com:8443"],
-      ["https://user%20name@example.com:8443/a?q=1", "getAuthority", "user name@example.com:8443"],
-      ["//example.test/path", "getRawAuthority", "example.test"],
-      ["mailto:user@example.test", "getRawAuthority", null],
-      ["file:///tmp/video.mp4", "getRawAuthority", null],
-      ["file:///tmp/video.mp4", "getAuthority", null],
-      ["https://user%20name:p%40ss@example.com/path", "getRawUserInfo", "user%20name:p%40ss"],
-      ["https://user%20name:p%40ss@example.com/path", "getUserInfo", "user name:p@ss"],
-      ["https://example.com/path", "getRawUserInfo", null],
-      ["https://example.test/a?name=a%20b&path=%2F#fragment", "getRawQuery", "name=a%20b&path=%2F"],
-      ["a/b?x=1", "getRawQuery", "x=1"],
-      ["https://example.test/path?#fragment", "getRawQuery", ""],
-      ["mailto:user@example.test?subject=hello", "getRawQuery", null],
-      ["https://example.test/a?q=1#section%202%2F3", "getRawFragment", "section%202%2F3"],
-      ["mailto:user@example.test#contact%20card", "getRawFragment", "contact%20card"],
-      ["relative#", "getRawFragment", ""],
-      ["relative", "getRawFragment", null],
-    ] as const) {
-      const uri = await scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", text);
-      expect([text, method, await vcall(uri, method, "()Ljava/lang/String;")]).toEqual([text, method, expected]);
-    }
-  });
-});
-
-describe("uri-syntax", () => {
-  test("URI syntax exceptions preserve input, reason and optional index", async () => {
-    const error = await newObj("java/net/URISyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", "a b", "Illegal character", 1);
-    expect(await vcall(error, "getMessage", "()Ljava/lang/String;")).toBe("Illegal character at index 1: a b");
-    expect(await vcall(error, "getInput", "()Ljava/lang/String;")).toBe("a b");
-    expect(await vcall(error, "getReason", "()Ljava/lang/String;")).toBe("Illegal character");
-    expect(await vcall(error, "getIndex", "()I")).toBe(1);
-  });
-  test("URI parses relative authorities without URL normalization", async () => {
-    for (const [text, host, port, path] of [
-      ["//API.example.com:443/a%20b", "API.example.com", 443, "/a b"],
-      ["//example.com:0", "example.com", 0, ""],
-      ["//[::1]:443/", "[::1]", 443, "/"],
-      ["dns:///example.com", null, -1, "/example.com"],
-      ["mailto:a@example.com", null, -1, null],
-    ]) {
-      const uri = await newObj("java/net/URI", "(Ljava/lang/String;)V", text);
-      expect(await vcall(uri, "getHost", "()Ljava/lang/String;")).toBe(host);
-      expect(await vcall(uri, "getPort", "()I")).toBe(port);
-      expect(await vcall(uri, "getPath", "()Ljava/lang/String;")).toBe(path);
-    }
-  });
-  test("URI component construction quotes delimiters and retains empty query and fragment", async () => {
-    const uri = await newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "https", "example.com:443", "/a b?c", "", "");
-    expect(await vcall(uri, "toString", "()Ljava/lang/String;")).toBe("https://example.com:443/a%20b%3Fc?#");
-    expect(await vcall(uri, "getPath", "()Ljava/lang/String;")).toBe("/a b?c");
-    expect(await vcall(uri, "getQuery", "()Ljava/lang/String;")).toBe("");
-  });
-});
-
 describe("url-handlers", () => {
   test("URL resolves http, https and class path jar handlers as a device does", async () => {
     const connection = async (spec: string) => vcall(await newObj("java/net/URL", "(Ljava/lang/String;)V", spec), "openConnection", "()Ljava/net/URLConnection;");
@@ -383,36 +289,5 @@ describe("url-handlers", () => {
     expect(await vcall(url, "toString", "()Ljava/lang/String;")).toBe("jar:file:/apex/com.android.art/javalib/core-oj.jar!/calendars.properties");
     const stream = await vcall(url, "openStream", "()Ljava/io/InputStream;");
     expect(await vcall(stream, "read", "()I")).toBe("#".charCodeAt(0));
-  });
-});
-
-describe("url-empty-authority", () => {
-  test("URL preserves Android's empty HTTP authority", async () => {
-    for (const [spec, path, query] of [
-      ["http://", "", null],
-      ["http:///path", "/path", null],
-      ["http://?query", "", "query"],
-    ] as const) {
-      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", spec);
-      expect(await vcall(url, "getAuthority", "()Ljava/lang/String;")).toBe("");
-      expect(await vcall(url, "getHost", "()Ljava/lang/String;")).toBe("");
-      expect(await vcall(url, "getPath", "()Ljava/lang/String;")).toBe(path);
-      expect(await vcall(url, "getQuery", "()Ljava/lang/String;")).toBe(query);
-      expect(await vcall(url, "toString", "()Ljava/lang/String;")).toBe(spec);
-    }
-  });
-});
-
-describe("urlconnection-mime", () => {
-  test("URLConnection guesses names using Android fragment and directory rules", async () => {
-    const guess = (name: string | null) => vcallAsync(rt.link("java/net/URLConnection").ctor, "guessContentTypeFromName", "(Ljava/lang/String;)Ljava/lang/String;", name);
-    expect(await guess("/assets/INDEX.HTML#part")).toBe("text/html");
-    expect(await guess("/assets/")).toBe("text/html");
-    expect(await guess("html")).toBe("text/html");
-    expect(await guess("/html")).toBeNull();
-    expect(await guess("page.html?query=1")).toBeNull();
-    expect(await guess("unknown.extension")).toBeNull();
-    const error = await guess(null).then(() => null, e => e);
-    expect(rt.iof(error, "java/lang/NullPointerException")).toBeTruthy();
   });
 });

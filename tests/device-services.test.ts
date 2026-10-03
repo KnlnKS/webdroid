@@ -18,6 +18,8 @@ rt.register({ name: "webdroid/test/Outcome", ctor: class extends JObj {}, ifaces
 } });
 rt.register({ name: "webdroid/test/CallState", ctor: class extends JObj {}, sup: "android/telephony/TelephonyCallback",
   ifaces: ["android/telephony/TelephonyCallback$CallStateListener"], methods: { "onCallStateChanged(I)V": () => {} } });
+rt.register({ name: "webdroid/test/DiscoveryListener", ctor: class extends JObj {}, ifaces: ["android/net/nsd/NsdManager$DiscoveryListener"],
+  methods: { "onStartDiscoveryFailed(Ljava/lang/String;I)V": (type: string, code: number) => outcomes.shift()?.(`failed ${type} ${code}`) } });
 rt.register({ name: "webdroid/test/Inline", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/Executor"],
   methods: { "execute(Ljava/lang/Runnable;)V": (r: JObj) => vcall(r, "run", "()V") } });
 
@@ -195,5 +197,15 @@ describe("performance hints", () => {
     const session = await vcall(hints, "createHintSession", "([IJ)Landroid/os/PerformanceHintManager$Session;", Int32Array.of(7), 16_000_000n);
     expect([...await vcall(session, "getThreadIds", "()[I")]).toEqual([7]);
     await vcall(session, "close", "()V");
+  });
+});
+
+describe("network service discovery", () => {
+  test("multicast discovery is unavailable, reported without fabricated services", async () => {
+    const nsd = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "servicediscovery");
+    const outcome = new Promise<string>((resolve) => { outcomes.push(resolve); });
+    await vcall(nsd, "discoverServices", "(Ljava/lang/String;ILandroid/net/nsd/NsdManager$DiscoveryListener;)V",
+      "_googlecast._tcp.", 1, await newObj("webdroid/test/DiscoveryListener"));
+    expect(await outcome).toBe("failed _googlecast._tcp. 0");
   });
 });
