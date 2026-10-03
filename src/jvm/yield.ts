@@ -42,10 +42,11 @@ export function yieldToLoop(): Promise<void> {
   if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { yieldStats.pushes++; waiters.push(r); post(); });
 }
-/** A parked thread's wake: a macrotask, so its waker runs on to its next await first, ahead of
- *  the threads that only yielded. */
+/** A macrotask ahead of the threads that only yielded: a parked thread's wake (so its waker runs
+ *  on to its next await first), the main looper's turn. */
 export function wakeSoon(): Promise<void> {
   if (processExited()) return never();
+  if (scheduler && background()) return scheduler.postTask(() => {}, { priority: "background" });
   if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { woken.push(r); post(); });
 }

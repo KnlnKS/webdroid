@@ -11,7 +11,7 @@ import { curThread, mainThread, scall, newObj, vcall, callOn, callUncaught, disp
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
-import { yieldToLoop } from "../jvm/yield";
+import { wakeSoon, yieldToLoop } from "../jvm/yield";
 
 /** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
  *  inline; phase: which stage of a frame the main thread is in, so a stuck frame names it */
@@ -45,7 +45,8 @@ export class NativeLooper {
   private signal(): void { const w = this.waiter; this.waiter = null; w?.(); }
   /** MessageQueue.nativePollOnce: synchronous on the main looper when nothing is due to wait for.
    *  Another looper yields between messages, so a busy background thread does not hold off the
-   *  main thread (a device runs them on other cores). */
+   *  main thread (a device runs them on other cores); the main looper's own yield goes ahead of
+   *  theirs, as its core would keep it going. */
   pollOnce(timeout: number): void | Promise<void> {
     if (!this.callbacks.length && !this.woken && timeout === 0 && this === mainLooper && !sliceOver()) return;
     return this.poll(timeout);
@@ -55,7 +56,7 @@ export class NativeLooper {
     if (!this.callbacks.length && !this.woken) {
       this.polling = true;
       if (main) mainDbg.depth--;
-      try { await (timeout === 0 ? yieldToLoop() : this.idle(timeout)); }
+      try { await (timeout === 0 ? main ? wakeSoon() : yieldToLoop() : this.idle(timeout)); }
       finally { this.polling = false; if (main) mainDbg.depth++; }
     }
     this.woken = false;
