@@ -395,12 +395,10 @@ class ProcessBroker {
     forgetRemoved(pkg);
     await Promise.all([...this.entries.values()].filter((e) => !e.dead).map((e) => e.ready.then((endpoint) => endpoint.packageRemoved(pkg), () => {})));
   }
-  /** system_server's part in a package's data change, which outlives its caller (the caller may be
-   *  the package): the package stops, its data is cleared or removed, then `broadcasts` go out */
+  /** system_server's part in a package's data change, run in this realm: it outlives its caller,
+   *  which may be the package */
   async changePackageData(pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[]): Promise<void> {
-    const { changePackageData } = await import("./packagedata");
-    await changePackageData(this, pkg, change);
-    for (const { data, targets } of broadcasts) await this.broadcast(null, data, targets, [], false);
+    await (await import("./packagedata")).changePackageData(this, pkg, change, broadcasts);
   }
   /** whether a process shown on screen, or one serving such a process, waits on `pid` (process
    *  start included) or binds a service it runs: as binder calls inherit their caller's priority,

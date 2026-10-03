@@ -1,6 +1,7 @@
 import { attr, attrStr, TV, type XmlNode } from "./axml";
 import { normRV, type Resources } from "./res";
 import { SHARED_LIBRARIES } from "../jvm/bootclasspath";
+import type { PackageState } from "../shell/packagedata";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 export const qualifyComponent = (name: string, pkg: string): string => {
@@ -110,15 +111,30 @@ export function installTime(pkg: string): bigint {
   return BigInt(ms);
 }
 
+/** the packages named by the persisted keys `prefix` + pkg (+ ":" + more) */
+export function storedPackages(prefix: string): string[] {
+  const names = new Set<string>(), storage = globalThis.localStorage;
+  try {
+    for (let i = 0; storage && i < storage.length; i++) {
+      const key = storage.key(i)!, pkg = key.startsWith(prefix) ? key.slice(prefix.length).split(":")[0] : "";
+      if (pkg) names.add(pkg);
+    }
+  } catch { /* storage can be unavailable */ }
+  return [...names];
+}
 /** the uid a package was given, without assigning one */
 export const knownUid = (pkg: string): number | undefined => uids.get(pkg);
-/** the package's install state (its install time and what is kept with it), as its removal drops it */
-export function forgetInstall(pkg: string): void {
-  const storage = globalThis.localStorage, key = "wd:install:" + pkg;
-  try {
-    for (let i = storage?.length ?? 0; i--;) { const k = storage!.key(i)!; if (k === key || k.startsWith(key + ":")) storage!.removeItem(k); }
-  } catch { /* storage can be unavailable */ }
-}
+/** the packages installed or with an install kept, whose removal drops the install state (its
+ *  install time and what is kept with it) */
+export const installData: PackageState = {
+  remove(pkg) {
+    const storage = globalThis.localStorage, key = "wd:install:" + pkg;
+    try {
+      for (let i = storage?.length ?? 0; i--;) { const k = storage!.key(i)!; if (k === key || k.startsWith(key + ":")) storage!.removeItem(k); }
+    } catch { /* storage can be unavailable */ }
+  },
+  packages: () => [...packages.keys(), ...storedPackages("wd:install:")],
+};
 export function packageUid(pkg: string): number {
   const old = uids.get(pkg);
   if (old !== undefined) return old;

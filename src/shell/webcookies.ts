@@ -1,4 +1,7 @@
 import { CookieJar, Cookie, getPublicSuffix } from "tough-cookie";
+import { storedPackages } from "../android/packages";
+
+const KEY = "wd:web-cookies:";
 
 /** a cookie as document.cookie shows it, and when it expires (0: with the session) */
 export type DocumentCookie = { text: string; expires: number };
@@ -10,7 +13,7 @@ export class WebCookies {
   private key: string;
   private watchers = new Set<() => void>();
   constructor(pkg: string) {
-    this.key = "wd:web-cookies:" + pkg;
+    this.key = KEY + pkg;
     try { const saved = localStorage.getItem(this.key); if (saved) this.jar = CookieJar.deserializeSync(saved); } catch {}
   }
   get(url: string, http = true): string {
@@ -61,9 +64,10 @@ export class WebCookies {
     this.changed();
     return before.length !== saved.cookies.length;
   }
-  /** the jar's removal with its app */
+  /** the packages with jars persisted */
+  static packages(): string[] { return storedPackages(KEY); }
+  /** the emptied jar's removal with its app */
   forget() {
-    this.remove();
     try { localStorage.removeItem(this.key); } catch {}
   }
   flush() {

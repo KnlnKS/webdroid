@@ -230,9 +230,9 @@ const wd = {
   // a fresh install of every app: each package's data and install state as its removal takes them,
   // with the shared storage and the picked directories
   reset: async () => {
-    const broker = processBroker(), names = packagesWithData(broker);
+    const broker = processBroker(), names = await packagesWithData(broker);
     await Promise.all(names.map((pkg) => removePackageData(broker, pkg)));
-    await Promise.all([clearRoots(), clearPickedDocuments(), broker.files.clear()]);
+    await Promise.all([clearRoots(), clearPickedDocuments(), broker.files.clearAll()]);
     return names;
   },
   // an app's data cleared as Settings' "Clear storage" does, and its uninstall as the launcher's

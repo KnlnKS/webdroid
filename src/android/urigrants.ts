@@ -6,14 +6,18 @@ import { PROCESS_UID } from "./os";
 import { newObj, vcall, after } from "../jvm/natives/jentry";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { packages } from "./packages";
+import type { PackageState } from "../shell/packagedata";
 type PersistedUriGrant = { uri: string; flags: number; time: number };
 const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */
 const grantsKey = (pkg: string) => "wd:install:" + pkg + ":uriperms";
-/** removeUriPermissionsForPackage's persisted share: the grants the package holds */
-export function clearPersistedGrants(pkg: string): void {
-  try { globalThis.localStorage?.removeItem(grantsKey(pkg)); } catch { /* storage can be unavailable */ }
-}
+/** removeUriPermissionsForPackage's persisted share: the grants the package holds, which a clear
+ *  that keeps the package's state keeps */
+export const uriGrantData: PackageState = {
+  clear(pkg, _uid, how) {
+    if (!how.keepState) try { globalThis.localStorage?.removeItem(grantsKey(pkg)); } catch { /* storage can be unavailable */ }
+  },
+};
 const uriGrants = {
   key: () => grantsKey(appHost?.pkg ?? ""),
   all(): PersistedUriGrant[] {

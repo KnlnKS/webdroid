@@ -56,7 +56,7 @@ export class PendingIntents {
     record.cancellations.clear();
   }
   /** a removed package's senders */
-  cancelPackage(pkg: string): void {
+  remove(pkg: string): void {
     for (const [id, record] of [...this.records]) if (record.operation.pkg === pkg) this.cancel(id);
   }
   watch(id: number, canceled: () => void): (() => void) | null {

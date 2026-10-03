@@ -17,6 +17,7 @@ import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, un
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { postMain } from "./mainloop";
 import { preferenceStore } from "./sharedprefs";
+import type { DataClear } from "../shell/packagedata";
 import { packages } from "./packages";
 import { appHost } from "./apphost";
 import { coverTop, foreground } from "./server/atm";
@@ -58,13 +59,15 @@ class NotificationStore {
   readonly ungrouped = new Map<string, Map<string, Ungrouped>>();
   /** pkg|id of each foreground service's notification (ActiveServices' ServiceRecord.foregroundId) */
   readonly foreground = new Set<string>();
-  /** INotificationManager.clearData: the package's notifications go, with the grouping state they
-   *  kept, and its channels unless it cleared its own data (PreferencesHelper.clearData) */
-  clearData(pkg: string, fromApp: boolean): void {
+  /** INotificationManager.clearData, unless the clear keeps the package's state: the package's
+   *  notifications go, with the grouping state they kept, and its channels unless it cleared its own
+   *  data (PreferencesHelper.clearData) */
+  clear(pkg: string, _uid: number | undefined, { fromApp, keepState }: DataClear): void {
+    if (keepState) return;
     for (let i = this.posted.length; i--;) if (this.posted[i].pkg === pkg) this.posted.splice(i, 1);
     for (const key of [...this.autobundled.keys(), ...this.ungrouped.keys()]) if (key.endsWith("|" + pkg)) { this.autobundled.delete(key); this.ungrouped.delete(key); }
     for (const key of this.foreground) if (key.startsWith(pkg + "|")) this.foreground.delete(key);
-    if (!fromApp) preferenceStore.remove(policyFile(pkg));
+    if (!fromApp) preferenceStore.delete(policyFile(pkg));
   }
 }
 export let notificationStore = new NotificationStore();

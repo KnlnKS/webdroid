@@ -28,11 +28,13 @@ export class AccountStore {
   }
   /** AccountManagerService on a package's removal: the accounts its authenticator kept, and their
    *  visibility to it */
-  removePackage(pkg: string): void {
+  remove(pkg: string): void {
     const kept = this.records.filter((s) => s.owner !== pkg);
     for (const s of kept) delete s.visibility[pkg];
     this.loaded = kept;
     this.persist();
   }
+  /** the packages whose authenticators keep accounts */
+  packages(): string[] { return this.records.map((s) => s.owner); }
   watch(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
 }

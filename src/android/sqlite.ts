@@ -13,6 +13,7 @@ import { vfs } from "../shell/vfs";
 import { handle, deref, release } from "./handles";
 import { type NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow";
+import type { PackageState } from "../shell/packagedata";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 /** the C API and Emscripten FS vendor/sql.js/sqljs.patch exports */
@@ -130,16 +131,18 @@ function retire(file: SharedDatabase) {
   if (file.saving) clearTimeout(file.saving);
   C.FS.unlink(file.name);
 }
-/** the snapshots an older build kept for databases under `dirs`, which go with an app's data */
-export function forgetLegacySnapshots(dirs: string[]): void {
-  const storage = globalThis.localStorage;
-  try {
-    for (let i = storage?.length ?? 0; i--;) {
-      const key = storage!.key(i)!;
-      if (key.startsWith("wd:db:") && dirs.some((dir) => key.startsWith("wd:db:" + dir + "/"))) storage!.removeItem(key);
-    }
-  } catch { /* storage can be unavailable */ }
-}
+/** the snapshots an older build kept for an app's databases, which go with its data */
+export const legacySnapshotData: PackageState = {
+  clear(pkg) {
+    const storage = globalThis.localStorage, dirs = ["/data/data/", "/data/user/0/", "/data/user_de/0/"].map((root) => "wd:db:" + root + pkg + "/");
+    try {
+      for (let i = storage?.length ?? 0; i--;) {
+        const key = storage!.key(i)!;
+        if (dirs.some((dir) => key.startsWith(dir))) storage!.removeItem(key);
+      }
+    } catch { /* storage can be unavailable */ }
+  },
+};
 /** a snapshot an older build kept in localStorage */
 function legacySnapshot(path: string): Uint8Array | null {
   try {

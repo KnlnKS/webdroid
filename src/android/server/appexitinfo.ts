@@ -9,6 +9,8 @@ import { appHost } from "../apphost";
 import { wallMillis } from "../../guest-clock";
 import { foreground } from "./atm";
 import { logLine } from "../../native/libc";
+import { storedPackages } from "../packages";
+import type { PackageState } from "../../shell/packagedata";
 
 export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
 export type ExitRecord = {
@@ -28,14 +30,15 @@ const HISTORY = 16;
 /** ActivityManagerConstants.MIN_CRASH_INTERVAL */
 const MIN_CRASH_INTERVAL_MS = 2 * 60_000;
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
-const storageKey = (pkg: string) => "wd:exit-info:" + pkg;
+const PREFIX = "wd:exit-info:", storageKey = (pkg: string) => PREFIX + pkg;
 const base64 = (bytes: Uint8Array): string => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
 export const unbase64 = (s: string): Uint8Array => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-/** AppExitInfoTracker.onPackageRemoved */
-export function forgetExitRecords(pkg: string): void {
-  try { globalThis.localStorage?.removeItem(storageKey(pkg)); } catch { /* storage can be unavailable */ }
-}
+/** the packages with records, which AppExitInfoTracker.onPackageRemoved drops */
+export const exitRecordData: PackageState = {
+  remove(pkg) { try { globalThis.localStorage?.removeItem(storageKey(pkg)); } catch { /* storage can be unavailable */ } },
+  packages: () => storedPackages(PREFIX),
+};
 /** a package's records, newest first */
 export function exitRecords(pkg: string): ExitRecord[] {
   try {

@@ -20,6 +20,7 @@ import {
   EVP_PKEY_RSA, EVP_PKEY_EC, type PKey,
 } from "../jvm/natives/pkey";
 import { seq, oid, tlv, integer, bits, bigToBytes, bytesToBig, derNull, octets } from "../jvm/natives/der";
+import type { PackageState } from "../shell/packagedata";
 
 // KeyMint's constants (android.hardware.security.keymint)
 const TAG = {
@@ -86,9 +87,11 @@ const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
   ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
 const storeKey = (uid = PROCESS_UID) => "wd:keystore2:" + uid;
 /** AppDataHelper.clearKeystoreData: every key of the app's uid */
-export function clearKeystore(uid: number): void {
-  try { globalThis.localStorage?.removeItem(storeKey(uid)); } catch { /* storage can be unavailable */ }
-}
+export const keystoreData: PackageState = {
+  clear(_pkg, uid) {
+    if (uid !== undefined) try { globalThis.localStorage?.removeItem(storeKey(uid)); } catch { /* storage can be unavailable */ }
+  },
+};
 let cache: { raw: string | null; entries: Entry[] } = { raw: null, entries: [] };
 function entries(): Entry[] {
   let raw: string | null = null;

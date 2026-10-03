@@ -124,7 +124,7 @@ export class PrivateFiles {
     ]);
   }
   /** installd's clearAppData: the package's data directories and its external app directories */
-  async clearPackage(pkg: string): Promise<void> {
+  async clear(pkg: string): Promise<void> {
     await this.prepare(pkg);
     const dirs = [...roots, "/sdcard/Android/media/"].map((root) => root + pkg);
     for (const path of new Set([...dirs, ...this.values.keys()])) {
@@ -159,7 +159,7 @@ export class PrivateFiles {
     });
     return write;
   }
-  async clear(): Promise<void> {
+  async clearAll(): Promise<void> {
     await Promise.all(this.loaded.values());
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     this.pending.clear();

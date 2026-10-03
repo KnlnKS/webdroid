@@ -8,7 +8,7 @@ import { newArrayList } from "../jvm/natives/jcoll";
 import { type XmlNode, attrStr, attr } from "./axml";
 import { appHost } from "./apphost";
 import { registerSystemActivity, newIntent, putExtra, type JIntent } from "./intent";
-import { PackageRecord, packages, signaturePermissions, usesSdk } from "./packages";
+import { PackageRecord, packages, signaturePermissions, storedPackages, usesSdk } from "./packages";
 import { hostStub } from "./binder";
 import { permissionInfo$ } from "./pm";
 
@@ -28,11 +28,11 @@ const RUNTIME_PERMISSIONS = new Set(["READ_CALENDAR", "WRITE_CALENDAR", "READ_CA
   "BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "NEARBY_WIFI_DEVICES"]
   .map((n) => "android.permission." + n));
 export class PermissionStore {
-  private packages = new Map<string, Set<string>>();
+  private grants = new Map<string, Set<string>>();
   get(pkg: string): Set<string> {
-    let grants = this.packages.get(pkg);
+    let grants = this.grants.get(pkg);
     if (!grants) {
-      grants = new Set(); this.packages.set(pkg, grants);
+      grants = new Set(); this.grants.set(pkg, grants);
       try {
         const saved: unknown = JSON.parse(globalThis.localStorage?.getItem("wd:permissions:" + pkg) ?? "[]");
         if (Array.isArray(saved)) for (const value of saved) if (typeof value === "string") grants.add(value);
@@ -40,9 +40,11 @@ export class PermissionStore {
     }
     return grants;
   }
-  /** resetRuntimePermissions: every runtime grant the package's requests made */
-  revoke(pkg: string) {
-    this.packages.delete(pkg);
+  /** the packages with grants persisted */
+  packages(): string[] { return storedPackages("wd:permissions:"); }
+  /** a package's data clear: resetRuntimePermissions, every runtime grant the package's requests made */
+  clear(pkg: string) {
+    this.grants.delete(pkg);
     try { globalThis.localStorage?.removeItem("wd:permissions:" + pkg); } catch { /* storage can be unavailable */ }
   }
   grant(pkg: string, names: string[]) {

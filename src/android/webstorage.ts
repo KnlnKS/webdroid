@@ -11,6 +11,7 @@ import { installTime } from "./packages";
 import { onMain } from "./mainloop";
 import { appHost } from "./apphost";
 import { rendererOrigin, rendererStorage, type StorageOp } from "../shell/webbridge";
+import type { PackageState } from "../shell/packagedata";
 
 /** kept with the install */
 const originsKey = (pkg: string) => "wd:install:" + pkg + ":webview";
@@ -44,12 +45,12 @@ const storageOf = (pkg: string, webOrigin: string, op: StorageOp) => rendererOf(
 
 /** everything `pkg`'s WebViews stored on their renderer origins, as clearing its data or uninstalling
  *  it removes its WebView data directory (the cookie jar's owner clears that) */
-export function clearWebData(pkg: string): Promise<void> {
-  return inOrder(async () => {
+export const webData: PackageState = {
+  clear: (pkg) => inOrder(async () => {
     await Promise.all(webOrigins(pkg).map((o) => storageOf(pkg, o, "all")));
     try { globalThis.localStorage?.removeItem(originsKey(pkg)); } catch { /* storage can be unavailable */ }
-  });
-}
+  }),
+};
 
 // ── WebStorage, as AwQuotaManagerBridge answers it over the noted origins
 const pkg = () => appHost?.pkg ?? "";

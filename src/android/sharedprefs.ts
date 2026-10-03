@@ -1,6 +1,11 @@
 // The preference store behind AOSP's SharedPreferencesImpl files and the platform's own settings.
 
 import { vfs } from "../shell/vfs";
+import { storedPackages } from "./packages";
+
+/** the platform's preference files of a package that a data clear keeps: DeviceIdleController's
+ *  allowlist (ActivityTaskManager's per-app night mode and locales go, onPackageDataCleared) */
+const KEPT_ON_CLEAR = new Set(["__system_power"]);
 
 type PreferenceValue =string | number | bigint | boolean | null | readonly string[];
 class PreferenceStore {
@@ -25,9 +30,9 @@ class PreferenceStore {
     } catch { /* corrupt */ }
     return values;
   }
-  /** the files named `prefix`..., held or persisted */
-  names(prefix: string): string[] {
-    const names = new Set([...this.files.keys()].filter((name) => name.startsWith(prefix)));
+  /** a package's files, held or persisted */
+  private named(pkg: string): string[] {
+    const prefix = pkg + ":", names = new Set([...this.files.keys()].filter((name) => name.startsWith(prefix)));
     const storage = globalThis.localStorage;
     for (let i = 0; storage && i < storage.length; i++) {
       const key = storage.key(i)!;
@@ -35,7 +40,14 @@ class PreferenceStore {
     }
     return [...names];
   }
-  remove(name: string): void {
+  /** the packages with files persisted */
+  packages(): string[] { return storedPackages("wd:prefs:"); }
+  /** a package's data clear takes its files but the platform's that a clear keeps */
+  clear(pkg: string): void {
+    for (const name of this.named(pkg)) if (!KEPT_ON_CLEAR.has(name.slice(pkg.length + 1))) this.delete(name);
+  }
+  remove(pkg: string): void { for (const name of this.named(pkg)) this.delete(name); }
+  delete(name: string): void {
     this.files.delete(name);
     try { globalThis.localStorage?.removeItem("wd:prefs:" + name); } catch { /* storage can be unavailable */ }
   }
