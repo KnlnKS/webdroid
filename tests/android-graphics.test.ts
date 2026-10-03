@@ -5,6 +5,8 @@ import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android
 import { typefaceOf } from "../src/android/fonts";
 import { declaredField } from "../src/jvm/runtime";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
+import { NativeRenderNode } from "../src/android/rendernode";
+import { mapPoint } from "../src/android/matrix";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
@@ -116,6 +118,24 @@ describe("lighting-color-filter", () => {
 });
 
 describe("matrix", () => {
+  test("RenderNode composes rotation and scale about its implicit or explicit pivot", () => {
+    const node = new NativeRenderNode(null);
+    node.setSide("right", 100); node.setSide("bottom", 80);
+    node.setTransform("rotation", 90); node.setTransform("tx", 7);
+    node.setTransform("scaleX", 2); node.setTransform("scaleY", 3);
+    node.updateMatrix();
+    expect(mapPoint(node.transform!, 50, 40)).toEqual([57, 40]);
+    expect(mapPoint(node.transform!, 0, 0)).toEqual([177, -60]);
+    node.setPivot("pivotX", 10); node.setPivot("pivotY", 20);
+    node.updateMatrix();
+    expect(mapPoint(node.transform!, 10, 20)).toEqual([17, 20]);
+    node.setTransform("rotationX", 30); node.updateMatrix();
+    node.setTransform("rotationX", 0); node.setTransform("rotation", 0);
+    node.setTransform("scaleX", 1); node.setTransform("scaleY", 1);
+    node.updateMatrix();
+    expect(mapPoint(node.transform!, 0, 0)).toEqual([7, 0]);
+  });
+
   rt.linkNatives();
 
   test("Matrix.set copies independently and null restores identity", async () => {

@@ -2429,3 +2429,21 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   allocation and copy of up to 1 MiB per batch; no FPS gain is claimed. Existing
   cache/JIT tests passed, and a scratch Bun probe overwriting the source after
   `instantiate` returned still compiled the original bytes successfully.
+- RenderNode allocation pass (2026-10-02). Every ordinary 2D transform update
+  built 13 temporary Float64Arrays through general matrix multiplication.
+  Scalar composition now writes the node's retained matrix, keeping the
+  original arithmetic grouping; 3D and nonfinite inputs retain their existing
+  path. Camera3D is allocated on first use. Position listeners retain numeric
+  bounds instead of allocating corner arrays and string keys each frame,
+  preserving NaN and signed-zero deduplication. Recording contexts consult
+  their method cache before reading the native context again.
+  Scratch differential probes found no differences across 10k transforms
+  (Object.is) or 10k position cases including nonfinite coordinates. Seven
+  V8 samples of 100k transform updates measured median 292.8 ms before and
+  2.3 ms after; Bun measured 28.3 and 1.51 ms. These isolate allocation and
+  arithmetic, not app performance: verified Mihon settings scrolling remained
+  equivalent, 69.91 versus 69.66 presentations/s. All 16 graphics tests and
+  the existing browser Canvas, render-effect and runtime-shader probes passed.
+  A compact display-list rewrite remains unproven: first measure argument-array
+  allocation and command distributions. Moving individual Canvas2D commands to
+  Wasm would add crossings; a renderer rewrite needs a batched rendering boundary.

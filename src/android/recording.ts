@@ -58,16 +58,15 @@ function recordInto(mirror: Ctx2D, rec: Recording): Ctx2D {
   const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
   const context = new Proxy(mirror, {
     get(target, key) {
+      let method = methods.get(key);
+      if (method) return method;
       const value: unknown = Reflect.get(target, key, target);
       if (typeof value !== "function") return value;
-      let method = methods.get(key);
-      if (!method) {
-        const fn = value as (...args: unknown[]) => unknown;
-        const read = READS.has(key as string), draw = DRAWS.has(key as string);
-        methods.set(key, method = read ? (...args) => fn.apply(target, args)
-          : draw ? (...args) => { rec.ops.push(CALL, key, args); }
-          : (...args) => { rec.ops.push(CALL, key, args); return fn.apply(target, args); });
-      }
+      const fn = value as (...args: unknown[]) => unknown;
+      const read = READS.has(key as string), draw = DRAWS.has(key as string);
+      methods.set(key, method = read ? (...args) => fn.apply(target, args)
+        : draw ? (...args) => { rec.ops.push(CALL, key, args); }
+        : (...args) => { rec.ops.push(CALL, key, args); return fn.apply(target, args); });
       return method;
     },
     set(target, key, value) {
