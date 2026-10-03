@@ -653,9 +653,10 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   shared WebAssembly.Memory committed as used (TikTok GC 52% → 2.8%; history). Done
   (knlnks/open-tiktok): TikTok's idle stalls were its process dying of libmetasec's own crash
   path after a signal handler left without sigreturn; such a handler now returns from the
-  interrupted call. Open: TikTok's swipe and video steps still miss the 3 s liveness probe in
-  some runs (main thread on cold code or Keva waits while software video decode takes 75-85%
-  of the JS thread; history), and TikTok stops offering guest sessions after many installs.
+  interrupted call; woken threads and the main looper's yields go ahead of other threads'. Open:
+  the swipe that opens TikTok's first video page still misses the 3 s liveness probe in some
+  runs (6.3 s of cold code in one main-thread message beside the software video decode;
+  history), and TikTok stops offering guest sessions after many installs from one host.
 
 ### §4 performance follow-up (2026-10-02): reuse idle work and retained state
 

@@ -3002,11 +3002,15 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     fingerprint. Those runs fail at launch ("completion timed out") on live content.
   - Result: before, every step wedged after the launch death. With the handler fix, 9 of the 24
     runs that got a guest feed passed, across the experiments above (the rest wedged one to three
-    swipe/video steps); the last such run, with all three fixes, passed launch and both swipes and
-    wedged in the video step with the main
-    looper idle-polling (stalled 5.6 s, guest threads 79% of the step). Open: the first swipe's
-    cold code and the software decode's share of the one JS thread; TikTok's player choosing
-    MediaCodec (its extradata); a priority for the main thread's wakeups from its looper poll.
+    swipe/video steps). One run with the GL and wake fixes passed launch and both swipes and
+    wedged in the video step with the main looper idle-polling (stalled 5.6 s, guest threads 79%
+    of the step): its yields waited behind every thread's slice, so the main looper's yield now
+    goes first. The two runs after that each wedged once, on the swipe that opens the first video
+    page: the main thread inside one message for 6.3-6.4 s (9.0-9.5 k classes compiled, compile
+    0.4 s, class init 0.14-0.18 s, the rest running that code cold) while guest threads took
+    47-67% of the step. Open: the first video page's cold code on the main thread (the §4
+    performance items), the software decode's share of the one JS thread, and TikTok's player
+    choosing MediaCodec (its missing extradata).
 
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
   startup blocker after the shared-mapping and SIGILL fixes. The US build
