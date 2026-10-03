@@ -5,6 +5,7 @@ import type { DexFile, EncAnnotation } from "../src/jvm/dex";
 import { vcall, newObj, vcallAsync, vcallOn, callOn, callUncaught, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
+import { yieldAs } from "../src/jvm/suspend";
 import { scall, loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
@@ -218,6 +219,20 @@ describe("class-init", () => {
     gate.resolve();
     expect(await seen).toBe(1);
     expect(reentry).toBeNull();
+    await first;
+  });
+
+  test("another job waits out a <clinit> whose chain only waits for its turn", async () => {
+    class Starved extends JObj { static ready = 0; }
+    rt.register({ name: "test/StarvedInit", ctor: Starved, clinit: () => rt.drive(function* () {
+      yield yieldAs(new Promise<void>((r) => setTimeout(r, 200)));  // a fuel yield a busy page answers late
+      Starved.ready = 1;
+    }()) });
+    const info = rt.link("test/StarvedInit");
+    const first = callOn(mainThread, () => rt.initClass(info));
+    const waiter = callOn(mainThread, () => rt.initClass(info));
+    expect(await Promise.resolve(waiter).then(() => Starved.ready)).toBe(1);
+    expect(info.assumeReentrant).toBe(false);
     await first;
   });
 });

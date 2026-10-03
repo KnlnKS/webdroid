@@ -6,7 +6,7 @@
 // when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
-import { currentStrand, enterStrand, inStrand, ownStrand, suspendWith } from "./suspend";
+import { currentStrand, enterStrand, inStrand, ownStrand, suspendWith, watchStrand, yieldAs } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
@@ -157,7 +157,7 @@ function siteCache(c: unknown[], k: number, fn: Cells): unknown {
 export const HEAP_LIMIT = 512 * 1024 * 1024;
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
 const STRICT_FIELDS = process.env.NODE_ENV !== "production";
-/** how long a cross-chain clinit wait runs before it is presumed a same-chain cycle */
+/** how long a <clinit>'s chain may go without running before a same-thread wait on it is presumed a cycle */
 const CLINIT_WAIT_MS = 60;
 
 export class Runtime {
@@ -830,20 +830,25 @@ export class Runtime {
     if (from) from.waitingOn = info;
     const clear = () => { if (from && from.waitingOn === info) from.waitingOn = null; };
     let esc: ReturnType<typeof setTimeout> | undefined;
-    const p = timed
+    const watch = timed ? watchStrand(info.initStrand) : undefined;
+    const p = watch
       ? Promise.race([info.initP!, new Promise<void>((res) => {
-          // short escape: a job interleaved on the initializing thread mostly waits out a
-          // <clinit>'s last suspension; anything longer is more likely a cycle through a host
-          // callback that lost its chain than a slow initializer, and proceeds as JLS re-entry.
+          // escape: a job interleaved on the initializing thread waits while the <clinit>'s chain
+          // runs or waits only for its turn, however long a loaded page (or a background realm)
+          // makes that; a chain stalled for a whole window is more likely in a cycle through this
+          // job (a host callback that lost its chain), and the request proceeds as JLS re-entry.
           // Remember it so the next several hundred accesses don't each pay the timeout.
           // The timer must be cleared when the race is won: left armed, it would mark a class
           // reentrant after a healthy wait, and later reads would stop waiting for a <clinit>
           // that really is in flight.
-          esc = setTimeout(() => { console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res(); },
-                           CLINIT_WAIT_MS);
+          const arm = () => { esc = setTimeout(() => {
+            if (watch.ran()) return arm();
+            console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res();
+          }, CLINIT_WAIT_MS); };
+          arm();
         })])
       : info.initP!;
-    const done = () => { if (esc !== undefined) clearTimeout(esc); clear(); };
+    const done = () => { if (esc !== undefined) clearTimeout(esc); watch?.stop(); clear(); };
     return p.then((v) => { done(); return v; }, (e) => { done(); throw e; });
   }
 
@@ -1174,7 +1179,7 @@ export class Runtime {
     const now = performance.now();
     if (now - this.lastYield < this.yieldGap) return null;
     this.lastYield = now;
-    return yieldToLoop();
+    return yieldAs(yieldToLoop());
   }
   /** java.lang.Class for the type at dex typeIdx (compiled const-class) */
   classForIdx(D: DexLink, typeIdx: number): unknown {
