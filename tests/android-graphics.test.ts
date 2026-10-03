@@ -6,7 +6,7 @@ import { typefaceOf } from "../src/android/fonts";
 import { declaredField } from "../src/jvm/runtime";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { NativeRenderNode } from "../src/android/rendernode";
-import { mapPoint } from "../src/android/matrix";
+import { about, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
@@ -134,6 +134,22 @@ describe("matrix", () => {
     node.setTransform("scaleX", 1); node.setTransform("scaleY", 1);
     node.updateMatrix();
     expect(mapPoint(node.transform!, 0, 0)).toEqual([7, 0]);
+    const retained = node.transform;
+    for (const [tx, ty, rotation, sx, sy, px, py] of [
+      [0, -0, -0, -0, 1, 0, -0], [7.5, -13, 37, -2, 0.25, 11, -17],
+      [1, 2, 0.01, 2, 3, 4, 5], [1, 2, 0.02, 2, 3, 4, 5],
+      [3e38, -3e38, 180, 3e38, -3e38, 3e38, -3e38],
+      [NaN, 0, 0, 1, 1, 0, 0], [0, Infinity, 0, 1, 1, 0, 0],
+      [0, 0, Infinity, 1, 1, 0, 0], [0, 0, 0, -Infinity, 1, 0, 0],
+      [0, 0, 0, 1, 1, Infinity, 0], [0, 0, 0, 1, 1, 0, 0],
+    ]) {
+      node.setTransform("tx", tx); node.setTransform("ty", ty); node.setTransform("rotation", rotation);
+      node.setTransform("scaleX", sx); node.setTransform("scaleY", sy);
+      node.setPivot("pivotX", px); node.setPivot("pivotY", py); node.updateMatrix();
+      const expected = mul(mul(translateM(tx, ty), about(rotateM(rotation), px, py)), about(scaleM(sx, sy), px, py));
+      expect(node.transform).toBe(retained);
+      for (let i = 0; i < 9; i++) expect(Object.is(node.transform![i], expected[i])).toBe(true);
+    }
   });
 
   rt.linkNatives();

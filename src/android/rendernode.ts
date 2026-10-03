@@ -14,7 +14,7 @@ import { perf } from "../perf";
 import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
-import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, rotateM, snap, about, invert, isIdentity, applyMatrix, matrixAt } from "./matrix";
+import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt } from "./matrix";
 import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas";
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
@@ -72,19 +72,7 @@ export class NativeRenderNode {
     if (!this.pivotExplicit) { this.pivotX = f32(this.width / 2); this.pivotY = f32(this.height / 2); }
     const px = this.pivotX, py = this.pivotY;
     if (isZero(this.rotationX) && isZero(this.rotationY)) {
-      if (Number.isFinite(px + py + this.tx + this.ty + this.rotation + this.scaleX + this.scaleY)) {
-        const m = this.transform ??= identity(), rad = this.rotation * Math.PI / 180;
-        const s = snap(Math.sin(rad)), c = snap(Math.cos(rad)), sx = this.scaleX, sy = this.scaleY;
-        const x = sx * -px + px, y = sy * -py + py;
-        // T * pivot(R) * pivot(S), retaining the composition's arithmetic order.
-        m[0] = c * sx + 0; m[1] = -s * sy + 0;
-        m[2] = c * x + -s * y + (c * -px + -s * -py + px + this.tx);
-        m[3] = s * sx + 0; m[4] = c * sy + 0;
-        m[5] = s * x + c * y + (s * -px + c * -py + py + this.ty);
-        m[6] = 0; m[7] = 0; m[8] = 1;
-      } else {
-        this.transform = mul(mul(translateM(this.tx, this.ty), about(rotateM(this.rotation), px, py)), about(scaleM(this.scaleX, this.scaleY), px, py));
-      }
+      setPivotedTransform(this.transform ??= identity(), this.tx, this.ty, this.rotation, this.scaleX, this.scaleY, px, py);
     } else {
       const cam = this.camera, t3d = identity();
       cam.stack.push(cam.top.slice());
