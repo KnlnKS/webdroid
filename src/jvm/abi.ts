@@ -240,11 +240,12 @@ export const varHandleValues = (mode: string): number | undefined => VARHANDLE_V
  *  frames carry it whatever script the body came from, as persisted code does not carry its
  *  per-method sourceURL. Every other character is `_` and four hex digits, so `__` separates. */
 const frameEscape = (s: string) => s.replace(/[^A-Za-z0-9]/g, (c) => "_" + c.charCodeAt(0).toString(16).padStart(4, "0"));
-export const frameName = (cls: string, method: string) => `wd_${frameEscape(cls)}__${frameEscape(method)}`;
-/** [class, method] from a frameName in a stack line, if it holds one */
-export function frameOf(line: string): [string, string] | null {
-  const m = /\bwd_([A-Za-z0-9_]*?)__([A-Za-z0-9_]+)/.exec(line);
+export const frameName = (cls: string, method: string, methodIdx = -1) =>
+  `wd_${frameEscape(cls)}__${frameEscape(method)}${methodIdx >= 0 ? "__" + methodIdx : ""}`;
+/** [class, method, method index or -1] from a frameName in a stack line, if it holds one */
+export function frameOf(line: string): [string, string, number] | null {
+  const m = /\bwd_([A-Za-z0-9_]*?)__([A-Za-z0-9_]+?)(?:__(\d+))?\b/.exec(line);
   if (!m) return null;
   const unescape = (s: string) => s.replace(/_([0-9a-f]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
-  return [unescape(m[1]), unescape(m[2])];
+  return [unescape(m[1]), unescape(m[2]), m[3] === undefined ? -1 : Number(m[3])];
 }

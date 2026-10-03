@@ -156,9 +156,15 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     prepare: () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName),
     entry: (prepared, count) => emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}.${rec.name}.js`,
     resume: (prepared) => resumableSource(R, dex, info, rec.m, prepared) + `\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`,
-    cold: (prepared) => new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
-      .compileCold(prepared, coldInstructions(code, prepared)),
+    cold: (prepared) => Object.assign(new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold", rec.m.methodIdx)
+      .compileCold(prepared, coldInstructions(code, prepared)), { codeOff: rec.m.codeOff }),
   });
+}
+
+/** a lazy method's body as `form` emits it, each instruction's first line marked with its pc */
+export function markedBody(R: Runtime, info: ClassInfo, rec: LazyMethod, form: "e" | "r"): string {
+  const prepared = prepareDexMethod(rec.dex, rec.dex.code(rec.m.codeOff), rec.desc, rec.isStatic, "");
+  return form === "e" ? emitMethod(R, rec.dex, info, rec.m, prepared, false, true) : resumableSource(R, rec.dex, info, rec.m, prepared, true);
 }
 
 type MethodKey = { name: string; desc: string; mangled: string };
@@ -200,11 +206,11 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
 /** A hot entry. A frame that suspends hands itself to `$R()`, the method's resumable body.
  *  Bodies are parenthesized because each runs as soon as it compiles: V8 then compiles it eagerly
  *  rather than preparsing it and parsing it again on the first call. */
-function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod, count = true): string {
+function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod, count = true, marked = false): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), isStatic, desc, name, "hot").compile(prepared, count, "entry");
+    const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), isStatic, desc, name, "hot", m.methodIdx, marked).compile(prepared, count, "entry");
     return `{const $ic=[];${holder(isStatic)}.${mangled}=(${body});}`;
   } catch (error) { return unimplementedMethod(info, m, dex, error); }
 }
@@ -218,9 +224,9 @@ function unimplementedMethod(info: ClassInfo, m: EncodedMethod, dex: DexFile, er
 }
 
 /** An expression evaluating to the method's resumable body. */
-function resumableSource(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod): string {
+function resumableSource(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod, marked = false): string {
   const { name, desc } = methodKey(dex, m.methodIdx);
-  const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), (m.flags & ACC.STATIC) !== 0, desc, name, "hot").compile(prepared, false, "resumable");
+  const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), (m.flags & ACC.STATIC) !== 0, desc, name, "hot", m.methodIdx, marked).compile(prepared, false, "resumable");
   return `(()=>{const $ic=[];const $m=(${body}),$R=()=>$m;return $m;})()`;
 }
 
@@ -245,6 +251,10 @@ class MethodEmitter {
     private R: Runtime, private dex: DexFile, private info: ClassInfo,
     private code: CodeItem, private isStatic: boolean, private desc: string,
     private mname: string, private backend: EmitBackend,
+    /** the method's index, which its function name carries for a stack to name it exactly */
+    private methodIdx: number,
+    /** each instruction's first line starts with a comment naming its pc (stackLines.ts) */
+    private marked = false,
   ) {
     this.hasTries = code.tries.length > 0;
   }
@@ -342,7 +352,9 @@ class MethodEmitter {
         cur = [flow ? at : `case ${ins.pc}:${at}`];
       }
       if (!cur) throw new Error(`instruction ${ins.pc} has no emitted block`);
+      const at = cur.length;
       this.emitIns(ins, cur);
+      if (this.marked && cur.length > at) cur[at] = `/*@${ins.pc}*/` + cur[at];
       last = ins;
     }
     end();
@@ -383,7 +395,7 @@ ${this.sync ? "" : this.saveFrame()}
 }catch($e){
 ${this.resuming ? "R.st($th);$r=0;" : ""}${catchBody}
 }`;
-    const source = `function ${frameName(this.info.name, this.mname)}(${this.resuming ? "$F" : jsParams.join(",")}){
+    const source = `function ${frameName(this.info.name, this.mname, this.methodIdx)}(${this.resuming ? "$F" : jsParams.join(",")}){
 ${this.resuming ? "" : coverageProbeSource(profileName)}
 ${profileStart}
 ${init}

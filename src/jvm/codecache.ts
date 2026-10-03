@@ -22,6 +22,31 @@ const platformDexes = new Set<string>();
 export function markPlatformDex(id: string): void { platformDexes.add(id); }
 const isPlatformKey = (key: string) => platformDexes.has(key.slice(0, key.indexOf(":")));
 let loaded: Record<string, Factory> = {};
+/** each imported chunk's bodies, by the URL a stack names it with */
+const chunks = new Map<string, Record<string, Factory>>();
+/** a chunk's bodies, noted under the URL it was imported from */
+function noteChunk(url: string, bodies: Record<string, Factory>): Record<string, Factory> {
+  chunks.set(new URL(url, location.href).href, bodies);
+  return bodies;
+}
+const chunkStarts = new WeakMap<Record<string, Factory>, [key: string, line: number][]>();
+/** the persisted body a chunk's `line` falls in, and the line within its body: codeText writes
+ *  each factory on the line after the last one's, under its key */
+export function chunkBody(url: string, line: number): { key: string; line: number } | null {
+  const bodies = chunks.get(url);
+  if (!bodies) return null;
+  let starts = chunkStarts.get(bodies);
+  if (!starts) {
+    let at = 2;
+    chunkStarts.set(bodies, starts = Object.entries(bodies).map(([key, factory]) => {
+      const start = at;
+      at += factory.toString().split("\n").length;
+      return [key, start];
+    }));
+  }
+  for (let i = starts.length - 1; i >= 0; i--) if (starts[i][1] <= line) return { key: starts[i][0], line: line - starts[i][1] };
+  return null;
+}
 /** keys the startup chunks hold, which a compacting rewrite keeps there */
 let startupKeys = new Set<string>();
 /** later chunks not yet imported: a compacting rewrite waits for them */
@@ -98,7 +123,7 @@ async function importOffers(): Promise<void> {
     if (!needed.length) continue;
     const url = URL.createObjectURL(new Blob([codeText(needed)], { type: "text/javascript" }));
     try {
-      const factories: Record<string, Factory> = (await import(/* @vite-ignore */ url)).default;
+      const factories = noteChunk(url, (await import(/* @vite-ignore */ url)).default);
       for (const key in factories) if (!loaded[key] && !pending.has(key)) { loaded[key] = factories[key]; offered.add(key); }
     } catch (e) { console.warn("[webdroid] compiled code unavailable", e); }
     finally { URL.revokeObjectURL(url); }
@@ -133,8 +158,10 @@ const storeRoot = once(async (): Promise<string | null> => {
   const cache = await caches.open(CACHE);
   // through the service worker when it controls the page, so V8 can reuse its code cache
   const direct = !!navigator.serviceWorker?.controller;
-  importChunk = async (path) =>
-    (await import(/* @vite-ignore */ direct ? path : URL.createObjectURL(await (await cache.match(path))!.blob()))).default;
+  importChunk = async (path) => {
+    const url = direct ? path : URL.createObjectURL(await (await cache.match(path))!.blob());
+    return noteChunk(url, (await import(/* @vite-ignore */ url)).default);
+  };
   // the bodies depend on which platform classes run from bytecode, so a cut has a store of its own
   const platform = `@platform${BYTECODE.length ? "-" + [...BYTECODE.join(",")].reduce((h, c) => Math.imul(h, 31) + c.charCodeAt(0) | 0, 0).toString(36) : ""}`;
   const root = `/wd-code/${build}/`;

@@ -36,6 +36,8 @@ export interface ClassDef {
   directMethods: EncodedMethod[]; virtualMethods: EncodedMethod[];
   staticValuesOff: number;
   annotationsOff: number;
+  /** the SourceFile attribute's string index, NO_INDEX (0xffffffff) without one */
+  sourceFileIdx: number;
   dex: DexFile;
 }
 
@@ -275,7 +277,7 @@ export class DexFile {
     const def: ClassDef = {
       typeIdx, flags, superIdx, interfaces,
       staticFields: [], instanceFields: [], directMethods: [], virtualMethods: [],
-      staticValuesOff: v.getUint32(off + 28, true), annotationsOff: v.getUint32(off + 20, true), dex: this,
+      staticValuesOff: v.getUint32(off + 28, true), annotationsOff: v.getUint32(off + 20, true), sourceFileIdx: v.getUint32(off + 16, true), dex: this,
     };
     if (classDataOff) {
       const r = new Reader(this.bytes, classDataOff);
@@ -373,6 +375,44 @@ export class DexFile {
     const sec = this.section(0x0007);
     if (!sec || i >= sec.size) throw new Error(`call_site ${i} out of range in ${this.name}`);
     return this.encodedArray(this.view.getUint32(sec.off + i * 4, true));
+  }
+
+  /** the source line of the instruction at code unit `pc`, by the code item's debug_info
+   *  position table; -1 without one */
+  lineAt(codeOff: number, pc: number): number {
+    let table = this.lineTables.get(codeOff);
+    if (!table) this.lineTables.set(codeOff, table = this.positions(codeOff));
+    let found = -1;
+    for (let i = 0; i < table.length && table[i] <= pc; i += 2) found = table[i + 1];
+    return found;
+  }
+  private lineTables = new Map<number, Int32Array>();
+  /** a code item's position entries: address, line pairs in address order */
+  private positions(codeOff: number): Int32Array {
+    const debugOff = this.view.getUint32(codeOff + 8, true), out: number[] = [];
+    if (!debugOff) return new Int32Array(0);
+    const r = new Reader(this.bytes, debugOff);
+    let line = r.uleb(), address = 0;
+    for (let n = r.uleb(); n > 0; n--) r.uleb();
+    for (;;) {
+      const op = r.u8();
+      switch (op) {
+        case 0: return Int32Array.from(out);                           // DBG_END_SEQUENCE
+        case 1: address += r.uleb(); break;                            // DBG_ADVANCE_PC
+        case 2: line += r.sleb(); break;                               // DBG_ADVANCE_LINE
+        case 3: r.uleb(); r.uleb(); r.uleb(); break;                   // DBG_START_LOCAL
+        case 4: r.uleb(); r.uleb(); r.uleb(); r.uleb(); break;         // DBG_START_LOCAL_EXTENDED
+        case 5: case 6: r.uleb(); break;                               // DBG_END_LOCAL, DBG_RESTART_LOCAL
+        case 7: case 8: break;                                         // DBG_SET_PROLOGUE_END, DBG_SET_EPILOGUE_BEGIN
+        case 9: r.uleb(); break;                                       // DBG_SET_FILE
+        default: {                                                     // a special opcode emits a position
+          const adjusted = op - 10;
+          address += Math.floor(adjusted / 15);
+          line += -4 + adjusted % 15;
+          out.push(address, line);
+        }
+      }
+    }
   }
 
   code(off: number): CodeItem {
