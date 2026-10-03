@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, type JClassLoader } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { scall, loadLibcore, mountApexData } from "./java";
@@ -446,6 +446,67 @@ describe("thread-group", () => {
     await vcall(thread, "join", "()V");
     expect(await vcall(group, "activeCount", "()I")).toBe(before);
     expect(await vcall(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;")).toBeNull();
+  });
+});
+
+describe("thread-enumeration", () => {
+  class WaitingTask extends JObj { finish: (() => void) | null = null; }
+  rt.register({ name: "test/EnumerationTask", ctor: WaitingTask, ifaces: ["java/lang/Runnable"], methods: {
+    "run()V": function (this: WaitingTask) { return new Promise<void>(resolve => { this.finish = resolve; }); },
+  } });
+  rt.linkNatives();
+  test("thread enumeration includes suspended live threads and removes completed threads", async () => {
+    const cls = rt.link("java/lang/Thread").ctor;
+    const count = await vcall(cls, "activeCount", "()I");
+    const task = await newObj("test/EnumerationTask");
+    const thread = await newObj("java/lang/Thread", "(Ljava/lang/Runnable;)V", task);
+    await vcall(thread, "start", "()V");
+    await Bun.sleep(0);
+    try {
+      expect(curThread).toBe(mainThread);
+      expect(await vcall(cls, "activeCount", "()I")).toBe(count + 1);
+      const threads = jarray(new Array(count + 2).fill(null), "Ljava/lang/Thread;");
+      expect(await vcall(cls, "enumerate", "([Ljava/lang/Thread;)I", threads)).toBe(count + 1);
+      expect(threads).toContain(thread);
+    } finally { task.finish?.(); }
+    await vcall(thread, "join", "()V");
+    expect(await vcall(cls, "activeCount", "()I")).toBe(count);
+  });
+});
+
+describe("thread-state", () => {
+  const state = async (thread: unknown) => vcall(await vcall(thread, "getState", "()Ljava/lang/Thread$State;"), "name", "()Ljava/lang/String;");
+
+  test("Thread states distinguish new, runnable and terminated threads", async () => {
+    const thread = await newObj("java/lang/Thread");
+    expect(await state(thread)).toBe("NEW");
+    expect(await state(mainThread)).toBe("RUNNABLE");
+    await vcall(thread, "start", "()V");
+    await vcall(thread, "join", "()V");
+    expect(await state(thread)).toBe("TERMINATED");
+    await expect(vcallAsync(thread, "start", "()V")).rejects.toBeDefined();
+  });
+
+  test("Thread states expose monitor contention, timed parking, wakeup and interruption", async () => {
+    const thread = new JThread(); thread.alive = 1;
+    const lock = {}, owner = new JThread(); owner.alive = 1;
+    rt.monitors.enter(lock, owner);
+    const entered = rt.monitors.enter(lock, thread);
+    expect(await state(thread)).toBe("BLOCKED");
+    rt.monitors.exit(lock, owner);
+    await entered;
+    rt.monitors.exit(lock, thread);
+    let wake = () => {};
+    const waiting = park(thread, (resume) => { wake = resume; return () => {}; });
+    expect(await state(thread)).toBe("WAITING");
+    wake(); await waiting;
+    expect(await state(thread)).toBe("RUNNABLE");
+    const timed = park(thread, () => () => {}, 10000);
+    expect(await state(thread)).toBe("TIMED_WAITING");
+    const interrupted = timed.then(() => false, () => true);
+    await vcall(thread, "interrupt", "()V");
+    expect(await interrupted).toBe(true);
+    expect(await state(thread)).toBe("RUNNABLE");
   });
 });
 
