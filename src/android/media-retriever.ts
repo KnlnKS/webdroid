@@ -1,11 +1,12 @@
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
+import { concat } from "../jvm/abi";
 import { after } from "../jvm/natives/jlang";
 import { fdInt } from "../jvm/natives/jio";
 import type { FileSource } from "../shell/lazyfile";
 import { NativeBitmap, javaBitmap } from "./bitmap";
 import { MediaExtractor } from "./media-extractor";
 import { TYPE_LONG } from "./media-format";
-import { definitionFor, videoChunk, videoConfig } from "./media-codec";
+import { definitionFor, parameterSets, videoConfig } from "./media-codec";
 import { inspectMp3 } from "./media-mp3";
 import { dataSourceFile, fdSlice, nativePeer } from "./media-native";
 
@@ -61,7 +62,7 @@ class Retriever {
     if (!track?.samples.length) return null;
     const { format } = track, mime = format.string("mime"), def = definitionFor(mime);
     if (def?.kind !== "video" || !format.number("width", 0) || !format.number("height", 0)) return null;
-    const config = videoConfig(def, format);
+    const sets = parameterSets(mime, format), config = videoConfig(def, format, concat(sets));
     if (!(await VideoDecoder.isConfigSupported(config)).supported) return null;
     const requested = timeUs < 0n ? 0 : Number(timeUs);
     const mode = option === 1 ? 1 : option === 2 || option === 3 ? 2 : 0;
@@ -81,7 +82,7 @@ class Retriever {
     const decoder = new VideoDecoder({ output: output => { if (frames.length) output.close(); else frames.push(output); }, error: error => { failure = error; } });
     try {
       decoder.configure(config);
-      decoder.decode(videoChunk(mime, format, packet.data, packet.time, true, true));
+      decoder.decode(new EncodedVideoChunk({ type: "key", timestamp: packet.time, data: concat([...sets, packet.data]) }));
       await decoder.flush();
       if (failure || !frames[0]) return null;
       const decoded = frames[0];

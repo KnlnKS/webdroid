@@ -9,90 +9,134 @@ import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, formatFro
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";
 import { nativePeer, postNativeEvent } from "./media-native";
 
-type VideoLimits = { maxDimension: number; maxBitrate: number; blockSize: number; maxBlocks: number; blocksPerSecond: number };
-type Definition = ({ kind: "video"; mime: string; codec: string; profiles: [number, number][] } & VideoLimits)
-  | { kind: "audio"; mime: string; codec: string; profiles: [number, number][]; rates: string };
-const avc42 = { maxDimension: 4096, maxBitrate: 50000000, blockSize: 16, maxBlocks: 8704, blocksPerSecond: 522240 };
+/** A profile and level the codec lists, and the WebCodecs codec string a browser decoder is probed with */
+type Profile = { profile: number; level: number; codec: string };
+type Definition = { kind: "video" | "audio"; name: string; mime: string; profiles: Profile[] };
+const profile = (profile: number, level: number, codec: string): Profile => ({ profile, level, codec });
+// Names follow Codec2's c2.<vendor>.<type>.decoder for codecs that run outside the device's CPU, as
+// the Android Emulator lists its host-backed c2.goldfish decoders: the browser decodes, off the
+// guest's thread, whether or not it uses the GPU. Players choose by these names and flags
+// (c2.android and OMX.google are AOSP's software codecs, which run on the CPU they emulate).
+// Profiles and levels are MediaCodecInfo.CodecProfileLevel's; each is listed if the browser decodes it.
 const definitions: Definition[] = [
-  { kind: "video", mime: "video/avc", codec: "avc1.42002A", ...avc42, profiles: [[1, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", ...avc42, profiles: [[2, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.64002A", ...avc42, maxBitrate: 62500000, profiles: [[8, 8192]] },
-  { kind: "video", mime: "video/hevc", codec: "hvc1.1.6.L123.B0", ...avc42, profiles: [[1, 4096]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, blockSize: 16, maxBlocks: 0x7fffffff, blocksPerSecond: 0x7fffffff, profiles: [[1, 8]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 4160, maxBitrate: 30000000, blockSize: 8, maxBlocks: 34816, blocksPerSecond: 2506752, profiles: [[1, 128]] },
-  { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]], rates: "7350-96000" },
-  { kind: "audio", mime: "audio/mpeg", codec: "mp3", profiles: [], rates: "8000-48000" },
-  { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [], rates: "8000-48000" },
+  // High first: the codec string a stream without parameter sets configures
+  { kind: "video", name: "c2.webcodecs.avc.decoder", mime: "video/avc", profiles: [profile(8, 0x10000, "avc1.640034"), profile(0x80000, 0x10000, "avc1.640C34"),
+    profile(2, 0x10000, "avc1.4D0034"), profile(1, 0x10000, "avc1.420034"), profile(0x10000, 0x10000, "avc1.42C034")] },
+  { kind: "video", name: "c2.webcodecs.hevc.decoder", mime: "video/hevc", profiles: [profile(1, 0x10000, "hvc1.1.6.L153.B0"), profile(2, 0x10000, "hvc1.2.4.L153.B0")] },
+  { kind: "video", name: "c2.webcodecs.vp8.decoder", mime: "video/x-vnd.on2.vp8", profiles: [profile(1, 8, "vp8")] },
+  { kind: "video", name: "c2.webcodecs.vp9.decoder", mime: "video/x-vnd.on2.vp9", profiles: [profile(1, 512, "vp09.00.51.08"), profile(4, 512, "vp09.02.51.10")] },
+  { kind: "video", name: "c2.webcodecs.av1.decoder", mime: "video/av01", profiles: [profile(1, 0x2000, "av01.0.13M.08"), profile(2, 0x2000, "av01.0.13M.10")] },
+  { kind: "audio", name: "c2.webcodecs.aac.decoder", mime: "audio/mp4a-latm", profiles: [profile(2, 0, "mp4a.40.2")] },
+  { kind: "audio", name: "c2.webcodecs.mp3.decoder", mime: "audio/mpeg", profiles: [profile(0, 0, "mp3")] },
+  { kind: "audio", name: "c2.webcodecs.opus.decoder", mime: "audio/opus", profiles: [profile(0, 0, "opus")] },
 ];
-/** the first definition for a type, whether or not the browser decodes it */
+/** the definition for a type, whether or not the browser decodes it */
 export const definitionFor = (mime: string): Definition | undefined => definitions.find((d) => d.mime === mime);
-const codecName = (def: Definition) => "webcodecs." + def.codec;
+const isNal = (mime: string) => mime === "video/avc" || mime === "video/hevc";
+/** an Annex B stream's NAL units, each from its header byte to the next start code */
+function nalUnits(data: Uint8Array): Uint8Array[] {
+  const units: Uint8Array[] = [];
+  let start = -1;
+  for (let i = 0; i + 2 < data.length; i++) {
+    if (data[i] || data[i + 1] || data[i + 2] !== 1) continue;
+    if (start >= 0) units.push(data.subarray(start, i && !data[i - 1] ? i - 1 : i));
+    start = i += 3;
+  }
+  if (start >= 0) units.push(data.subarray(start));
+  return units;
+}
+const nalType = (mime: string, unit: Uint8Array) => mime === "video/avc" ? unit[0] & 31 : unit[0] >>> 1 & 63;
+/** whether an access unit starts a coded video sequence: an AVC IDR, HEVC IRAP, VP8 or VP9 key frame or AV1 key frame */
 function videoKeyFrame(mime: string, data: Uint8Array): boolean {
-  if (mime === "video/x-vnd.on2.vp8") return data.length > 0 && !(data[0] & 1);
+  if (!data.length) return false;
+  if (mime === "video/x-vnd.on2.vp8") return !(data[0] & 1);
   if (mime === "video/x-vnd.on2.vp9") {
     const header = data[0], shift = (header & 48) === 48 ? 1 : 0;
-    return data.length > 0 && header >>> 6 === 2 && !(header & (12 >>> shift));
+    return header >>> 6 === 2 && !(header & (12 >>> shift));
   }
-  if (mime === "video/avc") for (let i = 0; i + 3 < data.length; i++) {
-    if (data[i] || data[i + 1] || data[i + 2] !== 1) continue;
-    const type = data[i + 3] & 31;
-    if (type === 1 || type === 5) return type === 5;
+  if (mime === "video/av01") {
+    // the first frame (header) OBU: show_existing_frame 0 and frame_type KEY_FRAME, as an uncompressed header begins
+    for (let i = 0; i < data.length;) {
+      const header = data[i], type = header >>> 3 & 15;
+      let at = i + 1 + (header & 4 ? 1 : 0), size = 0;
+      if (!(header & 2)) size = data.length - at;
+      else for (let shift = 0; at < data.length; shift += 7) { const b = data[at++]; size += (b & 127) * 2 ** shift; if (!(b & 128)) break; }
+      if (type === 3 || type === 6) return at < data.length && !(data[at] & 0xe0);
+      i = at + size;
+    }
+    return false;
   }
-  if (mime === "video/hevc") for (let i = 0; i + 4 < data.length; i++) {
-    if (data[i] || data[i + 1] || data[i + 2] !== 1) continue;
-    const type = data[i + 3] >>> 1 & 63;
-    if (type <= 31) return type >= 16 && type <= 21;
+  if (isNal(mime)) for (const unit of nalUnits(data)) {
+    const type = nalType(mime, unit);
+    if (mime === "video/avc" ? type === 1 || type === 5 : type <= 31) return mime === "video/avc" ? type === 5 : type >= 16 && type <= 21;
   }
   return false;
 }
-/** a decoder chunk for an access unit; AVC and HEVC parameter sets (csd-0, csd-1) lead the first */
-export function videoChunk(mime: string, format: NativeFormat, data: Uint8Array, timestamp: number, key: boolean, first: boolean): EncodedVideoChunk {
-  const csd = first && (mime === "video/avc" || mime === "video/hevc") ? csdBytes(format, "csd-0") : undefined;
-  if (csd) data = concat([csd, csdBytes(format, "csd-1") ?? new Uint8Array(0), data]);
-  return new EncodedVideoChunk({ type: key || videoKeyFrame(mime, data) ? "key" : "delta", timestamp, data });
+/** the RBSP of a NAL unit's first bytes, without emulation prevention */
+function rbsp(unit: Uint8Array, length: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < unit.length && out.length < length; i++) if (!(unit[i] === 3 && i >= 2 && !unit[i - 1] && !unit[i - 2])) out.push(unit[i]);
+  return out;
 }
-export function videoConfig(def: Definition, format: NativeFormat): VideoDecoderConfig {
-  const specified = format.string("codecs-string");
-  let codec = def.mime === "video/hevc" && /^(hvc1|hev1)\./.test(specified) ? specified : def.codec;
-  const data = csdBytes(format, "csd-0");
-  if (def.mime === "video/avc" && data) {
-    for (let i = 0; i + 7 < data.length; i++) if (data[i] === 0 && data[i + 1] === 0 && (data[i + 2] === 1 || data[i + 2] === 0 && data[i + 3] === 1)) {
-      const start = i + (data[i + 2] === 1 ? 3 : 4);
-      if ((data[start] & 31) === 7) { codec = "avc1." + [...data.subarray(start + 1, start + 4)].map(b => b.toString(16).padStart(2, "0")).join(""); break; }
-    }
+const hex2 = (b: number) => b.toString(16).toUpperCase().padStart(2, "0");
+/** the codec string of a sequence parameter set, as ISO/IEC 14496-15 Annex E derives it */
+function spsCodec(mime: string, data: Uint8Array): string | null {
+  for (const unit of nalUnits(data)) {
+    if (mime === "video/avc" && nalType(mime, unit) === 7) return "avc1." + rbsp(unit, 4).slice(1).map(hex2).join("");
+    if (mime !== "video/hevc" || nalType(mime, unit) !== 33) continue;
+    // NAL header (2), vps id/sub-layers/nesting (1), then profile_tier_level's general fields
+    const b = rbsp(unit, 15);
+    if (b.length < 15) return null;
+    const flags = (b[4] << 24 | b[5] << 16 | b[6] << 8 | b[7]) >>> 0;
+    let compatibility = 0;
+    for (let i = 0; i < 32; i++) if (flags & 1 << (31 - i)) compatibility |= 1 << i;
+    const constraints = b.slice(8, 14);
+    while (constraints.length && !constraints[constraints.length - 1]) constraints.pop();
+    return `hvc1.${["", "A", "B", "C"][b[3] >>> 6]}${b[3] & 31}.${(compatibility >>> 0).toString(16).toUpperCase()}.${b[3] & 32 ? "H" : "L"}${b[14]}` +
+      constraints.map(c => "." + hex2(c)).join("");
   }
+  return null;
+}
+/** csd-0 and csd-1: AVC's and HEVC's parameter sets in Annex B, as a decoder takes them before the first access unit */
+export const parameterSets = (mime: string, format: NativeFormat): Uint8Array[] =>
+  isNal(mime) ? [csdBytes(format, "csd-0"), csdBytes(format, "csd-1")].filter(b => b !== undefined) : [];
+/** a decoder configuration for a video format, its codec string from the parameter sets that lead `data` if any */
+export function videoConfig(def: Definition, format: NativeFormat, data?: Uint8Array): VideoDecoderConfig {
+  const specified = format.number("profile", -1);
+  const codec = (data && spsCodec(def.mime, data)) ?? (def.profiles.find(p => p.profile === specified) ?? def.profiles[0]).codec;
   return { codec, codedWidth: format.number("width", 640), codedHeight: format.number("height", 360), optimizeForLatency: true };
 }
-function audioConfig(def: Definition, format: NativeFormat): AudioDecoderConfig {
-  return { codec: def.codec, sampleRate: format.number("sample-rate", 48000), numberOfChannels: format.number("channel-count", 2), description: csdBytes(format, "csd-0") };
+function audioConfig(def: Definition, format: NativeFormat, description = csdBytes(format, "csd-0")): AudioDecoderConfig {
+  return { codec: def.profiles[0].codec, sampleRate: format.number("sample-rate", 48000), numberOfChannels: format.number("channel-count", 2), description };
 }
-async function supported(def: Definition): Promise<boolean> {
-  const format = new NativeFormat();
-  try {
-    return def.kind === "video" ? typeof VideoDecoder !== "undefined" && (await VideoDecoder.isConfigSupported(videoConfig(def, format))).supported === true
-      : typeof AudioDecoder !== "undefined" && (await AudioDecoder.isConfigSupported(audioConfig(def, format))).supported === true;
-  } catch { return false; }
-}
+/** the codec list: each definition with the profiles a browser decoder accepts */
 let probed: Promise<Definition[]> | null = null;
-/** the codec list: each definition a browser decoder accepts */
-const codecs = (): Promise<Definition[]> =>
-  probed ??= Promise.all(definitions.map(async d => await supported(d) ? d : null)).then(a => a.filter(v => v !== null));
+const codecs = (): Promise<Definition[]> => probed ??= Promise.all(definitions.map(async (def) => {
+  const accepts = async (p: Profile) => {
+    try {
+      if (def.kind === "audio") return typeof AudioDecoder !== "undefined" && (await AudioDecoder.isConfigSupported({ ...audioConfig(def, new NativeFormat()), codec: p.codec })).supported === true;
+      return typeof VideoDecoder !== "undefined" && (await VideoDecoder.isConfigSupported({ codec: p.codec, codedWidth: 1920, codedHeight: 1080 })).supported === true;
+    } catch { return false; }
+  };
+  const ok = await Promise.all(def.profiles.map(accepts));
+  const profiles = def.profiles.filter((_, i) => ok[i]);
+  return profiles.length ? { ...def, profiles } : null;
+})).then(list => list.filter(d => d !== null));
 
 // ── MediaCodecList: MediaCodecInfo and its capabilities are AOSP's Java over these answers.
 // The capability map is what media_codecs.xml gives a codec, which CodecCapabilities parses.
 const CPL = "android/media/MediaCodecInfo$CodecProfileLevel";
 function capabilityMap(def: Definition): Record<string, string> {
-  if (def.kind === "audio") return { "sample-rate-ranges": def.rates, "max-channel-count": "2", "bitrate-range": "8000-510000" };
-  const b = def.blockSize;
-  return { "size-range": `${b}x${b}-${def.maxDimension}x${def.maxDimension}`, "alignment": "2x2", "block-size": `${b}x${b}`,
-    "block-count-range": `1-${def.maxBlocks}`, "blocks-per-second-range": `1-${def.blocksPerSecond}`, "bitrate-range": `1-${def.maxBitrate}`,
-    "frame-rate-range": "0-960" };
+  if (def.kind === "audio") return { "sample-rate-ranges": def.mime === "audio/mp4a-latm" ? "7350-96000" : "8000-48000", "max-channel-count": "2", "bitrate-range": "8000-510000" };
+  // up to 4096x2304 at 60 frames per second; the levels bound each profile further
+  return { "size-range": "16x16-4096x4096", "alignment": "2x2", "block-size": "16x16", "block-count-range": "1-36864",
+    "blocks-per-second-range": "1-2073600", "bitrate-range": "1-120000000", "frame-rate-range": "0-960" };
 }
 const stringMap = (entries: Record<string, string>) =>
   formatToJava(Object.entries(entries).reduce((format, [k, v]) => format.set(k, TYPE_STRING, v), new NativeFormat()));
 const capabilities = driven(function* capabilities$(def: Definition): Gen<JObj> {
   const levels: JObj[] = [];
-  for (const [profile, level] of def.profiles) levels.push(setDeclared(yield newObj(CPL), CPL, { profile, level }));
+  for (const { profile, level } of def.profiles) if (def.kind === "video" || profile) levels.push(setDeclared(yield newObj(CPL), CPL, { profile, level }));
   // COLOR_FormatYUV420Flexible, and the planar and semi-planar layouts a VideoFrame copies out as
   const colors = def.kind === "video" ? Int32Array.of(0x7f420888, 19, 21) : new Int32Array(0);
   return newObj("android/media/MediaCodecInfo$CodecCapabilities", `([L${CPL};[IZLjava/util/Map;Ljava/util/Map;)V`,
@@ -103,20 +147,20 @@ const at = (index: number) => after(codecs(), (list) => {
   if (!def) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
   return def;
 });
-/** no MediaCodecInfo flag: not an encoder, and a browser decoder may or may not use hardware */
-const ATTRIBUTES = 0;
+/** vendor and hardware-accelerated: see the names */
+const ATTRIBUTES = 2 | 8;
 rt.registerJnis("android/media/MediaCodecList", {
   "native_init()V": () => {},
   "native_getCodecCount()I": () => after(codecs(), (list) => list.length),
-  "getCodecName(I)Ljava/lang/String;": (i: number) => after(at(i), codecName),
-  "getCanonicalName(I)Ljava/lang/String;": (i: number) => after(at(i), codecName),
+  "getCodecName(I)Ljava/lang/String;": (i: number) => after(at(i), (def) => def.name),
+  "getCanonicalName(I)Ljava/lang/String;": (i: number) => after(at(i), (def) => def.name),
   "getAttributes(I)I": (i: number) => after(at(i), () => ATTRIBUTES),
   "getSupportedTypes(I)[Ljava/lang/String;": (i: number) => after(at(i), (def) => jarray([def.mime], "Ljava/lang/String;")),
   "getCodecCapabilities(ILjava/lang/String;)Landroid/media/MediaCodecInfo$CodecCapabilities;": (i: number, type: string) => after(at(i), (def) => {
     if (type !== def.mime) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
     return capabilities(def);
   }),
-  "findCodecByName(Ljava/lang/String;)I": (name: string) => after(codecs(), (list) => list.findIndex((d) => codecName(d) === name)),
+  "findCodecByName(Ljava/lang/String;)I": (name: string) => after(codecs(), (list) => list.findIndex((d) => d.name === name)),
   "native_getGlobalSettings()Ljava/util/Map;": () => newObj("java/util/HashMap"),
 });
 
@@ -141,17 +185,19 @@ class Run {
   inFlight = 0;
   ending = false;
   formatChanged = false;
-  prepend = true;
+  /** AVC or HEVC parameter sets (csd-0 and csd-1, then codec-config buffers) that lead the next key frame */
+  parameterSets: Uint8Array[];
   error: string | null = null;
   waiters = new Set<() => void>();
   scheduled = new Map<ReturnType<typeof setTimeout>, VideoFrame>();
   constructor(readonly codec: Codec) {
     const { def, format } = codec, outputFormat = new NativeFormat(format);
     const error = (e: unknown) => { if (this.live()) this.fail(e); };
+    this.parameterSets = parameterSets(def.mime, format);
     if (def.kind === "video") {
+      // configured at the first key frame, whose parameter sets give the codec string
       outputFormat.set("mime", TYPE_STRING, "video/raw");
-      const decoder = this.decoder = new VideoDecoder({ error, output: frame => this.frame(frame) });
-      decoder.configure(videoConfig(def, format));
+      this.decoder = new VideoDecoder({ error, output: frame => this.frame(frame) });
     } else {
       outputFormat.set("mime", TYPE_STRING, "audio/raw").set("pcm-encoding", TYPE_INTEGER, 2);
       const decoder = this.decoder = new AudioDecoder({ error, output: audio => {
@@ -239,19 +285,38 @@ class Run {
     this.available.delete(index);
     if (offset < 0 || size < 0 || offset + size > bufferCapacity(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid input range");
     const data = bufferBytes(buffer).subarray(offset, offset + size);
-    if (!(flags & 2) && size) {
-      this.inFlight++;
-      if (decoder instanceof VideoDecoder) {
-        decoder.decode(videoChunk(this.codec.def.mime, this.codec.format, data, Number(timestamp), !!(flags & 1), this.prepend));
-        this.prepend = false;
-      } else decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: Number(timestamp), data }));
-    }
+    try {
+      if (flags & 2) this.config(data);
+      else if (size) this.decode(data, Number(timestamp), !!(flags & 1));
+    } catch (e) { this.fail(e); }
     this.available.add(index);
     if (flags & 4) {
       this.ending = true;
-      void decoder.flush().then(() => { if (this.live()) this.output({ kind: "end", info: info(timestamp, 0, 4) }); })
+      void (decoder.state === "configured" ? decoder.flush() : Promise.resolve()).then(() => { if (this.live()) this.output({ kind: "end", info: info(timestamp, 0, 4) }); })
         .catch(e => { if (this.live()) this.fail(e); });
     } else this.pump();
+  }
+  /** a codec-config buffer: parameter sets for AVC and HEVC, an audio decoder's description;
+   *  VP8, VP9 and AV1 decoders take theirs in band, as AOSP's do */
+  config(data: Uint8Array): void {
+    const { def, format } = this.codec;
+    if (def.kind === "audio") (this.decoder as AudioDecoder).configure(audioConfig(def, format, data.slice()));
+    else if (isNal(def.mime)) this.parameterSets.push(data.slice());
+  }
+  decode(data: Uint8Array, timestamp: number, key: boolean): void {
+    const decoder = this.decoder;
+    if (decoder instanceof AudioDecoder) { this.inFlight++; decoder.decode(new EncodedAudioChunk({ type: "key", timestamp, data })); return; }
+    const mime = this.codec.def.mime;
+    if (this.parameterSets.length) data = concat([...this.parameterSets, data]);
+    key ||= videoKeyFrame(mime, data);
+    // a decoder starts at a key frame: what precedes it decodes to nothing, as on a device
+    if (decoder.state !== "configured") {
+      if (!key) return;
+      decoder.configure(videoConfig(this.codec.def, this.codec.format, data));
+    }
+    if (key) this.parameterSets = [];
+    this.inFlight++;
+    decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp, data }));
   }
   releaseOutput(index: number, render: boolean, timeNs?: bigint): void {
     const output = this.outputs.get(index);
@@ -330,7 +395,7 @@ export class Codec {
 }
 /** the codec for a type or component name, or null when the list has none */
 export const createCodec = (name: string, nameIsType: boolean, owner: JObj | null = null): Promise<Codec | null> =>
-  codecs().then((list) => { const def = list.find((d) => nameIsType ? d.mime === name : codecName(d) === name); return def ? new Codec(def, owner) : null; });
+  codecs().then((list) => { const def = list.find((d) => nameIsType ? d.mime === name : d.name === name); return def ? new Codec(def, owner) : null; });
 
 // ── MediaCodec's natives
 const MC = "android/media/MediaCodec";
@@ -378,10 +443,10 @@ rt.registerJnis(MC, {
   "getImage(ZI)Landroid/media/Image;": () => null,
   "getFormatNative(Z)Ljava/util/Map;": C((c, input: number) => formatToJava(input ? c.format : c.outputFormat)),
   "getOutputFormatNative(I)Ljava/util/Map;": C((c) => formatToJava(c.outputFormat)),
-  "getCanonicalName()Ljava/lang/String;": C((c) => codecName(c.def)),
+  "getCanonicalName()Ljava/lang/String;": C((c) => c.def.name),
   "getOwnCodecInfo()Landroid/media/MediaCodecInfo;": C((c) => after(capabilities(c.def), (caps) => newObj("android/media/MediaCodecInfo",
     "(Ljava/lang/String;Ljava/lang/String;I[Landroid/media/MediaCodecInfo$CodecCapabilities;)V",
-    codecName(c.def), codecName(c.def), ATTRIBUTES, jarray([caps], "Landroid/media/MediaCodecInfo$CodecCapabilities;")))),
+    c.def.name, c.def.name, ATTRIBUTES, jarray([caps], "Landroid/media/MediaCodecInfo$CodecCapabilities;")))),
   "native_setSurface(Landroid/view/Surface;)V": C((c, surface: JObj) => { c.surface = surface; }),
   "native_detachOutputSurface()V": C((c) => { c.surface = null; }),
   // the decoders take no parameters while running, and scale only to fit
