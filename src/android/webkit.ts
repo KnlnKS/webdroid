@@ -432,32 +432,35 @@ export class WebViewChromium extends JObj {
     if (/^javascript:/i.test(url)) { this.evalJs(url.slice(11)); return; }
     this.go({ url, src: srcFor(url, this) });
   }
-  private async intercept(request: WebRequest): Promise<WebResponse | null> {
-    const on = <T>(call: () => T) => callOn(this.requestThread, call);
-    const req = mkRequest(request.url);
-    req.main = request.main; req.method = request.method;
-    req.headers = inst("java/util/HashMap");
-    for (const [key, value] of Object.entries(request.headers)) await on(() => vcall(req.headers, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value));
-    const response = await on(() => vcall(this.client, "shouldInterceptRequest", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;", this.view, req)) as JObj | null;
-    if (!response) return null;
-    const get = <T>(name: string, desc: string) => on(() => vcall(response, name, desc)) as Promise<T>;
-    const [mime, enc, status, reason, responseHeaders, data] = [await get<string | null>("getMimeType", "()Ljava/lang/String;"),
-      await get<string | null>("getEncoding", "()Ljava/lang/String;"), await get<number>("getStatusCode", "()I"),
-      await get<string | null>("getReasonPhrase", "()Ljava/lang/String;"), await get<JObj | null>("getResponseHeaders", "()Ljava/util/Map;"),
-      await get<JObj | null>("getData", "()Ljava/io/InputStream;")];
-    const headers: Record<string, string> = {};
-    const entries = responseHeaders ? await on(() => vcall(responseHeaders, "entrySet", "()Ljava/util/Set;")) : null;
-    if (entries) for (const entry of await on(() => toJsArray(entries))) {
-      const key = await on(() => vcall(entry, "getKey", "()Ljava/lang/Object;")) as string;
-      headers[key] = await on(() => vcall(entry, "getValue", "()Ljava/lang/Object;")) as string;
-    }
-    if (mime) headers["content-type"] = mime + (enc ? "; charset=" + enc : "");
-    let body = "";
-    if (data) {
-      try { body = (await on(() => readStreamFully(data))).toBase64(); }
-      finally { await on(() => vcall(data, "close", "()V")); }
-    }
-    return { body, status, reason: reason ?? "OK", headers };
+  /** WebViewClient.shouldInterceptRequest, which Chromium calls on its IO thread */
+  private intercept(request: WebRequest): Promise<WebResponse | null> {
+    const self = this;
+    return Promise.resolve(callOn(this.requestThread, () => rt.drive(function* (): Gen<WebResponse | null> {
+      const req = mkRequest(request.url);
+      req.main = request.main; req.method = request.method;
+      req.headers = inst("java/util/HashMap");
+      for (const [key, value] of Object.entries(request.headers)) yield vcall(req.headers, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      const response: JObj | null = yield vcall(self.client, "shouldInterceptRequest", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;", self.view, req);
+      if (!response) return null;
+      const mime: string | null = yield vcall(response, "getMimeType", "()Ljava/lang/String;");
+      const enc: string | null = yield vcall(response, "getEncoding", "()Ljava/lang/String;");
+      const status: number = yield vcall(response, "getStatusCode", "()I");
+      const reason: string | null = yield vcall(response, "getReasonPhrase", "()Ljava/lang/String;");
+      const responseHeaders: JObj | null = yield vcall(response, "getResponseHeaders", "()Ljava/util/Map;");
+      const data: JObj | null = yield vcall(response, "getData", "()Ljava/io/InputStream;");
+      const headers: Record<string, string> = {};
+      const entries = responseHeaders ? yield vcall(responseHeaders, "entrySet", "()Ljava/util/Set;") : null;
+      if (entries) for (const entry of yield* awaited(toJsArray(entries))) {
+        headers[yield vcall(entry, "getKey", "()Ljava/lang/Object;")] = yield vcall(entry, "getValue", "()Ljava/lang/Object;");
+      }
+      if (mime) headers["content-type"] = mime + (enc ? "; charset=" + enc : "");
+      let body = "";
+      if (data) {
+        try { body = (yield* awaited(readStreamFully(data))).toBase64(); }
+        finally { yield vcall(data, "close", "()V"); }
+      }
+      return { body, status, reason: reason ?? "OK", headers };
+    }())));
   }
   step(n: number) {
     const i = this.idx + n;
