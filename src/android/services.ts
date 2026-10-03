@@ -17,7 +17,7 @@ import { intentSenderMethods, intentSenderTaskMethods } from "./pendingintent";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "./os";
 import { GL_ES_VERSION } from "./pm";
 import { protectionLevel, isRuntimePermission, permissionGranted, checkUidPermission } from "./permissions";
-import { deviceConfiguration } from "./resnative";
+import { deviceConfiguration, systemResource } from "./resnative";
 import { absentService, callingIdentity, enforceCallingOrSelfPermission, hostStub, parceledList } from "./binder";
 import { packages } from "./packages";
 import { getPrefs } from "./sharedprefs";
@@ -163,11 +163,6 @@ rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj
 hostStub("statusbar", "webdroid/StatusBarManagerService");
 // IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
 // or enabled, so a client's state is all off; the focus highlight is framework-res's
-const systemResource = driven(function* (type: string, name: string, read: string, desc: string, ...args: unknown[]): Gen<number> {
-  const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-  const id: number = yield vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
-  return yield vcall(res, read, desc, id, ...args);
-});
 rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends JObj {}, sup: "android/view/accessibility/IAccessibilityManager$Stub", methods: {
   "addClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)J": () => 0n,
   "removeClient(Landroid/view/accessibility/IAccessibilityManagerClient;I)Z": () => 1,

@@ -3,6 +3,7 @@
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { callUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { systemResource } from "./resnative";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { settingsStore } from "./settings";
 
@@ -16,9 +17,7 @@ const FALLBACK_PATTERNS: Record<number, string> = {
 function* fallbackTimings(effect: number): Gen<number[]> {
   const name = FALLBACK_PATTERNS[effect];
   if (!name) return [];
-  const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-  const id: number = yield vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, "array", "android");
-  const timings = [...(yield vcall(res, "getIntArray", "(I)[I", id)) as Int32Array];
+  const timings = [...(yield systemResource("array", name, "getIntArray", "(I)[I")) as Int32Array];
   return timings.length === 1 ? [0, timings[0]] : timings;
 }
 let vibration: ReturnType<typeof setTimeout> | undefined;

@@ -12,6 +12,12 @@ import { mkPfd } from "./os";
 import { appHost } from "./apphost";
 import { hostStub } from "./binder";
 
+/** framework-res's `type`/`name` as Resources.getSystem() reads it with `read`, or its id without one */
+export const systemResource = driven(function* systemResource$(type: string, name: string, read?: string, desc?: string, ...args: unknown[]): Gen<unknown> {
+  const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
+  const id: number = yield vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
+  return read ? yield vcall(res, read, desc!, id, ...args) : id;
+});
 /** an AssetFileDescriptor over bytes, the whole of a ParcelFileDescriptor served over them */
 export const mkAssetFd = (bytes: Uint8Array, pfd: unknown = null): unknown => after(pfd ?? mkPfd(bytes),
   (fd) => newObj("android/content/res/AssetFileDescriptor", "(Landroid/os/ParcelFileDescriptor;JJ)V", fd, 0n, BigInt(bytes.length)));

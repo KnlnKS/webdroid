@@ -8,6 +8,7 @@
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
 import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall, scall, callUncaught, stringHash } from "../jvm/natives/jlang";
+import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 import { jarray } from "../jvm/abi";
@@ -141,10 +142,8 @@ class Preferences {
 function* preferences(pkg: string): Gen<Preferences> {
   const prefs = new Preferences(pkg), legacy = targetSdk(pkg) < 26;
   if (legacy && !prefs.has(CHANNEL_KEY, DEFAULT_CHANNEL)) {
-    const system = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-    const label = yield vcall(system, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "default_notification_channel_label", "string", "android");
     const channel = yield newObj(CHANNEL, "(Ljava/lang/String;Ljava/lang/CharSequence;I)V", DEFAULT_CHANNEL,
-      yield vcall(system, "getString", "(I)Ljava/lang/String;", label), IMPORTANCE_UNSPECIFIED);
+      yield systemResource("string", "default_notification_channel_label", "getString", "(I)Ljava/lang/String;"), IMPORTANCE_UNSPECIFIED);
     yield* prefs.write(CHANNEL_KEY, DEFAULT_CHANNEL, channel);
   } else if (!legacy && prefs.has(CHANNEL_KEY, DEFAULT_CHANNEL)) prefs.remove(CHANNEL_KEY + DEFAULT_CHANNEL);
   return prefs;
@@ -336,9 +335,8 @@ function* monochromeAppIcon(pkg: string): Gen<JObj> {
     return yield scall("android/graphics/drawable/Icon", "createWithResourceAdaptiveDrawable", "(Ljava/lang/String;IZF)Landroid/graphics/drawable/Icon;",
       pkg, yield vcall(drawable, "getSourceDrawableResId", "()I"), 1, inset * -2);
   }
-  const system = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-  const id = yield vcall(system, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "ic_menu_cut_holo_light", "drawable", "android");
-  return yield scall("android/graphics/drawable/Icon", "createWithResource", "(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;", "android", id);
+  return yield scall("android/graphics/drawable/Icon", "createWithResource", "(Ljava/lang/String;I)Landroid/graphics/drawable/Icon;", "android",
+    yield systemResource("drawable", "ic_menu_cut_holo_light"));
 }
 function* groupHelperPosted(r: PostedNotification, notification: JObj): Gen<void> {
   const pk = packageKey(r.userId, r.pkg), hasSummary = notificationStore.autobundled.has(pk);
@@ -581,10 +579,8 @@ function* showToast(service: JObj, t: ToastRecord): Gen<void> {
   if (t.custom) yield vcall(t.custom, "show", "(Landroid/os/IBinder;)V", windowToken);
   else {
     const ctx = yield* awaited(serviceContext());
-    const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-    const id = (name: string, type: string) => vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", name, type, "android");
-    const gravity: number = yield vcall(res, "getInteger", "(I)I", yield id("config_toastDefaultGravity", "integer"));
-    const y: number = yield vcall(res, "getDimensionPixelSize", "(I)I", yield id("toast_y_offset", "dimen"));
+    const gravity = yield systemResource("integer", "config_toastDefaultGravity", "getInteger", "(I)I");
+    const y = yield systemResource("dimen", "toast_y_offset", "getDimensionPixelSize", "(I)I");
     t.presenter = yield newObj("android/widget/ToastPresenter", "(Landroid/content/Context;Landroid/view/accessibility/IAccessibilityManager;Landroid/app/INotificationManager;Ljava/lang/String;)V",
       ctx, yield* awaited(hostedService("accessibility")), service, t.pkg);
     const view = yield scall("android/widget/ToastPresenter", "getTextToastView", "(Landroid/content/Context;Ljava/lang/CharSequence;)Landroid/view/View;", ctx, t.text);

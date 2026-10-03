@@ -4,7 +4,8 @@
 // AVD mounts /storage/emulated/0 over /data/media. Space answers follow the browser's estimate.
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleStaticField } from "../jvm/abi";
-import { newObj, scall, vcall, linkInit } from "../jvm/natives/jlang";
+import { newObj, scall, linkInit } from "../jvm/natives/jlang";
+import { systemResource } from "./resnative";
 import { newFile } from "../jvm/natives/jio";
 import { hostStub } from "./binder";
 import { vfs } from "../shell/vfs";
@@ -15,11 +16,9 @@ const VI = "android/os/storage/VolumeInfo";
 const bytes = (n: number) => BigInt(Math.floor(n));
 
 const storageVolume = driven(function* storageVolume$(): Gen<JObj> {
-  const res = yield scall("android/content/res/Resources", "getSystem", "()Landroid/content/res/Resources;");
-  const id: number = yield vcall(res, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "storage_internal", "string", "android");
   return newObj("android/os/storage/StorageVolume",
     "(Ljava/lang/String;Ljava/io/File;Ljava/io/File;Ljava/lang/String;ZZZZZJLandroid/os/UserHandle;Ljava/util/UUID;Ljava/lang/String;Ljava/lang/String;)V",
-    "emulated;0", yield* awaited(newFile(SHARED)), yield* awaited(newFile(SHARED)), yield vcall(res, "getString", "(I)Ljava/lang/String;", id),
+    "emulated;0", yield* awaited(newFile(SHARED)), yield* awaited(newFile(SHARED)), yield systemResource("string", "storage_internal", "getString", "(I)Ljava/lang/String;"),
     1, 0, 1, 0, 0, 0n, yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", USER), uuidDefault(), null, "mounted");
 });
 const volumeInfo = driven(function* volumeInfo$(): Gen<JObj> {
