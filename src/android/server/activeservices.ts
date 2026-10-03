@@ -4,14 +4,14 @@
 // through the broker, whose request lands in that process's ActiveServices.
 import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, callUncaught } from "../../jvm/natives/jlang";
-import { hostedService, notConnected, parceledList } from "../binder";
+import { notConnected, parceledList } from "../binder";
 import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
 import { type JComponentName, type JIntent, componentParts, mkComponentName, newIntent } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
-import { scheduleOnApp, compatInfo } from "./am";
+import { scheduleOnApp, compatInfo, pms } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
 
 /** the services of another process, through the broker; `flags` are bindService's (BIND_AUTO_CREATE when omitted) */
@@ -26,7 +26,6 @@ export const serviceTransport: {
 const SI = "android/content/pm/ServiceInfo", INTENT = "Landroid/content/Intent;", BINDER = "Landroid/os/IBinder;";
 const CONNECTED = "(Landroid/content/ComponentName;Landroid/os/IBinder;Z)V";
 const BIND_AUTO_CREATE = 1, GET_SHARED_LIBRARY_FILES = 0x400n, STOP_FOREGROUND_REMOVE = 1, STOP_FOREGROUND_DETACH = 2;
-const pms = () => hostedService("package") as Promise<JObj>;
 
 /** a ConnectionRecord: an IServiceConnection of this process, or another process's binding by its key */
 interface Connection { id: JObj | string; autoCreate: boolean; connected: (binder: JObj | null, dead: boolean) => void }

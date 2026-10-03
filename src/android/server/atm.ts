@@ -10,12 +10,12 @@ import { once, shareable } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
-import { asSystem, hostedService, systemToken } from "../binder";
+import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
 import { PROCESS_NAME } from "../os";
 import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler } from "../intent";
 import { grantResultUris } from "../urigrants";
-import { thisApp, userLaunched } from "./am";
+import { thisApp, userLaunched, pms } from "./am";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
@@ -56,8 +56,11 @@ export const PROCESS_STATE_SERVICE = 10, PROCESS_STATE_RECEIVER = 11;
  *  resumed, else the state of the component it runs */
 export const foreground = (): boolean => stack.some((r) => r.state === "resumed");
 export const processState = (component: number): number => foreground() ? PROCESS_STATE_TOP : component;
-const pms = () => hostedService("package") as Promise<JObj>;
-const activityInfoOf = (resolved: JObj | null) => resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "activityInfo");
+/** PackageManager.resolveIntent's activity */
+function* resolveActivity(intent: JObj, resolvedType: string | null, flags: bigint): Gen<JObj | null> {
+  const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, resolvedType, flags, 0);
+  return resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "activityInfo");
+}
 const activityClientController = once(() => newObj("webdroid/ActivityClientController"));
 
 function* schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<void> {
@@ -266,8 +269,7 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
   yield vcall(intent, "addCategory", "(Ljava/lang/String;)Landroid/content/Intent;", "android.intent.category.LAUNCHER");
   yield vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
   yield vcall(intent, "addFlags", "(I)Landroid/content/Intent;", 0x10200000);   // NEW_TASK | RESET_TASK_IF_NEEDED
-  const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, GET_META_DATA, 0);
-  const info: JObj | null = activityInfoOf(resolved);
+  const info = yield* resolveActivity(intent, null, GET_META_DATA);
   if (!info) throw new Error(`no launcher activity in ${pkg}`);
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;",
     yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
@@ -279,9 +281,7 @@ const AI = "android/content/pm/ActivityInfo";
 export const startActivityFor = driven(function* (app: JObj, intent: JObj, resolvedType: string | null = null, resultTo: JObj | null = null, resultWho: string | null = null, requestCode: number = -1): Gen<number> {
   transitions++;
   try {
-    const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
-      intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
-    const info: JObj | null = activityInfoOf(resolved);
+    const info = yield* resolveActivity(intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA);
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = yield* awaited(intentQuery(intent)), system = systemActivity(q, false) ??

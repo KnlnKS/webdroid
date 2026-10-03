@@ -4,12 +4,12 @@
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { awaited, JObj, driven, type Gen } from "../../jvm/runtime";
 import { callUncaught, newObj, vcall } from "../../jvm/natives/jlang";
-import { hostedService, notConnected } from "../binder";
+import { notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { checkPermission } from "../permissions";
 import { mkComponentName, type JIntent } from "../intent";
-import { scheduleOnApp, compatInfo, thisApp } from "./am";
+import { scheduleOnApp, compatInfo, thisApp, pms } from "./am";
 import { processState, PROCESS_STATE_RECEIVER } from "./atm";
 
 export type BroadcastResult = { code: number; data: string | null; extras: JObj | null; aborted: boolean };
@@ -61,7 +61,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
   const from = sender ?? SYSTEM;
   if (component) {
     const name = yield* awaited(mkComponentName(appHost!.pkg, component));
-    const info = yield vcall(yield* awaited(hostedService("package")), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
+    const info = yield vcall(yield* awaited(pms()), "getReceiverInfo", `(Landroid/content/ComponentName;JI)Landroid/content/pm/ActivityInfo;`, name, GET_SHARED_LIBRARY_FILES, 0);
     if (!info) throw new Error("Receiver not installed: " + component);
     const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
     yield vcall(copy, "setComponent", `(Landroid/content/ComponentName;)${INTENT}`, name);

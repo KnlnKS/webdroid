@@ -17,7 +17,8 @@ import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../
 import { uriText, type JUri } from "../net";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
-const pms = () => hostedService("package") as Promise<JObj>;
+/** the package manager, as system_server's services reach it */
+export const pms = () => hostedService("package") as Promise<JObj>;
 
 let appThread: JObj | null = null, launcher = false;
 /** whether this is the app the user launched, whose launcher activity starts with it */
