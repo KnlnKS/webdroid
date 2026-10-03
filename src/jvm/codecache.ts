@@ -12,6 +12,7 @@
 
 import { inputSettled } from "./yield";
 import { BYTECODE } from "./provenance";
+import { once } from "./suspend";
 
 /** installs an entry body into C/C.prototype, or returns a resumable body */
 export type Factory = (C: unknown, D: unknown, R: unknown, S: unknown, P: unknown, $R?: unknown) => unknown;
@@ -132,40 +133,42 @@ export function codeText(bodies: Iterable<[string, string]> = [...pending].map((
   return text + "};\n";
 }
 
-let platformCode: Promise<void> | null = null;
-/** load the platform's persisted bodies: a zygote awaits them before it runs platform code */
-export const loadPlatformCode = (): Promise<void> => platformCode ??= (async () => {
-  if (typeof caches === "undefined") return;
-  // the build every realm shares: the page and a process frame are bundled apart, but emit the same bodies
-  const build = (await fetchLinkTable())?.build ?? new URL(import.meta.url).pathname.replace(/[^\w.-]+/g, "_");
+/** the build's store root, once the platform's persisted bodies are loaded; null when the page
+ *  cannot persist or has no link table naming its build */
+const storeRoot = once(async (): Promise<string | null> => {
+  const build = typeof caches === "undefined" ? undefined : (await fetchLinkTable())?.build;
+  if (!build) return null;
+  const cache = await caches.open(CACHE);
+  // through the service worker when it controls the page, so V8 can reuse its code cache
+  const direct = !!navigator.serviceWorker?.controller;
+  importChunk = async (path) =>
+    (await import(/* @vite-ignore */ direct ? path : URL.createObjectURL(await (await cache.match(path))!.blob()))).default;
   // the bodies depend on which platform classes run from bytecode, so a cut has a store of its own
   const platform = `@platform${BYTECODE.length ? "-" + [...BYTECODE.join(",")].reduce((h, c) => Math.imul(h, 31) + c.charCodeAt(0) | 0, 0).toString(36) : ""}`;
-  root = `/wd-code/${build}/`;
-  await loadStore(platformDir = `${root}${platform}/`, `/${platform}/`);
-})();
-let root = "";
+  const root = `/wd-code/${build}/`;
+  await loadStore(cache, platformDir = `${root}${platform}/`, `/${platform}/`);
+  return root;
+});
+/** load the platform's persisted bodies: a zygote awaits them before it runs platform code */
+export const loadPlatformCode = async (): Promise<void> => { await storeRoot(); };
 
 /** load `app`'s persisted bodies; a launch without them records its own */
 export async function loadCode(app: string): Promise<void> {
-  await loadPlatformCode();
+  const root = await storeRoot();
   if (!root) return;
   addEventListener("pagehide", () => void saveCode());
-  await loadStore(dir = `${root}${encodeURIComponent(app)}/`, `/${encodeURIComponent(app)}/`);
+  await loadStore(await caches.open(CACHE), dir = `${root}${encodeURIComponent(app)}/`, `/${encodeURIComponent(app)}/`);
 }
 
 /** import a store's startup chunks and note its later ones; another build's chunks of it are stale */
-async function loadStore(store: string, suffix: string): Promise<void> {
+async function loadStore(cache: Cache, store: string, suffix: string): Promise<void> {
   try {
-    const cache = await caches.open(CACHE), paths: string[] = [];
+    const paths: string[] = [];
     for (const request of await cache.keys()) {
       const path = new URL(request.url).pathname;
       if (path.startsWith(store)) paths.push(path);
       else if (path.includes(suffix)) void cache.delete(request);
     }
-    // through the service worker when it controls the page, so V8 can reuse its code cache
-    const direct = !!navigator.serviceWorker?.controller;
-    importChunk = async (path) =>
-      (await import(/* @vite-ignore */ direct ? path : URL.createObjectURL(await (await cache.match(path))!.blob()))).default;
     const laterPaths = paths.filter((path) => path.startsWith(`${store}l-`));
     if (laterPaths.length) (later ??= []).push(...laterPaths);
     for (const bodies of await Promise.all(paths.filter((path) => !laterPaths.includes(path)).map(importChunk)))
