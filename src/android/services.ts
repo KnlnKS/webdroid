@@ -4,7 +4,7 @@
 // code (Shizuku's Sui probe) gets the Stub's answer. A method not implemented here is reported as
 // missing by its AIDL name.
 import { once } from "../jvm/suspend";
-import { awaited, JObj, rt, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
+import { awaited, JObj, rt, noops, stubs, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField, after, callUncaught } from "../jvm/natives/jlang";
 import { onMain } from "./mainloop";
@@ -243,7 +243,7 @@ function* sendCallback(r: Registration, name: string): Gen<void> {
     yield put("LinkProperties", yield* awaited(linkProperties()));
   }
   const msg = yield scall("android/os/Message", "obtain", "()Landroid/os/Message;");
-  msg[declaredField("android/os/Message", "what")] = yield* awaited(callbackCode(name));
+  setDeclared(msg, "android/os/Message", { what: yield* awaited(callbackCode(name)) });
   yield vcall(msg, "setData", "(Landroid/os/Bundle;)V", data);
   yield vcall(r.messenger, "send", "(Landroid/os/Message;)V", msg);
 }
@@ -365,12 +365,12 @@ const checkOp = driven(function* (code: number, uid: number, pkg: string | null)
 const noteOp = driven(function* (code: number, uid: number, pkg: string | null, tag: string | null): Gen<JObj> {
   return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
 });
-const sourceField = (state: JObj, name: string) => (state as unknown as Record<string, unknown>)[declaredField("android/content/AttributionSourceState", name)];
+const SOURCE = "android/content/AttributionSourceState";
 const noteFor = (code: number, state: JObj) =>
-  noteOp(code, sourceField(state, "uid") as number, sourceField(state, "packageName") as string | null, sourceField(state, "attributionTag") as string | null);
+  noteOp(code, getDeclared(state, SOURCE, "uid") as number, getDeclared(state, SOURCE, "packageName") as string | null, getDeclared(state, SOURCE, "attributionTag") as string | null);
 /** a proxied op is noted for the proxy (an app is never a trusted proxy) and then the app it serves */
 const noteProxyOp = driven(function* (code: number, state: JObj): Gen<JObj> {
-  const proxy = yield* awaited(noteFor(code, state)), next = sourceField(state, "next") as JObj[] | null;
+  const proxy = yield* awaited(noteFor(code, state)), next = getDeclared(state, SOURCE, "next") as JObj[] | null;
   return next?.length && (yield vcall(proxy, "getOpMode", "()I")) === MODE_ALLOWED ? yield* awaited(noteFor(code, next[0])) : proxy;
 });
 rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IAppOpsService$Stub", methods: {
@@ -422,7 +422,6 @@ hostStub("appops", "webdroid/AppOpsService");
 // IPermissionChecker (PermissionCheckerService), behind PermissionChecker: every app in the
 // attribution chain must hold the permission; a data source checking for a caller (a provider)
 // is itself exempt. App ops are not modelled, so nothing is soft-denied.
-const SOURCE = "android/content/AttributionSourceState";
 rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JObj {}, sup: "android/permission/IPermissionChecker$Stub", methods: {
   "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
     driven(function* (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) {

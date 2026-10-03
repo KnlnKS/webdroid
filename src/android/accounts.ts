@@ -3,7 +3,7 @@
 // bytecode, and accounts live in the broker's store, shared by every process. An operation an
 // authenticator answers runs as an AccountManagerService session: bind the authenticator's
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
-import { awaited, JObj, rt, noops, declaredField, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { newObj, scall, vcall, reportUncaught, callUncaught, after } from "../jvm/natives/jlang";
 import { boxInt } from "../jvm/natives/jbox";
@@ -66,7 +66,7 @@ function visible(s: StoredAccount, pkg = caller()): boolean {
 }
 /** an account's visibility to `pkg`: its owner's uid always sees it */
 const visibilityFor = (s: StoredAccount, pkg: string) => sameUid(s.owner, pkg) ? 1 : s.visibility[pkg] ?? 4;
-const field = (account: JObj, name: string) => (account as unknown as Record<string, string>)[declaredField("android/accounts/Account", name)];
+const field = (account: JObj, name: string) => getDeclared<string>(account, "android/accounts/Account", name);
 const stored = (account: JObj | null) => account ? accounts().find((s) => s.name === field(account, "name") && s.type === field(account, "type")) : undefined;
 /** an account the caller manages: its authenticator is the caller's */
 function owned(account: JObj | null): StoredAccount | undefined {

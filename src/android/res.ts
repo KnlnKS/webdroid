@@ -3,7 +3,7 @@
 
 import { Arsc } from "./arsc";
 import { TV, type XmlNode, type XmlAttr } from "./axml";
-import { JObj, declaredField } from "../jvm/runtime";
+import { JObj, getDeclared } from "../jvm/runtime";
 import { deref } from "./handles";
 import { intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
@@ -497,17 +497,13 @@ export function rvString(res: Resources, v: RV | null): string | null {
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return String(v.d);
   return v.s ?? null;
 }
-/** a Java instance field of `cls`, on a bytecode object or a spec's */
-function javaField<T>(o: unknown, cls: string, name: string): T {
-  return (o as Record<string, T>)[declaredField(cls, name)];
-}
 /** the AssetManager2 behind AOSP's Resources */
 export function nativeRes(jres: unknown): Resources {
-  const impl = javaField<object>(jres, "android/content/res/Resources", "mResourcesImpl");
-  return nativeAssets(javaField(impl, "android/content/res/ResourcesImpl", "mAssets"));
+  const impl = getDeclared<object>(jres, "android/content/res/Resources", "mResourcesImpl");
+  return nativeAssets(getDeclared(impl, "android/content/res/ResourcesImpl", "mAssets"));
 }
 /** the AssetManager2 behind AOSP's AssetManager */
 export function nativeAssets(am: unknown): Resources {
-  return deref<Resources>(javaField(am, "android/content/res/AssetManager", "mObject"));
+  return deref<Resources>(getDeclared(am, "android/content/res/AssetManager", "mObject"));
 }
 

@@ -4,7 +4,7 @@
 // page's edits reach the editor through its IRemoteInputConnection; showSoftInput and hideSoftInput
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
 import { once } from "../../jvm/suspend";
-import { rt, JObj, noops, stubs, declaredField, driven, type Gen } from "../../jvm/runtime";
+import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { after, callUncaught, scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
@@ -23,7 +23,7 @@ const SUCCESS_WITH_IME_SESSION = 0, GET_EXTRACTED_TEXT_MONITOR = 1;
 interface Session extends ImeSession { window: JObj; id: number; header: JObj | null }
 let session: Session | null = null;
 let bindSequence = 0;
-const editorField = (info: JObj, name: string) => (info as unknown as Record<string, number>)[declaredField("android/view/inputmethod/EditorInfo", name)];
+const editorField = (info: JObj, name: string) => getDeclared<number>(info, "android/view/inputmethod/EditorInfo", name);
 
 /** InputMethodService.onStartInput: serve the editor, and read its text as an IME does, keeping it
  *  monitored so the editor reports each change (updateExtractedText) */

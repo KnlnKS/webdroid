@@ -5,7 +5,7 @@
 // Entries are per app uid and persist with the app's other state. Attestation is not available
 // (no provisioned attestation keys), and user-authentication-bound keys cannot be used.
 import { once } from "../jvm/suspend";
-import { awaited, rt, JObj, declaredField, setDeclared, driven, type Gen } from "../jvm/runtime";
+import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
 import { concat, jarray } from "../jvm/abi";
 import { after, newObj, scall } from "../jvm/natives/jlang";
 import { unbox } from "../jvm/natives/jbox";
@@ -55,13 +55,12 @@ type Param = { tag: number; kind: number; v: Value };
 const KINDS = ["invalid", "algorithm", "blockMode", "paddingMode", "digest", "ecCurve", "origin", "keyPurpose", "hardwareAuthenticatorType", "securityLevel",
   "boolValue", "integer", "longInteger", "dateTime", "blob"];
 const KIND = Object.fromEntries(KINDS.map((k, i) => [k, i])) as Record<string, number>;
-const f = (o: unknown, cls: string, name: string) => (o as Record<string, unknown>)[declaredField(cls, name)];
 const KP = "android/hardware/security/keymint/KeyParameter", KPV = "android/hardware/security/keymint/KeyParameterValue";
 function readParams(arr: unknown[] | null): Param[] {
   return (arr ?? []).map((p) => {
-    const value = f(p, KP, "value"), kind = f(value, KPV, "_tag") as number, boxed = f(value, KPV, "_value");
+    const value = getDeclared(p, KP, "value"), kind = getDeclared<number>(value, KPV, "_tag"), boxed = getDeclared(value, KPV, "_value");
     const v = boxed instanceof Int8Array ? new Uint8Array(boxed) : kind === KIND.boolValue ? !!unbox(boxed) : unbox(boxed) as Value;
-    return { tag: f(p, KP, "tag") as number, kind, v };
+    return { tag: getDeclared<number>(p, KP, "tag"), kind, v };
   });
 }
 const DESC: Record<number, string> = { [KIND.boolValue]: "Z", [KIND.integer]: "I", [KIND.longInteger]: "J", [KIND.dateTime]: "J", [KIND.blob]: "[B" };
@@ -112,7 +111,7 @@ const newId = () => BigInt.asIntN(64, bytesToBig(crypto.getRandomValues(new Uint
 const KD = "android/system/keystore2/KeyDescriptor";
 function descriptor(d: unknown): { domain: number; nspace: bigint; alias: string | null } {
   if (!d) throw rt.mkThrowable("java/lang/NullPointerException", "key descriptor");
-  return { domain: f(d, KD, "domain") as number, nspace: f(d, KD, "nspace") as bigint, alias: f(d, KD, "alias") as string | null };
+  return { domain: getDeclared(d, KD, "domain"), nspace: getDeclared(d, KD, "nspace"), alias: getDeclared(d, KD, "alias") };
 }
 function* find(d: unknown): Gen<Entry> {
   const k = descriptor(d);

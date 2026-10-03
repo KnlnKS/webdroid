@@ -1,6 +1,6 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // model native code shares (src/native/net.ts): a descriptor from either side is the same socket.
-import { awaited, rt, JObj, declaredField, getDeclared, driven } from "../jvm/runtime";
+import { awaited, rt, JObj, getDeclared, setDeclared, driven } from "../jvm/runtime";
 import { vcall, scall, newObj, after } from "../jvm/natives/jlang";
 import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
@@ -19,8 +19,6 @@ import { parseIpv4 } from "../shell/relay";
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";
 const SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, IP_MULTICAST_IF = 32, SO_BINDTODEVICE = 25;
-type Obj = Record<string, unknown>;
-const setField = (o: JObj, cls: string, name: string, v: unknown) => { (o as unknown as Obj)[declaredField(cls, name)] = v; };
 
 /** a bytecode throwable, initialized before it is made (a native's exception needs its class ready) */
 function thrown(cls: string, desc: string, ...args: unknown[]): never | Promise<never> {
@@ -68,8 +66,7 @@ function fillSocketAddress(target: JObj | null, ep: Endpoint | null): void | Pro
   if (target === null || ep === null || !rt.iof(target, ISA)) return;
   return after(inetAddress(ep), (a) => {
     const holder = getDeclared(target, ISA, "holder") as JObj;
-    setField(holder, ISA_HOLDER, "addr", a);
-    setField(holder, ISA_HOLDER, "port", ep.port);
+    setDeclared(holder, ISA_HOLDER, { addr: a, port: ep.port });
   });
 }
 const withEndpoint = <T>(ep: Endpoint | Promise<Endpoint>, f: (ep: Endpoint) => T) => after(ep, f);
@@ -110,8 +107,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     const pair = unixSocketPair(type);
     if (typeof pair === "number") throw errno("socketpair", -pair);
     const [x, y] = pair;
-    setField(a!, "java/io/FileDescriptor", "descriptor", x);
-    setField(b!, "java/io/FileDescriptor", "descriptor", y);
+    setDeclared(a!, "java/io/FileDescriptor", { descriptor: x });
+    setDeclared(b!, "java/io/FileDescriptor", { descriptor: y });
   },
   [`dup2(${FD}I)${FD}`]: (d: JObj | null, to: number) => {
     const fd = javaDup2Fd(fdInt(d), to);
@@ -148,7 +145,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     const P = "android/system/StructPollfd";
     const entries: PollEntry[] = fds.map((p) => ({ fd: p === null ? -1 : fdInt(getDeclared(p, P, "fd") as JObj | null), events: getDeclared(p, P, "events") as number, revents: 0 }));
     return after(pollEntries(entries, timeout), (n) => {
-      fds.forEach((p, i) => { if (p !== null) setField(p, P, "revents", entries[i].revents); });
+      fds.forEach((p, i) => { if (p !== null) setDeclared(p, P, { revents: entries[i].revents }); });
       return n;
     });
   },

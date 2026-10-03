@@ -3,7 +3,7 @@
 // ActivityTaskSupervisor gives them. Starting pauses the resumed activity, launches and resumes the
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
-import { awaited, rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
+import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { after, callUncaught, newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
 import { once, shareable } from "../../jvm/suspend";
@@ -57,7 +57,7 @@ export const PROCESS_STATE_SERVICE = 10, PROCESS_STATE_RECEIVER = 11;
 export const foreground = (): boolean => stack.some((r) => r.state === "resumed");
 export const processState = (component: number): number => foreground() ? PROCESS_STATE_TOP : component;
 const pms = () => hostedService("package") as Promise<JObj>;
-const resolveInfoField = () => declaredField("android/content/pm/ResolveInfo", "activityInfo");
+const activityInfoOf = (resolved: JObj | null) => resolved && getDeclared<JObj | null>(resolved, "android/content/pm/ResolveInfo", "activityInfo");
 const activityClientController = once(() => newObj("webdroid/ActivityClientController"));
 
 function* schedule(app: JObj, callbacks: JObj | null | (JObj | null)[], lifecycle: JObj | null): Gen<void> {
@@ -267,7 +267,7 @@ export const startMainActivity = driven(function* (app: JObj, pkg: string): Gen<
   yield vcall(intent, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", pkg);
   yield vcall(intent, "addFlags", "(I)Landroid/content/Intent;", 0x10200000);   // NEW_TASK | RESET_TASK_IF_NEEDED
   const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;", intent, null, GET_META_DATA, 0);
-  const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
+  const info: JObj | null = activityInfoOf(resolved);
   if (!info) throw new Error(`no launcher activity in ${pkg}`);
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;",
     yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
@@ -281,7 +281,7 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
   try {
     const resolved = yield vcall(yield* awaited(pms()), "resolveIntent", "(Landroid/content/Intent;Ljava/lang/String;JI)Landroid/content/pm/ResolveInfo;",
       intent, resolvedType, MATCH_DEFAULT_ONLY | GET_META_DATA, 0);
-    const info: JObj | null = resolved ? (resolved as Record<string, JObj>)[resolveInfoField()] : null;
+    const info: JObj | null = activityInfoOf(resolved);
     // ActivityStarter keeps a result record only for a start for a result by an activity not finishing
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = yield* awaited(intentQuery(intent)), system = systemActivity(q, false) ??
