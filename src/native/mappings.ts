@@ -57,33 +57,42 @@ export function trackSharedMap(va: bigint, n: number, off: number, file: VfsFile
   mapped.add(shared);
 }
 
+/** private file mappings: the file range each copied, which mremap's growth reads on from */
+type PrivateMapping = SharedMapping & { file: VfsFile };
+let privateMaps: PrivateMapping[] = [];
+export function trackPrivateMap(va: bigint, n: number, off: number, file: VfsFile): void {
+  privateMaps.push({ va, n, off, file, base: null });
+}
+
 /** msync or munmap of [va, va + n): the files mapped there are flushed; with `drop` the range stops
  *  being mapped */
 export function syncShared(va: bigint, n: number, drop: boolean): void {
   const end = va + BigInt(n);
+  if (drop && privateMaps.some((m) => overlaps(m, va, end))) privateMaps = privateMaps.flatMap((m) => cut(m, va, end));
   for (const shared of mapped) {
     if (!shared.maps.some((m) => overlaps(m, va, end))) continue;
     shared.flush();
     if (!drop) continue;
-    const kept: SharedMapping[] = [];
-    for (const m of shared.maps) {
-      const mEnd = m.va + BigInt(m.n);
-      if (!overlaps(m, va, end)) { kept.push(m); continue; }
-      const left = m.va < va ? Number(va - m.va) : 0, right = mEnd > end ? Number(mEnd - end) : 0;
-      if (left) kept.push({ ...m, n: left, base: m.base?.slice(0, left) ?? null });
-      if (right) kept.push({ ...m, va: end, n: right, off: m.off + m.n - right, base: m.base?.slice(m.n - right) ?? null });
-    }
-    shared.maps = kept;
-    if (!kept.length) { mapped.delete(shared); shared.file.sharedMaps = undefined; }
+    shared.maps = shared.maps.flatMap((m) => cut(m, va, end));
+    if (!shared.maps.length) { mapped.delete(shared); shared.file.sharedMaps = undefined; }
   }
 }
+/** what is left of a mapping once [va, end) stops being mapped */
+function cut<M extends SharedMapping>(m: M, va: bigint, end: bigint): M[] {
+  if (!overlaps(m, va, end)) return [m];
+  const mEnd = m.va + BigInt(m.n), left = m.va < va ? Number(va - m.va) : 0, right = mEnd > end ? Number(mEnd - end) : 0, kept: M[] = [];
+  if (left) kept.push({ ...m, n: left, base: m.base?.slice(0, left) ?? null });
+  if (right) kept.push({ ...m, va: end, n: right, off: m.off + m.n - right, base: m.base?.slice(m.n - right) ?? null });
+  return kept;
+}
 
-/** the file range the shared mapping at va holds from there, which mremap carries along */
-export function sharedAt(va: bigint): { file: VfsFile; off: number; writable: boolean } | null {
+/** the file range the file mapping at va holds from there, which mremap carries along */
+export function fileMapAt(va: bigint): { file: VfsFile; off: number; shared: boolean; writable: boolean } | null {
   for (const shared of mapped) for (const m of shared.maps) {
-    if (overlaps(m, va, va + 1n)) return { file: shared.file, off: m.off + Number(va - m.va), writable: !!m.base };
+    if (overlaps(m, va, va + 1n)) return { file: shared.file, off: m.off + Number(va - m.va), shared: true, writable: !!m.base };
   }
-  return null;
+  const m = privateMaps.find((m) => overlaps(m, va, va + 1n));
+  return m ? { file: m.file, off: m.off + Number(va - m.va), shared: false, writable: false } : null;
 }
 
 /** whether any byte of [va, va+n) is a shared file mapping */

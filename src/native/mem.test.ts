@@ -105,6 +105,18 @@ test("mremap grows a mapping in place only into free address space", () => {
   mem.unmapPages(low, 0x4000);
 });
 
+test("MAP_FIXED below a plane's mapping keeps the mapping's bytes at their addresses", () => {
+  const va = mem.mapVa(0x0020_0000, false);
+  if (typeof va !== "bigint") throw new Error("large A64 mapping did not receive a virtual plane");
+  mem.st8(mem.txVa(va + 0x1000n), 5);
+  expect(mem.mapFixed(va - 0x10_0000n, 0x10_0000)).toBe(true);
+  expect(mem.commitVa(va - 0x10_0000n, 0x10_0000)).toBe(true);
+  expect(mem.u8[mem.txVa(va + 0x1000n)]).toBe(5);
+  expect(mem.u8[mem.txVa(va - 0x1000n)]).toBe(0);
+  expect(mem.mapFixed(0x1000n, 0x1000)).toBe(false);                    // the core's own space
+  expect(mem.unmapVa(va - 0x10_0000n, 0x30_0000)).toBe(true);
+});
+
 test("writable mappings beyond the pool commit on first touch, as Linux overcommits", () => {
   const size = 0x1_0080_0000;
   const va = mem.mapVa(size, false);

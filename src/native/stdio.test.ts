@@ -94,6 +94,39 @@ test("mremap carries a shared file mapping's range, and its new pages hold the f
   }
 });
 
+test("a private file mapping grows with the file's bytes, and MAP_FIXED/MREMAP_FIXED take free address space", async () => {
+  setA64(true); kernelInit();
+  const path = "/private-mapping-test", bytes = new Uint8Array(8192);
+  bytes[4096] = 9;
+  vfs.write(path, bytes);
+  const fd = javaOpenFd(path, 0), cpu = new Cpu(mainThread, "private-mapping-test");
+  const mmap = kernel("mmap"), mremap = kernel("mremap"), munmap = kernel("munmap");
+  const maps: [number | bigint, number][] = [];
+  try {
+    let address = await cpu.call(mmap, [0, 4096, 3, 2 /* MAP_PRIVATE */, fd, 0]);
+    mem.st8(address, 7);
+    address = await cpu.call(mremap, [address, 4096, 8192, 1]);
+    maps.push([address, 8192]);
+    expect([mem.ld8u(address), mem.ld8u(address + 4096)]).toEqual([7, 9]);
+    expect(vfs.read(path)?.[0]).toBe(0);
+    // a plane's tail unmapped, then mapped again at its address; and an unused plane taken whole
+    const call64 = async (fn: number, args: (number | bigint)[]) => { const lo = await cpu.call(fn, args); return BigInt(cpu.ret1 >>> 0) << 32n | BigInt(lo >>> 0); };
+    const plane = await call64(mmap, [0, 0x400000, 3, 0x22, -1, 0]);
+    expect(plane >> 32n).not.toBe(0n);
+    await cpu.call(munmap, [plane + 0x200000n, 0x200000]);
+    expect(await call64(mmap, [plane + 0x300000n, 0x100000, 3, 0x32, -1, 0])).toBe(plane + 0x300000n);
+    mem.st8(mem.txVa(plane + 0x300000n), 1);
+    maps.push([plane, 0x400000]);
+    const free = (plane & ~0xffffffffn) + 0x50_0000_0000n;
+    expect(await call64(mremap, [address, 8192, 8192, 3, free])).toBe(free);
+    maps[0] = [free, 8192];
+    expect(mem.ld8u(mem.txVa(free + 4096n))).toBe(9);
+  } finally {
+    for (const [m, n] of maps) await cpu.call(munmap, [m, n]);
+    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+  }
+});
+
 test("record-lock queries report no conflicting process lock through the guest pointer", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "fcntl-test");

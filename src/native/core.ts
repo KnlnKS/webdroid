@@ -32,6 +32,7 @@ interface Core {
   map_va(n: bigint, reserve: number, low: number): bigint;
   unmap_va(va: bigint, n: bigint): number;
   extend_va(va: bigint, oldSize: bigint, size: bigint): number;
+  map_fixed(va: bigint, n: bigint): number;
   check_reserve(h: number, lo: number, size: number): number;
   resident_va(va: bigint): number;
   commit_va(va: bigint, n: bigint): number;

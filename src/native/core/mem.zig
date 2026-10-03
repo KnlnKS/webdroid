@@ -585,6 +585,60 @@ export fn extend_va(v: u64, old_n: u64, new_n: u64) u32 {
     R[h] = off + new_n;
     return 1;
 }
+/// MAP_FIXED's and MREMAP_FIXED's claim on [v, v + n): address space no mapping holds becomes
+/// reserved, as the kernel maps at any address in the process's range; the caller then commits or
+/// reserves the range as usual. 0 when part of it is space the core keeps for itself (below the
+/// arena, its pool or module images) or past the planes.
+export fn map_fixed(v: u64, n: u64) u32 {
+    if (v & (PAGE_SIZE - 1) != 0 or n == 0) return 0;
+    for (0..2) |pass| {
+        var a = v;
+        var left = n;
+        while (left > 0) {
+            const h = hi(a);
+            const l = lo(a);
+            const size: u64 = @min(left, 0x1_0000_0000 - @as(u64, l));
+            if (h == 0) {
+                const top: u64 = @min(mem_size, if (pool_base != 0) pool_base else module_bot);
+                if (l < abi.ARENA_BASE or l + size > top) return 0;
+                if (pass == 1) {
+                    for (pageOf(l)..@as(usize, @intCast((l + size + PAGE_SIZE - 1) >> PAGE_SHIFT))) |i| {
+                        if (pages[i] == FREE) pages[i] = RESERVED;
+                    }
+                }
+            } else if (h >= PLANES or pool_base == 0) {
+                return 0;
+            } else if (pass == 1 and !claimPlane(h, l, size)) return 0;
+            left -= size;
+            a += size;
+        }
+    }
+    return 1;
+}
+/// plane h's one mapping widened to cover [l, l + size): a free plane starts there, a range past
+/// its end extends it, and one before its start moves the committed prefix up to keep its offsets
+fn claimPlane(h: usize, l: u32, size: u64) bool {
+    if (R[h] == 0) {
+        L[h] = l;
+        R[h] = size;
+        W[h] = 0;
+        return true;
+    }
+    if (l < L[h]) {
+        const d = L[h] - l;
+        if (S[h] != 0) {
+            const old = S[h];
+            if (@as(u64, old) + d > 0xffff_f000 or !grow(h, old + d, true)) return false;
+            move(P[h] + d, P[h], old);
+            fill(P[h], 0, d);
+        }
+        if (W[h] != 0) W[h] += d;
+        R[h] += d;
+        L[h] = l;
+    }
+    R[h] = @max(R[h], @as(u64, l - L[h]) + size);
+    return true;
+}
 export fn check_reserve(h: u32, l: u32, size: u32) u32 {
     if (h == 0) {
         if (l < abi.ARENA_BASE or @as(u64, l) + size > (if (pool_base != 0) pool_base else module_bot)) return 0;

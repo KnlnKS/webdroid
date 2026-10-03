@@ -117,6 +117,8 @@ export const mem = {
   unmapVa: (va: bigint, n: number): boolean => Number.isSafeInteger(n) && n > 0 && core.unmap_va(va, BigInt(n)) !== 0,
   /** grow the mapping [va, va + n) to `size` in place: false when the address space after it is taken */
   extendVa: (va: bigint, n: number, size: number): boolean => core.extend_va(va, BigInt(n), BigInt(size)) !== 0,
+  /** MAP_FIXED: free address space at [va, va + n) becomes reserved; false where the core keeps it */
+  mapFixed: (va: bigint, n: number): boolean => Number.isSafeInteger(n) && n > 0 && core.map_fixed(va, BigInt(n)) !== 0,
   reserveVa(va: bigint, n: number): boolean {
     const ranges: [bigint, number][] = [];
     while (n > 0) {

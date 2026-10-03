@@ -3,7 +3,7 @@ import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 import { appUserName, procIdentity, processTid, sysconf, uname } from "../shell/procfs";
 import { guestAt, mem } from "../native/mem";
-import { syncShared, trackSharedMap } from "../native/mappings";
+import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings";
 import { awaited, rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { i8, jarray, utf8 } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
@@ -327,7 +327,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (source && prot === 0) throw errno("mmap", E.NOTSUP);
       // ashmem refuses a mapping beyond its region's protection
       if (prot & ~(ashmemProt(fd) ?? 7)) throw errno("mmap", E.PERM);
-      const file = flags & 1 ? fdFile(fd) : null;
+      const file = anonymous ? null : fdFile(fd);
       if (flags & 1 && prot & 2 && !file) throw errno("mmap", E.NOTSUP);
       const address = mem.mapVa(size, prot === 0);
       if (!address) throw errno("mmap", E.NOMEM);
@@ -337,7 +337,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         mem.unmapVa(BigInt(address), size);
         throw errno("mmap", E.IO);
       }
-      if (file) trackSharedMap(BigInt(address), size, Number(offset), file, (prot & 2) !== 0);
+      if (file && flags & 1) trackSharedMap(BigInt(address), size, Number(offset), file, (prot & 2) !== 0);
+      else if (file) trackPrivateMap(BigInt(address), size, Number(offset), file);
       return BigInt(address);
     }),
     "munmap(JJ)V": (address: bigint, count: bigint) => {

@@ -22,7 +22,7 @@ import { procIdentity, sysconf, uname } from "../shell/procfs";
 import { guestNow, wallMillis } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
-import { isShared, syncShared, trackSharedMap, sharedAt } from "./mappings";
+import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt } from "./mappings";
 /** the C locale's month and weekday names (strftime, asctime) */
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -50,6 +50,7 @@ export function fail(cpu: Cpu | null, e: number): number {
   return -1;
 }
 /** MAP_FAILED, pointer-wide, with errno set */
+const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return PTR === 8 ? -1n : -1; }
 
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -212,10 +213,14 @@ const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn => (cpu, 
   // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
   // low and made executable later, as V8's is) must not land in a plane above it.
   const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
-  if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return mapFailed(cpu, E.NOMEM);
-  if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
+  if (!p || (flags & 0x10 && !(mem.mapFixed(hint, pages(n)) && (reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n))))) return mapFailed(cpu, E.NOMEM);
+  if (flags & 0x10) syncShared(hint, n, true);
+  if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
   if (fd !== -1 && !(flags & 0x20)) {
-    const file = flags & 1 ? fdFile(fd) : null, track = () => { if (file) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); return p; };
+    const file = fdFile(fd), track = () => {
+      if (file) { if (flags & 1) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); else trackPrivateMap(BigInt(p), n, off, file); }
+      return p;
+    };
     const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(track) : track();
   }
   return p;
@@ -252,7 +257,7 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
   // range wherever it lands, and its new pages hold the file's bytes.
   mremap: (cpu, a) => {
     const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i(), fixed = flags & 2 ? a.va() : 0n;
-    const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE, mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
+    const page = pages, mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
     if (old & mask || fixed & mask || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return mapFailed(cpu, E.INVAL);
     if (flags & 2 && fixed < old + BigInt(page(oldSize)) && old < fixed + BigInt(page(size))) return mapFailed(cpu, E.INVAL);
     if (!(flags & 2) && page(size) <= page(oldSize)) {
@@ -260,13 +265,13 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
       if (tail) { syncShared(old + BigInt(page(size)), tail, true); mem.unmapVa(old + BigInt(page(size)), tail); }
       return result(old);
     }
-    const shared = sharedAt(old);
+    const mapping = fileMapAt(old);
     let to = old;
     if (flags & 2 || !mem.extendVa(old, oldSize, size)) {
       if (!(flags & 1)) return mapFailed(cpu, E.NOMEM);
       if (flags & 2) {
         syncShared(fixed, size, true);
-        if (!mem.commitVa(fixed, size)) return mapFailed(cpu, E.NOMEM);
+        if (!mem.mapFixed(fixed, page(size)) || !mem.commitVa(fixed, size)) return mapFailed(cpu, E.NOMEM);
         invalidateRange(mem.txVa(fixed), size); mem.dropVa(fixed, size);
         to = fixed;
       } else {
@@ -278,10 +283,13 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
       mem.write(mem.txVa(to), mem.bytes(mem.txVa(old), Math.min(oldSize, size)));
       mem.unmapVa(old, page(oldSize));
     } else syncShared(old, oldSize, true);
-    if (!shared) return result(to);
-    const track = () => { trackSharedMap(to, size, shared.off, shared.file, shared.writable); return result(to); };
+    if (!mapping) return result(to);
+    const track = () => {
+      if (mapping.shared) trackSharedMap(to, size, mapping.off, mapping.file, mapping.writable); else trackPrivateMap(to, size, mapping.off, mapping.file);
+      return result(to);
+    };
     if (size <= oldSize) return track();
-    const tail = contentAt(shared.file, shared.off + oldSize, size - oldSize);
+    const tail = contentAt(mapping.file, mapping.off + oldSize, size - oldSize);
     const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(oldSize)), bytes); return track(); };
     return tail instanceof Promise ? tail.then(fill, () => mapFailed(cpu, E.IO)) : fill(tail);
   },
