@@ -62,7 +62,7 @@ class Retriever {
     if (!track?.samples.length) return null;
     const { format } = track, mime = format.string("mime"), def = definitionFor(mime);
     if (def?.kind !== "video" || !format.number("width", 0) || !format.number("height", 0)) return null;
-    const sets = parameterSets(mime, format), config = videoConfig(def, format, concat(sets));
+    const sets = parameterSets(def, format), config = videoConfig(def, format, concat(sets));
     if (!(await VideoDecoder.isConfigSupported(config)).supported) return null;
     const requested = timeUs < 0n ? 0 : Number(timeUs);
     const mode = option === 1 ? 1 : option === 2 || option === 3 ? 2 : 0;

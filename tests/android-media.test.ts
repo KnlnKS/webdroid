@@ -8,6 +8,8 @@ import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 import { mkAssetFd } from "../src/android/resnative";
 import { hostedService } from "../src/android/binder";
+import { definitionFor, videoConfig, videoKeyFrame } from "../src/android/media-codec";
+import { NativeFormat } from "../src/android/media-format";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -172,5 +174,30 @@ describe("sound-pool", () => {
     await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
     expect(decoded).toEqual([7]);
     expect(listener.loaded).toEqual([[id, 0]]);
+  });
+});
+
+describe("media-codec-bitstreams", () => {
+  const u = (...b: number[]) => Uint8Array.from(b);
+  const read = (mime: string, data: Uint8Array) => {
+    const def = definitionFor(mime)!;
+    if (def.kind !== "video") throw new Error(mime);
+    return [videoKeyFrame(def, data), videoConfig(def, new NativeFormat(), data).codec];
+  };
+  test("an access unit's key frame and its sequence parameter set's codec string", () => {
+    // AVC: SPS, PPS, IDR; a non-IDR slice; an SPS with emulation prevention
+    expect(read("video/avc", u(0, 0, 0, 1, 0x67, 0x64, 0x00, 0x1f, 0xac, 0, 0, 0, 1, 0x68, 0xee, 0, 0, 1, 0x65, 0x88, 0x80))).toEqual([true, "avc1.64001F"]);
+    expect(read("video/avc", u(0, 0, 1, 0x09, 0xf0, 0, 0, 1, 0x41, 0x9a))).toEqual([false, "avc1.640034"]);
+    expect(read("video/avc", u(0, 0, 1, 0x67, 0x64, 0x00, 0x00, 0x03, 0x1f))[1]).toBe("avc1.640000");
+    // HEVC: VPS, SPS, PPS, IDR_W_RADL; a TRAIL_R slice; a truncated SPS
+    expect(read("video/hevc", u(0, 0, 0, 1, 0x40, 0x01, 0x0c, 0, 0, 0, 1, 0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x00, 0x90, 0, 0, 0, 0, 0, 0x5d,
+      0, 0, 1, 0x44, 0x01, 0xc0, 0, 0, 1, 0x26, 0x01, 0xaf))).toEqual([true, "hvc1.1.6.L93.90"]);
+    expect(read("video/hevc", u(0, 0, 1, 0x02, 0x01, 0xd0))).toEqual([false, "hvc1.1.6.L153.B0"]);
+    expect(read("video/hevc", u(0, 0, 1, 0x42, 0x01, 0x01, 0x01))).toEqual([false, "hvc1.1.6.L153.B0"]);
+    expect([u(0x10, 2), u(0x11, 2)].map((data) => read("video/x-vnd.on2.vp8", data)[0])).toEqual([true, false]);
+    expect([u(0x82, 0x49), u(0x86, 0), u(0xb2, 0)].map((data) => read("video/x-vnd.on2.vp9", data)[0])).toEqual([true, false, false]);
+    // AV1: a temporal delimiter then a frame header OBU; a frame OBU of an inter frame; one without a size; none
+    expect([u(0x12, 0x00, 0x1a, 0x01, 0x10), u(0x12, 0x00, 0x32, 0x02, 0x30, 0x00), u(0x32, 0x01, 0x00), u()].map((data) => read("video/av01", data)[0]))
+      .toEqual([true, false, true, false]);
   });
 });
