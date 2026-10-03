@@ -622,6 +622,9 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   shared libraries (YouTube's exocache answers). PdfDocument rasterises its pages. WebView
   interface names travel with the load, so print snapshots work without site isolation. A serial
   `bun test` passes (history, "the platform open items").
+- **Done (GL, kernel, WebView):** glGetError answers without WebGL's GPU wait while no tracked
+  call can have failed. Unhandled terminating signals end the process. dlclose unloads TLS images.
+  WebView has Android WebView's user agent (history, "GL errors, signal defaults").
 - **Open:** without site isolation, `document.cookie` and JavaScript interface calls still block.
   Two of 17 YouTube runs under heavy host load hit a `removeSyncBarrier` race in a resumed doFrame.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity

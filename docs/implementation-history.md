@@ -2401,6 +2401,41 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     WebGL getError, which is where software GL's queued work is waited on.
   - FlappyBird under `?jit=0` reaches every checkpoint as the JIT does (same game-over screen).
 
+- **2026-10-02, GL errors, signal defaults, TLS unload, WebView's UA** (branch `knlnks/open-gl2`):
+  - Lichess's getError time is Skia's allocation bracket (bind, glGetError, glBufferData or
+    glTexStorage2D, glGetError): about 600 queries in 12 s. Most cost under 0.3 ms, but the first
+    one after a present waits for that frame's GPU work (24-185 ms each on SwiftShader). Each WebGL
+    context now records whether WebGL can have latched an error since it last answered NO_ERROR.
+    Binds, texture parameters, pixel store, texStorage2D, texImage2D, texSubImage2D into tracked
+    storage, bufferData and bufferSubData, renderbuffer storage and fences keep it clean when their
+    arguments pass checks that mirror WebGL's INVALID_ENUM/VALUE/OPERATION; anything else, or a Java
+    GLES, ES 1 or SurfaceTexture call on the context, defers to WebGL. Clean answers skip
+    OUT_OF_MEMORY: GL may report it late, WebGL keeps it latched for the next real query, and
+    Chrome usually loses the context instead (always queried). Host-raised errors are per context.
+    perf-browser, editor exercise, 12 s, 3 runs each: getError 1.12-1.71 s → 0.62-0.64 s, glFps
+    4.5-5.5 → 6.5-7.3 (noisy host). What remains is the clear after draws, which only WebGL's
+    draw validation can answer. DoodleJump and FlappyBird never call glGetError; their WebGL time
+    is command-buffer backpressure in uniform and attribute calls. A fence after each present,
+    polled before a query (tried first), freed the thread but cost 100-130 ms in polls with no fps gain.
+  - Signals: an unhandled, unblocked signal now takes signal(7)'s default instead of being dropped.
+    SIGCHLD, SIGCONT, SIGURG, SIGWINCH and the stop signals are discarded; SIG_IGN is a disposition.
+    Everything else ends the process through `markProcessExited` (as exit_group and
+    Process.killProcess do; Java threads keep running, as they already did for those). Core-dumping
+    signals first log debuggerd's "Fatal signal" line and tombstone head with the abort message and
+    backtrace. A raise or unblock returns to the signal before the next guest instruction, so bionic's
+    abort dies of SIGABRT rather than reaching `_exit(127)`; the HLE abort raises it too. A blocked
+    SIGPIPE or SIGQUIT stays pending, as on the AVD (ART's signal catcher is not run). Memory faults
+    still surface as host faults, not SIGSEGV: no guest SIGSEGV handler (sigchain, crash reporters)
+    sees them, which is unchanged.
+  - dlclose unloads images with TLS: each thread's block for the image is freed, as bionic retires
+    the module and frees the block at the next dtv update. dl_iterate_phdr reports the mapped headers,
+    found as ElfReader::FindPhdr finds them, instead of a copy that leaked on every reload.
+  - WebView's default user agent is AwContentClient's (`Android 15; Pixel 9 Build/AP3A.241005.015;
+    wv ... Version/4.0 Chrome/<v> Mobile`), with the provider version taken from the host's Chromium
+    (full version from its client hints, fixed at first use). The page renders in the host's Blink,
+    so a site's UA checks then match the engine and the host's client hints. `navigator.userAgentData`
+    still reports the host's own platform.
+
 - **2026-10-02, Stage E2 follow-up: the serialized font map, hyphenation, emoji and heavy weights.**
   - Every realm loaded the system font map twice: the zygote ran `loadPreinstalledSystemFontMap`,
     and bindApplication, handed no map, called `setSystemFontMap(null)`, which parses
