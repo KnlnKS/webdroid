@@ -99,7 +99,7 @@ const A64: Record<number, HostFn> = {
   },
   130: (cpu, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; }, // tkill
   137: (cpu, a) => {                                                             // rt_sigtimedwait
-    const set = mem.ld64(a.p()), info = a.p() ? mem.va(a.p()) : 0, ms = millis(a.p());
+    const set = mem.ld64(a.p()), info = a.va(), ms = millis(a.p());
     const take = (): number => {
       const i = cpu.signals.findIndex((sig) => set & 1n << BigInt(sig - 1));
       if (i < 0) return 0;

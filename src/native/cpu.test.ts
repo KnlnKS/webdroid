@@ -4,7 +4,8 @@ import { Cpu, setA64, sigHandlers, slice } from "./cpu";
 import { defineHost } from "./host";
 import { mem } from "./mem";
 import { futex } from "./pthread";
-import { RET_SENTINEL } from "./abi";
+import { E, RET_SENTINEL } from "./abi";
+import { kernelInit, rawSyscall } from "./syscall";
 
 for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 thread identity", () => {
   test("static TLS is initialized once per guest thread", () => {
@@ -274,4 +275,28 @@ test("ARM signal entry clears Thumb IT state and restores it on return", async (
     if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
     cpu.dispose();
   }
+});
+
+test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signals", async () => {
+  setA64(true); kernelInit();
+  const cpu = new Cpu(new JThread(), "signal-wait"), storage = mem.calloc(1, 152);
+  const set = storage, info = storage + 8, timeout = info + 128;
+  const entry = defineHost("test.signal.timedwait", (c, a) => rawSyscall(c, 137, a));
+  cpu.signalMask = 1n << 11n;
+  mem.st64(set, cpu.signalMask);
+  try {
+    cpu.kill(12);
+    expect(await cpu.call(entry, [set, info, timeout, 8])).toBe(12);
+    expect(mem.ld32(info)).toBe(12);
+    expect(mem.ld64(timeout)).toBe(0n);
+    expect(await cpu.call(entry, [set, 0, timeout, 8])).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(E.AGAIN);
+    mem.memset(info, 0, 128);
+    const waiting = cpu.call(entry, [set, info, 0, 8]);
+    expect(cpu.sigQueued).not.toBeNull();
+    cpu.kill(12);
+    expect(await waiting).toBe(12);
+    expect(mem.ld32(info)).toBe(12);
+    expect(cpu.sigQueued).toBeNull();
+  } finally { mem.free(storage); cpu.dispose(); }
 });
