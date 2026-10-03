@@ -303,7 +303,7 @@ export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?
   const q = s.queue, layer = q?.control?.layer;
   if (!q || !layer) { if (buffer !== q?.canvas) releaseFrame(buffer); return; }
   q.frame++;
-  const latch: Transaction = { ops: [...q.pending.flatMap((t) => t.ops.splice(0))] };
+  const latch: Transaction = { ops: q.pending.flatMap((t) => t.ops.splice(0)) };
   q.pending.length = 0;
   latch.ops.push(() => {
     if (layer.buffer !== buffer) releaseFrame(layer.buffer);
