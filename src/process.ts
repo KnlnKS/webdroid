@@ -18,11 +18,12 @@ import type { FileSource } from "./shell/lazyfile";
 import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
+import { dumpWindows } from "./shell/uiautomator";
 import { mountPlatformData } from "./shell/apex";
 import { hexBytes, u8 } from "./jvm/abi";
 import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
 import { perf } from "./perf";
-import { mainDbg } from "./android/mainloop";
+import { mainDbg, onMain } from "./android/mainloop";
 import { guestClockControl } from "./guest-clock";
 import { nativeRequirements } from "./shell/diagnostics";
 import { native } from "./native/debug";
@@ -64,7 +65,7 @@ processPresentation.changed = (visible) => {
 };
 // the realm's share of the main page's `wd`: enough to see its app and drive it from a probe
 (globalThis as { wd?: unknown }).wd = { rt, app: () => appHost, jvmCoverage, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements, native,
-  get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? testFrame() : Promise.resolve(),
+  get ticks() { return ticks; }, back: pressBack, uiTree: () => onMain(dumpWindows), testFrame: () => processPresentation.visible ? testFrame() : Promise.resolve(),
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => {
   guestClockControl.dispose();

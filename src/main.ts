@@ -155,14 +155,24 @@ const wd = {
   web: () => webViewInfo(),
   // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
   // absolute device px with the status bar included, which is the space a tap is expressed in.
-  uiTree: () => onMain(dumpWindows),
+  uiTree: async (): Promise<Awaited<ReturnType<typeof dumpWindows>>> => {
+    const nodes = await onMain(dumpWindows);
+    // the processes the broker shows stack above this one in their frames, as their windows do on a display
+    const shown = [...document.querySelectorAll("iframe")].filter((f) => !f.hidden && new URL(f.src, location.href).origin === location.origin)
+      .sort((a, b) => Number(a.style.zIndex) - Number(b.style.zIndex));
+    for (const frame of shown) {
+      const child = frame.contentWindow as unknown as { wd?: typeof wd } | null;
+      if (child?.wd) nodes.push(...await child.wd.uiTree());
+    }
+    return nodes;
+  },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
   // the space wd.tap takes), topmost window first.
   locateText: (s: string): Promise<{ x: number; y: number } | null> => {
     const normalized = (text: unknown) => String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     const want = normalized(s);
     const matches = (candidate: string) => candidate === want || candidate.startsWith(want);
-    return onMain(dumpWindows).then((nodes) => {
+    return wd.uiTree().then((nodes) => {
       // topmost window first, as a tap reaches it; an exact match before a prefix, as the device driver ranks them
       const shown = nodes.reverse().filter((n) => n.bounds[2] > n.bounds[0]), texts = (n: typeof shown[number]) => [normalized(n.text), normalized(n.desc)];
       const hit = shown.find((n) => texts(n).includes(want)) ?? shown.find((n) => texts(n).some(matches));
