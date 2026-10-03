@@ -236,4 +236,3 @@ function getAndSetRef(o: any, off: bigint, v: unknown): unknown {
 function arrayIndexScale(cls: JClass): number {
   return PRIM_ARRAYS[cls.arrDesc?.[1] as PrimElem]?.BYTES_PER_ELEMENT ?? 4;
 }
-

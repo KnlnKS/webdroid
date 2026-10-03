@@ -1556,7 +1556,7 @@ android/content/res/`):
   through XmlBlock (today the TS inflater parses AXML itself). String reads with spans
   (StringBlock styles).
 - **Done (step 1): natives.** 94 of 97 have libandroidfw semantics over one AssetManager2
-  (`res.ts` `Resources`, `JTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
+  (`res.ts` `Resources`, `NativeTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
   stack uses too. Left: ObbScanner and ResourceTimer (unreached), resolution logging (answers "") and fd-backed ApkAssets (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
   runs AOSP's Resources end to end headless. Measurements are in the history entry.
 - **Done (steps 2-5), the default since 131efb48:** apps boot through AOSP's ApkAssets, AssetManager and Resources

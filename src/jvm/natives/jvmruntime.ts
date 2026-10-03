@@ -100,4 +100,3 @@ rt.registerJnis("dalvik/system/VMRuntime", {
 
 // DDMS chunks go to an attached debugger, and ART drops them when none is (there never is here)
 rt.registerJni("org/apache/harmony/dalvik/ddmc/DdmServer", "nativeSendChunk(I[BII)V", () => {});
-

@@ -2621,3 +2621,56 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   were 40/24/146 ms cold and 61/23/97 ms warm. Mihon's cold sample has little
   margin against 150 ms. These are gate samples without a matched performance
   baseline, not evidence of a general speedup or FPS gain.
+
+- Branch quality follow-up (2026-10-02, against `main`, working baseline
+  `6a7f1920`). The parallel review concentrated on JVM ownership and initialization,
+  Android resource selection, native descriptors/syscalls and the shell boundary.
+  Unsafe and VM array allocation/process configuration now live outside reflection;
+  Class descriptors have one owner beside `JClass`, and the two Unsafe registrations
+  share their read-modify-write implementations. `jreflect.ts` drops from 1,365 to
+  1,022 lines. An accessor cache keyed only by a native JS property reused integer
+  accessors for floating fields with that property: `getInt` returned 1.5 instead
+  of its IEEE bits, 1069547520. The key now includes the JVM descriptor, with one
+  core regression covering integer/float and long/double access.
+- Class initialization's timeout escape was unreachable: same-thread requests
+  returned before the only call that could enable its timer, and the other caller
+  always disabled it. The timer, fallback state and associated branches are gone;
+  the original success/error Promise chain retains its settlement timing.
+  `runtime.ts` falls from 1,218 to 1,199 lines, but remains above main's 955 lines.
+  Native member installation and String-constructor bridging remain concrete
+  decomposition candidates; this pass does not waive that ownership concern.
+- Resource selection generations now belong to each `Resources`, preventing a new
+  unrelated AssetManager from flushing every theme's resolved values. The existing
+  resource test reproduced that unnecessary invalidation and now checks both cache
+  isolation and reselection after an owning-resource change. `NativeTheme` requires
+  its resource owner at construction and no longer masquerades as a Java object.
+  Global qualifier changes still invalidate registered resources; configured native
+  managers, theme copying and rebasing retain their explicit invalidation paths.
+- Native descriptors now read append/nonblocking behavior from `statusFlags`,
+  removing mirrored booleans and their synchronization at creation, accept and
+  `fcntl`. A temporary probe exercised append, positional writes, duplicated
+  descriptors, pipes and Unix sockets on both ABIs. The ARM64 `rt_sigtimedwait`
+  adapter separately consumed a non-null output pointer twice, shifting its
+  timeout to the sigset-size argument and faulting at address 0x8. It now reads
+  that virtual pointer once; one core test covers immediate/delayed siginfo and
+  zero-timeout delivery. No app-specific behavior or visual goldens changed.
+- Integrated validation: full typecheck passed; the standalone suite passed all
+  1,186 tests / 76,293 assertions, including browser probes. The descriptor audit
+  retained its checked-in 29 mismatches in nine classes. Framework checks passed
+  30/30, and FitNotes/Mihon smoke compilation passed with 4,213/21,918 classes and
+  zero method failures. The serialized quick matrix passed all seven flows and
+  105 steps. All 313 process snapshots supplied diagnostics, every step had a
+  presented frame and shell ticks advanced in each flow. There were no new missing
+  APIs, native requirements, layout/draw/GL errors, wedges or timeouts; Komikku
+  retained its 11 configured expected SQLite messages. The four visual checkpoints
+  passed their existing limits. No matched visual/performance baseline or full
+  live/corpus matrix was run, so these results establish the tested paths only.
+  Logs and diagnostic summaries are in ignored
+  `webdroid-shots/quality-review-followup/`; step captures are in
+  `tests/e2e/actual-fast/`. The broad optional descriptor-state model and native
+  `setsockopt` suppressing unsupported-option errors remain review concerns; the
+  latter inherits main's success behavior and was not changed speculatively.
+- Cold and warm latency gates passed, with Calculator/FitNotes/Mihon maxima
+  of 72/38/142 ms cold and 43/43/97 ms warm. Mihon
+  retains limited cold margin against 150 ms. These are individual gate samples,
+  not evidence of an overall speedup or FPS improvement.
