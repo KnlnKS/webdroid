@@ -101,9 +101,9 @@ const liveHash = (ref: JObj): Deferred => {
   if (!c.hash) throw runtimeError("EVP_MD_CTX not initialized");
   return c.hash;
 };
-nc("EVP_DigestUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V", (ref: JObj, b: Int8Array, off: number, len: number) => {
-  liveHash(ref).update(region(b, off, len));
-});
+const digestUpdate = (ref: JObj, b: Int8Array, off: number, len: number) => { liveHash(ref).update(region(b, off, len)); };
+for (const n of ["EVP_DigestUpdate", "EVP_DigestSignUpdate", "EVP_DigestVerifyUpdate"])
+  nc(`${n}(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V`, digestUpdate);
 nc("EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I", (ref: JObj, out: Int8Array, off: number) => {
   const c = ptr<MdCtx>(ref), h = liveHash(ref), dst = region(out, off, h.size);
   c.hash = null; c.md = null;
@@ -116,15 +116,15 @@ nc("EVP_MD_CTX_copy_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;Lcom/andr
 });
 
 // ── HMAC
-type HmacCtx = { md: MdDesc | null; mac: Hmac | null };
-nc("HMAC_CTX_new()J", () => ownedHandle({ md: null, mac: null } satisfies HmacCtx));
+type HmacCtx = { mac: Hmac | null };
+nc("HMAC_CTX_new()J", () => ownedHandle({ mac: null } satisfies HmacCtx));
 nc("HMAC_CTX_free(J)V", (h: bigint) => release(h));
 nc("HMAC_Init_ex(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;[BJ)V", (ref: JObj, key: Int8Array | null, md: bigint) => {
   const c = ptr<HmacCtx>(ref);
   // a null key with the same digest restarts the keyed state, as HMAC_Init_ex(ctx, NULL, 0, md) does
   if (key === null) { if (!c.mac) throw runtimeError("HMAC_Init_ex"); c.mac.reset(); return; }
   const d = mdOf(md);
-  c.md = d; c.mac = new Hmac(d.make, u8(key));
+  c.mac = new Hmac(d.make, u8(key));
 });
 const liveMac = (ref: JObj): Hmac => {
   const c = ptr<HmacCtx>(ref);
@@ -470,16 +470,16 @@ nc("RSA_private_encrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I",
 nc("RSA_public_decrypt(I[B[BLcom/android/org/conscrypt/NativeRef$EVP_PKEY;I)I", rsaRaw("pubdec"));
 
 // EVP_PKEY_CTX: the padding parameters of an RSA encryption or signature
-type RsaParams = { key: Key; padding: number; oaepMd: string; mgf1Md: string | null; label: Uint8Array; saltLen: number; encrypt: boolean };
-const pkeyCtx = (key: Key, encrypt: boolean): RsaParams => ({ key, padding: RSA_PKCS1_PADDING, oaepMd: "sha1", mgf1Md: null, label: new Uint8Array(0), saltLen: -2, encrypt });
+type RsaParams = { key: Key; padding: number; oaepMd: string; mgf1Md: string | null; label: Uint8Array; saltLen: number };
+const pkeyCtx = (key: Key): RsaParams => ({ key, padding: RSA_PKCS1_PADDING, oaepMd: "sha1", mgf1Md: null, label: new Uint8Array(0), saltLen: -2 });
 const unwrapped = <T>(h: bigint): T => { const o = deref<T | WeakRef<object>>(h); return (o instanceof WeakRef ? o.deref() : o) as T; };
 const params = (h: bigint): RsaParams => {
   const p = unwrapped<RsaParams>(h);
   if (!p?.key) throw rt.mkThrowable("java/lang/NullPointerException", "ctx == null");
   return p;
 };
-nc("EVP_PKEY_encrypt_init(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle(pkeyCtx(keyOf(ref), true)));
-nc("EVP_PKEY_decrypt_init(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle(pkeyCtx(keyOf(ref), false)));
+nc("EVP_PKEY_encrypt_init(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle(pkeyCtx(keyOf(ref))));
+nc("EVP_PKEY_decrypt_init(Lcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", (ref: JObj) => ownedHandle(pkeyCtx(keyOf(ref))));
 nc("EVP_PKEY_CTX_free(J)V", (h: bigint) => release(h));
 nc("EVP_PKEY_CTX_set_rsa_padding(JI)V", (h: bigint, pad: number) => { params(h).padding = pad; });
 nc("EVP_PKEY_CTX_set_rsa_pss_saltlen(JI)V", (h: bigint, len: number) => { params(h).saltLen = len; });
@@ -511,16 +511,13 @@ function digestSignInit(signing: boolean) {
     const c = ptr<SignCtx>(ref), d = mdOf(md), key = keyOf(keyRef);
     if (key.type === EVP_PKEY_X25519) throw sslError("java/security/InvalidKeyException", EVP, 125, "OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE");
     c.md = d; c.hash = deferred(d.name);
-    const p = pkeyCtx(key, false);
+    const p = pkeyCtx(key);
     c.sign = { key, params: p, signing, pctx: weakHandle(p) };
     return c.sign.pctx;
   };
 }
 nc("EVP_DigestSignInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", digestSignInit(true));
 nc("EVP_DigestVerifyInit(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;JLcom/android/org/conscrypt/NativeRef$EVP_PKEY;)J", digestSignInit(false));
-const signUpdate = (ref: JObj, b: Int8Array, off: number, len: number) => { liveHash(ref).update(region(b, off, len)); };
-nc("EVP_DigestSignUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V", signUpdate);
-nc("EVP_DigestVerifyUpdate(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BII)V", signUpdate);
 const directUpdate = (ref: JObj, address: bigint, len: number) => { liveHash(ref).update(guest(address, len)); };
 for (const n of ["EVP_DigestUpdateDirect", "EVP_DigestSignUpdateDirect", "EVP_DigestVerifyUpdateDirect"]) nc(`${n}(Lcom/android/org/conscrypt/NativeRef\$EVP_MD_CTX;JI)V`, directUpdate);
 nc("HMAC_UpdateDirect(Lcom/android/org/conscrypt/NativeRef$HMAC_CTX;JI)V", (ref: JObj, address: bigint, len: number) => { liveMac(ref).update(guest(address, len)); });
