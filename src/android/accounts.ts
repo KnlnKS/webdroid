@@ -88,6 +88,16 @@ function drop(s: StoredAccount | undefined): number {
   accounts().splice(i, 1); persist();
   return 1;
 }
+// a new password invalidates every token issued under the old one
+function setPassword(account: JObj, password: string | null): void {
+  const s = owned(account);
+  if (s) { s.password = password; s.tokens = Object.create(null); persist(); }
+}
+function setEntry(map: Record<string, string> | undefined, key: string, value: string | null): void {
+  if (!map) return;
+  if (value == null) delete map[key]; else map[key] = value;
+  persist();
+}
 function* bundle(values: Record<string, string | JObj | number | boolean>): Gen<JObj> {
   const b = yield newObj("android/os/Bundle");
   for (const [key, value] of Object.entries(values)) {
@@ -211,29 +221,12 @@ rt.register({ name: "webdroid/AccountManagerService", ctor: class extends JObj {
   [`someUserHasAccount(${A})Z`]: (account: JObj) => +!!stored(account),
   [`hasAccountAccess(${A}${S}Landroid/os/UserHandle;)Z`]: (account: JObj, pkg: string) => { const s = stored(account); return +(!!s && visible(s, pkg)); },
   [`getPassword(${A})${S}`]: (account: JObj) => owned(account)?.password ?? null,
-  // a new password invalidates every token issued under the old one
-  [`setPassword(${A}${S})V`]: (account: JObj, password: string | null) => {
-    const s = owned(account);
-    if (s) { s.password = password; s.tokens = Object.create(null); persist(); }
-  },
-  [`clearPassword(${A})V`]: (account: JObj) => {
-    const s = owned(account);
-    if (s) { s.password = null; s.tokens = Object.create(null); persist(); }
-  },
+  [`setPassword(${A}${S})V`]: setPassword,
+  [`clearPassword(${A})V`]: (account: JObj) => setPassword(account, null),
   [`getUserData(${A}${S})${S}`]: (account: JObj, key: string) => owned(account)?.data[key] ?? null,
-  [`setUserData(${A}${S}${S})V`]: (account: JObj, key: string, value: string | null) => {
-    const s = owned(account);
-    if (!s) return;
-    if (value == null) delete s.data[key]; else s.data[key] = value;
-    persist();
-  },
+  [`setUserData(${A}${S}${S})V`]: (account: JObj, key: string, value: string | null) => setEntry(owned(account)?.data, key, value),
   [`peekAuthToken(${A}${S})${S}`]: (account: JObj, type: string) => owned(account)?.tokens[type] ?? null,
-  [`setAuthToken(${A}${S}${S})V`]: (account: JObj, type: string, token: string | null) => {
-    const s = owned(account);
-    if (!s) return;
-    if (token == null) delete s.tokens[type]; else s.tokens[type] = token;
-    persist();
-  },
+  [`setAuthToken(${A}${S}${S})V`]: (account: JObj, type: string, token: string | null) => setEntry(owned(account)?.tokens, type, token),
   [`invalidateAuthToken(${S}${S})V`]: (type: string, token: string | null) => {
     for (const s of accounts()) for (const k of Object.keys(s.tokens)) if (s.type === type && s.tokens[k] === token) delete s.tokens[k];
     persist();
