@@ -617,6 +617,14 @@ into gles3-{state,pixels,buffers,client-arrays,validate} with `keepsClean` marke
 `shell/devicefetch.ts`. A few socket edge cases now follow Linux (listed there). Open: the JVM's
 Stage A/B chain plumbing in loader/dl/jni/cpu, which waited for this merge.
 
+### WebView structural refactor (2026-10-03): branch `knlnks/refactor-webview`
+
+The review's five findings are done with behaviour kept (history, "the WebView stack's structural
+review"): one `RendererFrame` port protocol for main frame and subframes with a typed
+`PageMessage`, page code bundled at preload from `src/shell/webpage`, one link/form/navigate
+policy, webkit.ts split into web*.ts modules, renderer origins in `shell/webrenderer.ts`. One fix
+fell out: a cross-origin redirected subframe renders in its target origin's partition.
+
 ### E/F follow-up handoff (2026-10-02): branch `knlnks/ef-followup`, start here
 
 Stage E and F's open items, worked from `304c0529` and merged with `knlnks/bytecode` at `784677aa`.

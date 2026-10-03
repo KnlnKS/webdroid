@@ -2273,6 +2273,46 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     pthread's start, chain 0 before). jbench `monitors` median 0.42-0.47 -> 0.33-0.37 ms;
     initClass and linkInit fast paths unchanged (5M/1M calls, equal medians). Fast e2e 7/7 with no
     wedged or timed-out step; lat --warm passed (Mihon dark-warm 92-102 ms, load 5-16).
+- 2026-10-03, the WebView stack's structural review (branch `knlnks/refactor-webview`, behaviour kept):
+  - One frame protocol: every renderer document, main frame or routed subframe, is a
+    `RendererFrame` whose page talks to the app over the port its load hands it. The window carries
+    only the bootstrap's `ready`, dispatched by bridge id in `shell/webrenderer.ts` (shared with the
+    storage frames, as `rendererUrl` and `openRenderer` are); the bridge-id routing of every page
+    message, `subframeWindows`, `SubframeCookies` and the page's `sub ?` branches are gone.
+    Evaluate and snapshot carry a reply port and end on the page's `AbortSignal`, in place of the
+    sequence maps. The load message carries page, user agent and interception, so renderer URLs
+    keep only the bridge and a subframe token and the worker asks its client (`webcontext`) for
+    the document fetch too. `parsePageMessage`/`parseBridgeCall` (`webpage/protocol.ts`) are the
+    one validation of page and bridge messages.
+  - Page code: the page script, renderer bootstrap and proxy worker are TypeScript entries under
+    `src/shell/webpage`, bundled at preload (`scripts/build-web.ts`, generated
+    `webpage.gen.ts`, not committed) instead of `toString()` templates: no `__name` shims, double
+    escaping or threaded `hold`/`formRequest` parameters; minified whitespace and syntax only, the
+    page script is 29 KB (39 KB) and the bootstrap 36 KB (50 KB). A page's links, forms,
+    `form.submit()` and navigate events go through `routeSubframes`' one policy in every realm; the
+    page's own document keeps its capture-phase links and window submit listener, handing what
+    targets no frame to the app (`leave`). The dev server must restart after `webpage/` changes.
+  - webkit.ts (1,076 lines) is the provider (556) beside webfactory, websettings, webuseragent,
+    webfonts, webjavabridge, webnavigation (entries, `WebHistory`), webrequests and webframes
+    (layer, frames, `Subframes`). WebView state resolves `runningApp()` or throws.
+  - Differences: a subframe redirected to another origin rendered on the opaque partition (its
+    entry carried the document, so `webOrigin` read no URL); it now renders in the target origin's
+    partition, as the main frame always did. A snapshot requested before the page script listens
+    waits for it (up to its 10 s) rather than timing out unanswered. In the page's own document an
+    `area` link now goes through the link handler and an `about:` link through the navigate event,
+    each sending the app the navigation it sent before; a link already cancelled by a window
+    capture listener is no longer sent.
+  - Verified (4406): the frames probe APK's data, blob, scheme, http, named, cross and child
+    scenarios log the same client callbacks as the base with and without site isolation; Markor's
+    view mode (three routed iframes, a srcdoc frame, a targeted Wikipedia link) and FitNotes' Change
+    Log match the base screenshots; Harmonic's blog.cloudflare.com article matches the base pixels
+    and errors in both modes; flappybird 3/3 per mode with AdMob's gmsg reaching the SDK as at the
+    base; Harmonic and ChatGPT `--live` pass. Gates: typecheck (both configs, `wrangler deploy
+    --dry-run` bundles the worker), 1,135 tests, FitNotes smoke, fwtest 31/31, fast e2e 7/7, `lat`
+    cold and warm (Mihon dark-warm 110 and 97 ms, load 5-6).
+    Main-frame load (probe, started to finished) measured 125-130 ms at the base and 132-139 ms
+    after, one run each at load 4-8, consistent with the added `webcontext` round trip; repeated
+    runs at load 10 (base 159-286 ms, after 135-418 ms) could not resolve it.
 
 - 2026-10-03, the Android services and process layer's structural review (branch
   `knlnks/refactor-android`, behaviour kept):
