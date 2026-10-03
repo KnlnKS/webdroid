@@ -1,12 +1,12 @@
 // An APK's own ART baseline profile (assets/dexopt/baseline.prof, docs/bytecode-first-plan.md §4.4):
-// the methods its developers measured as hot or run at startup. A compile worker emits their fast
-// bodies, so their first calls skip the cold tier and no tap waits on their compile.
+// the methods its developers measured as hot or run at startup. A first launch's compile worker
+// emits their fast bodies first, so their first calls skip the cold tier and no tap waits on their
+// compile.
 import { unzlibSync } from "fflate";
 import { codeStats, offerCode } from "./codecache";
 import type { CompileRequest } from "./compileworker";
 import { jvmCoverage } from "./coverage";
 import { jvmProfiler } from "./profile";
-import type { Runtime } from "./runtime";
 
 /** the profile's hot and startup methods, as method indices per dex name; null when unreadable */
 export function parseBaselineProfile(bytes: Uint8Array): Map<string, number[]> | null {
@@ -42,16 +42,17 @@ export function parseBaselineProfile(bytes: Uint8Array): Map<string, number[]> |
   return out;
 }
 
-/** On a launch without persisted code, emit the profiled methods' hot bodies in a compile worker
- *  (compileworker.ts); each chunk installs as it arrives. Once a launch has persisted what it ran,
- *  that is the app's own profile. `dexes` are the app's dex entries. */
-export function compileProfile(R: Runtime, dexes: [name: string, bytes: Uint8Array][], profile: Map<string, number[]>): void {
+/** On a launch without persisted code, a compile worker (compileworker.ts) emits the methods the
+ *  app is likely to run; each chunk installs as it arrives. Once a launch has persisted what it
+ *  ran, that is the app's own profile. */
+export function compileAhead(request: CompileRequest): void {
   if (typeof Worker === "undefined" || typeof document === "undefined" || jvmProfiler.enabled || jvmCoverage.enabled ||
     jvmProfiler.tier === "cold" || codeStats().loaded) return;
-  const work: CompileRequest["work"] = [];
-  for (const [name, methods] of profile) if (R.dexes.some((d) => d.name === name)) for (const m of methods) work.push([name, m]);
   const worker = new Worker(`/compile-worker.js${location.search}`, { type: "module" });
-  worker.onmessage = ({ data }: MessageEvent<[string, string][]>) => void offerCode(data);
-  const copies = dexes.map(([name, bytes]) => [name, bytes.slice()] as [string, Uint8Array]);
-  worker.postMessage({ dexes: copies, work } satisfies CompileRequest, copies.map(([, bytes]) => bytes.buffer));
+  worker.onmessage = ({ data }: MessageEvent<[string, string][]>) => offerCode(data);
+  // copies, transferred: an entry of a stored archive is a view of the whole archive's buffer
+  const dexes = request.dexes.map(([name, bytes]) => [name, bytes.slice()] as [string, Uint8Array]);
+  const profile = request.profile?.slice(), manifest = request.manifest.slice();
+  worker.postMessage({ dexes, profile, manifest, launch: request.launch } satisfies CompileRequest,
+    [...dexes.map(([, bytes]) => bytes.buffer), manifest.buffer, ...profile ? [profile.buffer] : []]);
 }

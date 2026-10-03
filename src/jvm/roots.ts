@@ -17,7 +17,8 @@ const COMPONENT_TAGS = new Set(["activity", "activity-alias", "service", "provid
 /** "a.b.C" or "a.b.C$D": a string shaped like a binary class name */
 const CLASS_NAME = /^[a-z][\w.]*\.[A-Z][\w$]*$/;
 
-function qualify(pkg: string, name: string): string {
+/** a manifest's android:name as the class it names, as PackageParser builds it */
+export function qualify(pkg: string, name: string): string {
   const n = name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name;
   return slashName(n);
 }

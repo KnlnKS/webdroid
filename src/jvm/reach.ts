@@ -263,3 +263,40 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
 
   return r;
 }
+
+/** The methods `roots` call when they run, breadth first and at most `limit`: each call's target
+ *  as its site declares it (a virtual call's declared class, without dispatch to subclasses) and
+ *  the static initializers of the classes they touch. A compile worker emits them in this order
+ *  after an APK's profile (docs/bytecode-first-plan.md §4.4). */
+export function callClosure(p: Program, roots: MemberKey[], limit: number): { cls: string; dex: DexFile; methodIdx: number }[] {
+  const seen = new Set<string>(), touched = new Set<string>(), out: { cls: string; dex: DexFile; methodIdx: number }[] = [];
+  let next: { cls: string; m: EncodedMethod }[] = [];
+  const add = (cls: string, sig: string, root = false) => {
+    const hit = p.resolve(cls, sig);
+    if (!hit?.m.codeOff || seen.has(hit.cls + "." + sig)) return;
+    seen.add(hit.cls + "." + sig);
+    if (!root) out.push({ cls: hit.cls, dex: p.dexOf(hit.cls)!, methodIdx: hit.m.methodIdx });
+    next.push(hit);
+  };
+  const touch = (cls: string) => {
+    if (cls && !touched.has(cls)) { touched.add(cls); add(cls, "<clinit>()V"); }
+  };
+  for (const k of roots) add(...splitKey(k), true);
+  while (next.length && out.length < limit) {
+    const level = next;
+    next = [];
+    for (const { cls, m } of level) {
+      const dex = p.dexOf(cls)!, insns = dex.code(m.codeOff).insns;
+      touch(cls);
+      walkInsns(insns, (op, pc) => {
+        if (INVOKE[op] !== undefined) {
+          const ref = dex.method(insns[pc + 1]), owner = typeName(dex.type(ref.cls));
+          if (op === 0x71 || op === 0x77) touch(owner);
+          add(owner, sigOf(dex, insns[pc + 1]));
+        } else if (op === 0x22) touch(typeName(dex.type(insns[pc + 1])));
+        else if (op >= 0x60 && op <= 0x6d) touch(typeName(dex.type(dex.field(insns[pc + 1]).cls)));
+      });
+    }
+  }
+  return out.slice(0, limit);
+}

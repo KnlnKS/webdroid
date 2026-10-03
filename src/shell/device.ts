@@ -12,7 +12,8 @@ import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
 import { deviceNightMode } from "../android/settings";
 import { loadCode, loadPlatformCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
-import { compileProfile, parseBaselineProfile } from "../jvm/baselineprof";
+import { compileAhead } from "../jvm/baselineprof";
+import { qualify as componentClass } from "../jvm/roots";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";
 import { setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, initDeviceLocales, type Locales } from "../android/resnative";
@@ -147,8 +148,11 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
   await code;
-  const profile = zip["assets/dexopt/baseline.prof"] && parseBaselineProfile(zip["assets/dexopt/baseline.prof"]);
-  if (profile) compileProfile(rt, Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]), profile);
+  // the Application, then the launcher Activity a launch instantiates first
+  const launch = [appNode && attrStr(appNode, "name"), !processName && launcher && (attrStr(launcher, "targetActivity") ?? attrStr(launcher, "name"))]
+    .flatMap((name) => name ? [componentClass(pkg, name)] : []);
+  compileAhead({ dexes: Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]),
+    profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);
