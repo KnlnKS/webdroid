@@ -617,7 +617,8 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   run one at a time: YouTube (3/3 after its flow taps the film by text, since a sponsored card
   can cover the old point), Lichess, Harmonic, ChatGPT and Reddit pass. Resy and Reddit now pass
   repeatedly (UI dumps report view ids and every shown process's windows; history, 2026-10-02).
-  TikTok wedges under V8 memory pressure from two 4 GiB guest memories, not live content.
+  TikTok wedged under V8 memory pressure from two 4 GiB guest memories; guest memory is now
+  committed as used (shared), and its swipe step's remaining wedge is native CPU, not GC.
 - **Done (platform):** loopback URLs reach the process's own listeners, and apps load the device's
   shared libraries (YouTube's exocache answers). PdfDocument rasterises its pages. WebView
   interface names travel with the load, so print snapshots work without site isolation. A serial
@@ -631,13 +632,14 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
   capabilities stay this device's. Apps get the NotoColorEmoji update Google Play installed on the
   AVD, as its FontManagerService serves it. Both are in the history.
-- **Rejected:** lazy guest-memory commit (`knlnks/lazy-guest-mem-experiment`) and early sizing.
-  Neither removes StatsEvent's GC stall, and V8's late-grow behaviour is recorded.
+- **Rejected:** early sizing. Lazy guest-memory commit (`knlnks/lazy-guest-mem-experiment`) did
+  not remove StatsEvent's stall alone; with a shared memory it is the realm-memory fix (history).
 - **Done (knlnks/open-jvm):** StatsEvent's stall was every realm committing 4 GiB in one isolate,
   past V8's global heap ceiling; early non-movable arrays live in the JS heap and StatsEvent runs
   from bytecode. Monitors and class-init waits go by call chain (no timed escape; cycles only),
-  and fire-and-forget entries get their own chain. Open: two realms running native code still
-  cross the ceiling (history).
+  and fire-and-forget entries get their own chain. Done (knlnks/realm-memory): guest memory is a
+  shared WebAssembly.Memory committed as used (TikTok GC 52% → 2.8%; history). Open: TikTok's
+  idle main-loop stalls of 8-60 s in some runs.
 
 ### §4 performance follow-up (2026-10-02): reuse idle work and retained state
 
@@ -827,8 +829,8 @@ smoke and the fast e2e (7/7) when it landed; the history's 2026-10-04 entries re
 4. **Performance (§4).** D-mode launches compile about 45% more classes than TS mode did; next
    are build-time AOT for the platform prefixes (§4.1) and the boot image (§4.3).
 
-**Known limits:** TikTok's live flow wedges under V8's global memory limit (two 4 GiB guest
-memories; guest memory committed as used is open); Clash of Clans and Clash
+**Known limits:** TikTok's swipe wedges its main loop on native CPU (its video path), and some
+runs stall idle; Clash of Clans and Clash
 Royale fail their anti-tamper checks; activities run as one task per process.
 
 **How to work here** is unchanged from the previous handoff below, with one change: `scratch-d.ts`

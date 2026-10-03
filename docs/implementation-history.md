@@ -2661,6 +2661,48 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     libraries failing to find libart. The one native requirement, ARM64 syscall 291 (statx),
     answers ENOSYS as a pre-4.11 kernel would; TikTok's own code issues it (bionic's stat calls do not).
 
+- 2026-10-02, guest memory committed as used, in a shared memory (the realm-memory item):
+  - Candidates, measured in headless Chromium 153 (a page with a ~600 MB retained heap and an
+    allocation loop that promotes): V8 counts a wasm memory's committed bytes, shared or
+    not, toward the isolate's global size (two 4 GiB memories, grown: 23.7 s for either kind
+    against 0.27 s with none; ungrown with a 4 GiB maximum: 0.20 s), so a shared memory alone
+    does not help. What it does give is a grow that detaches nothing: Chrome makes one without
+    cross-origin isolation (the `SharedArrayBuffer` global is absent, the memory's buffer is one),
+    wasm loads and stores on it run as fast (2e8 load/store iterations 54-56 ms either way) and so
+    do typed-array reads and writes from JS (34-46 ms per 1e8 either way, monomorphic). Separate
+    isolates per realm (cross-site frames) would need every broker call, store, `pageShared`
+    resource and the guest clock behind postMessage, and storage partitioning splits OPFS per
+    origin; it also leaves a single realm on a small-heap machine over the ceiling. A smaller
+    fixed reservation only moves the ceiling (3 GiB wedged).
+  - Fix: the guest memory is shared, and `knlnks/lazy-guest-mem-experiment`'s allocator (every
+    allocator takes the lowest free run, ARM64 pool units from plane 0's free pages, 64 MiB grow
+    steps, `mem_grown` refreshing the host's views) is back without pinning, with MAP_FIXED
+    refusing pool units and dlclose freeing image pages for any later use. The build declares the
+    import's maximum and the host flips its flags byte to shared; the JIT's modules declare the
+    same. Non-movable arrays live in guest memory from the start. Where no shared memory can be
+    made, mem.init commits the address space whole and early non-movable arrays stay host
+    arrays, as before. Shared views are refused by TextDecoder.decode (shimmed, as the Encoding
+    Standard's AllowSharedBufferSource reads), getRandomValues, Blob, ImageData, WebSocket.send,
+    AudioBuffer.copyToChannel and structured clone; WebGL, VideoFrame, the encoded chunks,
+    AudioData, Response/Request and crypto.subtle take them. libc's and conscrypt's random fill,
+    the relay's WebSocket write and the bitmap decoder's Blob now copy. A view cached across an
+    allocation is short after a grow (proc.ts's cpu and fd sets read through `mem` now).
+  - TikTok (live, scratch tracer over the whole flow, main-thread GC union of trace events):
+    before, two realms at 4096 MiB, used heap 1.8-2.3 GB plus 1.8-2.0 GB of ArrayBuffers, GC 52%
+    of 203 s (47% during launch, 35-88% per later step, 4-120 frames per step). After, 1024-1472
+    MiB in the main realm and 256 in the others, GC 2.8% of 221 s; `e2e --live --test tiktok`
+    went from 20 failures (every step wedged) to one: the swipe step's main loop misses its 3 s
+    probe while 12.7 s of its 16 s run native code (the feed's video path), not GC.
+    Mihon (mihon-app): 4096 → 256 MiB committed, GC 1.4% → 1.4%. Doodle Jump: 2048 → 256 MiB,
+    GC 2.4% → 2.3%; its perf-browser play window was within host noise (44-50 presents/s, 0.85-1.18
+    native Ginstr/s for both kinds of memory, alternated).
+  - TikTok first hung at launch on this base: KevaImpl.<clinit> called its native initialize,
+    whose JNI_OnLoad's GetStaticMethodID(KevaImpl) waited on that <clinit>. callGuestNative and
+    loadModule awaited before calling the guest and so ran it as chain 0; they now carry the
+    caller's chain. Some TikTok runs still stop answering on the main loop for 8-60 s with the JS
+    thread idle; no class-init wait was involved, one run had a monitor wait on applog's DbStore
+    past 5 s, and the cause is not yet identified.
+
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
   startup blocker after the shared-mapping and SIGILL fixes. The US build
   gates startup on Play Age Signals (`R.bool.is_age_gate_enabled`); the
