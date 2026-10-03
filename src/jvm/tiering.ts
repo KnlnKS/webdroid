@@ -43,6 +43,9 @@ const PROMOTE_BUDGET_MS = 4, PROMOTE_WINDOW_MS = 50;
 const HOT_SOURCE_LIMIT = 32 * 1024 * 1024, IDLE_SOURCE_LIMIT = HOT_SOURCE_LIMIT - 8 * 1024 * 1024;
 type IdleJob = (demand: boolean) => void;
 const waiting = new Map<IdleJob, boolean>();
+/** Jobs newest last: a method queues on its first call, so idle time prepares what the latest
+ *  interaction reached before what launch reached. A stale entry's job is no longer waiting. */
+const recent: IdleJob[] = [];
 export const pendingCompilations = (): number => waiting.size;
 let windowStart = -Infinity, windowSpent = 0, scheduled = false;
 function schedule(): void {
@@ -52,13 +55,17 @@ function schedule(): void {
 }
 function queue(job: IdleJob, demand = false): void {
   if (typeof requestIdleCallback === "undefined") return;
-  waiting.set(job, demand || waiting.get(job) === true);
+  const was = waiting.get(job);
+  waiting.set(job, demand || was === true);
+  if (was === undefined || demand) recent.push(job);
   schedule();
 }
 function prepareWaiting(deadline: IdleDeadline): void {
   try {
-    for (const [job, demand] of waiting) {
+    while (recent.length) {
       if (deadline.timeRemaining() < 2) return;
+      const job = recent.pop()!, demand = waiting.get(job);
+      if (demand === undefined) continue;
       waiting.delete(job);
       try { job(demand); } catch { /* a demand call retries failed idle preparation */ }
     }
