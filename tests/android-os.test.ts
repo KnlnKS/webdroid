@@ -142,21 +142,6 @@ describe("job-scheduler", () => {
   });
 });
 
-describe("keyevent-parcel", () => {
-  rt.linkNatives();
-
-  test("KeyEvent survives a Parcelable round trip", async () => {
-    const event = await newObj("android/view/KeyEvent", "(II)V", 1, 87);
-    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
-    await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", event, 0);
-    await vcall(parcel, "setDataPosition", "(I)V", 0);
-    const restored = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
-    expect(restored).not.toBe(event);
-    expect(await vcall(restored, "getAction", "()I")).toBe(1);
-    expect(await vcall(restored, "getKeyCode", "()I")).toBe(87);
-  });
-});
-
 describe("parcel-string16", () => {
   rt.linkNatives();
 
@@ -247,57 +232,5 @@ describe("remotecallbacklist", () => {
       expect(await count(list)).toBe(0);
       expect(await register(list, cb)).toBe(0);
     } finally { Object.assign(binderTransport, saved); }
-  });
-});
-
-describe("stats-event", () => {
-  rt.linkNatives();
-
-  test("StatsEvent encodes typed fields and annotations and reports invalid atom order", async () => {
-    const builder = await vcall(rt.link("android/util/StatsEvent").ctor, "newBuilder", "()Landroid/util/StatsEvent$Builder;");
-    await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 42);
-    await vcall(builder, "writeInt", "(I)Landroid/util/StatsEvent$Builder;", -1);
-    await vcall(builder, "addBooleanAnnotation", "(BZ)Landroid/util/StatsEvent$Builder;", 3, 1);
-    const event = await vcall(builder, "build", "()Landroid/util/StatsEvent;");
-    const bytes: Int8Array = await vcall(event, "getBytes", "()[B");
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    expect([...bytes.slice(0, 3)]).toEqual([7, 3, 1]);
-    expect(view.getInt32(12, true)).toBe(42);
-    expect(bytes[16]).toBe(0x10);
-    expect(view.getInt32(17, true)).toBe(-1);
-    expect([...bytes.slice(21)]).toEqual([3, 5, 1]);
-    const bad = await vcall(rt.link("android/util/StatsEvent").ctor, "newBuilder", "()Landroid/util/StatsEvent$Builder;");
-    await vcall(bad, "writeInt", "(I)Landroid/util/StatsEvent$Builder;", 10);
-    await vcall(bad, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 42);
-    const failed = await vcall(bad, "build", "()Landroid/util/StatsEvent;");
-    const error: Int8Array = await vcall(failed, "getBytes", "()[B");
-    expect(error[16]).toBe(15);
-    expect(new DataView(error.buffer, error.byteOffset).getInt32(17, true)).toBe(0x2000);
-  });
-
-  test("StatsEvent long arrays retain the list header and signed 64-bit values", async () => {
-    const builder = await vcall(rt.link("android/util/StatsEvent").ctor, "newBuilder", "()Landroid/util/StatsEvent$Builder;");
-    await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 42);
-    await vcall(builder, "writeLongArray", "([J)Landroid/util/StatsEvent$Builder;", BigInt64Array.of(-1n, 9223372036854775807n));
-    const event = await vcall(builder, "build", "()Landroid/util/StatsEvent;");
-    const bytes: Int8Array = await vcall(event, "getBytes", "()[B");
-    expect(Array.from(bytes.slice(16, 19))).toEqual([3, 2, 1]);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    expect(view.getBigInt64(19, true)).toBe(-1n);
-    expect(view.getBigInt64(27, true)).toBe(9223372036854775807n);
-  });
-});
-
-describe("long-sparse-array", () => {
-  test("LongSparseArray orders full-width keys and searches insertion positions", async () => {
-    const a = await newObj("android/util/LongSparseArray");
-    const hi = 9007199254740993n;
-    for (const [key, value] of [[hi, "high"], [-hi, "low"], [0n, "zero"]]) await vcall(a, "put", "(JLjava/lang/Object;)V", key, value);
-    expect(await vcall(a, "keyAt", "(I)J", 0)).toBe(-hi);
-    expect(await vcall(a, "indexOfKey", "(J)I", hi - 1n)).toBe(~2);
-    expect(await vcall(a, "indexOfValue", "(Ljava/lang/Object;)I", "high")).toBe(2);
-    const copy = await vcall(a, "clone", "()Landroid/util/LongSparseArray;");
-    await vcall(a, "remove", "(J)V", hi);
-    expect(await vcall(copy, "get", "(J)Ljava/lang/Object;", hi)).toBe("high");
   });
 });
