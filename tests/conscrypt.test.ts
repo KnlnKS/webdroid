@@ -174,3 +174,73 @@ describe("conscrypt-natives", () => {
     expect(hex(await vcall(key, "getEncoded", "()[B"))).toBe("0c60c80f961f0e71f3a9b524af6012062fe037a6");
   });
 });
+
+describe("signature", () => {
+  const text = (s: string) => Int8Array.from(new TextEncoder().encode(s));
+  async function keyPair(algo: string, size: number) {
+    const gen = await getInstance("java/security/KeyPairGenerator", algo);
+    await vcall(gen, "initialize", "(I)V", size);
+    const pair = await vcall(gen, "generateKeyPair", "()Ljava/security/KeyPair;");
+    return { priv: await vcall(pair, "getPrivate", "()Ljava/security/PrivateKey;"), pub: await vcall(pair, "getPublic", "()Ljava/security/PublicKey;") };
+  }
+  let rsa: Promise<{ priv: unknown; pub: unknown }> | null = null;
+  const rsaPair = () => rsa ??= keyPair("RSA", 2048);
+  async function sign(algo: string, priv: unknown, data: Int8Array, spec?: unknown): Promise<Int8Array> {
+    const s = await getInstance("java/security/Signature", algo);
+    await vcall(s, "initSign", "(Ljava/security/PrivateKey;)V", priv);
+    if (spec) await vcall(s, "setParameter", "(Ljava/security/spec/AlgorithmParameterSpec;)V", spec);
+    await vcall(s, "update", "([BII)V", data, 0, 3);
+    await vcall(s, "update", "([B)V", data.subarray(3));
+    return vcall(s, "sign", "()[B");
+  }
+  async function verify(algo: string, pub: unknown, data: Int8Array, sig: Int8Array, spec?: unknown): Promise<number> {
+    const s = await getInstance("java/security/Signature", algo);
+    await vcall(s, "initVerify", "(Ljava/security/PublicKey;)V", pub);
+    if (spec) await vcall(s, "setParameter", "(Ljava/security/spec/AlgorithmParameterSpec;)V", spec);
+    await vcall(s, "update", "([B)V", data);
+    return vcall(s, "verify", "([B)Z", sig);
+  }
+
+  test("SHA256withRSA signs and verifies; a changed message fails", async () => {
+    const pair = await rsaPair(), data = text("hello signature");
+    const sig = await sign("SHA256withRSA", pair.priv, data);
+    expect(sig.length).toBe(256);
+    expect(await verify("SHA256withRSA", pair.pub, data, sig)).toBe(1);
+    expect(await verify("SHA256withRSA", pair.pub, text("hello signaturf"), sig)).toBe(0);
+    expect(await verify("SHA512withRSA", pair.pub, data, sig)).toBe(0);
+  });
+
+  test("RSA/ECB/PKCS1Padding encrypts with the public key and decrypts with the private key", async () => {
+    const pair = await rsaPair();
+    const cipher = async (mode: number, key: unknown, data: Int8Array): Promise<Int8Array> => {
+      const c = await getInstance("javax/crypto/Cipher", "RSA/ECB/PKCS1Padding");
+      await vcall(c, "init", "(ILjava/security/Key;)V", mode, key);
+      return vcall(c, "doFinal", "([B)[B", data);
+    };
+    const encrypted = await cipher(1, pair.pub, text("password"));
+    expect(encrypted.length).toBe(256);
+    expect(await cipher(2, pair.priv, encrypted)).toEqual(text("password"));
+  });
+
+  test("RSA-PSS uses the digest-length salt by default and PSSParameterSpec otherwise", async () => {
+    const pair = await rsaPair(), data = text("pss message");
+    const sig = await sign("SHA256withRSA/PSS", pair.priv, data);
+    expect(await verify("SHA256withRSA/PSS", pair.pub, data, sig)).toBe(1);
+    expect(await verify("SHA256withRSAandMGF1", pair.pub, data, sig)).toBe(1);
+    const mgf = await newObj("java/security/spec/MGF1ParameterSpec", "(Ljava/lang/String;)V", "SHA-256");
+    const spec = await newObj("java/security/spec/PSSParameterSpec", "(Ljava/lang/String;Ljava/lang/String;Ljava/security/spec/AlgorithmParameterSpec;II)V", "SHA-256", "MGF1", mgf, 20, 1);
+    const salted = await sign("SHA256withRSA/PSS", pair.priv, data, spec);
+    expect(await verify("SHA256withRSA/PSS", pair.pub, data, salted, spec)).toBe(1);
+    expect(await verify("SHA256withRSA/PSS", pair.pub, data, salted)).toBe(0);
+  });
+
+  test("SHA256withECDSA produces DER signatures that verify", async () => {
+    const pair = await keyPair("EC", 256), data = text("ecdsa message");
+    const sig = await sign("SHA256withECDSA", pair.priv, data);
+    expect(sig[0]).toBe(0x30);
+    expect(sig[1] + 2).toBe(sig.length);
+    expect(await verify("SHA256withECDSA", pair.pub, data, sig)).toBe(1);
+    expect(await verify("SHA256withECDSA", pair.pub, text("ecdsa messagf"), sig)).toBe(0);
+    expect(await verify("SHA256withECDSA", pair.pub, data, sig.subarray(0, sig.length - 1))).toBe(0);
+  });
+});
