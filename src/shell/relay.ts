@@ -66,9 +66,12 @@ export class DatagramRelay {
           if (!opened) { opened = true; resolve(transport); }
           return;
         }
+        // the source as this relay dialed it: a name stands for its synthetic address, as the
+        // guest's connected peer does
         const frame = new Uint8Array(event.data as ArrayBuffer);
-        if (frame.length < 6) return;
-        this.onPacket(frame.subarray(6), [frame[0], frame[1], frame[2], frame[3]], frame[4] << 8 | frame[5]);
+        if (frame.length < 3 + frame[0]) return;
+        const source = new TextDecoder().decode(frame.subarray(3, 3 + frame[0]));
+        this.onPacket(frame.subarray(3 + frame[0]), syntheticAddress(source), frame[1] << 8 | frame[2]);
       };
       const failed = () => { if (!opened) { opened = true; reject(new Error("UDP relay unavailable")); } };
       transport.onclose = failed;

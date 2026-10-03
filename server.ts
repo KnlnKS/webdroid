@@ -27,7 +27,7 @@ function proxyTarget(requested: string): string {
 }
 
 type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; closed: boolean; pending: Uint8Array[]; pendingBytes: number; shut?: boolean };
-type UdpData = { kind: "udp"; sock: { send(data: Uint8Array, port: number, address: string): boolean; close(): void } | null; closed: boolean; addresses: Map<string, Promise<string>> };
+type UdpData = { kind: "udp"; sock: { send(data: Uint8Array, port: number, address: string): boolean; close(): void } | null; closed: boolean; addresses: Map<string, Promise<string>>; names: Map<string, string> };
 type SocketData = TcpData | UdpData | WebRelayData;
 const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 
@@ -204,7 +204,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
         (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
         (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 }));
     }
-    if (u.pathname === "/udp") return srv.upgrade(req, { data: { kind: "udp", sock: null, closed: false, addresses: new Map() } })
+    if (u.pathname === "/udp") return srv.upgrade(req, { data: { kind: "udp", sock: null, closed: false, addresses: new Map(), names: new Map() } })
       ? undefined : new Response("expected websocket", { status: 400 });
     if (u.pathname !== "/tcp") return new Response("not found", { status: 404 });
     const host = u.searchParams.get("host") ?? "";
@@ -224,11 +224,15 @@ const server: Bun.Server<SocketData> = Bun.serve({
       if (d.kind === "udp") {
         try {
           const sock = await Bun.udpSocket({ socket: {
+            // a reply names its source as the guest dialed it (the address is this server's
+            // resolution of the name, which the guest never saw), framed as a request is
             data: (_socket, bytes, port, address) => {
-              const ip = parseIpv4(address.replace(/^::ffff:/, ""));
-              if (!ip || d.closed) return;
-              const frame = new Uint8Array(6 + bytes.length);
-              frame.set(ip); frame[4] = port >> 8; frame[5] = port & 255; frame.set(bytes, 6);
+              const ip = address.replace(/^::ffff:/, "");
+              if (!parseIpv4(ip) || d.closed) return;
+              const name = new TextEncoder().encode(d.names.get(ip) ?? ip);
+              const frame = new Uint8Array(3 + name.length + bytes.length);
+              frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
+              frame.set(name, 3); frame.set(bytes, 3 + name.length);
               ws.send(frame);
             },
           } });
@@ -288,6 +292,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
             ws.data.addresses.set(host, resolved);
           }
           const address = await resolved;
+          ws.data.names.set(address, host);
           if (!ws.data.closed) ws.data.sock?.send(msg.subarray(3 + length), port, address);
         } catch { ws.data.addresses.delete(host); }
         return;
