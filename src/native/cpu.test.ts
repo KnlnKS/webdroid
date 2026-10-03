@@ -300,3 +300,28 @@ test("ARM64 sigtimedwait fills siginfo for pending and subsequently queued signa
     expect(cpu.sigQueued).toBeNull();
   } finally { mem.free(storage); cpu.dispose(); }
 });
+
+test("an unhandled terminating signal ends the process once unblocked; ignored ones are discarded", async () => {
+  // in a child process: dying marks this one's native tier exited for good
+  const code = `
+    import { Cpu, hasProcessExited, setA64, ignoredSignals } from "${import.meta.dir}/cpu";
+    import { JThread } from "${import.meta.dir}/../jvm/natives/jlang";
+    setA64(true);
+    const cpu = new Cpu(new JThread(), "victim"), turn = () => new Promise((r) => setTimeout(r, 0));
+    cpu.signalMask = 0n;
+    ignoredSignals.add(15);
+    for (const sig of [17, 23, 28, 15]) cpu.kill(sig);
+    await turn();
+    const ignored = !hasProcessExited() && !cpu.signals.length;
+    cpu.signalMask = 1n << 5n; cpu.kill(6);
+    await turn();
+    const pending = !hasProcessExited() && cpu.signals.includes(6);
+    cpu.signalMask = 0n; cpu.pump();
+    await turn();
+    console.log(JSON.stringify({ ignored, pending, exited: hasProcessExited() }));`;
+  const child = Bun.spawn(["bun", "-e", code], { stdout: "pipe", stderr: "pipe" });
+  const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(JSON.parse(out.trim().split("\n").at(-1)!)).toEqual({ ignored: true, pending: true, exited: true });
+  expect(err).toContain("Fatal signal 6 (SIGABRT) in tid");
+  expect(err).toContain("name: victim");
+});

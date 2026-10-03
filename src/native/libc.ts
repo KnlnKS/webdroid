@@ -15,7 +15,7 @@ import { KLAYOUT, rawSyscall } from "./syscall";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
-import { PROC_SYSCALLS, procInit, abortMessageOr } from "./proc";
+import { PROC_SYSCALLS, procInit, abortThread } from "./proc";
 import { NET_SYSCALLS, netInit } from "./net";
 import { device } from "../shell/config";
 import { procIdentity, sysconf, uname } from "../shell/procfs";
@@ -353,7 +353,7 @@ export function libcInit(): void {
   const M: Record<string, HostFn> = {
     __errno: (cpu) => cpu.errnoAddr,
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
-    abort: (cpu) => { cpu.fault(abortMessageOr("abort() called")); },
+    abort: (cpu) => abortThread(cpu),
     exit: (cpu, a) => { console.warn("[native] exit(" + a.i() + ")"); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     _exit: (cpu, a) => { console.warn(`[native] _exit(${a.i()}) from ${cpu.name} lr=${(cpu.lr >>> 0).toString(16)}`); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
     atexit: () => 0,

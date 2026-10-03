@@ -97,7 +97,7 @@ const A64: Record<number, HostFn> = {
     mem.memset(attr, 0, size); mem.st32(attr, Math.min(size, SCHED_ATTR_SIZE));
     return 0;
   },
-  130: (cpu, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; }, // tkill
+  130: (cpu, a) => { const t = cpuByOsTid(a.i()), sig = a.i(); if (!t || t.finished) return fail(cpu, E.SRCH); return signalThread(cpu, t, sig); }, // tkill
   137: (cpu, a) => {                                                             // rt_sigtimedwait
     const set = mem.ld64(a.p()), info = anchor(a.p()), ms = millis(a.p());
     const take = (): number => {
@@ -135,8 +135,7 @@ const A64: Record<number, HostFn> = {
   240: (cpu, a) => {                                                             // rt_tgsigqueueinfo: the info is not carried
     const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i();
     if (pid !== cpu.pid || !t || t.finished) return fail(cpu, E.SRCH);
-    signalThread(cpu, t, sig);
-    return 0;
+    return signalThread(cpu, t, sig);
   },
   270: (cpu, a) => {                                                             // process_vm_readv, of this process: a crash reporter's safe read
     const pid = a.i(), local = a.p(), nLocal = a.u(), remote = a.p(), nRemote = a.u();

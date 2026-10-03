@@ -6,7 +6,7 @@
 import { wrote, mem } from "./mem";
 import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
-import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
+import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers, ignoredSignals, abortMessageSource, dieOfSignal } from "./cpu";
 import { tidOf } from "./pthread";
 import { fail, fillSysinfo, logLine, strncpy, strncat, snprintfInto, readTm, MONTHS, DAYS } from "./libc";
 import { format } from "./printf";
@@ -73,15 +73,25 @@ function capget(cpu: Cpu, header: number, data: number): number {
 }
 
 let abortMessage = "";
-/** android_set_abort_message's text: the HLE's own, or what the guest libc keeps (bionic.ts) */
-export const abortMessageSource = { text: (): string => abortMessage };
-export function abortMessageOr(what: string): string { const m = abortMessageSource.text(); return m ? `${what}: ${m}` : what; }
-/** signals whose default action dumps core: with no handler, the process dies of them */
-const CRASH_SIGNALS: Record<number, string> = { 4: "SIGILL", 5: "SIGTRAP", 6: "SIGABRT", 7: "SIGBUS", 8: "SIGFPE", 9: "SIGKILL", 11: "SIGSEGV" };
-/** kill/tgkill/raise's delivery: a crash signal nothing handles ends the process, as the kernel's default does */
-export function signalThread(cpu: Cpu, target: Cpu, sig: number): void {
-  if (!sigHandlers.has(sig) && CRASH_SIGNALS[sig]) cpu.fault(abortMessageOr(`fatal signal ${sig} (${CRASH_SIGNALS[sig]})`));
-  target.kill(sig);
+abortMessageSource.text = () => abortMessage;
+const SIGKILL = 9, SIGSTOP = 19, SIGABRT = 6, SIG_IGN = 1;
+/** kill/tgkill/raise: signal 0 only probes the target */
+export function signalThread(cpu: Cpu, target: Cpu, sig: number): number {
+  if (sig < 0 || sig > 64) return fail(cpu, E.INVAL);
+  if (sig) target.kill(sig);
+  return 0;
+}
+/** bionic's abort: SIGABRT unblocked and raised; a handler that returns is followed by the default action */
+export function abortThread(cpu: Cpu): Promise<never> {
+  cpu.signalMask &= ~(1n << BigInt(SIGABRT - 1));
+  // a microtask on: the call has parked, so a handler runs on top of it
+  return Promise.resolve().then(() => cpu.deliver(SIGABRT)).then(() => dieOfSignal(cpu, SIGABRT));
+}
+/** sigaction's disposition change: SIGKILL and SIGSTOP keep their default */
+function setDisposition(sig: number, fn: number, flags: number, mask: bigint): void {
+  sigHandlers.delete(sig); ignoredSignals.delete(sig);
+  if (fn > SIG_IGN) sigHandlers.set(sig, { fn, flags, mask });
+  else if (fn === SIG_IGN) ignoredSignals.add(sig);
 }
 
 interface SigactionLayout { size: number; handler: number; mask: number; flags: number; wideMask: boolean }
@@ -89,25 +99,23 @@ interface SigactionLayout { size: number; handler: number; mask: number; flags: 
 const SIGACTION: SigactionLayout = { size: 16, handler: 0, mask: 4, flags: 8, wideMask: false };
 const SIGACTION64: SigactionLayout = { size: 20, handler: 0, mask: 4, flags: 12, wideMask: true };
 /** one signal's handler exchanged through a struct sigaction laid out as given */
-function exchangeAction(a: ArgReader, { size, handler: handlerAt, flags: flagsAt, mask: maskAt, wideMask }: SigactionLayout): number {
+function exchangeAction(cpu: Cpu, a: ArgReader, { size, handler: handlerAt, flags: flagsAt, mask: maskAt, wideMask }: SigactionLayout): number {
   const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
+  if (sig < 1 || sig > 64 || act && (sig === SIGKILL || sig === SIGSTOP)) return fail(cpu, E.INVAL);
   if (old) {
     mem.memset(old, 0, size);
+    if (ignoredSignals.has(sig)) stp(old + handlerAt, SIG_IGN);
     if (prev) {
       stp(old + handlerAt, prev.fn); mem.st32(old + flagsAt, prev.flags);
       if (wideMask) mem.st64(old + maskAt, prev.mask ?? 0n); else mem.st32(old + maskAt, Number((prev.mask ?? 0n) & 0xffffffffn));
     }
   }
-  if (act) {
-    const fn = ldp(act + handlerAt);
-    if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: wideMask ? mem.ld64(act + maskAt) : BigInt(mem.ld32(act + maskAt) >>> 0) });
-    else sigHandlers.delete(sig);
-  }
+  if (act) setDisposition(sig, ldp(act + handlerAt), mem.ld32(act + flagsAt), wideMask ? mem.ld64(act + maskAt) : BigInt(mem.ld32(act + maskAt) >>> 0));
   return 0;
 }
 /** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
  *  mask), which is not bionic's */
-const rtSigaction = (a: ArgReader): number => exchangeAction(a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true });
+const rtSigaction = (cpu: Cpu, a: ArgReader): number => exchangeAction(cpu, a, { size: 3 * PTR + 8, handler: 0, flags: PTR, mask: 3 * PTR, wideMask: true });
 const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
 /** what the core leaves to the host of a __memcpy_chk it serves: a failed check */
 export const memcpyChk: HostFn = (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); mem.memmove(d, s, n); return ARG0; };
@@ -133,9 +141,9 @@ export const PROC_SYSCALLS: Record<string, HostFn> = {
   capget: (cpu, a) => capget(cpu, a.p(), a.p()),
   // signals: a handler runs on the target thread, at once when it is parked in a host call
   // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
-  rt_sigaction: (_c, a) => rtSigaction(a),
-  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); signalThread(cpu, t, sig); return 0; },
-  kill: (cpu, a) => { a.i(); signalThread(cpu, cpu, a.i()); return 0; },
+  rt_sigaction: (cpu, a) => rtSigaction(cpu, a),
+  tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); return signalThread(cpu, t, sig); },
+  kill: (cpu, a) => { a.i(); return signalThread(cpu, cpu, a.i()); },
   sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
   sigaltstack,
 };
@@ -167,18 +175,24 @@ export function procInit(): void {
     ptrace: (cpu) => fail(cpu, E.PERM),
     // bionic reserves the first two realtime signals for itself: SIGRTMIN is 34, SIGRTMAX 64
     __libc_current_sigrtmin: () => 34, __libc_current_sigrtmax: () => 64,
-    sigaction: (_c, a) => exchangeAction(a, SIGACTION),
-    sigaction64: (_c, a) => exchangeAction(a, SIGACTION64),
-    signal: (_c, a) => { const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? 0; if (fn > 1) sigHandlers.set(sig, { fn, flags: 0 }); else sigHandlers.delete(sig); return prev; },
+    sigaction: (cpu, a) => exchangeAction(cpu, a, SIGACTION),
+    sigaction64: (cpu, a) => exchangeAction(cpu, a, SIGACTION64),
+    // bionic's signal(): sigaction with SA_RESTART; SIG_ERR and EINVAL for SIGKILL, SIGSTOP or a bad number
+    signal: (cpu, a) => {
+      const sig = a.i(), fn = a.p(), prev = sigHandlers.get(sig)?.fn ?? (ignoredSignals.has(sig) ? SIG_IGN : 0);
+      if (sig < 1 || sig > 64 || sig === SIGKILL || sig === SIGSTOP) { fail(cpu, E.INVAL); return -1; }
+      setDisposition(sig, fn, 0x10000000, 0n);
+      return prev;
+    },
     // a thread that has run to its end is gone: ESRCH, which a stop-the-world collector discounts
     pthread_kill: (c, a) => {
-      const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : 0;
+      const tid = tidOf(a.p()), t = cpuByTid(tid), sig = a.i(), r = !t || t.finished ? E.SRCH : sig < 0 || sig > 64 ? E.INVAL : 0;
       killLog.push(`${c.name}->${t?.name ?? "tid" + tid}:${sig}=${r}${t ? `/${t.state},${t.loops},${t.parked ? "p" : ""}` : ""}`);
       if (killLog.length > 300) killLog.splice(0, 100);
-      if (r === 0) t!.kill(sig);
+      if (r === 0 && sig) t!.kill(sig);
       return r;
     },
-    raise: (cpu, a) => { signalThread(cpu, cpu, a.i()); return 0; },
+    raise: (cpu, a) => signalThread(cpu, cpu, a.i()),
     sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 4); return e ? fail(cpu, e) : 0; },
     sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
     sigwait: () => new Promise<never>(() => {}),

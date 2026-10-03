@@ -234,6 +234,9 @@ export class Cpu {
     }
     return 0;
   }
+  /** a pending signal the mask lets through: a call that raised or unblocked one returns to it, as
+   *  the kernel delivers on the way back to user space */
+  private deliverable(): boolean { return this.signals.some((sig) => !(this.signalMask & 1n << BigInt(sig - 1))); }
   private takeSignal(): number {
     if (!this.signals.length) return 0;
     const i = this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
@@ -253,8 +256,8 @@ export class Cpu {
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
   kill(sig: number): void {
-    // a signal nothing handles is dropped, unless blocked: then it waits for sigwait/sigtimedwait
-    if (this.finished || !sigHandlers.has(sig) && !(this.signalMask & 1n << BigInt(sig - 1))) return;
+    // an ignored signal is discarded unless blocked: a handler may be installed before it is unblocked
+    if (this.finished || signalIgnored(sig) && !(this.signalMask & 1n << BigInt(sig - 1))) return;
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
     this.sigQueued?.();
     if (this.signalInterrupt && !(this.signalMask & 1n << BigInt(sig - 1))) {
@@ -296,6 +299,7 @@ export class Cpu {
   /** `info`: the siginfo of a signal this thread's own instruction raised */
   async deliver(sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
     const h = sigHandlers.get(sig);
+    if (!h) { if (!signalIgnored(sig)) void dieOfSignal(this, sig, info); return; }
     this.sigLog.push(`${sig}@${this.ic}${this.parked ? "p" : ""}/${this.loops}`);
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
@@ -640,11 +644,13 @@ export class Cpu {
         case CoreExit.Host:
           hostDispatch(this, this.exit);
           if (this.pending || this.finished) { jitDrain(); return this.pending ? SliceExit.Suspend : SliceExit.Exit; }
+          if (this.signals.length && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
           continue;
         case CoreExit.Ret: jitDrain(); return SliceExit.Exit;
         case CoreExit.Syscall:
           this.syscall(this.exit);
           if (this.pending) { jitDrain(); return SliceExit.Suspend; }
+          if (this.signals.length && this.deliverable()) { jitDrain(); return SliceExit.Budget; }
           continue;
         default: {
           const code = this.exit, word = this.u32[OFF_WORD >> 2] >>> 0;
@@ -782,6 +788,41 @@ export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) i
 export function cpuByOsTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.osTid === tid) return c; return undefined; }
 /** sigaction's table: signal → handler (sa_handler or sa_sigaction) and flags */
 export const sigHandlers = new Map<number, { fn: number; flags: number; mask?: bigint }>();
+/** the signals set to SIG_IGN */
+export const ignoredSignals = new Set<number>();
+const signalBits = (...sigs: number[]): bigint => sigs.reduce((m, sig) => m | 1n << BigInt(sig - 1), 0n);
+// signal(7)'s default actions. Stop signals are ignored: nothing here could continue the process.
+const DEFAULT_IGNORED = signalBits(17, 18, 19, 20, 21, 22, 23, 28);  // SIGCHLD SIGCONT, stops, SIGURG SIGWINCH
+const DUMPS_CORE = signalBits(3, 4, 5, 6, 7, 8, 11, 24, 25, 31);
+const SIGNAL_NAMES = ["", "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL", "SIGUSR1", "SIGSEGV",
+  "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG",
+  "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH", "SIGIO", "SIGPWR", "SIGSYS"];
+const has = (bits: bigint, sig: number): boolean => !!(bits >> BigInt(sig - 1) & 1n);
+/** delivering `sig` runs nothing: no handler, and SIG_IGN or a default of ignoring it */
+export const signalIgnored = (sig: number): boolean => !sigHandlers.has(sig) && (ignoredSignals.has(sig) || has(DEFAULT_IGNORED, sig));
+/** android_set_abort_message's text: the HLE's own (proc.ts), or what the guest libc keeps (bionic.ts) */
+export const abortMessageSource = { text: (): string => "" };
+/**
+ * A terminating signal nothing handles: the process ends as exit_group ends it, every thread
+ * parking at its next turn. One that dumps core is logged as debuggerd's handler logs it (the
+ * "Fatal signal" line and the tombstone's head and backtrace) before the kernel's default runs.
+ */
+export function dieOfSignal(cpu: Cpu, sig: number, info: { code: number; addr: number } | null = null): Promise<never> {
+  if (!processExited) {
+    const name = SIGNAL_NAMES[sig] ?? "?", process = `pid ${cpu.pid} (${procIdentity.name})`, code = info ? `, code ${info.code}` : "";
+    if (has(DUMPS_CORE, sig)) {
+      const abort = abortMessageSource.text();
+      console.error([`Fatal signal ${sig} (${name})${code} in tid ${cpu.osTid} (${cpu.name}), ${process}`,
+        "*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***",
+        `pid: ${cpu.pid}, tid: ${cpu.osTid}, name: ${cpu.name}  >>> ${procIdentity.name} <<<`,
+        `signal ${sig} (${name})${code}, fault addr ${info ? "0x" + (info.addr >>> 0).toString(16) : "--------"}`,
+        ...(abort ? [`Abort message: '${abort}'`] : []),
+        "backtrace:", ...backtraceHook(cpu).map((frame, i) => `  #${String(i).padStart(2, "0")} ${frame}`)].join("\n"));
+    } else console.warn(`[native] ${process} killed by signal ${sig} (${name})`);
+    markProcessExited();
+  }
+  return new Promise<never>(() => {});
+}
 
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);
 export function setSymbolizeHook(f: (pc: number) => string): void { symbolizeHook = f; }

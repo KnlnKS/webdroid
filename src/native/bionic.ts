@@ -8,10 +8,10 @@
 import { mem } from "./mem";
 import { defineHost, hostLib, stp, SERVED, type HostFn } from "./host";
 import { interposed, linkerHooks, loadModule, runInit, libdl as dl, modules } from "./dl";
-import { setThreadHooks, type Cpu } from "./cpu";
+import { setThreadHooks, abortMessageSource, type Cpu } from "./cpu";
 import { E, RET_SENTINEL, TRAMP_BASE, TRAMP_END } from "./abi";
 import { auxv, fail } from "./libc";
-import { abortMessageSource, memcpyChk } from "./proc";
+import { memcpyChk } from "./proc";
 import type { Module } from "./elf";
 import { processEnv } from "../shell/environment";
 import { procIdentity } from "../shell/procfs";
