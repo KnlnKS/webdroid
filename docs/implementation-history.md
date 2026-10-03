@@ -2237,6 +2237,15 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     sigsetsize as the timeout. The ARM32 libc's holders (qsort, bsearch, fgets, scandir, its
     pthread waits) were left: a 2 GiB process has no planes. Lichess (Flutter, cronet) passed
     15/15 live afterwards.
+  - The sendmsg/recvmsg commit broke YouTube's live flow (launch, search and video completions
+    timed out), found by tracing every syscall of Cronet's threads. Two causes: msghdr's
+    offsets were computed when net.ts loaded, before an arm64 process set PTR to 8, so
+    recvmsg read the iovecs from the wrong words and wedged CronetNet; and with recvmsg
+    working, QUIC to Google hosts stalled because the UDP relay framed replies with the
+    server's resolved address, which a socket connected to the name's synthetic address
+    drops. ENETUNREACH from recvmsg had made QUIC fail over to TCP at once before. Replies
+    now name their source as the guest dialed it; YouTube passes 16/16 with QUIC carrying
+    its traffic. Module-level constants that depend on PTR are wrong for arm64.
 - **2026-10-02, Stage E2 follow-up: the serialized font map, hyphenation, emoji and heavy weights.**
   - Every realm loaded the system font map twice: the zygote ran `loadPreinstalledSystemFontMap`,
     and bindApplication, handed no map, called `setSystemFontMap(null)`, which parses
