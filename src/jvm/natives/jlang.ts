@@ -1273,7 +1273,7 @@ export let curThread: JThread = null as never;
 export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
-rt.th = () => curThread;
+rt.cur = mainThread;
 rt.st = (t) => setCurThread(t as JThread);
 rt.su = releaseThread;
 // the default handler and the pre-handler, which RuntimeInit.commonInit sets (KillApplicationHandler,
@@ -1297,7 +1297,7 @@ export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
 export function setCurThread(t: JThread) {
   owned = true;
   if (t === curThread) return;
-  curThread = t;
+  curThread = rt.cur = t;
   threadSwitch.hook?.(t);
 }
 let threadCounter = 0;

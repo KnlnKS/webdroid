@@ -42,12 +42,12 @@ const modes = ["hot", "cold", "promoted", "denied"] as const;
 type Mode = typeof modes[number];
 async function fixture(mode: Mode) {
   const R = new Runtime(), worker = {}, main = {};
-  let thread: unknown = worker;
+  R.cur = worker;
   const seen: [number, unknown][] = [];
   const pending: { resolve: (value: number) => void; reject: (error: unknown) => void }[] = [];
   let park = false;
   let callback: ((value: number) => unknown) | undefined;
-  R.th = () => thread; R.st = (value) => { thread = value; }; R.su = () => { thread = main; };
+  R.st = (value) => { R.cur = value; }; R.su = () => { R.cur = main; };
   R.register({ name: "java/lang/Object", ctor: class extends JObj {}, methods: { "<init>()V"() {} } });
   R.register({ name: "java/lang/Throwable", ctor: class extends JObj {} });
   R.register({ name: "java/lang/Exception", sup: "java/lang/Throwable", ctor: class extends JObj {} });
@@ -55,7 +55,7 @@ async function fixture(mode: Mode) {
   R.mkThrowable = (name, message) => Object.assign(R.make(name), { message });
   R.register({ name: "JvmTierProbe$Host", ctor: class extends JObj {}, methods: {
     "static call(II)I"(which: number, value: number) {
-      seen.push([value, thread]);
+      seen.push([value, R.cur]);
       if (which && callback) return callback(value);
       return park && which ? new Promise<number>((resolve, reject) => pending.push({ resolve, reject })) : value;
     },
@@ -71,7 +71,7 @@ async function fixture(mode: Mode) {
   const fn = (name: string, desc: string): ((...args: unknown[]) => unknown) => {
     const value: unknown = Reflect.get(info.ctor, mangleMethod(name, desc));
     if (typeof value !== "function") throw new Error("missing fixture method " + name);
-    return (...args) => { thread = worker; return value(...args); };
+    return (...args) => { R.cur = worker; return value(...args); };
   };
   const warm = async (name: string, desc: string, args: unknown[]) => {
     const call = fn(name, desc);
@@ -86,7 +86,7 @@ async function fixture(mode: Mode) {
     if (!value) throw new Error("fixture did not suspend");
     return value;
   };
-  return { R, worker, main, seen, fn, warm, next, thread: () => thread, park: () => { park = true; },
+  return { R, worker, main, seen, fn, warm, next, thread: () => R.cur, park: () => { park = true; },
     reenter: (call: (value: number) => unknown) => { callback = call; } };
 }
 

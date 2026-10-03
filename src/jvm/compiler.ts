@@ -377,7 +377,7 @@ class MethodEmitter {
     // var, not let: a let without an initializer costs bytecode to set it, which counts against
     // V8's inlining budget
     const init = this.sync ? `var ${[...locals, "$t", "$u", "$ex", "pc=0"].join(",")};`
-      : !this.resuming ? `var ${[...locals, "$t", "$u", "$ex", "$fu", "$r=0", "pc=0"].join(",")};const $th=R.th();`
+      : !this.resuming ? `var ${[...locals, "$t", "$u", "$ex", "$fu", "$r=0", "pc=0"].join(",")};const $th=R.cur;`
       : `var ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "pc=$F.next", "$r=$F.r"].join(",")};` +
         `const $th=$F.$th,$s=$F.$s;R.st($th);`;
 

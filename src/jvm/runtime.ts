@@ -184,7 +184,10 @@ export class Runtime {
    *  when it finishes or suspends again (su), so a parked worker never leaves its identity behind
    *  for what the event loop runs next. One running from its caller's call leaves the thread to
    *  that caller, which goes on as its own thread whether or not the callee suspended. */
-  th: () => unknown = () => null;
+  /** the running thread; every compiled frame that can suspend reads it on entry, where a field
+   *  load costs less than a call */
+  cur: unknown = null;
+  th(): unknown { return this.cur; }
   st: (t: unknown) => void = () => {};
   su: (t: unknown) => void = () => {};
   monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
