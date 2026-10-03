@@ -1778,6 +1778,39 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     ownership. Same-thread waits that outlast 60 ms (a heavy `<clinit>` suspended past it) still
     proceed with partial statics and mark the class reentrant for every later request.
 
+- 2026-10-02, the desccheck backlog: StatsLog and print on bytecode, StatsEvent's GC stall found:
+  - StatsLog runs from bytecode: its <clinit> loads `stats_jni`, which nothing claimed, so every
+    FrameworkStatsLog.write threw UnsatisfiedLinkError, then NoClassDefFoundError (Mihon died at
+    launch). `stats_jni` is claimed and `writeImpl` drops the event, as libstatssocket does with no
+    statsd socket. ChangeReporter marks a change reported before it writes, so a Mihon session
+    writes ~21 events (atom 228, 43 bytes); the bytecode path costs ~1.2 us a write.
+  - StatsEvent stays TS, and the stall's mechanism is not StatsEvent's: its Builder takes a pooled
+    buffer from `ByteBuffer.allocateDirect`, whose non-movable array (`nonMovableBytes`) sizes guest
+    memory for the app's native ABI before any library loads. For arm64 Mihon that commits 4 GiB of
+    Wasm memory, after which Chrome keeps incremental marking running: CPU profiles of Mihon's
+    theme taps (a lat-style CDP driver) show 10.4–11.7 s of ~23 s in GC against 0.36–0.42 s on the
+    base, taps of 180–370 ms. TS StatsEvent with a forced `setA64(true)` reproduces it; bytecode
+    StatsLog over TS StatsEvent does not. In isolation (Chrome, ~600 MB retained heap) an
+    allocation loop runs 3x slower once committed Wasm memory passes 512–768 MB, whether grown or
+    initial; a 4 GiB maximum with 256 MiB committed costs nothing, `--no-incremental-marking`
+    removes it and Node does not show it. Every arm64 (4 GiB) and ARM32 (2 GiB) process that sizes
+    native memory pays this, Mihon's reader included; StatsEvent only brings it forward. Deferring
+    the sizing would leave non-movable arrays in memory a later grow detaches, so the fix is the
+    native tier committing guest memory as it is used.
+  - Printing: the reference AVD declares `android.software.print` and runs `com.android.printspooler`,
+    so the device declares it and PrintManager, PrintJob and PrintDocumentAdapter run from bytecode
+    over a hosted IPrintManager. Its print creates the job and answers with a one-shot intent for
+    `android.print.PRINT_DIALOG`, created as the calling package (the broker refuses another
+    creator). The dialog, a system activity, fills unset attributes with the spooler's en-US
+    defaults (letter, 300 dpi, colour, no margins; Markor sets none), lays out and writes the
+    document to a spool file and prints the PDF from a browser frame. WebView's adapter writes its
+    page snapshot as JPEG pages of the chosen media. In Markor, Share > Print / PDF reached the
+    dialog, layout and write with no missing API; with a synthetic snapshot the frame received a
+    valid 3-page letter PDF (PDFKit rendered it). The isolated WebView's own snapshot failed there,
+    as it does on the base: its injected script's synchronous `describe` bridge call times out
+    (504) when Markor's preview loads, so the snapshot (and the base's direct `print` message) has
+    no listener. Custom adapters that draw with PdfDocument still lack its natives.
+
 ## Java, storage and framework semantics
 
 - Collection views remain live. Copying `subList` or map views broke Compose

@@ -639,8 +639,11 @@ from 44,438 at b475a694; specs of platform classes 80 (from 291).
    After the merge the live flows run one at a time render Harmonic 14/14, Lichess 15/15, Reddit
    6/6, Resy 15/15, ChatGPT 24/24, YouTube 16/16 and TikTok 13/13 (one earlier TikTok run wedged
    from step 06 under live content and passed on rerun), with no `[webdroid unowned]` entry.
-1. StatsEvent (GC stall under bytecode, see history) and print (needs a hosted IPrintManager and a
-   PDF-producing WebView adapter) are the desccheck backlog.
+1. StatsEvent is the desccheck backlog (2026-10-02; StatsLog and print run from bytecode): its
+   pooled buffer is a direct ByteBuffer, which sizes guest memory early, and with 2–4 GiB of Wasm
+   memory committed Chrome keeps incremental marking running (history). The fix is lazy guest
+   memory commit in the native tier, which every native app needs. WebView snapshots of an
+   isolated renderer time out on its `describe` bridge call (504) in Markor's preview.
 2. Done 2026-10-02: Build runs from bytecode; zygoteInit waits for the process's bitness, which
    the page fixes from the install's central directories (no measured wait).
 3. Done 2026-10-02: host code continuing a Java chain carries it (Cpu loop, loader, JNI, `after`
