@@ -25,7 +25,6 @@ import "./jvm/natives/jnio";
 import "./jvm/natives/conscrypt";
 import "./jvm/natives/conscrypt-x509";
 import "./jvm/natives/jnet";
-import "./jvm/natives/jhttp";
 import "./jvm/natives/jzip";
 import "./android/gl";
 import "./android/glsurface";

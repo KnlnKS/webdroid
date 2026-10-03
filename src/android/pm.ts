@@ -18,6 +18,7 @@ import { appHost } from "./apphost";
 import { vfs, apkPath } from "../shell/vfs";
 import { systemProviders, systemProviderInfo$ } from "./systemproviders";
 import { newArrayList } from "../jvm/natives/jcoll";
+import { SHARED_LIBRARIES } from "../jvm/bootclasspath";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
@@ -171,6 +172,24 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
     fullBackupContent: intAttr(app, "fullBackupContent", 0), dataExtractionRulesRes: intAttr(app, "dataExtractionRules", 0),
     localeConfigRes: intAttr(app, "localeConfig", 0),
   });
+  if (flags & GET_SHARED_LIBRARY_FILES && record.usesLibraries.length) {
+    // SystemConfig's builtin libraries, which the platform package declares; each code path after its dependencies'
+    const infos = new Map<string, JObj>(), files: string[] = [];
+    const library$ = function* (name: string): Gen<JObj> {
+      const known = infos.get(name);
+      if (known) return known;
+      const { path, dependencies } = SHARED_LIBRARIES[name];
+      const info: JObj = yield newObj("android/content/pm/SharedLibraryInfo", "(Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;JILandroid/content/pm/VersionedPackage;Ljava/util/List;Ljava/util/List;Z)V",
+        path, null, null, name, -1n, 0, yield newObj("android/content/pm/VersionedPackage", "(Ljava/lang/String;J)V", "android", 0n), null, null, 0);
+      infos.set(name, info);
+      for (const dependency of dependencies) yield vcall(info, "addDependency", "(Landroid/content/pm/SharedLibraryInfo;)V", yield* library$(dependency));
+      files.push(path);
+      return info;
+    };
+    const used: JObj[] = [];
+    for (const name of record.usesLibraries) used.push(yield* library$(name));
+    setDeclared(ai, APP, { sharedLibraryFiles: strArray(files), sharedLibraryInfos: newArrayList(used) });
+  }
   return ai;
 }
 const longVersionCode = (root: XmlNode) => BigInt((attr(root, "versionCode")?.data ?? 0) >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;

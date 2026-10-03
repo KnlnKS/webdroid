@@ -99,6 +99,17 @@ if (!process.argv.includes("--verify")) {
     data[src] = Bun.file(`${OUT}${src}`).size;
   }
   Object.assign(data, await recordFontUpdates());
+  // the libraries <uses-library> names: SystemConfig's <library> jars under /system, mirrored too
+  const libraries: Record<string, { path: string; dependencies: string[] }> = {};
+  for (const [, attrs] of sh("shell", "cat /system/etc/permissions/*.xml").matchAll(/<library\b([^>]*)>/g)) {
+    const at = (name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1];
+    const name = at("name"), path = at("file");
+    if (!name || !path?.startsWith("/system/") || !path.endsWith(".jar")) continue;
+    await Bun.$`mkdir -p ${`${OUT}${path.slice(0, path.lastIndexOf("/"))}`}`.quiet();
+    pull(path, path.slice(1));
+    data[path] = Bun.file(`${OUT}${path}`).size;
+    libraries[name] = { path, dependencies: at("dependency")?.split(":") ?? [] };
+  }
   await Bun.write(`${OUT}/build.txt`, `${fingerprint}\nsdk ${sh("shell", "getprop", "ro.build.version.sdk")}\n`);
   await recordDeviceColors();
   await recordOsConstants();
@@ -111,7 +122,9 @@ if (!process.argv.includes("--verify")) {
     `/** where each of those jars lives on the device */\n` +
     `export const BOOT_JAR_PATHS = ${JSON.stringify(bootJars, null, 1).replace(/\n\s*/g, " ")};\n` +
     `/** the ICU and time zone files, fonts and their updates, hyphenation patterns and bionic's libraries, by device path (mirrored under vendor/aosp), with their sizes */\n` +
-    `export const PLATFORM_DATA: Record<string, number> = ${JSON.stringify(data)};\n`);
+    `export const PLATFORM_DATA: Record<string, number> = ${JSON.stringify(data)};\n` +
+    `/** the shared libraries by name, with the ones each loads first */\n` +
+    `export const SHARED_LIBRARIES: Record<string, { path: string; dependencies: string[] }> = ${JSON.stringify(libraries)};\n`);
   // its own process: it boots the class path just written, which the verification below loads apart
   if (Bun.spawnSync(["bun", "scripts/gen-framework.ts", "--settings"], { stdout: "inherit", stderr: "inherit" }).exitCode) throw new Error("recording settings failed");
 }

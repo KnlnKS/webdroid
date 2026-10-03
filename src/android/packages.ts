@@ -1,5 +1,6 @@
 import { attr, attrStr, TV, type XmlNode } from "./axml";
 import { normRV, type Resources } from "./res";
+import { SHARED_LIBRARIES } from "../jvm/bootclasspath";
 
 export type ComponentKind = "activity" | "service" | "receiver" | "provider";
 export const qualifyComponent = (name: string, pkg: string): string => {
@@ -60,6 +61,14 @@ export class PackageRecord {
   }
   get enabled(): boolean { return this.flag(this.application, "enabled", true); }
   get sdk(): { min: number; target: number } { return usesSdk(this.root); }
+  /** the device's libraries the package loads: those PackageBackwardCompatibility prefixes for older
+   *  targets (OrgApacheHttpLegacyUpdater through O MR1, AndroidTestBaseUpdater through Q), then its
+   *  own <uses-library> ones */
+  get usesLibraries(): string[] {
+    const { target } = this.sdk, names = [...target <= 29 ? ["android.test.base"] : [], ...target <= 27 ? ["org.apache.http.legacy"] : []];
+    for (const node of this.application?.children ?? []) if (node.name === "uses-library") names.push(attrStr(node, "name") ?? "");
+    return [...new Set(names)].filter((name) => Object.hasOwn(SHARED_LIBRARIES, name));
+  }
   async visibleCertificates(): Promise<Uint8Array[]> { return this.compatibilityCertificates ?? this.certificates(); }
 }
 

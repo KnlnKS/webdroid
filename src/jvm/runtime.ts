@@ -253,11 +253,21 @@ export class Runtime {
   platformClasses = new Set<string>();
   platformParent = false;
   classLoader: unknown = null;
+  /** BaseDexClassLoader's shared library loaders, asked before this runtime's own classes or after */
+  libraries: { before: Runtime[]; after: Runtime[] } | null = null;
+  private libraryDefining(name: string): Runtime | null {
+    if (this.platformClasses.has(name)) return null;
+    for (const lib of this.libraries!.before) if (lib.defines(name)) return lib;
+    if (this.dexIndex.has(name)) return null;
+    for (const lib of this.libraries!.after) if (lib.defines(name)) return lib;
+    return null;
+  }
+  defines(name: string): boolean { return this.dexIndex.has(name) || !!this.libraries && !!this.libraryDefining(name); }
   // Share host services and thread hooks; loader definitions and compiled call sites stay private.
   fork(): Runtime {
     return Object.assign(Object.create(this) as Runtime, {
       parent: this, classes: new Map(), dexes: [], dexIndex: new Map(), links: new Map(), refCache: new Map(), jni: new Map(),
-      classpath: {}, classpathLocations: new Map(),
+      classpath: {}, classpathLocations: new Map(), libraries: null,
     });
   }
 
@@ -502,6 +512,8 @@ export class Runtime {
   link(name: string): ClassInfo {
     let info = this.classes.get(name);
     if (info) return info;
+    const library = this.libraries && this.libraryDefining(name);
+    if (library) return library.link(name);
     if (this.parent && (this.natives.has(name) || !this.dexIndex.has(name) && (!this.platformParent || this.platformClasses.has(name)))) return this.parent.link(name);
     if (name[0] === "[") return this.linkArray(name);
     info = new ClassInfo(name, this);

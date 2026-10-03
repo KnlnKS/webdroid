@@ -17,13 +17,16 @@ function initRuntime(loader: JClassLoader, parent: JClassLoader | null): void {
 /** the app's own archives, whose dex the process loaded at boot: a loader over them (LoadedApk's) is
  *  the app's class loader, over the runtime that already holds those classes */
 export const appArchives = new Set<string>();
-async function init(this: JClassLoader, path: string, libraries: string | null, parent: JClassLoader | null) {
+async function init(this: JClassLoader, path: string, _libraries: string | null, parent: JClassLoader | null,
+  before: JClassLoader[] | null = null, after: JClassLoader[] | null = null) {
   if (!rt.classLoader && appArchives.has(path.split(":")[0])) {
     this.parent = parent; this.runtime = rt; rt.classLoader = this;
-    return;
+  } else {
+    initRuntime(this, parent);
+    await addDexPath(this, path);
   }
-  initRuntime(this, parent);
-  await addDexPath(this, path);
+  if (before?.length || after?.length)
+    this.runtime.libraries = { before: (before ?? []).map((l) => l.runtime), after: (after ?? []).map((l) => l.runtime) };
 }
 /** DexPathList: each archive's dex files, in classes, classes2, ... order, and its other entries as resources */
 async function addDexPath(loader: JClassLoader, path: string): Promise<void> {
@@ -81,7 +84,7 @@ class JBaseDexClassLoader extends JClassLoader {}
 /** a class from this loader's own dex files, not its parent's */
 function findDexClass(this: JClassLoader, name: string) {
   const cls = slashName(name);
-  if (!this.runtime.dexIndex.has(cls)) throw rt.mkThrowable("java/lang/ClassNotFoundException", name);
+  if (!this.runtime.defines(cls)) throw rt.mkThrowable("java/lang/ClassNotFoundException", name);
   return this.runtime.classFor(cls);
 }
 rt.register({
@@ -104,7 +107,7 @@ rt.register({
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
     "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, path: string, parent: JClassLoader | null) { return init.call(this, path, null, parent); },
-    // ClassLoaderFactory's, with the shared libraries' loaders, which here are the boot class path's
+    // ClassLoaderFactory's, with the shared libraries' loaders
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;[Ljava/lang/ClassLoader;)V": init,
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;[Ljava/lang/ClassLoader;[Ljava/lang/ClassLoader;)V": init,
   },
