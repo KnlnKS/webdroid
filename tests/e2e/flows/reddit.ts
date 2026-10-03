@@ -27,7 +27,9 @@ export const reddit: Flow = {
       fastAction: { type: "back", whileText: ONE_TAP, appearMs: 15_000 }, wait: wait.live(5000),
       fastWait: wait.state({ kind: "all", conditions: [{ kind: "text", text: "Get Started" }, { kind: "text-absent", text: ONE_TAP }] }, 0, 4_000) },
     { id: "get-started", label: "Get Started — sign-up sheet", action: tap(540, 1837), wait: wait.live(4000), fastWait: wait.state({ kind: "text", text: "Continue with phone number" }, 0, 6_000) },
-    { id: "sign-up-back", label: "Back closes the sign-up sheet", action: { type: "back" }, wait: wait.live(3000), fastWait: wait.state({ kind: "text-absent", text: "Continue with phone number" }, 0, 4_000) },
+    // the sheet slides out bottom row first, and still takes taps until its top row is gone
+    { id: "sign-up-back", label: "Back closes the sign-up sheet", action: { type: "back" }, wait: wait.live(3000),
+      fastWait: wait.state({ kind: "text-absent", text: "Continue with Google" }, 0, 4_000) },
     { id: "have-account", label: "I already have an account — login sheet", action: tap(540, 1983), wait: wait.live(4000), fastWait: wait.state({ kind: "text", text: "Use email or username" }, 0, 6_000) },
     { id: "login-back", label: "Back closes the login sheet — welcome screen", action: { type: "back" }, wait: wait.live(3000), fastWait: wait.state({ kind: "text-absent", text: "Use email or username" }, 0, 4_000) },
   ],
