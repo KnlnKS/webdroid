@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { Runtime, JObj, stubs, isPlaceholderMethod } from "../src/jvm/runtime";
+import { Strand } from "../src/jvm/suspend";
 import { DexFile } from "../src/jvm/dex";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 import { setLazyMethods } from "../src/jvm/compiler";
@@ -41,7 +42,7 @@ test("class lookup preserves first DEX precedence across files", async () => {
 const modes = ["hot", "cold", "promoted", "denied"] as const;
 type Mode = typeof modes[number];
 async function fixture(mode: Mode) {
-  const R = new Runtime(), worker = {}, main = {};
+  const R = new Runtime(), worker = new Strand({}), main = new Strand({});
   R.cur = worker;
   const seen: [number, unknown][] = [];
   const pending: { resolve: (value: number) => void; reject: (error: unknown) => void }[] = [];

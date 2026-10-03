@@ -22,8 +22,8 @@ export function jclsName(o: unknown): string {
 }
 
 const monitorMethods: NativeSpec["methods"] = {
-  "notify()V": function () { rt.monitors.notify(this, curThread, false); },
-  "notifyAll()V": function () { rt.monitors.notify(this, curThread, true); },
+  "notify()V": function () { rt.monitors.notify(this, rt.cur, false); },
+  "notifyAll()V": function () { rt.monitors.notify(this, rt.cur, true); },
   "wait()V": function () { return monWait(this, 0); },
   "wait(J)V": function (ms: bigint) { return monWait(this, Number(ms)); },
   "wait(JI)V": function (ms: bigint, ns: number) {
@@ -63,11 +63,11 @@ for (const [sig, fn] of Object.entries(monitorMethods))
 function monWait(obj: object | string, ms: number): Promise<void> {
   if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
   const thread = curThread;
-  if (thread.interrupted && rt.monitors.holds(obj, thread)) {
+  if (thread.interrupted && rt.monitors.holds(obj, rt.cur)) {
     thread.interrupted = 0;
     return Promise.reject(rt.mkThrowable("java/lang/InterruptedException", null));
   }
-  return rt.monitors.wait(obj, thread, (arm) => park(thread, arm, ms > 0 ? ms : undefined));
+  return rt.monitors.wait(obj, rt.cur, (arm) => park(thread, arm, ms > 0 ? ms : undefined));
 }
 
 export function classDesc(c: JClass | null): string {

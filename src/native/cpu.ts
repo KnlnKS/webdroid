@@ -3,8 +3,9 @@
 // signals and yields between slices. The core executes; this decides what happens at its exits.
 
 import type { Runtime } from "../jvm/runtime";
-import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../jvm/natives/jentry";
-import { currentStrand, enterStrand } from "../jvm/suspend";
+import { JThread, mainThread, releaseThread, resumeAs } from "../jvm/natives/jentry";
+import { rt } from "../jvm/runtime";
+import type { Strand } from "../jvm/suspend";
 import { NativeFault, BadAddress, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, onBadAddress, kernelEntry, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
@@ -437,7 +438,7 @@ export class Cpu {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
-    const chain = currentStrand();
+    const strand = rt.cur;
     if (!frame.handler) while (this.frames.at(-1)?.handler) await new Promise<void>((r) => this.idle.push(r));
     this.frames.push(frame);
     this.ensureStack();
@@ -494,7 +495,7 @@ export class Cpu {
     this.depth++;
     let returned = false;
     try {
-      await this.run(chain);
+      await this.run(strand);
       returned = true;
       if (frame.handler && this.spVa !== stackVa) this.escapeHandler(frame.handler);
       this.ret1 = this.a64 ? w[1] : w[2];
@@ -522,22 +523,19 @@ export class Cpu {
   endThread(): Promise<void> { return this.libc === "host" && threadHooks ? threadHooks.end(this) : Promise.resolve(); }
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
-  async run(chain = currentStrand()): Promise<void> {
+  async run(strand = rt.cur): Promise<void> {
     if (this.libc === "none" && threadHooks) await threadHooks.start(this);
     this.loops++;
-    const sync = { on: true }, loop = this.loop(sync, chain);
+    // the caller's strand when it is this thread's (a JNI call), else the thread as no chain (its own start)
+    const sync = { on: true }, loop = this.loop(sync, strand.thread === this.jthread ? strand : this.jthread.root);
     sync.on = false;
     try { await loop; } finally { this.loops--; }
   }
   /** `sync.on` while the caller is still on the stack: a frame that never parked leaves it its thread */
-  private async loop(sync: { on: boolean }, chain: number): Promise<void> {
-    const caller = curThread, myDepth = this.depth;
-    // each turn the loop resumes in runs as its thread and as the Java call chain that entered it
-    let outer = chain;
-    const turn: LoopTurn = {
-      own: () => { setCurThread(this.jthread); if (currentStrand() !== chain) outer = enterStrand(chain); },
-      release: () => { releaseThread(); enterStrand(outer); },
-    };
+  private async loop(sync: { on: boolean }, strand: Strand): Promise<void> {
+    const caller = rt.cur, myDepth = this.depth;
+    // each turn the loop resumes in runs as the strand that entered it
+    const turn: LoopTurn = { own: () => resumeAs(strand), release: releaseThread };
     let budgetStreak = 0;
     try {
       for (;;) {
@@ -612,7 +610,7 @@ export class Cpu {
           });
         else await yieldToLoop();
       }
-    } finally { if (sync.on) { setCurThread(caller); enterStrand(outer); } else turn.release(); }
+    } finally { if (sync.on) resumeAs(caller); else turn.release(); }
   }
 
   /** exempt from the background share: the UI thread, a running signal handler, a frame producer */

@@ -10,58 +10,44 @@ type Continuation = (value: unknown, threw: boolean) => unknown;
 const FRAMES = Symbol("continuations");
 type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
 
-/** The call chain running now, across its suspensions: the frames a chain suspends resume as that
- *  chain, so class initialization and monitors tell its own chain's re-entry from another job
- *  interleaved on the same Java thread. 0 is a host turn's chain that has not suspended yet. */
-let strand = 0, strands = 0;
-export const currentStrand = (): number => strand;
-/** continue as chain `s`; returns the chain to restore */
-export function enterStrand(s: number): number {
-  const was = strand;
-  strand = s;
-  return was;
+/** An execution that can block: a Java thread as one of its call chains. Chains interleave on a
+ *  thread while another is suspended, so class initialization and monitors tell a chain's own
+ *  re-entry from another job's. Each entry from host code runs as a strand of its own (callOn),
+ *  and every frame resumes as the strand it captured (Runtime.cur). A thread's root strand is Java
+ *  that no entry gave a chain (host tools, tests): it shares its thread's locks and class
+ *  initializations with every chain of that thread, and its waits are not recorded. */
+export class Strand {
+  /** the strand this one waits for: the one initializing a class or holding a lock it needs */
+  waitsOn: Strand | null = null;
+  constructor(readonly thread: unknown, readonly root = false) {}
 }
-/** the chain each blocked chain waits for: the one initializing the class or holding the lock */
-const waits = new Map<number, number>();
-/** whether chain `holder` waits, through the chains it waits for, on chain `waiter` */
-export function waitsFor(holder: number, waiter: number): boolean {
-  for (let c = holder, n = 0; c; c = waits.get(c) ?? 0) if (c === waiter || ++n > 64) return true;
+/** whether `holder` waits, through the strands it waits for, on `waiter` */
+export function waitsFor(holder: Strand, waiter: Strand): boolean {
+  if (waiter.root) return false;
+  for (let c: Strand | null = holder, n = 0; c && !c.root; c = c.waitsOn) if (c === waiter || ++n > 64) return true;
   return false;
 }
-/** chain `waiter` waits for chain `holder` until `until` settles */
-export function waitFor<T>(waiter: number, holder: number, until: Promise<T>): Promise<T> {
-  if (!waiter || !holder || waiter === holder) return until;
-  waits.set(waiter, holder);
-  const done = () => { if (waits.get(waiter) === holder) waits.delete(waiter); };
+/** `waiter` waits for `holder` until `until` settles */
+export function waitFor<T>(waiter: Strand, holder: Strand, until: Promise<T>): Promise<T> {
+  if (waiter.root || holder.root || waiter === holder) return until;
+  waiter.waitsOn = holder;
+  const done = () => { if (waiter.waitsOn === holder) waiter.waitsOn = null; };
   until.then(done, done);
   return until;
 }
-/** `f` as chain `s`: host code continuing a chain from a later turn */
-export function inStrand<T>(s: number, f: () => T): T {
-  const was = enterStrand(s);
-  try { return f(); } finally { strand = was; }
-}
-/** a chain apart from every other: an entry, or a call no frame of the running chain waits on,
- *  which that chain may run on past while the call is suspended */
-export const newStrand = (): number => ++strands;
-/** the current chain, given an identity apart from other host turns' if it has none yet */
-export const ownStrand = (): number => strand || newStrand();
 
 /** Wait on `pending` with `k`: the returned Promise settles with the outermost frame's result. */
 export function suspendWith(pending: Promise<unknown>, k: Continuation): Promise<unknown> {
   const frames = (pending as Suspension)[FRAMES];
   if (frames) { frames.push(k); return pending; }
-  const list = [k], s = ownStrand();
-  const suspension: Suspension = pending.then((value) => unwind(list, s, value, false), (error) => unwind(list, s, error, true));
+  const list = [k];
+  const suspension: Suspension = pending.then((value) => unwind(list, value, false), (error) => unwind(list, error, true));
   suspension[FRAMES] = list;
   return suspension;
 }
 
-function unwind(list: Continuation[], s: number, value: unknown, threw: boolean): unknown {
-  if (processExited()) return never();
-  const was = enterStrand(s);
-  try { return resume(list, value, threw); } finally { strand = was; }
-}
+/** each frame resumes as the strand it captured, so the list carries none */
+const unwind = (list: Continuation[], value: unknown, threw: boolean): unknown => processExited() ? never() : resume(list, value, threw);
 
 function resume(list: Continuation[], value: unknown, threw: boolean): unknown {
   for (let i = 0; i < list.length; i++) {

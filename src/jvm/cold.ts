@@ -2,13 +2,13 @@ import type { Runtime } from "./runtime";
 import { perf } from "../perf";
 import { descToName } from "./abi";
 import { jvmProfiler } from "./profile";
-import { suspendWith } from "./suspend";
+import { suspendWith, type Strand } from "./suspend";
 
 /** Field names match a hot frame's (see Runtime.dfr), so a hot body can resume one (OSR). */
 export interface ColdFrame {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown; method: ColdMethod;
   v: unknown[]; next: number; r: 0; done: boolean; value: unknown;
-  $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number;
+  $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: Strand; $s: number;
   /** what the Promise a handler returned resolves: 1 its call result, 0 a wait before rerunning it */
   $w: number;
 }
@@ -65,7 +65,7 @@ export function runCold(method: ColdMethod, receiver: unknown, args: unknown[]):
   perf.coldCalls++;
   const { R, D, S } = method;
   const f: ColdFrame = { R, D, S, method, v: new Array(method.regs), next: 0, r: 0, done: false, value: undefined,
-    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, $w: 0 };
+    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.cur, $s: 0, $w: 0 };
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }

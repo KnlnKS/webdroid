@@ -7,7 +7,7 @@ import { park } from "../src/jvm/natives/jthread";
 import { type JClassLoader } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt, type ClassInfo } from "../src/jvm/runtime";
-import { inStrand, newStrand } from "../src/jvm/suspend";
+import { Strand } from "../src/jvm/suspend";
 import { scall, loadLibcore, mountApexData } from "./java";
 import { detached } from "../src/jvm/natives/jthrowable";
 
@@ -576,31 +576,32 @@ describe("thread-state", () => {
   });
 
   test("a monitor excludes another call chain on its thread and admits its own", async () => {
-    const lock = {}, a = newStrand(), b = newStrand();
-    inStrand(a, () => { rt.me(lock); rt.me(lock); });
+    const lock = {}, a = new Strand(curThread), b = new Strand(curThread);
+    const within = <T>(s: Strand, f: () => T) => rt.within(s, f);
+    within(a, () => { rt.me(lock); rt.me(lock); });
     let entered = false;
-    const blocked = inStrand(b, () => rt.me(lock));
+    const blocked = within(b, () => rt.me(lock));
     void Promise.resolve(blocked).then(() => { entered = true; });
     expect(blocked).toBeInstanceOf(Promise);
-    expect(() => inStrand(b, () => rt.mx(lock))).toThrow();
-    inStrand(a, () => rt.mx(lock));
+    expect(() => within(b, () => rt.mx(lock))).toThrow();
+    within(a, () => rt.mx(lock));
     await Promise.resolve();
     expect(entered).toBe(false);
-    inStrand(a, () => rt.mx(lock));
+    within(a, () => rt.mx(lock));
     await blocked;
     expect(entered).toBe(true);
-    inStrand(b, () => rt.mx(lock));
+    within(b, () => rt.mx(lock));
   });
 
   test("Thread states expose monitor contention, timed parking, wakeup and interruption", async () => {
     const thread = new JThread(); thread.alive = 1;
     const lock = {}, owner = new JThread(); owner.alive = 1;
-    rt.monitors.enter(lock, owner);
-    const entered = rt.monitors.enter(lock, thread);
+    rt.monitors.enter(lock, owner.root);
+    const entered = rt.monitors.enter(lock, thread.root);
     expect(await state(thread)).toBe("BLOCKED");
-    rt.monitors.exit(lock, owner);
+    rt.monitors.exit(lock, owner.root);
     await entered;
-    rt.monitors.exit(lock, thread);
+    rt.monitors.exit(lock, thread.root);
     let wake = () => {};
     const waiting = park(thread, (resume) => { wake = resume; return () => {}; });
     expect(await state(thread)).toBe("WAITING");

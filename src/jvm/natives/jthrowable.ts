@@ -6,7 +6,7 @@ import { awaited, rt, JObj, type ClassInfo, type NativeSpec, driven, type Gen } 
 import { mangleMethod, mangleField, demangle, frameOf, jarray, dotName } from "../abi";
 import { coldStack, COLD_SOURCE, type ColdAt } from "../cold";
 import { frameSource, type FrameAt } from "../stacklines";
-import { inStrand, newStrand } from "../suspend";
+import { Strand } from "../suspend";
 import { processExited } from "../../process-exit";
 import { after, callOn, curThread, mainThread, vcall, vcallOn, type JThread } from "./jentry";
 import { jclsName } from "./jlang";
@@ -226,7 +226,7 @@ export const toThread = (thread: JThread = curThread): Escape => (e) => void dis
  *  and the runtime restart it, which this page cannot do under the apps it hosts. */
 export function detached(call: () => unknown, escape: Escape = toThread()): void {
   if (processExited()) return;
-  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(escape); } catch (e) { escape(e); }
+  try { const r = rt.within(new Strand(curThread), call); if (r instanceof Promise) r.catch(escape); } catch (e) { escape(e); }
 }
 /** ART's Thread::HandleUncaughtExceptions: Thread.dispatchUncaughtException on the thread, whose
  *  own exception is cleared. A JS error is the Java throwable its frames would have seen. */

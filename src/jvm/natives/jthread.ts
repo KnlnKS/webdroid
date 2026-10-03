@@ -184,7 +184,7 @@ rt.register({
     },
     "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
-    "static holdsLock(Ljava/lang/Object;)Z": (o: unknown) => rt.monitors.holds(o as object, curThread) ? 1 : 0,
+    "static holdsLock(Ljava/lang/Object;)Z": (o: unknown) => rt.monitors.holds(o as object, rt.cur) ? 1 : 0,
   },
 });
 

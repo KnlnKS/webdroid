@@ -6,7 +6,7 @@
 // when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
-import { currentStrand, suspendWith } from "./suspend";
+import { Strand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
@@ -19,7 +19,7 @@ import { initialize } from "./clinit";
 import { isBytecode, isStageD } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
-import { Monitors, type Monitor } from "./monitor";
+import { Monitors, owns, type Monitor } from "./monitor";
 
 export const ACC = { PRIVATE: 0x2, STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400 } as const;
 // DEX type IDs cap distinct class definitions at 65,535 per file.
@@ -96,8 +96,7 @@ export class ClassInfo {
   state = 0;                          // 0 linked, 1 initing, 2 inited, 3 erroneous (<clinit> failed)
   initError: unknown = null;          // what the failed <clinit> threw
   initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
-  initThread: unknown = null;         // thread and call chain running the in-flight clinit
-  initStrand = 0;                     // (JLS recursive-request check)
+  initBy: Strand | null = null;      // the strand running the in-flight clinit (JLS recursive-request check)
   stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
   fieldTable = new Map<string, string>(); // own instance fields: name → mangled
   ownMethods: string[] = [];          // mangled prototype methods declared here
@@ -175,44 +174,52 @@ export class Runtime {
   onMissing: (what: string) => void = () => {};
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   onUncaught: (throwable: unknown) => void = () => {};
-  /** the running thread; every compiled frame that can suspend reads it on entry, where a field
-   *  load costs less than a call */
-  cur: unknown = null;
-  th(): unknown { return this.cur; }
-  /** current-thread hooks (set by jentry): a resumed activation pins its thread (st) and releases it
-   *  when it finishes or suspends again (su), so a parked worker never leaves its identity behind
-   *  for what the event loop runs next. One running from its caller's call leaves the thread to
-   *  that caller, which goes on as its own thread whether or not the callee suspended. */
-  st: (t: unknown) => void = () => {};
+  /** the running strand, a thread as one call chain: every compiled frame that can suspend reads it
+   *  on entry, where a field load costs less than a call, and resumes as it */
+  cur = new Strand(null, true);
+  /** the running thread */
+  th(): unknown { return this.cur.thread; }
+  /** strand hooks (set by jentry): a resumed activation pins its strand (st) and releases it when it
+   *  finishes or suspends again (su), so a parked worker never leaves its identity behind for what
+   *  the event loop runs next. One running from its caller's call leaves the strand to that caller,
+   *  which goes on as itself whether or not the callee suspended. */
+  st: (s: Strand) => void = () => {};
   su: () => void = () => {};
+  /** `f` as strand `s` of the running thread; then as the strand that ran before, unless `f` left
+   *  the turn to another (a native that parked released it) */
+  within<T>(s: Strand, f: () => T): T {
+    const was = this.cur;
+    this.cur = s;
+    try { return f(); } finally { if (this.cur === s) this.cur = was; }
+  }
   monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
   /** monitor-enter and monitor-exit, given the monitor the compiled site loaded from the object: a
    *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call.
-   *  The holder is a thread as one call chain (Monitors' chainHolds, inlined) */
+   *  The holder is a strand (Monitors' owns, its common case first) */
   me(obj: object | string | null | 0, m?: Monitor) {
-    const thread = this.cur, s = currentStrand();
-    if (m !== undefined && (m.depth === 0 || (m.owner === thread && (m.strand === s || m.strand === 0 || s === 0)))) {
-      if (m.depth++ === 0) { m.owner = thread; m.strand = s; }
+    const s = this.cur;
+    if (m !== undefined && (m.depth === 0 || m.owner === s || owns(m, s))) {
+      if (m.depth++ === 0) m.owner = s;
       return;
     }
-    return this.monitors.enter(obj, thread, s);
+    return this.monitors.enter(obj, s);
   }
   mx(obj: object | string | null | 0, m?: Monitor) {
-    const thread = this.cur, s = currentStrand();
-    if (m !== undefined && m.owner === thread && (m.strand === s || m.strand === 0 || s === 0) && (m.depth > 1 || m.entrants.length === 0)) {
+    const s = this.cur;
+    if (m !== undefined && (m.owner === s || owns(m, s)) && (m.depth > 1 || m.entrants.length === 0)) {
       if (--m.depth === 0) m.owner = null;
       return;
     }
-    this.monitors.exit(obj, thread);
+    this.monitors.exit(obj, s);
   }
   /**
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
    * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a
-   * resumed native runs on the thread that entered it and releases that thread when it finishes
-   * or suspends again.
+   * resumed native runs as the strand that entered it and releases it when it finishes or
+   * suspends again.
    */
-  drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.th(), false); }
-  private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, thread: unknown, resumed: boolean): T | Promise<T> {
+  drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.cur, false); }
+  private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): T | Promise<T> {
     for (;;) {
       let step: IteratorResult<unknown, T>;
       try { step = threw ? g.throw(input) : g.next(input); }
@@ -221,7 +228,7 @@ export class Runtime {
       const value = step.value;
       if (value instanceof Promise) {
         if (resumed) this.su();
-        return suspendWith(value, (v, threw) => { this.st(thread); return this.driveStep(g, v, threw, thread, true); }) as Promise<T>;
+        return suspendWith(value, (v, threw) => { this.st(strand); return this.driveStep(g, v, threw, strand, true); }) as Promise<T>;
       }
       input = value; threw = false;
     }

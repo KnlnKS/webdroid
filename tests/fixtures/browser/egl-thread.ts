@@ -234,7 +234,7 @@ async function probe() {
   const firstGL = gl, firstTables = tables();
   gl?.clearColor(1, 0, 0, 1);
   const suspended = vcall(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
-  rt.st(second);
+  rt.st(second.root);
   const emptySecond = gl === null && glSurfaces.current === null;
   const display14 = call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 0);
   const configs: unknown[] = [null];
@@ -246,21 +246,21 @@ async function probe() {
   const bound14 = call14("eglMakeCurrent", `(${E14}EGLDisplay;${E14}EGLSurface;${E14}EGLSurface;${E14}EGLContext;)Z`, display14, surface14, surface14, context14);
   const isolated = gl !== firstGL && tables() !== firstTables;
   call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 99);
-  rt.st(first);
+  rt.st(first.root);
   const firstError = vcall(e10, "eglGetError", "()I");
   const restored = gl === firstGL && tables() === firstTables;
   const sameContext10 = vcall(e10, "eglGetCurrentContext", "()" + E10 + "EGLContext;") === context10;
-  rt.st(second);
+  rt.st(second.root);
   const secondError = call14("eglGetError", "()I");
   // a Java EGLContext names its native context by handle, a new object per call as JNI makes them
   const sameContext14 = vcall(call14("eglGetCurrentContext", "()" + E14 + "EGLContext;"), "equals", "(Ljava/lang/Object;)Z", context14) === 1;
   call14("eglReleaseThread", "()Z");
   await suspended;
-  rt.st(first);
+  rt.st(first.root);
   const restoredAfterRelease = gl === firstGL;
   gl?.clear(gl.COLOR_BUFFER_BIT);
   const swapped = await vcall(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
-  rt.st(first);
+  rt.st(first.root);
   const canvas = new OffscreenCanvas(4, 4), ctx = canvas.getContext("2d")!;
   ctx.drawImage(glSurfaces.current!.target!.present!, 0, 0);
   const pixel = [...ctx.getImageData(1, 1, 1, 1).data];

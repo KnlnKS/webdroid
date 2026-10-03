@@ -1,9 +1,10 @@
-// Entering Java from host code: which Java thread owns the turn (JThread, curThread, setCurThread)
-// and the calls native code makes into Java on it (vcall, scall, newObj, callOn, after).
+// Entering Java from host code: which Java thread owns the turn, as which of its call chains (a
+// Strand: rt.cur, curThread its thread), and the calls native code makes into Java on it (vcall,
+// scall, newObj, callOn, after).
 
 import { rt, JObj, type ClassInfo } from "../runtime";
 import { mangleMethod, mangleStaticField, lateMethod, idHash } from "../abi";
-import { enterStrand, newStrand, suspendWith } from "../suspend";
+import { Strand, suspendWith } from "../suspend";
 import { never, processExited } from "../../process-exit";
 
 /** Does a Java thread own this event-loop turn? A resumed activation takes its thread (rt.st) and
@@ -14,7 +15,7 @@ let owned = true, strictOwnership = false;
 export function strictThreadOwnership(): void { strictOwnership = true; owned = false; }
 /** no Java thread owns the turn from here (a frame suspended, a native thread parked): the main
  *  thread's identity is left for code that reads it */
-export function releaseThread(): void { setCurThread(mainThread); owned = !strictOwnership; }
+export function releaseThread(): void { resumeAs(mainThread.root); owned = !strictOwnership; }
 function unowned(what: string): never {
   throw new Error(`[webdroid unowned] ${what} from a turn no Java thread owns: enter with onMain, callOn or a driven generator`);
 }
@@ -39,19 +40,19 @@ export function vcallOn(thread: JThread, obj: unknown, name: string, desc: strin
  *  need not wait for an entry, and must not run on as it while the entry suspends */
 export function callOn<T>(thread: JThread, call: () => T): T {
   if (processExited()) return never() as T;
-  const previous = curThread, was = owned, outer = enterStrand(newStrand());
-  setCurThread(thread);
-  try { return call(); } finally { setCurThread(previous); owned = was; enterStrand(outer); }
+  const previous = rt.cur, was = owned;
+  resumeAs(new Strand(thread));
+  try { return call(); } finally { resumeAs(previous); owned = was; }
 }
 /** `f` of `r`, now or once it settles; settled later, `f` continues the thread and chain that
  *  asked as a suspended frame does (if a thread owned the turn that asked) */
 export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
   if (!(r instanceof Promise)) return f(r);
   if (!owned) return r.then(f);
-  const thread = curThread;
+  const strand = rt.cur;
   return suspendWith(r, (v, threw) => {
     if (threw) throw v;
-    setCurThread(thread);
+    resumeAs(strand);
     try { return f(v as R); } finally { releaseThread(); }
   }) as Promise<T>;
 }
@@ -113,19 +114,25 @@ export class JThread extends JObj {
   looper: unknown = null;
   /** the ThreadGroup a Java constructor named; null is the main group */
   group: unknown = null;
+  /** the thread as Java no entry gave a chain (suspend.ts) */
+  readonly root: Strand = new Strand(this, true);
 }
 export let curThread: JThread = null as never;
 export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
-rt.cur = mainThread;
-rt.st = (t) => setCurThread(t as JThread);
+rt.cur = mainThread.root;
+rt.st = resumeAs;
 rt.su = releaseThread;
 export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
-/** run as `t` from here: the code that follows owns the turn as that thread */
-export function setCurThread(t: JThread) {
+/** run as strand `s` from here: the code that follows owns the turn as its thread and chain */
+export function resumeAs(s: Strand): void {
   owned = true;
+  rt.cur = s;
+  const t = s.thread as JThread;
   if (t === curThread) return;
-  curThread = rt.cur = t;
+  curThread = t;
   threadSwitch.hook?.(t);
 }
+/** run as `t` from here, as Java no entry gave a chain of its own */
+export const setCurThread = (t: JThread): void => resumeAs(t.root);

@@ -529,7 +529,7 @@ export function jniInit(): void {
       a.p(); const obj = deref(a.p());
       try {
         if (typeof obj !== "object" && typeof obj !== "string") throw throwable("java/lang/NullPointerException", "JNI monitor reference");
-        const pending = enter ? rt.monitors.enter(obj, cpu.jthread) : rt.monitors.exit(obj, cpu.jthread);
+        const pending = enter ? rt.monitors.enter(obj, rt.cur) : rt.monitors.exit(obj, rt.cur);
         return pending ? pending.then(() => 0, (e) => { pend(cpu, e); return -1; }) : 0;
       } catch (e) { pend(cpu, e); return -1; }
     });
