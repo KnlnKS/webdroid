@@ -1742,6 +1742,34 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     12960925:userdebug/dev-keys, ro.build.characteristics emulator. These are recognizably an
     emulator's; recording a production device's build instead is a gen-framework input change.
     GL_VENDOR/EGL_VENDOR still read "webdroid".
+- 2026-10-02, the Pixel 9's identity from its factory image (E/F follow-up decision):
+  - `gen-framework --identity` reads Google's tokay-ap3a.241005.015 factory image (Android 15's
+    first Pixel 9 release, sha256 880138730c75aca3dd388759fa1711cab650aad21047889d5adf6bfa514ac87a).
+    Its partitions are ext4, read with debugfs (e2fsprogs). It merges the build.prop files in init's
+    order: vendor and odm files set only what vendor_init may, and values are checked against their
+    property_contexts type. It then derives ro.product.* (default source order), the fingerprint and
+    ro.vendor.api_level (34: the board sets no first level), and checks the API level against vendor/aosp.
+    App readability is evaluated from the image's CIL policy for untrusted_app. It agrees with the AVD's
+    selinuxfs answers on the shared properties: ro.odm.build.id, ro.debuggable, ro.secure and
+    ro.vendor.build.security_patch are unreadable, and ro.bootimage.* is unreadable too.
+  - Identity (build, partitions' builds, ro.product.*, board, SoC, hardware, bootloader, vendor API
+    level) now comes from the image. Everything else still comes from the AVD recording in
+    `platform-properties.ts`: ART configuration and heap sizes, SDK extensions, crypto and logd.
+    The ABI lists, ro.zygote, density, GL/EGL/Vulkan selection and the media performance class remain
+    this device's. The phone is arm64 only, GLES 3.2 on Mali at 420 dpi, and declares performance
+    class 34.
+  - Boot-time values: ro.bootloader is android-info.txt's required version, which the image also
+    flashes. ro.hardware is `tokay` because init.rc imports `init.${ro.hardware}.rc` and the vendor
+    ships only init.tokay.rc. vendor_boot's bootconfig carries only boot_devices. ro.baseband,
+    ro.bootmode, ro.revision and the serial are left absent because the bootloader supplies them.
+    With no telephony there is no RIL to set gsm.version.baseband, so Build.RADIO is "unknown".
+  - uname comes from the boot.img kernel banner (6.1.75-android14-11-g48b922851ac5-ab12039954, `#1 SMP
+    PREEMPT Tue Jul  2 09:33:34 UTC 2024`) and init.rc's hostname/domainname. init refuses one vendor
+    value (persist.device_config.configuration.disable_rescue_party).
+  - Checked in the page: Build reports Pixel 9/Google/tokay/Tensor G4, user/release-keys, patch 2024-10-05,
+    IS_EMULATOR false. http.agent is `Dalvik/2.1.0 (Linux; U; Android 15; Pixel 9 Build/AP3A.241005.015)`.
+    Open: the WebView UA keeps webdroid's shape (no `Build/…; wv`, `Version/4.0` or full Chrome
+    version), and GL_VENDOR/EGL_VENDOR still read "webdroid".
 - 2026-10-02, cleanup of the graphics, input, service and server natives (`src/android` −75 lines
   net). Local `declaredField` wrappers now use `getDeclared`/`setDeclared`, the server files share
   `pms` and `runsHere` from am.ts, and pm, decode, socket, path and the CanvasProperty readers use

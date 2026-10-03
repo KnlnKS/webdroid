@@ -619,10 +619,10 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   live content, as they do at `304c0529`.
 - **Open:** a loopback media URL an app serves in-process (YouTube's
   `http://localhost:32768/exocache`) goes to the dev server's `/proxy` instead of the guest.
-- **Decisions open for the user:** the device now reports the reference AVD's identity
-  (sdk_gphone64_arm64, dev-keys), which emulator checks recognise; see the history. Apps now get
-  the AVD's GMS-installed NotoColorEmoji update, as its FontManagerService serves it (history,
-  "the emoji font is the one Google Play installed").
+- **Device decisions (made by the user):** the device reports the Pixel 9's identity
+  (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
+  capabilities stay this device's. Apps get the NotoColorEmoji update Google Play installed on the
+  AVD, as its FontManagerService serves it. Both are in the history.
 - **Rejected:** lazy guest-memory commit (`knlnks/lazy-guest-mem-experiment`) and early sizing.
   Neither removes StatsEvent's GC stall, and V8's late-grow behaviour is recorded.
 
