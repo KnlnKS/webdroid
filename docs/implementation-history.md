@@ -2310,6 +2310,32 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     answers in 0.9 s and the loop starts after it. A realm nobody visible waits on still yields at
     background priority. microG's exposure-notification ServiceTrigger NPE in its process (a
     browser error that fails the flow in some runs) also occurs at 55c3a17b without this change.
+- **2026-10-02, the emoji font is the one Google Play installed.** The reference AVD's
+  FontManagerService serves a NotoColorEmoji update GMS installed on 2026-09-30
+  (`/data/fonts/files/~~Nd6t1SNlfuHRxjD2O1nQ6A==/NotoColorEmoji.ttf`, revision 134152 against the
+  image's 133825; config.xml: lastModifiedDate 1790762392872, no added families; config version 1).
+  An app process (a probe APK started with `am start`) sees it: SystemFonts.getAvailableFonts lists
+  that path, and TextRunShaper shapes "a👍🏽b👨‍👩‍👧🇨🇦" to glyphs 571 and 856 of it with the image's
+  advances, and the Unicode 16 additions (U+1FAC6, 1FAE9, 1FA89, 1FADF; also 1FA8F, 1FABE, 1FADC) to
+  its glyphs 3254, 3280, 3183 and 3270. `app_process` probes (textcmp, earlier fwtest recordings) load
+  the preinstalled map, which is why nothing recorded pointed at `/data/fonts`; the app process's
+  StaticLayout rows equal textcmp's fixture, so it stays. Of the image's 1,449 code points, 281
+  map to other glyph ids and 50 render differently (the hand emoji, and their skin-tone and ZWJ
+  forms).
+  - gen-framework (`--fonts` alone) pulls updated files to their device paths and records
+    `src/android/font-updates.ts`; the font index serializes the map as FontManagerService does
+    (SystemFonts.getSystemFontConfig over the PostScript-name map, buildSystemFallback,
+    buildSystemTypefaces), and a headless realm serializes it itself in place of the preinstalled
+    map. Skia's bitmap-text emoji face is the served file. The page now matches the app process,
+    and the image's emoji file is no longer fetched. Headless loadSystemFontMap stays 80-140 ms.
+  - fwtest's Typeface values were app_process's: in an app, a deserialized alias is its own
+    Typeface, so `Typeface.create("arial", 0)` is neither `==` nor `equals` DEFAULT (the device
+    app process, recorded with the probe). Those two expectations changed with the headless map,
+    not with the font. The shaping fixture gains the update's path and the Unicode 16 run.
+  - No golden is affected: all were recorded before 2026-09-30, and none shows emoji (the UI dumps
+    of calculatorm, lichess, reddit, resy and youtube hold none; fitnotes, harmonic and both mihon
+    flows load no emoji font). IFontManager.getFontConfig needs UPDATE_FONTS (signature|privileged),
+    so apps cannot read it; the page registers no `font` service.
 
 ## App investigations and remaining limits
 

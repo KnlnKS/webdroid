@@ -620,8 +620,9 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
 - **Open:** a loopback media URL an app serves in-process (YouTube's
   `http://localhost:32768/exocache`) goes to the dev server's `/proxy` instead of the guest.
 - **Decisions open for the user:** the device now reports the reference AVD's identity
-  (sdk_gphone64_arm64, dev-keys), which emulator checks recognise. The AVD serves a GMS-installed
-  emoji font from `/data/fonts` while the page keeps the image's. Both are in the history.
+  (sdk_gphone64_arm64, dev-keys), which emulator checks recognise; see the history. Apps now get
+  the AVD's GMS-installed NotoColorEmoji update, as its FontManagerService serves it (history,
+  "the emoji font is the one Google Play installed").
 - **Rejected:** lazy guest-memory commit (`knlnks/lazy-guest-mem-experiment`) and early sizing.
   Neither removes StatsEvent's GC stall, and V8's late-grow behaviour is recorded.
 
@@ -769,8 +770,7 @@ grid) for measurement, TextRunShaper and drawing;
 5. Text (2026-10-02, history "Stage E2 follow-up"): bindApplication receives the serialized font
    map from `/font-index.json` and hyphenation runs on the reference patterns. Open: each realm's
    Typeface.<clinit> (legacy `fonts.xml`, ICU likely subtags; 130-500 ms) needs the boot image
-   (§4.3); hyphenated layouts have no device recording (extend textcmp's probe); the AVD serves a
-   GMS-installed NotoColorEmoji update from `/data/fonts` while the page keeps the image's; FreeType's 6 px `l` at wght
+   (§4.3); hyphenated layouts have no device recording (extend textcmp's probe); FreeType's 6 px `l` at wght
    900 matches neither unhinted nor auto-hinted FreeType here and needs a device probe.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
