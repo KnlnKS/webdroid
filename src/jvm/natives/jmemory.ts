@@ -128,32 +128,23 @@ export function hostBytes(size: number): Int8Array {
 }
 /** the address of a hostBytes array */
 export const hostAddress = (array: object): bigint | undefined => hostAddresses.get(array as Int8Array);
-/** the external mapping `address` falls in; `at` is where */
-let at = 0;
+/** the external mapping `address` falls in */
 function regionAt(address: bigint): Region | HostBytes {
-  const x = Number(address) - FIRST, n = Math.floor(x / REGION), region = regions[n];
+  const region = regions[regionNumber(address)];
   if (!region) throw rt.mkThrowable("java/lang/InternalError", `unmapped address 0x${address.toString(16)}`);
-  at = x - n * REGION;
   return region;
 }
+/** where `address` is in its external mapping */
+const offsetIn = (address: bigint): number => (Number(address) - FIRST) % REGION;
 export const isExternal = (address: bigint): boolean => address >= EXTERNAL;
 /** null when [address, address + n) of an external mapping is resident, else a Promise */
-export function pagesIn(address: bigint, n: number): Promise<void> | null {
-  const region = regionAt(address);
-  return region.load(at, n);
-}
-export function isResident(address: bigint, n: number): boolean {
-  const region = regionAt(address);
-  return region.resident(at, n);
-}
+export const pagesIn = (address: bigint, n: number): Promise<void> | null => regionAt(address).load(offsetIn(address), n);
+export const isResident = (address: bigint, n: number): boolean => regionAt(address).resident(offsetIn(address), n);
 /** resident external bytes as one run */
-export function externalBytes(address: bigint, n: number): Uint8Array {
-  const region = regionAt(address);
-  return region.bytes(at, n);
-}
+export const externalBytes = (address: bigint, n: number): Uint8Array => regionAt(address).bytes(offsetIn(address), n);
 /** where native code reads an external mapping: the whole mapping, loaded into guest memory once */
 export function guestAddress(address: bigint): number | bigint | Promise<number | bigint> {
-  const region = regionAt(address), offset = at;
+  const region = regionAt(address), offset = offsetIn(address);
   if (region instanceof HostBytes) return 0;
   return after(region.load(0, region.size), () => {
     if (!region.guest) {
@@ -175,6 +166,11 @@ export const physical = (address: bigint) => mem.txVa(BigInt.asUintN(64, address
  *  mapping's once resident, read only) */
 export const memoryAt = (address: bigint, n: number): Uint8Array | Promise<Uint8Array> =>
   isExternal(address) ? after(pagesIn(address, n), () => externalBytes(address, n)) : mem.bytes(physical(address), n);
+/** n bytes at a native address in guest memory, as a native reads a structure it allocated there */
+export function memorySync(address: bigint, n: number): Uint8Array {
+  if (isExternal(address)) throw rt.mkThrowable("java/lang/InternalError", `not native memory at 0x${address.toString(16)}`);
+  return mem.bytes(physical(address), n);
+}
 
 /** the bytes of `count` elements of `array` from `offset`, bounds-checked as JNI's Get/SetArrayRegion */
 function region(array: Elements | null, offset: number, count: number): Uint8Array {
@@ -189,16 +185,16 @@ function swapped(bytes: Uint8Array, size: number): Uint8Array {
   for (let i = 0; i < bytes.length; i += size) for (let j = 0; j < size; j++) out[i + j] = bytes[i + size - 1 - j];
   return out;
 }
-/** the host array a store of n at an external address lands in (at `at`), as mappings are read only */
+/** the host array a store of n at an external address lands in (at offsetIn), as mappings are read only */
 function stored(address: bigint, n: number): HostBytes {
   const region = regionAt(address);
   if (!(region instanceof HostBytes)) throw rt.mkThrowable("java/lang/InternalError", `store to a read-only mapping at 0x${address.toString(16)}`);
-  region.load(at, n);
+  region.load(offsetIn(address), n);
   return region;
 }
 /** a store of `bytes` at a native address (code pages see the write) */
 export function writeAt(address: bigint, bytes: Uint8Array): void {
-  if (isExternal(address)) stored(address, bytes.length).u8.set(bytes, at);
+  if (isExternal(address)) stored(address, bytes.length).u8.set(bytes, offsetIn(address));
   else mem.write(physical(address), bytes);
 }
 const peekArray = (address: bigint, array: Elements | null, offset: number, count: number, swap = 0) => {
@@ -215,28 +211,27 @@ const pokeArray = (address: bigint, array: Elements | null, offset: number, coun
 };
 let bufferAddress: ((buffer: object) => bigint) | null = null;
 export function setBufferAddress(read: (buffer: object) => bigint): void { bufferAddress = read; }
-/** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
-function objectBytes(o: Elements | object | null, at: number, n: number): Uint8Array | Promise<Uint8Array> {
+/** n bytes of a primitive array from byte `at` */
+function arrayBytes(o: ArrayBufferView | null, at: number, n: number): Uint8Array {
   if (o === null) return rt.npe();
-  if (ArrayBuffer.isView(o)) return new Uint8Array(o.buffer, o.byteOffset + at, n);
-  return memoryAt(bufferAddress!(o) + BigInt(at), n);
+  return new Uint8Array(o.buffer, o.byteOffset + at, n);
 }
-const external = <T>(address: bigint, width: number, get: Get<T>): T | Promise<T> => {
-  const region = regionAt(address);
-  return region.read(at, width, get);
-};
+/** a primitive array's bytes, or a direct buffer's from its address, as memmove takes them (ScopedBytes) */
+const objectBytes = (o: Elements | object | null, at: number, n: number): Uint8Array | Promise<Uint8Array> =>
+  o === null || ArrayBuffer.isView(o) ? arrayBytes(o, at, n) : memoryAt(bufferAddress!(o) + BigInt(at), n);
+const external = <T>(address: bigint, width: number, get: Get<T>): T | Promise<T> => regionAt(address).read(offsetIn(address), width, get);
 const I8: Get<number> = (v, i) => v.getInt8(i), I16: Get<number> = (v, i) => v.getInt16(i, true);
 const I32: Get<number> = (v, i) => v.getInt32(i, true), I64: Get<bigint> = (v, i) => v.getBigInt64(i, true);
 
 const natives: Record<string, (...args: never[]) => unknown> = {
   "peekByte(J)B": (address: bigint) => isExternal(address) ? external(address, 1, I8) : mem.ld8s(physical(address)),
-  "pokeByte(JB)V": (address: bigint, value: number) => isExternal(address) ? stored(address, 1).view.setInt8(at, value) : mem.st8(physical(address), value),
+  "pokeByte(JB)V": (address: bigint, value: number) => isExternal(address) ? stored(address, 1).view.setInt8(offsetIn(address), value) : mem.st8(physical(address), value),
   "peekShortNative(J)S": (address: bigint) => isExternal(address) ? external(address, 2, I16) : mem.ld16s(physical(address)),
-  "pokeShortNative(JS)V": (address: bigint, value: number) => isExternal(address) ? stored(address, 2).view.setInt16(at, value, true) : mem.st16(physical(address), value),
+  "pokeShortNative(JS)V": (address: bigint, value: number) => isExternal(address) ? stored(address, 2).view.setInt16(offsetIn(address), value, true) : mem.st16(physical(address), value),
   "peekIntNative(J)I": (address: bigint) => isExternal(address) ? external(address, 4, I32) : mem.ld32(physical(address)),
-  "pokeIntNative(JI)V": (address: bigint, value: number) => isExternal(address) ? stored(address, 4).view.setInt32(at, value, true) : mem.st32(physical(address), value),
+  "pokeIntNative(JI)V": (address: bigint, value: number) => isExternal(address) ? stored(address, 4).view.setInt32(offsetIn(address), value, true) : mem.st32(physical(address), value),
   "peekLongNative(J)J": (address: bigint) => isExternal(address) ? external(address, 8, I64) : mem.ld64(physical(address)),
-  "pokeLongNative(JJ)V": (address: bigint, value: bigint) => isExternal(address) ? stored(address, 8).view.setBigInt64(at, value, true) : mem.st64(physical(address), value),
+  "pokeLongNative(JJ)V": (address: bigint, value: bigint) => isExternal(address) ? stored(address, 8).view.setBigInt64(offsetIn(address), value, true) : mem.st64(physical(address), value),
   "peekByteArray(J[BII)V": peekArray,
   "pokeByteArray(J[BII)V": pokeArray,
 };
@@ -261,11 +256,11 @@ rt.registerJni("libcore/io/Memory", "memmove(Ljava/lang/Object;ILjava/lang/Objec
 // the element array is indexed in elements, the byte array in bytes (libcore_io_Memory.cpp)
 rt.registerJni("libcore/io/Memory", "unsafeBulkGet(Ljava/lang/Object;II[BIIZ)V",
   (dst: Elements | null, dstOffset: number, count: number, src: Int8Array | null, srcOffset: number, size: number, swap: number) => {
-    const bytes = objectBytes(src, srcOffset, count) as Uint8Array;
-    (objectBytes(dst, dstOffset * size, count) as Uint8Array).set(swap ? swapped(bytes, size) : bytes);
+    const bytes = arrayBytes(src, srcOffset, count);
+    arrayBytes(dst, dstOffset * size, count).set(swap ? swapped(bytes, size) : bytes);
   });
 rt.registerJni("libcore/io/Memory", "unsafeBulkPut([BIILjava/lang/Object;IIZ)V",
   (dst: Int8Array | null, dstOffset: number, count: number, src: Elements | null, srcOffset: number, size: number, swap: number) => {
-    const bytes = objectBytes(src, srcOffset * size, count) as Uint8Array;
-    (objectBytes(dst, dstOffset, count) as Uint8Array).set(swap ? swapped(bytes, size) : bytes);
+    const bytes = arrayBytes(src, srcOffset * size, count);
+    arrayBytes(dst, dstOffset, count).set(swap ? swapped(bytes, size) : bytes);
   });

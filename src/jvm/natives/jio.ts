@@ -6,7 +6,7 @@ import { vcall, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { isExternal, mapExternal, memoryAt, unmapExternal, writeAt } from "./jmemory";
+import { isExternal, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory";
 import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
@@ -124,7 +124,7 @@ function readInto(address: bigint, len: number, read: (target: Uint8Array) => nu
 function iovec(iov: bigint, i: number): [bigint, number] {
   const width = addressSize(), at = iov + BigInt(i * 2 * width);
   const word = (a: bigint) => {
-    const b = memoryAt(a, width) as Uint8Array, view = new DataView(b.buffer, b.byteOffset, width);
+    const b = memorySync(a, width), view = new DataView(b.buffer, b.byteOffset, width);
     return width === 8 ? view.getBigUint64(0, true) : BigInt(view.getUint32(0, true));
   };
   return [word(at), Number(word(at + BigInt(width)))];

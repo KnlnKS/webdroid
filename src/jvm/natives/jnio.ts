@@ -274,6 +274,9 @@ const arrayAccess = (k: Kind, params: string, op: Op, advance: boolean) => `
   if (I < 0 || I + ${k.n} > hb.length) return base.call(this${params && ", " + params});
   ${advance ? `this.$position = p + ${k.n};` : ""}
   ${heapAccess(k, op)}`;
+/** a direct buffer over a host byte[] (jmemory's hostBytes), given `a` and `hb`: its address is
+ *  outside guest memory, and the array holds its bytes */
+const HOST_ARRAY = "a < 0 && hb !== null";
 /** a direct buffer's element at `at`, after `guard`; `advance` moves the position past it */
 const direct: Access = (k, params, guard, op, advance) => compile(params, `
   if (!this.$memoryRef.$isAccessible) return base.call(this${params && ", " + params});
@@ -281,7 +284,7 @@ const direct: Access = (k, params, guard, op, advance) => compile(params, `
   const a = low(this.$address);
   if (a < 0 || a + at < 0 || a + at + ${k.n} > 4294967296) {
     const hb = this.$hb;
-    if (a >= 0 || hb === null) return base.call(this${params && ", " + params});
+    if (!(${HOST_ARRAY})) return base.call(this${params && ", " + params});
     ${arrayAccess(k, params, op, advance)}
     return;
   }
@@ -313,22 +316,24 @@ function accessors(k: Kind, make: Access, checked: boolean): Record<string, Intr
 const directTables = [BYTE, ...KINDS].map((k) => accessors(k, direct, false));
 // DirectByteBuffer's getChar and putChar check their bounds by their own steps; theirs stay AOSP's
 for (const sig of ["getChar()C", "getChar(I)C", "putChar(C)Ljava/nio/ByteBuffer;", "putChar(IC)Ljava/nio/ByteBuffer;"]) delete directTables[2][sig];
-// bulk copies between a typed view's array and its direct buffer, in the buffer's native order
-const bulk = (copy: string) => compile("i, array, offset, length", `
+/** a bulk copy between a typed view's `elements` and its direct buffer's bytes: those in guest
+ *  memory at a + i, or those of its host array */
+type Copy = { guest: string; host: string };
+// in the buffer's native order
+const bulk = (copy: Copy) => compile("i, array, offset, length", `
   if (!this.$memoryRef.$isAccessible || !this.$nativeByteOrder || array === null || length <= 0 || offset < 0 || offset > array.length - length)
     return base.call(this, i, array, offset, length);
   const a = low(this.$address), size = array.BYTES_PER_ELEMENT, n = length * size, hb = this.$hb;
   const elements = new Uint8Array(array.buffer, array.byteOffset + offset * size, n);
   if (a < 0 || a + i < 0 || a + i + n > 4294967296) {
     const I = this.$offset + i;
-    if (a >= 0 || hb === null || I < 0 || I + n > hb.length) return base.call(this, i, array, offset, length);
+    if (!(${HOST_ARRAY}) || I < 0 || I + n > hb.length) return base.call(this, i, array, offset, length);
     const bytes = new Uint8Array(hb.buffer, hb.byteOffset + I, n);
-    ${copy.replace("M.write(a + i, elements)", "bytes.set(elements)").replace("M.bytes(a + i, n)", "bytes")}
-  } else { ${copy} }`);
-for (const k of KINDS) Object.assign(directTables[0], {
-  [`putUnchecked(I[${k.d}II)V`]: bulk("M.write(a + i, elements);"),
-  [`getUnchecked(I[${k.d}II)V`]: bulk("elements.set(M.bytes(a + i, n));"),
-});
+    ${copy.host}
+  } else { ${copy.guest} }`);
+const PUT_BULK: Copy = { guest: "M.write(a + i, elements);", host: "bytes.set(elements);" };
+const GET_BULK: Copy = { guest: "elements.set(M.bytes(a + i, n));", host: "elements.set(bytes);" };
+for (const k of KINDS) Object.assign(directTables[0], { [`putUnchecked(I[${k.d}II)V`]: bulk(PUT_BULK), [`getUnchecked(I[${k.d}II)V`]: bulk(GET_BULK) });
 rt.intrinsic(DBB, Object.assign({}, ...directTables));
 rt.intrinsic(HBB, Object.assign({}, ...[BYTE, ...KINDS].map((k) => accessors(k, heap, true))));
 
