@@ -36,20 +36,17 @@ export async function inputSettled(): Promise<void> {
 let background = (): boolean => false;
 export function setBackgroundRealm(isBackground: () => boolean): void { background = isBackground; }
 const scheduler = (globalThis as { scheduler?: { postTask(task: () => void, options: { priority: string }): Promise<void> } }).scheduler;
-export function yieldToLoop(): Promise<void> {
+/** a later turn, after what `queue` already holds; a background realm's after the page's own work */
+function turn(queue: (() => void)[]): Promise<void> {
   if (processExited()) return never();
   if (scheduler && background()) return scheduler.postTask(() => {}, { priority: "background" });
   if (!chan) return new Promise((r) => setTimeout(r, 0));
-  return new Promise((r) => { yieldStats.pushes++; waiters.push(r); post(); });
+  return new Promise((r) => { yieldStats.pushes++; queue.push(r); post(); });
 }
+export const yieldToLoop = (): Promise<void> => turn(waiters);
 /** A macrotask ahead of the threads that only yielded: a parked thread's wake (so its waker runs
  *  on to its next await first), the main looper's turn. */
-export function wakeSoon(): Promise<void> {
-  if (processExited()) return never();
-  if (scheduler && background()) return scheduler.postTask(() => {}, { priority: "background" });
-  if (!chan) return new Promise((r) => setTimeout(r, 0));
-  return new Promise((r) => { woken.push(r); post(); });
-}
+export const wakeSoon = (): Promise<void> => turn(woken);
 /** Timers that are a thread waiting with a deadline rather than scheduled work: a park, a timed
  *  monitor wait, a futex or semaphore timeout. An idle observer ignores them; everything else it
  *  must wait for. */
