@@ -9,43 +9,30 @@ const FRAMES = Symbol("continuations");
 type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
 
 /** The call chain running now, across its suspensions: the frames a chain suspends resume as that
- *  chain, so class initialization tells its own chain's re-entry from another job interleaved on
- *  the same Java thread. 0 is a host turn's chain that has not suspended yet. */
+ *  chain, so class initialization and monitors tell its own chain's re-entry from another job
+ *  interleaved on the same Java thread. 0 is a host turn's chain that has not suspended yet. */
 let strand = 0, strands = 0;
 export const currentStrand = (): number => strand;
-/** how often each chain a class-init wait watches has been entered since the wait began */
-const runs = new Map<number, { n: number; watchers: number }>();
 /** continue as chain `s`; returns the chain to restore */
 export function enterStrand(s: number): number {
   const was = strand;
   strand = s;
-  if (runs.size !== 0) { const r = runs.get(s); if (r) r.n++; }
   return was;
 }
-/** chains suspended on a yield to the event loop, which will run again however long a busy page
- *  makes them wait */
-const yielding = new Map<number, number>();
-/** `pending`, a yield to the event loop, as the running chain's */
-export function yieldAs(pending: Promise<void>): Promise<void> {
-  const s = strand;
-  if (!s) return pending;
-  yielding.set(s, (yielding.get(s) ?? 0) + 1);
-  const end = () => { const n = yielding.get(s)! - 1; if (n) yielding.set(s, n); else yielding.delete(s); };
-  pending.then(end, end);
-  return pending;
+/** the chain each blocked chain waits for: the one initializing the class or holding the lock */
+const waits = new Map<number, number>();
+/** whether chain `holder` waits, through the chains it waits for, on chain `waiter` */
+export function waitsFor(holder: number, waiter: number): boolean {
+  for (let c = holder, n = 0; c; c = waits.get(c) ?? 0) if (c === waiter || ++n > 64) return true;
+  return false;
 }
-/** watch chain `s` make progress: `ran()` says whether it has run since the last ask or is
- *  waiting only for its turn */
-export function watchStrand(s: number): { ran(): boolean; stop(): void } {
-  let r = runs.get(s);
-  if (!r) runs.set(s, r = { n: 0, watchers: 0 });
-  const w = r;
-  w.watchers++;
-  let seen = w.n;
-  return {
-    ran: () => { const moved = w.n !== seen || yielding.has(s); seen = w.n; return moved; },
-    stop: () => { if (--w.watchers === 0) runs.delete(s); },
-  };
+/** chain `waiter` waits for chain `holder` until `until` settles */
+export function waitFor<T>(waiter: number, holder: number, until: Promise<T>): Promise<T> {
+  if (!waiter || !holder || waiter === holder) return until;
+  waits.set(waiter, holder);
+  const done = () => { if (waits.get(waiter) === holder) waits.delete(waiter); };
+  until.then(done, done);
+  return until;
 }
 /** `f` as chain `s`: host code continuing a chain from a later turn */
 export function inStrand<T>(s: number, f: () => T): T {

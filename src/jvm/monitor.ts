@@ -1,4 +1,4 @@
-import { currentStrand } from "./suspend";
+import { currentStrand, waitFor } from "./suspend";
 
 /** A lock is owned by the execution that can block: a thread as one call chain (suspend.ts's
  *  strand), since chains interleave on a thread while another is suspended. Chain 0 (Java no entry
@@ -52,9 +52,9 @@ export class Monitors {
     if (monitor.owner === thread && chainHolds(monitor, s)) { monitor.depth++; return; }
     const waiter = { thread, obj: obj as object | string };
     this.waiting.add(waiter);
-    return new Promise((resolve) => monitor.entrants.push(() => {
+    return waitFor(s, monitor.strand, new Promise((resolve) => monitor.entrants.push(() => {
       monitor.owner = thread; monitor.strand = s; monitor.depth = 1; this.waiting.delete(waiter); resolve();
-    }));
+    })));
   }
   exit(obj: object | string | null | 0, thread: unknown): void {
     this.release(obj, this.owned(obj, thread));

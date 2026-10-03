@@ -6,7 +6,7 @@
 // when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
-import { currentStrand, enterStrand, inStrand, ownStrand, suspendWith, watchStrand, yieldAs } from "./suspend";
+import { currentStrand, enterStrand, inStrand, ownStrand, suspendWith, waitFor, waitsFor } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
@@ -105,11 +105,9 @@ export class ClassInfo {
   state = 0;                          // 0 linked, 1 initing, 2 inited, 3 erroneous (<clinit> failed)
   initError: unknown = null;          // what the failed <clinit> threw
   initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
-  assumeReentrant = false;            // a wait on this clinit timed out once: stop waiting (same-chain cycle)
   initThread: unknown = null;         // thread and call chain running the in-flight clinit
   initStrand = 0;                     // (JLS recursive-request check)
   stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
-  waitingOn: ClassInfo | null = null; // class this one's clinit currently awaits (cycle detection)
   fieldTable = new Map<string, string>(); // own instance fields: name → mangled
   ownMethods: string[] = [];          // mangled prototype methods declared here
   dex?: DexFile; def?: ClassDef;
@@ -133,8 +131,6 @@ export class ClassInfo {
 export const HEAP_LIMIT = 512 * 1024 * 1024;
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
 const STRICT_FIELDS = process.env.NODE_ENV !== "production";
-/** how long a <clinit>'s chain may go without running before a same-thread wait on it is presumed a cycle */
-const CLINIT_WAIT_MS = 60;
 
 export class Runtime {
   classes = new Map<string, ClassInfo>();
@@ -749,33 +745,6 @@ export class Runtime {
     return info;
   }
 
-  /** record from's clinit waiting on info; race a timeout escape for undetected cycles */
-  private awaitInit(info: ClassInfo, from: ClassInfo | undefined, timed: boolean): Promise<void> {
-    if (from) from.waitingOn = info;
-    const clear = () => { if (from && from.waitingOn === info) from.waitingOn = null; };
-    let esc: ReturnType<typeof setTimeout> | undefined;
-    const watch = timed ? watchStrand(info.initStrand) : undefined;
-    const p = watch
-      ? Promise.race([info.initP!, new Promise<void>((res) => {
-          // escape: a job interleaved on the initializing thread waits while the <clinit>'s chain
-          // runs or waits only for its turn, however long a loaded page (or a background realm)
-          // makes that; a chain stalled for a whole window is more likely in a cycle through this
-          // job (a host callback that lost its chain), and the request proceeds as JLS re-entry.
-          // Remember it so the next several hundred accesses don't each pay the timeout.
-          // The timer must be cleared when the race is won: left armed, it would mark a class
-          // reentrant after a healthy wait, and later reads would stop waiting for a <clinit>
-          // that really is in flight.
-          const arm = () => { esc = setTimeout(() => {
-            if (watch.ran()) return arm();
-            console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res();
-          }, CLINIT_WAIT_MS); };
-          arm();
-        })])
-      : info.initP!;
-    const done = () => { if (esc !== undefined) clearTimeout(esc); watch?.stop(); clear(); };
-    return p.then((v) => { done(); return v; }, (e) => { done(); throw e; });
-  }
-
   /** returns promise only if init work needed. `from` = class whose <clinit> performs the access */
   initClass(info: ClassInfo, from?: ClassInfo): Promise<void> | null {
     if (info.owner && info.owner !== this) return info.owner.initClass(info, from);
@@ -784,7 +753,7 @@ export class Runtime {
     // still-uncompiled prototype silently inherits the SUPERCLASS's method instead.
     this.ensureCompiled(info);
     if (info.state === 1) {
-      if (!info.initP || info === from || info.assumeReentrant) return null; // sync-prefix / self / known-cycle reentrancy
+      if (!info.initP || info === from) return null; // sync-prefix / self reentrancy
       // JLS 12.4.2 step 3: a request from the thread already initializing this class is
       // recursive and completes at once with the statics as they are. The `from` tag only
       // sees <clinit>-to-<clinit> edges; <clinit> → constructor → sget of its own class is the
@@ -792,18 +761,16 @@ export class Runtime {
       // BufferedChannelKt's <clinit> builds NULL_SEGMENT). Main-loop jobs and host turns share
       // their Java thread, so "the thread" is that thread as the chain that started the <clinit>,
       // across its suspensions: another job on it would not run on a device before init finished.
-      if (info.initThread === this.th() && info.initStrand === currentStrand()) return null;
-      // clinit cycle (info's chain transitively waits on `from`) → JVM same-thread
-      // semantics: proceed with partial statics instead of deadlocking. A loop in the wait
-      // chain (two threads' clinits waiting on each other, which a JVM would deadlock on) also
-      // proceeds with partial statics rather than hanging the page.
-      for (let c = info.waitingOn, n = 0; c; c = c.waitingOn) if (c === from || ++n > 64) return null;
+      const s = currentStrand();
+      if (info.initThread === this.th() && info.initStrand === s) return null;
+      // a cycle: the <clinit>'s chain waits, through class initializations and locks, on this
+      // one. Two threads' clinits waiting on each other deadlock a JVM; here the request proceeds
+      // with partial statics, as a same-thread cycle would, rather than hang the page.
+      if (waitsFor(info.initStrand, s)) return null;
       // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
-      // thread blocks until it completes, however long a heavy static initializer takes. Another
-      // chain on the same thread waits with the timed escape: the <clinit>'s own chain continued
-      // from a host callback that did not carry it, or a <clinit> awaiting work only this chain
-      // would deliver, is indistinguishable from a wait that will never end.
-      return this.awaitInit(info, from, info.initThread === this.th());
+      // thread, and here every other chain on its thread, blocks until it completes, however
+      // long a heavy static initializer takes
+      return waitFor(s, info.initStrand, info.initP);
     }
     if (info.state !== 0) {
       if (info.state === 3) throw Object.assign(this.mkThrowable("java/lang/NoClassDefFoundError",
@@ -824,7 +791,7 @@ export class Runtime {
       finally { this.clinitDepth--; if (outer) perf.clinitMs += performance.now() - started; }
     };
 
-    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.initStrand = 0; info.assumeReentrant = false; fastStatics(info.ctor); };
+    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.initStrand = 0; fastStatics(info.ctor); };
     /** JLS 12.4.2: the class becomes erroneous; an Exception reaches the caller wrapped in an
      *  ExceptionInInitializerError, and every later initialization fails with NoClassDefFoundError */
     const failed = (e: unknown) => {
@@ -847,7 +814,7 @@ export class Runtime {
         } catch (e) { throw failed(e); }
         settle();
       })();
-      return from ? this.awaitInit(info, from, false) : info.initP;
+      return info.initP;
     };
 
     // a host turn's chain takes its identity here, so the <clinit>'s suspensions and callbacks keep it
@@ -1103,7 +1070,7 @@ export class Runtime {
     const now = performance.now();
     if (now - this.lastYield < this.yieldGap) return null;
     this.lastYield = now;
-    return yieldAs(yieldToLoop());
+    return yieldToLoop();
   }
   /** java.lang.Class for the type at dex typeIdx (compiled const-class) */
   classForIdx(D: DexLink, typeIdx: number): unknown {

@@ -4,8 +4,8 @@ import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDo
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
 import { vcall, newObj, vcallAsync, vcallOn, callOn, callUncaught, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
-import { JObj, rt } from "../src/jvm/runtime";
-import { inStrand, newStrand, yieldAs } from "../src/jvm/suspend";
+import { JObj, rt, type ClassInfo } from "../src/jvm/runtime";
+import { inStrand, newStrand } from "../src/jvm/suspend";
 import { scall, loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
@@ -222,18 +222,30 @@ describe("class-init", () => {
     await first;
   });
 
-  test("another job waits out a <clinit> whose chain only waits for its turn", async () => {
-    class Starved extends JObj { static ready = 0; }
-    rt.register({ name: "test/StarvedInit", ctor: Starved, clinit: () => rt.drive(function* () {
-      yield yieldAs(new Promise<void>((r) => setTimeout(r, 200)));  // a fuel yield a busy page answers late
-      Starved.ready = 1;
+  test("another chain waits out a stalled <clinit>; chains waiting on each other proceed", async () => {
+    class Stalled extends JObj { static ready = 0; }
+    rt.register({ name: "test/StalledInit", ctor: Stalled, clinit: () => rt.drive(function* () {
+      yield new Promise<void>((r) => setTimeout(r, 150));
+      Stalled.ready = 1;
     }()) });
-    const info = rt.link("test/StarvedInit");
-    const first = callOn(mainThread, () => rt.initClass(info));
-    const waiter = callOn(mainThread, () => rt.initClass(info));
-    expect(await Promise.resolve(waiter).then(() => Starved.ready)).toBe(1);
-    expect(info.assumeReentrant).toBe(false);
+    const stalled = rt.link("test/StalledInit");
+    const first = callOn(mainThread, () => rt.initClass(stalled));
+    expect(await Promise.resolve(callOn(mainThread, () => rt.initClass(stalled))).then(() => Stalled.ready)).toBe(1);
     await first;
+
+    const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const cyclic = (name: string, gate: Promise<void>, other: () => ClassInfo) => rt.register({ name, ctor: class extends JObj {}, clinit: () => rt.drive(function* () {
+      yield gate;
+      yield rt.initClass(other());
+    }()) });
+    cyclic("test/CycleA", gates[0].promise, () => rt.link("test/CycleB"));
+    cyclic("test/CycleB", gates[1].promise, () => rt.link("test/CycleA"));
+    const a = callOn(mainThread, () => rt.initClass(rt.link("test/CycleA")));
+    const b = callOn(mainThread, () => rt.initClass(rt.link("test/CycleB")));
+    gates[0].resolve(); await Promise.resolve();
+    gates[1].resolve();
+    await Promise.all([a, b]);
+    expect([rt.link("test/CycleA").state, rt.link("test/CycleB").state]).toEqual([2, 2]);
   });
 });
 
