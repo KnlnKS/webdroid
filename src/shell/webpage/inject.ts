@@ -1,14 +1,13 @@
 // The page script: the first script of every WebView page's document, on its renderer origin. It
 // takes the load's context from the renderer bootstrap (renderer.ts) and gives the page Android
 // WebView's navigator, cookies, JavaScript interfaces, subframes, history and location.
-import type { DocumentCookie } from "../webcookies";
 import { installClientHints } from "./clienthints";
 import { setDocumentCookie } from "./cookie";
 import { routeSubframes } from "./frames";
 import { installWebHistory } from "./history";
 import { installWebLocation } from "./location";
 import { snapshotDocument } from "./snapshot";
-import type { AppMessage, PageConfig, WebFonts } from "./protocol";
+import type { AppMessage, PageConfig, PageMessage, WebFonts } from "./protocol";
 
 /** the WebView settings' faces, by their families, and the rules that use them, before the page's own */
 function installWebFonts(fonts: WebFonts): void {
@@ -26,20 +25,15 @@ function start(config: PageConfig | undefined) {
     Object.defineProperty(navigator, "appVersion", { value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua });
   }
   if (config?.clientHints) installClientHints(config.clientHints);
-  const id = config?.id;
-  if (!config || !id) return;
-  // a subframe's page reaches the app through its frame's port, a main frame's through its parent
-  const send = (data: object, transfer: Transferable[] = []) => config.post
-    ? config.post({ bridge: id, ...data }, transfer) : parent.postMessage({ bridge: id, ...data }, "*", transfer);
-  const ask = (data: object) => new Promise((resolve) => {
-    const channel = new MessageChannel();
-    channel.port1.onmessage = (event) => { channel.port1.close(); resolve(event.data); };
-    send(data, [channel.port2]);
-  });
+  if (!config?.id) return;
+  const { id, port } = config, send = (message: PageMessage) => port.postMessage(message);
   if (config.fonts) installWebFonts(config.fonts);
-  // the page's links, forms and navigations: into a frame of the page, or to the app
-  if (config.frames) routeSubframes(config.frames, (url, init) => ask({ kind: "subframe", url, ...init }), () => config.page,
-    (url, init) => send(init?.method === "POST" ? { kind: "submit", url, ...init } : { kind: "navigate", url }));
+  // the page's links, forms and navigations: into a frame of the page, where the app answers, or to the app
+  if (config.frames) routeSubframes(config.frames, (url, init) => new Promise((resolve) => {
+    const answer = new MessageChannel();
+    answer.port1.onmessage = (event) => { answer.port1.close(); resolve(event.data); };
+    port.postMessage({ kind: "subframe", url, init } satisfies PageMessage, [answer.port2]);
+  }), () => config.page, (url, init) => send(init?.method === "POST" ? { kind: "submit", url, init } : { kind: "navigate", url, replace: false }));
   // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
   // them keeps the embedding page from reporting them as its own exceptions.
   const consoleMessage = (data: { message: string; source: string; line: number }) => send({ kind: "console", ...data });
@@ -82,7 +76,7 @@ function start(config: PageConfig | undefined) {
     get: () => cookies.filter((c) => !c.expires || c.expires > Date.now()).map((c) => c.text).join("; "),
     set: (value) => {
       value = String(value);
-      if (/^https?:/.test(config.page ?? "")) cookies = setDocumentCookie(cookies, value, config.page!);
+      if (/^https?:/.test(config.page)) cookies = setDocumentCookie(cookies, value, config.page);
       send({ kind: "cookie", value, seq: ++written });
     },
   });
@@ -102,7 +96,7 @@ function start(config: PageConfig | undefined) {
   for (const [name, methods] of Object.entries(config.interfaces ?? {})) {
     const object = Object.create(null);
     for (const [method, returns] of Object.entries(methods)) object[method] = (...args: unknown[]) => {
-      const body = { kind: "invoke", object: name, method, args: JSON.parse(JSON.stringify(args)) };
+      const body: PageMessage = { kind: "invoke", object: name, method, args: JSON.parse(JSON.stringify(args)) };
       if (!sharesThread()) return call(body);
       if (returns) throw Error("A WebView JavaScript interface result needs the page in a renderer apart from the app's (site isolation)");
       send(body);
@@ -111,24 +105,19 @@ function start(config: PageConfig | undefined) {
   }
   installWebLocation(config, (url, replace) => send({ kind: "navigate", url, replace }));
   addEventListener("hashchange", (event) => { if (event.isTrusted) send({ kind: "fragment", url: config.page }); });
-  addEventListener("load", () => send({ kind: "loaded", url: config.page ?? document.querySelector<HTMLMetaElement>('meta[name="wd-proxy-url"]')?.content,
-    error: document.querySelector<HTMLMetaElement>('meta[name="wd-proxy-error"]')?.content, title: document.title,
+  addEventListener("load", () => send({ kind: "loaded", url: config.page ?? document.querySelector<HTMLMetaElement>('meta[name="wd-proxy-url"]')?.content ?? null,
+    error: document.querySelector<HTMLMetaElement>('meta[name="wd-proxy-error"]')?.content ?? null, title: document.title,
     width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
-  const receive = (data: AppMessage) => {
+  // what the app asks of the page, answered on the port that comes with it
+  port.onmessage = ({ data, ports: [answer] }: MessageEvent<AppMessage>) => {
     if (data.kind === "eval") {
       let value = "null";
-      try { value = JSON.stringify((0, eval)(data.script as string)) ?? "null"; } catch {}
-      send({ kind: "evaluated", seq: data.seq, value });
+      try { value = JSON.stringify((0, eval)(data.script)) ?? "null"; } catch {}
+      answer?.postMessage(value);
     } else if (data.kind === "stop") window.stop();
-    else if (data.kind === "cookies" && (data.ack as number) >= written) cookies = data.list as DocumentCookie[];
-    else if (data.kind === "snapshot") {
-      snapshotDocument(document).then((result) => send({ kind: "snapshot", seq: data.seq, ...result }),
-        (error) => send({ kind: "snapshot", seq: data.seq, error: String(error) }));
-    }
+    else if (data.kind === "cookies") { if (data.ack >= written) cookies = data.list; }
+    else if (data.kind === "snapshot") snapshotDocument(document).then((result) => answer?.postMessage(result), (error) => answer?.postMessage({ error: String(error) }));
   };
-  // the app answers a subframe through its port too: its parent is the page that framed it
-  if (config.listen) config.listen(receive);
-  else addEventListener("message", (event) => { if (event.source === parent && event.data?.bridge === id) receive(event.data); });
   send({ kind: "script-ready" });
 }
 

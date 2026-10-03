@@ -3,10 +3,12 @@
 // sees one of another scheme first. The page holds a frame's URL until then; the policy stops any
 // direct load the holding missed.
 
-/** the request a form (with its submitter) submits from a document at `page`, as the browser encodes it */
-export async function webFormRequest(form: HTMLFormElement, submitter: HTMLElement | null, page: string | null): Promise<
-  { url: string; method: "GET" | "POST"; body?: ArrayBuffer; contentType?: string } | null
-> {
+import type { FrameInit } from "./protocol";
+
+/** what a form submits: a GET's URL, or a POST's body as the browser encodes it */
+export type FormRequest = { url: string; method: "GET" } | { url: string; method: "POST"; body: ArrayBuffer; contentType?: string };
+/** the request a form (with its submitter) submits from a document at `page` */
+export async function webFormRequest(form: HTMLFormElement, submitter: HTMLElement | null, page: string | null): Promise<FormRequest | null> {
   const method = (submitter?.getAttribute("formmethod") || form.method).toUpperCase();
   if (method === "DIALOG") return null;
   const action = submitter?.getAttribute("formaction") ?? form.getAttribute("action");
@@ -100,8 +102,6 @@ export function holdFrames(html: string, carry?: { raw: string; tail: string }):
   return out + html.slice(from);
 }
 
-/** what a navigation into a frame carries besides its URL: a form's POST */
-export type FrameInit = { method?: string; body?: ArrayBuffer; contentType?: string };
 type NavigateEvent = Event & { cancelable: boolean; hashChange: boolean; downloadRequest: string | null; formData: FormData | null;
   destination: { url: string; sameDocument: boolean } };
 
@@ -114,7 +114,7 @@ type NavigateEvent = Event & { cancelable: boolean; hashChange: boolean; downloa
  *  only sites a frame may load from otherwise. `src` reads what the page set; the frame's initial
  *  document, which Chromium never shows, fires no load event. */
 export function routeSubframes(renderers: string, route: (url: string, init?: FrameInit) => Promise<unknown>,
-  page: () => string | null, leave: (url: string, init?: FrameInit) => void): void {
+  page: () => string | null, leave: (url: string, form?: FormRequest) => void): void {
   const policy = document.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";
   policy.content = "frame-src 'self' data: blob: " + renderers;

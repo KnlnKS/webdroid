@@ -15,3 +15,8 @@ export interface AppHost {
 }
 export let appHost: AppHost | null = null;
 export function setAppHost(h: AppHost | null) { appHost = h; }
+/** the app this realm runs, which owns what its WebViews keep */
+export function runningApp(): AppHost {
+  if (!appHost) throw new Error("No app is running");
+  return appHost;
+}

@@ -10,7 +10,8 @@ import { boxLong } from "../jvm/natives/jbox";
 import { installTime } from "./packages";
 import { onMain } from "./mainloop";
 import { appHost } from "./apphost";
-import { rendererOrigin, rendererStorage, type StorageOp } from "../shell/webrenderer";
+import { rendererOrigin, rendererStorage } from "../shell/webrenderer";
+import type { StorageOp } from "../shell/webpage/protocol";
 import type { PackageState } from "../shell/packagedata";
 
 /** kept with the install */

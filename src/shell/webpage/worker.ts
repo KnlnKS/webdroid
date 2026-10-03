@@ -2,11 +2,11 @@
 // WebView's network stack sends them (its user agent, client hints, cookie jar and client), and its
 // apk assets and device fonts come from the app.
 import { webViewBrands } from "./clienthints";
+import type { RendererContext } from "./protocol";
 
 type Client = { id: string; url: string; postMessage(data: unknown, transfer: Transferable[]): void };
 type FetchEvent = Event & { request: Request; clientId: string; respondWith(response: Promise<Response>): void };
 type ExtendableEvent = Event & { waitUntil(work: Promise<unknown>): void };
-type WorkerContext = { id?: string | null; page?: string | null; agent?: string; intercept?: boolean; sub?: boolean };
 const worker = globalThis as unknown as { location: Location; navigator: Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } };
   skipWaiting(): Promise<void>; clients: { claim(): Promise<void>; get(id: string): Promise<Client | undefined> };
   addEventListener(type: "install" | "activate", listener: (event: ExtendableEvent) => void): void;
@@ -19,7 +19,8 @@ const clientHints = [["x-wd-sec-ch-ua", brands.map((b) => '"' + b.brand + '";v="
   ["x-wd-sec-ch-ua-mobile", "?1"], ["x-wd-sec-ch-ua-platform", '"Android"']];
 worker.addEventListener("install", (event) => event.waitUntil(worker.skipWaiting()));
 worker.addEventListener("activate", (event) => event.waitUntil(worker.clients.claim()));
-const contexts = new Map<string, Promise<WorkerContext>>();
+// each client's load, which its renderer bootstrap answers
+const contexts = new Map<string, Promise<RendererContext>>();
 function message<T>(client: Client, data: object): Promise<T> {
   return new Promise((resolve, reject) => {
     const channel = new MessageChannel();
@@ -28,13 +29,11 @@ function message<T>(client: Client, data: object): Promise<T> {
     client.postMessage(data, [channel.port2]);
   });
 }
-async function context(client: Client): Promise<WorkerContext> {
-  const url = new URL(client.url), config = url.searchParams;
-  if (config.has("__wd_bridge")) return { id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua") ?? undefined, intercept: config.get("__wd_intercept") === "1", sub: config.has("__wd_sub") };
+function context(client: Client): Promise<RendererContext> {
   const key = client.id + client.url;
   let value = contexts.get(key);
   if (!value) {
-    value = message<WorkerContext>(client, { kind: "webcontext" }); contexts.set(key, value);
+    value = message<RendererContext>(client, { kind: "webcontext" }); contexts.set(key, value);
     if (contexts.size > 64) contexts.delete(contexts.keys().next().value!);
     value.catch(() => contexts.delete(key));
   }
@@ -93,7 +92,7 @@ worker.addEventListener("fetch", (event) => {
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }
-      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id!) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page ?? "") ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
+      const response = await fetch("/proxy?manual=1&url=" + encodeURIComponent(target) + (frame ? "&frame=1" + (sub ? "&sub=1" : "") : "") + (isolated ? "&bridge=" + encodeURIComponent(id) + (intercept && !redirects ? "&intercept=1" : "") : "") + (isolated && !request.integrity && /^https?:/.test(page) ? "&webview=1" : ""), { method, headers, body, credentials: "omit" });
       const values = response.headers.get("x-wd-set-cookie");
       if (include && values) await message(client, { kind: "webcookies", url: target, values: JSON.parse(values) });
       const status = Number(response.headers.get("x-wd-status") || response.status), location = response.headers.get("location");

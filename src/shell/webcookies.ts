@@ -1,10 +1,8 @@
 import { CookieJar, Cookie, getPublicSuffix } from "tough-cookie";
 import { storedPackages } from "../android/packages";
+import type { DocumentCookie } from "./webpage/protocol";
 
 const KEY = "wd:web-cookies:";
-
-/** a cookie as document.cookie shows it, and when it expires (0: with the session) */
-export type DocumentCookie = { text: string; expires: number };
 
 export class WebCookies {
   accept = true;

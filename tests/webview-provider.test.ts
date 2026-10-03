@@ -64,8 +64,8 @@ describe("webfragment", () => {
 
   test("a WebView history copy is an independent snapshot", async () => {
     const view = webView();
-    view.go({ url: "https://example.org/one" });
-    view.go({ url: "https://example.org/two" });
+    view.loadUrl("https://example.org/one");
+    view.loadUrl("https://example.org/two");
     const history = await vcall(view, "copyBackForwardList", "()Landroid/webkit/WebBackForwardList;");
     await vcall(view, "clearHistory", "()V");
     expect(await vcall(history, "getSize", "()I")).toBe(2);

@@ -18,11 +18,12 @@ import { device } from "../shell/config";
 import { propertyValue } from "../shell/properties";
 import { onMain } from "./mainloop";
 import { mkUri } from "./net";
-import { appHost } from "./apphost";
+import { runningApp } from "./apphost";
 import { onProcessExit } from "../process-exit";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
-import { rendererPattern } from "../shell/webrenderer";
+import { onRendererReady, openRenderer, rendererPattern, rendererUrl } from "../shell/webrenderer";
+import { parsePageMessage, type AppMessage, type FrameDocument, type FrameInit, type LoadMessage, type PageMessage, type RendererReady } from "../shell/webpage/protocol";
 import { webRenderer } from "./webstorage";
 import { isPlatformFont, platformFontBytes, typefaceOf, ITAL, WGHT } from "./fonts";
 import { localAsset } from "../shell/localassets";
@@ -183,7 +184,6 @@ let layer: HTMLElement | null = null;
 let layerObserver: ResizeObserver | null = null;
 /** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
 export function setWebLayer(el: HTMLElement) {
-  if (!layer) window.addEventListener("message", WebViewChromium.message);
   layerObserver?.disconnect();
   layer = el;
   layerObserver = new ResizeObserver(([entry]) => {
@@ -193,12 +193,20 @@ export function setWebLayer(el: HTMLElement) {
 }
 /** the providers with a frame */
 const live = new Set<WebViewChromium>();
-/** what a WebView's page holds on the host side; it never references the provider itself */
-interface FrameHold { el: HTMLIFrameElement | null; remote: WebBridge | null; port: MessagePort | null; functor: number; unwatch: (() => void) | null }
+/** a document a WebView's page shows on a renderer origin: its main frame, or a subframe the page
+ *  routed there, which talks to the app over `port` */
+class RendererFrame {
+  /** the document.cookie last sent, and the page's last write it answers */
+  cookies = { ack: 0, sent: "" };
+  constructor(readonly sub: boolean, public url: string, readonly win: Window, readonly port: MessagePort) {}
+}
+/** what a WebView's page holds on the host side, by its frames' windows; it never references the provider itself */
+interface FrameHold { el: HTMLIFrameElement | null; remote: WebBridge | null; frames: Map<Window, RendererFrame>; functor: number; ends: (() => void)[] }
 function unbridge(h: FrameHold) {
-  if (h.remote) { bridges.delete(h.remote.id); h.remote.close(); h.remote = null; }
-  h.unwatch?.(); h.unwatch = null;
-  h.port?.close(); h.port = null;
+  h.remote?.close(); h.remote = null;
+  for (const end of h.ends.splice(0)) end();
+  for (const frame of h.frames.values()) frame.port.close();
+  h.frames.clear();
 }
 function release(h: FrameHold) { unbridge(h); h.el?.remove(); h.el = null; releaseFunctor(h.functor); }
 // a page's renderer ends with its app's process, closing what it held open on its origin
@@ -207,13 +215,12 @@ onProcessExit(() => { for (const view of live) release(view.hold); live.clear();
 // an app that drops a WebView without destroy() does not keep its page. Page-side callbacks and the
 // bridge therefore reach a provider only weakly; detaching alone keeps the page, as apps reattach.
 const collected = new FinalizationRegistry<FrameHold>(release);
-const bridges = new Map<string, WeakRef<WebViewChromium>>();
 /** page-side proxies of the interfaces, so the page does not keep the Java objects (and so often its WebView) reachable */
 function weakIfaces(of: () => WebInterfaces | null | undefined): WebInterfaces {
   const out: WebInterfaces = Object.create(null);
   for (const [name, methods] of Object.entries(of() ?? {})) {
     const proxy: WebInterfaces[string] = out[name] = Object.create(null);
-    for (const m in methods) proxy[m] = async (...args) => of()?.[name]?.[m]?.(...args);
+    for (const m in methods) proxy[m] = Object.assign(async (...args: unknown[]) => of()?.[name]?.[m]?.(...args), { returns: methods[m].returns });
   }
   return out;
 }
@@ -223,10 +230,10 @@ export function webViewInfo(): { url: string | null; title: string; loaded: bool
 }
 
 /** what the browser loads for an Android URL: the dev server fronts http(s) and the apk's assets */
-function srcFor(url: string, v: WebViewChromium): string {
-  if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url) + "&ua=" + encodeURIComponent(String(v.settings.v.userAgentString));
+function srcFor(url: string): string {
+  if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url);
   const m = /^file:\/\/\/android_asset\/(.*)$/i.exec(url);
-  return m ? "/asset/" + encodeURIComponent(appHost?.assetKey ?? "") + "/assets/" + m[1] : url;
+  return m ? "/asset/" + encodeURIComponent(runningApp().assetKey) + "/assets/" + m[1] : url;
 }
 const toJava = (d: string, x: unknown): unknown =>
   d === "J" ? BigInt(Math.trunc(Number(x)) || 0) : d === "Z" ? (x ? 1 : 0) : d === "F" || d === "D" ? Number(x)
@@ -273,16 +280,29 @@ function mkRequest(url: string, gesture = false): JReq {
 }
 class JWebErr extends JObj { code = -1; desc = ""; }
 
-interface Entry { url: string; src?: string; doc?: string; final?: string; base?: string; method?: string; body?: ArrayBuffer; contentType?: string }
-/** a subframe handed out to a page: what it loads, the renderer origin it loads on, and the page's bridge */
-interface Subframe { entry: Entry; origin: string; remote: WebBridge }
-interface SubframeCookies { sub: Subframe; port: MessagePort; ack: number; sent: string }
+/** a page as history keeps it: a URL the frame fetches (`src`, with a form's request), or a document
+ *  the app wrote (with its base URL) */
+type SrcEntry = { url: string; src: string; init?: FrameInit };
+type Entry = SrcEntry | { url: string; doc: string; base?: string };
+/** what a frame loads for `e`: the document a redirect already fetched, the app's, or its src */
+const documentFor = (e: Entry, prefetched?: string): FrameDocument =>
+  prefetched !== undefined ? { html: prefetched, final: e.url } : "doc" in e ? { html: e.doc } : { src: e.src, init: e.init };
+/** a document a renderer frame is to load: its entry, the renderer origin, and a redirect's document */
+interface FrameLoad { entry: Entry; origin: string; prefetched?: string }
 /** the web origin whose storage a page of `e` keeps: the base URL's for a document the app wrote,
  *  the file scheme's for files, and none (opaque) otherwise */
 function webOrigin(e: Entry): string {
-  const url = e.doc === undefined ? e.url : e.base ?? "";
+  const url = "doc" in e ? e.base ?? "" : e.url;
   return /^https?:/i.test(url) ? new URL(url).origin : /^file:/i.test(url) ? "file://" : "null";
 }
+/** whether `win` is a frame within `main`'s document */
+function inside(win: Window, main: Window): boolean {
+  for (let w = win, depth = 0; w !== w.parent && depth < 32; w = w.parent, depth++) if (w.parent === main) return true;
+  return false;
+}
+const reply = (port: MessagePort, value: unknown) => { port.postMessage(value); port.close(); };
+/** the main frame's port once its page script listens, and the page's end */
+const newPage = () => ({ script: Promise.withResolvers<MessagePort>(), closed: new AbortController() });
 class JWebHistoryItem extends JObj {
   constructor(public entry: Entry) { super(); }
 }
@@ -341,161 +361,137 @@ export class WebViewChromium extends JObj {
   bridgeThread = Object.assign(new JThread(), { jname: "JavaBridge" });
   private requestThread = Object.assign(new JThread(), { jname: "Chrome_IOThread" });
   private readonly ref = new WeakRef(this);
-  readonly hold: FrameHold = { el: null, remote: null, port: null, functor: 0, unwatch: null };
+  readonly hold: FrameHold = { el: null, remote: null, frames: new Map(), functor: 0, ends: [] };
   /** the view's size, which its draw functor covers */
   readonly size = { w: 0, h: 0, place: (rect: Rect | null) => this.ref.deref()?.place(rect) };
   background: string | null = null;
-  private remoteOrigin = "";
   /** the page's content size, in CSS pixels */
   remoteWidth = 0;
   remoteHeight = 0;
   /** the last measure's terms: whether the width is the content's, and the height's limit (-1 when exact) */
   private measured = { width: true, height: Infinity };
-  private nextEval = 0;
-  private evaluations = new Map<number, (value: string) => void>();
-  private nextSnapshot = 0;
-  private snapshots = new Map<number, { resolve: (data: string) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
-  private pendingScripts = new Map<number, string>();
-  private scriptReady = false;
-  private cookieAck = 0;
-  private cookiesSent = "";
-  /** the subframes handed out, by the token in their frame's URL, and the windows that loaded them */
-  private subframes = new Map<string, Subframe>();
-  private subframeWindows = new WeakMap<Window, Subframe>();
-  /** each loaded subframe's port and the document.cookie it was last sent */
-  private subframeCookies = new Map<Window, SubframeCookies>();
+  /** the main frame's document until its renderer announces itself */
+  private loading: FrameLoad | null = null;
+  /** the subframes handed out to the page, by the token in their renderer URL */
+  private subframes = new Map<string, FrameLoad>();
+  private page = newPage();
   /** whether the client intercepts requests, as the page loaded */
   private intercepting = false;
-  /** the redirected document the next frame writes rather than fetching it again */
-  private prefetched: string | undefined;
+  private cookieJar: Promise<WebCookies> | null = null;
   /** where the content shows, in display pixels, or null when hidden */
   rect: Rect | null = null;
   /** bumped by every load and by stopLoading: a frame event from an older load is ignored */
   gen = 0;
 
-  static message(event: MessageEvent) { bridges.get(event.data?.bridge)?.deref()?.message(event); }
-  private message(event: MessageEvent) {
-    const data = event.data, main = this.hold.el?.contentWindow;
-    if (!main) return;
-    if (event.source !== main || event.origin !== this.remoteOrigin) { this.subframeMessage(event, main); return; }
-    if (data.kind === "ready" && !this.hold.port) {
-      const channel = this.channel(null);
-      this.hold.port = channel.port1;
-      const entry = this.hist[this.idx], g = this.gen;
-      void this.loadMessage(this.url ?? "", true).then((load) => {
-        if (this.gen !== g) return;
-        this.cookiesSent = JSON.stringify(load.cookies);
-        const prefetched = this.prefetched;
-        this.prefetched = undefined;
-        this.send({ ...load, src: entry?.src, doc: prefetched ?? entry?.doc, final: prefetched === undefined ? undefined : entry?.url, method: entry?.method,
-          body: entry?.body, contentType: entry?.contentType }, [channel.port2]);
-      });
-    }
-    else if (data.kind === "subframe" && typeof data.url === "string" && event.ports[0]) this.answerSubframe(data, event.ports[0]);
-    else if (data.kind === "script-ready") {
-      this.scriptReady = true;
-      for (const [seq, script] of this.pendingScripts) this.send({ kind: "eval", seq, script });
-      this.pendingScripts.clear();
-    }
-    else if (data.kind === "loaded") {
-      this.remoteWidth = typeof data.width === "number" ? data.width : 0;
-      this.remoteHeight = typeof data.height === "number" ? data.height : 0;
-      this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
-    } else if (data.kind === "redirect" && typeof data.url === "string" && typeof data.html === "string") {
-      // the document is another origin's: it renders in that origin's partition
-      const entry = { url: data.url, src: srcFor(data.url, this) };
-      if (this.idx >= 0) this.hist[this.idx] = entry;
-      this.go(entry, false, data.html);
-    } else if (data.kind === "size" && typeof data.width === "number" && typeof data.height === "number") this.contentSized(data.width, data.height);
-    else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
-    else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
-    else if (data.kind === "submit" && typeof data.url === "string" && typeof data.method === "string" && data.body instanceof ArrayBuffer)
-      this.go({ url: data.url, src: srcFor(data.url, this), method: data.method, body: data.body,
-        contentType: typeof data.contentType === "string" ? data.contentType : undefined });
-    else if (data.kind === "console") this.consoleMessage(data);
-    else if (data.kind === "cookie" && typeof data.value === "string" && typeof data.seq === "number") {
-      const g = this.gen;
-      void webCookies(appHost?.pkg ?? "").then((jar) => {
-        if (this.gen !== g) return;
-        this.cookieAck = data.seq;
-        jar.set(this.url ?? "", data.value, false);
-        this.sendCookies(jar, true);
-      });
-    } else if (data.kind === "invoke") this.hold.remote?.post(data);
-    else if (data.kind === "thread" && typeof data.shared === "boolean") sharedRenderer = data.shared;
-    else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
-    else if (data.kind === "snapshot" && typeof data.seq === "number") {
-      const pending = this.snapshots.get(data.seq);
-      if (pending) {
-        clearTimeout(pending.timer); this.snapshots.delete(data.seq);
-        if (data.error) pending.reject(rt.mkThrowable("java/lang/UnsupportedOperationException", data.error));
-        else pending.resolve(data.data);
-      }
-    }
+  /** the app's cookie jar, which every page of its WebViews shares */
+  private get jar() { return this.cookieJar ??= webCookies(runningApp().pkg); }
+
+  /** a renderer document announced itself: the main frame's, or a subframe's within it */
+  private rendererReady(event: MessageEvent<RendererReady>, win: Window) {
+    const main = this.hold.el?.contentWindow, remote = this.hold.remote, token = event.data.sub;
+    if (!main || !remote) return;
+    const load = token === null ? win === main ? this.loading : null : this.subframes.get(token);
+    if (!load || event.origin !== load.origin || token !== null && !inside(win, main)) return;
+    if (token === null) this.loading = null;
+    const g = this.gen, channel = new MessageChannel(), ref = this.ref, frame = new RendererFrame(token !== null, load.entry.url, win, channel.port1);
+    channel.port1.onmessage = ({ data, ports }) => {
+      const message = parsePageMessage(data);
+      if (message) ref.deref()?.frameMessage(frame, message, ports[0]);
+    };
+    void this.loadMessage(frame, load).then((task) => {
+      if (this.gen !== g) { channel.port1.close(); return; }
+      this.hold.frames.get(win)?.port.close();
+      this.hold.frames.set(win, frame);
+      frame.cookies.sent = JSON.stringify(task.cookies);
+      openRenderer(win, load.origin, remote.id, task, channel.port2);
+    });
   }
-  /** the page's document.cookie, once the jar changed or answered its write `cookieAck`, and each
-   *  subframe's */
-  private sendCookies(jar: WebCookies, answer = false) {
-    if (!this.remoteOrigin) return;
-    for (const frame of this.subframeCookies.values()) this.sendSubframeCookies(jar, frame);
-    const list = jar.document(this.url ?? ""), sent = JSON.stringify(list);
-    if (sent === this.cookiesSent && !answer) return;
-    this.cookiesSent = sent;
-    this.send({ kind: "cookies", list, ack: this.cookieAck });
-  }
-  /** a subframe's cookies are the jar's for its URL when they are first-party to the page or third-party ones are allowed */
-  private subframeSees(jar: WebCookies, url: string): boolean { return jar.sameSite(url, this.url ?? "") || thirdPartyCookies.has(this.view); }
-  private sendSubframeCookies(jar: WebCookies, frame: SubframeCookies, answer = false) {
-    const url = frame.sub.entry.url, list = this.subframeSees(jar, url) ? jar.document(url) : [], sent = JSON.stringify(list);
-    if (sent === frame.sent && !answer) return;
-    frame.sent = sent;
-    frame.port.postMessage({ kind: "cookies", list, ack: frame.ack });
-  }
-  /** what a frame loads a page of `url` with: the interfaces (and which methods return a value), as
+  /** what a frame loads: its document, the interfaces (and which methods return a value), as
    *  Chromium injects them per load, the cookies its document sees, and the renderer's settings. The
    *  interfaces travel with the load: a synchronous call back would deadlock a renderer that shares
    *  this realm's thread, as one does without site isolation. */
-  private async loadMessage(url: string, firstParty: boolean) {
+  private async loadMessage(frame: RendererFrame, { entry, prefetched }: FrameLoad): Promise<LoadMessage> {
     const interfaces = Object.fromEntries(Object.entries(this.pageIfaces ?? {}).map(([name, methods]) =>
-      [name, Object.fromEntries(Object.entries(methods).map(([method, fn]) => [method, fn.returns !== false]))]));
-    const [jar, frames, fonts] = await Promise.all([webCookies(appHost?.pkg ?? ""), rendererPattern(), webFonts(this.settings)]);
-    return { kind: "load", userAgent: this.settings.v.userAgentString, interfaces, cookies: firstParty ? jar.document(url) : [],
-      clientHints: clientHints(), sharedThread: sharedRenderer, frames, fonts };
+      [name, Object.fromEntries(Object.entries(methods).map(([method, fn]) => [method, fn.returns]))]));
+    const [jar, frames, fonts] = await Promise.all([this.jar, rendererPattern(), webFonts(this.settings)]);
+    return { kind: "load", page: entry.url, userAgent: String(this.settings.v.userAgentString), intercept: this.intercepting, interfaces,
+      cookies: this.sees(jar, frame) ? jar.document(entry.url) : [], clientHints: clientHints(), sharedThread: sharedRenderer, frames, fonts,
+      document: documentFor(entry, prefetched) };
   }
-  /** the port a frame's page reaches the app through: its worker's cookie and asset requests, and a
-   *  subframe page's own messages */
-  private channel(sub: { sub: Subframe; win: Window } | null): MessageChannel {
-    const channel = new MessageChannel(), ref = this.ref, jar = webCookies(appHost?.pkg ?? "");
-    channel.port1.onmessage = async ({ data, ports }) => {
-      const v = ref.deref();
-      if (!v) return;
-      const port = ports[0];
-      if (data?.kind === "webasset" && port) {
-        try { port.postMessage(await webAsset(data.path)); }
-        catch { port.postMessage({ status: 500 }); }
-        port.close();
-      } else if (data?.kind === "webcookies" && port && typeof data.url === "string") {
-        const values = Array.isArray(data.values) ? data.values.filter((value: unknown): value is string => typeof value === "string") : [];
-        port.postMessage((await jar).network(data.url, v.url ?? "", values, thirdPartyCookies.has(v.view))); port.close();
-      } else if (data?.kind === "subframe" && port && typeof data.url === "string") v.answerSubframe(data, port);
-      else if (sub) v.subframePage(sub, data);
-    };
-    return channel;
+  /** what a frame's page tells the app. Chromium reports a subframe's console and cookies as the
+   *  main frame's; a subframe's navigations stay in it, through the renderer of their origin. */
+  private frameMessage(frame: RendererFrame, m: PageMessage, answer: MessagePort | undefined) {
+    const sub = frame.sub;
+    switch (m.kind) {
+      case "webasset":
+        if (answer) void webAsset(m.path).catch(() => ({ status: 500 })).then((asset) => reply(answer, asset));
+        break;
+      case "webcookies":
+        if (answer) void this.jar.then((jar) => reply(answer, jar.network(m.url, this.url ?? "", m.values, thirdPartyCookies.has(this.view))));
+        break;
+      case "subframe":
+        if (answer) void this.subframeSrc({ url: m.url, src: srcFor(m.url), init: m.init }).then((src) => reply(answer, src), () => reply(answer, null));
+        break;
+      case "console": this.consoleMessage(m); break;
+      case "cookie": {
+        const url = this.urlOf(frame);
+        void this.jar.then((jar) => {
+          if (this.hold.frames.get(frame.win) !== frame) return;
+          frame.cookies.ack = m.seq;
+          if (this.sees(jar, frame)) jar.set(url, m.value, false);
+          this.pushCookies(jar, frame, true);
+        });
+        break;
+      }
+      case "invoke": this.hold.remote?.post(m); break;
+      case "thread": sharedRenderer = m.shared; break;
+      case "script-ready": if (!sub) this.page.script.resolve(frame.port); break;
+      case "loaded":
+        if (sub) { if (m.url !== null) frame.url = m.url; break; }
+        this.remoteWidth = m.width; this.remoteHeight = m.height;
+        this.finishLoad(m.url, m.title, m.error);
+        break;
+      case "size": if (!sub) this.contentSized(m.width, m.height); break;
+      case "fragment": if (!sub) this.fragmentNavigated(m.url); break;
+      case "navigate":
+        if (!sub) this.navigate(m.url, m.replace);
+        else if (!/^javascript:/i.test(m.url)) this.subframeNavigate(frame, { url: m.url, src: srcFor(m.url) });
+        break;
+      case "submit": {
+        const entry = { url: m.url, src: srcFor(m.url), init: m.init };
+        if (sub) this.subframeNavigate(frame, entry); else this.go(entry);
+        break;
+      }
+      case "redirect": {
+        // the document is another origin's: it renders in that origin's partition
+        const entry = { url: m.url, src: srcFor(m.url) };
+        if (sub) { this.subframeNavigate(frame, entry, m.html); break; }
+        if (this.idx >= 0) this.hist[this.idx] = entry;
+        this.go(entry, false, m.html);
+      }
+    }
   }
-  /** a frame's page asks where its subframe of `url` loads (a form's POST with its body): a frame on
-   *  a renderer, the URL itself, or none */
-  private answerSubframe(data: Record<string, unknown>, port: MessagePort) {
-    const url = String(data.url);
-    void this.subframeSrc({ url, src: srcFor(url, this), method: typeof data.method === "string" ? data.method : undefined,
-      body: data.body instanceof ArrayBuffer ? data.body : undefined, contentType: typeof data.contentType === "string" ? data.contentType : undefined })
-      .then((src) => port.postMessage(src), () => port.postMessage(null)).finally(() => port.close());
+  /** the URL whose cookies a frame's document sees */
+  private urlOf(frame: RendererFrame) { return frame.sub ? frame.url : this.url ?? ""; }
+  /** whether a frame's document sees the jar's cookies: a subframe's when they are first-party to the
+   *  page or third-party ones are allowed */
+  private sees(jar: WebCookies, frame: RendererFrame) { return !frame.sub || jar.sameSite(frame.url, this.url ?? "") || thirdPartyCookies.has(this.view); }
+  /** each frame's document.cookie, once the jar changed */
+  private sendCookies(jar: WebCookies) { for (const frame of this.hold.frames.values()) this.pushCookies(jar, frame); }
+  /** a frame's document.cookie, when it changed or answers the page's write */
+  private pushCookies(jar: WebCookies, frame: RendererFrame, answer = false) {
+    const list = this.sees(jar, frame) ? jar.document(this.urlOf(frame)) : [], sent = JSON.stringify(list);
+    if (sent === frame.cookies.sent && !answer) return;
+    frame.cookies.sent = sent;
+    frame.port.postMessage({ kind: "cookies", list, ack: frame.cookies.ack } satisfies AppMessage);
   }
   /** Chromium's navigation throttle offers a subframe navigation of any scheme but http(s), about: and
    *  javascript: to shouldOverrideUrlLoading. Then a blob: loads; any other goes to shouldInterceptRequest
    *  (as http(s) does through the proxy), whose response loads; otherwise a data: URL loads and an
-   *  unknown scheme fails with ERR_UNKNOWN_URL_SCHEME and an error page. */
-  private async subframeSrc(entry: Entry): Promise<string | null> {
-    if (/^https?:/i.test(entry.url)) return this.subframe(entry);
+   *  unknown scheme fails with ERR_UNKNOWN_URL_SCHEME and an error page. Answers where the frame
+   *  loads: a renderer, the URL itself, or nowhere. */
+  private async subframeSrc(entry: SrcEntry, prefetched?: string): Promise<string | null> {
+    if (/^https?:/i.test(entry.url)) return this.subframe(entry, prefetched);
     const request = mkRequest(entry.url);
     request.main = false;
     if (await onMain(() => vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, request))) return null;
@@ -520,92 +516,48 @@ export class WebViewChromium extends JObj {
     try { html = new TextDecoder(charset).decode(bytes); } catch { html = new TextDecoder().decode(bytes); }
     return this.subframe({ url, doc: srcdoc(html, null, /^data:/i.test(url) ? null : url) });
   }
-  private async subframe(entry: Entry): Promise<string> {
+  /** the renderer document a subframe of `entry` loads, on its web origin's renderer */
+  private async subframe(entry: Entry, prefetched?: string): Promise<string> {
     const remote = this.hold.remote;
     if (!remote) throw new Error("no page");
-    const origin = await webRenderer(appHost?.pkg ?? "", webOrigin(entry)), token = crypto.randomUUID();
-    this.subframes.set(token, { entry, origin, remote });
+    const origin = await webRenderer(runningApp().pkg, webOrigin(entry)), token = crypto.randomUUID();
+    if (this.hold.remote !== remote) throw new Error("page closed");
+    this.subframes.set(token, { entry, origin, prefetched });
     if (this.subframes.size > 256) this.subframes.delete(this.subframes.keys().next().value!);
-    return origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(entry.url) + "&__wd_ua="
-      + encodeURIComponent(String(this.settings.v.userAgentString)) + (this.intercepting ? "&__wd_intercept=1" : "") + "&__wd_sub=" + token;
+    return rendererUrl(origin, remote.id, token);
   }
-  /** a message from a window inside the page: a subframe this provider handed out, once it is ready */
-  private subframeMessage(event: MessageEvent, main: Window) {
-    const data = event.data, win = event.source as Window | null;
-    if (!win) return;
-    if (data.kind !== "ready") {
-      const known = this.subframeWindows.get(win);
-      if (known?.origin === event.origin && data.kind === "redirect" && typeof data.url === "string" && typeof data.html === "string")
-        this.subframeNavigate(win, { url: data.url, src: srcFor(data.url, this), doc: data.html, final: data.url });
-      return;
-    }
-    const sub = typeof data.sub === "string" ? this.subframes.get(data.sub) : undefined;
-    if (!sub || sub.remote !== this.hold.remote || event.origin !== sub.origin) return;
-    let inside = false;
-    for (let w = win, depth = 0; !inside && w !== w.parent && depth < 32; w = w.parent, depth++) inside = w.parent === main;
-    if (!inside) return;
-    this.subframeWindows.set(win, sub);
-    const channel = this.channel({ sub, win }), { entry } = sub, g = this.gen;
-    void webCookies(appHost?.pkg ?? "").then((jar) => this.loadMessage(entry.url, this.subframeSees(jar, entry.url))).then((load) => {
-      if (this.gen !== g) return;
-      this.subframeCookies.get(win)?.port.close();
-      this.subframeCookies.set(win, { sub, port: channel.port1, ack: 0, sent: JSON.stringify(load.cookies) });
-      win.postMessage({ ...load, bridge: sub.remote.id, src: entry.src, doc: entry.doc, final: entry.final, method: entry.method,
-        body: entry.body, contentType: entry.contentType }, sub.origin, [channel.port2]);
+  private subframeNavigate(frame: RendererFrame, entry: SrcEntry, prefetched?: string) {
+    void this.subframeSrc(entry, prefetched).then((src) => { if (src) frame.win.location.replace(src); }, () => {});
+  }
+  /** `message` to the page once its script listens, and the answer on a port of its own; a rejection
+   *  ("interrupted", "timed out") when the page closes or `ms` pass first */
+  private ask(message: AppMessage, ms: number): Promise<unknown> {
+    const { script, closed } = this.page, channel = new MessageChannel();
+    return new Promise((resolve, reject) => {
+      const settle = (done: () => void) => { clearTimeout(timer); closed.signal.removeEventListener("abort", interrupted); channel.port1.close(); done(); };
+      const interrupted = () => settle(() => reject("interrupted"));
+      const timer = setTimeout(() => settle(() => reject("timed out")), ms);
+      closed.signal.addEventListener("abort", interrupted);
+      channel.port1.onmessage = ({ data }) => settle(() => resolve(data));
+      void script.promise.then((port) => port.postMessage(message, [channel.port2]));
     });
   }
-  /** what a subframe's page reports: Chromium sends a subframe's console and cookies as the main
-   *  frame's, and its navigations stay in the subframe, through the renderer of their origin */
-  private subframePage({ sub, win }: { sub: Subframe; win: Window }, data: Record<string, unknown> | null) {
-    if (!data || sub.remote !== this.hold.remote) return;
-    if (data.kind === "console") this.consoleMessage(data);
-    else if (data.kind === "loaded" && typeof data.url === "string") sub.entry.url = data.url;
-    else if (data.kind === "cookie" && typeof data.value === "string" && typeof data.seq === "number") {
-      const value = data.value, seq = data.seq, url = sub.entry.url;
-      void webCookies(appHost?.pkg ?? "").then((jar) => {
-        const frame = this.subframeCookies.get(win);
-        if (!frame || frame.sub !== sub) return;
-        frame.ack = seq;
-        if (this.subframeSees(jar, url)) jar.set(url, value, false);
-        this.sendSubframeCookies(jar, frame, true);
-      });
-    } else if (data.kind === "invoke") this.hold.remote?.post(data);
-    else if (data.kind === "thread" && typeof data.shared === "boolean") sharedRenderer = data.shared;
-    else if (data.kind === "navigate" && typeof data.url === "string" && !/^javascript:/i.test(data.url)) this.subframeNavigate(win, { url: data.url, src: srcFor(data.url, this) });
-    else if (data.kind === "submit" && typeof data.url === "string" && typeof data.method === "string" && data.body instanceof ArrayBuffer)
-      this.subframeNavigate(win, { url: data.url, src: srcFor(data.url, this), method: data.method, body: data.body,
-        contentType: typeof data.contentType === "string" ? data.contentType : undefined });
-  }
-  private subframeNavigate(win: Window, entry: Entry) {
-    void this.subframeSrc(entry).then((src) => { if (src) win.location.replace(src); }, () => {});
-  }
-  send(data: object, transfer: Transferable[] = []) { if (this.remoteOrigin) this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
   async bitmapSnapshot(): Promise<ImageBitmap> {
-    let data: string;
-    if (this.remoteOrigin) {
-      data = await new Promise<string>((resolve, reject) => {
-        const seq = ++this.nextSnapshot;
-        const timer = setTimeout(() => {
-          this.snapshots.delete(seq);
-          reject(rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView snapshot timed out"));
-        }, 10_000);
-        this.snapshots.set(seq, { resolve, reject, timer });
-        this.send({ kind: "snapshot", seq });
-      });
-    } else throw rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView content is unavailable for bitmap capture");
-    return createImageBitmap(await (await fetch(data)).blob());
+    const failed = (message: string) => rt.mkThrowable("java/lang/UnsupportedOperationException", message);
+    if (!this.hold.remote) throw failed("WebView content is unavailable for bitmap capture");
+    const answer = await this.ask({ kind: "snapshot" }, 10_000).catch((why) => { throw failed("WebView snapshot " + why); }) as { data?: string; error?: string };
+    if (answer.error) throw failed(answer.error);
+    return createImageBitmap(await (await fetch(answer.data!)).blob());
+  }
+  stop() {
+    this.gen++;
+    const win = this.hold.el?.contentWindow;
+    if (win) this.hold.frames.get(win)?.port.postMessage({ kind: "stop" } satisfies AppMessage);
   }
   private closeBridge() {
-    this.scriptReady = false; this.cookieAck = 0; this.cookiesSent = "";
-    for (const frame of this.subframeCookies.values()) frame.port.close();
-    this.subframeCookies.clear();
-    unbridge(this.hold); this.remoteOrigin = "";
-    for (const done of this.evaluations.values()) done("null");
-    for (const pending of this.snapshots.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView snapshot interrupted"));
-    }
-    this.snapshots.clear();
+    unbridge(this.hold);
+    this.loading = null; this.subframes.clear();
+    this.page.closed.abort(); this.page = newPage();
   }
   destroy() { this.gen++; this.closeBridge(); collected.unregister(this.hold); release(this.hold); this.rect = null; live.delete(this); }
 
@@ -642,7 +594,6 @@ export class WebViewChromium extends JObj {
     const g = ++this.gen, el = this.frame(), url = e.url;
     if (el) {
       this.closeBridge();
-      this.prefetched = prefetched;
       // Chromium injects the interfaces a page loads with; a later add or remove applies at the next load
       const ref = this.ref;
       this.pageIfaces = { ...this.ifaces };
@@ -653,22 +604,22 @@ export class WebViewChromium extends JObj {
       });
       this.intercepting = intercept;
       const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
-        intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, webRenderer(appHost?.pkg ?? "", webOrigin(e)));
-      bridges.set(remote.id, ref);
-      void webCookies(appHost?.pkg ?? "").then((jar) => {
-        if (this.hold.remote === remote) this.hold.unwatch = jar.watch(() => ref.deref()?.sendCookies(jar));
+        intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
+      this.hold.ends.push(onRendererReady(remote.id, (event, win) => ref.deref()?.rendererReady(event, win)));
+      void this.jar.then((jar) => {
+        if (this.hold.remote === remote) this.hold.ends.push(jar.watch(() => ref.deref()?.sendCookies(jar)));
       });
       void remote.ready.then((origin) => {
         if (this.gen !== g) return;
-        this.remoteOrigin = origin;
-        el.src = origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(e.url) + "&__wd_ua=" + encodeURIComponent(String(this.settings.v.userAgentString)) + (intercept ? "&__wd_intercept=1" : "");
+        this.loading = { entry: e, origin, prefetched };
+        el.src = rendererUrl(origin, remote.id);
       }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
     }
     if (prefetched === undefined) void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this.view, url, null));
   }
   loadUrl(url: string) {
     if (/^javascript:/i.test(url)) { this.evalJs(url.slice(11)); return; }
-    this.go(/^about:blank$/i.test(url) ? { url, doc: "" } : { url, src: srcFor(url, this) });
+    this.go(/^about:blank$/i.test(url) ? { url, doc: "" } : { url, src: srcFor(url) });
   }
   /** WebViewClient.shouldInterceptRequest, which Chromium calls on its IO thread */
   private intercept(request: WebRequest): Promise<WebResponse | null> {
@@ -739,7 +690,7 @@ export class WebViewChromium extends JObj {
   fragmentNavigated(url: string) {
     const g = this.gen, cur = this.hist[this.idx];
     this.url = url;
-    if (cur) { cur.url = url; if (cur.src) cur.src = srcFor(url, this); }
+    if (cur) { cur.url = url; if ("src" in cur) cur.src = srcFor(url); }
     const self = this;
     void onMain(() => rt.drive(function* () {
       if (self.gen !== g) return;
@@ -751,7 +702,7 @@ export class WebViewChromium extends JObj {
     void onMain(() => after(vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, mkRequest(href, true)), (overridden) => {
       if (overridden) return;
       if (replace && this.idx >= 0 && !/^javascript:/i.test(href)) {
-        const entry = { url: href, src: srcFor(href, this) };
+        const entry = { url: href, src: srcFor(href) };
         this.hist[this.idx] = entry;
         this.go(entry, false);
       } else this.loadUrl(href);
@@ -759,15 +710,8 @@ export class WebViewChromium extends JObj {
   }
   /** Chromium JSON-encodes the completion value; undefined, functions and throws all read as null */
   evalJs(js: string): string | Promise<string> {
-    if (this.hold.remote) return new Promise<string>((resolve) => {
-      const seq = ++this.nextEval;
-      const done = (value: string) => { clearTimeout(timer); this.evaluations.delete(seq); this.pendingScripts.delete(seq); resolve(value); };
-      const timer = setTimeout(() => done("null"), 30_000);
-      this.evaluations.set(seq, done);
-      if (this.scriptReady) this.send({ kind: "eval", seq, script: js });
-      else this.pendingScripts.set(seq, js);
-    });
-    return "null";
+    if (!this.hold.remote) return "null";
+    return this.ask({ kind: "eval", script: js }, 30_000).then((value) => typeof value === "string" ? value : "null", () => "null");
   }
   findAll(query: string) {
     this.findQuery = query;
@@ -877,10 +821,10 @@ rt.register({
         this.go({ url: hist || "about:blank", doc: srcdoc(data, enc, base), base: base ?? undefined });
       },
     "postUrl(Ljava/lang/String;[B)V": function (this: P, url: string, body: Uint8Array) {
-      this.go({ url, src: srcFor(url, this), method: "POST", body: body.slice().buffer, contentType: "application/x-www-form-urlencoded" });
+      this.go({ url, src: srcFor(url), init: { method: "POST", body: body.slice().buffer, contentType: "application/x-www-form-urlencoded" } });
     },
     "reload()V": function (this: P) { if (this.idx >= 0) this.go(this.hist[this.idx], false); },
-    "stopLoading()V": function (this: P) { this.gen++; this.send({ kind: "stop" }); },
+    "stopLoading()V": function (this: P) { this.stop(); },
     ...fieldGetters({ "getSettings()Landroid/webkit/WebSettings;": "settings",
       "getWebViewClient()Landroid/webkit/WebViewClient;": "client",
       "getWebChromeClient()Landroid/webkit/WebChromeClient;": "chrome", "getUrl()Ljava/lang/String;": "url",

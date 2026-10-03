@@ -18,13 +18,18 @@ afterAll(async () => { await browser?.close(); });
 const renderer = "http://renderer.example:8443";
 
 /** A renderer page serving `html` as webdroid rewrites it for `upstream`, with the bridge context the
- *  shell injects. The bridge hides `__wdWebView`, so tests read the same object as `probeContext`. */
+ *  shell injects. The bridge hides `__wdWebView`, so tests read the same object as `probeContext`, and
+ *  the app's end of the page's port as `appPort`. */
 async function rendererPage(path: string, html: string, upstream: string, context: { id: string | null; page: string; [key: string]: unknown }, isolated = false): Promise<Page> {
   const page = await browser.newPage();
   await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
     ? route.fulfill({ json: { value: {} } })
     : route.fulfill({ contentType: "text/html", body: await webDocument(html, upstream, isolated) }));
   await page.addInitScript((context) => {
+    const channel = new MessageChannel();
+    channel.port2.start();
+    Object.defineProperty(window, "appPort", { value: channel.port2 });
+    context.port = channel.port1;
     Object.defineProperty(window, "__wdWebView", { value: context, configurable: true });
     Object.defineProperty(window, "probeContext", { value: context });
   }, context);
@@ -274,7 +279,7 @@ describe("WebView location", () => {
     const page = await fixture('<base href="/app/">');
     try {
       expect(await evaluate(page, `(async () => {
-        const request = new Promise(resolve => addEventListener("message", event => {
+        const request = new Promise(resolve => appPort.addEventListener("message", event => {
           if (event.data?.kind === "navigate") resolve([event.data.url, event.data.replace]);
         }, {once: true}));
         location.replace("next");
@@ -315,7 +320,7 @@ describe("WebView location", () => {
     const page = await fixture();
     try {
       expect(await evaluate(page, `(async () => {
-        const reported = new Promise(resolve => addEventListener("message", event => {
+        const reported = new Promise(resolve => appPort.addEventListener("message", event => {
           if (event.data?.kind === "fragment") resolve(event.data.url);
         }));
         location.hash = "section";
@@ -326,7 +331,7 @@ describe("WebView location", () => {
 
   test.concurrent("document completion reports history changes made during parsing", async () => {
     const page = await fixture(`<script>
-      addEventListener("message", event => { if (event.data?.kind === "loaded") document.documentElement.dataset.loaded = event.data.url; });
+      appPort.addEventListener("message", event => { if (event.data?.kind === "loaded") document.documentElement.dataset.loaded = event.data.url; });
       history.replaceState(null, "", "/next");
     </script>`);
     try {
@@ -376,14 +381,14 @@ describe("WebView cookies", () => {
       { id: "cookie-probe", page: upstream, cookies: [{ text: "a=1", expires: 0 }, { text: "gone=1", expires: 1 }] }, true);
     try {
       expect(await page.evaluate(() => {
-        const posted: unknown[] = [];
-        addEventListener("message", (event) => { if (event.data?.kind === "cookie") posted.push(event.data.seq); });
+        const posted: unknown[] = [], app = (window as unknown as { appPort: MessagePort }).appPort;
+        app.addEventListener("message", (event) => { if (event.data?.kind === "cookie") posted.push(event.data.seq); });
         const before = document.cookie;
         for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly"]) document.cookie = value;
         const written = document.cookie;
         // the jar's answer to an earlier write is not the cookies the page has since written
-        postMessage({ bridge: "cookie-probe", kind: "cookies", ack: 1, list: [{ text: "x=1", expires: 0 }] }, "*");
-        postMessage({ bridge: "cookie-probe", kind: "cookies", ack: 5, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] }, "*");
+        app.postMessage({ kind: "cookies", ack: 1, list: [{ text: "x=1", expires: 0 }] });
+        app.postMessage({ kind: "cookies", ack: 5, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] });
         return new Promise<unknown>((resolve) => setTimeout(() => resolve([before, written, document.cookie, posted]), 50));
       })).toEqual(["a=1", "b=2", "b=2; z=9", [1, 2, 3, 4, 5]]);
     } finally { await page.close(); }
@@ -444,7 +449,7 @@ describe("WebView isolation", () => {
         out.siblingFrame = await new Promise(resolve => {
           addEventListener("message", event => { if (event.source === sibling.contentWindow) resolve(event.data.kind); });
           sibling.onload = () => {
-            sibling.contentWindow.postMessage({bridge: id, kind: "load", doc: "<script>parent.postMessage({kind: 'forged'}, '*')<\\/script>"}, "*", [new MessageChannel().port2]);
+            sibling.contentWindow.postMessage({bridge: id, kind: "load", page: "about:blank", document: {html: "<script>parent.postMessage({kind: 'forged'}, '*')<\\/script>"}}, "*", [new MessageChannel().port2]);
             setTimeout(() => resolve("silent"), 300);
           };
           document.body.append(sibling);
@@ -457,10 +462,11 @@ describe("WebView isolation", () => {
         document.cookie = "secret=app; path=/";
         const frame = document.createElement("iframe");
         frame.setAttribute("sandbox", sandbox);
-        frame.src = `http://partition.localhost:${port}/webview?__wd_bridge=${id}&__wd_url=about:blank`;
+        frame.src = `http://partition.localhost:${port}/webview?__wd_bridge=${id}`;
         const result = new Promise((resolve) => addEventListener("message", (event) => {
           if (event.source !== frame.contentWindow || event.data?.bridge !== id) return;
-          if (event.data.kind === "ready") frame.contentWindow!.postMessage({ bridge: id, kind: "load", doc: "<!doctype html><body>" + probe }, event.origin, [new MessageChannel().port2]);
+          if (event.data.kind === "ready") frame.contentWindow!.postMessage({ bridge: id, kind: "load", page: "about:blank", document: { html: "<!doctype html><body>" + probe } },
+            event.origin, [new MessageChannel().port2]);
           else if (event.data.kind === "probe") resolve({ ...event.data, bridge: undefined, kind: undefined, location: location.href });
         }));
         document.body.append(frame);
@@ -493,12 +499,12 @@ describe("WebView isolation", () => {
           });
           document.body.append(frame);
         });
-        const read = (write: boolean) => drive({ kind: "load", doc: `<script>(async () => {
+        const read = (write: boolean) => drive({ kind: "load", page: "about:blank", document: { html: `<script>(async () => {
           if (${write}) { localStorage.setItem("k", "v"); await new Promise(r => { const q = indexedDB.open("db"); q.onupgradeneeded = () => q.result.createObjectStore("s");
             q.onsuccess = () => { const t = q.result.transaction("s", "readwrite"); t.objectStore("s").put(new Uint8Array(1 << 16), 1); t.oncomplete = () => { q.result.close(); r(); }; }; }); }
           parent.postMessage({bridge: new URL(location.href).searchParams.get("__wd_bridge"), kind: "found",
             found: [localStorage.getItem("k"), (await indexedDB.databases()).map(d => d.name)]}, "*");
-        })()</script>` });
+        })()</script>` } });
         const written = await read(true), usage = (await drive({ kind: "storage", op: "usage" }) as { usage: number }).usage > 0;
         await drive({ kind: "storage", op: "origin" });
         const afterOrigin = await read(false);

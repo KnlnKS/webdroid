@@ -1,6 +1,7 @@
 import { htmlAttribute, webDocument } from "./webhtml";
 import { webScript } from "./webscript";
 import { isGuestHost } from "../native/net-address";
+import type { BridgeCall } from "./webpage/protocol";
 
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
@@ -47,7 +48,7 @@ async function proxied(request: Request, options: ProxyOptions): Promise<Respons
     const encoded = !frame && !isolated && headers.has("accept-encoding");
     const bridge = query.get("bridge"), body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
     /** the WebView's process answering `call`: its WebResourceResponse, or null for none */
-    const bridged = async (call: object): Promise<Response | null> => {
+    const bridged = async (call: BridgeCall): Promise<Response | null> => {
       const response = await options.bridgeCall(new Request(new URL(`/webview-call?id=${encodeURIComponent(bridge!)}`, request.url), {
         method: "POST", signal: request.signal, body: JSON.stringify(call),
       }));
