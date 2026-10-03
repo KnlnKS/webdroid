@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { webDocument } from "../src/shell/webhtml";
 import { webScript } from "../src/shell/webscript";
-import { webViewBrands } from "../src/shell/webinject";
+import { proxyRequest } from "../src/shell/proxy";
+import { WEB_FRAME, WEB_FRAME_SANDBOX, WEB_PROXY_WORKER, webViewBrands } from "../src/shell/webinject";
 
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
@@ -381,5 +382,62 @@ describe("WebView cookies", () => {
         return new Promise<unknown>((resolve) => setTimeout(() => resolve([before, written, document.cookie, posted]), 50));
       })).toEqual(["a=1", "b=2", "b=2; z=9", [1, 2, 3, 4, 5]]);
     } finally { await page.close(); }
+  });
+});
+
+describe("WebView isolation", () => {
+  // the app's page and a renderer frame on a *.localhost site of its own, as the dev server serves them
+  test("a WebView page reaches neither the app page's storage, cookies and window nor a frame of the app's origin", async () => {
+    const id = crypto.randomUUID(), html = { "content-type": "text/html" };
+    const server = Bun.serve({ port: 0, fetch: (req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
+      if (url.pathname === "/webview") return new Response(WEB_FRAME, { headers: html });
+      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async () => new Response(
+        "<script>parent.postMessage({kind: 'upstream', storage: (() => { try { return top.localStorage.getItem('secret'); } catch (e) { return e.name; } })()}, '*')</script>", { headers: html }) });
+      return new Response("<!doctype html><body>app", { headers: html });
+    } });
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://localhost:${server.port}/`);
+      // the page writes its findings where the app would read them: postMessage to its parent
+      const probe = `<script>(async () => {
+        const out = {}, id = window.__wdWebView.id, attempt = f => { try { return f(); } catch (e) { return e.name; } };
+        out.storage = localStorage.getItem("secret");
+        out.cookie = document.cookie;
+        out.parentStorage = attempt(() => parent.localStorage.getItem("secret"));
+        out.topDocument = attempt(() => typeof top.document);
+        // a frame of the app's own origin is no renderer: it never takes a document from this page
+        const child = document.createElement("iframe");
+        child.src = "http://localhost:${server.port}/webview?__wd_bridge=" + id;
+        const answer = frame => new Promise(resolve => {
+          addEventListener("message", event => { if (event.source === frame.contentWindow) resolve(event.data.storage ?? event.data.kind); });
+          frame.onload = () => setTimeout(() => resolve("silent"), 300);
+          document.body.append(frame);
+        });
+        out.appFrame = await answer(child);
+        // nor does the app's origin serve it an upstream document
+        const proxied = document.createElement("iframe");
+        proxied.src = "http://localhost:${server.port}/proxy?url=" + encodeURIComponent("https://upstream.example/");
+        out.proxiedFrame = await answer(proxied);
+        out.topNavigation = attempt(() => { top.location.href = "about:blank"; return "navigated"; });
+        parent.postMessage({bridge: id, kind: "probe", ...out}, "*");
+      })()</script>`;
+      expect(await page.evaluate(async ({ id, port, sandbox, probe }) => {
+        localStorage.setItem("secret", "app");
+        document.cookie = "secret=app; path=/";
+        const frame = document.createElement("iframe");
+        frame.setAttribute("sandbox", sandbox);
+        frame.src = `http://partition.localhost:${port}/webview?__wd_bridge=${id}&__wd_url=about:blank`;
+        const result = new Promise((resolve) => addEventListener("message", (event) => {
+          if (event.source !== frame.contentWindow || event.data?.bridge !== id) return;
+          if (event.data.kind === "ready") frame.contentWindow!.postMessage({ bridge: id, kind: "load", doc: "<!doctype html><body>" + probe }, event.origin, [new MessageChannel().port2]);
+          else if (event.data.kind === "probe") resolve({ ...event.data, bridge: undefined, kind: undefined, location: location.href });
+        }));
+        document.body.append(frame);
+        return result;
+      }, { id, port: server.port, sandbox: WEB_FRAME_SANDBOX, probe })).toEqual({ storage: null, cookie: "", parentStorage: "SecurityError", topDocument: "SecurityError",
+        appFrame: "silent", proxiedFrame: "SecurityError", topNavigation: "SecurityError", location: `http://localhost:${server.port}/`, bridge: undefined, kind: undefined });
+    } finally { await page.close(); await server.stop(true); }
   });
 });

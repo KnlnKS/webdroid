@@ -82,20 +82,20 @@ export function setDocumentCookie(cookies: { text: string; expires: number }[], 
 export const WEB_INJECT = `<script>(function(){
 // Wrangler can insert __name into functions embedded through toString().
 const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
-const config = window.__wdWebView, f = window.frameElement;
+const config = window.__wdWebView;
 delete window.__wdWebView;
-const ua = config?.agent || f?.__wdUserAgent;
+const ua = config?.agent;
 if (ua) {
   Object.defineProperty(navigator, "userAgent", {value: ua});
   Object.defineProperty(navigator, "appVersion", {value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua});
 }
-const hints = config?.clientHints || f?.__wdClientHints;
-if (hints) (${installClientHints.toString()})(hints);
+if (config?.clientHints) (${installClientHints.toString()})(config.clientHints);
 const id = config?.id;
+if (!id) return;
 // Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
 // them keeps the embedding page from reporting them as its own exceptions.
-const consoleMessage = id ? data => parent.postMessage({bridge: id, kind: "console", ...data}, "*") : f?.__wdConsole;
-if (consoleMessage) {
+const consoleMessage = data => parent.postMessage({bridge: id, kind: "console", ...data}, "*");
+{
   addEventListener("error", event => {
     if (!event.isTrusted || !(event instanceof ErrorEvent)) return;
     event.preventDefault();
@@ -109,7 +109,6 @@ if (consoleMessage) {
       source: document.URL, line: 0});
   });
 }
-if (!id) { if (f && f.__wdIfaces) Object.assign(window, f.__wdIfaces); return; }
 (${installWebHistory.toString()})(config);
 function call(body) {
   const xhr = new XMLHttpRequest();
@@ -203,7 +202,12 @@ addEventListener("message", event => {
 send({kind: "script-ready"});
 })()</script>`;
 
+/** a WebView frame's sandbox: its own (renderer) origin, and no navigation of the app's window */
+export const WEB_FRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
+
 export const WEB_FRAME = `<!doctype html><meta charset="utf-8"><script>(function(){
+// a frame of the app's own origin would hand its parent's document the app's storage
+try { if (top.location.href) return; } catch {}
 const id = new URL(location.href).searchParams.get("__wd_bridge");
 addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
@@ -228,7 +232,12 @@ addEventListener("message", async event => {
       method: event.data.method || "GET", body: event.data.body,
       headers: {"x-wd-user-agent": event.data.userAgent, ...(event.data.contentType ? {"content-type": event.data.contentType} : {})},
     }) : null;
-    const final = response?.headers.get("x-wd-final-url");
+    const final = response?.headers.get("x-wd-final-url") ?? event.data.final;
+    // a redirect to another origin renders in that origin's partition
+    if (response && final && /^https?:/.test(context.page) && new URL(final).origin !== new URL(context.page).origin) {
+      parent.postMessage({bridge: id, kind: "redirect", url: final, html: await response.text()}, "*");
+      return;
+    }
     if (final) {
       const source = new URL(final), local = new URL(location.href);
       local.pathname = source.pathname; local.search = source.search; local.hash = source.hash;
@@ -268,11 +277,9 @@ function message(client, data) {
     client.postMessage(data, [channel.port2]);
   });
 }
-const frameContext = config => ({page: config.get("url"), agent: config.get("ua")});
 async function context(client) {
   const url = new URL(client.url), config = url.searchParams;
   if (config.has("__wd_bridge")) return {id: config.get("__wd_bridge"), page: config.get("__wd_url"), agent: config.get("__wd_ua"), intercept: config.get("__wd_intercept") === "1"};
-  if (url.pathname === "/proxy" && config.get("frame") === "1") return frameContext(config);
   const key = client.id + client.url;
   let value = contexts.get(key);
   if (!value) {
@@ -302,22 +309,21 @@ self.addEventListener("fetch", event => {
   const localProxy = original.origin === self.location.origin && original.pathname === "/proxy";
   if (original.origin === self.location.origin && !localProxy) return;
   event.respondWith((async () => {
-    // a frame's own navigation has no client yet: its /proxy URL carries the context
-    const navigation = localProxy && request.mode === "navigate" && original.searchParams.get("frame") === "1";
-    const client = navigation ? null : await self.clients.get(event.clientId);
-    if (!client && !navigation) return fetch(request);
+    const client = await self.clients.get(event.clientId);
+    if (!client) return fetch(request);
     // the shell's own pages (its Java networking) are no WebView: nothing to rewrite
-    if (client && !client.url.includes("__wd_bridge") && ["/", "/process"].includes(new URL(client.url).pathname)) return fetch(request);
-    const {page, agent, id, intercept} = client ? await context(client) : frameContext(original.searchParams), isolated = !!id;
+    if (!client.url.includes("__wd_bridge") && ["/", "/process"].includes(new URL(client.url).pathname)) return fetch(request);
+    const {page, agent, id, intercept} = await context(client), isolated = !!id;
     const headers = new Headers();
     // client hints describe the host browser, not the WebView the user agent names
     request.headers.forEach((value, name) => { if (!name.startsWith("sec-ch-")) headers.set(name.startsWith("x-wd-") ? name : "x-wd-" + name, value); });
     if (agent) headers.set("x-wd-user-agent", agent);
-    // fetch metadata the browser adds past the worker; a frame's navigation loads the WebView's document
-    headers.set("x-wd-sec-fetch-mode", request.mode);
-    headers.set("x-wd-sec-fetch-dest", navigation ? "document" : request.destination || "empty");
+    // fetch metadata the browser adds past the worker; the frame's fetch of its document is its navigation
+    const frame = localProxy && original.searchParams.get("frame") === "1";
+    headers.set("x-wd-sec-fetch-mode", frame ? "navigate" : request.mode);
+    headers.set("x-wd-sec-fetch-dest", frame ? "document" : request.destination || "empty");
     let target = localProxy ? original.searchParams.get("url") : request.url;
-    if (page && /^https?:/.test(page)) {
+    if (page && /^https?:/.test(page) && !frame) {
       const source = new URL(page);
       if (request.mode === "cors") headers.set("x-wd-origin", source.origin);
       if (request.referrerPolicy !== "no-referrer") headers.set("x-wd-referer", source.origin === new URL(target).origin ? source.href : source.origin + "/");
@@ -332,7 +338,6 @@ self.addEventListener("fetch", event => {
         const value = await message(client, {kind: "webcookies", url: target});
         if (value) headers.set("x-wd-cookie", value); else headers.delete("x-wd-cookie");
       }
-      const frame = localProxy && original.searchParams.get("frame") === "1";
       if (isolated && (frame || request.destination === "script") && !request.integrity) {
         headers.delete("x-wd-if-none-match"); headers.delete("x-wd-if-modified-since");
       }

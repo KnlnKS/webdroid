@@ -1,9 +1,11 @@
 // The WebView implementation package. AOSP's android.webkit (WebView, WebViewFactory, the clients)
 // runs from bytecode; WebViewFactory loads this module's WebViewFactoryProvider where it would load
 // Chromium's, and each WebView's WebViewProvider shows its page in a DOM frame over the display,
-// placed where the WebView's draw functor composes. JavaScript interfaces use a separate renderer
-// so synchronous page calls can wait while the Java runtime continues executing; a browser that
-// runs that renderer on this thread gets only the calls that return nothing, posted.
+// placed where the WebView's draw functor composes. Every page renders on a renderer origin of its
+// own app and web origin, apart from this page's window and storage, as Chromium sandboxes web
+// content from the app. Synchronous page calls wait there while the Java runtime continues
+// executing; a browser that runs that renderer on this thread gets only the calls that return
+// nothing, posted.
 
 import { awaited, rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod, jarray, PRIM_ARRAYS, type PrimElem } from "../jvm/abi";
@@ -20,13 +22,11 @@ import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
-import { WEB_INJECT, webFormRequest, webViewBrands, type ClientHints } from "../shell/webinject";
+import { WEB_FRAME_SANDBOX, WEB_INJECT, webViewBrands, type ClientHints } from "../shell/webinject";
 import type { WebCookies } from "../shell/webcookies";
-import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
 import { createFunctor, releaseFunctor, drawFunctor, type Rect } from "./webfunctor";
-import { guestEndpoint } from "../native/net-address";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
@@ -128,15 +128,6 @@ function* newSettings(): Gen<WebSettingsAdapter> {
 // ── the frame layer (shell-owned)
 let layer: HTMLElement | null = null;
 let layerObserver: ResizeObserver | null = null;
-let proxyReady: Promise<void> | null = null;
-function webProxy(): Promise<void> {
-  return proxyReady ??= (async () => {
-    const service = navigator.serviceWorker;
-    await service.register("/webview-worker.js");
-    await service.ready;
-    if (!service.controller) await new Promise<void>((resolve) => service.addEventListener("controllerchange", () => resolve(), { once: true }));
-  })();
-}
 /** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
 export function setWebLayer(el: HTMLElement) {
   if (!layer) window.addEventListener("message", WebViewChromium.message);
@@ -181,23 +172,6 @@ function srcFor(url: string, v: WebViewChromium): string {
   if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url) + "&ua=" + encodeURIComponent(String(v.settings.v.userAgentString));
   const m = /^file:\/\/\/android_asset\/(.*)$/i.exec(url);
   return m ? "/asset/" + encodeURIComponent(appHost?.assetKey ?? "") + "/assets/" + m[1] : url;
-}
-/** a frame-side absolute URL back to the Android-visible one the app knows */
-function unmap(href: string): string {
-  const o = location.origin;
-  if (href.startsWith(o + "/proxy?")) {
-    const local = new URL(href), source = local.searchParams.get("url");
-    if (!source) return href;
-    const url = new URL(source); if (local.hash) url.hash = local.hash;
-    return url.href;
-  }
-  const a = o + "/asset/" + encodeURIComponent(appHost?.assetKey ?? "") + "/assets/";
-  return href.startsWith(a) ? "file:///android_asset/" + href.slice(a.length) : href;
-}
-/** the frame's window when its document is ours to script (data: URLs are opaque) */
-function win(v: WebViewChromium): Window | null {
-  const w = v.hold.el?.contentWindow ?? null;
-  try { return w?.document ? w : null; } catch { return null; }
 }
 const toJava = (d: string, x: unknown): unknown =>
   d === "J" ? BigInt(Math.trunc(Number(x)) || 0) : d === "Z" ? (x ? 1 : 0) : d === "F" || d === "D" ? Number(x)
@@ -244,7 +218,13 @@ function mkRequest(url: string, gesture = false): JReq {
 }
 class JWebErr extends JObj { code = -1; desc = ""; }
 
-interface Entry { url: string; src?: string; doc?: string; method?: string; body?: ArrayBuffer; contentType?: string }
+interface Entry { url: string; src?: string; doc?: string; base?: string; method?: string; body?: ArrayBuffer; contentType?: string }
+/** the web origin whose storage a page of `e` keeps: the base URL's for a document the app wrote,
+ *  the file scheme's for files, and none (opaque) otherwise */
+function webOrigin(e: Entry): string {
+  const url = e.doc === undefined ? e.url : e.base ?? "";
+  return /^https?:/i.test(url) ? new URL(url).origin : /^file:/i.test(url) ? "file://" : "null";
+}
 class JWebHistoryItem extends JObj {
   constructor(public entry: Entry) { super(); }
 }
@@ -318,6 +298,8 @@ export class WebViewChromium extends JObj {
   private scriptReady = false;
   private cookieAck = 0;
   private cookiesSent = "";
+  /** the redirected document the next frame writes rather than fetching it again */
+  private prefetched: string | undefined;
   /** where the content shows, in display pixels, or null when hidden */
   rect: Rect | null = null;
   /** bumped by every load and by stopLoading: a frame event from an older load is ignored */
@@ -355,8 +337,11 @@ export class WebViewChromium extends JObj {
         if (this.gen !== g) return;
         const list = jar.document(this.url ?? "");
         this.cookiesSent = JSON.stringify(list);
-        this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body, contentType: entry?.contentType,
-          userAgent: this.settings.v.userAgentString, interfaces, cookies: list, clientHints: clientHints(), sharedThread: sharedRenderer }, [channel.port2]);
+        const prefetched = this.prefetched;
+        this.prefetched = undefined;
+        this.send({ kind: "load", src: entry?.src, doc: prefetched ?? entry?.doc, final: prefetched === undefined ? undefined : entry?.url, method: entry?.method,
+          body: entry?.body, contentType: entry?.contentType, userAgent: this.settings.v.userAgentString, interfaces, cookies: list,
+          clientHints: clientHints(), sharedThread: sharedRenderer }, [channel.port2]);
       });
     }
     else if (data.kind === "script-ready") {
@@ -368,6 +353,11 @@ export class WebViewChromium extends JObj {
       this.remoteWidth = typeof data.width === "number" ? data.width : 0;
       this.remoteHeight = typeof data.height === "number" ? data.height : 0;
       this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
+    } else if (data.kind === "redirect" && typeof data.url === "string" && typeof data.html === "string") {
+      // the document is another origin's: it renders in that origin's partition
+      const entry = { url: data.url, src: srcFor(data.url, this) };
+      if (this.idx >= 0) this.hist[this.idx] = entry;
+      this.go(entry, false, data.html);
     } else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
     else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
     else if (data.kind === "submit" && typeof data.url === "string" && typeof data.method === "string" && data.body instanceof ArrayBuffer)
@@ -402,7 +392,7 @@ export class WebViewChromium extends JObj {
     this.cookiesSent = sent;
     this.send({ kind: "cookies", list, ack: this.cookieAck });
   }
-  private send(data: object, transfer: Transferable[] = []) { this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
+  send(data: object, transfer: Transferable[] = []) { if (this.remoteOrigin) this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
   async bitmapSnapshot(): Promise<ImageBitmap> {
     let data: string;
     if (this.remoteOrigin) {
@@ -415,8 +405,6 @@ export class WebViewChromium extends JObj {
         this.snapshots.set(seq, { resolve, reject, timer });
         this.send({ kind: "snapshot", seq });
       });
-    } else if (this.hold.el?.contentDocument) {
-      data = (await snapshotDocument(this.hold.el.contentDocument)).data;
     } else throw rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView content is unavailable for bitmap capture");
     return createImageBitmap(await (await fetch(data)).blob());
   }
@@ -434,13 +422,12 @@ export class WebViewChromium extends JObj {
 
   frame(): HTMLIFrameElement | null {
     if (this.hold.el || !layer) return this.hold.el;
-    const el = this.hold.el = document.createElement("iframe"), ref = this.ref;
+    const el = this.hold.el = document.createElement("iframe");
     el.referrerPolicy = "no-referrer";
+    el.setAttribute("sandbox", WEB_FRAME_SANDBOX);
     el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1))";
     if (this.background) el.style.background = this.background;
     el.hidden = true;
-    (el as unknown as { __wdConsole: unknown }).__wdConsole = (data: unknown) => ref.deref()?.consoleMessage(data);
-    el.addEventListener("load", () => ref.deref()?.onLoad());
     layer.appendChild(el);
     collected.register(this, this.hold, this.hold);
     live.add(this);
@@ -459,47 +446,39 @@ export class WebViewChromium extends JObj {
     s.left = l / device.width * 100 + "%"; s.top = t / device.height * 100 + "%";
     s.width = (r - l) / device.density + "px"; s.height = (b - t) / device.density + "px";
   }
-  go(e: Entry, push = true) {
+  /** load `e`; `prefetched` is its document, already fetched by a frame that redirected to it */
+  go(e: Entry, push = true, prefetched?: string) {
     if (push) { this.hist.length = ++this.idx; this.hist.push(e); }
     this.url = e.url; this.loaded = false; this.progress = 10; this.title = "";
     const g = ++this.gen, el = this.frame(), url = e.url;
     if (el) {
-      Object.assign(el, { __wdUserAgent: this.settings.v.userAgentString, __wdClientHints: clientHints() });
-      const load = () => {
-        if (this.gen !== g) return;
-        if (e.doc !== undefined) el.srcdoc = e.doc;
-        else { el.removeAttribute("srcdoc"); el.src = e.src!; }
-      };
       this.closeBridge();
+      this.prefetched = prefetched;
       // Chromium injects the interfaces a page loads with; a later add or remove applies at the next load
-      const ref = this.ref, ifaces = this.pageIfaces = { ...this.ifaces };
-      (el as unknown as { __wdIfaces: WebInterfaces }).__wdIfaces = weakIfaces(() => ref.deref()?.pageIfaces);
+      const ref = this.ref;
+      this.pageIfaces = { ...this.ifaces };
       const base = rt.link("android/webkit/WebViewClient").ctor.prototype;
       const intercept = ["Landroid/webkit/WebResourceRequest;", "Ljava/lang/String;"].some(arg => {
         const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
         return jmethod(this.client, method) !== jmethod(base, method);
       });
-      // the bridge also carries what the app's own loopback server answers
-      if (intercept || Object.keys(ifaces).length || e.method === "POST" || guestEndpoint(e.url)) {
-        const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
-          intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined);
-        bridges.set(remote.id, ref);
-        void webCookies(appHost?.pkg ?? "").then((jar) => {
-          if (this.hold.remote === remote) this.hold.unwatch = jar.watch(() => ref.deref()?.sendCookies(jar));
-        });
-        void remote.ready.then((origin) => {
-          if (this.gen !== g) return;
-          this.remoteOrigin = origin;
-          el.removeAttribute("srcdoc"); el.src = origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(e.url) + "&__wd_ua=" + encodeURIComponent(String(this.settings.v.userAgentString)) + (intercept ? "&__wd_intercept=1" : "");
-        }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
-      } else if (e.src?.startsWith("/proxy?")) void webProxy().then(load).catch((error) => { console.error("[webview transport]", error); load(); });
-      else load();
+      const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
+        intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, (appHost?.pkg ?? "") + " " + webOrigin(e));
+      bridges.set(remote.id, ref);
+      void webCookies(appHost?.pkg ?? "").then((jar) => {
+        if (this.hold.remote === remote) this.hold.unwatch = jar.watch(() => ref.deref()?.sendCookies(jar));
+      });
+      void remote.ready.then((origin) => {
+        if (this.gen !== g) return;
+        this.remoteOrigin = origin;
+        el.src = origin + "/webview?__wd_bridge=" + remote.id + "&__wd_url=" + encodeURIComponent(e.url) + "&__wd_ua=" + encodeURIComponent(String(this.settings.v.userAgentString)) + (intercept ? "&__wd_intercept=1" : "");
+      }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
     }
-    void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this.view, url, null));
+    if (prefetched === undefined) void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this.view, url, null));
   }
   loadUrl(url: string) {
     if (/^javascript:/i.test(url)) { this.evalJs(url.slice(11)); return; }
-    this.go({ url, src: srcFor(url, this) });
+    this.go(/^about:blank$/i.test(url) ? { url, doc: "" } : { url, src: srcFor(url, this) });
   }
   /** WebViewClient.shouldInterceptRequest, which Chromium calls on its IO thread */
   private intercept(request: WebRequest): Promise<WebResponse | null> {
@@ -537,16 +516,6 @@ export class WebViewChromium extends JObj {
     this.idx = i;
     this.go(this.hist[i], false);
   }
-  private onLoad() {
-    if (this.hold.remote) return;
-    const cur = this.hist[this.idx], doc = this.hold.el!.contentDocument;
-    // the iframe's initial about:blank fires load too; it is nobody's navigation
-    if (doc?.URL === "about:blank" && cur?.src !== "about:blank") return;
-    const redirected = doc?.querySelector('meta[name="wd-proxy-url"]')?.getAttribute("content");
-    const err = doc?.querySelector('meta[name="wd-proxy-error"]')?.getAttribute("content");
-    if (doc && !err) this.hookLinks(doc);
-    this.finishLoad(redirected ?? null, doc?.title ?? "", err ?? null);
-  }
   private finishLoad(redirected: string | null, title: string, err: string | null) {
     const g = this.gen, cur = this.hist[this.idx];
     if (redirected) { this.url = redirected; if (cur) cur.url = redirected; }
@@ -568,7 +537,7 @@ export class WebViewChromium extends JObj {
   /** an uncaught page error, as Chromium reports it; unhandled messages go to logcat's chromium tag */
   consoleMessage(data: unknown) {
     const { message, source, line } = (data ?? {}) as { message?: unknown; source?: unknown; line?: unknown };
-    const msg = String(message), src = typeof source === "string" ? unmap(source) : "", n = typeof line === "number" ? line : 0;
+    const msg = String(message), src = typeof source === "string" ? source : "", n = typeof line === "number" ? line : 0;
     const self = this;
     void onMain(() => rt.drive(function* () {
       const level = yield staticField("android/webkit/ConsoleMessage$MessageLevel", "ERROR");
@@ -587,37 +556,6 @@ export class WebViewChromium extends JObj {
       yield vcall(self.client, "doUpdateVisitedHistory", "(Landroid/webkit/WebView;Ljava/lang/String;Z)V", self.view, url, 0);
       if (self.gen === g) yield vcall(self.client, "onPageFinished", WV_S, self.view, url);
     }()));
-  }
-  /** a link click in the frame is the app's to override, as Chromium asks before navigating */
-  private hookLinks(doc: Document) {
-    const g = this.gen, ref = this.ref;
-    doc.defaultView?.addEventListener("hashchange", event => {
-      const v = ref.deref();
-      if (event.isTrusted && v?.gen === g) v.fragmentNavigated(unmap(event.newURL));
-    });
-    doc.addEventListener("click", (e) => {
-      const a = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null, v = ref.deref();
-      if (!a || !v || /^javascript:/i.test(a.href)) return;
-      const href = unmap(a.href);
-      if (a.hash && href.split("#")[0] === (v.url ?? "").split("#")[0]) return; // same-document fragment: no navigation
-      e.preventDefault();
-      v.navigate(href);
-    }, true);
-    const submit = (form: HTMLFormElement, submitter: HTMLElement | null) => {
-      void webFormRequest(form, submitter, ref.deref()?.url ?? doc.URL).then((request) => {
-        const v = ref.deref();
-        if (!request || v?.gen !== g) return;
-        if (request.method === "GET") v.navigate(request.url);
-        else v.go({ ...request, src: srcFor(request.url, v) });
-      });
-    };
-    doc.defaultView?.addEventListener("submit", (event) => {
-      if (event.defaultPrevented || (event.target as Element)?.tagName !== "FORM") return;
-      event.preventDefault();
-      submit(event.target as HTMLFormElement, (event as SubmitEvent).submitter);
-    });
-    const prototype = Object.getPrototypeOf(doc.createElement("form")) as HTMLFormElement;
-    prototype.submit = function (this: HTMLFormElement) { submit(this, null); };
   }
   private navigate(href: string, replace = false) {
     void onMain(() => after(vcall(this.client, "shouldOverrideUrlLoading", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Z", this.view, mkRequest(href, true)), (overridden) => {
@@ -639,9 +577,7 @@ export class WebViewChromium extends JObj {
       if (this.scriptReady) this.send({ kind: "eval", seq, script: js });
       else this.pendingScripts.set(seq, js);
     });
-    const w = win(this);
-    if (!w) return "null";
-    try { return JSON.stringify((w as unknown as { eval(s: string): unknown }).eval(js)) ?? "null"; } catch { return "null"; }
+    return "null";
   }
   findAll(query: string) {
     this.findQuery = query;
@@ -683,8 +619,8 @@ export class WebViewChromium extends JObj {
       return 1;
     }());
   }
-  contentWidth() { return this.hold.remote ? this.remoteWidth : win(this)?.document.documentElement.scrollWidth ?? 0; }
-  contentHeight() { return this.hold.remote ? this.remoteHeight : win(this)?.document.documentElement.scrollHeight ?? 0; }
+  contentWidth() { return this.remoteWidth; }
+  contentHeight() { return this.remoteHeight; }
   /** AwLayoutSizer.onMeasure: the given size unless unspecified, the content's height unless the
    *  height is exact or the content exceeds its limit */
   measure(ws: number, hs: number): Promise<unknown> {
@@ -706,7 +642,12 @@ function srcdoc(data: string, enc: string | null, base: string | null): string {
 const W = "android/webkit/WebViewProvider";
 type P = WebViewChromium;
 const loadUrl = function (this: P, u: string) { this.loadUrl(u); };
-const page = (scroll: (w: Window) => void) => function (this: P): number { const w = win(this); if (!w) return 0; scroll(w); return 1; };
+/** AwContents.pageUp/pageDown: the page scrolls by its viewport, or to its end */
+const page = (sign: number) => function (this: P, end: number): number {
+  if (!this.hold.remote) return 0;
+  void this.evalJs(`scrollBy(0, ${sign} * (${end ? "document.documentElement.scrollHeight" : "innerHeight"}))`);
+  return 1;
+};
 const viaAccess = (name: string, desc: string) => function (this: P, ...args: unknown[]) { return vcall(this.access, name, desc, ...args); };
 rt.register({
   name: "webdroid/WebViewProvider", ctor: WebViewChromium, ifaces: [W, W + "$ViewDelegate", W + "$ScrollDelegate"],
@@ -733,13 +674,13 @@ rt.register({
     },
     "loadDataWithBaseURL(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
       function (this: P, base: string | null, data: string, _mime: string | null, enc: string | null, hist: string | null) {
-        this.go({ url: hist || "about:blank", doc: srcdoc(data, enc, base) });
+        this.go({ url: hist || "about:blank", doc: srcdoc(data, enc, base), base: base ?? undefined });
       },
     "postUrl(Ljava/lang/String;[B)V": function (this: P, url: string, body: Uint8Array) {
       this.go({ url, src: srcFor(url, this), method: "POST", body: body.slice().buffer, contentType: "application/x-www-form-urlencoded" });
     },
     "reload()V": function (this: P) { if (this.idx >= 0) this.go(this.hist[this.idx], false); },
-    "stopLoading()V": function (this: P) { this.gen++; win(this)?.stop(); },
+    "stopLoading()V": function (this: P) { this.gen++; this.send({ kind: "stop" }); },
     ...fieldGetters({ "getSettings()Landroid/webkit/WebSettings;": "settings",
       "getWebViewClient()Landroid/webkit/WebViewClient;": "client",
       "getWebChromeClient()Landroid/webkit/WebChromeClient;": "chrome", "getUrl()Ljava/lang/String;": "url",
@@ -764,8 +705,8 @@ rt.register({
     "getContentHeight()I": function (this: P) { return this.contentHeight(); },
     "getContentWidth()I": function (this: P) { return this.contentWidth(); },
     "getScale()F": () => device.density,
-    "pageUp(Z)Z": function (this: P, top: number) { return page((w) => w.scrollBy(0, top ? -w.document.documentElement.scrollHeight : -w.innerHeight)).call(this); },
-    "pageDown(Z)Z": function (this: P, bottom: number) { return page((w) => w.scrollBy(0, bottom ? w.document.documentElement.scrollHeight : w.innerHeight)).call(this); },
+    "pageUp(Z)Z": page(-1),
+    "pageDown(Z)Z": page(1),
     "findAllAsync(Ljava/lang/String;)V": function (this: P, query: string) { this.findAll(query); },
     "findNext(Z)V": function (this: P, forward: number) { this.findNext(!!forward); },
     "clearMatches()V": function (this: P) {

@@ -5,14 +5,30 @@ export type WebInterfaces = Record<string, Record<string, ((...args: unknown[]) 
 export type WebRequest = { url: string; method: string; main: boolean; headers: Record<string, string> };
 export type WebResponse = { body: string; status: number; reason: string; headers: Record<string, string> };
 
-let frameOrigin: Promise<string> | null = null;
+/** the renderer origin pattern: a "*" label stands for each storage partition */
+let rendererTemplate: Promise<string> | null = null;
+/** the origin a WebView page of `partition` (its app and web origin) renders in. A distinct site keeps
+ *  the page from this one's window and storage; a wildcard template gives each partition its own
+ *  origin, as each app's WebView data directory keeps each web origin's storage apart. */
+async function rendererOrigin(partition: string): Promise<string> {
+  const template = await (rendererTemplate ??= fetch("/webview-origin").then(async (r) => {
+    if (!r.ok) throw new Error("WebView requires a separate renderer site");
+    const origin: unknown = await r.json();
+    if (typeof origin !== "string" || new URL(origin.replace("*", "x")).origin === location.origin) throw new Error("Invalid WebView renderer origin");
+    return origin;
+  }));
+  if (!template.includes("*")) return new URL(template).origin;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(partition)));
+  return new URL(template.replace("*", digest.subarray(0, 16).toHex())).origin;
+}
+
 export class WebBridge {
   readonly id = crypto.randomUUID();
   readonly ready: Promise<string>;
   private socket: WebSocket;
   private queue = Promise.resolve();
 
-  constructor(private ifaces: WebInterfaces, intercept?: (request: WebRequest) => Promise<WebResponse | null>) {
+  constructor(private ifaces: WebInterfaces, intercept: ((request: WebRequest) => Promise<WebResponse | null>) | undefined, partition: string) {
     const url = new URL("/webview-socket", location.href);
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("id", this.id);
@@ -22,13 +38,7 @@ export class WebBridge {
       socket.onerror = () => reject(new Error("WebView bridge connection failed"));
       socket.onclose = () => reject(new Error("WebView bridge closed"));
     });
-    frameOrigin ??= fetch("/webview-origin").then(async (r) => {
-      if (!r.ok) throw new Error("WebView requires a separate renderer site");
-      const origin: unknown = await r.json();
-      if (typeof origin !== "string" || new URL(origin).origin === location.origin) throw new Error("Invalid WebView renderer origin");
-      return new URL(origin).origin;
-    });
-    this.ready = Promise.all([connected, frameOrigin]).then(([, origin]) => origin);
+    this.ready = Promise.all([connected, rendererOrigin(partition)]).then(([, origin]) => origin);
     socket.onmessage = (event) => {
       if (typeof event.data !== "string") return;
       const at = event.data.indexOf("\n"), seq = event.data.slice(0, at), body = event.data.slice(at + 1);

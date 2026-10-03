@@ -2,7 +2,7 @@ import index from "./index.html";
 import processIndex from "./process.html";
 import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { webDocument } from "./src/shell/webhtml";
-import { forwardDnsMessage, proxyRequest } from "./src/shell/proxy";
+import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy";
 import { openInstall } from "./src/shell/install";
 import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
@@ -124,8 +124,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
       const url = new URL(req.url);
       if (process.env.WEBDROID_WEBVIEW_ORIGIN) return Response.json(process.env.WEBDROID_WEBVIEW_ORIGIN);
       if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return new Response("Configure WEBDROID_WEBVIEW_ORIGIN on a separate site", { status: 503 });
-      url.hostname = url.hostname === "localhost" ? "127.0.0.1" : "localhost";
-      return Response.json(url.origin);
+      // a browser resolves every *.localhost name to this loopback server, each its own site
+      return Response.json(`${url.protocol}//*.localhost:${url.port}`);
     },
     "/compile-worker.js": () => compileWorker(),
     "/link-table.json": linkTable,
@@ -149,7 +149,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
       if (!bytes) return new Response("not found", { status: 404 });
       const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
       const type = EXT_MIME[ext] ?? "application/octet-stream";
-      if (ext === "html") return new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } });
+      if (ext === "html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),

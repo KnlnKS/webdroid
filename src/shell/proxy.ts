@@ -5,6 +5,14 @@ import { isGuestHost } from "../native/net-address";
 const DROP = /^(content-encoding|transfer-encoding|set-cookie)$/i;
 const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
 
+/** A WebView page reaches this server through its frame's fetches; a document loaded straight from it
+ *  (a page's frame pointed at it) runs in an opaque origin, never as the origin that serves it. */
+export function sandboxDocument(request: Request, response: Response): Response {
+  if (/^(|document|iframe|frame|object|embed)$/.test(request.headers.get("sec-fetch-dest") ?? ""))
+    response.headers.set("content-security-policy", "sandbox allow-scripts allow-forms allow-popups allow-modals");
+  return response;
+}
+
 interface ProxyOptions {
   target?: (requested: string) => string;
   bridgeCall: (request: Request) => Promise<Response>;
@@ -23,6 +31,10 @@ function failureKind(error: unknown): string {
 }
 
 export async function proxyRequest(request: Request, options: ProxyOptions): Promise<Response> {
+  return sandboxDocument(request, await proxied(request, options));
+}
+
+async function proxied(request: Request, options: ProxyOptions): Promise<Response> {
   if (request.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
   const query = new URL(request.url).searchParams;
   const requested = query.get("url"), frame = query.get("frame") === "1";
