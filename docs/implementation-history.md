@@ -2401,6 +2401,53 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     WebGL getError, which is where software GL's queued work is waited on.
   - FlappyBird under `?jit=0` reaches every checkpoint as the JIT does (same game-over screen).
 
+- **2026-10-02, process death and synchronous fault signals** (branch `knlnks/open-death`):
+  - A process ends all at once (`src/process-exit.ts`): exit_group, exit/_exit, a signal's default
+    action, Runtime.nativeExit (Runtime.exit runs the shutdown hooks from bytecode first) and
+    Process.sendSignal(SIGKILL) record the status and never return to the caller. From then the
+    realm runs nothing: Cpu loops park, `unwind` never resumes a suspended Java chain, yieldToLoop,
+    guest timers, callOn and callUncaught never return, and the AudioContext and playing media
+    stop. The broker hears it as appDied (`died` → `fail`): death recipients fire, transactions to
+    the pid throw DeadObjectException, its bindings and activities go (a caller gets
+    RESULT_CANCELED), and a process realm's frame is removed. SIGKILL of another process of the
+    caller's uid goes through the broker. The page's app shows an "exited" session: AOSP removes an
+    activity with no saved state when its process dies and shows no dialog on a first crash, so the
+    launcher returns; opening the app again reloads the page, whose realm keeps the dead app's
+    classes. Probed: FitNotes after System.exit(3) (state exited, ticks and yields frozen) and its
+    microG realm after SIGKILL (frame gone, the app running on).
+  - Limits: the page realm also runs system_server's Java work (`asBroker`), so after the page's
+    app dies the broker's Java-backed requests from other realms wait until reload. Uncaught Java
+    exceptions still only log (no KillApplicationHandler). AMS does not restart START_STICKY or
+    auto-create-bound services: their ServiceRecords live in the hosting realm's activeservices.ts,
+    so a restart needs those records in the broker first. ApplicationExitInfo is not recorded.
+  - Guest faults are synchronous signals on the faulting thread: below the null page, an unbacked
+    plane address or a write-protected page (stack guard, core data) is SIGSEGV with SEGV_MAPERR or
+    SEGV_ACCERR, a null branch target SIGSEGV with pc at the target, a misaligned pc or
+    alignment-checked ARM32 access SIGBUS/BUS_ADRALN, an undefined instruction SIGILL and BRK
+    SIGTRAP, each with si_addr. Emulator gaps (unimplemented encodings, unsupported syscalls) and
+    host functions tripping on a bad pointer stay host faults; wasm traps (an ARM32 address past
+    2 GiB) too. Handlers get the kernel's frame for both ABIs (arm64 fault_address and
+    fpsimd_context, which Mono asserts; ARM32 sigcontext and vfp_sigframe), and sigreturn loads the
+    registers, pc, FP state and mask they leave. A blocked or ignored fault takes the default
+    action; SA_RESETHAND is honoured. The core keeps the full 64-bit fault address. JIT exits wrote
+    the flag locals without a pending compare's flags, so a handler resuming a region saw stale
+    NZCV; exits now write them (the unit test fails without it, in both ISAs and Thumb).
+  - Faults had no handler to reach: on a device the linker's debuggerd handler is installed for
+    SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGSEGV, SIGSTKFLT and SIGSYS, and runtimes chain to
+    the handler they replaced. Without it Among Us's libunity logged "No handler for signal 11" and
+    returned to the fault 9,000 times in 3 s. kernelInit now installs a host debuggerd handler that
+    logs the tombstone from the ucontext and ends the process. Among Us (arm64 il2cpp), a null
+    il2cpp_object_get_class on a real thread: libunity's handler read the ucontext (pc, lr, sp,
+    "null pointer dereference"), wrote its crash report, forwarded to debuggerd, and the page
+    showed "The app stopped". A handler that keeps returning to a fault now yields between
+    deliveries rather than holding the page. Survey: SIGSEGV/SIGBUS handlers in apks/ are crash
+    reporters (libunity, Sentry, Crashlytics, Bugsnag, xCrash, Google's native crash handler) plus
+    Go (Feeder's libgojni) and TikTok's probes; no app has Mono, and no e2e flow takes a handled
+    fault, so the `?jit=0` comparison is the unit test's.
+  - Cost: none on the slice path (only the fault exit changed). libc-bench ns/op base vs new within
+    noise (3 alternating runs each); DoodleJump executes the same 10.97 G guest instructions, and
+    its native-ms varies with presented frames (GL calls run inside slices), in both builds.
+    doodlejump, flappybird, komikku and lichess (`--live`) pass.
 - **2026-10-02, GL errors, signal defaults, TLS unload, WebView's UA** (branch `knlnks/open-gl2`):
   - Lichess's getError time is Skia's allocation bracket (bind, glGetError, glBufferData or
     glTexStorage2D, glGetError): about 600 queries in 12 s. Most cost under 0.3 ms, but the first

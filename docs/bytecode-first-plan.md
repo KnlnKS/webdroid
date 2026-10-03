@@ -788,6 +788,11 @@ grid) for measurement, TextRunShaper and drawing;
    17-21 ms in a process realm and 75 ms warm in the first. Open: the first realm's fonts.xml parse
    (~35 ms), and microG's provisioning realm racing the app's first frame (history "the first
    realm's Typeface.<clinit>"). Apps get the Google Play emoji update.
+6. Done 2026-10-02 (history "process death and synchronous fault signals"): process death ends the
+   whole realm and reaches the broker; guest faults reach SIGSEGV/SIGBUS/SIGILL/SIGTRAP handlers with
+   siginfo and ucontext, behind the linker's debuggerd handler. Open: AMS restarts of sticky and
+   bound services, uncaught Java exceptions killing the process, and broker Java work after the
+   page's app dies.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 
