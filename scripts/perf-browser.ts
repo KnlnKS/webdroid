@@ -103,7 +103,7 @@ try {
     const rec = manifest?.steps.find((s) => s.id === step.id);
     const started = performance.now();
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
-    if (hit === false) throw new Error(`Setup ${step.id}: text target missing; wait for the intended screen before measuring`);
+    if (hit === false && !("optional" in step.action && step.action.optional)) throw new Error(`Setup ${step.id}: text target missing; wait for the intended screen before measuring`);
     const actionMs = performance.now() - started;
     const horizonMs = waitHorizonMs(step.wait);
     await page.waitForTimeout(Math.max(Number(values["setup-min-wait"]), setupSettleCap === undefined ? horizonMs : Math.min(horizonMs, setupSettleCap)));
