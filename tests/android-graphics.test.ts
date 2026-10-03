@@ -5,6 +5,8 @@ import { NativePaint, newPaint, paintOf, setPaintTypeface } from "../src/android
 import { typefaceOf } from "../src/android/fonts";
 import { declaredField } from "../src/jvm/runtime";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
+import { canvasOver, canvasOf } from "../src/android/canvas";
+import { glSurfaces } from "../src/native/egl-current";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
@@ -48,6 +50,61 @@ describe("egl14-query-context", () => {
     expect(await vcall(egl, "eglQueryContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z",
       display, context, -1, result, 0)).toBe(0);
     expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3004);
+  });
+});
+
+describe("egl10", () => {
+  rt.linkNatives();
+  test("EGL10 returns configurations with their declared Java type", async () => {
+    const egl = rt.make("javax/microedition/khronos/egl/EGL10"), configs = [null], count = new Int32Array(1);
+    const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
+    expect(await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null)).toBe(display);
+    expect(rt.iof(display, "javax/microedition/khronos/egl/EGLDisplay")).toBe(1);
+    expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", display, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
+    expect(count[0]).toBe(1);
+    expect(rt.iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(1);
+  });
+
+  test("EGL11 rejects the no-display handle", async () => {
+    const egl = rt.make("javax/microedition/khronos/egl/EGL11");
+    const noDisplay = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_DISPLAY")];
+    const configs = [null], count = new Int32Array([-1]);
+    expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", noDisplay, new Int32Array([0x3038]), configs, 1, count)).toBe(0);
+    expect([configs[0], count[0]]).toEqual([null, -1]);
+    expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3008);
+    expect(await vcall(egl, "eglSwapInterval", "(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z", noDisplay, 0)).toBe(0);
+    expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3008);
+  });
+
+  test("EGL10 reports its no-context handle until a context is bound", async () => {
+    const egl = rt.make("javax/microedition/khronos/egl/EGL10");
+    const none = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_CONTEXT")];
+    const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
+    expect(none).not.toBeNull();
+    expect(rt.iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(1);
+    expect(await vcall(egl, "eglGetCurrentContext", "()Ljavax/microedition/khronos/egl/EGLContext;")).toBe(none);
+    expect(glSurfaces.current).toBeNull();
+    expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, null, null, none)).toBe(1);
+    expect(glSurfaces.current).toBeNull();
+  });
+});
+
+describe("canvas-state", () => {
+  rt.linkNatives();
+  beforeAll(loadFrameworkJar);
+
+  test("canvas root state rejects unmatched restores", async () => {
+    let restores = 0;
+    const context = {
+      restore() { restores++; },
+    } as unknown as OffscreenCanvasRenderingContext2D;
+    const canvas = canvasOver(context, 100, 100);
+    const thrown = async (f: () => unknown) => { try { await f(); } catch (e) { return rt.jx(e).msg; } return null; };
+
+    expect(await thrown(() => vcall(canvas, "restore", "()V"))).toBe("Underflow in restore - more restores than saves");
+    expect(await thrown(() => vcall(canvas, "restoreToCount", "(I)V", 0))).toBe("Underflow in restoreToCount - more restores than saves");
+    expect(canvasOf(canvas).saveCount).toBe(1);
+    expect(restores).toBe(0);
   });
 });
 

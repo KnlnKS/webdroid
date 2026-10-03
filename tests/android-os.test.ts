@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { TV } from "../src/android/axml";
 import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
-import { rt, JObj } from "../src/jvm/runtime";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
 import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
@@ -171,6 +171,19 @@ describe("environment", () => {
     expect(await scall(env, "isExternalStorageRemovable", "()Z")).toBe(0);
     const files: JObj[] = await scall(env, "buildExternalStorageAppFilesDirs", "(Ljava/lang/String;)[Ljava/io/File;", PKG);
     expect(await vcall(files[0], "getPath", "()Ljava/lang/String;")).toBe(`/sdcard/Android/data/${PKG}/files`);
+  });
+});
+
+describe("uname", () => {
+  rt.linkNatives();
+
+  test("uname reports the emulated Linux ABI", async () => {
+    await loadLibcore();
+    const uts = await scall("android/system/Os", "uname", "()Landroid/system/StructUtsname;");
+    const field = (name: string) => getDeclared<string>(uts, "android/system/StructUtsname", name);
+    expect(field("sysname")).toBe("Linux");
+    expect(field("release")).toContain("webdroid");
+    expect(["aarch64", "armv7l"]).toContain(field("machine"));
   });
 });
 
