@@ -62,9 +62,6 @@ const SEL = { density: 0 };
  */
 let configGen = 0;
 const allResources: Resources[] = [];
-/** the booted app's Resources — the framework package is an Arsc, not one of these, so the
- *  most recent is the app's. */
-function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
 /** Re-resolve entries under changed qualifiers in every live resource table. */
 function setDeviceQualifiers(qualifiers: Partial<Arsc["device"]>): void {
   configGen++;
@@ -396,12 +393,6 @@ export class JTheme extends JObj {
 export const STYLE_NUM_ENTRIES = 7;
 const STYLED = newSV();
 
-/**
- * libandroidfw's AttributeResolution in one pass: ApplyStyle with a theme (XML attribute, the
- * XML's style=, the default style, then the theme), ResolveAttrs when `srcValues` stands in for
- * the XML, RetrieveAttributes without a theme (XML attributes only). Each value lands in
- * `outValues`/`outIndices` in TypedArray's layout.
- */
 function ascending<T>(list: ArrayLike<T>, id: (t: T) => number): boolean {
   for (let i = 1; i < list.length; i++) if (id(list[i]) < id(list[i - 1])) return false;
   return true;
@@ -414,6 +405,12 @@ function fromBag(bag: Bag, key: number, flags: number, v: SV): number {
   return bag.styles[i];
 }
 
+/**
+ * libandroidfw's AttributeResolution in one pass: ApplyStyle with a theme (XML attribute, the
+ * XML's style=, the default style, then the theme), ResolveAttrs when `srcValues` stands in for
+ * the XML, RetrieveAttributes without a theme (XML attributes only). Each value lands in
+ * `outValues`/`outIndices` in TypedArray's layout.
+ */
 export function resolveAttributes(
   res: Resources, theme: JTheme | null, node: XmlNode | null, sourceResId: number,
   defStyleAttr: number, defStyleRes: number, attrs: ArrayLike<number>, srcValues: ArrayLike<number> | null,
@@ -472,16 +469,14 @@ export function resolveAttributes(
   if (outIndices) outIndices[0] = found;
 }
 
-
-
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
-function frameworkValue<T>(type: string, name: string, read: (res: Resources, v: RV) => T, missing: T): T {
-  const res = currentResources(), id = res?.idFor(type, name, "android");
-  return id ? read(res!, res!.ref(id)) : missing;
+/** a com.android.internal string, as the platform's own UI labels things, through the booted app's
+ *  Resources (the framework package is an Arsc, not one of these, so the most recent is the app's) */
+export function frameworkString(name: string): string | null {
+  const res = allResources.at(-1), id = res?.idFor("string", name, "android");
+  return id ? rvString(res!, res!.ref(id)) : null;
 }
-/** a com.android.internal string, as the platform's own UI labels things */
-export function frameworkString(name: string): string | null { return frameworkValue("string", name, rvString, null); }
 export function rvString(res: Resources, v: RV | null): string | null {
   if (!v || v.t === TV.NULL) return null;
   if (v.s !== undefined && (v.t === T_STR || v.t === TV.STRING)) return v.s;
