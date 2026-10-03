@@ -610,9 +610,9 @@ holds `run-full`.
 Cleanup: four area passes removed dead code and duplicate helpers (`src` −171 lines net);
 hand-written TS in `src/android` + `src/jvm/natives` is 41,455 lines. Since then String case
 mapping follows the locale and `bun run fwtest` passes 30/30 (its nine failures were stale harness
-reads). Gradients and `drawColor` decode ColorLongs in their colour space. Open: a serial `bun test` of the
-java-io, net, java-lang, serialization and data files that hangs (also at 602d87cf; the parallel
-run passes).
+reads). Gradients and `drawColor` decode ColorLongs in their colour space. A serial `bun test` of the
+java-io, net, java-lang, serialization and data files no longer hangs (`bootApp` left StrictMode's
+death on network armed; history, 2026-10-02); a serial run of every file still shares one app.
 
 ### Stage F handoff (2026-10-05): superseded TS removed
 

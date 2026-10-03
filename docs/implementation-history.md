@@ -70,6 +70,23 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   ~4 µs without CDP); Snapseed's ~1,140 reflective NoSuchFieldExceptions per
   tool open cost ~65 ms only under the harness. Measure with real pointer
   events from the up (`plat`) or raw CDP, on the hardware GPU, on a quiet host.
+- 2026-10-02, the serial `bun test` "hang" and the unit-suite prune. `bun test` without
+  `--parallel` runs every file in one runtime. data.test.ts's `bootApp` ran bindApplication,
+  whose `StrictMode.enableDeathOnNetwork` (targetSdk ≥ 11) armed the main thread that test bodies
+  call Java from, so net.test.ts's `InetAddress.getByName` then threw NetworkOnMainThreadException.
+  Bun prints a rejected non-Error value's own properties without honouring
+  `nodejs.util.inspect.custom`; a JThrowable reaches its cold frames, DEX and class graph, so the
+  failure printed 11 GB, which looked like a hang. `bootApp` now leaves the main thread's policy
+  LAX. Unfixed limit: one Bun process holds one app, and `bootApp` returns the first file's
+  Application to later files, so a serial run of every file still fails cases that need their
+  own package (android-os's job service, notification's uid check), and prints such failures at
+  length. Pruning (tests/ only): 37 files, 395 tests, 7,820 lines to 33, 298, 6,249,
+  removing cases that only exercised libcore or framework bytecode since Stage F (the conformance
+  suites cover libcore's) and folding legacy-api, security, java-concurrent, android-view and
+  android-widget into the files owning their code. `bun run test` went from 10.6–12.1 s to
+  6.3–8.7 s on a shared host: intrinsics.test.ts, the critical path, spent 8 s in
+  `shiftRight(Integer.MIN_VALUE)`, which the BigInteger intrinsic delegates to an AOSP body that
+  allocates a 256 MB magnitude per operand.
 
 ## JVM, DEX and process ownership
 
