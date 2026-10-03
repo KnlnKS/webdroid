@@ -4,7 +4,7 @@
 // system_server's part in resolving intents and providers; permissions.ts answers for permissions.
 // Intents and component names are read through their Java API only.
 import { awaited, JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { jarray, hexBytes, sameBytes } from "../jvm/abi";
+import { jarray, strArray, intBitsToFloat, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault } from "./os";
 import { vcall, after, newObj } from "../jvm/natives/jlang";
@@ -22,7 +22,7 @@ import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from 
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
-import { hostStub } from "./binder";
+import { hostStub, parceledList } from "./binder";
 import { installerService } from "./packageinstaller";
 import { checkPermission } from "./permissions";
 
@@ -156,7 +156,7 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
     compileSdkVersion: intAttr(record.root, "compileSdkVersion", 0), compileSdkVersionCodename: attrStr(record.root, "compileSdkVersionCodename"),
     versionCode: intAttr(record.root, "versionCode", 0), longVersionCode: longVersionCode(record.root),
     sourceDir: record.path, publicSourceDir: record.path,
-    splitNames: splits && jarray(splits.slice(), "Ljava/lang/String;"),
+    splitNames: splits && strArray(splits),
     splitSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
     splitPublicSourceDirs: splits && jarray(splits.map((n) => apkPath(n)), "Ljava/lang/String;"),
     nativeLibraryDir: "/lib", dataDir: `/data/data/${pkg}`, credentialProtectedDataDir: `/data/data/${pkg}`,
@@ -449,7 +449,7 @@ function* packageInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   const own = record === currentPackage && appHost?.pkg === record.pkg ? appHost : null;
   const time = installTime(record.pkg);
   setDeclared(pi, PACKAGE, {
-    packageName: record.pkg, splitNames: jarray(own?.splits.slice() ?? [], "Ljava/lang/String;"), splitRevisionCodes: new Int32Array(own?.splits.length ?? 0),
+    packageName: record.pkg, splitNames: strArray(own?.splits ?? []), splitRevisionCodes: new Int32Array(own?.splits.length ?? 0),
     versionCode: intAttr(root, "versionCode", 0), versionCodeMajor: intAttr(root, "versionCodeMajor", 0),
     versionName: version?.type === TV.REFERENCE ? resString(record.res, version.data) : version?.str ?? null,
     sharedUserId: attrStr(root, "sharedUserId"), sharedUserLabel: intAttr(root, "sharedUserLabel", 0), applicationInfo: app,
@@ -586,7 +586,6 @@ function compareSignatures(left: Uint8Array[], right: Uint8Array[]): number {
 }
 const recordsForUid = (uid: number) => [...packages.values()].filter((p) => p.uid === uid);
 
-const slice = (items: unknown[]) => newObj(PKG + "ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
 function* componentArgs$(component: JObj | null): Gen<[string, string]> {
   if (!component) rt.npe();
   return [yield vcall(component, "getPackageName", "()Ljava/lang/String;"), yield vcall(component, "getClassName", "()Ljava/lang/String;")];
@@ -598,7 +597,7 @@ const componentInfoFor = (kind: ComponentKind) => driven(function* componentInfo
 });
 const queryFor = (kind: ComponentKind, best: boolean) => driven(function* queryFor$(intent: JObj | null, type: string | null, flags: bigint): Gen {
   const infos = yield* queryIntent$(intent, type, flag(flags), kind);
-  return best ? infos[0] ?? null : slice(infos);
+  return best ? infos[0] ?? null : parceledList(infos);
 });
 const unknownPackage = (pkg: string) => rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package: " + pkg);
 
@@ -612,7 +611,7 @@ function propertyOf(owner: PackageRecord, node: XmlNode, cls: string | null): JO
   if (resource) return newObj(P, `(${S}IZ${S}${S})V`, name, resource.data, 1, owner.pkg, cls);
   if (!value) return null;
   if (value.type === TV.BOOLEAN) return newObj(P, `(${S}Z${S}${S})V`, name, +!!value.data, owner.pkg, cls);
-  if (value.type === TV.FLOAT) return newObj(P, `(${S}F${S}${S})V`, name, new Float32Array(new Int32Array([value.data]).buffer)[0], owner.pkg, cls);
+  if (value.type === TV.FLOAT) return newObj(P, `(${S}F${S}${S})V`, name, intBitsToFloat(value.data), owner.pkg, cls);
   if (value.type >= TV.INT_DEC && value.type <= TV.COLOR_RGB4) return newObj(P, `(${S}I${S}${S})V`, name, value.data, owner.pkg, cls);
   return newObj(P, `(${S}${S}${S}${S})V`, name, value.str ?? attrStr(node, "value") ?? "", owner.pkg, cls);
 }
@@ -665,7 +664,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
       own.push([attr(c.node, "initOrder")?.data ?? 0, yield* providerInfo$(c, flag(flags), null)]);
     }
     // sProviderInitOrderSorter: by descending initOrder, the order ActivityThread installs them in
-    return slice([...out, ...own.sort((a, b) => b[0] - a[0]).map(([, info]) => info)]);
+    return parceledList([...out, ...own.sort((a, b) => b[0] - a[0]).map(([, info]) => info)]);
   }),
   [`getComponentEnabledSetting(${CN}I)I`]: driven(function* getComponentEnabledSetting$(c: JObj): Gen {
     const [pkg, cls] = yield* componentArgs$(c);
@@ -680,7 +679,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   [`getApplicationEnabledSetting(${S}I)I`]: (pkg: string) => after(packageRecord(pkg), (record) => { if (!record) throw unknownPackage(pkg); return 0; }),
   [`hasSystemFeature(${S}I)Z`]: (name: string, version: number) => device.features.includes(name) && version <= 0 ? 1 : 0,
   "getSystemAvailableFeatures()Landroid/content/pm/ParceledListSlice;": driven(function* getSystemAvailableFeatures$(): Gen {
-    return slice([...yield* all$(device.features, (name) => featureInfo$(name)), yield* featureInfo$(null, 0, GL_ES_VERSION)]);
+    return parceledList([...yield* all$(device.features, (name) => featureInfo$(name)), yield* featureInfo$(null, 0, GL_ES_VERSION)]);
   }),
   "getSystemSharedLibraryNames()[Ljava/lang/String;": () => jarray([], S),
   [`checkPermission(${S}${S}I)I`]: (permission: string, pkg: string) => checkPermission(permission, pkg),
@@ -701,7 +700,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   [`isPackageAvailable(${S}I)Z`]: (pkg: string) => after(packageRecord(pkg), (record) => record ? 1 : 0),
   "isSafeMode()Z": () => 0,
-  [`queryProperty(${S}I)${SLICE}`]: driven(function* queryProperty$(name: string, type: number): Gen { return slice(yield* properties$(name, type)); }),
+  [`queryProperty(${S}I)${SLICE}`]: driven(function* queryProperty$(name: string, type: number): Gen { return parceledList(yield* properties$(name, type)); }),
   [`getPropertyAsUser(${S}${S}${S}I)Landroid/content/pm/PackageManager$Property;`]: driven(function* getPropertyAsUser$(name: string, pkg: string, cls: string | null): Gen {
     const owner = packages.get(pkg);
     if (!owner) throw rt.mkThrowable(PKG + "PackageManager$NameNotFoundException", pkg);
@@ -738,10 +737,10 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     return 0;
   },
   [`getInstalledPackages(JI)${SLICE}`]: driven(function* getInstalledPackages$(flags: bigint): Gen {
-    return slice(yield* all$(yield* awaited(installedPackages()), (record) => packageInfo$(record, flag(flags))));
+    return parceledList(yield* all$(yield* awaited(installedPackages()), (record) => packageInfo$(record, flag(flags))));
   }),
   [`getInstalledApplications(JI)${SLICE}`]: driven(function* getInstalledApplications$(flags: bigint): Gen {
-    return slice(yield* all$(yield* awaited(installedPackages()), (record) => applicationInfo$(record, flag(flags))));
+    return parceledList(yield* all$(yield* awaited(installedPackages()), (record) => applicationInfo$(record, flag(flags))));
   }),
   [`requestPackageChecksums(${S}ZIILjava/util/List;Landroid/content/pm/IOnChecksumsReadyListener;I)V`]: driven(function* requestPackageChecksums$(
     pkg: string, includeSplits: number, _optional: number, required: number, _installers: unknown, listener: JObj): Gen {
