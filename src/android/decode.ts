@@ -14,7 +14,7 @@ import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat } from "../jvm/abi";
 import { javaFdBytes, javaSeekFd } from "../native/fs";
 import { assetBytes } from "./assetmanager";
-import { NativeBitmap, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
+import { NativeBitmap, bitmapAt, bytesPerPixel, javaBitmap, reinitJava, ALPHA_8, RGB_565, ARGB_8888, RGBA_F16, HARDWARE, OPAQUE, PREMUL, UNPREMUL } from "./bitmap";
 import { decodeHeif } from "./heif";
 import { edges, setEdges } from "./graphics";
 import { bitmapCanvas } from "./canvas";
@@ -332,7 +332,7 @@ const doDecode = driven(function* doDecode(bytes: Uint8Array, padding: object | 
     if (justBounds) return null;
   }
   const sw = scale === 1 ? w : scaled(w, scale), sh = scale === 1 ? ht : scaled(ht, scale);
-  let reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null;
+  let reuse = inBitmap ? bitmapAt(inBitmap) : null;
   if (reuse?.immutable) reuse = null;
   if (reuse && sw * sh * bytesPerPixel(config) > reuse.allocation) return null;
   const img = yield* awaited(decodePixels(bytes, h, sw, sh, null, false));
@@ -407,7 +407,7 @@ rt.registerJnis("android/graphics/BitmapRegionDecoder", {
       clearOuts(options);
       const left = Math.max(0, x), top = Math.max(0, y), right = Math.min(header.width, x + w), bottom = Math.min(header.height, y + ht);
       if (right <= left || bottom <= top) return null;
-      const reuse = inBitmap ? deref<NativeBitmap>(inBitmap) : null, hardware = preferred === HARDWARE;
+      const reuse = inBitmap ? bitmapAt(inBitmap) : null, hardware = preferred === HARDWARE;
       const config = reuse ? reuse.config : outputConfig(header, preferred);
       const [iw, ih] = sampledSize(header, sample, right - left, bottom - top);
       const bw = iw + Math.trunc((left - x) / sample) + Math.trunc((x + w - right) / sample);

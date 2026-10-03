@@ -10,7 +10,7 @@ import { charsToString } from "../jvm/abi";
 import { deref } from "./handles";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path";
 import { type NativeRegion } from "./region";
-import { NativeBitmap, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap";
+import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap";
 import { drawGlyphs, cssFont, shapeTextRun } from "./shaping";
 import { fontNatives } from "./fonts";
 import { paintAdvance } from "./minikin";
@@ -181,8 +181,6 @@ function punchHole(nc: NativeCanvas, l: number, t: number, r: number, b: number,
   });
 }
 
-/** the bitmap a draw names by handle */
-const bitmapAt = (h: bigint) => deref<NativeBitmap>(h);
 /** an image drawn through the paint as SkCanvas::drawImage does: its alpha, blend mode and colour
  *  filter; an ALPHA_8 bitmap is coverage, drawn in the paint's colour */
 function drawBitmap(nc: NativeCanvas, b: NativeBitmap, paint: NativePaint | null, draw: (ctx: Ctx2D, image: CanvasImageSource) => void) {

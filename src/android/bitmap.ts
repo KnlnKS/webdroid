@@ -346,7 +346,8 @@ export function javaBitmap(b: NativeBitmap, density = -1, chunk: Int8Array | nul
 export const reinitJava = (bitmap: object, b: NativeBitmap, requestPremultiplied: boolean) =>
   vcall(bitmap, "reinit", "(IIZ)V", b.w, b.h, +requestPremultiplied);
 
-const bmp = (h: bigint) => deref<NativeBitmap>(h);
+export const bitmapAt = (h: bigint) => deref<NativeBitmap>(h);
+const noHardwareBuffer = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", "HardwareBuffer is not supported"); };
 /** GraphicsJNI::legacyBitmapConfigToColorType, then what Bitmap_creator does with ARGB_4444 */
 const creatable = (config: number) => config === ARGB_4444 ? ARGB_8888 : config;
 /** a copy of `src` in `config` (bitmapCopyTo): 565 drops alpha from the premultiplied colour */
@@ -379,22 +380,22 @@ rt.registerJnis(BITMAP, {
     return wrap(b, mutable);
   },
   // HARDWARE is our raster, as a GPU buffer is on a device: immutable, drawn without a readback
-  "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, config: number, mutable: number) => wrap(copyBitmap(bmp(h), config), mutable),
-  "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bmp(h), ARGB_8888), 0),
+  "nativeCopy(JIZ)Landroid/graphics/Bitmap;": (h: bigint, config: number, mutable: number) => wrap(copyBitmap(bitmapAt(h), config), mutable),
+  "nativeCopyPreserveInternalConfig(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bitmapAt(h), ARGB_8888), 0),
   // no ashmem here: a shared copy is an immutable heap copy, and no bitmap reports a descriptor
-  "nativeCopyAshmem(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bmp(h), bmp(h).config), 0),
-  "nativeCopyAshmemConfig(JI)Landroid/graphics/Bitmap;": (h: bigint, config: number) => wrap(copyBitmap(bmp(h), config), 0),
+  "nativeCopyAshmem(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyBitmap(bitmapAt(h), bitmapAt(h).config), 0),
+  "nativeCopyAshmemConfig(JI)Landroid/graphics/Bitmap;": (h: bigint, config: number) => wrap(copyBitmap(bitmapAt(h), config), 0),
   "nativeGetAshmemFD(J)I": () => -1,
   "nativeIsBackedByAshmem(J)Z": () => 0,
   "nativeGetNativeFinalizer()J": () => FINALIZER,
-  "nativeRecycle(J)V": (h: bigint) => { bmp(h).recycle(); },
+  "nativeRecycle(J)V": (h: bigint) => { bitmapAt(h).recycle(); },
   "nativeReconfigure(JIIIZ)V": (h: bigint, w: number, ht: number, config: number, premul: number) => {
-    const b = bmp(h), cfg = creatable(config);
+    const b = bitmapAt(h), cfg = creatable(config);
     if (w * ht * bytesPerPixel(cfg) > b.allocation) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bitmap not large enough to support new configuration");
     b.reconfigure(w, ht, cfg, b.config !== RGB_565 && b.alphaType === OPAQUE ? OPAQUE : premul ? PREMUL : UNPREMUL);
   },
   "nativeCompress(JIILjava/io/OutputStream;[B)Z": driven(function* (h: bigint, format: number, quality: number, out: unknown, storage: Int8Array): Gen {
-    const b = bmp(h);
+    const b = bitmapAt(h);
     // CompressFormat's nativeInt: JPEG, PNG, WEBP (lossless at 100), WEBP_LOSSY, WEBP_LOSSLESS
     const type = ["image/jpeg", "image/png", "image/webp", "image/webp", "image/webp"][format];
     if (!type) return 0;
@@ -409,41 +410,41 @@ rt.registerJnis(BITMAP, {
     }
     return 1;
   }),
-  "nativeErase(JI)V": (h: bigint, c: number) => erase(bmp(h), c),
-  "nativeErase(JJJ)V": (h: bigint, cs: bigint, color: bigint) => erase(bmp(h), colorLongAt(color, cs)),
-  "nativeRowBytes(J)I": (h: bigint) => bmp(h).rowBytes,
-  "nativeConfig(J)I": (h: bigint) => bmp(h).config,
-  "nativeGetPixel(JII)I": (h: bigint, x: number, y: number) => { const b = bmp(h); return argbAt(b.pixels(), (y * b.w + x) * 4); },
+  "nativeErase(JI)V": (h: bigint, c: number) => erase(bitmapAt(h), c),
+  "nativeErase(JJJ)V": (h: bigint, cs: bigint, color: bigint) => erase(bitmapAt(h), colorLongAt(color, cs)),
+  "nativeRowBytes(J)I": (h: bigint) => bitmapAt(h).rowBytes,
+  "nativeConfig(J)I": (h: bigint) => bitmapAt(h).config,
+  "nativeGetPixel(JII)I": (h: bigint, x: number, y: number) => { const b = bitmapAt(h); return argbAt(b.pixels(), (y * b.w + x) * 4); },
   // unpremultiplied RGBA halves in the bitmap's own space
   "nativeGetColor(JII)J": (h: bigint, x: number, y: number) => {
-    const b = bmp(h), px = b.pixels(), i = (y * b.w + x) * 4;
+    const b = bitmapAt(h), px = b.pixels(), i = (y * b.w + x) * 4;
     let v = 0n;
     for (let k = 3; k >= 0; k--) v = v << 16n | BigInt(toHalf(px[i + k] / 255));
     return BigInt.asIntN(64, v);
   },
   "nativeGetPixels(J[IIIIIII)V": (h: bigint, out: Int32Array, off: number, stride: number, x: number, y: number, w: number, ht: number) => {
-    const b = bmp(h), px = b.pixels();
+    const b = bitmapAt(h), px = b.pixels();
     for (let r = 0; r < ht; r++) for (let c = 0; c < w; c++) out[off + r * stride + c] = argbAt(px, ((y + r) * b.w + x + c) * 4);
   },
   "nativeSetPixel(JIII)V": (h: bigint, x: number, y: number, c: number) => {
-    const b = bmp(h);
+    const b = bitmapAt(h);
     quantize(b, c, b.pixels(), (y * b.w + x) * 4);
     b.commit(x, y, 1, 1);
   },
   "nativeSetPixels(J[IIIIIII)V": (h: bigint, colors: Int32Array, off: number, stride: number, x: number, y: number, w: number, ht: number) =>
-    setPixels(bmp(h), colors, off, stride, x, y, w, ht),
+    setPixels(bitmapAt(h), colors, off, stride, x, y, w, ht),
   "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
-    const memory = memoryOf(bmp(h));
+    const memory = memoryOf(bitmapAt(h));
     remainingBytes(buffer).set(memory);
   }),
   "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
-    const b = bmp(h);
+    const b = bitmapAt(h);
     setMemory(b, remainingBytes(buffer).slice(0, byteSize(b)));
   }),
-  "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
+  "nativeGenerationId(J)I": (h: bigint) => bitmapAt(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
   "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, parcel: JObj) => {
-    const b = bmp(h), p = nativeParcel(parcel);
+    const b = bitmapAt(h), p = nativeParcel(parcel);
     for (const v of [b.immutable ? 0 : 1, b.config, b.alphaType, b.w, b.h, b.rowBytes, density]) writeInt(p, v);
     const memory = memoryOf(b);
     writeByteArray(p, new Int8Array(memory.buffer, memory.byteOffset, memory.length));
@@ -458,41 +459,37 @@ rt.registerJnis(BITMAP, {
     return javaBitmap(b, density);
   },
   "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
-    wrap(extractBitmapAlpha(bmp(h), paint ? paintAt(paint) : null, offsetXY), true),
+    wrap(extractBitmapAlpha(bitmapAt(h), paint ? paintAt(paint) : null, offsetXY), true),
   // hwui uploads a texture ahead of drawing; the 2D path has none to prepare
   "nativePrepareToDraw(J)V": () => {},
-  "nativeHasAlpha(J)Z": (h: bigint) => +bmp(h).hasAlpha,
-  "nativeIsPremultiplied(J)Z": (h: bigint) => +bmp(h).premultiplied,
-  "nativeSetHasAlpha(JZZ)V": (h: bigint, hasAlpha: number, premul: number) => bmp(h).setAlphaType(hasAlpha ? premul ? PREMUL : UNPREMUL : OPAQUE),
+  "nativeHasAlpha(J)Z": (h: bigint) => +bitmapAt(h).hasAlpha,
+  "nativeIsPremultiplied(J)Z": (h: bigint) => +bitmapAt(h).premultiplied,
+  "nativeSetHasAlpha(JZZ)V": (h: bigint, hasAlpha: number, premul: number) => bitmapAt(h).setAlphaType(hasAlpha ? premul ? PREMUL : UNPREMUL : OPAQUE),
   "nativeSetPremultiplied(JZ)V": (h: bigint, premul: number) => {
-    const b = bmp(h);
+    const b = bitmapAt(h);
     if (premul ? b.alphaType === UNPREMUL : b.alphaType === PREMUL) b.setAlphaType(premul ? PREMUL : UNPREMUL);
   },
-  "nativeHasMipMap(J)Z": (h: bigint) => +bmp(h).mipmap,
-  "nativeSetHasMipMap(JZ)V": (h: bigint, v: number) => { bmp(h).mipmap = !!v; },
+  "nativeHasMipMap(J)Z": (h: bigint) => +bitmapAt(h).mipmap,
+  "nativeSetHasMipMap(JZ)V": (h: bigint, v: number) => { bitmapAt(h).mipmap = !!v; },
   "nativeSameAs(JJ)Z": (a: bigint, b: bigint) => {
-    const x = bmp(a), y = bmp(b);
+    const x = bitmapAt(a), y = bitmapAt(b);
     if (x.w !== y.w || x.h !== y.h || x.config !== y.config || x.alphaType !== y.alphaType || isSrgb(x.space) !== isSrgb(y.space)) return 0;
     const p = x.pixels(), q = y.pixels();
     const pw = new Uint32Array(p.buffer, p.byteOffset, p.length >> 2), qw = new Uint32Array(q.buffer, q.byteOffset, q.length >> 2);
     for (let i = 0; i < pw.length; i++) if (pw[i] !== qw[i]) return 0;
     return 1;
   },
-  "nativeGetAllocationByteCount(J)I": (h: bigint) => bmp(h).allocation,
-  "nativeIsImmutable(J)Z": (h: bigint) => +bmp(h).immutable,
-  "nativeSetImmutable(J)V": (h: bigint) => { bmp(h).immutable = true; },
-  "nativeComputeColorSpace(J)Landroid/graphics/ColorSpace;": (h: bigint) => javaColorSpace(bmp(h)),
-  "nativeSetColorSpace(JJ)V": (h: bigint, cs: bigint) => { bmp(h).space = spaceOf(cs); },
-  "nativeIsSRGB(J)Z": (h: bigint) => +(bmp(h).config !== ALPHA_8 && isSrgb(bmp(h).space)),
-  "nativeIsSRGBLinear(J)Z": (h: bigint) => +isLinearSrgb(bmp(h).space),
+  "nativeGetAllocationByteCount(J)I": (h: bigint) => bitmapAt(h).allocation,
+  "nativeIsImmutable(J)Z": (h: bigint) => +bitmapAt(h).immutable,
+  "nativeSetImmutable(J)V": (h: bigint) => { bitmapAt(h).immutable = true; },
+  "nativeComputeColorSpace(J)Landroid/graphics/ColorSpace;": (h: bigint) => javaColorSpace(bitmapAt(h)),
+  "nativeSetColorSpace(JJ)V": (h: bigint, cs: bigint) => { bitmapAt(h).space = spaceOf(cs); },
+  "nativeIsSRGB(J)Z": (h: bigint) => +(bitmapAt(h).config !== ALPHA_8 && isSrgb(bitmapAt(h).space)),
+  "nativeIsSRGBLinear(J)Z": (h: bigint) => +isLinearSrgb(bitmapAt(h).space),
   // HardwareBuffer and HDR gainmaps are GPU allocations there is no device for: a HARDWARE
   // bitmap here is a raster, and no gainmap can be made (Gainmap's natives are absent)
-  "nativeGetHardwareBuffer(J)Landroid/hardware/HardwareBuffer;": () => {
-    throw rt.mkThrowable("java/lang/UnsupportedOperationException", "HardwareBuffer is not supported");
-  },
-  "nativeWrapHardwareBufferBitmap(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;": () => {
-    throw rt.mkThrowable("java/lang/UnsupportedOperationException", "HardwareBuffer is not supported");
-  },
+  "nativeGetHardwareBuffer(J)Landroid/hardware/HardwareBuffer;": noHardwareBuffer,
+  "nativeWrapHardwareBufferBitmap(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;": noHardwareBuffer,
   "nativeHasGainmap(J)Z": () => 0,
   "nativeExtractGainmap(J)Landroid/graphics/Gainmap;": () => null,
   "nativeSetGainmap(JJ)V": (_h: bigint, gainmap: bigint) => {

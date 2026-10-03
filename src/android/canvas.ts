@@ -8,7 +8,7 @@ import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath, inversePath, pathAt } from "./path";
-import { NativeBitmap } from "./bitmap";
+import { NativeBitmap, bitmapAt } from "./bitmap";
 import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
@@ -399,13 +399,6 @@ export class NativeCanvas {
     }
     return !this.clipEmpty;
   }
-  /** SkCanvas::clipRRect, anti-aliased as hwui clips a view to its outline */
-  clipRoundRect(l: number, t: number, r: number, b: number, radius: number): boolean {
-    clipRoundRect(this.ctx, l, t, r, b, radius);
-    if (this.persistent) this.persist((c) => clipRoundRect(c, l, t, r, b, radius));
-    this.narrowOut(l, t, r, b);
-    return !this.clipEmpty;
-  }
   /** intersect the bounds with an anti-aliased clip's local bounds, rounded out */
   private narrowOut(l: number, t: number, r: number, b: number) {
     if (this.clipEmpty) return;
@@ -664,9 +657,9 @@ export function drawingCanvas(h: bigint): NativeCanvas {
 const clipOp = (nc: NativeCanvas, op: number, intersect: () => boolean, difference: () => boolean) =>
   +(op === 1 ? intersect() : op === 0 ? difference() : !nc.clipEmpty);
 rt.registerJnis("android/graphics/Canvas", {
-  "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(b ? deref<NativeBitmap>(b) : null)),
+  "nInitRaster(J)J": (b: bigint) => handle(bitmapCanvas(b ? bitmapAt(b) : null)),
   "nGetNativeFinalizer()J": () => FINALIZER,
-  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { const bmp = b ? deref<NativeBitmap>(b) : null; if (bmp) canvasAt(h).setTarget(bmp.context(), bmp.w, bmp.h, bmp); else canvasAt(h).setTarget(emptyCtx(), 0, 0, null); },
+  "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { const bmp = b ? bitmapAt(b) : null; if (bmp) canvasAt(h).setTarget(bmp.context(), bmp.w, bmp.h, bmp); else canvasAt(h).setTarget(emptyCtx(), 0, 0, null); },
   "nIsOpaque(J)Z": (h: bigint) => { const b = canvasAt(h).bmp; return +(!!b && (!b.hasAlpha || b.config === 3)); },
   "nGetWidth(J)I": (h: bigint) => canvasAt(h).w,
   "nGetHeight(J)I": (h: bigint) => canvasAt(h).h,
