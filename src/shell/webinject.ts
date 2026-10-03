@@ -79,6 +79,15 @@ export function setDocumentCookie(cookies: { text: string; expires: number }[], 
   return expires < 0 ? kept : [...kept, { text, expires }];
 }
 
+/** the WebView settings' faces, by their families, and the rules that use them, before the page's own */
+export function installWebFonts(fonts: { faces: { family: string; path: string; weight: string; style: string; stretch: string }[]; css: string }): void {
+  for (const f of fonts.faces) document.fonts.add(new FontFace(f.family, `url(${JSON.stringify(location.origin + f.path)})`, { weight: f.weight, style: f.style, stretch: f.stretch }));
+  if (!fonts.css) return;
+  const style = document.createElement("style");
+  style.textContent = fonts.css;
+  document.head.insertBefore(style, document.head.firstChild);
+}
+
 /** each http(s) frame of the page loads where `route` says (its web origin's renderer); `renderers`,
  *  the renderer origins, are the only sites a frame may load from meanwhile. `src` reads what the
  *  page set. */
@@ -135,6 +144,7 @@ const ask = data => new Promise(resolve => {
   channel.port1.onmessage = event => { channel.port1.close(); resolve(event.data); };
   send(data, [channel.port2]);
 });
+if (config.fonts) (${installWebFonts.toString()})(config.fonts);
 // Chromium loads a page's subframes through the WebView's network stack: each frame of a web
 // origin renders on that origin's renderer, which the app hands out. Until then the policy keeps
 // the frame from loading straight from its site.
@@ -301,7 +311,7 @@ const loaded = async event => {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
     const context = {id, page: params.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, cookies: event.data.cookies,
       clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: params.get("__wd_intercept") === "1",
-      sub: params.has("__wd_sub"), frames: event.data.frames};
+      sub: params.has("__wd_sub"), frames: event.data.frames, fonts: event.data.fonts};
     // the document's own response may set cookies before it is written
     addEventListener("message", event => { if (event.source === owner && event.data?.bridge === id && event.data.kind === "cookies") context.cookies = event.data.list; });
     const stop = Event.prototype.stopImmediatePropagation;
@@ -393,7 +403,8 @@ self.addEventListener("fetch", event => {
     event.respondWith(caches.open("wd-code").then(cache => cache.match(request)).then(hit => hit || new Response("", {status: 404})));
     return;
   }
-  if (original.origin === self.location.origin && original.pathname.startsWith("/asset/")) {
+  // an apk asset, or a device font the WebView's settings name, from the app
+  if (original.origin === self.location.origin && /^\\/(asset|system\\/fonts|data\\/fonts)\\//.test(original.pathname)) {
     event.respondWith((async () => {
       const client = await self.clients.get(event.clientId);
       if (!client) return fetch(request);
