@@ -5,7 +5,9 @@ import { curThread, threadSwitch } from "../jvm/natives/jentry";
 import { type JBuffer, remainingBytes, bufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
 import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap";
 import { gles1String } from "../native/gles1";
-import { activeUniformInfo, externalSamplersAs2D, gles3Extensions, pixelStore, textureTarget } from "../native/gles3";
+import { gles3Extensions } from "../native/gles3";
+import { activeUniformInfo, externalSamplersAs2D, textureTarget } from "../native/gles3-state";
+import { pixelStore } from "../native/gles3-pixels";
 import { perf } from "../perf";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
@@ -63,6 +65,10 @@ export function takeError(): number {
 }
 /** a call gles3 does not track reached the current context */
 export function untracked(): void { T.clean = false; T.mixed = true; }
+/** a tracked call WebGL may reject reached it: the next glGetError asks WebGL */
+export function unsure(): void { T.clean = false; }
+/** an error GL raises that WebGL would not: kept until glGetError, the first one winning as in GL */
+export function raise(e: number): void { T.err ||= e; }
 /** the Java bindings' natives, each marking the context untracked */
 function bindings(table: Record<string, (...a: never[]) => unknown>): Record<string, (...a: never[]) => unknown> {
   return Object.fromEntries(Object.entries(table).map(([sig, fn]) => [sig, sig === "glGetError()I" || sig === "_nativeClassInit()V" ? fn

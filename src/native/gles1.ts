@@ -7,8 +7,10 @@
 import { mem } from "./mem";
 import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host";
 import type { Cpu } from "./cpu";
-import { glCommon, glProbe, readGuestPixels, pixelStore, vertexTypeBytes, guestIndices, indexBounds } from "./gles3";
-import { gl, invert, takeError, untracked } from "../android/gl";
+import { glCommon, glProbe } from "./gles3";
+import { readGuestPixels, pixelStore } from "./gles3-pixels";
+import { vertexTypeBytes, guestIndices, indexBounds } from "./gles3-client-arrays";
+import { gl, invert, takeError, untracked, raise } from "../android/gl";
 import { perf } from "../perf";
 import { activateEglCurrent } from "./egl-current";
 
@@ -59,7 +61,6 @@ interface Ctx {
   alphaTest: boolean; alphaFunc: number; alphaRef: number;
   arrayBuf: number; elemBuf: number;
   caps: Set<number>;
-  err: number;
   unpackAlign: number;
   scratch: Float32Array;
   warned: Set<string>;
@@ -115,7 +116,7 @@ function ctxFor(g: GL): Ctx {
     vert: newArr(4), col: newArr(4), tex: [newArr(4), newArr(4)], norm: newArr(3), point: newArr(1),
     clientUnit: 0, unit: 0, texOn: [false, false], texEnv: [0x2100, 0x2100], bound: [0, 0], texCoord: [new Float32Array([0, 0, 0, 1]), new Float32Array([0, 0, 0, 1])],
     color: new Float32Array([1, 1, 1, 1]), pointSize: 1, clipMask: 0, clipPlanes: Array.from({ length: 6 }, () => new Float32Array(4)), clipValues: new Float32Array(24), alphaTest: false, alphaFunc: 0x207, alphaRef: 0,
-    arrayBuf: 0, elemBuf: 0, caps: new Set(), err: 0, unpackAlign: 4, scratch: new Float32Array(4096), warned: new Set(),
+    arrayBuf: 0, elemBuf: 0, caps: new Set(), unpackAlign: 4, scratch: new Float32Array(4096), warned: new Set(),
   };
   ctxs.set(g, c);
   return c;
@@ -315,7 +316,7 @@ export function gles1Init(): void {
   const clipInverse = new Float32Array(16);
   const clipPlane = (c: Ctx, a: ArgReader, fixed: boolean) => {
     const index = a.i() - 0x3000, p = a.p();
-    if (index < 0 || index >= 6) { c.err = 0x500; return; }
+    if (index < 0 || index >= 6) { raise(0x500); return; }
     const eq = new Float32Array(4);
     for (let i = 0; i < 4; i++) eq[i] = fixed ? mem.ld32(p + 4 * i) / 65536 : mem.ldf32(p + 4 * i);
     const plane = c.clipPlanes[index];
@@ -406,7 +407,7 @@ export function gles1Init(): void {
     if (count <= 0) return;
     if (indices) {
       // ES 1.1 indices are bytes or shorts; GL_OES_element_index_uint is not advertised
-      if (indices.type !== 0x1401 && indices.type !== 0x1403) { c.err = 0x500; return; }
+      if (indices.type !== 0x1401 && indices.type !== 0x1403) { raise(0x500); return; }
       const es = indices.type === 0x1403 ? 2 : 1;
       let vertices = 65536;
       if (c.elemBuf) once(c, "glDrawElements with a bound ELEMENT_ARRAY_BUFFER (vertex range unknown)");
@@ -430,8 +431,8 @@ export function gles1Init(): void {
     glLoadMatrixx: W("glLoadMatrixx", (c, a) => { top(c).set(m4(a, true)); }),
     glMultMatrixf: W("glMultMatrixf", (c, a) => { mulRight(top(c), m4(a, false)); }),
     glMultMatrixx: W("glMultMatrixx", (c, a) => { mulRight(top(c), m4(a, true)); }),
-    glPushMatrix: W("glPushMatrix", (c) => { const s = stack(c); const lim = c.mode === 0x1700 ? 32 : 2; if (s.length >= lim) { c.err = 0x503; return; } s.push(new Float32Array(s[s.length - 1])); }),
-    glPopMatrix: W("glPopMatrix", (c) => { const s = stack(c); if (s.length <= 1) { c.err = 0x504; return; } s.pop(); }),
+    glPushMatrix: W("glPushMatrix", (c) => { const s = stack(c); const lim = c.mode === 0x1700 ? 32 : 2; if (s.length >= lim) { raise(0x503); return; } s.push(new Float32Array(s[s.length - 1])); }),
+    glPopMatrix: W("glPopMatrix", (c) => { const s = stack(c); if (s.length <= 1) { raise(0x504); return; } s.pop(); }),
     glVertexPointer: setArr((c) => c.vert),
     glColorPointer: setArr((c) => c.col),
     glTexCoordPointer: setArr((c) => c.tex[c.clientUnit]),
@@ -442,28 +443,28 @@ export function gles1Init(): void {
     glDrawArrays: W("glDrawArrays", (c, a) => { const mode = a.i(), first = a.i(), count = a.i(); draw(c, mode, count, null, first); }),
     glDrawElements: W("glDrawElements", (c, a) => { const mode = a.i(), count = a.i(), type = a.i(), ptr = a.p(); draw(c, mode, count, { type, ptr }, 0); }),
     glColor4ub: W("glColor4ub", (c, a) => { c.color[0] = (a.i() & 255) / 255; c.color[1] = (a.i() & 255) / 255; c.color[2] = (a.i() & 255) / 255; c.color[3] = (a.i() & 255) / 255; }),
-    glPointSize: W("glPointSize", (c, a) => { const size = F(a); if (size <= 0) c.err = 0x501; else c.pointSize = size; }),
-    glPointSizex: W("glPointSizex", (c, a) => { const size = Xa(a); if (size <= 0) c.err = 0x501; else c.pointSize = size; }),
+    glPointSize: W("glPointSize", (c, a) => { const size = F(a); if (size <= 0) raise(0x501); else c.pointSize = size; }),
+    glPointSizex: W("glPointSizex", (c, a) => { const size = Xa(a); if (size <= 0) raise(0x501); else c.pointSize = size; }),
     glPointSizePointerOES: W("glPointSizePointerOES", (c, a) => {
       const type = a.i(), stride = a.i(), ptr = a.p();
-      if (type !== 0x1406 && type !== 0x140c) { c.err = 0x500; return; }
-      if (stride < 0) { c.err = 0x501; return; }
+      if (type !== 0x1406 && type !== 0x140c) { raise(0x500); return; }
+      if (stride < 0) { raise(0x501); return; }
       Object.assign(c.point, { size: 1, type, stride, ptr, vbo: c.arrayBuf });
     }),
     glMultiTexCoord4f: W("glMultiTexCoord4f", (c, a) => {
       const unit = a.i() - 0x84c0;
-      if (unit < 0 || unit >= 2) { c.err = 0x500; return; }
+      if (unit < 0 || unit >= 2) { raise(0x500); return; }
       for (let i = 0; i < 4; i++) c.texCoord[unit][i] = a.f();
     }),
     glMultiTexCoord4x: W("glMultiTexCoord4x", (c, a) => {
       const unit = a.i() - 0x84c0;
-      if (unit < 0 || unit >= 2) { c.err = 0x500; return; }
+      if (unit < 0 || unit >= 2) { raise(0x500); return; }
       for (let i = 0; i < 4; i++) c.texCoord[unit][i] = Xa(a);
     }),
     glClipPlanef: W("glClipPlanef", (c, a) => clipPlane(c, a, false)),
     glClipPlanex: W("glClipPlanex", (c, a) => clipPlane(c, a, true)),
-    glGetClipPlanef: W("glGetClipPlanef", (c, a) => { const index = a.i() - 0x3000, out = a.p(); if (index < 0 || index >= 6) { c.err = 0x500; return; } for (let i = 0; i < 4; i++) mem.stf32(out + i * 4, c.clipPlanes[index][i]); }),
-    glGetClipPlanex: W("glGetClipPlanex", (c, a) => { const index = a.i() - 0x3000, out = a.p(); if (index < 0 || index >= 6) { c.err = 0x500; return; } for (let i = 0; i < 4; i++) mem.st32(out + i * 4, Math.round(c.clipPlanes[index][i] * 65536)); }),
+    glGetClipPlanef: W("glGetClipPlanef", (c, a) => { const index = a.i() - 0x3000, out = a.p(); if (index < 0 || index >= 6) { raise(0x500); return; } for (let i = 0; i < 4; i++) mem.stf32(out + i * 4, c.clipPlanes[index][i]); }),
+    glGetClipPlanex: W("glGetClipPlanex", (c, a) => { const index = a.i() - 0x3000, out = a.p(); if (index < 0 || index >= 6) { raise(0x500); return; } for (let i = 0; i < 4; i++) mem.st32(out + i * 4, Math.round(c.clipPlanes[index][i] * 65536)); }),
     glLineWidthx: W("glLineWidthx", (c, a) => c.gl.lineWidth(Xa(a))),
     glGenTextures: W("glGenTextures", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.textures.push({ tex: c.gl.createTexture(), hasAlpha: true, genMip: false }); mem.st32(out + i * 4, c.textures.length - 1); } }),
     glDeleteTextures: W("glDeleteTextures", (c, a) => { const n = a.i(), p = a.p(); for (let i = 0; i < n; i++) { const id = mem.ld32(p + i * 4); const r = c.textures[id]; if (r) { c.gl.deleteTexture(r.tex); c.textures[id] = null; } for (let u = 0; u < 2; u++) if (c.bound[u] === id) c.bound[u] = 0; } }),
@@ -475,7 +476,7 @@ export function gles1Init(): void {
       const target = a.i(), level = a.i(), fmt = a.i(), w = a.i(), h = a.i(); a.i(); const size = a.i(), p = a.p();
       const rec = c.textures[c.bound[c.unit]];
       if (!rec) return;
-      if (fmt !== ETC1) { once(c, `glCompressedTexImage2D format 0x${fmt.toString(16)}`); c.err = 0x500; return; }
+      if (fmt !== ETC1) { once(c, `glCompressedTexImage2D format 0x${fmt.toString(16)}`); raise(0x500); return; }
       const g = c.gl;
       g.bindTexture(g.TEXTURE_2D, rec.tex);
       pixelStore(g, g.UNPACK_ALIGNMENT, 4);
@@ -498,14 +499,14 @@ export function gles1Init(): void {
     glClearDepthx: W("glClearDepthx", (c, a) => c.gl.clearDepth(Xa(a))),
     glPolygonOffsetx: W("glPolygonOffsetx", (c, a) => c.gl.polygonOffset(Xa(a), Xa(a))),
     glSampleCoveragex: W("glSampleCoveragex", (c, a) => c.gl.sampleCoverage(Xa(a), !!(a.i() & 255))),
-    glGetError: W("glGetError", (c) => { const e = c.err || takeError(); c.err = 0; return e; }),
+    glGetError: W("glGetError", () => takeError()),
     glGetString: W("glGetString", (c, a) => {
       const value = gles1String(c.gl, a.i());
-      if (value === null) { c.err = 0x500; return 0; }
+      if (value === null) { raise(0x500); return 0; }
       return cstr(value);
     }),
     glGetIntegerv: getInto("i"), glGetFloatv: getInto("f"), glGetFixedv: getInto("x"), glGetBooleanv: getInto("b"),
-    glGetPointerv: W("glGetPointerv", (c, a) => { const pn = a.i(), out = a.p(); const s = pn === 0x808e ? c.vert : pn === 0x808f ? c.norm : pn === 0x8090 ? c.col : pn === 0x8092 ? c.tex[c.clientUnit] : pn === 0x898c ? c.point : null; if (s) stp(out, s.ptr); else c.err = 0x500; }),
+    glGetPointerv: W("glGetPointerv", (c, a) => { const pn = a.i(), out = a.p(); const s = pn === 0x808e ? c.vert : pn === 0x808f ? c.norm : pn === 0x8090 ? c.col : pn === 0x8092 ? c.tex[c.clientUnit] : pn === 0x898c ? c.point : null; if (s) stp(out, s.ptr); else raise(0x500); }),
     glGetTexEnviv: W("glGetTexEnviv", (c, a) => { a.i(); const pn = a.i(), out = a.p(); mem.st32(out, pn === 0x2200 ? c.texEnv[c.unit] : 0); }),
     glGetTexParameteriv: W("glGetTexParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); mem.st32(out, Number(c.gl.getTexParameter(t, pn)) | 0); }),
     // a client-array draw leaves the stream buffers bound, so bind the guest's buffer as glBufferData does
