@@ -293,7 +293,7 @@ test("idle preparation belongs to each method instance and preserves suspended f
       expect(read).not.toHaveBeenCalled();
       expect(f.thread()).toBe(f.main);
     } finally { read.mockRestore(); }
-    // A prior instance has already persisted this source; the next instance still warms.
+    // Source recorded by another instance must not prevent this instance warming.
     const later = await fixture("cold"), third = later.fn("suspended", "(II)I");
     third(0, 7); flush();
     const cold = perf.coldCalls;

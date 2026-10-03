@@ -180,13 +180,13 @@ function syncPinned(args: unknown[], toJava: boolean): void {
   }
 }
 function invokeBody(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): unknown {
-  let fn: any;
+  let fn: unknown;
   if (m.isStatic) {
     self = m.info.ctor;
     fn = m.info.ctor[m.mangled];
   } else {
     if (self === null || self === undefined) throw throwable("java/lang/NullPointerException", "JNI call on null " + m.name);
-    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as any)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc);
+    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as Record<string, unknown>)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc);
   }
   if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
   return callOn(cpu.jthread, () => fn.apply(self, args));

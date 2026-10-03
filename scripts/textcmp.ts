@@ -49,19 +49,19 @@ const browser = await launchBrowser();
 const page = await browser.newPage(CONTEXT_OPTS);
 const resp = await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL}`);
-await page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
+await page.waitForFunction(() => !!globalThis.wd, null, { timeout: 60_000 });
 await page.evaluate(() => document.fonts.ready);
-await page.evaluate((a) => void (globalThis as any).wd.boot(a), apk);
-await page.waitForFunction(() => (globalThis as any).wd.perf.bootMs > 0, null, { timeout: 120_000 });
+await page.evaluate((a) => void globalThis.wd.boot(a), apk);
+await page.waitForFunction(() => globalThis.wd.perf.bootMs > 0, null, { timeout: 120_000 });
 // LineBreakConfig reads the application's target SDK: wait for bindApplication, which follows boot
-while (!await page.evaluate(async () => await (globalThis as any).wd.scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;") !== null))
+while (!await page.evaluate(async () => await globalThis.wd.scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;") !== null))
   await Bun.sleep(250);
 const ours: string[] = await page.evaluate(async (paras) => {
-  const wd = (globalThis as any).wd, out: string[] = [];
+  const wd = globalThis.wd, out: string[] = [];
   const config = await wd.vcall(await wd.vcall(await wd.vcall(await wd.newObj("android/graphics/text/LineBreakConfig$Builder", "()V"),
     "setLineBreakStyle", "(I)Landroid/graphics/text/LineBreakConfig$Builder;", 0),
     "setLineBreakWordStyle", "(I)Landroid/graphics/text/LineBreakConfig$Builder;", 0), "build", "()Landroid/graphics/text/LineBreakConfig;");
-  for (const [i, [text, width, size]] of (paras as [string, number, number][]).entries()) {
+  for (const [i, [text, width, size]] of paras.entries()) {
     const paint = await wd.newObj("android/text/TextPaint", "(I)V", 1);
     await wd.vcall(paint, "setTextSize", "(F)V", size);
     for (let strategy = 0; strategy <= 2; strategy++) for (let spacing = 0; spacing <= 1; spacing++) {
@@ -82,8 +82,8 @@ const ours: string[] = await page.evaluate(async (paras) => {
     }
   }
   return out;
-}, PARAGRAPHS as unknown as never);
-const missing: string[] = await page.evaluate(() => [...(globalThis as any).wd.rt.missing]);
+}, PARAGRAPHS);
+const missing: string[] = await page.evaluate(() => [...globalThis.wd.rt.missing]);
 await browser.close();
 
 const device = (await Bun.file(FIXTURE).text()).trim().split("\n").filter((l) => /^\d/.test(l));

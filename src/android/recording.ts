@@ -7,7 +7,6 @@ type Operation = (ctx: Ctx2D) => void;
 export type DisplayList = unknown[];
 const CALL = 0, SET = 1, DEFER = 2;
 
-/** where a recording context appends */
 type Recording = { ops: DisplayList };
 const recordings = new WeakMap<Ctx2D, Recording>();
 const mirrors = new WeakMap<Ctx2D, Ctx2D>();
@@ -36,7 +35,6 @@ export const displayListLength = (ops: DisplayList): number => ops.length / 3;
  *  variable scoped by replayFor names it for every target a replay reaches. */
 let replaying: NativeCanvas | null = null;
 export function replayingCanvas(): NativeCanvas | null { return replaying; }
-/** `draw`, replaying for `canvas` */
 export function replayFor(canvas: NativeCanvas, draw: () => void): void {
   const previous = replaying;
   replaying = canvas;
@@ -53,7 +51,6 @@ const DRAWS = new Set(["fillRect", "strokeRect", "clearRect", "fillText", "strok
   "putImageData", "clip", "drawFocusIfNeeded"]);
 
 /** Mirror native operations for measurement while retaining them for display-list replay. */
-function recordingContext(mirror: Ctx2D, ops: DisplayList): Ctx2D { return recordInto(mirror, { ops }); }
 function recordInto(mirror: Ctx2D, rec: Recording): Ctx2D {
   const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
   const context = new Proxy(mirror, {
@@ -96,5 +93,5 @@ export class Recorder implements Recording {
 /** A recording that shares `ctx`'s mirror, so its state stays continuous, but keeps its
  *  operations in `ops`: the content of a layer, replayed into the layer's own raster. */
 export function nestedRecording(ctx: Ctx2D, ops: DisplayList): Ctx2D {
-  return recordingContext(mirrors.get(ctx)!, ops);
+  return recordInto(mirrors.get(ctx)!, { ops });
 }

@@ -1,14 +1,7 @@
-// Compiled method bodies persisted across launches (docs/bytecode-first-plan.md §4.4). A launch
-// records the source of every hot and resumable body it compiles; the next launch of the same
-// package, on the same build, installs those bodies from scripts in Cache Storage instead of
-// preparing, interpreting and compiling them again, and the service worker serving the scripts
-// lets V8 reuse their code cache. A body's source depends only on its dex and the build, so the
-// key is the dex signature and method index. Saves append a chunk of the bodies not yet written,
-// so their cost follows what is new rather than what the app has accumulated. Bodies a launch
-// first needed before its first frame go to startup chunks, which the next launch awaits; the
-// rest load after that launch's first frame, so they do not delay it. Bodies of the platform's
-// dex are the same for every app, so they persist in one store all packages share: an app's first
-// launch runs the framework code earlier launches of other apps compiled.
+// Compiled bodies persist by build, DEX and method (docs/bytecode-first-plan.md §4.4).
+// Cache Storage scripts let V8 reuse compiled code across launches. Saves append new bodies;
+// startup chunks load before launch, later chunks after the first frame. Platform bodies share
+// a store across apps.
 
 import { inputSettled } from "./yield";
 import { BYTECODE } from "./provenance";

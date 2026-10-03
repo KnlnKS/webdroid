@@ -141,13 +141,11 @@ const shortStringUnits: number[][] = [];
 const utf16 = new TextDecoder("utf-16le", { fatal: true, ignoreBOM: true });
 /** code units → string, chunked to stay under the argument limit */
 export function charsToString(chars: Uint16Array | Uint8Array, off: number, len: number): string {
-  // a long run decodes about 2.5x faster (V8, 1 KB); a lone surrogate, which the decoder refuses,
-  // and a view it cannot read (shared memory) take fromCharCode's path
+  // TextDecoder is faster for long strings but rejects lone surrogates and shared memory.
   if (len >= 128 && chars instanceof Uint16Array) {
     try { return utf16.decode(chars.subarray(off, off + len)); } catch { /* below */ }
   }
-  // fromCharCode reads a plain array's elements faster than a typed array's (about 2x in V8 below
-  // 40 code units); a subarray also allocates a view, which the whole-array case skips
+  // fromCharCode reads short plain arrays faster than typed arrays.
   if (len < 128) {
     const units = shortStringUnits[len] ??= new Array<number>(len);
     for (let i = 0; i < len; i++) units[i] = chars[off + i];
