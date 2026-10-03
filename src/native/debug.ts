@@ -8,7 +8,7 @@ import { cpus, codeStats, stepMode, setStepMode, profile, slice, yieldStats, sig
 import { mem } from "./mem";
 import { processExited } from "../process-exit";
 import { core, jitStats } from "./core";
-import { netDebug } from "./net";
+import { netDebug } from "./socket/core";
 
 export const native = {
   modules,

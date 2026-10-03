@@ -11,7 +11,8 @@ import { cpuByOsTid, exitGroup, setRawSyscall, type Cpu } from "./cpu";
 import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
 import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
-import { NET_SYSCALLS, nativePoll, nativeSelect } from "./net";
+import { NET_SYSCALLS } from "./socket/syscalls";
+import { POLL_SYSCALLS, nativePoll, nativeSelect } from "./poll";
 import { PROC_SYSCALLS, installDebuggerdHandlers, signalThread } from "./proc";
 import { device } from "../shell/config";
 
@@ -182,7 +183,7 @@ let table: (HostFn | undefined)[] = [];
 export function kernelInit(): void {
   const wide = PTR === 8;
   KLAYOUT = wide ? KERNEL64 : KERNEL32;
-  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...PROC_SYSCALLS };
+  const byName: Record<string, HostFn> = { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS };
   table = [];
   for (const [nr, name] of Object.entries(wide ? SAME64 : SAME32)) {
     if (!byName[name]) throw new Error(`kernel: no body for ${name}`);

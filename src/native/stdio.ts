@@ -11,7 +11,8 @@ import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs } from "../shell/vfs";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdReadFully, fdWrite, fdClose, fdSeek, fdDup2, fdFallocate,
-  statPath, accessPath, faccessatPath, renamePath, mkdirPath, makeFifo, makePipe, epollCreate, truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
+  statPath, accessPath, faccessatPath, renamePath, mkdirPath, makeFifo, makePipe, truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
+import { POLL_SYSCALLS, epollCreate } from "./poll";
 const dec = new TextDecoder();
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
@@ -246,7 +247,7 @@ export function stdioInit(): void {
     dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
     pipe: (_c, a) => makePipe(a.p(), 0),
     epoll_create: () => epollCreate(false),
-    epoll_wait: FS_SYSCALLS.epoll_pwait,
+    epoll_wait: POLL_SYSCALLS.epoll_pwait,
     __read_chk: (cpu, a) => { const fd = a.i(), p = a.p(), n = a.u(); chk(cpu, n, a.u(), "read"); return fdRead(cpu, fd, p, n); },
     __write_chk: (cpu, a) => {
       const fd = a.i(), p = a.p(), n = a.va(), size = a.va();

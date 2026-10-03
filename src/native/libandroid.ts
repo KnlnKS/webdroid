@@ -10,7 +10,7 @@ import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
 import { mainThread } from "../jvm/natives/jentry";
 import { dispatchUncaught } from "../jvm/natives/jthrowable";
-import { nativePoll } from "./net";
+import { nativePoll } from "./poll";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { nativeAssets } from "../android/res";
 

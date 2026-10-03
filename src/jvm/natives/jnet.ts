@@ -15,7 +15,7 @@ import { strArray, u8, mangleMethod } from "../abi";
 import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
-import { abandonConnection } from "../../native/net";
+import { abandonConnection } from "../../native/socket/inet";
 import { proxyFetch } from "../../native/loopback-http";
 
 /** a connected TLS socket; rt.make skips <init> */

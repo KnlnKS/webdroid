@@ -1,5 +1,5 @@
 // The kernel's descriptor table and file system over the JVM vfs: files, pipes and fifos,
-// eventfd, epoll, inotify, timerfd and unix socket ends, shared by a raw syscall, the ARM32
+// eventfd, epoll, inotify, timerfd and sockets (socket/), shared by a raw syscall, the ARM32
 // libc's wrappers (stdio.ts) and libcore's descriptors (the java*Fd exports).
 
 import { mem, guestAt, anchor } from "./mem";
@@ -12,14 +12,16 @@ import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
-import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketAvailable, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd, socketReceive, socketSend, heldSocket, retainSocket, installSocket, releaseSocket, type NetSocket } from "./net";
 import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd";
 import { armClockTimer, disarmClockTimer, timerState, validTime, type ClockTimer } from "./timers";
-import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../guest-clock";
-import { procIdentity } from "../shell/procfs";
+import { gather } from "./socket/abi";
+import type { Socket, Received } from "./socket/core";
+import type { Epoll } from "./poll";
 const dec = new TextDecoder();
 
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
+export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
+const O_RDWR = 2, SIGPIPE = 13, MSG_NOSIGNAL = 0x4000, SOCK_STREAM = 1;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_IFSOCK = 0xc000;
 
 /** a pipe: byte chunks, whoever is parked waiting for them (a reader, or an epoll_wait), and its
@@ -27,33 +29,22 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000, S_IFIFO = 0x1000, S_IFCHR = 0x2000, S_
  *  a reader gone (or shut down), which a writer meets as EPIPE. */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; writers: number; closed: boolean }
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
-interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
-interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
-interface Fd {
+/** an open file: what descriptors dup(2) and SCM_RIGHTS share */
+export interface OpenFile {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   /** a writable /proc file, whose writes procWrite takes */
   proc?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
-  /** an AF_UNIX socket's type (unix.ts): SOCK_DGRAM and SOCK_SEQPACKET keep each write whole */
-  unix?: number;
-  /** a bound AF_UNIX socket's name, and once it listens the connections it has yet to accept */
-  unixName?: string; unixPeer?: string; listener?: { pending: Fd[]; wake: (() => void)[] };
-  /** an AF_UNIX socket's SOL_SOCKET options it keeps: the timeouts (ms) and SO_PASSCRED */
-  options?: Map<number, number>;
+  socket?: Socket;
   /** run when the last descriptor sharing this open file closes it */
   onLastClose?: () => void;
 }
+type Fd = OpenFile;
 const F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4, F_GETLK = 5, F_GETLK64 = 12, F_DUPFD_CLOEXEC = 0x406;
-const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
+const EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
 const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
 const newPipe = (writers: number): Pipe => ({ q: [], wake: [], writers, closed: false });
-const SOCK_STREAM = 1, SOCK_DGRAM = 2, SOCK_SEQPACKET = 5, MSG_PEEK = 2, MSG_DONTWAIT = 0x40, MSG_NOSIGNAL = 0x4000;
-const SO_ERROR = 4, SO_LINGER = 13, SO_PASSCRED = 16, SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, SO_ACCEPTCONN = 30, SO_PROTOCOL = 38, SO_DOMAIN = 39;
-const SIGPIPE = 13, SCM_MAX_FD = 253;
-const messages = (f: Fd | undefined): boolean => f?.unix === SOCK_DGRAM || f?.unix === SOCK_SEQPACKET;
-/** the bound name a datagram was sent from, by the datagram */
-const senders = new WeakMap<Uint8Array, string>();
 /** named pipes (mkfifo) in this process, by the file that names them: every open shares the one
  *  pipe, which outlives its descriptors and goes with its file; Realm's interprocess condition
  *  variables signal through them */
@@ -100,36 +91,36 @@ const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length 
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
-const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, statusFlags: 0, references: 1 });
+export const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
 const closeOnExec = new Set<number>();
 export const openFd = (fd: number): Fd | undefined => fds.get(fd);
 
-setNativePollProvider({
-  query(fd, events) {
-    const f = fds.get(fd);
-    if (!f) return null;
-    let revents = 0;
-    if (f.rpipe) {
-      if (events & 1 && (f.rpipe.q.length || f.rpipe.closed)) revents |= 1;
-      if (f.rpipe.closed) revents |= 16;
-    } else if (f.event) {
-      if (events & 1 && f.event.count > 0) revents |= 1;
-    } else if (f.listener) {
-      if (events & 1 && f.listener.pending.length) revents |= 1;
-    } else if (!f.epoll && events & 1 && !f.write) revents |= 1;
-    if (f.wpipe) revents |= f.wpipe.closed ? 8 : events & 4;
-    else if (f.write && events & 4) revents |= 4;
-    return revents;
-  },
-  subscribe(fd, wake) {
-    const f = fds.get(fd);
-    const waiters = f?.rpipe?.wake ?? f?.event?.wake ?? f?.listener?.wake;
-    if (!waiters) return () => {};
-    waiters.push(wake);
-    return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
-  },
-});
+/** poll(2)'s answer for one descriptor: which of `events` it is ready for, with POLLERR and POLLHUP */
+export function pollEvents(fd: number, events: number): number {
+  const f = fds.get(fd);
+  if (!f) return POLLNVAL;
+  if (f.socket) return f.socket.poll(events);
+  let revents = 0;
+  if (f.rpipe) {
+    if (events & POLLIN && (f.rpipe.q.length || f.rpipe.closed)) revents |= POLLIN;
+    if (f.rpipe.closed) revents |= POLLHUP;
+  } else if (f.event) {
+    if (events & POLLIN && f.event.count > 0) revents |= POLLIN;
+  } else if (!f.epoll && events & POLLIN && !f.write) revents |= POLLIN;
+  if (f.wpipe) revents |= f.wpipe.closed ? POLLERR : events & POLLOUT;
+  else if (f.write && events & POLLOUT) revents |= POLLOUT;
+  return revents;
+}
+/** call `wake` once the descriptor's readiness may have changed */
+export function watchFd(fd: number, wake: () => void): () => void {
+  const f = fds.get(fd);
+  if (f?.socket) return f.socket.watch(wake);
+  const waiters = f?.rpipe?.wake ?? f?.event?.wake;
+  if (!waiters) return () => {};
+  waiters.push(wake);
+  return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
+}
 
 function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
   if (path.startsWith("/") || dirfd === -100) return path;
@@ -242,273 +233,44 @@ export function javaOnLastClose(fd: number, hook: () => void): void { const f = 
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
 export const javaDupFd = (fd: number): number => fdDup(null, fd);
 export const javaDup2Fd = (fd: number, to: number): number => fdDup2(null, fd, to);
-/** socketpair's ends are the only sockets this table holds; net.ts keeps the rest */
-export const javaIsSocketFd = (fd: number): boolean => isNativeSocket(fd) || fds.get(fd)?.path === "socketpair";
-/** shutdown(2) of a socketpair end: SHUT_WR (or RDWR) ends what its peer reads, SHUT_RD (or RDWR)
- *  what it reads once drained, and the peer's writes meet EPIPE; -errno otherwise */
-export function javaShutdownFd(fd: number, how: number): number {
+export const javaIsSocketFd = (fd: number): boolean => !!fds.get(fd)?.socket;
+/** the socket `fd` names, or EBADF, or ENOTSOCK for another open file */
+export function socketOf(fd: number): Socket | number {
   const f = fds.get(fd);
-  if (!f) return -E.BADF;
-  if (f.path !== "socketpair") return -E.NOTSOCK;
-  if (how !== 0 && f.wpipe && !f.wpipe.closed) {
-    if (!--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
-    f.wpipe = { ...newPipe(1), closed: true };
-  }
-  if (how !== 1 && f.rpipe && f.unix !== SOCK_DGRAM) { f.rpipe.closed = true; wakeAll(f.rpipe); }
-  return 0;
+  return f?.socket ?? (f ? -E.NOTSOCK : -E.BADF);
 }
-/** socket(AF_UNIX): unconnected until it connects or unix.ts attaches the daemon it names; a
- *  datagram socket has its receive queue from the start. -errno for a type AF_UNIX lacks. */
-export function unixSocket(type: number): number {
-  const kind = (type & 15) === 3 ? SOCK_DGRAM : type & 15;                       // unix_create makes SOCK_RAW a datagram socket
-  if (kind !== SOCK_STREAM && kind !== SOCK_DGRAM && kind !== SOCK_SEQPACKET) return -E.SOCKTNOSUPPORT;
-  return put({ ...fdBase("socketpair"), unix: kind, rpipe: kind === SOCK_DGRAM ? newPipe(1) : undefined, statusFlags: 2 | (type & O_NONBLOCK) }, !!(type & O_CLOEXEC));
+/** while descriptor `fd` names `socket`: what a socket call waiting on it checks */
+export const naming = (fd: number, socket: Socket) => (): boolean => fds.get(fd)?.socket === socket;
+/** a new socket's descriptor, the lowest free; `flags` SOCK_NONBLOCK and SOCK_CLOEXEC */
+export function installSocket(socket: Socket, flags: number): number {
+  socket.file = { ...fdBase("socket"), socket, statusFlags: O_RDWR | flags & O_NONBLOCK };
+  return put(socket.file, !!(flags & O_CLOEXEC));
 }
-export const isUnixSocket = (fd: number): boolean => !!fds.get(fd)?.unix;
-/** connect a unix socket to an in-process peer: each write reaches `receive` whole, and what it
- *  replies is what the socket reads; -errno when already connected */
-export function attachUnixPeer(fd: number, receive: (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void): number {
-  const f = fds.get(fd)!;
-  if (f.wpipe) return -E.ISCONN;
-  const toPeer = newPipe(1), fromPeer = newPipe(1);
-  const reply = (bytes: Uint8Array) => { fromPeer.q.push(bytes); wakeAll(fromPeer); };
-  const drain = () => { while (toPeer.q.length) receive(toPeer.q.shift()!, reply); if (!toPeer.closed) toPeer.wake.push(drain); };
-  toPeer.wake.push(drain);
-  f.wpipe = toPeer; f.rpipe = fromPeer;
-  return 0;
+/** SCM_RIGHTS's hold on an open file while a message carries it, installed in the receiver's
+ *  table (this process's) at the lowest free number when the message is read, or dropped */
+export const holdFile = (f: Fd): Fd => { f.references++; return f; };
+export const installFile = (f: Fd, cloexec = false): number => put(f, cloexec);
+/** EPIPE's signal: a write to a pipe or stream socket no one reads any more raises SIGPIPE in the
+ *  writer, unless the call passed MSG_NOSIGNAL. The result as libc returns it. */
+export function written(cpu: Cpu | null, f: Fd, r: number, flags = 0): number {
+  if (r === -E.PIPE && cpu && !(flags & MSG_NOSIGNAL) && (!f.socket || f.socket.type === SOCK_STREAM)) cpu.kill(SIGPIPE);
+  return r < 0 ? fail(cpu, -r) : r;
 }
-/** AF_UNIX names bound in this process, by sockaddr_un path (an abstract name starts with NUL) */
-const unixNames = new Map<string, Fd>();
-export function unixBind(fd: number, path: string): number {
+/** a socket read's bytes alone, the open files it passed dropped: read(2), recv without msg_control */
+export function readSocket(fd: number, target: Uint8Array, flags = 0): number | Promise<number> {
   const f = fds.get(fd);
-  if (!f?.unix) return -E.NOTSOCK;
-  if (f.unixName !== undefined || f.wpipe) return -E.INVAL;
-  if (unixNames.has(path)) return -E.ADDRINUSE;
-  unixNames.set(f.unixName = path, f);
-  return 0;
+  if (!f?.socket) return f ? -E.NOTSOCK : -E.BADF;
+  const r = f.socket.receive(fd, target, flags);
+  return r instanceof Promise ? r.then(bytesOf) : bytesOf(r);
 }
-export function unixListen(fd: number): number {
-  const f = fds.get(fd);
-  if (!f?.unix) return -E.NOTSOCK;
-  if (f.unixName === undefined || f.wpipe) return -E.INVAL;
-  f.listener ??= { pending: [], wake: [] };
-  return 0;
-}
-/** park on `waiters` until woken (true) or the guest clock reaches `deadline` (false) */
-function parkUntil(waiters: (() => void)[], deadline: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let timer: GuestTimer | undefined;
-    const wake = () => { clearGuestTimeout(timer); resolve(true); };
-    waiters.push(wake);
-    if (deadline < Infinity) timer = setGuestTimeout(() => { const i = waiters.indexOf(wake); if (i >= 0) waiters.splice(i, 1); resolve(false); }, deadline - guestNow());
-  });
-}
-/** when a wait for f under its SO_RCVTIMEO or SO_SNDTIMEO gives up with EAGAIN */
-const deadlineOf = (f: Fd, option: number): number => { const ms = f.options?.get(option) ?? 0; return ms > 0 ? guestNow() + ms : Infinity; };
-/** accept4(2) on a listening AF_UNIX socket: the next connection's descriptor, waiting for one
- *  unless nonblocking (or until SO_RCVTIMEO passes); EBADF once the listener closes under the wait.
- *  `flags`: SOCK_NONBLOCK, SOCK_CLOEXEC */
-export function unixAccept(fd: number, flags = 0): number | Promise<number> {
-  const f = fds.get(fd);
-  if (!f?.unix) return -E.NOTSOCK;
-  if (!f.listener) return -E.INVAL;
-  const deadline = deadlineOf(f, SO_RCVTIMEO);
-  const next = (woken = true): number | Promise<number> => {
-    if (fds.get(fd) !== f) return -E.BADF;
-    const connection = f.listener!.pending.shift();
-    if (connection) {
-      connection.statusFlags |= flags & O_NONBLOCK;
-      return put(connection, !!(flags & O_CLOEXEC));
-    }
-    if (f.statusFlags & O_NONBLOCK || !woken) return -EAGAIN;
-    return parkUntil(f.listener!.wake, deadline).then(next);
-  };
-  return next();
-}
-/** getsockname(2)/getpeername(2) of an AF_UNIX socket: its sun_path ("" unnamed), or -errno */
-export function unixSocketName(fd: number, peer: boolean): string | number {
-  const f = fds.get(fd);
-  if (!f?.unix) return -E.NOTSOCK;
-  if (peer && !f.wpipe) return -E.NOTCONN;
-  return (peer ? f.unixPeer : f.unixName) ?? "";
-}
-/** connect(2) to an AF_UNIX socket bound in this process: a stream or seqpacket one listening, or
- *  a datagram socket, which becomes this datagram socket's default destination; -errno otherwise */
-export function unixConnectListener(fd: number, path: string): number {
-  const f = fds.get(fd)!, server = unixNames.get(path);
-  if (!server || f.unix !== SOCK_DGRAM && !server.listener) return -E.CONNREFUSED;
-  if (server.unix !== f.unix) return -E.PROTOTYPE;
-  if (f.unix === SOCK_DGRAM) { f.unixPeer = path; return 0; }
-  if (f.wpipe) return -E.ISCONN;
-  const up = newPipe(1), down = newPipe(1);
-  f.wpipe = up; f.rpipe = down; f.unixPeer = path;
-  server.listener!.pending.push({ ...fdBase("socketpair"), unix: f.unix, rpipe: up, wpipe: down, statusFlags: 2 });
-  wakeAll(server.listener!);
-  return 0;
-}
-/** socketpair(2): two connected AF_UNIX sockets, each reading what the other writes; -errno for a type AF_UNIX lacks */
-export function unixSocketPair(type: number): [number, number] | number {
-  const a = unixSocket(type);
-  if (a < 0) return a;
-  const b = unixSocket(type), fa = fds.get(a)!, fb = fds.get(b)!;
-  fa.wpipe = fb.rpipe = newPipe(1);
-  fb.wpipe = fa.rpipe = newPipe(1);
-  return [a, b];
-}
-
-// ── SCM_RIGHTS: an open file the kernel holds while a message carries it, installed in the
-// receiver's table (this process's) when the message is read, or released when it never is
-type Passed = { file: Fd } | { socket: NetSocket };
-const rights = new WeakMap<Uint8Array, Passed[]>();
-function hold(fd: number): Passed | null {
-  const f = fds.get(fd);
-  if (f) { f.references++; return { file: f }; }
-  const socket = heldSocket(fd);
-  return socket ? { socket: retainSocket(socket) } : null;
-}
-const retain = (p: Passed): Passed => "file" in p ? (p.file.references++, p) : { socket: retainSocket(p.socket) };
-const release = (p: Passed): void => { if ("file" in p) dropFile(p.file); else releaseSocket(p.socket); };
-/** a received descriptor: the lowest free number */
-export const installPassed = (p: Passed, cloexec: boolean): number => "file" in p ? put(p.file, cloexec) : installSocket(p.socket, cloexec);
-export const releasePassed = (passed: Passed[]): void => passed.forEach(release);
-/** what a message carries along: the descriptors held for SCM_RIGHTS */
-export type Received = { name: string; rights: Passed[] | null };
-/** a chunk a reader took: its descriptors go to `passed` (a peek duplicates them), or are released */
-function collect(chunk: Uint8Array, peek: boolean, passed: Passed[] | null): boolean {
-  const held = rights.get(chunk);
-  if (!held) return false;
-  if (peek) { if (passed) for (const p of held) passed.push(retain(p)); return true; }
-  rights.delete(chunk);
-  if (passed) passed.push(...held); else held.forEach(release);
-  return true;
-}
-/** this process's credentials, SO_PEERCRED's and SCM_CREDENTIALS's struct ucred */
-export const processCredentials = () => ({ pid: procIdentity.pid, uid: procIdentity.uid, gid: procIdentity.uid });
-/** SO_PEERCRED: who connected or listens, every peer being this process; an unconnected socket's
- *  reads as no process. -errno for a descriptor no AF_UNIX socket */
-export function unixPeerCredentials(fd: number): { pid: number; uid: number; gid: number } | number {
-  const f = fds.get(fd);
-  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
-  return f.wpipe || f.listener ? processCredentials() : { pid: 0, uid: -1, gid: -1 };
-}
-export const unixPassesCredentials = (fd: number): boolean => !!fds.get(fd)?.options?.get(SO_PASSCRED);
-
-/** a datagram to the AF_UNIX datagram socket bound to `path`, from f */
-function sendDatagram(f: Fd, path: string | undefined, bytes: Uint8Array, held: Passed[]): number {
-  if (path === undefined) return -E.NOTCONN;
-  const target = unixNames.get(path);
-  if (!target) return path.startsWith("\0") ? -E.CONNREFUSED : -E.NOENT;
-  if (target.unix !== SOCK_DGRAM) return -E.PROTOTYPE;
-  const datagram = bytes.slice();
-  if (f.unixName !== undefined) senders.set(datagram, f.unixName);
-  if (held.length) rights.set(datagram, held);
-  target.rpipe!.q.push(datagram);
-  wakeAll(target.rpipe!);
-  return bytes.length;
-}
-/** f's message or bytes to its peer (or a datagram socket's to `path`), carrying `held` */
-function sendOn(f: Fd, bytes: Uint8Array, path: string | null, held: Passed[]): number {
-  if (path !== null) return f.unix !== SOCK_DGRAM ? f.wpipe ? -E.ISCONN : -E.NOTSUP : sendDatagram(f, path, bytes, held);
-  const pipe = f.wpipe;
-  if (!pipe) return f.unix === SOCK_DGRAM ? sendDatagram(f, f.unixPeer, bytes, held) : -E.NOTCONN;
-  if (pipe.closed) return -E.PIPE;
-  if (!bytes.length && !messages(f)) { held.forEach(release); return 0; }    // a stream queues no empty write, nor what it carries
-  const chunk = bytes.slice();
-  if (held.length) rights.set(chunk, held);
-  pipe.q.push(chunk);
-  wakeAll(pipe);
-  return bytes.length;
-}
-/** send(2)/sendto(2)/sendmsg(2) on an AF_UNIX socket: to its peer, or a datagram socket's to the
- *  socket bound to `path`, with SCM_RIGHTS's descriptors; -errno on failure */
-export function unixSend(fd: number, bytes: Uint8Array, path: string | null = null, passing: ArrayLike<number> = []): number {
-  const f = fds.get(fd);
-  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
-  if (passing.length > SCM_MAX_FD) return -E.INVAL;
-  const held: Passed[] = [];
-  for (let i = 0; i < passing.length; i++) {
-    const p = hold(passing[i]);
-    if (!p) { held.forEach(release); return -E.BADF; }
-    held.push(p);
-  }
-  const r = sendOn(f, bytes, path, held);
-  if (r < 0) held.forEach(release);
-  return r;
-}
-/** EPIPE's signal: a write to a pipe or stream no one reads any more raises SIGPIPE in the writer,
- *  unless the call passed MSG_NOSIGNAL */
-export function brokenPipe(cpu: Cpu | null, flags = 0): number {
-  if (cpu && !(flags & MSG_NOSIGNAL)) cpu.kill(SIGPIPE);
-  return fail(cpu, E.PIPE);
-}
-/** recv(2) into `target` on an AF_UNIX socket: the bytes queued for it, or a message socket's next
- *  message cut to the target, answering its whole length; EAGAIN once SO_RCVTIMEO passes. The
- *  sender's name and the descriptors the bytes carried are left in `from` (released without it). */
-export function unixReceive(fd: number, target: Uint8Array, flags: number, from?: Received): number | Promise<number> {
-  const f = fds.get(fd);
-  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
-  const pipe = f.rpipe;
-  if (!pipe) return f.unix === SOCK_STREAM ? -E.INVAL : -E.NOTCONN;
-  const attempt = (): number | null => {
-    if (!pipe.q.length) return pipe.closed ? 0 : null;
-    if (from) from.name = (f.unix === SOCK_DGRAM ? senders.get(pipe.q[0]) : f.unixPeer) ?? "";
-    return takeQueued(f, target.length, (bytes, at) => target.set(bytes, at), !!(flags & MSG_PEEK), from?.rights ?? null);
-  };
-  const now = attempt();
-  if (now !== null) return now;
-  if (f.statusFlags & O_NONBLOCK || flags & MSG_DONTWAIT) return -EAGAIN;
-  const deadline = deadlineOf(f, SO_RCVTIMEO);
-  const wait = (): Promise<number> => parkUntil(pipe.wake, deadline).then((woken) => fds.get(fd) !== f ? -E.BADF : attempt() ?? (woken ? wait() : -EAGAIN));
-  return wait();
-}
-/** take up to n bytes of what is queued for f, handing put each piece and where it lands: a message
- *  socket's next message whole, cut to n, answering the message's length. A stream read stops
- *  after bytes that carried descriptors, which go to `passed`. */
-function takeQueued(f: Fd, n: number, put: (bytes: Uint8Array, at: number) => void, peek = false, passed: Passed[] | null = null): number {
-  const q = f.rpipe!.q;
-  if (messages(f)) {
-    const message = peek ? q[0] : q.shift()!;
-    collect(message, peek, passed);
-    put(message.subarray(0, Math.min(n, message.length)), 0);
-    return message.length;
-  }
-  let k = 0;
-  for (let i = 0; k < n && i < q.length;) {
-    const c = q[i], take = Math.min(n - k, c.length), carried = collect(c, peek, passed);
-    put(c.subarray(0, take), k);
-    k += take;
-    if (peek) i++; else if (take === c.length) q.shift(); else q[0] = c.subarray(take);
-    if (carried) break;
-  }
-  return k;
-}
-/** getsockopt(2) for an AF_UNIX socket's int options: SO_TYPE, SO_DOMAIN, SO_PROTOCOL, SO_ACCEPTCONN,
- *  SO_PASSCRED and the timeouts (ms); SO_ERROR and SO_LINGER (off) read 0 */
-export function unixSocketOption(fd: number, level: number, name: number): number {
-  const f = fds.get(fd);
-  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
-  if (level !== 1 /* SOL_SOCKET */) return -E.NOPROTOOPT;
-  switch (name) {
-    case 3 /* SO_TYPE */: return f.unix;
-    case SO_DOMAIN: return 1;
-    case SO_ACCEPTCONN: return +!!f.listener;
-    case SO_ERROR: case SO_LINGER: case SO_PROTOCOL: return 0;
-    case SO_PASSCRED: case SO_RCVTIMEO: case SO_SNDTIMEO: return f.options?.get(name) ?? 0;
-  }
-  return -E.NOPROTOOPT;
-}
-/** setsockopt(2) on an AF_UNIX socket: the options it keeps, the timeouts in ms; the other
- *  socket-level ones are accepted with nothing to observe */
-export function unixSetOption(fd: number, level: number, name: number, value: number): number {
-  const f = fds.get(fd);
-  if (!f?.unix) return f ? -E.NOTSOCK : -E.BADF;
-  if (level !== 1) return -E.NOPROTOOPT;
-  if (name === SO_PASSCRED || name === SO_RCVTIMEO || name === SO_SNDTIMEO) (f.options ??= new Map()).set(name, name === SO_PASSCRED ? +!!value : Math.max(0, value));
-  return 0;
-}
+const bytesOf = (r: Received | number): number => {
+  if (typeof r === "number") return r;
+  r.rights.forEach(dropFile);
+  return r.length;
+};
 /** the bytes behind a descriptor read at offsets: not a stream, a directory or /dev/random */
 const regularContent = (f: Fd | undefined): VfsFile | null =>
-  !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify ? null : f.content;
+  !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify || f.socket ? null : f.content;
 export function javaFdSource(fd: number): FileSource | null {
   const f = fds.get(fd), content = regularContent(f);
   if (!content) return null;
@@ -522,9 +284,8 @@ export function javaFdSource(fd: number): FileSource | null {
   };
 }
 export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
-  if (isNativeSocket(fd)) return socketReceive(fd, target);
   const f = fds.get(fd);
-  if (f?.unix) return unixReceive(fd, target, 0);
+  if (f?.socket) return readSocket(fd, target);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return f.dir ? -E.ISDIR : -E.BADF;
   if (f && !f.content.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
     const n = Math.max(0, Math.min(target.length, f.content.len - f.pos));
@@ -552,19 +313,18 @@ export function javaPreadFd(fd: number, target: Uint8Array, off: number): number
   const done = (bytes: Uint8Array) => { target.set(bytes); return bytes.length; };
   return value instanceof Promise ? value.then(done, () => -E.IO) : done(value);
 }
-export const javaWriteFd = (fd: number, bytes: Uint8Array): number => isNativeSocket(fd) ? socketSend(fd, bytes) : writeBytes(null, fds.get(fd), bytes);
+export const javaWriteFd = (fd: number, bytes: Uint8Array): number => writeBytes(null, fds.get(fd), bytes);
 export const javaPwriteFd = (fd: number, bytes: Uint8Array, off: number): number => pwriteBytes(null, fd, bytes, off);
 export const javaTruncateFd = (fd: number, length: number): number => truncateFd(null, fd, length);
 export const javaSyncFd = (fd: number): number => syncFd(null, fd);
 export const javaFcntlFd = (fd: number, cmd: number, arg: number): number => fdFcntl(null, fd, cmd, arg);
 /** ioctl(2) requests with an int result; FIONREAD is the one files answer */
 export function javaIoctlIntFd(fd: number, request: number): number {
-  if (isNativeSocket(fd)) return request === FIONREAD ? nativeSocketAvailable(fd) : -E.NOTTY;
   return fds.has(fd) && request !== FIONREAD ? -E.NOTTY : fionread(fd);
 }
 export function javaFdStat(fd: number): { mode: number; size: number; path: string | null } | null {
   const f = fds.get(fd);
-  if (!f) return isNativeSocket(fd) ? { mode: S_IFSOCK | 0o777, size: 0, path: null } : null;
+  if (!f) return null;
   return { mode: fdMode(f), size: f.content.len, path: f.dir ? f.path : f.content.path };
 }
 
@@ -572,12 +332,12 @@ export function javaFdStat(fd: number): { mode: number; size: number; path: stri
 export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
-  if (f && !f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll) {
+  if (!f) return null;
+  if (!f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll && !f.socket) {
     vfs.sync(f.content);
     try { return f.content.source ? await readFully(f.content.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
     catch { return null; }
   }
-  if (!f && !isNativeSocket(fd)) return null;
   const buffer = mem.malloc(65536), target = mem.va(buffer), chunks: Uint8Array[] = [];
   try {
     for (;;) {
@@ -590,7 +350,7 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
 }
 
 export function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
-  return isNativeSocket(fd) ? nativeSocketWrite(cpu, fd, p, n) : writeBytes(cpu, fds.get(fd), mem.u8.subarray(p, p + n));
+  return writeBytes(cpu, fds.get(fd), mem.u8.subarray(p, p + n));
 }
 /** write(2) of `bytes` to an open file, which copies what it keeps */
 function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): number {
@@ -602,9 +362,9 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
     while ((i = f.line.indexOf("\n")) >= 0) { logLine(f.log, f.log === 6 ? "stderr" : "stdout", f.line.slice(0, i)); f.line = f.line.slice(i + 1); }
     return n;
   }
-  if (f.unix) { const r = sendOn(f, bytes, null, []); return r === -E.PIPE && f.unix === SOCK_STREAM ? brokenPipe(cpu) : r < 0 ? fail(cpu, -r) : r; }
+  if (f.socket) return written(cpu, f, f.socket.send(bytes, null, null));
   if (f.wpipe) {
-    if (f.wpipe.closed) return brokenPipe(cpu);
+    if (f.wpipe.closed) return written(cpu, f, -E.PIPE);
     f.wpipe.q.push(bytes.slice()); wakeAll(f.wpipe); return n;
   }
   if (f.proc) return procWrite(f.path, dec.decode(bytes)) ? n : fail(cpu, E.INVAL);
@@ -620,12 +380,6 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
   vfs.writeAt(f.content, f.pos, bytes);
   f.pos += n;
   return n;
-}
-/** an iovec array's bytes as one buffer: what one datagram carries */
-export function gather(iov: number, count: number): Uint8Array {
-  const parts: Uint8Array[] = [];
-  for (let i = 0; i < count; i++) { const entry = iov + i * 2 * PTR; parts.push(mem.bytes(ldp(entry), mem.ld32(entry + PTR) >>> 0)); }
-  return concat(parts);
 }
 /** readv/writev: each iovec in turn until a transfer comes up short, as the kernel does. `op` is
  *  told what the call has moved so far: a read that would then have to wait moves nothing. */
@@ -647,8 +401,8 @@ function vectored(cpu: Cpu, iov: number, count: number, op: (p: number, n: numbe
   return from(0, 0);
 }
 function readWouldWait(fd: number): boolean {
-  if (isNativeSocket(fd)) return !(nativePollEvents(fd, 1) & (1 | 8 | 16));
   const f = fds.get(fd);
+  if (f?.socket) return !(f.socket.poll(POLLIN) & (POLLIN | POLLHUP)) && !f.socket.error;
   return !!f && !!(f.rpipe || f.event) && !ready(f);
 }
 function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): number | Promise<number> {
@@ -669,9 +423,14 @@ export function contentAt(content: VfsFile, off: number, n: number): Uint8Array 
   return content.source ? content.source.read(off, k) : content.data.subarray(off, off + k);
 }
 export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
-  if (isNativeSocket(fd)) return nativeSocketRead(cpu, fd, p, n);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
+  if (f.socket) {
+    const target = new Uint8Array(n), dst = anchor(p);
+    const land = (r: number) => { if (r < 0) return fail(cpu, -r); mem.write(dst(), target.subarray(0, r)); return r; };
+    const r = readSocket(fd, target);
+    return r instanceof Promise ? r.then(land) : land(r);
+  }
   if (f.dir) return fail(cpu, E.ISDIR);
   if (f.inotify) {
     const q = f.inotify.pipe.q;
@@ -689,12 +448,6 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
     }
     return done;
   }
-  if (f.unix) {
-    const target = new Uint8Array(n), dst = anchor(p);
-    const land = (r: number) => { if (r < 0) return fail(cpu, -r); mem.write(dst(), target.subarray(0, Math.min(r, n))); return Math.min(r, n); };
-    const r = unixReceive(fd, target, 0);
-    return r instanceof Promise ? r.then(land) : land(r);
-  }
   if (f.event && n < 8) return fail(cpu, E.INVAL);
   if (f.rpipe || f.event) {
     if (!ready(f)) {
@@ -704,7 +457,7 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
       return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, dst(), n));
     }
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st64(p, BigInt(c)); return 8; }
-    return Math.min(n, takeQueued(f, n, (bytes, at) => mem.write(p + at, bytes)));
+    return takePipe(f.rpipe!, p, n);
   }
   if (f.content.source) {
     const dst = anchor(p);
@@ -719,6 +472,18 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
   const result = fdReadAt(cpu, f, p, n, f.pos);
   const advance = (read: number) => { if (read > 0) f.pos += read; return read; };
   return result instanceof Promise ? result.then(advance) : advance(result);
+}
+/** up to `n` bytes a pipe holds, into guest memory at `p` */
+function takePipe(pipe: Pipe, p: number, n: number): number {
+  const q = pipe.q;
+  let k = 0;
+  while (k < n && q.length) {
+    const c = q[0], take = Math.min(n - k, c.length);
+    mem.write(p + k, c.subarray(0, take));
+    k += take;
+    if (take === c.length) q.shift(); else q[0] = c.subarray(take);
+  }
+  return k;
 }
 async function readLoop(dst: number, n: number, read: (p: number, k: number, done: number) => number | Promise<number>): Promise<number> {
   const target = anchor(dst);
@@ -745,15 +510,16 @@ export function fdFile(fd: number): VfsFile | null {
   return f?.synthetic ? null : regularContent(f);
 }
 export function fdClose(cpu: Cpu | null, fd: number): number {
-  if (isNativeSocket(fd)) return nativeSocketClose(cpu, fd);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   fds.delete(fd); closeOnExec.delete(fd); releaseFd(fd);
   dropFile(f);
+  // a socket call waiting on this descriptor ends with EBADF
+  f.socket?.wake();
   return 0;
 }
 /** one reference to an open file gone: the last ends it */
-function dropFile(f: Fd): void {
+export function dropFile(f: Fd): void {
   if (--f.references > 0) return;
   f.onLastClose?.();
   if (f.content.path && f.write) notifyInotify(f.content.path, IN_CLOSE_WRITE);
@@ -761,22 +527,12 @@ function dropFile(f: Fd): void {
   if (f.timer) disarmClockTimer(f.timer);
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe && !--f.wpipe.writers) { f.wpipe.closed = true; wakeAll(f.wpipe); }
-  // a pipe or socket nobody reads: its writers meet EPIPE, and what it held is released
-  if (f.rpipe && !f.inotify && fifos.get(f.content) !== f.rpipe) {
-    for (const chunk of f.rpipe.q) collect(chunk, false, null);
-    f.rpipe.closed = true;
-  }
-  if (f.unixName !== undefined && unixNames.get(f.unixName) === f) unixNames.delete(f.unixName);
-  if (f.listener) {
-    // connections never accepted are reset: their clients read the end of the stream and meet EPIPE writing
-    for (const c of f.listener.pending) dropFile(c);
-    f.listener.pending = [];
-    wakeAll(f.listener);
-  }
+  // a pipe nobody reads: its writers meet EPIPE (a fifo's outlives its descriptors)
+  if (f.rpipe && fifos.get(f.content) !== f.rpipe) f.rpipe.closed = true;
+  f.socket?.close();
 }
 /** dup(2) and F_DUPFD: the lowest free descriptor at or above `min`, sharing fd's open file */
 function fdDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
-  if (isNativeSocket(fd)) return nativeSocketDup(cpu, fd, min, cloexec);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   f.references++;
@@ -785,18 +541,12 @@ function fdDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
 /** dup2's implicit close of `to`, which (unlike close) leaves bionic's fdsan owner tag in place */
 function closeReplaced(cpu: Cpu | null, to: number): () => number {
   const tag = fdsanOwnerTag(to);
-  if (isNativeSocket(to)) nativeSocketClose(cpu, to);
-  else if (fds.has(to)) fdClose(cpu, to);
+  if (fds.has(to)) fdClose(cpu, to);
   return () => { if (tag) fdsanExchangeOwnerTag(to, 0n, tag); return to; };
 }
 export function fdDup2(cpu: Cpu | null, fd: number, to: number, cloexec = false): number {
   if (to < 0) return fail(cpu, E.BADF);
-  if (fd === to) return isNativeSocket(fd) || fds.has(fd) ? fd : fail(cpu, E.BADF);
-  if (isNativeSocket(fd)) {
-    const retag = closeReplaced(cpu, to);
-    nativeSocketDup(cpu, fd, to, cloexec);                                         // `to` is free now
-    return retag();
-  }
+  if (fd === to) return fds.has(fd) ? fd : fail(cpu, E.BADF);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   const retag = closeReplaced(cpu, to);
@@ -808,8 +558,8 @@ export function fdDup2(cpu: Cpu | null, fd: number, to: number, cloexec = false)
 }
 export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): number {
   const f = fds.get(fd);
-  if (!f) return fail(cpu, isNativeSocket(fd) ? E.SPIPE : E.BADF);
-  if (f.rpipe || f.wpipe || f.event || f.epoll || f.timer) return fail(cpu, E.SPIPE);
+  if (!f) return fail(cpu, E.BADF);
+  if (f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.socket) return fail(cpu, E.SPIPE);
   if (f.random) return f.pos;                                                     // noop_llseek
   if (whence < 0 || whence > 2) return fail(cpu, E.INVAL);
   const np = whence === 0 ? off : whence === 1 ? f.pos + off : f.content.len + off;
@@ -884,50 +634,6 @@ function inotifyRmWatch(cpu: Cpu | null, fd: number, wd: number): number {
 export function javaInotifyInit(): number { hookInotify(); return makeInotify(null, IN_CLOEXEC); }
 export const javaInotifyAddWatch = (fd: number, path: string, mask: number): number => inotifyAddWatch(null, fd, path, mask);
 export const javaInotifyRmWatch = (fd: number, wd: number): number => inotifyRmWatch(null, fd, wd);
-export const epollCreate = (cloexec: boolean): number => put({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }, cloexec);
-function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
-  const entry: EpollEntry = { events, data, pending: nativePollEvents(fd, events), disabled: false, cancel: () => {} };
-  let active = true, remove = () => {};
-  const watch = () => {
-    if (!active) return;
-    remove = watchNativeFd(fd, () => {
-      remove();
-      entry.pending |= nativePollEvents(fd, entry.events);
-      for (const wake of ep.wake) wake();
-      queueMicrotask(watch);
-    });
-  };
-  entry.cancel = () => { active = false; remove(); };
-  watch();
-  return entry;
-}
-async function epollWait(cpu: Cpu, epfd: number, events: bigint, max: number, timeout: number): Promise<number> {
-  const ep = fds.get(epfd)?.epoll, deadline = performance.now() + timeout;
-  if (!ep) return fail(cpu, E.BADF);
-  if (max <= 0) return fail(cpu, E.INVAL);
-  for (;;) {
-    let n = 0;
-    for (const [fd, e] of ep.entries) {
-      if (!fds.has(fd) && !isNativeSocket(fd)) { e.cancel(); ep.entries.delete(fd); continue; }
-      if (e.disabled) continue;
-      const ready = nativePollEvents(fd, e.events) & (e.events & EPOLLET ? e.pending : -1);
-      if (!ready || n === max) continue;
-      const out = mem.txVa(events) + n++ * 16;
-      mem.st32(out, ready); mem.st64(out + 8, e.data);
-      e.pending &= ~ready;
-      if (e.events & EPOLLONESHOT) e.disabled = true;
-    }
-    if (n || timeout === 0) return n;
-    const remaining = deadline - performance.now();
-    if (timeout > 0 && remaining <= 0) return 0;
-    await new Promise<void>((resolve) => {
-      const done = () => { ep.wake.delete(done); clearTimeout(timer); resolve(); };
-      const timer = timeout < 0 ? undefined : setTimeout(done, remaining);
-      ep.wake.add(done);
-    });
-    if (fds.get(epfd)?.epoll !== ep) return fail(cpu, E.BADF);
-  }
-}
 export function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
   if (isRandomDevice(path)) { fillStat(buf, false, 0, Date.now(), path); return 0; }
@@ -951,14 +657,14 @@ function statFd(cpu: Cpu, fd: number, buf: number): number {
 function fdMode(f: Fd): number {
   if (f.dir) return S_IFDIR | 0o755;
   if (f.random || f.log || f.path === "/dev/stdin") return S_IFCHR | 0o666;
-  if (f.path === "socketpair") return S_IFSOCK | 0o777;
+  if (f.socket) return S_IFSOCK | 0o777;
   if (f.event || f.epoll || f.timer || f.inotify) return 0o600;
   return f.rpipe || f.wpipe ? S_IFIFO | 0o600 : S_IFREG | 0o644;
 }
 
 /** why pread/pwrite at `off` cannot reach fd's file, 0 when they can: streams have no offsets */
 function positionalError(fd: number, f: Fd | undefined, off: number, write: boolean): number {
-  if (!f) return isNativeSocket(fd) ? E.SPIPE : E.BADF;
+  if (!f) return E.BADF;
   if (!f.random && !f.dir && !regularContent(f)) return E.SPIPE;
   if (write ? !f.write : (f.statusFlags & O_ACCMODE) === 1) return E.BADF;
   return off < 0 ? E.INVAL : f.dir ? E.ISDIR : 0;
@@ -981,13 +687,12 @@ export const pwrite = (cpu: Cpu, fd: number, p: number, n: number, off: number):
 /** ftruncate(2): only a regular file open for writing */
 export function truncateFd(cpu: Cpu | null, fd: number, n: number): number {
   const f = fds.get(fd);
-  if (!f && !isNativeSocket(fd)) return fail(cpu, E.BADF);
+  if (!f) return fail(cpu, E.BADF);
   if (n < 0 || !f?.write || !regularContent(f)) return fail(cpu, E.INVAL);
   vfs.resize(f.content, n); return 0;
 }
 function fdFcntl(cpu: Cpu | null, fd: number, cmd: number, arg: number): number {
   if (cmd === F_DUPFD || cmd === F_DUPFD_CLOEXEC) return arg < 0 ? fail(cpu, E.INVAL) : fdDup(cpu, fd, arg, cmd === F_DUPFD_CLOEXEC);
-  if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, arg);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (cmd === F_GETFD) return closeOnExec.has(fd) ? 1 : 0;
@@ -1001,6 +706,7 @@ const FIONREAD = 0x541b;
 function fionread(fd: number): number {
   const f = fds.get(fd), pipe = f?.rpipe ?? f?.wpipe;
   if (!f) return -E.BADF;
+  if (f.socket) return f.socket.available();
   if (pipe) return pipe.q.reduce((n, b) => n + b.length, 0);
   if (f.random) return -E.INVAL;
   return f.dir || !regularContent(f) ? -E.NOTTY : Math.max(0, f.content.len - f.pos);
@@ -1008,8 +714,8 @@ function fionread(fd: number): number {
 /** fsync/fdatasync: the VFS has nothing to flush, but pipes and sockets cannot sync */
 function syncFd(cpu: Cpu | null, fd: number): number {
   const f = fds.get(fd);
-  if (!f) return fail(cpu, isNativeSocket(fd) ? E.INVAL : E.BADF);
-  return f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.random || f.log ? fail(cpu, E.INVAL) : 0;
+  if (!f) return fail(cpu, E.BADF);
+  return f.rpipe || f.wpipe || f.event || f.epoll || f.timer || f.random || f.log || f.socket ? fail(cpu, E.INVAL) : 0;
 }
 /** posix_fallocate: grow the file to cover the range; it reports the error number itself */
 export function fdFallocate(fd: number, offset: number, len: number): number {
@@ -1067,7 +773,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   readv: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(cpu, fd, p, n)); },
   writev: (cpu, a) => {
     const fd = a.i(), iov = a.p(), count = a.i();
-    if (messages(fds.get(fd))) return writeBytes(cpu, fds.get(fd), gather(iov, count));
+    if (fds.get(fd)?.socket?.messages) return writeBytes(cpu, fds.get(fd), gather(iov, count));
     return vectored(cpu, iov, count, (p, n) => fdWrite(cpu, fd, p, n));
   },
   pread64: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), Number(a.l())),
@@ -1119,14 +825,6 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   inotify_init1: (cpu, a) => makeInotify(cpu, a.i()),
   inotify_add_watch: (cpu, a) => inotifyAddWatch(cpu, a.i(), a.str(), a.u()),
   inotify_rm_watch: (cpu, a) => inotifyRmWatch(cpu, a.i(), a.i()),
-  socketpair: (cpu, a) => {
-    const domain = a.i(), type = a.i(); a.i(); const sv = a.p();
-    if (domain !== 1 /* AF_UNIX */) return fail(cpu, domain === 2 || domain === 10 ? E.NOTSUP : E.AFNOSUPPORT);
-    const pair = unixSocketPair(type);
-    if (typeof pair === "number") return fail(cpu, -pair);
-    mem.st32(sv, pair[0]); mem.st32(sv + 4, pair[1]);
-    return 0;
-  },
   timerfd_create: (cpu, a) => {
     const clock = a.i(), flags = a.i();
     if (![0, 1, 7].includes(clock) || flags & ~(O_NONBLOCK | O_CLOEXEC)) return fail(cpu, E.INVAL);
@@ -1153,34 +851,13 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     timerState(f.timer, out); return 0;
   },
   eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC)); },
-  epoll_create1: (cpu, a) => {
-    const flags = a.i();
-    if (flags & ~O_CLOEXEC) return fail(cpu, E.INVAL);
-    return epollCreate(!!flags);
-  },
-  epoll_ctl: (cpu, a) => {
-    const epfd = a.i(), ep = fds.get(epfd)?.epoll, op = a.i(), fd = a.i(), ev = a.p();
-    if (fd === epfd) return fail(cpu, E.INVAL);
-    if (!ep || (!fds.has(fd) && !isNativeSocket(fd))) return fail(cpu, E.BADF);
-    const old = ep.entries.get(fd);
-    if (op === 1 && old) return fail(cpu, E.EXIST);
-    if ((op === 2 || op === 3) && !old) return fail(cpu, E.NOENT);
-    if (op < 1 || op > 3) return fail(cpu, E.INVAL);
-    old?.cancel();
-    if (op === 2) ep.entries.delete(fd); else ep.entries.set(fd, epollWatch(ep, fd, mem.ld32(ev), mem.ld64(ev + 8)));
-    for (const wake of ep.wake) wake();
-    return 0;
-  },
-  // its sigmask is left as is
-  epoll_pwait: (cpu, a) => epollWait(cpu, a.i(), a.va(), a.i(), a.i()),
   sendfile: (cpu) => fail(cpu, E.NOSYS),
   flock: () => 0,
   unlinkat: (cpu, a) => { a.i(); const p = a.str(), flags = a.i(); if (flags & 0x200) { const d = vfs.norm(p); if (!vfs.isDir(d)) return fail(cpu, E.NOTDIR); vfs.rmdir(d); return 0; } return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
   fchmodat: () => 0, utimensat: () => 0,
   ioctl: (cpu, a) => {
     const fd = a.i(), request = a.i(), argument = a.p();
-    if (isNativeSocket(fd)) return nativeSocketIoctl(cpu, fd, request, argument);
-    if (request !== FIONREAD) return fail(cpu, E.NOSYS);
+    if (request !== FIONREAD) return fail(cpu, fds.get(fd)?.socket ? E.NOTTY : E.NOSYS);
     const n = fionread(fd);
     if (n < 0) return fail(cpu, -n);
     mem.st32(argument, n);

@@ -16,7 +16,8 @@ import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
 import { localeInit } from "./locale";
 import { PROC_SYSCALLS, procInit, abortThread } from "./proc";
-import { NET_SYSCALLS, netInit } from "./net";
+import { NET_SYSCALLS, netInit } from "./socket/syscalls";
+import { POLL_SYSCALLS } from "./poll";
 import { device } from "../shell/config";
 import { procIdentity, sysconf, uname } from "../shell/procfs";
 import { guestNow, wallMillis } from "../guest-clock";
@@ -593,7 +594,7 @@ export function libcInit(): void {
     const d = a.p(), n = a.u(), value = a.i();
     mem.memset(d, value, n);
   };
-  hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...PROC_SYSCALLS, ...M });
+  hostLib("libc.so", { ...LIBC_SYSCALLS, ...FS_SYSCALLS, ...PTHREAD_SYSCALLS, ...NET_SYSCALLS, ...POLL_SYSCALLS, ...PROC_SYSCALLS, ...M });
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(TM.size);
   const inetBuf = mem.hostAlloc(20);

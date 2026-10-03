@@ -5,38 +5,44 @@ import { defineHost, ldp, lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
 import { mem } from "./mem";
-import { NET_SYSCALLS, netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, SOL_SOCKET } from "./net";
+import { NET_SYSCALLS, netInit, socketCreate } from "./socket/syscalls";
+import type { Socket, Accepted } from "./socket/core";
+import { SOL_SOCKET, type SocketAddress } from "./socket/abi";
 import { E } from "./abi";
-import { FS_SYSCALLS } from "./fs";
-import { AF_INET, AF_INET6, guestEndpoint } from "./net-address";
+import { FS_SYSCALLS, javaCloseFd, readSocket, socketOf } from "./fs";
+import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address";
 import { loopbackFetch } from "./loopback-http";
+
+const sock = (fd: number) => socketOf(fd) as Socket;
+const inet = (address: number[], port: number): SocketAddress => ({ family: address.length === 4 ? AF_INET : AF_INET6, ep: { address, port } });
+const endpoint = (fd: number) => (sock(fd).name(false) as { ep: Endpoint }).ep;
 
 test("a loopback TCP connection stays in the process, with Linux's errors", async () => {
   const SOCK_STREAM = 1, SOCK_NONBLOCK = 0x800, SO_ERROR = 4, any6 = new Array(16).fill(0);
   const server = socketCreate(AF_INET6, SOCK_STREAM, 0);
-  expect(socketBind(server, { address: any6, port: 0 })).toBe(0);
-  expect(socketListen(server)).toBe(0);
-  const { port } = socketName(server, false) as { port: number };
+  expect(sock(server).bind(inet(any6, 0))).toBe(0);
+  expect(sock(server).listen()).toBe(0);
+  const { port } = endpoint(server);
   const refused = socketCreate(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-  expect(socketConnect(refused, { address: [127, 0, 0, 1], port: port === 1 ? 2 : 1 })).toBe(-E.INPROGRESS);
-  expect(socketOption(refused, SOL_SOCKET, SO_ERROR)).toBe(E.CONNREFUSED);
+  expect(sock(refused).connect(inet([127, 0, 0, 1], port === 1 ? 2 : 1))).toBe(-E.INPROGRESS);
+  expect(sock(refused).getOption(SOL_SOCKET, SO_ERROR)).toBe(E.CONNREFUSED);
 
   const client = socketCreate(AF_INET, SOCK_STREAM, 0);
-  expect(socketConnect(client, { address: [127, 0, 0, 1], port })).toBe(0);
-  const accepted = await socketAccept(server) as { fd: number; peer: { address: number[]; port: number } };
-  expect(accepted.peer).toEqual(socketName(client, false) as { address: number[]; port: number });
+  expect(sock(client).connect(inet([127, 0, 0, 1], port))).toBe(0);
+  const accepted = await sock(server).accept(server, 0) as Accepted;
+  expect((accepted.peer as { ep: Endpoint }).ep).toEqual(endpoint(client));
   const buffer = new Uint8Array(8);
-  const pending = socketReceive(accepted.fd, buffer);
+  const pending = readSocket(accepted.fd, buffer);
   expect(pending).toBeInstanceOf(Promise);
-  expect(socketSend(client, Uint8Array.of(1, 2, 3))).toBe(3);
+  expect(sock(client).send(Uint8Array.of(1, 2, 3), null, null)).toBe(3);
   expect(await pending).toBe(3);
-  expect(socketShutdown(client, 1)).toBe(0);
-  expect(socketReceive(accepted.fd, buffer)).toBe(0);
-  expect(socketSend(client, Uint8Array.of(4))).toBe(-E.PIPE);
-  expect(socketSend(accepted.fd, Uint8Array.of(5))).toBe(1);
-  expect(socketReceive(client, buffer)).toBe(1);
-  for (const fd of [client, accepted.fd, server, refused]) expect(socketClose(fd)).toBe(0);
-  expect(socketReceive(client, buffer)).toBe(-E.BADF);
+  expect(sock(client).shutdown(1)).toBe(0);
+  expect(readSocket(accepted.fd, buffer)).toBe(0);
+  expect(sock(client).send(Uint8Array.of(4), null, null)).toBe(-E.PIPE);
+  expect(sock(accepted.fd).send(Uint8Array.of(5), null, null)).toBe(1);
+  expect(readSocket(client, buffer)).toBe(1);
+  for (const fd of [client, accepted.fd, server, refused]) expect(javaCloseFd(fd)).toBe(0);
+  expect(readSocket(client, buffer)).toBe(-E.BADF);
 });
 
 test("getifaddrs exposes the same loopback interface as Java networking", async () => {
@@ -167,20 +173,20 @@ test("host HTTP to a loopback URL reaches this process's listener", async () => 
       { address: [127, 0, 0, 2], port: 80 }, { address: [127, 0, 0, 1], port: 443 }]);
   expect(guestEndpoint("http://example.com/")).toBeNull();
   const server = socketCreate(AF_INET, 1, 0);
-  expect(socketBind(server, { address: [0, 0, 0, 0], port: 0 })).toBe(0);
-  expect(socketListen(server)).toBe(0);
-  const { port } = socketName(server, false) as { port: number };
+  expect(sock(server).bind(inet([0, 0, 0, 0], 0))).toBe(0);
+  expect(sock(server).listen()).toBe(0);
+  const { port } = endpoint(server);
   expect(await loopbackFetch(`http://localhost:${port + 1}/`)).toBeNull();
   const response = loopbackFetch(`http://localhost:${port}/exocache?v=1`, { method: "POST", headers: new Headers({ "x-test": "1" }), body: Uint8Array.of(104, 105) });
-  const accepted = await socketAccept(server) as { fd: number }, buffer = new Uint8Array(4096);
+  const accepted = await sock(server).accept(server, 0) as Accepted, buffer = new Uint8Array(4096);
   let request = "";
   while (!request.endsWith("hi")) {
-    const n = await socketReceive(accepted.fd, buffer);
+    const n = await readSocket(accepted.fd, buffer);
     request += new TextDecoder().decode(buffer.subarray(0, n as number));
   }
   expect(request).toBe(`POST /exocache?v=1 HTTP/1.1\r\nHost: localhost:${port}\r\nx-test: 1\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi`);
-  socketSend(accepted.fd, new TextEncoder().encode("HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"));
+  sock(accepted.fd).send(new TextEncoder().encode("HTTP/1.1 200 OK\r\nSet-Cookie: a=1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"), null, null);
   const answer = (await response)!;
   expect([answer.status, answer.headers.get("x-wd-set-cookie"), await answer.text()]).toEqual([200, '["a=1"]', "abcde"]);
-  for (const fd of [accepted.fd, server]) socketClose(fd);
+  for (const fd of [accepted.fd, server]) javaCloseFd(fd);
 });

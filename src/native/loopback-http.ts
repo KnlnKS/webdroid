@@ -3,7 +3,8 @@
 // network service) reach the app's loopback listener instead.
 import { concat } from "../jvm/abi";
 import { guestEndpoint } from "./net-address";
-import { loopbackConnection, type Stream } from "./net";
+import type { Stream } from "./socket/core";
+import { loopbackConnection } from "./socket/inet";
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 type Init = { method?: string; headers?: Headers; body?: ArrayBuffer | Uint8Array; signal?: AbortSignal };
