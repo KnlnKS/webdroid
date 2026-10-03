@@ -5,7 +5,7 @@ import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
-import { JTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
+import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import type { TextStyle } from "../src/android/minikin";
 import { withFonts } from "../src/android/fonts";
@@ -125,8 +125,8 @@ describe("styled-null", () => {
     const res = await fakeStyles(["fallback", "custom-family"], {
       [S]: [[A, TV.STRING, 0], [A + 3, TV.REFERENCE, 0]],
       [S + 1]: [[A, TV.REFERENCE, 0], [A + 1, TV.STRING, 1], [A + 2, TV.ATTRIBUTE, A + 3]],
-    }), theme = new JTheme();
-    theme.res = res; theme.apply(S);
+    }), theme = new NativeTheme(res);
+    theme.apply(S);
     const out = new Int32Array(3 * STYLE_NUM_ENTRIES), indices = new Int32Array(4);
     resolveAttributes(res, theme, null, 0, 0, S + 1, new Int32Array([A, A + 1, A + 2]), null, out, indices);
     expect([out[0], out[2 * STYLE_NUM_ENTRIES]]).toEqual([TV.NULL, TV.NULL]);

@@ -3,7 +3,7 @@
 
 import { Arsc } from "./arsc";
 import { TV, type XmlNode, type XmlAttr } from "./axml";
-import { JObj, declaredField } from "../jvm/runtime";
+import { declaredField } from "../jvm/runtime";
 import { deref } from "./handles";
 import { intBitsToFloat } from "../jvm/abi";
 import type { FileSource } from "../shell/lazyfile";
@@ -55,19 +55,12 @@ export class Bag {
 const LOADED_BY_ID = new Set(["drawable", "layout", "style", "anim", "xml", "menu", "mipmap", "raw", "font", "id", "transition", "interpolator", "animator"]);
 const SEL = { density: 0 };
 
-/**
- * Every resource memo below is only valid for one device Configuration: the same id resolves to
- * a different entry once a qualifier changes (`-night` above all). setResourceNight() bumps this
- * generation so the caches — and every JTheme, which memoises attribute lookups — reload.
- */
-let configGen = 0;
 const allResources: Resources[] = [];
 /** the booted app's Resources — the framework package is an Arsc, not one of these, so the
  *  most recent is the app's. */
 function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
 /** Re-resolve entries under changed qualifiers in every live resource table. */
 function setDeviceQualifiers(qualifiers: Partial<Arsc["device"]>): void {
-  configGen++;
   for (const r of allResources) {
     r.invalidate();
     if (r.arsc) Object.assign(r.arsc.device, qualifiers);
@@ -92,6 +85,8 @@ export class Resources {
   zip: Record<string, Uint8Array>;
   lazyEntries: Map<string, FileSource>;
   bagCache = new Map<number, Bag | null>();
+  /** Selection changes invalidate this AssetManager's bags and its themes' resolved values. */
+  generation = 0;
   private framework: Arsc | null | undefined;
   /** an AssetManager's apks in cookie order; null for a package's own tables */
   apks: Apk[] | null = null;
@@ -105,7 +100,7 @@ export class Resources {
     if (!scoped) allResources.push(this);
   }
 
-  invalidate(): void { this.bagCache.clear(); configGen++; }
+  invalidate(): void { this.bagCache.clear(); this.generation++; }
 
   /** AssetManager2::SetApkAssets: the last package that is not the framework is the app's */
   setApks(apks: Apk[]): void {
@@ -307,8 +302,8 @@ function scopeTable(table: Arsc | null, qualifiers: Partial<Arsc["device"]>): Ar
 interface ThemeEntry { t: number; d: number; pkg: number; flags: number }
 /** A theme's native half (AssetManager2's Theme): the attributes of the styles applied to it,
  *  merged as Theme::ApplyStyle merges them. */
-export class JTheme extends JObj {
-  res!: Resources;
+export class NativeTheme {
+  constructor(public res: Resources) { this.gen = res.generation; }
   entries = new Map<number, ThemeEntry>();
   /** the styles applied so far, with their force flags, in pairs */
   applied: number[] = [];
@@ -316,11 +311,11 @@ export class JTheme extends JObj {
   /** resolved values (AOSP caches them too), valid for one selection generation; AOSP's ThemeImpl
    *  rebases the theme when a qualifier changes */
   private resolved = new Map<number, SV | null>();
-  private gen = configGen;
+  private gen: number;
 
   private sync(): void {
-    if (this.gen === configGen) return;
-    this.gen = configGen;
+    if (this.gen === this.res.generation) return;
+    this.gen = this.res.generation;
     this.resolved.clear();
   }
   private replay(applied: number[]): void {
@@ -349,15 +344,15 @@ export class JTheme extends JObj {
   }
   /** Theme::SetTo. A theme copied onto another AssetManager's tables, where the same styles select
    *  other values, re-applies them there. */
-  setTo(o: JTheme): void {
+  setTo(o: NativeTheme): void {
     o.sync();
-    this.gen = configGen; this.resolved.clear();
-    if (this.res && this.res !== o.res) { this.replay(o.applied); return; }
-    this.res = o.res;
+    this.resolved.clear();
+    if (this.res !== o.res) { this.replay(o.applied); return; }
+    this.gen = this.res.generation;
     this.entries = new Map(o.entries); this.flags = o.flags; this.applied = o.applied.slice();
   }
   /** Theme::Rebase: these styles over another AssetManager */
-  rebase(res: Resources, styles: number[]): void { this.res = res; this.gen = configGen; this.resolved.clear(); this.replay(styles); }
+  rebase(res: Resources, styles: number[]): void { this.res = res; this.gen = res.generation; this.resolved.clear(); this.replay(styles); }
 
   /** Theme::GetAttribute: the value an attribute holds, through ?attr indirections, unresolved */
   getAttribute(resid: number, out: SV): boolean {
@@ -418,7 +413,7 @@ function fromBag(bag: Bag, key: number, flags: number, v: SV): number {
 }
 
 export function resolveAttributes(
-  res: Resources, theme: JTheme | null, node: XmlNode | null, sourceResId: number,
+  res: Resources, theme: NativeTheme | null, node: XmlNode | null, sourceResId: number,
   defStyleAttr: number, defStyleRes: number, attrs: ArrayLike<number>, srcValues: ArrayLike<number> | null,
   outValues: Int32Array, outIndices: Int32Array | null,
 ): void {
