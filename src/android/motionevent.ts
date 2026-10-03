@@ -159,9 +159,7 @@ function transformedAxis(axis: number, source: number, flags: number, t: Xform, 
 
 /** InputEvent::nextId: a random id tagged with IdGenerator's Source::OTHER */
 export function nextId(): number {
-  let id = 0;
-  while (id === 0) id = ((Math.random() * 0x10000000) | 0x30000000) | 0;
-  return id;
+  return (Math.random() * 0x10000000) | 0x30000000;
 }
 
 export class NativeMotionEvent {

@@ -25,10 +25,10 @@ function* build(calls: [string, string, ...unknown[]][], ranges: [number, number
   return yield vcall(builder, "build", "()Landroid/view/InputDevice;");
 }
 const keyMap = (file: string) => parseKeyMap(`/system/usr/keychars/${file}`, KEY_CHARACTER_MAPS[file]);
-function common(id: number, generation: number, name: string, descriptor: string, sources: number, keyboardType: number, bus: number, display: number) {
+function common(id: number, generation: number, name: string, descriptor: string, sources: number, keyboardType: number, bus: number, display: number): [string, string, ...unknown[]][] {
   return [["setId", "I", id], ["setGeneration", "I", generation], ["setName", "Ljava/lang/String;", name],
     ["setDescriptor", "Ljava/lang/String;", descriptor], ["setSources", "I", sources], ["setKeyboardType", "I", keyboardType],
-    ["setDeviceBus", "I", bus], ["setAssociatedDisplayId", "I", display], ["setEnabled", "Z", 1]] as [string, string, ...unknown[]][];
+    ["setDeviceBus", "I", bus], ["setAssociatedDisplayId", "I", display], ["setEnabled", "Z", 1]];
 }
 const inputDevices = once(driven(function* (): Gen<Map<number, JObj>> {
   const virtual = yield* build([...common(VIRTUAL_KEYBOARD, 3, "Virtual", "a718a782d34bc767f4689c232d64d527998ea7fd", 0x301, 2, 0, -1),
