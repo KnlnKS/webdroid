@@ -1,5 +1,5 @@
 import { rt } from "../runtime";
-import { parkTimeout, unparkTimeout, yieldToLoop } from "../yield";
+import { parkTimeout, unparkTimeout, wakeSoon } from "../yield";
 import { wallMillis } from "../../guest-clock";
 import { JThread, curThread } from "./jlang";
 
@@ -7,7 +7,7 @@ import { JThread, curThread } from "./jlang";
 // status set rather than throwing (LockSupport.park). The wake is a macrotask so the unparker's
 // own chain runs to its next await first, and an untimed park still polls, as Java's spurious
 // wakeups allow, so a permit lost to a stale thread identity cannot hang it. The macrotask is the
-// yield channel's: a clamped setTimeout cost each executor handoff 1 to 4 ms.
+// yield channel's (a clamped setTimeout cost each executor handoff 1 to 4 ms), ahead of its yields.
 function parkThread(t: JThread, timeoutMs?: number): void | Promise<void> {
   if (t.permit) { t.permit = false; return; }
   if (t.interrupted) return;
@@ -20,7 +20,7 @@ function parkThread(t: JThread, timeoutMs?: number): void | Promise<void> {
     };
     const id = parkTimeout(done, timeoutMs ?? 1000);
     t.parked = timeoutMs === undefined ? 3 : 4;
-    t.unpark = () => void yieldToLoop().then(done);
+    t.unpark = () => void wakeSoon().then(done);
     t.wake = done;
   });
 }

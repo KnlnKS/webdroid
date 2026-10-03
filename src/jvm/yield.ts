@@ -4,10 +4,19 @@ import { never, processExited } from "../process-exit";
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
 // MessageChannel is not subject to the nested-setTimeout clamp (4 ms once the chain is nested),
 // which is what a computation that yields every few milliseconds would otherwise spend idle in.
+// Each turn resumes one yielded thread, after every thread woken since the last turn, so a wake
+// waits out one thread's slice rather than a round of every runnable thread's.
 const chan = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
-const waiters: (() => void)[] = [];
+const waiters: (() => void)[] = [], woken: (() => void)[] = [];
+let posted = false;
+const post = (): void => { if (!posted) { posted = true; chan!.port2.postMessage(0); } };
 if (chan) {
-  chan.port1.onmessage = () => { yieldStats.fires++; const w = waiters.splice(0); for (const f of w) f(); };
+  chan.port1.onmessage = () => {
+    posted = false; yieldStats.fires++;
+    for (const f of woken.splice(0)) f();
+    waiters.shift()?.();
+    if (waiters.length) post();
+  };
   // an open port keeps a bun/node process alive after its work is done (tests, scripts)
   (chan.port1 as unknown as { unref?: () => void }).unref?.();
 }
@@ -31,7 +40,14 @@ export function yieldToLoop(): Promise<void> {
   if (processExited()) return never();
   if (scheduler && background()) return scheduler.postTask(() => {}, { priority: "background" });
   if (!chan) return new Promise((r) => setTimeout(r, 0));
-  return new Promise((r) => { yieldStats.pushes++; if (waiters.push(r) === 1) chan.port2.postMessage(0); });
+  return new Promise((r) => { yieldStats.pushes++; waiters.push(r); post(); });
+}
+/** A parked thread's wake: a macrotask, so its waker runs on to its next await first, ahead of
+ *  the threads that only yielded. */
+export function wakeSoon(): Promise<void> {
+  if (processExited()) return never();
+  if (!chan) return new Promise((r) => setTimeout(r, 0));
+  return new Promise((r) => { woken.push(r); post(); });
 }
 /** Timers that are a thread waiting with a deadline rather than scheduled work: a park, a timed
  *  monitor wait, a futex or semaphore timeout. An idle observer ignores them; everything else it
@@ -47,4 +63,4 @@ export function unparkTimeout(id: GuestTimer | undefined): void {
   timedParks.delete(id);
   clearGuestTimeout(id);
 }
-export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length };
+export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length + woken.length };
