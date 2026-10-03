@@ -9,7 +9,7 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, logLine } from "./libc";
 import { attachUnixPeer, isUnixSocket, unixConnectListener } from "./fs";
-import { AF_INET, AF_UNIX, resolveHost, hostOf } from "./net";
+import { AF_INET, AF_UNIX, resolveHost, hostOf } from "./net-address";
 import { parseIpv4 } from "../shell/relay";
 
 type Daemon = (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void;
