@@ -63,13 +63,13 @@ function platformFile(path: string): FontFile {
   if (!file) files.set(path, file = new FontFile(null, path));
   return file;
 }
-/** Typeface's nativeWarmUpCache: a system font read ahead, as the device pages its file in */
 /** a platform font file's bytes, read once per tab for HarfBuzz and Skia alike */
 export async function platformFontBytes(path: string): Promise<Uint8Array> {
   const file = platformFile(path);
   await file.load();
   return file.bytes;
 }
+/** Typeface's nativeWarmUpCache: a system font read ahead, as the device pages its file in */
 export const warmUpCache = (path: string): Promise<void> | void => isPlatformFont(path) ? platformFile(path).load() : undefined;
 
 // The device's system server hands apps a serialized font map holding each font's style and

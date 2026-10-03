@@ -1,7 +1,8 @@
 // System properties, one store for Java's SystemProperties and native libc: the reference build's
 // (platform-properties.ts) under the identity of the phone it reports being (device-properties.ts),
-// what follows from the native tier, and the live device profile's (config.ts). Any other property is ABSENT, so its reader gets its own default: what a device that
-// has not set one reports, rather than a made-up answer a library will branch on.
+// what follows from the native tier, and the live device profile's (config.ts). Any other property
+// is ABSENT, so its reader gets its own default: what a device that has not set one reports, rather
+// than a made-up answer a library will branch on.
 import { device } from "./config";
 import { DEVICE_PROPERTIES } from "./device-properties";
 import { PLATFORM_PROPERTIES } from "./platform-properties";
