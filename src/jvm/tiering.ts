@@ -4,7 +4,7 @@ import type { Runtime, ClassInfo } from "./runtime";
 import type { LazyMethod } from "./compiler";
 import type { PreparedMethod } from "./prepared";
 import { runCold, type ColdFrame, type ColdMethod } from "./cold";
-import { codeKey, persistedBody, recordBody, recordUse, type Factory } from "./codecache";
+import { bodyScript, codeKey, persistedBody, recordBody, recordUse, type Factory } from "./codecache";
 import { jvmProfiler } from "./profile";
 import { jvmCoverage } from "./coverage";
 import { perf } from "../perf";
@@ -84,9 +84,11 @@ function promoteWithinBudget(promote: () => JvmFunction | undefined, job: IdleJo
   return compiled;
 }
 
+/** a body's parameters: what compileTieredMethod binds a factory with (see Factory) */
+const PARAMS = ["C", "D", "R", "S", "P"], ENTRY_PARAMS = [...PARAMS, "$R"];
 export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod, emit: MethodEmitter): JvmFunction {
   const info = C.$i, dex = rec.dex, target = rec.isStatic ? C : C.prototype;
-  const profileName = `${info.name}.${rec.name}${rec.desc}`;
+  const label = `${info.name}.${rec.name}`, profileName = label + rec.desc;
   const persist = !jvmProfiler.enabled && !jvmCoverage.enabled;
   const entryKey = codeKey(dex.id, rec.m.methodIdx, "e"), resumeKey = codeKey(dex.id, rec.m.methodIdx, "r");
   const bind = (factory: Factory, $R?: unknown) => factory(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
@@ -103,7 +105,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     const body = make();
     if (persist) recordBody(resumeKey, body, "r");
     if (owner.hotSourceBytes + body.length > limit) return undefined;
-    const fn = new Function("C", "D", "R", "S", "P", "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
+    const fn = bodyScript(resumeKey, `${label}.resume`, PARAMS, "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
     owner.hotSourceBytes += body.length;
     return resumable = fn;
   }
@@ -115,7 +117,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   };
   const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
-    new Function("C", "D", "R", "S", "P", "$R", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
+    bodyScript(entryKey, label, ENTRY_PARAMS, src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
     if (persist) recordBody(entryKey, src, "e");
     return installed();

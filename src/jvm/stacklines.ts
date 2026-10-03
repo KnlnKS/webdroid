@@ -1,13 +1,17 @@
-// A compiled frame's source line, found when a trace is read rather than when it is thrown. A
-// body's function name carries its method index; the frame's position in the script that holds the
-// body (its own, or a persisted chunk) is a line of the body, whose instruction the same emitter
-// names when it marks each instruction's first line with its pc. The DEX's debug info gives the
-// line of that pc.
-import type { ClassInfo, Runtime } from "./runtime";
+// Where a trace's Java frame was, resolved to its source file and line when the trace is read. A
+// cold frame is at its next instruction. A compiled frame is at a line of the script holding its
+// body (codecache's bodyAt), whose instruction the same emitter names when it marks each
+// instruction's first line with its pc. The DEX's debug info gives the line of that pc.
+import { runtimeOfDex, type ClassInfo, type Runtime } from "./runtime";
+import type { ClassDef } from "./dex";
 import { markedBody, type LazyMethod } from "./compiler";
-import { chunkBody } from "./codecache";
+import { bodyAt, type Form } from "./codecache";
+import type { ColdAt } from "./cold";
 
-type Form = "e" | "r";
+/** a compiled frame: the script line its JS stack line names, and the method its function name does */
+export interface CompiledAt { readonly url: string; readonly line: number; readonly methodIdx: number }
+export type FrameAt = ColdAt | CompiledAt;
+
 /** a body's pc by line, -1 above its first instruction */
 const bodyPcs = new WeakMap<LazyMethod, Partial<Record<Form, Int32Array>>>();
 function pcsOf(R: Runtime, info: ClassInfo, rec: LazyMethod, form: Form): Int32Array {
@@ -24,28 +28,21 @@ function pcsOf(R: Runtime, info: ClassInfo, rec: LazyMethod, form: Form): Int32A
   return known[form] = pcs;
 }
 
-/** `new Function` puts its parameter list and the opening brace on the two lines above the body */
-const FUNCTION_HEADER_LINES = 2;
-/** the source line of a frame of compiled method `methodIdx` of `cls` in a JS stack line, -1
- *  when it cannot be told (an eagerly compiled class, a body this launch did not load) */
-export function compiledLine(R: Runtime, stackLine: string, cls: string, methodIdx: number): number {
-  const at = /\(?([^\s()]+):(\d+):\d+\)?\s*$/.exec(stackLine);
-  if (!at || methodIdx < 0) return -1;
-  const url = at[1], line = Number(at[2]);
-  let form: Form, bodyLine: number;
-  if (url.startsWith("wd/")) {
-    form = url.endsWith(".resume.js") ? "r" : "e";
-    bodyLine = line - FUNCTION_HEADER_LINES - 1;
-  } else {
-    const persisted = chunkBody(url, line);
-    if (!persisted || !persisted.key.endsWith(`:${methodIdx}:${persisted.key.at(-1)}`)) return -1;
-    form = persisted.key.at(-1) as Form;
-    bodyLine = persisted.line;
+const sourceFile = (def: ClassDef | undefined): string | null =>
+  def && def.sourceFileIdx !== 0xffffffff ? def.dex.string(def.sourceFileIdx) : null;
+
+/** the source file and line of a frame of class `cls` at `at`, -1 when the line cannot be told (an
+ *  eagerly compiled class, a body this launch did not load). A frame that names no body (a native
+ *  method's) finds its class by name among those `R` linked. */
+export function frameSource(R: Runtime, cls: string, at: FrameAt | null): [file: string | null, line: number] {
+  if (at && "method" in at) {
+    const { R: owner, D, codeOff } = at.method;
+    return [sourceFile(owner.classes.get(cls)?.def), codeOff === undefined ? -1 : D.dex.lineAt(codeOff, at.next - 1)];
   }
-  try {
-    const info = R.link(cls), rec = info.lazy?.find((r) => r.m.methodIdx === methodIdx);
-    if (!rec) return -1;
-    const pc = pcsOf(R, info, rec, form)[bodyLine] ?? -1;
-    return pc < 0 ? -1 : rec.dex.lineAt(rec.m.codeOff, pc);
-  } catch { return -1; }
+  const body = at && bodyAt(at.url, at.line), owner = body && body.methodIdx === at.methodIdx ? runtimeOfDex(body.dexId) : undefined;
+  const info = owner?.classes.get(cls);
+  if (!body || !owner || !info) return [sourceFile(R.classes.get(cls)?.def), -1];
+  const rec = info.lazy?.find((r) => r.m.methodIdx === body.methodIdx && r.dex.id === body.dexId);
+  const pc = rec ? pcsOf(owner, info, rec, body.form)[body.line] ?? -1 : -1;
+  return [sourceFile(info.def), pc < 0 ? -1 : rec!.dex.lineAt(rec!.m.codeOff, pc)];
 }

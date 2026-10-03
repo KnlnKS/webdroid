@@ -22,31 +22,33 @@ const platformDexes = new Set<string>();
 export function markPlatformDex(id: string): void { platformDexes.add(id); }
 const isPlatformKey = (key: string) => platformDexes.has(key.slice(0, key.indexOf(":")));
 let loaded: Record<string, Factory> = {};
-/** each imported chunk's bodies, by the URL a stack names it with */
-const chunks = new Map<string, Record<string, Factory>>();
+type Starts = [key: string, line: number][];
+/** each imported chunk's bodies, by the URL a stack names it with, and the line each body starts on */
+const chunks = new Map<string, { bodies: Record<string, Factory>; starts?: Starts }>();
 /** a chunk's bodies, noted under the URL it was imported from */
-function noteChunk(url: string, bodies: Record<string, Factory>): Record<string, Factory> {
-  chunks.set(new URL(url, location.href).href, bodies);
+function noteChunk(url: string, bodies: Record<string, Factory>, starts?: Starts): Record<string, Factory> {
+  chunks.set(new URL(url, location.href).href, { bodies, starts });
   return bodies;
 }
-const chunkStarts = new WeakMap<Record<string, Factory>, [key: string, line: number][]>();
-/** the line each body of `bodies` starts on, as codeText writes them */
-function linesOf(bodies: [key: string, source: string][]): [key: string, line: number][] {
-  let at = 2;
-  return bodies.map(([key, source]) => {
-    const start = at;
-    at += source.split("\n").length;
-    return [key, start];
-  });
+/** `new Function` puts its parameter list and the opening brace on the two lines above the body */
+const SCRIPT_HEADER_LINES = 2;
+/** a body compiled as a script of its own, which DevTools names by `label` and bodyAt by its key */
+export const bodyScript = (key: string, label: string, params: string[], source: string): Function =>
+  new Function(...params, `${source}\n//# sourceURL=wd/${label}.js?${key}`);
+/** where a script line falls: the method and form of the body and the line within it */
+export interface BodyAt { dexId: string; methodIdx: number; form: Form; line: number }
+function bodyOf(key: string, line: number): BodyAt {
+  const [dexId, methodIdx, form] = key.split(":");
+  return { dexId, methodIdx: Number(methodIdx), form: form as Form, line };
 }
-/** the persisted body a chunk's `line` falls in, and the line within its body: codeText writes
- *  each factory on the line after the last one's, under its key */
-export function chunkBody(url: string, line: number): { key: string; line: number } | null {
-  const bodies = chunks.get(url);
-  if (!bodies) return null;
-  let starts = chunkStarts.get(bodies);
-  if (!starts) chunkStarts.set(bodies, starts = linesOf(Object.entries(bodies).map(([key, factory]) => [key, factory.toString()])));
-  for (let i = starts.length - 1; i >= 0; i--) if (starts[i][1] <= line) return { key: starts[i][0], line: line - starts[i][1] };
+/** the body line `line` of script `url` is in: a bodyScript's own, or a chunk's */
+export function bodyAt(url: string, line: number): BodyAt | null {
+  const own = url.startsWith("wd/") ? url.lastIndexOf("?") : -1;
+  if (own >= 0) return bodyOf(url.slice(own + 1), line - SCRIPT_HEADER_LINES - 1);
+  const chunk = chunks.get(url);
+  if (!chunk) return null;
+  const starts = chunk.starts ??= codeText(Object.entries(chunk.bodies).map(([key, factory]) => [key, factory.toString()])).starts;
+  for (let i = starts.length - 1; i >= 0; i--) if (starts[i][1] <= line) return bodyOf(starts[i][0], line - starts[i][1]);
   return null;
 }
 /** keys the startup chunks hold, which a compacting rewrite keeps there */
@@ -63,7 +65,9 @@ const entryOf = (key: string) => key.slice(0, -1) + "e";
 /** where this launch persists, what it loaded and what it has yet to write */
 export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) => !isPlatformKey(key)).length, pending: pending.size, later: later?.length ?? 0 });
 
-export const codeKey = (dexId: string, methodIdx: number, form: "e" | "r") => `${dexId}:${methodIdx}:${form}`;
+/** a body's form: a method's entry, or its resumable body */
+export type Form = "e" | "r";
+export const codeKey = (dexId: string, methodIdx: number, form: Form) => `${dexId}:${methodIdx}:${form}`;
 
 /** bodies a compile worker emitted this launch and no method has used yet, with the chunk holding each */
 const offered = new Map<string, Record<string, Factory>>();
@@ -100,20 +104,17 @@ function claim(key: string): boolean {
 }
 
 /** the factory source of a body: `body` is its statements (an entry) or expression (resumable) */
-export function factorySource(body: string, form: "e" | "r"): string {
-  // a chunk holds many bodies, and its last sourceURL would name them all; their function names
-  // name each one instead
-  body = body.replace(/\n\/\/# sourceURL=\S*\s*$/, "");
+export function factorySource(body: string, form: Form): string {
   return form === "e" ? `(C,D,R,S,P,$R)=>{${body}\n}` : `(C,D,R,S,P)=>(${body}\n)`;
 }
 
 /** a body compiled in this launch */
-export function recordBody(key: string, body: string, form: "e" | "r"): void {
+export function recordBody(key: string, body: string, form: Form): void {
   if (claim(key) || loaded[key] || pending.has(key)) return;
   record(key, factorySource(body, form), form);
 }
 
-function record(key: string, source: string, form: "e" | "r"): void {
+function record(key: string, source: string, form: Form): void {
   const at = firstUse.get(entryOf(key)) ?? phase;
   if (form === "e") firstUse.set(key, at);
   pending.set(key, { source, phase: at });
@@ -155,10 +156,10 @@ async function importOffers(): Promise<void> {
     const needed = bodies.filter(([key]) => !loaded[key] && !pending.has(key));
     if (!needed.length) continue;
     const id = ++scripts;
-    const url = URL.createObjectURL(new Blob([codeText(needed, `${OFFER}(${id},{`, "});")], { type: "text/javascript" }));
+    const { text, starts } = codeText(needed);
+    const url = URL.createObjectURL(new Blob([`${OFFER}(${id},${text});\n`], { type: "text/javascript" }));
     try {
-      const factories = noteChunk(url, await runScript(url, id));
-      chunkStarts.set(factories, linesOf(needed));
+      const factories = noteChunk(url, await runScript(url, id), starts);
       for (const key in factories) if (!loaded[key] && !pending.has(key)) { loaded[key] = factories[key]; offered.set(key, factories); }
       lastClaim = performance.now();
       sweepOffered();
@@ -171,16 +172,23 @@ async function importOffers(): Promise<void> {
 /** install persisted bodies: what loadCode imports from codeText's modules */
 export function useCode(bodies: Record<string, Factory>): void { loaded = bodies; }
 
-/** a module whose default export is `bodies` (the pending ones by default), or a script passing
- *  them between `open` and `close`; each factory is parenthesized so V8 compiles it with the
- *  script, off the launch's critical calls, rather than preparsing it there and compiling it again
- *  when the method is first called */
-export function codeText(bodies: Iterable<[string, string]> = [...pending].map(([key, { source }]) => [key, source]),
-  open = "export default {", close = "};"): string {
-  let text = open + "\n";
-  for (const [key, source] of bodies) text += `${JSON.stringify(key)}:(${source}),\n`;
-  return text + close + "\n";
+/** `bodies` (the pending ones by default) as an object literal, and the line each starts on: a
+ *  chunk puts the literal after a prefix on its first line. Each factory is parenthesized so V8
+ *  compiles it with the script, off the launch's critical calls, rather than preparsing it there
+ *  and compiling it again when the method is first called. */
+export function codeText(bodies: Iterable<[string, string]> = [...pending].map(([key, { source }]) => [key, source])): { text: string; starts: Starts } {
+  let text = "{\n", line = 2;
+  const starts: Starts = [];
+  for (const [key, source] of bodies) {
+    starts.push([key, line]);
+    text += `${JSON.stringify(key)}:(${source}),\n`;
+    for (let i = source.indexOf("\n"); i >= 0; i = source.indexOf("\n", i + 1)) line++;
+    line++;
+  }
+  return { text: text + "}", starts };
 }
+/** a chunk module whose default export is `bodies` */
+export const codeModule = (bodies?: Iterable<[string, string]>): string => `export default ${codeText(bodies).text};\n`;
 
 /** the source the page was built from, which decides every emitted body (scripts/build-id.ts) */
 async function fetchBuildId(): Promise<string | null> {
@@ -289,7 +297,7 @@ function saveCode(): Promise<void> {
     const cache = await caches.open(CACHE), old = rewrite ? await cache.keys() : [], stamp = Date.now().toString(36);
     // all at once: a pagehide save gets no time for a second write after the first
     await Promise.all([...chunks].map(([name, bodies]) =>
-      cache.put(`${name}-${stamp}.js`, new Response(codeText(bodies), { headers: { "content-type": "text/javascript" } }))));
+      cache.put(`${name}-${stamp}.js`, new Response(codeModule(bodies), { headers: { "content-type": "text/javascript" } }))));
     // Keep failed writes queued, and leave bodies recorded during this save for the next one.
     for (const [key, body] of batch) if (pending.get(key) === body) pending.delete(key);
     if (rewrite) for (const request of old) {

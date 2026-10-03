@@ -6,7 +6,7 @@ import { suspendWith } from "./suspend";
 
 /** Field names match a hot frame's (see Runtime.dfr), so a hot body can resume one (OSR). */
 export interface ColdFrame {
-  R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
+  R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown; method: ColdMethod;
   v: unknown[]; next: number; r: 0; done: boolean; value: unknown;
   $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number;
   /** what the Promise a handler returned resolves: 1 its call result, 0 a wait before rerunning it */
@@ -36,10 +36,10 @@ const handlers = new Map<string, Handler>();
 
 /** Cold methods share their handlers, so a stack names a running cold frame only by a handler
  *  frame from this source: the frames in `coldStack`, innermost last, map to those in order. */
-const COLD_SOURCE = "wd/.cold.js";
-export const coldStack: ColdMethod[] = [];
-/** the running cold frames, as coldStack: a captured trace notes where each one is (its `next`) */
-export const coldFrameStack: ColdFrame[] = [];
+export const COLD_SOURCE = "wd/.cold.js";
+export const coldStack: ColdFrame[] = [];
+/** where a cold frame is: its method and next instruction */
+export type ColdAt = Readonly<Pick<ColdFrame, "method" | "next">>;
 
 // Pool compiler-owned literals and register operands so cold DEX instructions share V8 code.
 export function coldOp(body: string, constants: unknown[], next: number): ColdOp {
@@ -64,7 +64,7 @@ function noteFrame(e: unknown, name: string): void {
 export function runCold(method: ColdMethod, receiver: unknown, args: unknown[]): unknown {
   perf.coldCalls++;
   const { R, D, S } = method;
-  const f: ColdFrame = { R, D, S, v: new Array(method.regs), next: 0, r: 0, done: false, value: undefined,
+  const f: ColdFrame = { R, D, S, method, v: new Array(method.regs), next: 0, r: 0, done: false, value: undefined,
     $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, $w: 0 };
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
@@ -78,8 +78,7 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
   const profiled = jvmProfiler.enabled;
   const started = profiled ? performance.now() : 0;
   let suspended = false;
-  const depth = coldStack.push(method);
-  coldFrameStack.push(f);
+  const depth = coldStack.push(f);
   try {
     while (!f.done) {
       const pc = thrownAt >= 0 ? thrownAt : f.next, op = method.ops[pc] ?? method.build(pc);
@@ -115,16 +114,16 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
           method.profiledInstructions = method.hotness;
         }
         if (method.hotness >= jvmProfiler.hotThreshold && method.promote) {
-          coldStack.pop(); coldFrameStack.pop(); // the hot body continues this frame under its own name
+          coldStack.pop(); // the hot body continues this frame under its own name
           const handoff = method.promote(f, receiver);
           if (handoff) { suspended = true; return handoff.value; }
-          coldStack.push(method); coldFrameStack.push(f);
+          coldStack.push(f);
         }
       }
     }
     return f.value;
   } finally {
-    coldStack.length = coldFrameStack.length = depth - 1;
+    coldStack.length = depth - 1;
     // A frame that has suspended hands the thread back on completion; one still suspended
     // released it already, and a hot handoff inherits the obligation.
     if (f.$s && !suspended) R.su(f.$th);

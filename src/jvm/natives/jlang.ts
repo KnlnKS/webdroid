@@ -4,8 +4,8 @@
 import { awaited, getDeclared, rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
-import { coldStack, coldFrameStack, type ColdMethod } from "../cold";
-import { compiledLine } from "../stacklines";
+import { coldStack, COLD_SOURCE, type ColdAt } from "../cold";
+import { frameSource, type FrameAt } from "../stacklines";
 import { currentStrand, enterStrand, inStrand, newStrand, once } from "../suspend";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
@@ -472,14 +472,13 @@ export class JThrowable extends JObj {
   suppressed: JThrowable[] = [];
   /** captured by fillInStackTrace(), which Throwable's constructors call virtually */
   jsErr: Error | null = null;
-  coldFrames: readonly ColdMethod[] = [];
-  /** where each of coldFrames was: its frame's next instruction */
-  coldNext: readonly number[] = NO_FRAMES;
+  /** the cold frames it was thrown through, innermost last */
+  coldFrames: readonly ColdAt[] = NO_FRAMES;
   get jsStack(): string | undefined { return this.jsErr?.stack; }
   /** memoised getStackTrace(), or what setStackTrace() was handed */
   trace: unknown[] | null = null;
 }
-const STACK_DEPTH = 64, NO_FRAMES: readonly number[] = [];
+const STACK_DEPTH = 64, NO_FRAMES: readonly ColdAt[] = [];
 /** the JS stack here, deep enough to hold the Java frames a trace reports */
 function jsStackHere(): Error {
   const limit = Error.stackTraceLimit;
@@ -494,53 +493,38 @@ function captureStack(t: JThrowable): void {
   t.trace = null;
   if (quiet !== null && quiet.split("|").some((n) => (t.constructor as { $i?: ClassInfo }).$i?.types.has(n))) {
     t.jsErr = null;
-    t.coldFrames = [];
-    t.coldNext = NO_FRAMES;
+    t.coldFrames = NO_FRAMES;
     return;
   }
   t.jsErr = jsStackHere();
-  t.coldFrames = coldStack.slice(-STACK_DEPTH);
-  t.coldNext = coldFrameStack.length ? coldFrameStack.slice(-STACK_DEPTH).map((f) => f.next) : NO_FRAMES;
+  t.coldFrames = coldStack.length ? coldStack.slice(-STACK_DEPTH).map(({ method, next }) => ({ method, next })) : NO_FRAMES;
 }
-/** A trace's frame: class, method, and source line (-1 unknown, or not looked up). */
-type JavaFrame = [cls: string, method: string, line: number];
-/** The Java frames of a captured JS stack, innermost first. Compiled code's source names its
- *  class and method ("wd/pkg/Class.method.js"; neither name can contain '.'), a class's own source
- *  (native stubs) leaves the method to the function name, and each cold handler frame is the
- *  next interpreted method outward. `lines` looks up each frame's source line (stacklines.ts). */
-function javaFrames(js: string | undefined, cold: readonly ColdMethod[], coldNext: readonly number[] = NO_FRAMES, lines = false): JavaFrame[] {
+/** A trace's frame: class, method, and where it was (null for a native method's) */
+type JavaFrame = [cls: string, method: string, at: FrameAt | null];
+/** The Java frames of a captured JS stack, innermost first. A compiled body's function name names
+ *  its class and method (abi's frameName), each cold handler frame is the next interpreted method
+ *  outward, and a class's own source ("wd/pkg/Class.js") holds its native methods' stubs. */
+function javaFrames(js: string | undefined, cold: readonly ColdAt[]): JavaFrame[] {
   const out: JavaFrame[] = [];
   let k = cold.length;
   for (const line of (js ?? "").split("\n")) {
-    const at = /^\s*at (?:(.*) \()?wd\/(.*)\.js:\d+:\d+\)?$/.exec(line);
-    if (!at) {
-      // a persisted body's script names the whole chunk; its function names the method
-      const named = /^\s*at /.test(line) ? frameOf(line) : null;
-      if (named) out.push([named[0], named[1], lines ? compiledLine(rt, line, named[0], named[2]) : -1]);
-      continue;
-    }
-    const [cls, method] = at[2].split(".");
-    if (cls === "") {
-      const c = cold[--k], next = coldNext[k];
+    const at = /^\s*at (?:(.*) \()?(.*?)(?::(\d+):\d+)?\)?$/.exec(line);
+    if (!at) continue;
+    const [, fn = "", url, row] = at, compiled = frameOf(fn);
+    if (compiled) out.push([compiled[0], compiled[1], { url, line: Number(row), methodIdx: compiled[2] }]);
+    else if (url === COLD_SOURCE) {
+      const c = cold[--k];
       if (c) {
-        const dot = c.name.indexOf(".");
-        out.push([c.name.slice(0, dot), c.name.slice(dot + 1, c.name.indexOf("(", dot)),
-          lines && next !== undefined && c.codeOff !== undefined ? c.D.dex.lineAt(c.codeOff, next - 1) : -1]);
+        const name = c.method.name, dot = name.indexOf(".");
+        out.push([name.slice(0, dot), name.slice(dot + 1, name.indexOf("(", dot)), c]);
       }
-    } else if (method !== undefined) out.push([cls, method, lines ? compiledLine(rt, line, cls, frameOf(at[1] ?? "")?.[2] ?? -1) : -1]);
-    else {
-      const fn = at[1] ?? "", named = demangle(/\[as (\S+)\]$/.exec(fn)?.[1] ?? fn.slice(fn.lastIndexOf(".") + 1));
-      if (named) out.push([cls, named[0], -1]);
+    } else {
+      const cls = /^wd\/([^.?]*)\.js$/.exec(url)?.[1];
+      const named = cls && demangle(/\[as (\S+)\]$/.exec(fn)?.[1] ?? fn.slice(fn.lastIndexOf(".") + 1));
+      if (named) out.push([cls, named[0], null]);
     }
   }
   return out;
-}
-/** the SourceFile a class's DEX names, null without one */
-function sourceFileOf(cls: string): string | null {
-  try {
-    const def = rt.link(cls).def;
-    return def && def.sourceFileIdx !== 0xffffffff ? def.dex.string(def.sourceFileIdx) : null;
-  } catch { return null; }
 }
 /**
  * StackTraceElements for Java frames. An EMPTY trace is not a thing any JVM produces, and library
@@ -551,20 +535,20 @@ function sourceFileOf(cls: string): string | null {
 function stackTrace(frames: JavaFrame[]): unknown[] {
   const ste = rt.link("java/lang/StackTraceElement");
   rt.ensureCompiled(ste);
-  const element = (cls: string, method: string, line: number) => {
+  const element = (cls: string, method: string, [file, line]: [string | null, number]) => {
     const e = new ste.ctor();
-    e[STE_CLASS] = dotName(cls); e[STE_METHOD] = method; e[STE_FILE] = cls && sourceFileOf(cls); e[STE_LINE] = line;
+    e[STE_CLASS] = dotName(cls); e[STE_METHOD] = method; e[STE_FILE] = file; e[STE_LINE] = line;
     return e;
   };
-  const out = frames.map(([cls, method, line]) => element(cls, method, line));
-  if (!out.length) out.push(element("", "", -1));
+  const out = frames.map(([cls, method, at]) => element(cls, method, frameSource(rt, cls, at)));
+  if (!out.length) out.push(element("", "", ["", -1]));
   return jarray(out, "Ljava/lang/StackTraceElement;");
 }
 const STE = "java/lang/StackTraceElement", STE_CLASS = mangleField(STE, "declaringClass"), STE_METHOD = mangleField(STE, "methodName"),
   STE_FILE = mangleField(STE, "fileName"), STE_LINE = mangleField(STE, "lineNumber");
 /** ART starts a throwable's trace below the frames of its own class hierarchy (its constructors) */
 function throwableTrace(t: JThrowable): unknown[] {
-  const frames = javaFrames(t.jsStack, t.coldFrames, t.coldNext, true), own = new Set<string>();
+  const frames = javaFrames(t.jsStack, t.coldFrames), own = new Set<string>();
   for (let info: ClassInfo | null | undefined = (t.constructor as { $i?: ClassInfo }).$i; info; info = info.superInfo) own.add(info.name);
   let skip = 0;
   while (skip < frames.length && own.has(frames[skip][0])) skip++;
@@ -573,7 +557,10 @@ function throwableTrace(t: JThrowable): unknown[] {
 const framesHere = () => javaFrames(jsStackHere().stack, coldStack);
 rt.javaFrames = () => framesHere().map(([cls, method]) => dotName(cls) + "." + method);
 /** Thread.getStackTrace: ART's trace names the natives that took it */
-const threadTrace = () => stackTrace([["dalvik/system/VMStack", "getThreadStackTrace", -1], ["java/lang/Thread", "getStackTrace", -1], ...framesHere()]);
+const VM_STACK: JavaFrame = ["dalvik/system/VMStack", "getThreadStackTrace", null];
+/** the running thread's frames as its traces report them, without looking up their lines */
+const threadFrames = (): JavaFrame[] => framesHere().map(([cls, method]) => [cls, method, null]);
+const threadTrace = () => stackTrace([VM_STACK, ["java/lang/Thread", "getStackTrace", null], ...threadFrames()]);
 /** VMStack.getStackClassN: the class `n` frames out from the native's caller */
 const stackClass = (n: number) => { const frame = framesHere()[n]; return frame ? rt.classFor(frame[0]) : null; };
 rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, methods: {
@@ -586,7 +573,7 @@ rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, method
   },
   // another cooperative thread's frames are not on the JS stack: none, as for a thread not running
   "static getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;": (t: JThread | null) =>
-    stackTrace(t === curThread ? [["dalvik/system/VMStack", "getThreadStackTrace", -1], ...framesHere()] : []),
+    stackTrace(t === curThread ? [VM_STACK, ...threadFrames()] : []),
 } });
 
 const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen {

@@ -10,7 +10,7 @@ import { perf } from "../perf";
 import { coldOp, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
 import { coverageProbeSource } from "./coverage";
-import { codeKey } from "./codecache";
+import { codeKey, type Form } from "./codecache";
 import { addCell, retarget, compileTieredMethod, type Cells, type CompiledCtor, type JvmFunction } from "./tiering";
 import { type Flow, Go, structure } from "./structure";
 import { discardedTypes, holdsNoThrowable, transparentCall } from "./discard";
@@ -154,15 +154,15 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const code = dex.code(rec.m.codeOff);
   return compileTieredMethod(R, C, rec, {
     prepare: () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName),
-    entry: (prepared, count) => emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}.${rec.name}.js`,
-    resume: (prepared) => resumableSource(R, dex, info, rec.m, prepared) + `\n//# sourceURL=wd/${info.name}.${rec.name}.resume.js`,
+    entry: (prepared, count) => emitMethod(R, dex, info, rec.m, prepared, count),
+    resume: (prepared) => resumableSource(R, dex, info, rec.m, prepared),
     cold: (prepared) => Object.assign(new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold", rec.m.methodIdx)
       .compileCold(prepared, coldInstructions(code, prepared)), { codeOff: rec.m.codeOff }),
   });
 }
 
 /** a lazy method's body as `form` emits it, each instruction's first line marked with its pc */
-export function markedBody(R: Runtime, info: ClassInfo, rec: LazyMethod, form: "e" | "r"): string {
+export function markedBody(R: Runtime, info: ClassInfo, rec: LazyMethod, form: Form): string {
   const prepared = prepareDexMethod(rec.dex, rec.dex.code(rec.m.codeOff), rec.desc, rec.isStatic, "");
   return form === "e" ? emitMethod(R, rec.dex, info, rec.m, prepared, false, true) : resumableSource(R, rec.dex, info, rec.m, prepared, true);
 }

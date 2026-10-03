@@ -132,6 +132,10 @@ export const HEAP_LIMIT = 512 * 1024 * 1024;
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
 const STRICT_FIELDS = process.env.NODE_ENV !== "production";
 
+/** the runtime that loaded each dex first, by id: where a frame of its code finds its class */
+const dexOwners = new Map<string, Runtime>();
+export const runtimeOfDex = (id: string): Runtime | undefined => dexOwners.get(id);
+
 export class Runtime {
   classes = new Map<string, ClassInfo>();
   natives = new Map<string, NativeSpec>();
@@ -279,6 +283,7 @@ export class Runtime {
     this.refCache.clear();
     const dexIndex = this.dexes.length;
     this.dexes.push(dex);
+    if (!dexOwners.has(dex.id)) dexOwners.set(dex.id, this);
     if (platform) markPlatformDex(dex.id);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
