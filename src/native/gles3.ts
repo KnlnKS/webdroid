@@ -36,9 +36,12 @@ function glForTextureFormat(format: number): GL {
 }
 const shaderRecs = new WeakMap<WebGLShader, { original: string; rewrite: SwizzleRewrite }>();
 /** `target`: 0 until first bound when glGenTextures made it, -1 when made elsewhere (unknown);
- *  an immutable texture's storage is `levels` of `format` from width x height */
+ *  an immutable texture's storage is `levels` of `format` from width x height; a mutable one's
+ *  `images` are the levels glTexImage2D specified, by face target and level */
 interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean; target: number; immutable: boolean;
-  format: number; width: number; height: number; levels: number }
+  format: number; width: number; height: number; levels: number; images: Map<number, TexImage> }
+interface TexImage { width: number; height: number; internal: number; format: number; type: number }
+const imageKey = (target: number, level: number): number => target * 32 + level;
 const texRecs = new WeakMap<WebGLTexture, TexRec>();
 interface SamplerBinding { target: number; units: Int32Array }
 interface ProgramMap { binding: SamplerBinding; location: WebGLUniformLocation; pending: Int32Array; uploaded: Int32Array }
@@ -94,7 +97,7 @@ function contextState(): ContextState {
 
 function textureRec(texture: WebGLTexture): TexRec {
   let rec = texRecs.get(texture);
-  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false, target: -1, immutable: false, format: 0, width: 0, height: 0, levels: 0 }; texRecs.set(texture, rec); }
+  if (!rec) { rec = { channels: [0, 1, 2, 3], code: IDENTITY_SWIZZLE, deleted: false, target: -1, immutable: false, format: 0, width: 0, height: 0, levels: 0, images: new Map() }; texRecs.set(texture, rec); }
   return rec;
 }
 
@@ -413,6 +416,11 @@ function trustedTexture(state: ContextState, target: number): TexRec | null {
   const texture = knownTexture(state, target), rec = texture && texRecs.get(texture);
   return rec && rec.target > 0 && !rec.deleted ? rec : null;
 }
+/** levels of the bound texture a call other than glTexImage2D specifies, which glTexSubImage2D then leaves to WebGL */
+function forgetImages(target: number, levels: (level: number) => boolean): void {
+  const rec = trustedTexture(contextState(), target >= 0x8515 && target <= 0x851a ? 0x8513 : target);
+  if (rec) for (const key of rec.images.keys()) if (Math.floor(key / 32) === target && levels(key % 32)) rec.images.delete(key);
+}
 /** a call WebGL may reject changed that texture: its state is no longer known */
 function untrust(target: number): void {
   unsure();
@@ -438,24 +446,32 @@ function storageAccepted(target: number, levels: number, format: number, w: numb
   if (!rec || rec.immutable || !STORAGE_FORMATS.has(format)) return null;
   return levels >= 1 && w >= 1 && h >= 1 && w <= max && h <= max && (target !== 0x8513 || w === h) && levels <= mipLevels(Math.max(w, h)) ? rec : null;
 }
-function imageAccepted(target: number, level: number, internal: number, w: number, h: number, border: number, format: number, type: number, p: number): boolean {
+function imageAccepted(target: number, level: number, internal: number, w: number, h: number, border: number, format: number, type: number, p: number): TexRec | null {
   const cube = target >= 0x8515 && target <= 0x851a;
-  if (target !== 0x0de1 && !cube) return false;
+  if (target !== 0x0de1 && !cube) return null;
   const state = contextState(), rec = trustedTexture(state, cube ? 0x8513 : target), max = state.limits[cube ? 2 : 1];
-  if (!rec || rec.immutable || border !== 0 || pbo(UNPACK) || !IMAGE_FORMATS.has(`${internal} ${format} ${type}`)) return false;
-  if (level < 0 || level >= mipLevels(max) || w < 0 || h < 0 || w > max >> level || h > max >> level || (cube && w !== h)) return false;
-  return pixelSourceAccepted(type, format, w, h, p);
+  if (!rec || rec.immutable || border !== 0 || pbo(UNPACK) || !IMAGE_FORMATS.has(`${internal} ${format} ${type}`)) return null;
+  if (level < 0 || level >= mipLevels(max) || w < 0 || h < 0 || w > max >> level || h > max >> level || (cube && w !== h)) return null;
+  return pixelSourceAccepted(type, format, w, h, p) ? rec : null;
 }
 // the (format, type) pairs ES 3.0's table 3.2 accepts for a sized format's byte and packed 16-bit uploads
 const SUB_FORMATS = new Map<number, string[]>([[0x8058, ["6408 5121"]], [0x8051, ["6407 5121"]], [0x8229, ["6403 5121"]], [0x822b, ["33319 5121"]],
   [0x8c43, ["6408 5121"]], [0x8d62, ["6407 5121", "6407 33635"]], [0x8056, ["6408 5121", "6408 32819"]], [0x8057, ["6408 5121", "6408 32820"]]]);
-/** texSubImage2D into a tracked immutable texture */
+/** texSubImage2D into a tracked texture's storage, or into a level glTexImage2D specified, with
+ *  the format and type that specified it where its internal format is unsized */
 function subImageAccepted(target: number, level: number, x: number, y: number, w: number, h: number, format: number, type: number, p: number): boolean {
   const cube = target >= 0x8515 && target <= 0x851a;
   if (target !== 0x0de1 && !cube) return false;
   const rec = trustedTexture(contextState(), cube ? 0x8513 : target);
-  if (!rec?.immutable || pbo(UNPACK) || !SUB_FORMATS.get(rec.format)?.includes(`${format} ${type}`)) return false;
-  if (level < 0 || level >= rec.levels || x < 0 || y < 0 || w < 0 || h < 0 || x + w > Math.max(1, rec.width >> level) || y + h > Math.max(1, rec.height >> level)) return false;
+  if (!rec || pbo(UNPACK) || x < 0 || y < 0 || w < 0 || h < 0) return false;
+  if (rec.immutable) {
+    if (!SUB_FORMATS.get(rec.format)?.includes(`${format} ${type}`)) return false;
+    if (level < 0 || level >= rec.levels || x + w > Math.max(1, rec.width >> level) || y + h > Math.max(1, rec.height >> level)) return false;
+  } else {
+    const image = rec.images.get(imageKey(target, level));
+    if (!image || x + w > image.width || y + h > image.height) return false;
+    if (image.internal === image.format ? format !== image.format || type !== image.type : !SUB_FORMATS.get(image.internal)?.includes(`${format} ${type}`)) return false;
+  }
   return pixelSourceAccepted(type, format, w, h, p);
 }
 /** the unpack state and guest memory hold the rows an upload reads */
@@ -683,7 +699,7 @@ export const glCommon: Record<string, HostFn> = {
   glCullFace: (_c, a) => g().cullFace(a.i()), glFrontFace: (_c, a) => g().frontFace(a.i()),
   glPolygonOffset: (_c, a) => g().polygonOffset(a.f(), a.f()), glLineWidth: (_c, a) => g().lineWidth(a.f()),
   glSampleCoverage: (_c, a) => g().sampleCoverage(a.f(), !!(a.i() & 255)),
-  glCopyTexImage2D: (_c, a) => g().copyTexImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
+  glCopyTexImage2D: (_c, a) => { const t = a.i(), l = a.i(); forgetImages(t, (level) => level === l); g().copyTexImage2D(t, l, a.i(), a.i(), a.i(), a.i(), a.i(), a.i()); },
   glCopyTexSubImage2D: (_c, a) => g().copyTexSubImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
 };
 const draw = (): ContextState => { perf.glDraws++; return prepareDraw(); };
@@ -951,7 +967,8 @@ export function gles3Init(): void {
     },
     glTexImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(), p = a.p();
-      if (!imageAccepted(t, l, f, w, h, b, fmt, ty, p)) untrust(t >= 0x8515 && t <= 0x851a ? 0x8513 : t);
+      const rec = imageAccepted(t, l, f, w, h, b, fmt, ty, p);
+      if (rec) rec.images.set(imageKey(t, l), { width: w, height: h, internal: f, format: fmt, type: ty }); else untrust(t >= 0x8515 && t <= 0x851a ? 0x8513 : t);
       (g().texImage2D as Function)(t, l, f, w, h, b, fmt, ty, texData(ty, p, fmt, [w, h]));
     },
     glTexSubImage2D: (_c, a) => {
@@ -964,6 +981,7 @@ export function gles3Init(): void {
     glCompressedTexImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(); a.i(); const n = a.i(), p = a.p();
       const gl = glForTextureFormat(f);
+      forgetImages(t, (level) => level === l);
       if (pbo(UNPACK)) gl.compressedTexImage2D(t, l, f, w, h, 0, n, p); else gl.compressedTexImage2D(t, l, f, w, h, 0, u8(p, n));
     },
     glCompressedTexSubImage2D: (_c, a) => {
@@ -992,7 +1010,7 @@ export function gles3Init(): void {
       gl.texStorage3D(target, levels, format, width, height, depth);
     },
     glCopyTexSubImage3D: (_c, a) => g().copyTexSubImage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
-    glGenerateMipmap: (_c, a) => g().generateMipmap(a.i()),
+    glGenerateMipmap: (_c, a) => { const t = a.i(); for (const face of t === 0x8513 ? [0x8515, 0x8516, 0x8517, 0x8518, 0x8519, 0x851a] : [t]) forgetImages(face, (level) => level > 0); g().generateMipmap(t); },
     glBindSampler: (_c, a) => g().bindSampler(a.i(), H(T().samplers, a.i())),
 
     // ── framebuffers and renderbuffers

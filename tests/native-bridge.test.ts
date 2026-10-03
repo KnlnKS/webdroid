@@ -213,7 +213,7 @@ describe("native-gles-errors", () => {
     const make = () => {
       const queued: number[] = [];
       return { queries: 0, queued, isContextLost: () => false, getParameter: (p: number) => limits[p] ?? 0, createTexture: () => ({}),
-        bindTexture() {}, texParameteri() {}, texStorage2D() {}, drawArrays() {},
+        bindTexture() {}, texParameteri() {}, texStorage2D() {}, texImage2D() {}, texSubImage2D() {}, drawArrays() {},
         getError() { this.queries++; return queued.shift() ?? 0; } };
     };
     const glA = make(), glB = make();
@@ -244,6 +244,20 @@ describe("native-gles-errors", () => {
     call(cpuA, "glDrawArrays", [4, 0, 3]);
     call(cpuA, "glGetError");
     expect(glA.queries).toBe(4);
+
+    // a level glTexImage2D specified takes uploads in its own format and bounds without asking
+    const plane = mem.malloc(64 * 64);
+    expect(call(cpuA, "glGetError")).toBe(0);
+    const queried = glA.queries;
+    call(cpuA, "glGenTextures", [1, names]);
+    call(cpuA, "glBindTexture", [0x0de1, mem.ld32(names)]);
+    call(cpuA, "glTexImage2D", [0x0de1, 0, 0x1909, 64, 64, 0, 0x1909, 0x1401, 0]);
+    call(cpuA, "glTexSubImage2D", [0x0de1, 0, 0, 0, 64, 64, 0x1909, 0x1401, plane]);
+    expect(call(cpuA, "glGetError")).toBe(0);
+    expect(glA.queries).toBe(queried);
+    call(cpuA, "glTexSubImage2D", [0x0de1, 0, 1, 0, 64, 64, 0x1909, 0x1401, plane]);
+    call(cpuA, "glGetError");
+    expect(glA.queries).toBe(queried + 1);
 
     // an error GL raises host-side stays with its context
     call(cpuB, "glShaderBinary");
