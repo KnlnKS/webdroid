@@ -244,8 +244,8 @@ describe("minikin", () => {
     const { computeBreaks, LineWidth, TabStops } = await import("../src/android/minikin");
     const rows = (await Bun.file(new URL("fixtures/textlayout-device.txt", import.meta.url)).text()).trim().split("\n");
     const cases = rows.filter((r) => r.startsWith("case ")).map((r) => {
-      const [, text, width, size] = r.split("\t");
-      return { text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), width: +width, size: +size };
+      const [, text, width, size, , frequency] = r.split("\t");
+      return { text: text.replace(/\\n/g, "\n").replace(/\\t/g, "\t"), width: +width, size: +size, hyphenated: !!+(frequency ?? 0) };
     });
     const advances = new Map(rows.filter((r) => r.startsWith("advances ")).map((r) => {
       const [, i, spacing, ...a] = r.split(" ");
@@ -253,7 +253,8 @@ describe("minikin", () => {
     }));
     const mismatches: string[] = [];
     for (const row of rows.filter((r) => /^\d/.test(r))) {
-      const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
+      const [i, strategy, spacing, ...lines] = row.split(" "), { text, width, size, hyphenated } = cases[+i], adv = advances.get(`${i} ${spacing}`)!;
+      if (hyphenated) continue; // hyphenation points are measured with their hyphens: textcmp compares these
       // line breaking reads only the size, scale and spacing of a run's style
       const style = { size, scaleX: 1, letterSpacing: +spacing * Math.fround(0.05) * size, wordSpacing: 0 } as TextStyle;
       const breaks: number[] = [];
