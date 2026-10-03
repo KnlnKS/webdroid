@@ -1988,6 +1988,51 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     resolve to the host's fonts, and the default fixed and minimum sizes and text zoom have no CSS
     equivalent (desktop Chromium ignores `text-size-adjust`). Checked with and without site
     isolation: FitNotes' change log, Markor's view mode (with subframes), Harmonic's article.
+- 2026-10-02, app data clearing and uninstall (branch `knlnks/open-cleardata`):
+  - Evidence: the reference AVD's services.jar. AMS.clearApplicationUserData force-stops the package
+    (reason REASON_USER_REQUESTED, "stop <pkg> due to clear data"), PMS clears its data, resets runtime
+    permissions and keystore keys, then AMS removes URI grants, calls NotificationManager.clearData
+    (channels survive when the app cleared itself: PreferencesHelper.clearData only `!fromApp`),
+    cancels jobs and alarms, and its observer wrapper sends ACTION_PACKAGE_DATA_CLEARED before the
+    caller's observer. ATM.onPackageDataCleared drops per-app night mode and locales. Neither
+    AccountManagerService nor AppExitInfoTracker handles DATA_CLEARED (both act on PACKAGE_REMOVED
+    only), so accounts and exit records survive a clear and go with an uninstall.
+  - Each owner of per-package state has a hook and `shell/packagedata.ts` calls them: PrivateFiles
+    (`/data/data`, `/data/user/0`, `/data/user_de/0`, `Android/data` and `Android/media`), legacy
+    `wd:db:` snapshots, renderer storage (`clearWebData`), the cookie jar, `wd:keystore2:<uid>`,
+    runtime grants, alarms, notifications and channels, platform preference files, persisted URI
+    grants; removal adds senders, accounts the package's authenticator kept (and visibility to it),
+    exit records and `wd:install:<pkg>*`. `wd.reset()` removes every package with state through the
+    same hooks (its own key list had drifted once already). The broker runs the change after the
+    caller's JVM built the broadcasts, since the caller is often the package it kills; the work is
+    the top realm's code, as a killed process frame's promise jobs never run.
+  - Faults found on the way: a dead page realm's SQLite save timer rewrote the database after the
+    clear (a detached view's writes are now ignored); process realms re-registered a removed package
+    from their own `/data/app/<pkg>/base.apk` copy and recreated its install time (every realm now
+    forgets the record and archive, and install time is recorded only for a registered package); a
+    dead app's WebView frames held IndexedDB connections that blocked the deletion (renderers now end
+    with the process).
+  - Uninstall: PackageInstaller.uninstall with DELETE_PACKAGES deletes at once; otherwise
+    REQUEST_DELETE_PACKAGES (target >= 28) gets STATUS_PENDING_USER_ACTION with the
+    ACTION_UNINSTALL_PACKAGE intent and an UninstallCompleteCallback, as PackageInstallerService
+    does. ACTION_DELETE/UNINSTALL_PACKAGE run the uninstaller, which asks through the page's
+    `confirm()`. System packages answer DELETE_FAILED_INTERNAL_ERROR. The launcher lists `/apks`
+    samples, not installed packages, so it has no uninstall affordance; `wd.clearData(pkg)` and
+    `wd.uninstall(pkg)` drive the two paths.
+  - Subframes: a subframe's port now carries the jar's document.cookie as the main frame's message
+    does, acknowledged against its writes; the page listens on that port (its parent is the
+    framing page). Base (same probe, FitNotes, a LAN page with a same-site subframe): the subframe
+    never saw a cookie CookieManager set after load nor the jar's answer to its own write; now both.
+  - Verified (Playwright, FitNotes on 4406): after the app's own clearApplicationUserData() every
+    store was empty (files and databases in IndexedDB, prefs, keystore, cookie jar, renderer
+    localStorage and IndexedDB), the exit record kept REASON_USER_REQUESTED, and the relaunched app
+    read no seeded preference, file or database. After uninstall no `com.github.jamesgay.fitnotes`
+    key or file remained; the reinstall had a new install time and renderer origin with empty
+    storage. ACTION_DELETE showed the confirmation, microG's receiver got PACKAGE_REMOVED.
+    fitnotes, mihon-onboarding and komikku pass.
+  - Limits: implicit-broadcast restrictions are not modelled for these broadcasts (as for the
+    others); a package another realm installed through a session is unknown to the broker's
+    registry, as before; the uninstaller's failure result is RESULT_CANCELED, not RESULT_FIRST_USER.
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator
