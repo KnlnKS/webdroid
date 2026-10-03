@@ -230,7 +230,7 @@ const wd = {
     await Promise.all([clearRoots(), clearPickedDocuments(), processBroker().files.clear(), ...webData]);
     const gone: string[] = [];
     for (const k of Object.keys(localStorage)) {
-      if (/^wd:(db|prefs|install|keystore|web-cookies):/.test(k)) { localStorage.removeItem(k); gone.push(k); }
+      if (/^wd:(db|prefs|install|keystore2?|web-cookies):/.test(k)) { localStorage.removeItem(k); gone.push(k); }
     }
     return gone;
   },
