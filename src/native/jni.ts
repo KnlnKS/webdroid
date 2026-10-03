@@ -7,6 +7,7 @@ import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8 } from "../jvm/abi";
 import { curThread, caller, JClass, stackTraceText } from "../jvm/natives/jlang";
+import { currentStrand, inStrand } from "../jvm/suspend";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { addressOf, capacity, directAddress, isBuffer, newDirectBuffer } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
@@ -218,7 +219,7 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
 
 /** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the result */
 async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
-  const { params, ret } = r;
+  const { params, ret } = r, chain = currentStrand();
   await cpu.awaitIdleBase();
   const prevCur = cur, previousRuntime = cpu.nativeRuntime;
   cpu.nativeRuntime = r.info.owner ?? rt;
@@ -239,7 +240,7 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
     let r0: number, r1: number;
     try {
-      r0 = await cpu.call(r.fn, list, r.label);
+      r0 = await inStrand(chain, () => cpu.call(r.fn, list, r.label));
       r1 = cpu.ret1;
     } finally { cur = cpu; }
     let out: unknown;

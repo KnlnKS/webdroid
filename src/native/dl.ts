@@ -9,6 +9,7 @@ import { cpuFor, cpus, setSymbolizeHook, setBacktraceHook, setA64, isA64, type C
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
 import { curThread } from "../jvm/natives/jlang";
+import { currentStrand, inStrand } from "../jvm/suspend";
 import { vfs } from "../shell/vfs";
 
 export const modules: Module[] = [];
@@ -55,6 +56,8 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
   if (have) { have.refs++; return have; }
   const p = inflight.get(name);
   if (p) return p;
+  // initializers run as the call chain that loads the image (a <clinit>'s, when it loads its library)
+  const chain = currentStrand();
   const q = (async () => {
     const source = bytes ? null : libSource(name, owner), b = bytes ?? (source ? await source.read() : null);
     if (!b) throw new Error(`dlopen failed: library "${name}" not found`);
@@ -70,14 +73,14 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
     for (const n of mod.needed) {
       const have = byName.get(n);
       if (have) have.refs++;
-      else if (!hostLibNames().includes(n) && libSource(n, owner)) await loadModule(n, undefined, link, owner, cpu);
+      else if (!hostLibNames().includes(n) && libSource(n, owner)) await inStrand(chain, () => loadModule(n, undefined, link, owner, cpu));
     }
-    await resolveIfuncs(mod, cpu);
+    await resolveIfuncs(mod, cpu, chain);
     if (mod.tls) linkerHooks.placeTls?.(mod);
     relocate(resolveGlobal);
     installTlsDescriptors(mod);
     await linkerHooks.linked(mod, cpu);
-    if (!link) await runInit(mod, cpu);
+    if (!link) await runInit(mod, cpu, chain);
     return mod;
   })();
   inflight.set(name, q);
@@ -86,14 +89,14 @@ export async function loadModule(name: string, bytes?: Uint8Array, link = false,
 
 /** The host's interposed names replace the image's own; an IFUNC export's resolver picks the
  *  implementation for this CPU, run with AT_HWCAP and the __ifunc_arg_t AArch64 passes beside it. */
-async function resolveIfuncs(mod: Module, cpu: Cpu): Promise<void> {
+async function resolveIfuncs(mod: Module, cpu: Cpu, chain: number): Promise<void> {
   for (const [name, addr] of interposed) if (mod.exports.has(name) || mod.ifuncs.delete(name)) mod.exports.set(name, addr);
   if (!mod.ifuncs.size) return;
   const arg = mem.malloc(24);
   try {
     mem.st64(arg, 24n); mem.st64(arg + 8, linkerHooks.hwcap); mem.st64(arg + 16, 0n);
     for (const [name, resolver] of mod.ifuncs) {
-      mod.exports.set(name, await cpu.call(resolver, [linkerHooks.hwcap | 1n << 62n, arg]) >>> 0);
+      mod.exports.set(name, await inStrand(chain, () => cpu.call(resolver, [linkerHooks.hwcap | 1n << 62n, arg])) >>> 0);
     }
   } finally { mem.free(arg); }
 }
@@ -115,11 +118,11 @@ function installTlsDescriptors(mod: Module): void {
   }
 }
 
-export async function runInit(mod: Module, cpu: Cpu): Promise<void> {
+export async function runInit(mod: Module, cpu: Cpu, chain = currentStrand()): Promise<void> {
   if (mod.inited) return;
   mod.inited = true;
-  if (mod.init) await cpu.call(mod.init);
-  for (const f of mod.initArray) if (f && f !== 0xffffffff && f !== RET_SENTINEL) await cpu.call(f);
+  if (mod.init) await inStrand(chain, () => cpu.call(mod.init!));
+  for (const f of mod.initArray) if (f && f !== 0xffffffff && f !== RET_SENTINEL) await inStrand(chain, () => cpu.call(f));
 }
 
 /** dlclose's release of a reference, bionic's soinfo_unload: when an image's last goes, it and the
