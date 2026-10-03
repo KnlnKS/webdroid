@@ -302,12 +302,12 @@ hostStub("account", "webdroid/AccountManagerService");
 function* addExplicitly(account: JObj, password: string | null, extras: JObj | null, visibility: JObj | null): Gen<number> {
   if (owned(account)) return 0;
   const data: Record<string, string> = Object.create(null);
-  if (extras) for (const key of (yield* awaited(toJsArray(yield vcall(yield vcall(extras, "keySet", "()Ljava/util/Set;"), "toArray", "()[Ljava/lang/Object;")))) as string[]) {
+  if (extras) for (const key of (yield* awaited(toJsArray(yield vcall(extras, "keySet", "()Ljava/util/Set;")))) as string[]) {
     const value = yield vcall(extras, "get", "(Ljava/lang/String;)Ljava/lang/Object;", key);
     if (value != null) data[key] = typeof value === "string" ? value : yield vcall(value, "toString", "()Ljava/lang/String;");
   }
   const visibilities: Record<string, number> = Object.create(null);
-  if (visibility) for (const entry of (yield* awaited(toJsArray(yield vcall(yield vcall(visibility, "entrySet", "()Ljava/util/Set;"), "toArray", "()[Ljava/lang/Object;")))) as JObj[]) {
+  if (visibility) for (const entry of (yield* awaited(toJsArray(yield vcall(visibility, "entrySet", "()Ljava/util/Set;")))) as JObj[]) {
     const pkg: string = yield vcall(entry, "getKey", "()Ljava/lang/Object;");
     visibilities[pkg] = yield vcall(yield vcall(entry, "getValue", "()Ljava/lang/Object;"), "intValue", "()I");
   }
