@@ -857,7 +857,8 @@ smoke and the fast e2e (7/7) when it landed; the history's 2026-10-04 entries re
    are build-time AOT for the platform prefixes (§4.1) and the boot image (§4.3).
 
 **Known limits:** TikTok's swipe and video steps can wedge its main loop behind its software
-video decode (it passes over MediaCodec for non-vendor codec names); Clash of Clans and Clash
+video decode; MediaCodec now lists c2.webcodecs vendor decoders TikTok accepts, unverified live
+while TikTok refuses this host a guest session; Clash of Clans and Clash
 Royale fail their anti-tamper checks; activities run as one task per process.
 
 **How to work here** is unchanged from the previous handoff below, with one change: `scratch-d.ts`

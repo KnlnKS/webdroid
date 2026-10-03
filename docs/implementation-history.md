@@ -3092,6 +3092,43 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     performance items), the software decode's share of the one JS thread, and TikTok's player
     choosing MediaCodec (its missing extradata).
 
+
+- 2026-10-02, MediaCodec as the device's hardware decoders (branch `knlnks/open-mediacodec`):
+  - Names and flags: the Pixel 9 factory image lists c2.exynos.{h264,hevc,vp8,vp9}.decoder and
+    c2.google.av1.decoder as its hardware decoders and AOSP's c2.android.* (aliases OMX.google.*)
+    as software; the reference AVD lists its host-backed c2.goldfish.* decoders with attributes
+    0xa (vendor, hardware-accelerated) whether the host decodes on its GPU or not. WebCodecs
+    decodes off the guest's thread the same way, so the list is now c2.webcodecs.<type>.decoder
+    (avc, hevc, vp8, vp9, av1, aac, mp3, opus), vendor and hardware-accelerated. The Exynos names
+    would claim another vendor's component and its quirks to apps that key workarounds on them.
+    Profiles and levels are probed one by one with isConfigSupported (headless Chromium 153 on
+    Apple silicon: AVC to High, HEVC Main/Main10 hardware-only, VP9 0/2, AV1 Main 8/10, VP8
+    software-only); limits are 4096x2304 at 60 fps, below the level bounds; no performance
+    points or measured rates are claimed.
+  - Input, as a c2 decoder takes it: codec-config buffers (BUFFER_FLAG_CODEC_CONFIG) were dropped,
+    so ExoPlayer's adaptive reconfiguration and any player that sends parameter sets in band lost
+    them; they now lead the next key frame (AVC/HEVC) or become an audio decoder's description.
+    The VideoDecoder is configured at the first key frame, its codec string from that SPS (HEVC's
+    general profile_tier_level, checked against Chromium-encoded streams); input before a key
+    frame decodes to nothing as on a device instead of throwing DataError out of
+    queueInputBuffer, and decode failures reach onError. Length-prefixed (hvcC/avcC) samples are
+    not accepted, as no device decoder accepts them.
+  - TikTok's player (libttmplayer, aj_media_codec_async.cpp) builds a codec's input itself: with
+    the stream's hvcC/avcC it converts the extradata to Annex B, prepends it to the first frame
+    ("copy sps pps first") and rewrites each sample's NAL lengths to start codes, but only when
+    the NAL length size from that extradata (3 or 4) is known; a sample already starting
+    00 00 00 01 passes as is. Its "optimize async init" configures a decoder before the stream's
+    extradata (default 1280x720, no csd) and takes the extradata later from packet side data.
+    The earlier experiment's length-prefixed samples are that window: the first sample threw out
+    of queueInputBuffer, which ended the attempt; a device decoder drops such input silently,
+    as this one now does. Not verified live: TikTok still offers no guest session from this host
+    ("Sign up for TikTok" at launch in fast and full runs), so its fps and guest CPU share after
+    the change are unmeasured (before: 2-5 video frames/s, libByteVC1_dec at 0.15-0.7 G instr/s).
+  - YouTube configures c2.webcodecs.vp9.decoder (vp09.00.51.08). `e2e --live --test youtube`:
+    5 of 7 runs passed here, the two failures the first runs after a host reboot (with debug
+    logging), at "resume"; the parent passed 3 of 3 and both pause at 0:00. perf-browser after
+    video-open, 10 s: 30.6 presents/s and 29.6 GL frames/s with the main thread 91% idle and guest
+    Wasm 1.1% of samples, against 30.5, 29.5, 91% and 1.0% at the parent. Lichess plays no video (no codec created) and passed.
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
   startup blocker after the shared-mapping and SIGILL fixes. The US build
   gates startup on Play Age Signals (`R.bool.is_age_gate_enabled`); the
