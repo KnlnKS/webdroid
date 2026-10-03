@@ -58,7 +58,7 @@ const START_CANCELED = -96;
 const KINDS: Record<PendingOperation["kind"], number> = { broadcast: 1, activity: 2, service: 4, "foreground-service": 5 };
 const KIND_OF: Record<number, PendingOperation["kind"]> = { 1: "broadcast", 2: "activity", 4: "service", 5: "foreground-service" };
 /** an IIntentSender over a record of the shell's registry, as AOSP's PendingIntent holds one */
-const intentSender = (id: number) => after(importBinder({ pid: 0, id }), (binder) => scall("android/content/IIntentSender$Stub", "asInterface",
+export const intentSender = (id: number) => after(importBinder({ pid: 0, id }), (binder) => scall("android/content/IIntentSender$Stub", "asInterface",
   "(Landroid/os/IBinder;)Landroid/content/IIntentSender;", binder));
 /** IActivityManager's IntentSender calls, over the shell's records */
 export const intentSenderMethods = {

@@ -1,18 +1,4 @@
 {
- "android/print/PrintDocumentAdapter": [
-  "reimplements <init>()V",
-  "reimplements onFinish()V",
-  "reimplements onStart()V"
- ],
- "android/print/PrintJob": [
-  "reimplements getInfo()Landroid/print/PrintJobInfo;",
-  "reimplements isCancelled()Z",
-  "reimplements isCompleted()Z",
-  "reimplements isFailed()Z"
- ],
- "android/print/PrintManager": [
-  "reimplements print(Ljava/lang/String;Landroid/print/PrintDocumentAdapter;Landroid/print/PrintAttributes;)Landroid/print/PrintJob;"
- ],
  "android/util/StatsEvent": [
   "reimplements getAtomId()I",
   "reimplements getBytes()[B",

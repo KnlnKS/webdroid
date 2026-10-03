@@ -108,7 +108,6 @@ addEventListener("message", event => {
     try { value = JSON.stringify((0, eval)(event.data.script)) ?? "null"; } catch {}
     send({kind: "evaluated", seq: event.data.seq, value});
   } else if (event.data.kind === "stop") window.stop();
-  else if (event.data.kind === "print") window.print();
   else if (event.data.kind === "snapshot") {
     (${snapshotDocument.toString()})(document).then(result => send({kind: "snapshot", seq: event.data.seq, ...result}),
       error => send({kind: "snapshot", seq: event.data.seq, error: String(error)}));

@@ -332,12 +332,6 @@ export class WebViewChromium extends JObj {
     }
   }
   private send(data: object, transfer: Transferable[] = []) { this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
-  requestPrint(): boolean {
-    if (!this.loaded || !this.hold.el?.contentWindow) return false;
-    if (this.remoteOrigin) this.send({ kind: "print" });
-    else this.hold.el.contentWindow.print();
-    return true;
-  }
   async bitmapSnapshot(): Promise<ImageBitmap> {
     let data: string;
     if (this.remoteOrigin) {

@@ -95,12 +95,13 @@ export const device = {
   /** the browser's dark-mode preference, live as a device's is (see setDeviceNight) */
   get night(): boolean { return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false; },
   /** PackageManager.hasSystemFeature: what this device can back — touch, both orientations,
-   *  a network, a WebView, location (browser geolocation stands behind the gps and network
-   *  providers the LocationManager lists) — and nothing it cannot (no camera, telephony or sensors) */
+   *  a network, a WebView, printing (the browser's print dialog), location (browser geolocation
+   *  stands behind the gps and network providers the LocationManager lists) — and nothing it
+   *  cannot (no camera, telephony or sensors) */
   features: ["android.hardware.touchscreen", "android.hardware.touchscreen.multitouch", "android.hardware.touchscreen.multitouch.distinct",
     "android.hardware.faketouch", "android.hardware.screen.portrait", "android.hardware.screen.landscape", "android.hardware.wifi",
     "android.hardware.location", "android.hardware.location.gps", "android.hardware.location.network",
-    "android.software.webview", "android.software.input_methods", "android.software.home_screen", "android.software.app_widgets"],
+    "android.software.webview", "android.software.print", "android.software.input_methods", "android.software.home_screen", "android.software.app_widgets"],
   /** CPU and memory descriptors shared by procfs and sysconf. */
   cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 neon tls", memKb: 2 * 1024 * 1024 },
   get statusBar(): number { return Math.round(this.statusBarDp * this.density); },
