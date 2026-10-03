@@ -12,6 +12,8 @@ import { jarray, mangleMethod, mangleStaticField, i8, u8 } from "../jvm/abi";
 import { handle, release, FINALIZER } from "./handles";
 
 const F_GETFL = 3, O_RDONLY = 0;
+/** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
+const BINDER_VM_SIZE = (1 << 20) - 2 * 4096, FLAG_ONEWAY = 1;
 /** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
 export const INTERFACE_TRANSACTION = 0x5f4e5446;
 export type BinderHandle = { pid: number; id: number };
@@ -151,19 +153,23 @@ export const unparcelled = driven(function* unparcelled(cls: string, data: Parce
   finally { yield vcall(parcel, "recycle", "()V"); }
 });
 
-// ── IPCThreadState
-const callers = new WeakMap<JThread, Caller>();
-const SELF_TOKEN = -1n;
-const strictModePolicies = new WeakMap<JThread, number>();
+// ── IPCThreadState: a thread's calling identity (`explicit` once cleared), StrictMode policy and
+// work source, and whether it transacts as system_server
+type IpcState = { caller: Caller | undefined; explicit: boolean; policy: number; workSource: { uid: number; propagate: boolean }; system: boolean };
 const UNSET_WORK_SOURCE = -1;
-const workSources = new WeakMap<JThread, { uid: number; propagate: boolean }>();
-const workSource = () => workSources.get(curThread) ?? { uid: UNSET_WORK_SOURCE, propagate: false };
+const ipcStates = new WeakMap<JThread, IpcState>();
+function ipc(thread = curThread): IpcState {
+  let state = ipcStates.get(thread);
+  if (!state) ipcStates.set(thread, state = { caller: undefined, explicit: false, policy: 0, workSource: { uid: UNSET_WORK_SOURCE, propagate: false }, system: false });
+  return state;
+}
+const SELF_TOKEN = -1n;
 function setWorkSource(uid: number, propagate: boolean): bigint {
-  const was = workSource();
-  workSources.set(curThread, { uid, propagate });
+  const state = ipc(), was = state.workSource;
+  state.workSource = { uid, propagate };
   return BigInt(+was.propagate) << 32n | BigInt(was.uid >>> 0);
 }
-const transactionCaller = (): Caller | undefined => callers.get(curThread);
+const transactionCaller = (): Caller | undefined => ipc().caller;
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 const SIGABRT = 6;
 /** an exception escaping a stub's method, as JavaBBinder's report_exception takes it: logged,
@@ -176,9 +182,10 @@ function reportException(e: unknown, message: string): void {
   console.error(`Fatal signal ${SIGABRT} (SIGABRT), pid ${PROCESS_PID}\nAbort message: '${message}'`);
   exitProcess({ signal: SIGABRT });
 }
+const UNCAUGHT_REMOTE = "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)";
 /** the escape of a call into a local stub that no caller waits on (a oneway transaction, a death
  *  notice), as Binder.execTransact takes it: a RuntimeException is logged, and anything else is reported */
-export const binderEscape = (message = "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)"): Escape => (e) => {
+export const binderEscape = (message = UNCAUGHT_REMOTE): Escape => (e) => {
   if (rt.iof(rt.jx(e), "java/lang/RuntimeException")) console.warn("[Binder] Caught a RuntimeException from the binder stub implementation.", rt.jx(e));
   else reportException(e, message);
 };
@@ -201,35 +208,45 @@ export const binderThread = (): JThread => Object.assign(new JThread(), { jname:
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
 async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
-  const thread = binderThread();
-  callers.set(thread, caller);
-  if (system) systemThreads.add(thread);
+  const thread = binderThread(), state = ipc(thread);
+  state.caller = caller;
+  if (system) state.system = true;
   try { return await callOn(thread, call); }
-  finally { callers.delete(thread); }
+  finally { state.caller = undefined; }
 }
 /** system_server's identity: what a hosted service's binder calls carry, local or remote */
 export const SYSTEM_CALLER: Caller = { pid: 0, uid: 1000 };
-const systemThreads = new WeakSet<JThread>();
 /** run a hosted service's calls into other binders as system_server makes them */
 export function asSystem<T>(call: () => T | Promise<T>): Promise<T> {
   return withCallingIdentity(SYSTEM_CALLER, call, true);
 }
-/** JavaBBinder::onTransact: Binder.execTransact over the transaction's parcels */
+/** Binder.execTransact over parcels of its own: `fill` writes the request (`size` bytes as sent),
+ *  and a caller that waits for the reply has `read` take it once it fits its buffer. `escaped`
+ *  hears an exception that escapes execTransact, as JavaBBinder reports it; without it the caller does. */
+function* execTransact<T>(binder: JObj, code: number, flags: number, size: number, fill: (data: NativeParcel) => unknown,
+  read: ((reply: NativeParcel) => T | Promise<T>) | null, escaped?: (error: unknown) => void): Gen<{ handled: number; reply: T | null }> {
+  const data = new NativeParcel(), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
+  try {
+    yield fill(data);
+    let handled = 0;
+    try { handled = yield vcall(binder, "execTransact", "(IJJI)Z", code, dataPtr, replyPtr, flags); }
+    catch (error) { if (!escaped) throw error; escaped(error); }
+    if (read) checkBuffer(reply, false, size);
+    return { handled, reply: read && (yield read(reply)) as T };
+  } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
+}
+/** JavaBBinder::onTransact: Binder.execTransact over the transaction's parcels, on a binder thread */
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
   const binder = local.get(request.handle.id);
   if (!binder || request.handle.pid !== PROCESS_PID) throw rt.mkThrowable("android/os/DeadObjectException", "Binder is dead");
+  const oneway = (request.flags & FLAG_ONEWAY) !== 0;
   const run = () => withCallingIdentity(caller, () => rt.drive(function* (): Gen<TransactionReply> {
-    const data = new NativeParcel(), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
-    try {
-      yield fillParcel(data, request.data);
-      let handled = 0;
-      try { handled = yield vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
-      catch (error) { reportException(error, "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)"); } // the caller sees UNKNOWN_TRANSACTION
-      if (!(request.flags & FLAG_ONEWAY)) checkBuffer(reply, false, request.data.bytes.length);
-      return { handled, data: yield* awaited(exportParcel(reply)) };
-    } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
+    // an escaped exception leaves the caller UNKNOWN_TRANSACTION
+    const { handled, reply } = yield* execTransact(binder, request.code, request.flags, request.data.bytes.length, (data) => fillParcel(data, request.data),
+      oneway ? null : exportParcel, (error) => reportException(error, UNCAUGHT_REMOTE));
+    return { handled, data: reply! };
   }()));
-  if (!(request.flags & 1)) return run();
+  if (!oneway) return run();
   const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(logUncaught);
   oneWay.set(request.handle.id, pending);
   void pending.finally(() => { if (oneWay.get(request.handle.id) === pending) oneWay.delete(request.handle.id); });
@@ -237,7 +254,6 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
 }
 
 const extensions = new WeakMap<JObj, unknown>();
-const explicitIdentity = new WeakSet<JThread>();
 const EXPLICIT = 1n << 31n;
 rt.registerJnis("android/os/Binder", {
   "getNativeBBinderHolder()J": () => handle({}),
@@ -245,24 +261,24 @@ rt.registerJnis("android/os/Binder", {
   "getCallingPid()I": () => callingIdentity().pid,
   "getCallingUid()I": () => callingIdentity().uid,
   "isDirectlyHandlingTransactionNative()Z": () => +(transactionCaller() !== undefined),
-  "hasExplicitIdentity()Z": () => +explicitIdentity.has(curThread),
+  "hasExplicitIdentity()Z": () => +ipc().explicit,
   // IPCThreadState packs the caller into the token, so clearing twice gives the same one. This
   // process's own identity is one token whatever its uid: the page is the zygote that became the
   // app, so a Looper that started looping before then still finds its identity unchanged.
   "clearCallingIdentity()J": () => {
-    const caller = transactionCaller(), explicit = explicitIdentity.has(curThread) ? EXPLICIT : 0n;
-    callers.delete(curThread); explicitIdentity.add(curThread);
+    const state = ipc(), caller = state.caller, explicit = state.explicit ? EXPLICIT : 0n;
+    state.caller = undefined; state.explicit = true;
     return caller ? BigInt(caller.uid) << 32n | explicit | BigInt(caller.pid & 0x7fffffff) : SELF_TOKEN;
   },
   "restoreCallingIdentity(J)V": (token: bigint) => {
-    const caller = { pid: Number(token & 0x7fffffffn), uid: Number(BigInt.asIntN(32, token >> 32n)) };
-    if (token === SELF_TOKEN || caller.pid === PROCESS_PID && caller.uid === PROCESS_UID) callers.delete(curThread); else callers.set(curThread, caller);
-    if (token !== SELF_TOKEN && token & EXPLICIT) explicitIdentity.add(curThread); else explicitIdentity.delete(curThread);
+    const state = ipc(), caller = { pid: Number(token & 0x7fffffffn), uid: Number(BigInt.asIntN(32, token >> 32n)) };
+    state.caller = token === SELF_TOKEN || caller.pid === PROCESS_PID && caller.uid === PROCESS_UID ? undefined : caller;
+    state.explicit = token !== SELF_TOKEN && !!(token & EXPLICIT);
   },
   // IPCThreadState's per-thread StrictMode policy, which a call carries to its binder thread
-  "setThreadStrictModePolicy(I)V": (mask: number) => { strictModePolicies.set(curThread, mask); },
-  "getThreadStrictModePolicy()I": () => strictModePolicies.get(curThread) ?? 0,
-  "getCallingWorkSourceUid()I": () => workSource().uid,
+  "setThreadStrictModePolicy(I)V": (mask: number) => { ipc().policy = mask; },
+  "getThreadStrictModePolicy()I": () => ipc().policy,
+  "getCallingWorkSourceUid()I": () => ipc().workSource.uid,
   "setCallingWorkSourceUid(I)J": (uid: number) => setWorkSource(uid, true),
   "clearCallingWorkSource()J": () => setWorkSource(UNSET_WORK_SOURCE, true),
   "restoreCallingWorkSource(J)V": (token: bigint) => { setWorkSource(Number(BigInt.asIntN(32, token)), !!(token >> 32n)); },
@@ -279,18 +295,18 @@ rt.registerJnis("android/os/Binder", {
 const STRICT_MODE_PENALTY_GATHER = 1 << 31, SYST = 0x53595354;
 rt.registerJnis("android/os/Parcel", {
   "nativeWriteInterfaceToken(JLjava/lang/String;)V": (ptr: bigint, name: string) => {
-    const p = parcelAt(ptr), source = workSource();
-    writeInt(p, (strictModePolicies.get(curThread) ?? 0) | STRICT_MODE_PENALTY_GATHER);
+    const p = parcelAt(ptr), { policy, workSource: source } = ipc();
+    writeInt(p, policy | STRICT_MODE_PENALTY_GATHER);
     p.workSourceAt = p.pos;
     writeInt(p, source.propagate ? source.uid : UNSET_WORK_SOURCE);
     writeInt(p, SYST);
     writeString(p, name);
   },
   "nativeEnforceInterface(JLjava/lang/String;)V": (ptr: bigint, name: string) => {
-    const p = parcelAt(ptr);
-    strictModePolicies.set(curThread, readInt(p) & ~STRICT_MODE_PENALTY_GATHER);
+    const p = parcelAt(ptr), state = ipc();
+    state.policy = readInt(p) & ~STRICT_MODE_PENALTY_GATHER;
     p.workSourceAt = p.pos;
-    workSources.set(curThread, { uid: readInt(p), propagate: false });
+    state.workSource = { uid: readInt(p), propagate: false };
     if (readInt(p) !== SYST || readString(p) !== name) throw rt.mkThrowable("java/lang/SecurityException", "Binder invocation to an incorrect interface");
   },
   "nativeReadCallingWorkSourceUid(J)I": (ptr: bigint) => {
@@ -319,8 +335,6 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
 const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
 const pidAlive = (pid: number) => pid === PROCESS_PID || binderTransport.alive(pid);
 const proxyAlive = function (this: JObj) { return +pidAlive(proxyOf(this).handle.pid); };
-/** the binder driver's buffer for a process (BINDER_VM_SIZE), half of it for oneway calls */
-const BINDER_VM_SIZE = (1 << 20) - 2 * 4096, FLAG_ONEWAY = 1;
 /** a transaction or reply the target's buffer cannot take fails, as signalExceptionForError reports
  *  FAILED_TRANSACTION for the data parcel's size */
 function checkBuffer(p: NativeParcel, oneway: boolean, dataSize: number): void {
@@ -338,30 +352,24 @@ const copyParcel = driven(function* copyParcel(from: NativeParcel, to: NativePar
 });
 /** a call from this process into a service it hosts for system_server: the stub reads a copy of
  *  the caller's parcel and the caller a copy of the reply, as across processes. It runs on the
- *  calling thread as a transaction from this process; the thread's own identity, StrictMode policy
- *  and work source come back after it. */
+ *  calling thread as a transaction from this process, and the thread's IPCThreadState comes back
+ *  after it. A oneway call too runs to its end before the caller goes on, so oneway calls to a
+ *  binder are delivered in order as the driver's per-binder queue keeps them; only the caller
+ *  waits where a device's would not. */
 const localTransact = driven(function* localTransact(binder: JObj, code: number, data: NativeParcel, reply: NativeParcel | null, flags: number): Gen<number> {
-  const request = new NativeParcel(), answer = new NativeParcel(), dataPtr = handle(request), replyPtr = handle(answer);
-  const thread = curThread, caller = callers.get(thread), policy = strictModePolicies.get(thread), source = workSources.get(thread);
-  callers.set(thread, systemThreads.has(thread) ? SYSTEM_CALLER : { pid: PROCESS_PID, uid: PROCESS_UID });
+  const state = ipc(), { caller, explicit, policy, workSource } = state;
+  state.caller = state.system ? SYSTEM_CALLER : { pid: PROCESS_PID, uid: PROCESS_UID };
   try {
-    yield copyParcel(data, request, systemView);
-    const handled: number = yield vcall(binder, "execTransact", "(IJJI)Z", code, dataPtr, replyPtr, flags);
-    if (reply) { checkBuffer(answer, false, data.size); yield copyParcel(answer, reply, appView); }
-    return handled;
-  } finally {
-    if (caller === undefined) callers.delete(thread); else callers.set(thread, caller);
-    if (policy === undefined) strictModePolicies.delete(thread); else strictModePolicies.set(thread, policy);
-    if (source === undefined) workSources.delete(thread); else workSources.set(thread, source);
-    freeData(request); freeData(answer); release(dataPtr); release(replyPtr);
-  }
+    return (yield* execTransact(binder, code, flags, data.size, (request) => copyParcel(data, request, systemView),
+      reply && ((answer) => copyParcel(answer, reply, appView)))).handled;
+  } finally { state.caller = caller; state.explicit = explicit; state.policy = policy; state.workSource = workSource; }
 });
 /** BpBinder::transact: the data parcel's bytes go whole; the reply is read from its start */
 const transact = driven(function* transact(target: BinderHandle, code: number, data: NativeParcel, reply: NativeParcel | null, flags: number): Gen<number> {
   checkBuffer(data, (flags & FLAG_ONEWAY) !== 0, data.size);
   const binder = target.pid === PROCESS_PID ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
-  const result = yield* awaited(binderTransport.transact({ handle: target, code, data: yield* awaited(exportParcel(data)), flags, system: systemThreads.has(curThread) }));
+  const result = yield* awaited(binderTransport.transact({ handle: target, code, data: yield* awaited(exportParcel(data)), flags, system: ipc().system }));
   if (reply) yield fillParcel(reply, result.data);
   return result.handled;
 });
