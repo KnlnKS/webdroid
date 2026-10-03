@@ -6,7 +6,7 @@ import { vcall, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { isExternal, mapExternal, memoryAt, physical, unmapExternal, writeAt } from "./jmemory";
+import { isExternal, mapExternal, memoryAt, unmapExternal, writeAt } from "./jmemory";
 import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
@@ -113,7 +113,10 @@ function readInto(address: bigint, len: number, read: (target: Uint8Array) => nu
 /** iovec i of an IOVecWrapper array: its base, a native address, and its length */
 function iovec(iov: bigint, i: number): [bigint, number] {
   const width = addressSize(), at = iov + BigInt(i * 2 * width);
-  const word = (a: bigint) => width === 8 ? BigInt.asUintN(64, mem.ld64(physical(a))) : BigInt(mem.ld32(physical(a)) >>> 0);
+  const word = (a: bigint) => {
+    const b = memoryAt(a, width) as Uint8Array, view = new DataView(b.buffer, b.byteOffset, width);
+    return width === 8 ? view.getBigUint64(0, true) : BigInt(view.getUint32(0, true));
+  };
   return [word(at), Number(word(at + BigInt(width)))];
 }
 /** a pread/pwrite offset: past what a file here can reach, EINVAL as the kernel reports an off_t overflow */
@@ -142,7 +145,7 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
       const [base, len] = iovec(iov, i), scratch = new Uint8Array(len);
       const n = yield* awaited(javaReadFd(openFd(d), scratch));
       if (n < 0) { if (total) break; return BigInt(ioStatus(n, true)); }
-      mem.write(physical(base), scratch.subarray(0, n));
+      writeAt(base, scratch.subarray(0, n));
       total += n;
       if (n < len) break;
     }
