@@ -57,7 +57,8 @@ function queue(job: IdleJob, demand = false): void {
   if (typeof requestIdleCallback === "undefined") return;
   const was = waiting.get(job);
   waiting.set(job, demand || was === true);
-  if (was === undefined || demand) recent.push(job);
+  // newest again only when it first waits and when it first becomes demanded: entries stay bounded
+  if (was === undefined || demand && !was) recent.push(job);
   schedule();
 }
 function prepareWaiting(deadline: IdleDeadline): void {
