@@ -4,18 +4,16 @@
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, callUncaught, newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
-import { mangleStaticField } from "../../jvm/abi";
+import { after, callUncaught, newObj, vcall, scall, reportUncaught, staticField } from "../../jvm/natives/jlang";
 import { once, shareable } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
 import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
-import { PROCESS_NAME } from "../os";
 import { intentQuery, mkComponentName, systemActivity, SYSTEM_ACTIVITY, type ComponentRef, type JIntent, type SystemHandler } from "../intent";
 import { grantResultUris } from "../urigrants";
-import { thisApp, userLaunched, pms } from "./am";
+import { thisApp, userLaunched, pms, runsHere } from "./am";
 
 const CT = "android/app/servertransaction/";
 const PROCESS_STATE_TOP = 2, START_SUCCESS = 0, START_INTENT_NOT_RESOLVED = -1;
@@ -253,11 +251,10 @@ const packageResources = once(driven(function* (): Gen<JObj> {
 function* translucentTheme(info: JObj): Gen<boolean> {
   const theme = yield vcall(yield* awaited(packageResources()), "newTheme", "()Landroid/content/res/Resources$Theme;");
   yield vcall(theme, "applyStyle", "(IZ)V", yield vcall(info, "getThemeResource", "()I"), 1);
-  const statics = (yield* awaited(linkInit(STYLEABLE))).ctor as Record<string, unknown>;
-  const a = yield vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", statics[mangleStaticField("Window")]);
+  const a = yield vcall(theme, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;", yield staticField(STYLEABLE, "Window"));
   try {
     return !!(yield scall(AI, "isTranslucentOrFloating", "(Landroid/content/res/TypedArray;)Z", a)) ||
-      !!(yield vcall(a, "getBoolean", "(IZ)Z", statics[mangleStaticField("Window_windowShowWallpaper")], 0));
+      !!(yield vcall(a, "getBoolean", "(IZ)Z", yield staticField(STYLEABLE, "Window_windowShowWallpaper"), 0));
   } finally { yield vcall(a, "recycle", "()V"); }
 }
 /** the broker shows the process under this one while every activity here lets it show through */
@@ -293,7 +290,7 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
     const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
-    if (pkg === appHost?.pkg && process === (PROCESS_NAME || pkg)) callUncaught(() => rt.drive(startActivity(app, copy, info, resultRecord, resultWho, requestCode)));
+    if (runsHere(pkg, process)) callUncaught(() => rt.drive(startActivity(app, copy, info, resultRecord, resultWho, requestCode)));
     else if (activityTransport.launch) {
       yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
         caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },

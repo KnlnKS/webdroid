@@ -91,8 +91,7 @@ export const deliverBroadcast = driven(function* (intent: JObj, component: strin
 export const broadcastIntent = driven(function* (intent: JObj, permissions: string[], ordered: boolean, resultTo: JObj | null = null, initial?: BroadcastResult): Gen<void> {
   const copy = yield newObj("android/content/Intent", `(${INTENT})V`, intent);
   const final = yield* awaited(broadcastTransport.send(copy, permissions, ordered, initial));
-  if (resultTo) yield scheduleOnApp("scheduleRegisteredReceiver", REGISTERED, resultTo, copy, final.code, final.data, final.extras, 0, 0, 1, 0,
-    processState(PROCESS_STATE_RECEIVER), PROCESS_UID, appHost!.pkg);
+  if (resultTo) yield scheduleRegistered(resultTo, copy, final, false, false, { uid: PROCESS_UID, pkg: appHost!.pkg });
 });
 
 /** the methods IActivityManager adds for ActivityThread's receivers */

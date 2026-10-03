@@ -5,13 +5,13 @@
 import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, callUncaught } from "../../jvm/natives/jlang";
 import { notConnected, parceledList } from "../binder";
-import { PROCESS_NAME, PROCESS_PID, PROCESS_UID } from "../os";
+import { PROCESS_PID, PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
 import { packages, qualifyComponent, type PackageRecord } from "../packages";
 import { checkPermission } from "../permissions";
 import { type JComponentName, type JIntent, componentParts, mkComponentName, newIntent } from "../intent";
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
-import { scheduleOnApp, compatInfo, pms } from "./am";
+import { scheduleOnApp, compatInfo, pms, runsHere } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
 
 /** the services of another process, through the broker; `flags` are bindService's (BIND_AUTO_CREATE when omitted) */
@@ -47,7 +47,7 @@ function* resolve(intent: JObj, resolvedType: string | null): Gen<Target | null>
   return { info, pkg, process: getDeclared<string>(info, SI, "processName"),
     name: yield* awaited(mkComponentName(pkg, getDeclared(info, SI, "name"))) };
 }
-const isLocal = (t: Target) => t.pkg === appHost?.pkg && t.process === (PROCESS_NAME || t.pkg);
+const isLocal = (t: Target) => runsHere(t.pkg, t.process);
 /** retrieveServiceLocked's refusal of the calling package, or null */
 function* denial(t: Target, callingPackage: string): Gen<string | null> {
   const uid = getDeclared<number>(getDeclared(t.info, SI, "applicationInfo"), "android/content/pm/ApplicationInfo", "uid");
@@ -192,7 +192,7 @@ export const bindAsSystem = driven(function* (component: JComponentName, key: st
   const intent = yield* awaited(newIntent(action));
   yield vcall(intent, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield* awaited(mkComponentName(owner.pkg, cls)));
   const process = owner.process(node);
-  if (owner.pkg === appHost.pkg && process === (PROCESS_NAME || owner.pkg))
+  if (runsHere(owner.pkg, process))
     return { binder: (yield* awaited(hostedServices.bind(intent, key)))!, unbind: () => hostedServices.unbind(key) };
   return { binder: (yield serviceTransport.bind(owner, process, intent, key)) as JObj, unbind: () => serviceTransport.unbind(owner, process, key) };
 });
