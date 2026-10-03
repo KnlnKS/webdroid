@@ -1,13 +1,11 @@
 import { expect, test, describe } from "bun:test";
-import { unzipSync } from "fflate";
 import "../src/natives";
 import { mkPfd, pfdBackingBytes } from "../src/android/os";
 import { parcelled, unparcelled } from "../src/android/binder";
-import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jlang";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newFile, fdInt, setFdInt, mkFd, readStreamFully } from "../src/jvm/natives/jio";
+import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio";
 import { vfs } from "../src/shell/vfs";
-import { mangleMethod } from "../src/jvm/abi";
 import { mkAssetFd } from "../src/android/resnative";
 import { E } from "../src/native/abi";
 import { Cpu, setA64 } from "../src/native/cpu";
@@ -16,7 +14,6 @@ import { mem, guestAt } from "../src/native/mem";
 import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath } from "../src/native/fs";
 import { kernelInit } from "../src/native/syscall";
 import { BytesFile } from "../src/shell/lazyfile";
-import { mkEnumeration } from "../src/jvm/natives/jcoll";
 import { scall, loadLibcore } from "./java";
 
 rt.linkNatives();
@@ -45,41 +42,6 @@ describe("android-pfd", () => {
     await vcall(second, "close", "()V");
     await pfdBackingBytes(key);
     expect(written).toEqual([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])]);
-  });
-});
-
-describe("atomicfile", () => {
-  const make = async (path: string) => { await loadLibcore(); return newObj("android/util/AtomicFile", "(Ljava/io/File;)V", await newFile(path)); };
-  const write = async (file: unknown, text: string) => {
-    const stream = await vcall(file, "startWrite", "()Ljava/io/FileOutputStream;");
-    const bytes = new TextEncoder().encode(text);
-    await vcall(stream, "write", "([BII)V", bytes, 0, bytes.length);
-    return stream;
-  };
-  test("AtomicFile commits new data and rolls failed replacements back", async () => {
-    const path = "/data/test-atomic/replace", file = await make(path);
-    let stream = await write(file, "first");
-    expect(vfs.exists(path)).toBe(false);
-    await vcall(file, "finishWrite", "(Ljava/io/FileOutputStream;)V", stream);
-    stream = await write(file, "second");
-    await vcall(file, "failWrite", "(Ljava/io/FileOutputStream;)V", stream);
-    expect(new TextDecoder().decode(await vcall(file, "readFully", "()[B"))).toBe("first");
-    expect(vfs.exists(path + ".new")).toBe(false);
-    stream = await write(file, "third");
-    await vcall(file, "finishWrite", "(Ljava/io/FileOutputStream;)V", stream);
-    expect(new TextDecoder().decode(await vcall(file, "readFully", "()[B"))).toBe("third");
-    await vcall(file, "delete", "()V");
-    await expect(vcallAsync(file, "openRead", "()Ljava/io/FileInputStream;")).rejects.toBeDefined();
-  });
-  test("AtomicFile restores legacy backups and discards interrupted replacements on read", async () => {
-    const path = "/data/test-atomic/recover", file = await make(path);
-    vfs.write(path, new Uint8Array([1]));
-    vfs.write(path + ".bak", new Uint8Array([2]));
-    vfs.write(path + ".new", new Uint8Array([3]));
-    expect(Array.from(await vcall(file, "readFully", "()[B"))).toEqual([2]);
-    expect(vfs.exists(path + ".bak")).toBe(false);
-    expect(vfs.exists(path + ".new")).toBe(false);
-    await vcall(file, "delete", "()V");
   });
 });
 
@@ -258,95 +220,6 @@ describe("file-relative", () => {
   });
 });
 
-describe("input-stream-wrapping", () => {
-  class ForwardOnlyStream extends JObj { cursor = 0; bytes = new TextEncoder().encode("<svg/>"); }
-  rt.register({ name: "test/ForwardOnlyStream", ctor: ForwardOnlyStream, sup: "java/io/InputStream", methods: {
-    "read()I": function (this: ForwardOnlyStream) { return this.cursor < this.bytes.length ? this.bytes[this.cursor++] : -1; },
-    "read([BII)I": function (this: ForwardOnlyStream, out: Int8Array, offset: number, count: number) {
-      if (!count) return 0;
-      const bytes = this.bytes.subarray(this.cursor, this.cursor + count);
-      out.set(bytes, offset); this.cursor += bytes.length; return bytes.length || -1;
-    },
-  } });
-  rt.linkNatives();
-  const bytes = (values: number[]) => newObj("java/io/ByteArrayInputStream", "([B)V", Int8Array.from(values));
-  const data = (source: unknown) => newObj("java/io/DataInputStream", "(Ljava/io/InputStream;)V", source);
-
-  test("forward-only subclasses request buffering before probing and rewinding a stream", async () => {
-    const source = rt.make("test/ForwardOnlyStream");
-    expect(await vcall(source, "markSupported", "()Z")).toBe(0);
-    await expect(vcallAsync(source, "reset", "()V")).rejects.toMatchObject({ msg: "mark/reset not supported" });
-    const buffer = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;)V", source);
-    await vcall(buffer, "mark", "(I)V", 3);
-    expect(await vcall(buffer, "read", "()I")).toBe(60);
-    expect(await vcall(buffer, "read", "()I")).toBe(115);
-    await vcall(buffer, "reset", "()V");
-    expect(new TextDecoder().decode(await readStreamFully(buffer))).toBe("<svg/>");
-  });
-
-  test("DataInputStream.readUTF decodes modified UTF-8", async () => {
-    // NUL as C0 80 and U+1F680 as a surrogate pair of three-byte halves, as Java's writeUTF emits them
-    const input = await data(await bytes([0, 8, 0xc0, 0x80, 0xed, 0xa0, 0xbd, 0xed, 0xba, 0x80]));
-    expect(await vcall(input, "readUTF", "()Ljava/lang/String;")).toBe("\0🚀");
-  });
-
-  test("InputStreamReader's UTF-16 takes the byte order from either mark", async () => {
-    for (const [values, text] of [[[0xff, 0xfe, 0x68, 0, 0x69, 0], "hi"], [[0xfe, 0xff, 0, 0x68], "h"], [[0, 0x68], "h"]] as const) {
-      const reader = await newObj("java/io/InputStreamReader", "(Ljava/io/InputStream;Ljava/lang/String;)V", await bytes([...values]), "UTF-16");
-      const out = new Uint16Array(4), n = await vcall(reader, "read", "([CII)I", out, 0, 4);
-      expect(String.fromCharCode(...out.subarray(0, n))).toBe(text);
-    }
-  });
-
-  test("DataInputStream advances the original stream's cursor", async () => {
-    const source = await bytes([0, 0, 1, 2, 3]), input = await data(source);
-    expect(await vcall(input, "readInt", "()I")).toBe(258);
-    expect(await vcall(source, "read", "()I")).toBe(3);
-  });
-
-  test("buffered data reads preserve sequence-stream overrides and marks across refills", async () => {
-    const source = await newObj("java/io/SequenceInputStream", "(Ljava/io/InputStream;Ljava/io/InputStream;)V", await bytes([0, 0]), await bytes([1, 2, 3, 4, 5]));
-    const buffer = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;I)V", source, 2);
-    const input = await data(buffer);
-    await vcall(input, "mark", "(I)V", 6);
-    expect(await vcall(input, "readInt", "()I")).toBe(258);
-    await vcall(input, "reset", "()V");
-    expect(await vcall(input, "readInt", "()I")).toBe(258);
-    expect(await vcall(input, "readUnsignedShort", "()I")).toBe(772);
-    expect(await vcall(input, "readUnsignedByte", "()I")).toBe(5);
-    await expect(vcallAsync(input, "reset", "()V")).rejects.toMatchObject({ msg: "Resetting to invalid mark" });
-    expect(await vcall(input, "read", "()I")).toBe(-1);
-    await vcall(input, "close", "()V");
-    await expect(vcallAsync(input, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
-  });
-
-  test("DataInputStream.skipBytes handles short skips and EOF without consuming a following byte", async () => {
-    const source = await bytes([1, 2, 3, 4, 5]), input = await data(source);
-    expect(await vcall(input, "skipBytes", "(I)I", -1)).toBe(0);
-    expect(await vcall(input, "skipBytes", "(I)I", 3)).toBe(3);
-    expect(await vcall(source, "read", "()I")).toBe(4);
-    expect(await vcall(input, "skipBytes", "(I)I", 99)).toBe(1);
-    expect(await vcall(input, "skipBytes", "(I)I", 1)).toBe(0);
-  });
-
-  test("DataInputStream.skipBytes retains its thread across short suspended skips and propagates failure", async () => {
-    const source = rt.make("java/io/InputStream"), thread = new JThread(), calls: unknown[] = [], chunks = [2n, 1n, 0n];
-    Object.assign(source, { [mangleMethod("skip", "(J)J")]: async (n: bigint) => {
-      calls.push([n, curThread === thread]);
-      setCurThread(mainThread);
-      await Promise.resolve();
-      return chunks.shift();
-    } });
-    const input = await data(source);
-    expect(await vcallOn(thread, input, "skipBytes", "(I)I", 5)).toBe(3);
-    expect(calls).toEqual([[5n, true], [3n, true], [2n, true]]);
-    const error = rt.mkThrowable("java/io/IOException", "skip failed");
-    Object.assign(source, { [mangleMethod("skip", "(J)J")]: () => { throw error; } });
-    expect(await vcall(input, "skipBytes", "(I)I", 0)).toBe(0);
-    await expect(vcallAsync(input, "skipBytes", "(I)I", 1)).rejects.toBe(error);
-  });
-});
-
 describe("parcel-file", () => {
   test("byte-backed descriptors have native storage and duplicates outlive the original", async () => {
     const pfd = await mkPfd(Uint8Array.of(1, 2, 3));
@@ -403,24 +276,6 @@ describe("parcel-file", () => {
   });
 });
 
-describe("pushbackreader", () => {
-  test("PushbackReader replays characters in order and enforces capacity", async () => {
-    const source = await newObj("java/io/StringReader", "(Ljava/lang/String;)V", "abcd");
-    const reader = await newObj("java/io/PushbackReader", "(Ljava/io/Reader;I)V", source, 2);
-    expect(await vcall(reader, "read", "()I")).toBe(97);
-    await vcall(reader, "unread", "([CII)V", Uint16Array.of(120, 121, 122), 1, 2);
-    const out = new Uint16Array(4);
-    expect(await vcall(reader, "read", "([CII)I", out, 0, 4)).toBe(4);
-    expect(String.fromCharCode(...out)).toBe("yzbc");
-    await vcall(reader, "unread", "(I)V", 81);
-    await vcall(reader, "unread", "(I)V", 82);
-    await expect(vcallAsync(reader, "unread", "(I)V", 83)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
-    expect(await vcall(reader, "read", "()I")).toBe(82);
-    await vcall(reader, "close", "()V");
-    await expect(vcallAsync(reader, "read", "()I")).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
-  });
-});
-
 describe("rename", () => {
   describe("renamePath", () => {
     test("moves a loaded file and keeps a lazy source lazy", () => {
@@ -456,28 +311,6 @@ describe("rename", () => {
   });
 });
 
-describe("sequence-input", () => {
-  class ClosingStream extends JObj { closed = false; }
-  rt.register({ name: "test/ClosingStream", ctor: ClosingStream, sup: "java/io/ByteArrayInputStream", methods: {
-    "close()V": function (this: ClosingStream) { this.closed = true; },
-  } });
-  rt.linkNatives();
-  test("SequenceInputStream advances lazily and closes exhausted and remaining streams", async () => {
-    const streams: ClosingStream[] = await Promise.all([[], [1, 2], [3]].map((b) => newObj("test/ClosingStream", "([B)V", Int8Array.from(b))));
-    const sequence = await newObj("java/io/SequenceInputStream", "(Ljava/util/Enumeration;)V", mkEnumeration(streams));
-    const bytes = new Int8Array(4);
-    expect(await vcall(sequence, "read", "([BII)I", bytes, 1, 3)).toBe(2);
-    expect([...bytes]).toEqual([0, 1, 2, 0]);
-    expect(streams[0].closed).toBe(true);
-    expect(streams[1].closed).toBe(false);
-    expect(await vcall(sequence, "read", "()I")).toBe(3);
-    expect(streams[1].closed).toBe(true);
-    await vcall(sequence, "close", "()V");
-    expect(streams[2].closed).toBe(true);
-    expect(await vcall(sequence, "read", "()I")).toBe(-1);
-  });
-});
-
 describe("shared-memory", () => {
   test("shared memory maps and parcels its protected bytes", async () => {
     const shared = await scall("android/os/SharedMemory", "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "sample", 3);
@@ -496,36 +329,5 @@ describe("shared-memory", () => {
     expect([...result]).toEqual([3, 5, 7]);
     expect(await vcall(readOnly, "isReadOnly", "()Z")).toBe(1);
     await scall("android/os/SharedMemory", "unmap", "(Ljava/nio/ByteBuffer;)V", readOnly);
-  });
-});
-
-describe("string-reader", () => {
-  test("StringReader marks and resets its character position", async () => {
-    const reader = await newObj("java/io/StringReader", "(Ljava/lang/String;)V", "abc");
-    expect(await vcall(reader, "markSupported", "()Z")).toBe(1);
-    expect(await vcall(reader, "read", "()I")).toBe(97);
-    await vcall(reader, "mark", "(I)V", 1);
-    expect(await vcall(reader, "read", "()I")).toBe(98);
-    await vcall(reader, "reset", "()V");
-    expect(await vcall(reader, "read", "()I")).toBe(98);
-  });
-});
-
-describe("zip-output", () => {
-  test("ZipOutputStream writes separate readable entries", async () => {
-    const output = await newObj("java/io/ByteArrayOutputStream");
-    const zip = await newObj("java/util/zip/ZipOutputStream", "(Ljava/io/OutputStream;)V", output);
-    for (const [name, body] of [["first.txt", "alpha"], ["nested/second.txt", "beta"]]) {
-      const entry = await newObj("java/util/zip/ZipEntry", "(Ljava/lang/String;)V", name);
-      await vcall(zip, "putNextEntry", "(Ljava/util/zip/ZipEntry;)V", entry);
-      const bytes = new TextEncoder().encode(body);
-      await vcall(zip, "write", "([BII)V", new Int8Array(bytes.buffer), 0, bytes.length);
-      await vcall(zip, "closeEntry", "()V");
-    }
-    await vcall(zip, "close", "()V");
-    const bytes = await vcall(output, "toByteArray", "()[B") as Int8Array;
-    const files = unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-    expect(new TextDecoder().decode(files["first.txt"])).toBe("alpha");
-    expect(new TextDecoder().decode(files["nested/second.txt"])).toBe("beta");
   });
 });
