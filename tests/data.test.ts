@@ -8,7 +8,7 @@ import { useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
-import { loadLibcore, loadFrameworkJar, bootApp, packageRecord } from "./java";
+import { loadLibcore, loadFrameworkJar, bootApp, packageRecord, thrown } from "./java";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -77,7 +77,6 @@ describe("sqlite", () => {
     `(${S}Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)${DB}`, path, null, 0x10000000);
   const exec = (db: unknown, sql: string) => vcall(db, "execSQL", `(${S})V`, sql);
   const long = (db: unknown, sql: string) => scall("android/database/DatabaseUtils", "longForQuery", `(${DB}${S}[${S})J`, db, sql, null);
-  const thrown = (f: () => unknown) => Promise.resolve().then(f).then(() => null, (e: { constructor: { $i: { name: string } } }) => e.constructor.$i.name);
 
   test("connections to one file share its writes, keep their own TEMP schema, and raise AOSP's exceptions", async () => {
     freshSQLiteStore();
@@ -90,8 +89,8 @@ describe("sqlite", () => {
     await exec(first, "CREATE TEMP TABLE marker (id INTEGER)");
     expect(await long(first, "SELECT count(*) FROM sqlite_temp_master")).toBe(1n);
     expect(await long(second, "SELECT count(*) FROM sqlite_temp_master")).toBe(0n);
-    expect(await thrown(() => exec(second, "INSERT INTO t VALUES (1, 0)"))).toBe("android/database/sqlite/SQLiteConstraintException");
-    expect(await thrown(() => long(second, "SELECT big FROM t WHERE id = 2"))).toBe("android/database/sqlite/SQLiteDoneException");
+    expect(await thrown(() => exec(second, "INSERT INTO t VALUES (1, 0)"))).toStartWith("android/database/sqlite/SQLiteConstraintException: ");
+    expect(await thrown(() => long(second, "SELECT big FROM t WHERE id = 2"))).toStartWith("android/database/sqlite/SQLiteDoneException: ");
     const cursor = await vcall(second, "rawQuery", `(${S}[${S})Landroid/database/Cursor;`, "SELECT big, 1.5 FROM t", null);
     expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
     expect([await vcall(cursor, "getString", `(I)${S}`, 0), await vcall(cursor, "getString", `(I)${S}`, 1)]).toEqual(["9007199254740993", "1.5"]);

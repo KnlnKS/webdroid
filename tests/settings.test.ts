@@ -9,7 +9,7 @@ import { hostedService } from "../src/android/binder";
 import { mkUri, uriText, type JUri } from "../src/android/net";
 import { settingsStore } from "../src/android/settings";
 import { systemProvider } from "../src/android/systemproviders";
-import { bootApp, packageRecord } from "./java";
+import { bootApp, packageRecord, thrown } from "./java";
 import { DEVICE_PROPERTIES } from "../src/shell/device-properties";
 
 async function install(pkg: string, target: number, permissions: string[], certificate: number): Promise<PackageRecord> {
@@ -30,10 +30,6 @@ async function observer(tag: string): Promise<JObj> {
   return o;
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
-const thrown = async (call: () => unknown): Promise<string> => {
-  try { await call(); } catch (error) { return `${(error as { constructor: { $i?: { name: string } } }).constructor.$i?.name}: ${(error as { msg?: string }).msg}`; }
-  return "no exception";
-};
 
 beforeAll(async () => {
   rt.linkNatives();

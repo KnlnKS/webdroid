@@ -4,13 +4,10 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jlang";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
-import { bootApp, packageRecord } from "./java";
+import { bootApp, packageRecord, thrown } from "./java";
 
 const pkg = "org.webdroid.test.services";
 let app: JObj, phone: JObj, subscriptions: JObj, wifi: JObj;
-/** the Java exception a call throws, as "class: message", or null */
-const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
-  .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
 const outcomes: ((value: string) => void)[] = [];
 rt.register({ name: "webdroid/test/Outcome", ctor: class extends JObj {}, ifaces: ["android/os/OutcomeReceiver"], methods: {
   "onResult(Ljava/lang/Object;)V": (value: unknown) => outcomes.shift()?.(`result ${value}`),

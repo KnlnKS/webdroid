@@ -47,17 +47,25 @@ describe("datagram-socket", () => {
 });
 
 describe("http-stream", () => {
-  test("HTTP headers and incremental reads do not await the entire response, and timed-out reads remain usable", async () => {
-    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const server = Bun.serve({ port: 0, fetch: () => new Response(new ReadableStream<Uint8Array>({
-      start(c) { controller = c; c.enqueue(Uint8Array.of(1, 2, 3)); },
-    }), { headers: { "content-type": "application/octet-stream", "x-wd-content-length": "7", "x-wd-final-url": "https://example.test/stream" } }) });
-    const original = globalThis.fetch;
+  /** `body` with fetch reaching a local server that answers through `handler` as the fetch proxy
+   *  would, and with `cookies` as the default CookieHandler */
+  async function viaProxy(handler: (request: Request) => Response, body: () => Promise<void>, cookies: unknown = null) {
+    const server = Bun.serve({ port: 0, fetch: handler }), original = globalThis.fetch;
     globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
       original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
-    try {
-      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/stream");
-      const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
+    if (cookies) await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", cookies);
+    try { await body(); } finally {
+      if (cookies) await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", null);
+      globalThis.fetch = original; server.stop(true);
+    }
+  }
+  const open = async (spec: string) => vcall(await newObj("java/net/URL", "(Ljava/lang/String;)V", spec), "openConnection", "()Ljava/net/URLConnection;");
+
+  test("HTTP headers and incremental reads do not await the entire response, and timed-out reads remain usable", async () => {
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    await viaProxy(() => new Response(new ReadableStream<Uint8Array>({ start(c) { controller = c; c.enqueue(Uint8Array.of(1, 2, 3)); } }),
+      { headers: { "content-type": "application/octet-stream", "x-wd-content-length": "7", "x-wd-final-url": "https://example.test/stream" } }), async () => {
+      const connection = await open("https://example.test/stream");
       await vcall(connection, "setReadTimeout", "(I)V", 30);
       expect(await vcall(connection, "getResponseCode", "()I")).toBe(200);
       expect(await vcall(connection, "getContentLength", "()I")).toBe(7);
@@ -68,36 +76,26 @@ describe("http-stream", () => {
       expect(await vcall(stream, "available", "()I")).toBe(1);
       expect(await vcall(stream, "read", "()I")).toBe(3);
       await expect(vcallAsync(stream, "read", "()I")).rejects.toMatchObject({ msg: "Read timed out" });
-      if (!controller) throw new Error("No response stream");
-      controller.enqueue(Uint8Array.of(4, 5, 6, 7));
+      controller!.enqueue(Uint8Array.of(4, 5, 6, 7));
       expect(await vcall(stream, "skip", "(J)J", 2n)).toBe(2n);
       expect(await vcall(stream, "read", "()I")).toBe(6);
       expect(await vcall(stream, "read", "()I")).toBe(7);
-      controller.close();
+      controller!.close();
       expect(await vcall(stream, "read", "()I")).toBe(-1);
       expect(await vcall(stream, "read", "([BII)I", out, 0, 0)).toBe(0);
       expect(await vcall(stream, "markSupported", "()Z")).toBe(0);
       await vcall(connection, "disconnect", "()V");
       await expect(vcallAsync(stream, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
-    } finally { globalThis.fetch = original; server.stop(true); }
+    });
   }, 5000);
 
   test("HttpURLConnection preserves a redirect when following is disabled", async () => {
     const seen: string[] = [];
-    const server = Bun.serve({ port: 0, fetch(request) {
-      const query = new URL(request.url).searchParams;
-      seen.push(query.get("manual") ?? "");
-      return new Response(null, { headers: {
-        "x-wd-status": "302", "x-wd-status-text": "Found", "x-wd-final-url": "https://example.test/start",
-        location: "/next",
-      } });
-    } });
-    const original = globalThis.fetch;
-    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-      original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
-    try {
-      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/start");
-      const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
+    await viaProxy((request) => {
+      seen.push(new URL(request.url).searchParams.get("manual") ?? "");
+      return new Response(null, { headers: { "x-wd-status": "302", "x-wd-status-text": "Found", "x-wd-final-url": "https://example.test/start", location: "/next" } });
+    }, async () => {
+      const connection = await open("https://example.test/start");
       await vcall(connection, "setInstanceFollowRedirects", "(Z)V", 0);
       expect(await vcall(connection, "getResponseCode", "()I")).toBe(302);
       expect(await vcall(connection, "getResponseMessage", "()Ljava/lang/String;")).toBe("Found");
@@ -105,23 +103,15 @@ describe("http-stream", () => {
       expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "location")).toBe("/next");
       expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "x-wd-status")).toBeNull();
       expect(seen).toEqual(["1"]);
-    } finally { globalThis.fetch = original; server.stop(true); }
+    });
   });
+
   test("HttpURLConnection consults the CookieHandler on every redirect hop", async () => {
-    const seen: { url: string; cookie: string | null }[] = [];
-    const server = Bun.serve({ port: 0, fetch(request) {
-      const url = new URL(request.url).searchParams.get("url")!;
-      seen.push({ url, cookie: request.headers.get("x-wd-cookie") });
-      const headers: Record<string, string> = { "x-wd-final-url": url, "x-wd-status": url.endsWith("/start") ? "302" : "200",
-        "x-wd-set-cookie": JSON.stringify([url.endsWith("/start") ? "hop=1" : "end=2"]) };
-      if (url.endsWith("/start")) headers.location = "https://other.test/end";
-      return new Response(url.endsWith("/start") ? null : "done", { headers });
-    } });
+    const seen: string[] = [];
     class Handler extends JObj { log: string[] = []; }
     rt.register({ name: "test/RecordingCookieHandler", ctor: Handler, sup: "java/net/CookieHandler", methods: {
       "get(Ljava/net/URI;Ljava/util/Map;)Ljava/util/Map;": async function (this: Handler, uri: unknown) {
-        const text = await vcall(uri, "toString", "()Ljava/lang/String;");
-        this.log.push("get " + text);
+        this.log.push("get " + await vcall(uri, "toString", "()Ljava/lang/String;"));
         return newObj("java/util/HashMap");
       },
       "put(Ljava/net/URI;Ljava/util/Map;)V": async function (this: Handler, uri: unknown, headers: unknown) {
@@ -130,47 +120,37 @@ describe("http-stream", () => {
       },
     } });
     rt.linkNatives();
-    const handler = new Handler(), original = globalThis.fetch;
-    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-      original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
-    await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", handler);
-    try {
-      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/start");
-      const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
+    const handler = new Handler();
+    await viaProxy((request) => {
+      const url = new URL(request.url).searchParams.get("url")!, start = url.endsWith("/start");
+      seen.push(url);
+      const headers: Record<string, string> = { "x-wd-final-url": url, "x-wd-status": start ? "302" : "200", "x-wd-set-cookie": JSON.stringify([start ? "hop=1" : "end=2"]) };
+      if (start) headers.location = "https://other.test/end";
+      return new Response(start ? null : "done", { headers });
+    }, async () => {
+      const connection = await open("https://example.test/start");
       expect(await vcall(connection, "getResponseCode", "()I")).toBe(200);
       expect(await vcall(await vcall(connection, "getURL", "()Ljava/net/URL;"), "toString", "()Ljava/lang/String;")).toBe("https://other.test/end");
-      expect(seen.map((s) => s.url)).toEqual(["https://example.test/start", "https://other.test/end"]);
+      expect(seen).toEqual(["https://example.test/start", "https://other.test/end"]);
       expect(handler.log).toEqual([
         "get https://example.test/start", "put https://example.test/start [hop=1]",
         "get https://other.test/end", "put https://other.test/end [end=2]",
       ]);
-    } finally {
-      await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", null);
-      globalThis.fetch = original; server.stop(true);
-    }
+    }, handler);
   });
+
   test("a default CookieManager returns a hop's Set-Cookie on the next hop, for URLs java.net.URI would reject", async () => {
     const seen: (string | null)[] = [];
-    const server = Bun.serve({ port: 0, fetch(request) {
+    await viaProxy((request) => {
       const url = new URL(request.url).searchParams.get("url")!, start = url.includes("/start");
       seen.push(request.headers.get("x-wd-cookie"));
       const headers: Record<string, string> = { "x-wd-final-url": url, "x-wd-status": start ? "302" : "200" };
       if (start) Object.assign(headers, { location: "https://example.test/end?v=a|b", "x-wd-set-cookie": JSON.stringify(["hop=1"]) });
       return new Response(start ? null : "done", { headers });
-    } });
-    const original = globalThis.fetch;
-    globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-      original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
-    await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", await newObj("java/net/CookieManager"));
-    try {
-      const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/start?q={x}");
-      const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
-      expect(await vcall(connection, "getResponseCode", "()I")).toBe(200);
+    }, async () => {
+      expect(await vcall(await open("https://example.test/start?q={x}"), "getResponseCode", "()I")).toBe(200);
       expect(seen).toEqual([null, "hop=1"]);
-    } finally {
-      await scall("java/net/CookieHandler", "setDefault", "(Ljava/net/CookieHandler;)V", null);
-      globalThis.fetch = original; server.stop(true);
-    }
+    }, await newObj("java/net/CookieManager"));
   });
 });
 

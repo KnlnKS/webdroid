@@ -11,7 +11,7 @@ import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
 import { parsePackageArchive } from "../src/android/packagearchive";
-import { appResources, loadFrameworkJar, loadSystemFonts, scall } from "./java";
+import { appResources, loadFrameworkJar, loadSystemFonts, scall, thrown } from "./java";
 
 beforeAll(loadSystemFonts);
 
@@ -99,10 +99,9 @@ describe("canvas-state", () => {
       restore() { restores++; },
     } as unknown as OffscreenCanvasRenderingContext2D;
     const canvas = canvasOver(context, 100, 100);
-    const thrown = async (f: () => unknown) => { try { await f(); } catch (e) { return rt.jx(e).msg; } return null; };
 
-    expect(await thrown(() => vcall(canvas, "restore", "()V"))).toBe("Underflow in restore - more restores than saves");
-    expect(await thrown(() => vcall(canvas, "restoreToCount", "(I)V", 0))).toBe("Underflow in restoreToCount - more restores than saves");
+    expect(await thrown(() => vcall(canvas, "restore", "()V"))).toBe("java/lang/IllegalStateException: Underflow in restore - more restores than saves");
+    expect(await thrown(() => vcall(canvas, "restoreToCount", "(I)V", 0))).toBe("java/lang/IllegalArgumentException: Underflow in restoreToCount - more restores than saves");
     expect(canvasOf(canvas).saveCount).toBe(1);
     expect(restores).toBe(0);
   });

@@ -5,6 +5,10 @@ import type { Resources } from "../src/android/res";
 
 export { scall } from "../src/jvm/natives/jlang";
 
+/** the Java exception `call` throws, synchronously or as a rejection, as "class: message", or null */
+export const thrown = (call: () => unknown): Promise<string | null> => Promise.resolve().then(call)
+  .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
+
 /** the AppHost a booted page sets for `pkg`, over its resources */
 export const testAppHost = ({ pkg, res }: { pkg: string; res: Resources }): AppHost =>
   ({ pkg, res, assetKey: "", zip: {}, splits: [], setApplicationNightMode: () => {}, setApplicationLocales: () => {} });
