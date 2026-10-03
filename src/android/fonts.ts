@@ -264,7 +264,7 @@ export function* preloadFonts(): Gen<void> {
  *  where the index carries none (a headless realm), and Typeface parses the configuration itself */
 export function systemFontMap(): JObj | Promise<JObj> | null {
   if (!fontIndex?.fontMap) return null;
-  const bytes = Uint8Array.from(atob(fontIndex.fontMap), (c) => c.charCodeAt(0));
+  const bytes = Uint8Array.fromBase64(fontIndex.fontMap);
   return after(mkFd(ashmemFd(bytes, OS_CONSTANTS.PROT_READ)), (fd) => newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", fd));
 }
 /** the zygote's preload and the font map bindApplication sets, for a realm that binds no application */
