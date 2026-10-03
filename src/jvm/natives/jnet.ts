@@ -16,7 +16,7 @@ import { baosBytes, fdInt } from "./jio";
 import { relayChain } from "./jrelaycert";
 import { Relay } from "../../shell/relay";
 import { abandonConnection } from "../../native/socket/inet";
-import { proxyFetch } from "../../native/loopback-http";
+import { deviceFetch } from "../../shell/devicefetch";
 
 /** a connected TLS socket; rt.make skips <init> */
 async function dial(host: string, port: number): Promise<JSSLSocket> {
@@ -471,7 +471,7 @@ const fetchResponse = driven(function* (this: JHttpURLConnection): Gen<HttpRes> 
     }
     arm(this.cto, "connect timed out");
     try {
-      r = yield* awaited(proxyFetch(target, { method, headers, signal: ac.signal, body }));
+      r = yield* awaited(deviceFetch(target, { method, headers, signal: ac.signal, body }));
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
       if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");

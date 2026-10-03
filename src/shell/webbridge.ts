@@ -1,4 +1,4 @@
-import { loopbackFetch } from "../native/loopback-http";
+import { loopbackFetch } from "./devicefetch";
 
 /** each interface's methods; `returns`: the Java method returns a value */
 export type WebInterfaces = Record<string, Record<string, ((...args: unknown[]) => Promise<unknown>) & { returns?: boolean }>>;

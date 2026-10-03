@@ -1,10 +1,10 @@
-// HTTP to a server this process runs. Host code fetches http(s) through the dev server's proxy, which
-// would reach the host's own loopback; Android's clients outside the app (the media server, WebView's
-// network service) reach the app's loopback listener instead.
+// HTTP as the device fetches it. Host code fetches http(s) through the dev server's proxy (proxy.ts),
+// which would reach the host's own loopback; Android's clients outside the app (the media server,
+// WebView's network service) reach the app's loopback listener instead.
 import { concat } from "../jvm/abi";
-import { guestEndpoint } from "./net-address";
-import type { Stream } from "./socket/core";
-import { loopbackConnection } from "./socket/inet";
+import { guestEndpoint } from "../native/net-address";
+import type { Stream } from "../native/socket/core";
+import { loopbackConnection } from "../native/socket/inet";
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 type Init = { method?: string; headers?: Headers; body?: ArrayBuffer | Uint8Array; signal?: AbortSignal };
@@ -116,7 +116,7 @@ export async function loopbackFetch(url: string, init: Init = {}): Promise<Respo
 
 /** an http(s) request as the proxy's manual=1 answer: from this process's own server when it serves
  *  the URL, else through the dev server's proxy (headers prefixed x-wd-, as it takes them) */
-export async function proxyFetch(url: string, init: Init & { headers: Headers }): Promise<Response> {
+export async function deviceFetch(url: string, init: Init & { headers: Headers }): Promise<Response> {
   if (guestEndpoint(url)) {
     const headers = new Headers();
     init.headers.forEach((value, name) => { if (name.startsWith("x-wd-")) headers.set(name.slice(5), value); });

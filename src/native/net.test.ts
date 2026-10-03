@@ -11,7 +11,7 @@ import { SOL_SOCKET, type SocketAddress } from "./socket/abi";
 import { E } from "./abi";
 import { FS_SYSCALLS, javaCloseFd, readSocket, socketOf } from "./fs";
 import { AF_INET, AF_INET6, guestEndpoint, type Endpoint } from "./net-address";
-import { loopbackFetch } from "./loopback-http";
+import { loopbackFetch } from "../shell/devicefetch";
 
 const sock = (fd: number) => socketOf(fd) as Socket;
 const inet = (address: number[], port: number): SocketAddress => ({ family: address.length === 4 ? AF_INET : AF_INET6, ep: { address, port } });
