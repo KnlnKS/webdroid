@@ -217,13 +217,15 @@ function saveCode(): Promise<void> {
       chunk.push([key, source]);
     };
     if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!offered.has(key) && !pending.has(key)) add(key, startupKeys.has(key) ? "s" : "l", factory.toString());
-    for (const [key, { source, phase }] of pending) add(key, phase, source);
-    pending.clear();
+    const batch = [...pending];
+    for (const [key, { source, phase }] of batch) add(key, phase, source);
     lastSave = performance.now();
     const cache = await caches.open(CACHE), old = rewrite ? await cache.keys() : [], stamp = Date.now().toString(36);
     // all at once: a pagehide save gets no time for a second write after the first
     await Promise.all([...chunks].map(([name, bodies]) =>
       cache.put(`${name}-${stamp}.js`, new Response(codeText(bodies), { headers: { "content-type": "text/javascript" } }))));
+    // Keep failed writes queued, and leave bodies recorded during this save for the next one.
+    for (const [key, body] of batch) if (pending.get(key) === body) pending.delete(key);
     if (rewrite) for (const request of old) {
       const path = new URL(request.url).pathname;
       if (path.startsWith(dir) || path.startsWith(platformDir!)) void cache.delete(request);
