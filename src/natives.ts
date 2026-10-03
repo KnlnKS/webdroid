@@ -17,6 +17,8 @@ import "./jvm/natives/jregex";
 import "./jvm/natives/jicu";
 import "./jvm/natives/jexpat";
 import "./jvm/natives/jreflect";
+import "./jvm/natives/junsafe";
+import "./jvm/natives/jvmruntime";
 import "./jvm/natives/jmemory";
 import "./jvm/natives/jinvoke";
 import "./jvm/natives/jnio";

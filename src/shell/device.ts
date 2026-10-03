@@ -6,7 +6,7 @@ import { rt } from "../jvm/runtime";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
-import { setTargetSdkVersion } from "../jvm/natives/jreflect";
+import { setTargetSdkVersion } from "../jvm/natives/jvmruntime";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
