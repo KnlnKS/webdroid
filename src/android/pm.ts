@@ -123,15 +123,16 @@ function privateFlags(record: PackageRecord): number {
   if (record.flag(app, "debuggable", false) || app?.children.some((n) => n.name === "profileable" && record.flag(n, "shell", false))) flags |= 0x800000;
   if (!record.flag(app, "directBootAware", false) && Object.values(record.components).some((kind) => [...kind.values()].some((n) => record.flag(n, "directBootAware", false))))
     flags |= 0x100; // PRIVATE_FLAG_PARTIALLY_DIRECT_BOOT_AWARE
-  if ([...record.components.activity.values()].some((n) => n.children.some((f) => f.name === "intent-filter" && hasWebLinks(f)))) flags |= 0x10;
+  if ([...record.components.activity.values()].some((n) => anyFilter(n, hasWebLinks))) flags |= 0x10;
   return flags;
 }
+/** an intent filter's <action> or <category> of that name */
+const filterHas = (filter: XmlNode, kind: string, name: string) => filter.children.some((n) => n.name === kind && attrStr(n, "name") === name);
+/** a component node with an intent filter `test` accepts */
+const anyFilter = (node: XmlNode, test: (filter: XmlNode) => boolean) => node.children.some((f) => f.name === "intent-filter" && test(f));
 /** a filter a browser hands web links to: VIEW, BROWSABLE, and an http(s) scheme */
-const hasWebLinks = (filter: XmlNode) => {
-  const named = (kind: string, value: string) => filter.children.some((n) => n.name === kind && attrStr(n, "name") === value);
-  return named("action", "android.intent.action.VIEW") && named("category", "android.intent.category.BROWSABLE") &&
-    filter.children.some((n) => n.name === "data" && ["http", "https"].includes(attrStr(n, "scheme") ?? ""));
-};
+const hasWebLinks = (filter: XmlNode) => filterHas(filter, "action", "android.intent.action.VIEW") && filterHas(filter, "category", "android.intent.category.BROWSABLE") &&
+  filter.children.some((n) => n.name === "data" && ["http", "https"].includes(attrStr(n, "scheme") ?? ""));
 const privateFlagsExt = (record: PackageRecord) => {
   const app = record.application, profileable = app?.children.find((n) => n.name === "profileable");
   return (record.flag(profileable, "enabled", true) ? 1 : 0) | (record.flag(app, "enableOnBackInvokedCallback", false) ? 8 : 0);
@@ -310,8 +311,7 @@ function* all$<T, R>(items: T[], each: (item: T) => Gen<R>): Gen<R[]> {
 }
 
 // ── the platform's own providers and activities
-const handlesAction = (node: XmlNode, action: string) => node.children.some((f) => f.name === "intent-filter" &&
-  f.children.some((a) => a.name === "action" && attrStr(a, "name") === action));
+const handlesAction = (node: XmlNode, action: string) => anyFilter(node, (f) => filterHas(f, "action", action));
 
 /** the manifests' services answering `action` */
 export const servicesMatching = (action: string) => [...packages.values()].flatMap((owner) =>
@@ -389,8 +389,7 @@ export function resolveProvider(authority: string, flags = 0): Component | null 
 /** the launcher activity of a package, as getLaunchIntentForPackage finds it */
 export function launcherActivity(pkg: string): Component | null {
   const owner = packages.get(pkg);
-  return owner ? components(owner, "activity", 0).find((c) => c.node.children.some((f) => f.name === "intent-filter" &&
-    f.children.some((x) => x.name === "category" && attrStr(x, "name") === "android.intent.category.LAUNCHER"))) ?? null : null;
+  return owner ? components(owner, "activity", 0).find((c) => anyFilter(c.node, (f) => filterHas(f, "category", "android.intent.category.LAUNCHER"))) ?? null : null;
 }
 
 /** a declared permission's PermissionInfo */
