@@ -229,6 +229,24 @@ test("an ARM64 signal context is restored before the interrupted frame runs on",
   }
 });
 
+test("an ARM64 handler that restores the interrupted sp by hand returns from the interrupted call", async () => {
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "signal-escape");
+  const raise = defineHost("test.signal.escape.raise", (c) => { c.kill(30); return 0; });
+  const previous = sigHandlers.get(30), address = mem.reserve(4096, 4096);
+  // f: push fp/lr; x19 = sp; raise; x0 = 1; pop; ret. handler: sp = x19; x0 = 7; pop; ret (f's return)
+  mem.u32.set([0xa9bf7bfd, 0x910003f3, 0x580000d0, 0xd63f0200, 0xd2800020, 0xa8c17bfd, 0xd65f03c0, 0xd503201f, raise, 0,
+    0x9100027f, 0xd28000e0, 0xa8c17bfd, 0xd65f03c0], address >>> 2);
+  sigHandlers.set(30, { fn: address + 0x28, mask: 0n, flags: 4 });
+  try {
+    expect(await cpu.call(address)).toBe(7);
+    expect(cpu.signalMask & 1n << 29n).toBe(1n << 29n);
+  } finally {
+    if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    cpu.dispose(); setA64(false);
+  }
+});
+
 // cmp; a load through a null pointer; an add only when the compare's flags say equal; return
 const FAULTING = {
   a64: { words: [0xeb03005f, 0xf9400020, 0x9a801400, 0xd65f03c0], step: 4, thumb: 0 },

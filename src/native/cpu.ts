@@ -567,6 +567,7 @@ export class Cpu {
     try {
       await this.run(chain);
       returned = true;
+      if (isSignalFrame(label) && this.spVa !== stackVa) this.escapeHandler();
       this.ret1 = this.a64 ? w[1] : w[2];
       this.retFp0 = this.a64 ? this.si[0] : w[0];
       this.retFp1 = this.a64 ? this.si[1] : w[2];
@@ -834,6 +835,15 @@ export class Cpu {
     h.exit = apply;
     this.setPc(RET_SENTINEL);
     return true;
+  }
+  /** A handler frame that reaches its return with another sp was left without sigreturn (its
+   *  registers restored by hand, as a guest's own longjmp does): what returned is the code it
+   *  jumped to, so the interrupted frame returns too, in this state and signal mask. */
+  private escapeHandler(): void {
+    const h = this.handlerFrames.at(-1);
+    if (!h || h.exit) return;
+    const state = this.bytes.slice(), mask = this.signalMask;
+    h.exit = () => { this.bytes.set(state); this.signalMask = mask; };
   }
   fault(msg: string): never {
     const first = !lastFault.regs;
