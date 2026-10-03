@@ -2422,3 +2422,10 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   rejection; TypeScript checking passed. The scheduler and JIT architecture
   remain intact: historical native profiles still identify compiled guest
   execution and region transitions as the larger native-game costs.
+- Native JIT batches no longer make a JS-owned copy before WebAssembly
+  compilation. The [WebAssembly JS API](https://www.w3.org/TR/2026/CRD-wasm-js-api-2-20260224/)
+  snapshots the BufferSource synchronously for both `Module` and asynchronous
+  `instantiate`, so a view into the emission buffer suffices. This removes one
+  allocation and copy of up to 1 MiB per batch; no FPS gain is claimed. Existing
+  cache/JIT tests passed, and a scratch Bun probe overwriting the source after
+  `instantiate` returned still compiled the original bytes successfully.

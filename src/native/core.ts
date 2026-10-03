@@ -160,7 +160,8 @@ export function jitDrain(): void {
   const t0 = performance.now();
   const len = core.jit_emit(JIT_BUF, JIT_CAP);
   if (!len) return;
-  const bytes = new Uint8Array(memory.buffer, JIT_BUF, len).slice(), n = core.jit_count();
+  // Both Module and asynchronous instantiate snapshot the source bytes before returning.
+  const bytes = new Uint8Array(memory.buffer, JIT_BUF, len), n = core.jit_count();
   if (syncCompile !== false) {
     try { jitLink(new WebAssembly.Instance(new WebAssembly.Module(bytes), jitImports), n, t0); syncCompile = true; return; }
     catch (e) {
