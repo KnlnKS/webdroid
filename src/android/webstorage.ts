@@ -1,0 +1,148 @@
+// A WebView's data directory: the renderer origins its pages kept storage on, WebStorage over them,
+// and WebViewDatabase's HTTP auth credentials. Each web origin of an app's install renders on its own
+// renderer origin, whose storage lives in the browser; a browser enumerates and clears an origin's
+// storage only from inside it, so the app notes each origin its WebViews create, and a hidden frame
+// on that origin reports or deletes what it holds.
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { jarray } from "../jvm/abi";
+import { newObj, vcall, scall } from "../jvm/natives/jlang";
+import { boxLong } from "../jvm/natives/jbox";
+import { installTime } from "./packages";
+import { onMain } from "./mainloop";
+import { appHost } from "./apphost";
+import { rendererOrigin, rendererStorage, type StorageOp } from "../shell/webbridge";
+
+/** kept with the install, so the shell's reset removes it with the rest */
+const originsKey = (pkg: string) => "wd:install:" + pkg + ":webview";
+/** the web origins `pkg`'s WebViews have rendered */
+export function webOrigins(pkg: string): string[] {
+  try {
+    const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(originsKey(pkg)) ?? "[]");
+    return Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : [];
+  } catch { return []; }
+}
+/** the renderer origin of `pkg`'s pages of `webOrigin`, noted among those its data holds. The install
+ *  time is part of it, so a reinstall starts on origins of its own. */
+export function webRenderer(pkg: string, webOrigin: string): Promise<string> {
+  const known = webOrigins(pkg);
+  if (!known.includes(webOrigin)) {
+    try { globalThis.localStorage?.setItem(originsKey(pkg), JSON.stringify([...known, webOrigin])); } catch { /* storage can be unavailable */ }
+  }
+  return rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
+}
+/** the renderer origin a noted `webOrigin` of `pkg` holds storage on, without noting it again */
+const rendererOf = (pkg: string, webOrigin: string) => rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
+
+// the quota manager runs its tasks in order: a query after a delete sees it done
+let lane: Promise<unknown> = Promise.resolve();
+function inOrder<T>(task: () => Promise<T>): Promise<T> {
+  const run = lane.then(task);
+  lane = run.catch(() => {});
+  return run;
+}
+const storageOf = (pkg: string, webOrigin: string, op: StorageOp) => rendererOf(pkg, webOrigin).then((origin) => rendererStorage(origin, op));
+
+/** everything `pkg`'s WebViews stored, as clearing its data or uninstalling it removes its WebView
+ *  data directory; the cookie jar goes with it */
+export function clearWebData(pkg: string): Promise<void> {
+  return inOrder(async () => {
+    await Promise.all(webOrigins(pkg).map((o) => storageOf(pkg, o, "all")));
+    try { globalThis.localStorage?.removeItem(originsKey(pkg)); globalThis.localStorage?.removeItem("wd:web-cookies:" + pkg); } catch { /* storage can be unavailable */ }
+  });
+}
+
+// ── WebStorage, as AwQuotaManagerBridge answers it over the noted origins
+const pkg = () => appHost?.pkg ?? "";
+/** a noted web origin matching the origin string an app passes (Chromium takes it as a URL) */
+const noted = (origin: string): string | undefined => {
+  const parsed = URL.parse(origin)?.origin;
+  return webOrigins(pkg()).find((o) => o === parsed || o === origin);
+};
+const answer = (callback: JObj | null, value: () => unknown) => {
+  if (callback) void onMain(() => rt.drive(function* (): Gen { yield vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", yield value()); }()));
+};
+/** usage and quota of an origin; the quota manager answers an origin without data with no usage */
+const usageAndQuota = (origin: string) => inOrder(async () => {
+  const known = noted(origin), web = URL.parse(origin)?.origin;
+  return known ? await storageOf(pkg(), known, "usage") : web && web !== "null" ? await rendererStorage(await rendererOf(pkg(), web), "usage") : null;
+});
+rt.register({
+  name: "webdroid/WebStorage", ctor: class extends JObj {}, sup: "android/webkit/WebStorage",
+  methods: {
+    // GetAllStorageKeys: the origins holding quota-managed data, each named by its URL spec
+    "getOrigins(Landroid/webkit/ValueCallback;)V": (callback: JObj | null) => {
+      void inOrder(() => Promise.all(webOrigins(pkg()).filter((o) => /^(https?|file):/.test(o)).map(async (o) => [o, await storageOf(pkg(), o, "usage")] as const)))
+        .then((usages) => answer(callback, driven(function* (): Gen {
+          const map: JObj = yield newObj("java/util/HashMap");
+          for (const [o, u] of usages) {
+            if (!u?.usage) continue;
+            const spec = o === "file://" ? "file:///" : o + "/";
+            yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", spec,
+              yield newObj("android/webkit/WebStorage$Origin", "(Ljava/lang/String;JJ)V", spec, BigInt(u.quota), BigInt(u.usage)));
+          }
+          return map;
+        })));
+    },
+    "getUsageForOrigin(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": (origin: string, callback: JObj | null) => {
+      void usageAndQuota(origin).then((u) => answer(callback, () => boxLong(BigInt(u?.usage ?? 0))));
+    },
+    "getQuotaForOrigin(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": (origin: string, callback: JObj | null) => {
+      void usageAndQuota(origin).then((u) => answer(callback, () => boxLong(BigInt(u?.quota ?? 0))));
+    },
+    // DeleteOriginFramework: its file systems and IndexedDB
+    "deleteOrigin(Ljava/lang/String;)V": (origin: string) => {
+      const known = noted(origin);
+      if (known) void inOrder(() => storageOf(pkg(), known, "origin"));
+    },
+    // DeleteAllDataFramework: every origin's file systems, IndexedDB and localStorage
+    "deleteAllData()V": () => { void inOrder(() => Promise.all(webOrigins(pkg()).map((o) => storageOf(pkg(), o, "data")))); },
+  },
+});
+
+// ── WebViewDatabase: Chromium keeps HTTP auth credentials in the app's http_auth.db (HttpAuthDatabase);
+// form data and website passwords are no longer kept (hasFormData answers false)
+let authDb: JObj | null = null;
+function* database(): Gen<JObj> {
+  if (authDb) return authDb;
+  const context: JObj = yield scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;");
+  const db: JObj = yield vcall(context, "openOrCreateDatabase", "(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;", "http_auth.db", 0, null);
+  yield vcall(db, "execSQL", "(Ljava/lang/String;)V", "CREATE TABLE IF NOT EXISTS httpauth (_id INTEGER PRIMARY KEY, host TEXT, realm TEXT, username TEXT, password TEXT, UNIQUE (host, realm) ON CONFLICT REPLACE);");
+  return authDb ??= db;
+}
+/** the rows of `sql` over `args`, each its columns as strings */
+const query = driven(function* (sql: string, args: string[]): Gen<(string | null)[][]> {
+  const cursor: JObj = yield vcall(yield* database(), "rawQuery", "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;", sql, jarray(args, "Ljava/lang/String;"));
+  const rows: (string | null)[][] = [];
+  try {
+    const columns: number = yield vcall(cursor, "getColumnCount", "()I");
+    while (yield vcall(cursor, "moveToNext", "()Z")) {
+      const row: (string | null)[] = [];
+      for (let i = 0; i < columns; i++) row.push(yield vcall(cursor, "getString", "(I)Ljava/lang/String;", i));
+      rows.push(row);
+    }
+  } finally { yield vcall(cursor, "close", "()V"); }
+  return rows;
+});
+const exec = driven(function* (sql: string, args: unknown[]): Gen {
+  yield vcall(yield* database(), "execSQL", "(Ljava/lang/String;[Ljava/lang/Object;)V", sql, jarray(args, "Ljava/lang/Object;"));
+});
+rt.register({
+  name: "webdroid/WebViewDatabase", ctor: class extends JObj {}, sup: "android/webkit/WebViewDatabase",
+  methods: {
+    "hasHttpAuthUsernamePassword()Z": driven(function* (): Gen { return (yield query("SELECT _id FROM httpauth LIMIT 1", [])).length ? 1 : 0; }),
+    "clearHttpAuthUsernamePassword()V": () => exec("DELETE FROM httpauth", []),
+    "setHttpAuthUsernamePassword(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
+      (host: string | null, realm: string | null, username: string | null, password: string | null) =>
+        host === null || realm === null ? undefined : exec("INSERT INTO httpauth (host, realm, username, password) VALUES (?, ?, ?, ?)", [host, realm, username, password]),
+    "getHttpAuthUsernamePassword(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;": driven(function* (host: string | null, realm: string | null): Gen {
+      if (host === null || realm === null) return null;
+      const [row] = yield query("SELECT username, password FROM httpauth WHERE host = ? AND realm = ?", [host, realm]);
+      return row ? jarray(row, "Ljava/lang/String;") : null;
+    }),
+    // deprecated: intentional no-ops in Chromium
+    "hasUsernamePassword()Z": () => 0,
+    "clearUsernamePassword()V": () => {},
+    "hasFormData()Z": () => 0,
+    "clearFormData()V": () => {},
+  },
+});

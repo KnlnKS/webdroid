@@ -213,18 +213,50 @@ send({kind: "script-ready"});
 /** a WebView frame's sandbox: its own (renderer) origin, and no navigation of the app's window */
 export const WEB_FRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
 
+/** a renderer origin's storage: its quota-managed usage (less this proxy's own worker), or what a
+ *  StorageOp deletes. Runs in a frame on that origin. */
+export async function storageOp(op: string): Promise<{ usage?: number; quota?: number }> {
+  if (op === "usage") {
+    // the browser keeps an emptied IndexedDB backing store, which the quota manager would delete
+    const { usage = 0, quota = 0, usageDetails: details = {} } = await navigator.storage.estimate() as StorageEstimate & { usageDetails?: Record<string, number> };
+    const emptied = (await indexedDB.databases()).length ? 0 : details.indexedDB ?? 0;
+    return { usage: Math.max(0, usage - (details.serviceWorkerRegistrations ?? 0) - emptied), quota };
+  }
+  const jobs: Promise<unknown>[] = [];
+  for (const { name } of await indexedDB.databases()) if (name) jobs.push(new Promise((done) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = request.onerror = request.onblocked = done;
+  }));
+  const root = await navigator.storage.getDirectory();
+  for await (const name of (root as unknown as { keys(): AsyncIterable<string> }).keys()) jobs.push(root.removeEntry(name, { recursive: true }).catch(() => {}));
+  if (op !== "origin") localStorage.clear();
+  if (op === "all") {
+    sessionStorage.clear();
+    for (const name of await caches.keys()) jobs.push(caches.delete(name));
+    for (const registration of await navigator.serviceWorker.getRegistrations()) jobs.push(registration.unregister());
+  }
+  await Promise.all(jobs);
+  return {};
+}
+
 export const WEB_FRAME = `<!doctype html><meta charset="utf-8"><script>(function(){
+const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
 // a frame of the app's own origin would hand its parent's document the app's storage
 try { if (top.location.href) return; } catch {}
-const id = new URL(location.href).searchParams.get("__wd_bridge");
-addEventListener("message", async event => {
-  if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
+const params = new URL(location.href).searchParams, id = params.get("__wd_bridge");
+// Only the app's realm drives this frame: the nearest ancestor of the top's origin. A page that
+// frames another renderer origin cannot load a document into it or clear its storage.
+const ancestors = location.ancestorOrigins, app = ancestors?.[ancestors.length - 1];
+let owner = parent;
+for (let i = 0; app && i < ancestors.length - 1 && ancestors[i] !== app; i++) owner = owner.parent;
+const post = data => owner.postMessage({bridge: id, ...data}, app ?? "*");
+const loaded = async event => {
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
-    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces,
-      cookies: event.data.cookies, clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
+    const context = {id, page: params.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, cookies: event.data.cookies,
+      clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: params.get("__wd_intercept") === "1"};
     // the document's own response may set cookies before it is written
-    addEventListener("message", event => { if (event.source === parent && event.data?.bridge === id && event.data.kind === "cookies") context.cookies = event.data.list; });
+    addEventListener("message", event => { if (event.source === owner && event.data?.bridge === id && event.data.kind === "cookies") context.cookies = event.data.list; });
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {
@@ -243,7 +275,7 @@ addEventListener("message", async event => {
     const final = response?.headers.get("x-wd-final-url") ?? event.data.final;
     // a redirect to another origin renders in that origin's partition
     if (response && final && /^https?:/.test(context.page) && new URL(final).origin !== new URL(context.page).origin) {
-      parent.postMessage({bridge: id, kind: "redirect", url: final, html: await response.text()}, "*");
+      post({kind: "redirect", url: final, html: await response.text()});
       return;
     }
     if (final) {
@@ -262,9 +294,19 @@ addEventListener("message", async event => {
     }
     window.__wdWebView = context;
     document.open(); document.write(html); document.close();
-  } catch { parent.postMessage({bridge: id, kind: "loaded", error: "WebView document transport failed"}, "*"); }
-}, {once: true});
-parent.postMessage({bridge: id, kind: "ready"}, "*");
+  } catch { post({kind: "loaded", error: "WebView document transport failed"}); }
+};
+let started = false;
+addEventListener("message", event => {
+  if (!event.isTrusted || event.source !== owner || app && event.origin !== app || event.data?.bridge !== id || !event.ports[0] || started) return;
+  if (event.data.kind === "load") { started = true; void loaded(event); }
+  else if (event.data.kind === "storage") {
+    started = true;
+    const port = event.ports[0];
+    (${storageOp.toString()})(event.data.op).then(answer => port.postMessage(answer), () => port.postMessage({}));
+  }
+});
+post({kind: "ready"});
 })()</script>`;
 
 export const WEB_PROXY_WORKER = `

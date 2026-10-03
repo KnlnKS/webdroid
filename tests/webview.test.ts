@@ -420,6 +420,17 @@ describe("WebView isolation", () => {
         const proxied = document.createElement("iframe");
         proxied.src = "http://localhost:${server.port}/proxy?url=" + encodeURIComponent("https://upstream.example/");
         out.proxiedFrame = await answer(proxied);
+        // nor does another app's or site's renderer, framed by this page, take a document from it
+        const sibling = document.createElement("iframe");
+        sibling.src = "http://other.localhost:${server.port}/webview?__wd_bridge=" + id;
+        out.siblingFrame = await new Promise(resolve => {
+          addEventListener("message", event => { if (event.source === sibling.contentWindow) resolve(event.data.kind); });
+          sibling.onload = () => {
+            sibling.contentWindow.postMessage({bridge: id, kind: "load", doc: "<script>parent.postMessage({kind: 'forged'}, '*')<\\/script>"}, "*", [new MessageChannel().port2]);
+            setTimeout(() => resolve("silent"), 300);
+          };
+          document.body.append(sibling);
+        });
         out.topNavigation = attempt(() => { top.location.href = "about:blank"; return "navigated"; });
         parent.postMessage({bridge: id, kind: "probe", ...out}, "*");
       })()</script>`;
@@ -437,7 +448,45 @@ describe("WebView isolation", () => {
         document.body.append(frame);
         return result;
       }, { id, port: server.port, sandbox: WEB_FRAME_SANDBOX, probe })).toEqual({ storage: null, cookie: "", parentStorage: "SecurityError", topDocument: "SecurityError",
-        appFrame: "silent", proxiedFrame: "SecurityError", topNavigation: "SecurityError", location: `http://localhost:${server.port}/`, bridge: undefined, kind: undefined });
+        appFrame: "silent", proxiedFrame: "SecurityError", siblingFrame: "silent", topNavigation: "SecurityError", location: `http://localhost:${server.port}/`, bridge: undefined, kind: undefined });
+    } finally { await page.close(); await server.stop(true); }
+  });
+
+  test("a renderer origin's storage frame reports and deletes what the origin holds", async () => {
+    const server = Bun.serve({ port: 0, fetch: (req) => {
+      const path = new URL(req.url).pathname;
+      if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
+      return new Response(path === "/webview" ? WEB_FRAME : "<!doctype html><body>app", { headers: { "content-type": "text/html" } });
+    } });
+    const page = await browser.newPage();
+    try {
+      await page.goto(`http://localhost:${server.port}/`);
+      expect(await page.evaluate(async ({ origin, sandbox }) => {
+        // the app drives a frame on the origin: a document it loads, or a storage op
+        const drive = (message: Record<string, unknown>) => new Promise<unknown>((resolve) => {
+          const id = crypto.randomUUID(), frame = document.createElement("iframe"), channel = new MessageChannel();
+          frame.setAttribute("sandbox", sandbox);
+          frame.src = `${origin}/webview?__wd_bridge=${id}`;
+          channel.port1.onmessage = ({ data }) => { frame.remove(); resolve(data); };
+          addEventListener("message", (event) => {
+            if (event.source !== frame.contentWindow || event.data?.bridge !== id) return;
+            if (event.data.kind === "ready") frame.contentWindow!.postMessage({ bridge: id, ...message }, origin, [channel.port2]);
+            else if (event.data.kind === "found") { frame.remove(); resolve(event.data.found); }
+          });
+          document.body.append(frame);
+        });
+        const read = (write: boolean) => drive({ kind: "load", doc: `<script>(async () => {
+          if (${write}) { localStorage.setItem("k", "v"); await new Promise(r => { const q = indexedDB.open("db"); q.onupgradeneeded = () => q.result.createObjectStore("s");
+            q.onsuccess = () => { const t = q.result.transaction("s", "readwrite"); t.objectStore("s").put(new Uint8Array(1 << 16), 1); t.oncomplete = () => { q.result.close(); r(); }; }; }); }
+          parent.postMessage({bridge: new URL(location.href).searchParams.get("__wd_bridge"), kind: "found",
+            found: [localStorage.getItem("k"), (await indexedDB.databases()).map(d => d.name)]}, "*");
+        })()</script>` });
+        const written = await read(true), usage = (await drive({ kind: "storage", op: "usage" }) as { usage: number }).usage > 0;
+        await drive({ kind: "storage", op: "origin" });
+        const afterOrigin = await read(false);
+        await drive({ kind: "storage", op: "data" });
+        return [written, usage, afterOrigin, await read(false), await drive({ kind: "storage", op: "usage" })];
+      }, { origin: `http://store.localhost:${server.port}`, sandbox: WEB_FRAME_SANDBOX })).toEqual([["v", ["db"]], true, ["v", []], [null, []], { usage: 0, quota: expect.any(Number) }]);
     } finally { await page.close(); await server.stop(true); }
   });
 });

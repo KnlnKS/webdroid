@@ -21,6 +21,7 @@ import { mkUri } from "./net";
 import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
+import { webRenderer } from "./webstorage";
 import { localAsset } from "../shell/localassets";
 import { WEB_FRAME_SANDBOX, WEB_INJECT, webViewBrands, type ClientHints } from "../shell/webinject";
 import type { WebCookies } from "../shell/webcookies";
@@ -467,7 +468,7 @@ export class WebViewChromium extends JObj {
         return jmethod(this.client, method) !== jmethod(base, method);
       });
       const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
-        intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, (appHost?.pkg ?? "") + " " + webOrigin(e));
+        intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, webRenderer(appHost?.pkg ?? "", webOrigin(e)));
       bridges.set(remote.id, ref);
       void webCookies(appHost?.pkg ?? "").then((jar) => {
         if (this.hold.remote === remote) this.hold.unwatch = jar.watch(() => ref.deref()?.sendCookies(jar));
@@ -839,9 +840,9 @@ rt.register({
     "getStatics()Landroid/webkit/WebViewFactoryProvider$Statics;": function (this: Factory) { return this.statics; },
     "getCookieManager()Landroid/webkit/CookieManager;": () => cookieManager(),
     "getWebViewDatabase(Landroid/content/Context;)Landroid/webkit/WebViewDatabase;": function (this: Factory) { return this.database ??= inst("webdroid/WebViewDatabase"); },
-    // the bases answer no origins: nothing here keeps per-origin grants or quotas
+    // the base answers no origins: nothing here keeps per-origin geolocation grants
     "getGeolocationPermissions()Landroid/webkit/GeolocationPermissions;": driven(function* (this: Factory): Gen { return this.geolocation ??= yield newObj("android/webkit/GeolocationPermissions"); }),
-    "getWebStorage()Landroid/webkit/WebStorage;": driven(function* (this: Factory): Gen { return this.storage ??= yield newObj("android/webkit/WebStorage"); }),
+    "getWebStorage()Landroid/webkit/WebStorage;": function (this: Factory) { return this.storage ??= inst("webdroid/WebStorage"); },
     "getServiceWorkerController()Landroid/webkit/ServiceWorkerController;": function (this: Factory) { return this.serviceWorker ??= inst("webdroid/ServiceWorkerController"); },
     "getTracingController()Landroid/webkit/TracingController;": function (this: Factory) { return this.tracing ??= inst("webdroid/TracingController"); },
     "getWebViewClassLoader()Ljava/lang/ClassLoader;": () => vcall(rt.classFor(FACTORY), "getClassLoader", "()Ljava/lang/ClassLoader;"),
@@ -860,16 +861,6 @@ rt.register({
     "initSafeBrowsing(Landroid/content/Context;Landroid/webkit/ValueCallback;)V": (_c: unknown, cb: JObj | null) => {
       if (cb) void onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", boxBool(false)));
     },
-  },
-});
-rt.register({
-  name: "webdroid/WebViewDatabase", ctor: class extends JObj {}, sup: "android/webkit/WebViewDatabase",
-  methods: {
-    // the frames keep no form data or credentials for the app to see
-    ...stubs(0, "hasFormData()Z", "hasHttpAuthUsernamePassword()Z", "hasUsernamePassword()Z"),
-    ...stubs(undefined, "clearFormData()V", "clearHttpAuthUsernamePassword()V", "clearUsernamePassword()V",
-      "setHttpAuthUsernamePassword(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
-    ...stubs(null, "getHttpAuthUsernamePassword(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;"),
   },
 });
 rt.register({
