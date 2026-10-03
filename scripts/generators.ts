@@ -3,7 +3,8 @@
 // that drives it. A callback handed to callUncaught, after or onMain has its result consumed as a
 // value, so a generator it returns runs nothing either. Also a pending Java result memoised with
 // `??=`, whose suspension every awaiting frame would share. Whether Java is entered from a turn a
-// thread owns is checked at run time (jlang's strictThreadOwnership).
+// thread owns is checked at run time (jlang's strictThreadOwnership). And per-process ABI state
+// read as a module loads.
 //   bun scripts/generators.ts
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -83,7 +84,29 @@ export function sharedSuspensions(): string[] {
   return out;
 }
 
+/** The process ABI's per-process state (host.ts's pointer width, syscall.ts's struct layouts, abi.ts's
+ *  memory size) read where a module loads: modules load before an arm64 process sets it, so the
+ *  value is the ARM32 default (msghdr's offsets once were). Only direct reads are seen. */
+const ABI_STATE = new Set(["PTR", "KLAYOUT", "MEM_SIZE"]);
+export function loadTimeAbiReads(): string[] {
+  const out: string[] = [];
+  for (const [file, source] of sources()) {
+    if (!/\b(PTR|KLAYOUT|MEM_SIZE)\b/.test(source.text)) continue;
+    const visit = (n: ts.Node) => {
+      if (ts.isFunctionLike(n) || ts.isImportDeclaration(n) || ts.isTypeNode(n) ||
+        ts.isPropertyDeclaration(n) && !n.modifiers?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) return;
+      if (ts.isIdentifier(n) && ABI_STATE.has(n.text) && !(ts.isVariableDeclaration(n.parent) && n.parent.name === n) &&
+        !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && !ts.isExportSpecifier(n.parent))
+        out.push(`${file}:${source.getLineAndCharacterOfPosition(n.getStart()).line + 1}: ${n.text}`);
+      ts.forEachChild(n, visit);
+    };
+    visit(source);
+  }
+  return out;
+}
+
 if (import.meta.main) {
   for (const line of sharedSuspensions()) console.log("shared suspension: " + line);
   for (const line of undelegatedGenerators()) console.log("not run: " + line);
+  for (const line of loadTimeAbiReads()) console.log("ABI read at load: " + line);
 }

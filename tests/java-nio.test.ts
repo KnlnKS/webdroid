@@ -50,6 +50,28 @@ describe("mapped-files", () => {
     const ro = await vcall(reader, "getChannel", "()Ljava/nio/channels/FileChannel;");
     await expect(vcallAsync(ro, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 0n, 4n)).rejects.toThrow();
   });
+  test("gathering writes and scattering reads move direct buffers through IOVecWrapper's iovecs", async () => {
+    const raf = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-vector.bin", "rw");
+    const channel = await vcall(raf, "getChannel", "()Ljava/nio/channels/FileChannel;");
+    const direct = async (bytes: number[]) => {
+      const b = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", bytes.length);
+      for (const x of bytes) await vcall(b, "put", "(B)Ljava/nio/ByteBuffer;", x);
+      await vcall(b, "flip", "()Ljava/nio/Buffer;");
+      return b;
+    };
+    const out = rt.oa(2, "Ljava/nio/ByteBuffer;");
+    out[0] = await direct([1, 2, 3]); out[1] = await direct([4, 5]);
+    expect(await vcall(channel, "write", "([Ljava/nio/ByteBuffer;)J", out)).toBe(5n);
+    expect([...vfs.read("/tmp/nio-vector.bin")!]).toEqual([1, 2, 3, 4, 5]);
+    await vcall(channel, "position", "(J)Ljava/nio/channels/FileChannel;", 0n);
+    const into = rt.oa(2, "Ljava/nio/ByteBuffer;");
+    into[0] = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 2);
+    into[1] = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 3);
+    expect(await vcall(channel, "read", "([Ljava/nio/ByteBuffer;)J", into)).toBe(5n);
+    expect([await vcall(into[0], "get", "(I)B", 1), await vcall(into[1], "get", "(I)B", 2)]).toEqual([2, 5]);
+    await vcall(raf, "close", "()V");
+    vfs.delete("/tmp/nio-vector.bin");
+  });
   test("READ_ONLY mappings of a mounted file load pages on first touch and outlive the descriptor", async () => {
     const size = 200_000, bytes = Uint8Array.from({ length: size }, (_, i) => (i * 7 + (i >> 8)) & 255), reads: number[] = [];
     vfs.mount("/tmp/nio-paged.bin", { size, read: async (at, n) => { reads.push(at); return bytes.slice(at, at + n); } });

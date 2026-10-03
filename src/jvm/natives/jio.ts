@@ -7,6 +7,7 @@ import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
 import { isExternal, mapExternal, memoryAt, physical, unmapExternal } from "./jmemory";
+import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
 import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/fs";
@@ -109,6 +110,12 @@ function readInto(address: bigint, len: number, read: (target: Uint8Array) => nu
   const scratch = new Uint8Array(len);
   return after(read(scratch), (n) => { if (n > 0) mem.write(physical(address), scratch.subarray(0, n)); return ioStatus(n, true); });
 }
+/** iovec i of an IOVecWrapper array: its base, a native address, and its length */
+function iovec(iov: bigint, i: number): [bigint, number] {
+  const width = addressSize(), at = iov + BigInt(i * 2 * width);
+  const word = (a: bigint) => width === 8 ? BigInt.asUintN(64, mem.ld64(physical(a))) : BigInt(mem.ld32(physical(a)) >>> 0);
+  return [word(at), Number(word(at + BigInt(width)))];
+}
 /** a pread/pwrite offset: past what a file here can reach, EINVAL as the kernel reports an off_t overflow */
 function offset(position: bigint, len: number): number {
   if (position + BigInt(len) > BigInt(Number.MAX_SAFE_INTEGER)) lastError(-E.INVAL, null);
@@ -128,30 +135,30 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
     after(memoryAt(address, len), (bytes) => ioStatus(javaWriteFd(openFd(d), bytes), false)),
   "pwrite0(Ljava/io/FileDescriptor;JIJ)I": (d: JObj, address: bigint, len: number, position: bigint) =>
     after(memoryAt(address, len), (bytes) => ioStatus(javaPwriteFd(openFd(d), bytes, offset(position, len)), false)),
-  // readv/writev over IOVecWrapper's iovecs: {base, len}, each as wide as Unsafe.addressSize (4)
+  // readv/writev over IOVecWrapper's iovecs: {base, len}, each as wide as Unsafe.addressSize
   "readv0(Ljava/io/FileDescriptor;JI)J": driven(function* (d: JObj, iov: bigint, count: number): Gen {
     let total = 0;
     for (let i = 0; i < count; i++) {
-      const at = physical(iov) + i * 8, base = mem.ld32(at) >>> 0, len = mem.ld32(at + 4) >>> 0, scratch = new Uint8Array(len);
+      const [base, len] = iovec(iov, i), scratch = new Uint8Array(len);
       const n = yield* awaited(javaReadFd(openFd(d), scratch));
       if (n < 0) { if (total) break; return BigInt(ioStatus(n, true)); }
-      mem.write(base, scratch.subarray(0, n));
+      mem.write(physical(base), scratch.subarray(0, n));
       total += n;
       if (n < len) break;
     }
     return BigInt(total || IOS_EOF);
   }),
-  "writev0(Ljava/io/FileDescriptor;JI)J": (d: JObj, iov: bigint, count: number) => {
+  "writev0(Ljava/io/FileDescriptor;JI)J": driven(function* (d: JObj, iov: bigint, count: number): Gen {
     let total = 0;
     for (let i = 0; i < count; i++) {
-      const at = physical(iov) + i * 8, base = mem.ld32(at) >>> 0, len = mem.ld32(at + 4) >>> 0;
-      const n = javaWriteFd(openFd(d), mem.bytes(base, len));
+      const [base, len] = iovec(iov, i);
+      const n = javaWriteFd(openFd(d), yield* awaited(memoryAt(base, len)));
       if (n < 0) { if (total) break; return BigInt(ioStatus(n, false)); }
       total += n;
       if (n < len) break;
     }
     return BigInt(total);
-  },
+  }),
   "force0(Ljava/io/FileDescriptor;Z)I": (d: JObj) => {
     lastError(javaSyncFd(openFd(d)), "Force failed");
     return after(vfs.flush(), () => 0);

@@ -3,6 +3,7 @@ import { PRIM_ARRAYS, type PrimElem, floatToIntBits, intBitsToFloat, doubleToLon
 import { classDesc, type JClass } from "./jlang";
 import { mem } from "../../native/mem";
 import { physical } from "./jmemory";
+import { addressSize } from "./jvmruntime";
 
 // Java threads share one cooperative realm, so these non-suspending Unsafe operations
 // need no host synchronization.
@@ -21,7 +22,7 @@ const sunMethods: NativeSpec["methods"] = {
   "putByte(JB)V": (address: bigint, value: number) => mem.st8(physical(address), value),
   "setMemory(JJB)V": (address: bigint, bytes: bigint, value: number) => mem.memset(physical(address), value, Number(bytes)),
   // NativeObject's struct accessors (sun.nio.ch's iovecs), with pointers as wide as the guest's
-  "addressSize()I": () => 4,
+  "addressSize()I": addressSize,
   "pageSize()I": () => 4096,
   "getByte(J)B": (a: bigint) => mem.ld8s(physical(a)),
   "getShort(J)S": (a: bigint) => mem.ld16s(physical(a)),
@@ -85,7 +86,7 @@ rt.register({ name: "sun/misc/Unsafe", ctor: JUnsafe, statics: { theUnsafe: unsa
 {
   const O = "Ljava/lang/Object;", fence = () => {};
   const jdk: NonNullable<NativeSpec["methods"]> = {
-    "addressSize()I": () => 4, "pageSize()I": () => 4096,
+    "addressSize()I": addressSize, "pageSize()I": () => 4096,
     "fullFence()V": fence, "loadFence()V": fence, "storeFence()V": fence, "loadLoadFence()V": fence, "storeStoreFence()V": fence,
     "getAndBitwiseAndInt(Ljava/lang/Object;JI)I": intRmw((a, b) => a & b),
     "getAndBitwiseOrInt(Ljava/lang/Object;JI)I": intRmw((a, b) => a | b),

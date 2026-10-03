@@ -44,6 +44,8 @@ export function fixProcessBitness(names: Iterable<string>): void {
 }
 /** whether the process runs arm64 code */
 export const is64BitProcess = (): boolean => wide ?? !is32Bit(rt.classpathNames());
+/** Unsafe.addressSize: a native pointer's width in this process, which IOVecWrapper lays its iovecs out by */
+export const addressSize = (): number => is64BitProcess() ? 8 : 4;
 /** the app's targetSdkVersion as ActivityThread binds it; ART's default is the development SDK */
 let targetSdk = 10000;
 export const setTargetSdkVersion = (version: number) => { targetSdk = version; };
