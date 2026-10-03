@@ -6,7 +6,7 @@ import { loadSkia } from "./android/skia";
 import { setProcessIdentity } from "./android/os";
 import { recordVsync } from "./android/vsync";
 import { attachIme, drainInput } from "./shell/input";
-import { setWebLayer } from "./android/webkit";
+import { setWebLayer } from "./android/webframes";
 import { apkCertificates, packageArchive } from "./android/packagearchive";
 import { zipTree } from "./jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";

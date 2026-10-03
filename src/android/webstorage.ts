@@ -9,7 +9,7 @@ import { newObj, vcall, scall } from "../jvm/natives/jentry";
 import { boxLong } from "../jvm/natives/jbox";
 import { installTime } from "./packages";
 import { onMain } from "./mainloop";
-import { appHost } from "./apphost";
+import { runningApp } from "./apphost";
 import { rendererOrigin, rendererStorage } from "../shell/webrenderer";
 import type { StorageOp } from "../shell/webpage/protocol";
 import type { PackageState } from "../shell/packagedata";
@@ -54,7 +54,7 @@ export const webData: PackageState = {
 };
 
 // ── WebStorage, as AwQuotaManagerBridge answers it over the noted origins
-const pkg = () => appHost?.pkg ?? "";
+const pkg = () => runningApp().pkg;
 /** a noted web origin matching the origin string an app passes (Chromium takes it as a URL) */
 const noted = (origin: string): string | undefined => {
   const parsed = URL.parse(origin)?.origin;

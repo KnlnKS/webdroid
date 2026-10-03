@@ -22,7 +22,7 @@ import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT
 import { configureJvmCoverage } from "./jvm/coverage";
 import { onMain } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
-import { setWebLayer, webViewInfo } from "./android/webkit";
+import { setWebLayer, webViewInfo } from "./android/webframes";
 import { packagesWithData, removePackageData } from "./shell/packagedata";
 import { clearUserData, deletePackage } from "./android/appdata";
 import { jitStats } from "./native/core";
