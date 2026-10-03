@@ -19,6 +19,7 @@ import { vfs, apkPath } from "../shell/vfs";
 import { systemProviders, systemProviderInfo$ } from "./systemproviders";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { SHARED_LIBRARIES } from "../jvm/bootclasspath";
+import { once } from "../jvm/suspend";
 import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from "./intent";
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
@@ -195,19 +196,17 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
 }
 export const longVersionCode = (root: XmlNode) => BigInt((attr(root, "versionCode")?.data ?? 0) >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
 
-const appInfos = new WeakMap<PackageRecord, Map<number, JObj | Promise<JObj>>>();
-/** the package's ApplicationInfo for these flags; equal answers share one, which each caller gets a copy of */
+const appInfos = new WeakMap<PackageRecord, Map<number, () => JObj | Promise<JObj>>>();
+/** the package's ApplicationInfo for these flags; equal answers share one, which each caller gets a
+ *  copy of. A build in flight is shared through `once`: its pending drive is a suspension that
+ *  another caller's frames would join, resuming inside the first caller's stack. */
 function applicationInfoOf(record: PackageRecord, flags: number): JObj | Promise<JObj> {
   const key = flags & (GET_META_DATA | GET_SHARED_LIBRARY_FILES);
   let cache = appInfos.get(record);
   if (!cache) appInfos.set(record, cache = new Map());
   let info = cache.get(key);
-  if (!info) {
-    info = rt.drive(buildApplicationInfo$(record, key));
-    cache.set(key, info);
-    if (info instanceof Promise) info.then((made) => cache.set(key, made), () => cache.delete(key));
-  }
-  return info;
+  if (!info) cache.set(key, info = once(() => rt.drive(buildApplicationInfo$(record, key))));
+  return info();
 }
 function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
   return copy(yield* awaited(applicationInfoOf(record, flags)));
