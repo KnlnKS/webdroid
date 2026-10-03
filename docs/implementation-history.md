@@ -2069,6 +2069,44 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     an Attr node's value, frames adopted from a DOMParser document, document.write chunks that split
     a tag. A held frame shows one about:blank load event before its routed one. The dev server
     injects the page script into proxied pages, so it must restart after webinject changes.
+- 2026-10-03, WebView subframes reached however the page navigates them (branch `knlnks/open-subframes`):
+  - Reference AVD probe (WebView test APK, page on the host): data: and blob: subframes reach
+    shouldOverrideUrlLoading (isForMainFrame false, no gesture); data: and custom schemes then reach
+    shouldInterceptRequest (blob: does not), and its response loads (data: origin null, myapp://x
+    origin `myapp://`); unanswered, data: loads and a custom scheme gets onReceivedError(-10) and an
+    error page with a load event. A revoked blob: URL still loads. Named targets (link, window.open)
+    and a parent's or child's location change navigate the frame, with the client asked as for src.
+    Every frame fires one load event (a frame without src: its about:blank one).
+  - Here a routed frame fired three: its initial document's (held), its renderer bootstrap's
+    (WEB_FRAME's own document before document.write) and the page's. The first is stopped while the
+    app answers; the bootstrap posts `{wdFrame: "bootstrap"}` to its parent, which stops that frame's
+    next load (message before load in 100/100 OOPIF trials; the written page's own message arrives
+    after its load, so it cannot announce itself). A streamed, never-ending bootstrap response also
+    has one load but holds an HTTP/1.1 connection per frame: rejected.
+  - Held before navigation: static srcdoc attributes (tokenizer decodes, holds, re-encodes), Attr
+    nodes (value/nodeValue/textContent on Attr.prototype; setAttributeNode(NS), setNamedItem(NS) via
+    frame `attributes`), DOMParser/parseHTMLUnsafe/XHR documents (frames renamed before adoption;
+    frame getAttribute/src read the page's URL), document.write chunks (open tag, comment or raw-text
+    end carried to the next write, flushed at a microtask or close). A hooked realm routes its own
+    cancelable navigate events, targeted links and forms (`_self`, `_parent`, names found through
+    same-origin documents) and window.open(url, name); the main document's link and form handlers
+    use the same lookup. A same-origin routed page marks the app's navigation of it
+    (`Symbol.for("wd.routed")`) so its own navigate handler does not re-route the answer. Parsed
+    frames are visited synchronously, so a blob: is fetched before the page can revoke it.
+  - Measured (probe, data:/blob: frame, src set to load, 41 interleaved runs, twice): data: 7.2/7.7 ms
+    native vs 8.1/9.0 ms asked; blob: 8.2/4.3 vs 8.2/3.8 ms.
+  - Verified (4406): probe callbacks and load counts match the AVD for data, blob, custom scheme,
+    http, named and child scenarios; flappybird 3/3 with no browser errors (AdMob gmsg still reach
+    the SDK); Markor view mode routes three iframes plus one in a static srcdoc and a `target` link
+    loads Wikipedia into its frame; Harmonic's tej.as article and FitNotes' change log show only
+    base errors (Partytown dispatching to a cross-origin `top`, a Sentry 429).
+  - Limits: a navigation of a cross-origin frame through its WindowProxy by another origin
+    (`frames[0].location = url`), or of an initial or document.open()ed about:blank frame by its own
+    location setter, is neither observable before (no navigate event there; Location is
+    unforgeable) nor after (the violation reports only the origin): it still logs a violation. An
+    opaque frame (sandboxed srcdoc, data:) navigating itself likewise. A static srcdoc document's
+    own frames fire their blank load before its realm is watched. data:/blob: frames get no
+    JavaScript interfaces, and an intercepted document reads its renderer URL as location.
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator
