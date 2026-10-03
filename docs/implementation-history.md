@@ -1915,6 +1915,42 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     and model/platformVersion from Build; the renderer's worker sends the default Sec-CH-UA,
     -Mobile and -Platform to secure origins. Architecture and bitness answer empty, as Chrome on
     Android does; high-entropy hints are not sent as headers (no Accept-CH bookkeeping).
+- 2026-10-02, every WebView page on its own renderer origin (branch `knlnks/open-webviso`):
+  - A page without interfaces or interception rendered same-origin with the emulator (srcdoc,
+    /proxy?frame=1 and /asset frames). FitNotes' change log (loadDataWithBaseURL) read the app
+    page's localStorage, cookies, IndexedDB names and `top.wd`; its contentWidth read of a null
+    documentElement then threw in View.measure and the dialog never showed. Every load now takes
+    the renderer path, on `<sha256(package, web origin)>` substituted into a `*` label of the
+    renderer origin: `*.localhost` on the dev server (Chromium resolves it to loopback, and each
+    name is its own site), a wildcard WEBVIEW_ORIGIN when deployed. A fixed WEBVIEW_ORIGIN (the
+    current Pages deployment) still shares one origin's storage among apps and sites. The web
+    origin is the URL's, the base URL's for loadDataWithBaseURL, `file://` for files, and one
+    partition per app for opaque documents (Chromium gives a data: document a unique origin
+    without storage; here an app's opaque documents share one). A main document redirected to another origin is
+    handed to a frame on that origin's renderer without a second fetch.
+  - Escapes closed: the frame is sandboxed without top navigation; WEB_FRAME refuses to run when
+    its top is readable (a frame of the app's own origin, which a page could otherwise drive
+    with its own `load` message); /proxy and /asset documents loaded as frames get
+    `CSP: sandbox` (an opaque origin). tests/webview.test.ts serves the frame from a Bun server
+    on `localhost` and `*.localhost` and fails if either guard is removed.
+  - A hidden frame was display:none, so a wrap_content WebView measured a 0 content height.
+    Frames now hide with visibility, take the measured width before they show, and report
+    content size changes; a change requests layout only when the measure used that dimension
+    (AwLayoutSizer). FitNotes' change log and Markor's view mode render, with and without site
+    isolation.
+  - Measured (headless Playwright, Harmonic's WebView with its client replaced by the default,
+    https://example.com/, 7 warm loads, median): the old same-origin path loaded (iframe load) in
+    33-36 ms with first contentful paint at 88-112 ms; the renderer path reports loaded (the
+    document's load) at 63-79 ms and paints at 54-69 ms. The first load on a new origin adds the
+    service worker's install (131-548 ms first loads). rAF in the page runs at 50-61/s under
+    `--site-per-process` against 120/s same-process; the old renderer path (Harmonic's
+    intercepting client) measures the same 58-61/s, and without site isolation the new path
+    runs at 120/s, so this is the out-of-process frame's rate in headless Chromium. Markor's
+    view mode: loaded 195 ms, paint 215 ms (base 222/722 ms, one run each).
+  - Open: WebStorage and WebViewDatabase answer no origins and clear nothing, and neither app
+    data clearing nor uninstall removes an app's renderer storage (it lives in the browser's
+    partitions, keyed by a hash that a reinstall reproduces). Subframes of a WebView page load
+    straight from their sites, not through the app's cookie jar.
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator

@@ -631,6 +631,11 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   throw: no same-thread answer exists); WebView reports Android WebView's client hints. YouTube's
   `removeSyncBarrier` race did not reproduce in 15 throttled runs; no other chain touches a
   traversal (history). Open: interface results without site isolation.
+- **Done (knlnks/open-webviso):** every WebView page renders on a renderer origin of its app and
+  web origin (`*.localhost`, or a wildcard WEBVIEW_ORIGIN), never the emulator's: no access to its
+  storage, cookies or window. A hidden page keeps its layout, so wrap_content WebViews size
+  (history, "every WebView page on its own renderer origin"). Open: WebStorage/WebViewDatabase
+  clearing and per-app removal of renderer storage; a fixed deployed WEBVIEW_ORIGIN shares one.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity
   (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
   capabilities stay this device's. Apps get the NotoColorEmoji update Google Play installed on the
