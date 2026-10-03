@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, callUncaught, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, type JClassLoader, curThread, JThread, park, detached } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt, type ClassInfo } from "../src/jvm/runtime";
 import { inStrand, newStrand } from "../src/jvm/suspend";
@@ -211,7 +211,7 @@ describe("class-init", () => {
     const info = rt.link("test/InterleavedInit");
     // the chain that forks the <clinit> without waiting for it runs on, as does another job
     let first: unknown;
-    const forker = callOn(mainThread, () => { callUncaught(() => (first = rt.initClass(info))); return rt.initClass(info); });
+    const forker = callOn(mainThread, () => { detached(() => (first = rt.initClass(info))); return rt.initClass(info); });
     const second = callOn(mainThread, () => rt.initClass(info));
     expect(forker).toBeInstanceOf(Promise);
     expect(second).toBeInstanceOf(Promise);
@@ -523,7 +523,7 @@ describe("uncaught-exceptions", () => {
       expect(seen.map(([tag]) => tag)).toEqual(["pre", "own"]);
       // a host-entered call no Java frame waits on escapes the thread that made it
       seen.length = 0;
-      callUncaught(() => { throw failure; });
+      detached(() => { throw failure; });
       await Bun.sleep(0);
       expect(seen).toEqual([["pre", mainThread, failure], ["default", mainThread, failure]]);
     } finally {

@@ -1,6 +1,6 @@
 // Calls of a driven-style generator (one declared to return Gen) whose generator nothing runs: one
 // neither delegated to (yield*), driven (rt.drive), nor returned by a plain function to a caller
-// that drives it. A callback handed to callUncaught, after or onMain has its result consumed as a
+// that drives it. A callback handed to detached, after, onMain or postMain has its result consumed as a
 // value, so a generator it returns runs nothing either. Also a pending Java result kept in a cache,
 // whose suspension every awaiting frame would share, and a Java entry whose result is dropped. Whether Java is entered from a turn a thread owns is checked at run time (jlang's
 // strictThreadOwnership). And per-process ABI state read as a module loads.
@@ -11,7 +11,7 @@ import ts from "typescript";
 
 const root = resolve(import.meta.dir, "..");
 /** helpers that take a callback's result as a value, never running a generator it returns */
-const CONSUMERS = new Set(["callUncaught", "after", "onMain"]);
+const CONSUMERS = new Set(["detached", "after", "onMain", "postMain"]);
 /** driven-style generators every module imports, whose calls are checked in each file */
 const SHARED = ["awaited"];
 /** helpers that enter Java and may return a pending result */
@@ -124,7 +124,7 @@ export function loadTimeAbiReads(): string[] {
 }
 
 /** `void vcall(…)` or a bare `vcall(…);`: a Java entry nothing waits for, which, suspended, would
- *  go on as the running chain while that chain runs past it. callUncaught gives it a chain. */
+ *  go on as the running chain while that chain runs past it. detached gives it a chain. */
 export function discardedEntries(): string[] {
   const out: string[] = [];
   for (const [file, source] of sources()) {

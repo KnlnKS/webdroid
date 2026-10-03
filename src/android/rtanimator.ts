@@ -6,7 +6,7 @@
 // the frame's time and reports a finish to the Java listener.
 
 import { rt } from "../jvm/runtime";
-import { callUncaught, scall } from "../jvm/natives/jlang";
+import { scall, detached } from "../jvm/natives/jlang";
 import { deref, handle, ownedHandle, take } from "./handles";
 import { type NativePaint } from "./paint";
 import { NativeRenderNode, prop as canvasProperty } from "./rendernode";
@@ -168,7 +168,7 @@ class NodeAnimator extends RenderAnimator {
   protected onFinished(): void {
     const l = this.listener;
     this.listener = null;
-    if (l) callUncaught(() => scall("android/graphics/animation/RenderNodeAnimator", "callOnFinished", "(Landroid/graphics/animation/RenderNodeAnimator;)V", l));
+    if (l) detached(() => scall("android/graphics/animation/RenderNodeAnimator", "callOnFinished", "(Landroid/graphics/animation/RenderNodeAnimator;)V", l));
   }
 }
 const nodeAnimator = (h: bigint) => deref<NodeAnimator>(h);
@@ -314,7 +314,7 @@ class AnimatorSet extends RenderAnimator {
     const l = this.listener;
     if (!l) return;
     this.listener = null;
-    callUncaught(() => scall("android/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT", "callOnFinished",
+    detached(() => scall("android/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT", "callOnFinished",
       "(Landroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V", l.java, l.id));
   }
   /** sorted by total duration, so the one that ends last applies last */

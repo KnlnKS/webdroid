@@ -5,10 +5,10 @@
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
 import { once } from "../../jvm/suspend";
 import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, callUncaught, systemUncaught, scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
+import { after, scall, staticField, newObj, vcall, detached, logUncaught } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
-import { onMain } from "../mainloop";
+import { postMain } from "../mainloop";
 import { type ImeSession, serveInput, showInput, extractedInput, mirrorInput } from "../ime";
 import { setImeShown } from "./wm";
 
@@ -41,13 +41,13 @@ function startInput(window: JObj, info: JObj, connection: JObj, id: number): Ses
   };
   session = s;
   serveInput(s);
-  callUncaught(() => onMain(() => rt.drive(function* (): Gen<void> {
+  postMain(() => rt.drive(function* (): Gen<void> {
     const request = yield newObj("android/view/inputmethod/ExtractedTextRequest");
     const future = yield newObj("com/android/internal/infra/AndroidFuture");
     yield s.call("getExtractedText", "Landroid/view/inputmethod/ExtractedTextRequest;ILcom/android/internal/infra/AndroidFuture;", request, GET_EXTRACTED_TEXT_MONITOR, future);
     const extracted = yield vcall(future, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", null);
     if (extracted && session === s) yield extractedInput(s, extracted);
-  }())));
+  }()));
   return s;
 }
 function finishInput(): void {
@@ -64,7 +64,7 @@ function showSoftInput(visible: boolean): number {
   if (visible && shown) return RESULT_UNCHANGED_SHOWN;
   shown = visible;
   showInput(visible);
-  systemUncaught(() => setImeShown(visible));
+  detached(() => setImeShown(visible), logUncaught);
   return visible ? RESULT_SHOWN : RESULT_HIDDEN;
 }
 let shown = false;

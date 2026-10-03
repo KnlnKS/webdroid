@@ -2,7 +2,7 @@
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
 import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { systemUncaught, scall, vcall, after, newObj } from "../jvm/natives/jlang";
+import { scall, vcall, after, newObj, detached, logUncaught } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -10,7 +10,7 @@ import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
-import { binderUncaught, callingIdentity, newStub } from "./binder";
+import { callingIdentity, newStub, binderEscape } from "./binder";
 import { packages } from "./packages";
 import { checkUidPermission } from "./permissions";
 import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata";
@@ -30,7 +30,7 @@ function session(id: number): Session {
   return value;
 }
 function notify(name: string, desc: string, ...args: unknown[]): void {
-  for (const callback of callbacks) binderUncaught(() => vcall(callback, name, desc, ...args));
+  for (const callback of callbacks) detached(() => vcall(callback, name, desc, ...args), binderEscape());
 }
 function finish(s: Session, success: boolean): void {
   sessions.delete(s.id);
@@ -54,7 +54,7 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
   if (installed !== null) {
     const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
     const added: JIntent = yield newObj("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
-    systemUncaught(() => broadcastIntent(added, [], false));
+    detached(() => broadcastIntent(added, [], false), logUncaught);
     yield putExtra(result, "android.content.pm.extra.PACKAGE_NAME", installed, S);
     yield putExtra(result, "android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
   } else {
@@ -92,7 +92,7 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
     const s = unsealed(this);
     if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
     s.sealed = true;
-    systemUncaught(() => rt.drive(commit$(s, sender)));
+    detached(() => rt.drive(commit$(s, sender)), logUncaught);
   },
   "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(s, false); },
   "getInstallFlags()I": () => 0,
@@ -141,7 +141,7 @@ rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj
     const pkg: string = yield vcall(versioned, "getPackageName", `()${S}`), version: bigint = yield vcall(versioned, "getLongVersionCode", "()J");
     const observer: JObj = yield deleteObserver(pkg, sender);
     if (yield mayDeletePackages()) {
-      systemUncaught(() => after(deleteVersioned(pkg, version), (code) => vcall(observer, "onPackageDeleted", `(${S}I${S})V`, pkg, code, null)));
+      detached(() => after(deleteVersioned(pkg, version), (code) => vcall(observer, "onPackageDeleted", `(${S}I${S})V`, pkg, code, null)), logUncaught);
       return;
     }
     if (record.sdk.target >= 28 && (yield checkUidPermission("android.permission.REQUEST_DELETE_PACKAGES", uid)) !== 0)

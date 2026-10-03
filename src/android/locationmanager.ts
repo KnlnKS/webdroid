@@ -6,10 +6,10 @@
 // grant is not fudged here) and a caller without either sees no providers.
 import { awaited, JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { after, newObj, scall, vcall, logUncaught, callUncaught } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall, logUncaught } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import { bootTime, uptimeMillis } from "../guest-clock";
-import { onMain } from "./mainloop";
+import { onMain, postMain } from "./mainloop";
 import { hostStub } from "./binder";
 import { geocodeMethods } from "./geocoder";
 import { permissionGranted } from "./permissions";
@@ -100,15 +100,14 @@ function subscribe(key: unknown, provider: string, request: Request, on: {
   unsubscribe(key);
   const subscription: Subscription = { id: nextId++, active: true, timer: null };
   subscriptions.set(key, subscription);
-  const deliver = (job: () => unknown) => callUncaught(() => onMain(job));
-  const end = () => { if (subscription.active) { unsubscribe(key); if (on.expired) deliver(on.expired); } };
+  const end = () => { if (subscription.active) { unsubscribe(key); if (on.expired) postMain(on.expired); } };
   if (request.duration < 0x7fffffffn) subscription.timer = setTimeout(end, Number(request.duration));
   const start = uptimeMillis();
   let previous: LocationFix | null = null, remaining = request.maxUpdates, events = Promise.resolve();
   const receive = async (event: LocationEvent) => {
     if (!subscription.active) return;
     if (event.kind !== "fix") {
-      if (on.enabled && (event.kind === "enabled" || event.code === 1)) deliver(() => on.enabled!(event.kind === "enabled"));
+      if (on.enabled && (event.kind === "enabled" || event.code === 1)) postMain(() => on.enabled!(event.kind === "enabled"));
       return;
     }
     const fix = event.fix;
@@ -116,7 +115,7 @@ function subscribe(key: unknown, provider: string, request: Request, on: {
     if (previous && (fix.monotonic - previous.monotonic < Number(request.minInterval) || await distanceM(previous, fix) < request.distance)) return;
     previous = fix;
     if (--remaining === 0) unsubscribe(key);
-    deliver(() => on.location(fix));
+    postMain(() => on.location(fix));
   };
   locationTransport.subscribe(subscription.id, request.high, provider !== "passive" && request.interval !== PASSIVE_INTERVAL,
     (event) => { events = events.then(() => receive(event)).catch(logUncaught); });
@@ -174,7 +173,7 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
     }),
   [`unregisterLocationListener(${LISTENER})V`]: unsubscribe,
   [`requestListenerFlush(Ljava/lang/String;${LISTENER}I)V`]: (_provider: string, listener: JObj, code: number) =>
-    callUncaught(() => onMain(() => vcall(listener, "onFlushComplete", "(I)V", code))),
+    postMain(() => vcall(listener, "onFlushComplete", "(I)V", code)),
   // one location within the request's duration, or null once it passes
   "getCurrentLocation(Ljava/lang/String;Landroid/location/LocationRequest;Landroid/location/ILocationCallback;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/os/ICancellationSignal;":
     driven(function* (provider: string | null, request: JObj, callback: JObj, pkg: string | null) {

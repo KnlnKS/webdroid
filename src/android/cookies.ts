@@ -1,9 +1,9 @@
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { vcall, callUncaught } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import { boxBool } from "../jvm/natives/jbox";
 import type { WebCookies } from "../shell/webcookies";
 import { appHost } from "./apphost";
-import { onMain } from "./mainloop";
+import { postMain } from "./mainloop";
 
 const defaults = new Map<string, Promise<WebCookies>>();
 export let webCookies = (pkg: string): Promise<WebCookies> => {
@@ -16,7 +16,7 @@ export let webCookies = (pkg: string): Promise<WebCookies> => {
 export function useWebCookies(get: typeof webCookies) { webCookies = (pkg) => Promise.resolve(get(pkg)); }
 const store = () => webCookies(appHost?.pkg ?? "");
 const complete = (callback: unknown, value: boolean) => {
-  if (callback) callUncaught(() => onMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", boxBool(value))));
+  if (callback) postMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", boxBool(value)));
 };
 /** the WebViews whose pages may send third-party cookies */
 export const thirdPartyCookies = new WeakSet<JObj>();

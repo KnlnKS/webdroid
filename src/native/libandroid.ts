@@ -8,7 +8,7 @@ import { deref } from "./jni";
 import { surfaceTarget, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glsurface";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
-import { mainThread, reportUncaught } from "../jvm/natives/jlang";
+import { mainThread, dispatchUncaught } from "../jvm/natives/jlang";
 import { nativePoll } from "./net";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { nativeAssets } from "../android/res";
@@ -147,7 +147,7 @@ function pumpMainLooper(l: Looper): void {
   void (async () => {
     try {
       while (!l.cpu.finished && [...l.fds.values()].some((entry) => entry.callback)) await pollLooper(l.cpu, -1, 0n, 0n, 0n, true);
-    } catch (error) { reportUncaught(error); }
+    } catch (error) { void dispatchUncaught(mainThread, error); }
     finally { l.pumping = false; }
   })();
 }

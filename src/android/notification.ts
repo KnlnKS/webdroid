@@ -7,14 +7,14 @@
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
 import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, systemUncaught, stringHash } from "../jvm/natives/jlang";
+import { newObj, vcall, scall, stringHash, detached, logUncaught } from "../jvm/natives/jlang";
 import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 import { jarray } from "../jvm/abi";
 import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
-import { onMain } from "./mainloop";
+import { postMain } from "./mainloop";
 import { preferenceStore } from "./sharedprefs";
 import { packages } from "./packages";
 import { appHost } from "./apphost";
@@ -594,7 +594,7 @@ function* showToast(service: JObj, t: ToastRecord): Gen<void> {
     const view = yield scall("android/widget/ToastPresenter", "getTextToastView", "(Landroid/content/Context;Ljava/lang/CharSequence;)Landroid/view/View;", ctx, t.text);
     yield vcall(t.presenter, "show", `(Landroid/view/View;Landroid/os/IBinder;Landroid/os/IBinder;IIIIFF${T}Z)V`, view, t.token, windowToken, t.duration, gravity, 0, y, 0, 0, t.callback, 0);
   }
-  t.timer = setGuestTimeout(() => systemUncaught(() => onMain(() => rt.drive(hideToast(t)))), TOAST_DELAY[t.duration ? 1 : 0]);
+  t.timer = setGuestTimeout(() => postMain(() => rt.drive(hideToast(t)), logUncaught), TOAST_DELAY[t.duration ? 1 : 0]);
 }
 function* hideToast(t: ToastRecord): Gen<void> {
   const i = toastQueue.indexOf(t);
@@ -615,7 +615,7 @@ const serviceAccessGranted = driven(function* (component: JObj | null) {
 function enqueueToast(this: JObj, t: ToastRecord): number {
   toastService = this;
   toastQueue.push(t);
-  if (toastQueue.length === 1) systemUncaught(() => onMain(() => rt.drive(showToast(this, t))));
+  if (toastQueue.length === 1) postMain(() => rt.drive(showToast(this, t)), logUncaught);
   return 1;
 }
 
@@ -674,7 +674,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     }
     // the prompt shows over the activity in front, after this call returns: covering it pauses that
     // activity, whose main thread may be the caller
-    if (created && !had && foreground() && promptNeeded(pkg)) systemUncaught(() => showNotificationPrompt(pkg));
+    if (created && !had && foreground() && promptNeeded(pkg)) detached(() => showNotificationPrompt(pkg), logUncaught);
   }),
   "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
     driven(function* (callingPkg: string, userId: number, pkg: string, channelId: string | null) {

@@ -4,7 +4,7 @@
 // through the service's IJobService, and hear back through the IJobCallback its parameters carry.
 
 import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { systemUncaught, newObj, scall, vcall } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, detached, logUncaught } from "../jvm/natives/jlang";
 import { bindAsSystem } from "./server/activeservices";
 import { asSystem, hostStub, parceledList } from "./binder";
 import { batteryLow, netUp } from "./services";
@@ -40,7 +40,7 @@ const pending = (job: ScheduledJob) => namespaces.get(job.spec.namespace)?.get(j
 let nextBinding = 1;
 /** the scheduler's own work, as system_server's JobServiceContext does it: a job waits on its
  *  service's binding, which the app's main thread publishes */
-const asScheduler = (job: () => Gen<void>) => systemUncaught(() => asSystem(() => rt.drive(job())));
+const asScheduler = (job: () => Gen<void>) => detached(() => asSystem(() => rt.drive(job())), logUncaught);
 /** off the caller's stack, as JobServiceContext's handler messages are: a service reporting from
  *  inside a callback is not unbound under itself */
 const later = (job: () => Gen<void>) => { setTimeout(() => asScheduler(job), 0); };

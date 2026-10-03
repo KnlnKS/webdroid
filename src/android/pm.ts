@@ -7,7 +7,7 @@ import { awaited, JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/
 import { jarray, strArray, intBitsToFloat, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault } from "./os";
-import { vcall, after, newObj, systemUncaught } from "../jvm/natives/jlang";
+import { vcall, after, newObj, detached, logUncaught } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -710,11 +710,11 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   "getPackageInstaller()Landroid/content/pm/IPackageInstaller;": () => installerService(),
   // DELETE_PACKAGES deletes without asking; the observer hears the result once the package is gone
   [`deletePackageAsUser(${S}ILandroid/content/pm/IPackageDeleteObserver;II)V`]: (pkg: string, version: number, observer: JObj | null) =>
-    after(enforceDeletePackages(), () => systemUncaught(() => after(deleteVersioned(pkg, BigInt(version)), (code) => observer && oneway(observer, "packageDeleted", `(${S}I)V`, pkg, code)))),
+    after(enforceDeletePackages(), () => detached(() => after(deleteVersioned(pkg, BigInt(version)), (code) => observer && oneway(observer, "packageDeleted", `(${S}I)V`, pkg, code)), logUncaught)),
   [`deletePackageVersioned(Landroid/content/pm/VersionedPackage;Landroid/content/pm/IPackageDeleteObserver2;II)V`]: driven(function* deletePackageVersioned$(versioned: JObj, observer: JObj | null): Gen {
     yield enforceDeletePackages();
     const pkg: string = yield vcall(versioned, "getPackageName", `()${S}`), version: bigint = yield vcall(versioned, "getLongVersionCode", "()J");
-    systemUncaught(() => after(deleteVersioned(pkg, version), (code) => observer && oneway(observer, "onPackageDeleted", `(${S}I${S})V`, pkg, code, null)));
+    detached(() => after(deleteVersioned(pkg, version), (code) => observer && oneway(observer, "onPackageDeleted", `(${S}I${S})V`, pkg, code, null)), logUncaught);
   }),
   // installs need no user approval here, so a package asking for the permission may request them
   [`canRequestPackageInstalls(${S}I)Z`]: (pkg: string) =>

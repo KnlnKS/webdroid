@@ -5,7 +5,7 @@
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
 import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall, logUncaught, systemUncaught, after } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, logUncaught, after, detached } from "../jvm/natives/jlang";
 import { boxInt } from "../jvm/natives/jbox";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";
@@ -19,7 +19,7 @@ import { asSystem, hostStub } from "./binder";
 import { bindAsSystem } from "./server/activeservices";
 import { mkComponentName, newIntent } from "./intent";
 import { deliverBroadcast } from "./server/broadcastqueue";
-import { onMain } from "./mainloop";
+import { postMain } from "./mainloop";
 
 type Authenticator = { type: string; pkg: string; cls: string; label: number; icon: number; smallIcon: number; preferences: number; customTokens: boolean };
 /** the manifests' authenticator services, each described by its <account-authenticator> resource */
@@ -49,8 +49,8 @@ let accountStore = new AccountStore(), stopAccountUpdates = () => {};
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
 function accountsChanged(): void {
   if (!appHost) return;
-  for (const action of CHANGED) systemUncaught(() => onMain(() => after(newIntent(action),
-    (intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null))));
+  for (const action of CHANGED) postMain(() => after(newIntent(action),
+    (intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null)), logUncaught);
 }
 export function useAccountStore(store: AccountStore): () => void {
   stopAccountUpdates(); accountStore = store;
@@ -129,7 +129,7 @@ class JAccountSession extends JObj {
   /** the response to answer, and the session closed unless it waits on an activity */
   take(keepOpen: boolean): JObj | null {
     const response = this.response;
-    if (!keepOpen) { this.response = null; systemUncaught(this.unbind); }
+    if (!keepOpen) { this.response = null; detached(this.unbind, logUncaught); }
     return response;
   }
 }

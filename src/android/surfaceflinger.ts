@@ -5,7 +5,7 @@
 // display composes every visible layer of layer stack 0 into the page's frame at the end of the JS
 // turn that changed one.
 import { rt, type JObj, declaredField } from "../jvm/runtime";
-import { after, callUncaught, newObj, vcall } from "../jvm/natives/jlang";
+import { after, newObj, vcall, detached } from "../jvm/natives/jlang";
 import { asSystem } from "./binder";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel";
@@ -269,11 +269,11 @@ rt.registerJnis("android/view/SurfaceControl", {
     "nativeSetDesiredHdrHeadroom(JJF)V",
   ].map((sig) => [sig, () => {}])),
   "nativeAddTransactionCommittedListener(JLandroid/view/SurfaceControl$TransactionCommittedListener;)V": (t: bigint, listener: JObj) => {
-    tx(t).ops.push(() => queueMicrotask(() => callUncaught(() => asSystem(() => vcall(listener, "onTransactionCommitted", "()V")))));
+    tx(t).ops.push(() => queueMicrotask(() => detached(() => asSystem(() => vcall(listener, "onTransactionCommitted", "()V")))));
   },
   // composition is synchronous, so the present fence has signaled by the time the stats arrive
   "nativeAddTransactionCompletedListener(JLjava/util/function/Consumer;)V": (t: bigint, consumer: JObj) => {
-    tx(t).ops.push(() => queueMicrotask(() => callUncaught(() => asSystem(() => {
+    tx(t).ops.push(() => queueMicrotask(() => detached(() => asSystem(() => {
       const now = BigInt(Math.round(uptimeMillis() * 1e6));
       return after(newObj("android/view/SurfaceControl$TransactionStats", "(JJ)V", now, handle({ signaled: now, refs: 1 })),
         (stats) => vcall(consumer, "accept", "(Ljava/lang/Object;)V", stats));
@@ -347,7 +347,7 @@ export function glSurfaceOf(s: Surface): GlSurface | null {
   return q.gl ??= {
     present: null, frames: 0,
     get width() { return q.width; }, get height() { return q.height; },
-    post: (frame) => callUncaught(() => queueBuffer(s, frame)),
+    post: (frame) => detached(() => queueBuffer(s, frame)),
   };
 }
 

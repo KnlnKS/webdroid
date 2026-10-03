@@ -7,7 +7,8 @@
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
 import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
-import { curThread, mainThread, scall, newObj, vcall, callOn, callUncaught, dispatchUncaught, type JThread } from "../jvm/natives/jlang";
+import { curThread, mainThread, scall, newObj, vcall, callOn, detached, dispatchUncaught, toThread, type Escape, type JThread } from "../jvm/natives/jlang";
+import { processExited } from "../process-exit";
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
@@ -147,13 +148,18 @@ export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   });
 }
 
+/** onMain for a job no caller waits on: its exception escapes the main thread, where it ran */
+export function postMain(job: () => unknown, escape: Escape = toThread(mainThread)): void {
+  if (!processExited()) onMain(job).catch(escape);
+}
+
 /** Handler.postDelayed(r, delay ms) on the main handler unless another is named */
 export const postRunnable = (r: unknown, delay = 0, handler = mainHandler()): unknown =>
   vcall(handler, "postDelayed", "(Ljava/lang/Runnable;J)Z", r, BigInt(Math.max(0, Math.ceil(delay))));
 /** post `fn` to a Handler as a Runnable */
 export function postTo(handler: JObj, fn: () => unknown, delay = 0): JFnRunnable {
   const r = fnRunnable(fn);
-  callUncaught(() => postRunnable(r, delay, handler));
+  detached(() => postRunnable(r, delay, handler));
   return r;
 }
 

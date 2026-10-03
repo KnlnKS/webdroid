@@ -15,7 +15,7 @@ import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit, type ExitStatus } from "../process-exit";
 import { noteAppKill, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
-import { after, systemUncaught, logUncaught } from "../jvm/natives/jlang";
+import { after, logUncaught, detached } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
 import { BIND_AUTO_CREATE, ServiceRecords, type Death, type ServiceBinding, type ServiceRestart, type ServiceState } from "./servicerecords";
@@ -52,7 +52,7 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
  *  system_server does it. The broker runs none itself (a caller's realm rebuilds its errors), so
  *  it answers whichever process's JVM has ended, the page's included. */
 const asBroker = <T>(work: Gen<T>): Promise<T> => asSystem(() => rt.drive(work));
-const detached = (work: Promise<unknown>) => void work.catch((error) => console.error("[broker]", error));
+const unawaited = (work: Promise<unknown>) => void work.catch((error) => console.error("[broker]", error));
 export type Receiver = { pkg: string; cls: string; priority: number };
 /** the manifest receivers an intent reaches, as the sending process's package manager resolves them */
 function* receivers(intent: JObj): Gen<Receiver[]> {
@@ -154,10 +154,10 @@ class ProcessBroker {
   private booted = false;
   private services = new ServiceRecords((pkg, process, restart) => {
     const entry = this.connect(pkg, process);
-    detached(this.request(entry, (endpoint) => endpoint.service({ kind: "restart", ...restart })));
+    unawaited(this.request(entry, (endpoint) => endpoint.service({ kind: "restart", ...restart })));
   }, (binding) => this.connection(binding, null, true), (pkg, process, cls, binding) => {
     const entry = this.byName.get(pkg + "/" + process);
-    if (entry) detached(this.request(entry, (endpoint) => endpoint.service({ kind: "bind", cls, intent: binding.intent, key: binding.key, flags: binding.flags })));
+    if (entry) unawaited(this.request(entry, (endpoint) => endpoint.service({ kind: "bind", cls, intent: binding.intent, key: binding.key, flags: binding.flags })));
   }, (pkg) => { const owner = packages.get(pkg); return !!owner?.system && owner.flag(owner.application, "persistent", false); });
 
   /** sent from the page's realm, which is up at boot */
@@ -181,7 +181,7 @@ class ProcessBroker {
     this.entry(pid);
     this.clipboard = data ? this.copyClipboard(data) : null;
     for (const watcher of this.clipboardWatchers) {
-      if (this.alive(watcher)) detached(this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()));
+      if (this.alive(watcher)) unawaited(this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()));
     }
   }
   getClipboard(pid: number): ParcelData | null {
@@ -360,7 +360,7 @@ class ProcessBroker {
     for (const binding of this.services.bindingsOf(pid)) {
       this.services.unbind(binding.key);
       const host = this.byName.get(binding.pkg + "/" + binding.process);
-      if (host && !host.dead) detached(this.request(host, (endpoint) => endpoint.service({ kind: "unbind", key: binding.key })));
+      if (host && !host.dead) unawaited(this.request(host, (endpoint) => endpoint.service({ kind: "unbind", key: binding.key })));
     }
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
@@ -471,7 +471,7 @@ class ProcessBroker {
   private connection(binding: ServiceBinding, binder: BinderHandle | null, dead: boolean): void {
     if (!this.alive(binding.client)) return;
     const key = binding.key.slice(binding.key.indexOf("/") + 1);
-    detached(this.request(this.entry(binding.client), (endpoint) => endpoint.serviceConnected(key, binder, dead)));
+    unawaited(this.request(this.entry(binding.client), (endpoint) => endpoint.serviceConnected(key, binder, dead)));
   }
   /** getContentProviderImpl for a provider in another process: checkContentProviderPermission,
    *  then the binder its process publishes, starting it. The provider enforces each call's
@@ -579,7 +579,7 @@ export function connectProcess(): ProcessEndpoint {
   };
   activityTransport.finished = (id, code, data) => {
     setVisible(false);
-    systemUncaught(() => after(data && encodeIntent(data), (encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)));
+    detached(() => after(data && encodeIntent(data), (encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)), logUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);

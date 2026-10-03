@@ -1,5 +1,5 @@
 import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
-import { JThread, reportUncaught } from "../jvm/natives/jlang";
+import { JThread, toThread } from "../jvm/natives/jlang";
 import { Cpu, bindCpu } from "./cpu";
 import { processExited } from "../process-exit";
 import { hostLib, stp, ptr, type HostFn } from "./host";
@@ -40,7 +40,7 @@ class Stream {
   change(state: number): void { this.state = state; for (const wake of this.waiters) wake(); }
   pump(): void {
     if (this.pumping || !this.config.callback || this.state !== AAUDIO_STREAM_STATE_STARTED) return;
-    this.pumping = this.fill().catch((e) => reportUncaught(e, this.cpu.jthread)).finally(() => { this.pumping = null; });
+    this.pumping = this.fill().catch(toThread(this.cpu.jthread)).finally(() => { this.pumping = null; });
   }
   async fill(): Promise<void> {
     const track = this.track;

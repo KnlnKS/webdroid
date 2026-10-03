@@ -3,8 +3,8 @@
 // the caller may be the package being stopped; the broker, which outlives every process, stops the
 // package, has the data's owners clear or remove it (shell/packagedata.ts) and sends them.
 import { awaited, driven, rt, JObj, type Gen } from "../jvm/runtime";
-import { scall, vcall, newObj, after } from "../jvm/natives/jlang";
-import { binderUncaught, callingIdentity, type ParcelData } from "./binder";
+import { scall, vcall, newObj, after, detached } from "../jvm/natives/jlang";
+import { callingIdentity, type ParcelData, binderEscape } from "./binder";
 import { encodeIntent } from "./intentipc";
 import { putExtra, registerSystemActivity, type JIntent, type SystemResult } from "./intent";
 import { longVersionCode, queryReceivers } from "./pm";
@@ -41,7 +41,7 @@ export const clearUserData = driven(function* (pkg: string, fromApp: boolean, ke
   const cleared = record && (yield* packageBroadcast$("android.intent.action.PACKAGE_DATA_CLEARED", pkg, record.uid));
   const done = !cleared ? Promise.resolve(false) : change(pkg, { kind: "clear", fromApp, keepState }, [cleared])
     .then(() => true, (error) => { console.error("[clear data]", pkg, error); return false; });
-  void done.then((ok) => { if (observer) binderUncaught(() => vcall(observer, "onRemoveCompleted", `(${S}Z)V`, pkg, ok ? 1 : 0)); });
+  void done.then((ok) => { if (observer) detached(() => vcall(observer, "onRemoveCompleted", `(${S}Z)V`, pkg, ok ? 1 : 0), binderEscape()); });
   return { done };
 });
 

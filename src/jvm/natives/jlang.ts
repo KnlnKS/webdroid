@@ -59,20 +59,17 @@ export function vcall(obj: any, name: string, desc: string, ...args: unknown[]):
 export function vcallAsync(obj: unknown, name: string, desc: string, ...args: unknown[]): Promise<any> {
   try { return Promise.resolve(vcall(obj, name, desc, ...args)); } catch (e) { return Promise.reject(e); }
 }
-/** A call no Java frame waits on (a listener, a posted task): its exception, thrown now or when
- *  it resumes, escapes the thread that made it, which dispatches it to its uncaught handler
- *  rather than to the native that dispatched it. */
-export function callUncaught(call: () => unknown): void {
+/** what becomes of an exception no Java frame waits for */
+export type Escape = (e: unknown) => void;
+/** it escapes `thread`, which dispatches it to its uncaught handler */
+export const toThread = (thread: JThread = curThread): Escape => (e) => void dispatchUncaught(thread, e);
+/** A call no Java frame waits on (a listener, a posted task), as a chain of its own: its exception,
+ *  thrown now or when it resumes, goes to `escape` rather than to the native that made the call.
+ *  system_server's work escapes to logUncaught: there its default handler would end system_server
+ *  and the runtime restart it, which this page cannot do under the apps it hosts. */
+export function detached(call: () => unknown, escape: Escape = toThread()): void {
   if (processExited()) return;
-  const thread = curThread, escaped = (e: unknown) => reportUncaught(e, thread);
-  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(escaped); } catch (e) { escaped(e); }
-}
-/** system_server's work that no Java frame waits on. There its own default handler would end
- *  system_server and the runtime would restart; this page cannot restart it under the apps it
- *  hosts, so the exception is logged. */
-export function systemUncaught(call: () => unknown): void {
-  if (processExited()) return;
-  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(logUncaught); } catch (e) { logUncaught(e); }
+  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(escape); } catch (e) { escape(e); }
 }
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));
@@ -659,11 +656,6 @@ rt.register({
   },
 });
 
-/** a throwable that escaped every Java frame of `thread`: Thread.dispatchUncaughtException,
- *  as ART calls it when a thread's run loop ends in an exception */
-export function reportUncaught(e: unknown, thread: JThread = mainThread): void {
-  void dispatchUncaught(thread, e);
-}
 /** log a throwable no Java handler takes and tell the development shell */
 export function logUncaught(e: unknown): void {
   const je = rt.jx(e);

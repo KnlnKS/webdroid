@@ -24,8 +24,8 @@ import { setManifest } from "../android/pm";
 import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages, usesSdk } from "../android/packages";
-import { onMain } from "../android/mainloop";
-import { after, callUncaught, reportUncaught } from "../jvm/natives/jlang";
+import { onMain, postMain } from "../android/mainloop";
+import { after, mainThread, toThread } from "../jvm/natives/jlang";
 import { deliverVsync } from "../android/vsync";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
@@ -206,7 +206,7 @@ export function rotateDevice(landscape: boolean): Promise<void> {
     if (orientationForRequest(request) === null && request !== 5 && request !== 14 && applyOrientationRequest(landscape ? 0 : 1)) await configurationChanged();
   });
 }
-function applyConfigChange(): void { callUncaught(() => onMain(configurationChanged)); }
+function applyConfigChange(): void { postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
@@ -255,5 +255,5 @@ export function dispatchPointer(action: number, x: number, y: number): Promise<v
   noteInput();
   const now = BigInt(Math.floor(uptimeMillis()));
   if (action === 0) touchDown = now;
-  return dispatchTouch(action, x, y, touchDown, now).then(() => {}, reportUncaught).finally(() => { perf.inputMs += performance.now() - t0; });
+  return dispatchTouch(action, x, y, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
 }

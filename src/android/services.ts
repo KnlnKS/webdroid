@@ -6,8 +6,8 @@
 import { once } from "../jvm/suspend";
 import { awaited, JObj, rt, noops, stubs, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
-import { newObj, vcall, scall, linkInit, staticField, after, callUncaught } from "../jvm/natives/jlang";
-import { onMain } from "./mainloop";
+import { newObj, vcall, scall, linkInit, staticField, after } from "../jvm/natives/jlang";
+import { postMain } from "./mainloop";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
@@ -283,9 +283,9 @@ rt.register({ name: "webdroid/ConnectivityService", ctor: class extends JObj {},
     "unregisterNetworkActivityListener(Landroid/net/INetworkActivityListener;)V"),
 } });
 if (typeof addEventListener !== "undefined") for (const event of ["online", "offline"])
-  addEventListener(event, () => callUncaught(() => onMain(() => rt.drive(function* () {
+  addEventListener(event, () => postMain(() => rt.drive(function* () {
     for (const r of registrations.values()) yield* sendCallback(r, event === "online" ? "CALLBACK_AVAILABLE" : "CALLBACK_LOST");
-  }()))));
+  }())));
 
 hostStub("connectivity", "webdroid/ConnectivityService");
 

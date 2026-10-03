@@ -4,7 +4,7 @@
 // after. Render-thread animators keep the proxy drawing on each vsync until they finish, without
 // the UI thread, as hwui's RenderThread does.
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
-import { vcall, scall, callOn, callUncaught, JThread } from "../jvm/natives/jlang";
+import { vcall, scall, callOn, JThread, detached } from "../jvm/natives/jlang";
 import { handle, deref, release } from "./handles";
 import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
 import { textureLayerNatives } from "./texturelayer";
@@ -61,7 +61,7 @@ function animate(p: Proxy): void {
   p.animating = true;
   onNextVsync(() => {
     p.animating = false;
-    callUncaught(() => callOn(renderThread, () => drawFrame(p)));
+    detached(() => callOn(renderThread, () => drawFrame(p)));
   });
 }
 

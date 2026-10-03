@@ -4,8 +4,8 @@
 // getPreferredWideGamutColorSpaceId, getOverlaySupport, getBrightness).
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleField, jarray } from "../jvm/abi";
-import { after, newObj, scall, vcall, staticField } from "../jvm/natives/jlang";
-import { binderUncaught, hostStub } from "./binder";
+import { after, newObj, scall, vcall, staticField, detached } from "../jvm/natives/jlang";
+import { hostStub, binderEscape } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
 import { nativeParcel, readInt, writeInt } from "./parcel";
 import { device } from "../shell/config";
@@ -75,7 +75,7 @@ const callbacks = new Set<JObj>();
 /** DisplayManagerService.sendDisplayEventLocked: the display's geometry or rate changed */
 export function notifyDisplayChanged(): void {
   for (const callback of callbacks) {
-    binderUncaught(() => vcall(callback, "onDisplayEvent", "(II)V", 0, EVENT_DISPLAY_CHANGED));
+    detached(() => vcall(callback, "onDisplayEvent", "(II)V", 0, EVENT_DISPLAY_CHANGED), binderEscape());
   }
 }
 const register = (callback: JObj | null) => {
