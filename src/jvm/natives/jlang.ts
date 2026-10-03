@@ -1183,11 +1183,11 @@ rt.registerJni("jdk/internal/misc/VM", "getNanoTimeAdjustment(J)J", (offset: big
 });
 const MAX_NANO_ADJUSTMENT = (1n << 32n) * 1_000_000_000n;
 
-// there is no process to fork: exec fails as for a program that is not there, and ProcessBuilder
-// names the program
+// there is no second process: the fork fails as native code's does (EAGAIN), in UNIXProcess_md.c's
+// words, and ProcessBuilder names the program
 rt.registerJnis("java/lang/UNIXProcess", {
   "initIDs()V": () => {},
-  "forkAndExec([B[BI[BI[B[IZ)I": () => { throw rt.mkThrowable("java/io/IOException", "error=2, No such file or directory"); },
+  "forkAndExec([B[BI[BI[B[IZ)I": () => { throw rt.mkThrowable("java/io/IOException", "error=11, Try again"); },
 });
 rt.registerJnis("java/lang/Runtime", {
   "nativeLoad(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/String;": nativeLoad,

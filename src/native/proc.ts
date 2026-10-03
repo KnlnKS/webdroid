@@ -1,7 +1,7 @@
 // The process-facing rest of Bionic: sysinfo and scheduling, users, signals, syslog, the abort
 // message and asserts, fortified wrappers, qsort/bsearch (which call the guest's comparator),
 // and the calls a sandboxed app process cannot make (fork, exec, ptrace), which fail as they
-// would on a device.
+// would on a device at its process limit or under its sandbox.
 
 import { wrote, mem } from "./mem";
 import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
@@ -271,7 +271,10 @@ export function procInit(): void {
     __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), u8[set + (fd >> 3)] & ~(1 << (fd & 7))); },
     __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (u8[set + (fd >> 3)] >> (fd & 7)) & 1; },
   };
-  for (const n of ["fork", "vfork", "execl", "execlp", "execv", "execve", "execvp", "waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
+  // no second process (see cloneThread), so no child to wait for
+  for (const n of ["fork", "vfork"]) M[n] = (cpu) => fail(cpu, E.AGAIN);
+  for (const n of ["waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.CHILD);
+  for (const n of ["execl", "execlp", "execv", "execve", "execvp"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
   for (const suffix of ["", "64"]) {
     M["sigemptyset" + suffix] = (_c, a) => { mem.memset(a.p(), 0, suffix ? 8 : 4); return 0; };
     M["sigfillset" + suffix] = (_c, a) => { mem.memset(a.p(), 255, suffix ? 8 : 4); return 0; };
