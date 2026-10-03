@@ -2033,6 +2033,42 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Limits: implicit-broadcast restrictions are not modelled for these broadcasts (as for the
     others); a package another realm installed through a session is unknown to the broker's
     registry, as before; the uninstaller's failure result is RESULT_CANCELED, not RESULT_FIRST_USER.
+- 2026-10-02, WebView subframes held before their navigation (branch `knlnks/fix-subframe-csp`):
+  - flappybird failed on four `Framing '' violates ... frame-src` errors from its AdMob page. The
+    frames were `afma-notify-*` iframes with `gmsg://mobileads.google.com/...` srcs (loadSdkConstants,
+    invalidRequest, log), the SDK's messages; the empty URL is how Chromium reports a non-network
+    scheme. Before the routing change they went to the host's external-protocol handler and vanished,
+    so the SDK never received them either. Every script-created http(s) frame also logged a violation
+    before it was routed (Harmonic's tej.as article: its Twitter widget).
+  - Reference AVD probe (a WebView test APK, loadDataWithBaseURL page): shouldOverrideUrlLoading
+    (isForMainFrame false, no gesture) sees subframe navigations of data:, blob:, gmsg:, intent: and
+    custom schemes, including a frame removed right after insertion and a child's location change;
+    not http(s), about:blank, srcdoc or javascript:. An overridden frame stays on its initial
+    document with no load event; an unknown scheme not overridden gets shouldInterceptRequest, then
+    onReceivedError(-10, net::ERR_UNKNOWN_URL_SCHEME) and an error page. data: (also offered to
+    shouldInterceptRequest) and blob: load when not overridden; about:blank, srcdoc and javascript:
+    frames are same-origin with the page.
+  - The page now holds a frame's URL before its navigation starts: src and setAttribute (frame and
+    iframe), srcdoc, innerHTML/outerHTML/insertAdjacentHTML/setHTMLUnsafe/createContextualFragment/
+    document.write, and the initial document, whose frames' src a small tokenizer renames
+    (`data-wd-frame-src`, skipping comments and raw-text elements) so the parser inserts them
+    without navigating. The same hooks go into each same-origin frame's realm (on contentWindow/
+    contentDocument access, or its load). Held frames route as before, or for another scheme ask the
+    client, then route (android_asset) or report ERR_UNKNOWN_URL_SCHEME. about:, srcdoc,
+    javascript:, data: and blob: frames load untouched; `src` reads the page's URL. The tokenizer
+    costs ~5.5 ms on a 2.4 MB page with a frame and nothing without one.
+  - Verified (4406): flappybird 3/3 (AdMob's four GMSGs reach shouldOverrideUrlLoading, which
+    claims them); Markor view mode with three routed iframes (example.com, example.org, wikipedia)
+    and a srcdoc frame, no CSP violation; Harmonic's tej.as article routes its Twitter frame with no
+    violation (base: one); FitNotes' change log renders. tests/webview.test.ts covers script,
+    parsed, srcdoc-nested, about:blank-written, data: and custom-scheme frames with no console error.
+  - Limits: Chromium also offers data: and blob: subframes to shouldOverrideUrlLoading, and custom
+    schemes to shouldInterceptRequest; here neither is asked (a revoked blob: URL would not survive
+    the round trip). Paths the hooks do not see still meet the policy and log a violation: a child
+    frame's own location change or a named-target navigation, a static `srcdoc` attribute's frames,
+    an Attr node's value, frames adopted from a DOMParser document, document.write chunks that split
+    a tag. A held frame shows one about:blank load event before its routed one. The dev server
+    injects the page script into proxied pages, so it must restart after webinject changes.
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator

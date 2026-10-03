@@ -638,7 +638,9 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   HTTP auth and reset clear renderer storage, a reinstall gets new origins, subframes take the
   renderer path, pages get the device's fonts (history). Done (knlnks/open-cleardata):
   clearApplicationUserData and uninstall clear every per-package owner, and subframes get live
-  cookies (history, "app data clearing and uninstall"). Open: CSS generic families and text zoom;
+  cookies (history, "app data clearing and uninstall"). Done (knlnks/fix-subframe-csp): pages hold
+  subframes before navigating, so routed frames log no CSP errors and custom-scheme frames (AdMob's
+  gmsg) reach shouldOverrideUrlLoading (history). Open: CSS generic families and text zoom;
   a fixed deployed WEBVIEW_ORIGIN shares one.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity
   (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
