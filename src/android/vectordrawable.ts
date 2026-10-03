@@ -4,7 +4,7 @@
 // changed, then drawn into the bounds through the colour filter at the root alpha.
 
 import { rt } from "../jvm/runtime";
-import { deref, ownedHandle, release, weakHandle } from "./handles";
+import { deref, ownedHandle, weakHandle } from "./handles";
 import { type NativeColorFilter, type NativeShader, cssColor, tintedBmp, edges } from "./graphics";
 import { type NativeCanvas, drawingCanvas } from "./canvas";
 import { NativeBitmap } from "./bitmap";
@@ -150,7 +150,6 @@ export class Tree {
   alpha = 1;
   dirty = true;
   private cache: NativeBitmap | null = null;
-  refs = 0;
   constructor(readonly root: Group) { root.adopt(this); }
   /** Tree::draw: the canvas's scale sizes the cache (no skew or rotation), which is drawn at the
    *  bounds, mirrored for RTL, through the colour filter; answers the cache's pixel count */
@@ -277,10 +276,4 @@ rt.registerJnis("android/graphics/drawable/VectorDrawable", {
   ...groupProperty(ROTATE, "Rotation"), ...groupProperty(PIVOT_X, "PivotX"), ...groupProperty(PIVOT_Y, "PivotY"),
   ...groupProperty(SCALE_X, "ScaleX"), ...groupProperty(SCALE_Y, "ScaleY"),
   ...groupProperty(TRANSLATE_X, "TranslateX"), ...groupProperty(TRANSLATE_Y, "TranslateY"),
-});
-
-// VirtualRefBasePtr: a strong count over the handle, which the last decrement releases
-rt.registerJnis("com/android/internal/util/VirtualRefBasePtr", {
-  "nIncStrong(J)V": (h: bigint) => { const o = deref<{ refs?: number }>(h); if (o) o.refs = (o.refs ?? 0) + 1; },
-  "nDecStrong(J)V": (h: bigint) => { const o = deref<{ refs?: number }>(h); if (o && !(o.refs = (o.refs ?? 1) - 1)) release(h); },
 });
