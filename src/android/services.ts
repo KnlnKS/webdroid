@@ -161,6 +161,13 @@ hostStub("device_identifiers", "webdroid/DeviceIdentifiersPolicyService");
 rt.register({ name: "webdroid/StatusBarManagerService", ctor: class extends JObj {}, sup: "com/android/internal/statusbar/IStatusBarService$Stub",
   methods: noops("requestTileServiceListeningState(Landroid/content/ComponentName;I)V") });
 hostStub("statusbar", "webdroid/StatusBarManagerService");
+// FontManagerService: both calls require UPDATE_FONTS, which only signature or privileged apps hold
+const updateFonts = () => enforceCallingOrSelfPermission("android.permission.UPDATE_FONTS", "UPDATE_FONTS permission required.");
+rt.register({ name: "webdroid/FontManagerService", ctor: class extends JObj {}, sup: "com/android/internal/graphics/fonts/IFontManager$Stub", methods: {
+  "getFontConfig()Landroid/text/FontConfig;": updateFonts,
+  "updateFontFamily(Ljava/util/List;I)I": updateFonts,
+} });
+hostStub("font", "webdroid/FontManagerService");
 // IAccessibilityManager, under AOSP's AccessibilityManager: no accessibility service is installed
 // or enabled, so a client's state is all off; the focus highlight is framework-res's
 rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends JObj {}, sup: "android/view/accessibility/IAccessibilityManager$Stub", methods: {

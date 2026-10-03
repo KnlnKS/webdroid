@@ -86,6 +86,14 @@ describe("app widgets", () => {
   });
 });
 
+describe("fonts", () => {
+  test("FontManager exists and its configuration needs UPDATE_FONTS", async () => {
+    const fonts = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "font");
+    expect(fonts).not.toBeNull();
+    expect(await thrown(() => vcall(fonts, "getFontConfig", "()Landroid/text/FontConfig;"))).toStartWith("java/lang/SecurityException");
+  });
+});
+
 describe("system health", () => {
   test("a uid snapshot holds no usage, and another uid's needs BATTERY_STATS", async () => {
     const health = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "systemhealth");
