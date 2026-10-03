@@ -1951,6 +1951,43 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     data clearing nor uninstall removes an app's renderer storage (it lives in the browser's
     partitions, keyed by a hash that a reinstall reproduces). Subframes of a WebView page load
     straight from their sites, not through the app's cookie jar.
+- 2026-10-02, WebView data, subframes and fonts on the renderer origins (branch `knlnks/open-webdata`):
+  - A browser lets only an origin enumerate or clear its storage, so the app notes each web origin
+    its WebViews render (`wd:install:<pkg>:webview`), and a hidden frame on that renderer origin
+    answers its usage (`navigator.storage.estimate`, less the proxy worker's registration and an
+    emptied IndexedDB store the quota manager would delete) or deletes as AwQuotaManagerBridge does:
+    deleteOrigin IndexedDB and file systems, deleteAllData also localStorage, getOrigins the origins
+    holding quota-managed data by URL spec. Harmonic's article origin (IndexedDB written): getOrigins
+    listed it, usage 4,477 bytes, and empty after deleteAllData. WebViewDatabase keeps HTTP auth
+    credentials in the app's `http_auth.db` (HttpAuthDatabase's schema); form data is not kept, as
+    in current Chromium.
+  - The renderer origin hashes the install time with the app and web origin, so a reinstall starts
+    clean; the shell's reset (the only data wipe here) first clears every noted origin through such
+    a frame, and drops the app's cookie jar. Playwright, FitNotes' change log: localStorage and an
+    IndexedDB written in the frame were gone after `wd.reset()`, and the reinstalled app rendered on
+    a new, empty origin. ActivityManager.clearApplicationUserData, `pm clear` and uninstall do not
+    exist here (no per-package data wipe at all); `clearWebData(pkg)` is the WebView share of one.
+  - A renderer frame took a `load` from whichever window framed it, so a page could frame another
+    app's or site's renderer and run a document there with its storage. It now takes documents and
+    storage requests only from the app's realm, the nearest ancestor of the top's origin
+    (`location.ancestorOrigins`; without it, its parent).
+  - Subframes: a page asks the app where each http(s) frame loads; the app hands out a frame on that
+    web origin's renderer under a token, and a `frame-src` policy (renderer origins only) stops the
+    direct load before any request. The subframe's document and requests go through the app's
+    cookies (the main page as site; third-party only if allowed), interception (isForMainFrame
+    false) and interfaces; its navigations stay in it. Measured (Markor view mode, three iframes on
+    three LAN origins, tap to each subframe's script, two runs): base 174-178 ms cold, 125-177 warm;
+    routed 234-260 cold (each new origin installs the proxy worker), 124-161 warm. Harmonic's
+    Substack article routes its two substack.com frames.
+  - Fonts: AwSettings sets Blink's family and size preferences, which no page can set in a host
+    browser. The standard family and default font size apply as the document's lowest-precedence
+    style, and every system font map name that is no CSS generic (sans-serif-light, arial, times,
+    sans-serif-condensed with its wdth as stretch) is a FontFace over the device's file, fetched from
+    the app. FitNotes' change log renders in Roboto (it was Times). Limits: CSS generics (serif,
+    monospace, ...) and names neither the device nor host has (Markor's `sans-serif-regular`) still
+    resolve to the host's fonts, and the default fixed and minimum sizes and text zoom have no CSS
+    equivalent (desktop Chromium ignores `text-size-adjust`). Checked with and without site
+    isolation: FitNotes' change log, Markor's view mode (with subframes), Harmonic's article.
 - 2026-10-02, StatsEvent's GC stall: lazy guest-memory commit and early sizing both tried, neither
   fixes it (Stage F open 1):
   - Lazy commit (branch `knlnks/lazy-guest-mem-experiment`, not merged): every mem.zig allocator

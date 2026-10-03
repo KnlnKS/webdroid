@@ -634,8 +634,10 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
 - **Done (knlnks/open-webviso):** every WebView page renders on a renderer origin of its app and
   web origin (`*.localhost`, or a wildcard WEBVIEW_ORIGIN), never the emulator's: no access to its
   storage, cookies or window. A hidden page keeps its layout, so wrap_content WebViews size
-  (history, "every WebView page on its own renderer origin"). Open: WebStorage/WebViewDatabase
-  clearing and per-app removal of renderer storage; a fixed deployed WEBVIEW_ORIGIN shares one.
+  (history, "every WebView page on its own renderer origin"). Done (knlnks/open-webdata): WebStorage,
+  HTTP auth and reset clear renderer storage, a reinstall gets new origins, subframes take the
+  renderer path, pages get the device's fonts (history). Open: a per-app clear-data/uninstall
+  (none exists), CSS generic families and text zoom; a fixed deployed WEBVIEW_ORIGIN shares one.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity
   (AP3A.241005.015, user/release-keys) from its factory image (`gen-framework --identity`), while
   capabilities stay this device's. Apps get the NotoColorEmoji update Google Play installed on the
