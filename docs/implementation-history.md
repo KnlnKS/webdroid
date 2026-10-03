@@ -2304,6 +2304,52 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     controls step failed once on live content, then passed), lat cold (load 8.5; warm not run).
   - Not reduced: the source grew by about 200 lines net (module headers, the ports' contracts, the
     bitstream vectors and the servicerecords tests of the start operations).
+- 2026-10-03, the native kernel's structural review (branch `knlnks/refactor-native`):
+  - Sockets: a socket is an open file in fs.ts's table (`OpenFile.socket`), so dup, close, fcntl,
+    poll, epoll and SCM_RIGHTS see one kind of descriptor. `socket/core.ts` holds the Socket base
+    (options, SO_*TIMEO `block()`, generic SOL_SOCKET options) and Loopback (byte or message mode,
+    rights carried on each write, a peerless end as a datagram queue); `inet.ts` TCP/UDP,
+    `unix.ts` the path namespace, credentials and the logd/dnsproxyd peers (now Loopback peers),
+    `abi.ts` every guest layout with a typed SocketAddress, `syscalls.ts` and `resolver.ts`. One
+    `written()` raises SIGPIPE for EPIPE on pipes and SOCK_STREAM sockets. The socket core imports
+    fs only as a type (`naming(fd, socket)` checks the descriptor a wait is on), so the family
+    classes' `extends` reads no binding of their import cycle.
+  - Behaviour that now follows Linux instead of the old split's quirks: shutdown(2) validates
+    `how` on AF_UNIX; a non-socket descriptor answers ENOTSOCK (not EBADF) from listen/accept/
+    shutdown and libcore's socket calls; FIONREAD on a message socket is the next message's length;
+    a truncated AF_UNIX message read without MSG_TRUNC answers the bytes copied (read(2), libcore's
+    recvfrom); lseek on an unconnected AF_UNIX socket is ESPIPE; ARM32 libc `send()` honours
+    MSG_NOSIGNAL (it raised SIGPIPE regardless); libcore's sendto on AF_UNIX uses its destination,
+    and SocketInputStream/OutputStream read and write AF_UNIX descriptors; SO_PEERCRED or a group
+    request on the wrong family is ENOPROTOOPT; fcntl F_GETLK on a socket reports F_UNLCK and an
+    unknown command is 0, as for files; closing one of a dup'd AF_UNIX descriptor wakes a call
+    waiting on that number (EBADF), as inet did. Unconnected AF_UNIX sockets still poll readable.
+  - Signals: `signals.ts` has the numbers, sigset bits, one disposition table and `action()`,
+    which kill and delivery both follow, with the signal calls out of proc.ts; `sigframe.ts` is the
+    only spelling of the per-ABI siginfo/ucontext layout; `crash.ts` owns exit_group, dieOfSignal,
+    the tombstone's assembly (out of dl.ts), the abort message and debuggerd's handlers, so the
+    three hooks go. Cpu keeps one typed frame stack: a handler's Frame carries its stack range,
+    siglongjmp exit and sigreturn, with no label-prefix matching. A fault a parked host call's body
+    raised now goes through the slice-fault branch, which yields one macrotask after the handler.
+  - Bad pointers: kernelInit marks system call slots once (`kernelEntry(slot)`), and the three
+    catch sites call `onBadAddress`; a raw svc's EFAULT now also sets errno, as wrapper bodies do.
+  - GL: gles3.ts (1,183 -> 624 lines) keeps strings, queries and the entry table; state, pixels,
+    buffers, client arrays and validation are gles3-* modules. Entries marked `keepsClean` where
+    defined replace the TRACKED name list (the marked set equals it), a texture's tracking is a
+    typed unknown/unbound/bound state, and gles1's host errors use `raise` (first error wins, as
+    GL specifies; gles1 kept the last).
+  - `shell/devicefetch.ts` (from native/loopback-http.ts) owns the loopback-or-proxy routing.
+  - Measured against the base under load 6-12 (interleaved): libc-bench ns/op within noise
+    (qsort 268.7k vs 268.1k, mutex 66.5 vs 66.0, clock 56.0 vs 57.5); perf-browser glFps flappybird
+    49.4 vs 50.4, doodlejump 46.4 vs 46.4 (4 runs each), lichess 17.6 vs 20.4.
+  - Gates: typecheck per commit, 1,135 tests, src/native 781, FitNotes smoke, fwtest 31/31, fast
+    e2e 7/7 (twice), lichess live, YouTube live 2/3 (the first failed `resume`, "Play video" not
+    found; the next two passed), lat cold and warm (Mihon dark-warm 110 and 89 ms). DoodleJump
+    under `?jit=0` times out at `title` on the base and here alike. Markor boots with no missing
+    API; its boot path makes no AF_UNIX call, so LocalSocket rests on the unit tests.
+  - Not met: the branch adds about 200 lines net (module headers, typed results and the two
+    socket families as classes); about 55 family branches, the chunk-keyed side tables, the
+    poll-provider and crash hooks, and the TRACKED list are gone.
 
 ## Java, storage and framework semantics
 

@@ -607,6 +607,16 @@ one binder execTransact harness, codec bitstream traits, gen-framework plumbing 
 `scripts/identity.ts`, and ActivityStack/process-endpoint split out of the broker. Open: none of
 its own; `wd.uninstall` of the running page app still never answers (as before).
 
+### Native structural refactor (2026-10-03): branch `knlnks/refactor-native`
+
+The native review's findings 1-7 are done (history, "the native kernel's structural review"):
+one socket stack in `src/native/socket/` over fs.ts's one descriptor table (AF_UNIX a family of
+it, layouts in `socket/abi.ts`), poll/select/epoll in `poll.ts`, signals in `signals.ts`,
+`sigframe.ts` and `crash.ts` over one typed frame stack, a per-slot bad-pointer flag, gles3 split
+into gles3-{state,pixels,buffers,client-arrays,validate} with `keepsClean` markers, and
+`shell/devicefetch.ts`. A few socket edge cases now follow Linux (listed there). Open: the JVM's
+Stage A/B chain plumbing in loader/dl/jni/cpu, which waited for this merge.
+
 ### E/F follow-up handoff (2026-10-02): branch `knlnks/ef-followup`, start here
 
 Stage E and F's open items, worked from `304c0529` and merged with `knlnks/bytecode` at `784677aa`.
@@ -801,7 +811,7 @@ libc.so's disassembly; a new reference build must recheck them. The host keeps t
 mem*/str* primitives and the heap (through bionic's malloc dispatch table). The kernel both libcs
 reach is `kernelInit` in `src/native/syscall.ts`: each syscall number dispatches by reference to a
 body in its owning module's `*_SYSCALLS` record (`fs.ts` holds the descriptor table and file
-system), and `src/native/unix.ts` serves logd and netd's dnsproxyd. Only an ARM32 process
+system), and `src/native/socket/unix.ts` serves logd and netd's dnsproxyd. Only an ARM32 process
 registers the HLE libc (`libcInit`).
 `scripts/libc-bench/` times libc calls from guest code.
 
