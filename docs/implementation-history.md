@@ -2436,6 +2436,47 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
 
 ## App investigations and remaining limits
 
+- 2026-10-02, live Resy, Reddit and TikTok (the E/F follow-up's failing live flows):
+  - Resy failed on webdroid, not live content. With View on bytecode every UI-dump `resId` was
+    empty: View sets a node's view id only while the window's AttachInfo carries
+    FLAG_SERVICE_REQUESTS_REPORT_VIEW_IDS, which AccessibilityInteractionController holds there for
+    UiAutomation; `dumpWindows` now does the same, so every resource wait (search results, venue)
+    could pass. The launcher activity's "Unable to configure device for notifications" alert,
+    raised after it stopped under the list, stayed shown: the window manager now keeps
+    ActivityRecord's client visibility per token (dispatchAppVisibility to every window of a
+    stopping or restarting activity, no ADD_FLAG_APP_VISIBLE for a hidden one). The fast flow
+    sampled the list before it loaded and closed the announcement sheet before it arrived (about
+    5 s after the venues); it now waits for a venue row and up to 10 s for the sheet. 7 of 8 runs
+    passed afterwards (the last 6 in a row); the one failure's artifacts were overwritten.
+  - Reddit: the welcome screen pauses to start microG's One Tap activity, whose process shows it
+    0.6-3.3 s later. Until then taps reach the paused welcome screen, as on a device (input goes to
+    the topmost shown window), so the fast lane's taps raced the sheet. `wd.uiTree` now dumps every
+    shown process's windows, as uiautomator dumps the display, and the flow awaits the sheet and
+    presses back while it shows; the sign-up sheet's exit is awaited by its top row, since it
+    takes taps while it slides out. 4 of 4 after both changes.
+  - TikTok's wedge is V8 memory pressure, not live content or a lock: no monitor is blocked and
+    the main queue drains when it gets the thread. Its feed runs two 64-bit native processes, each
+    with a 4 GiB guest memory, beside a 1.9-2.1 GB JS heap and 1.3-1.8 GB of other ArrayBuffers
+    (dex and resources) in the one renderer isolate. Wasm memory counts in V8's global consumed
+    bytes (two committed 4 GiB memories alone report 8.7 GB in an empty page), and from the
+    `resume` step on every incremental marking starts on "global allocation limit" with the limit
+    equal to consumption (8.5 GB, then 9.25 GB once the second process starts at the swipe). A
+    25 s trace across swipe and video: 51 major GCs, 14.7 s of main-thread mark-compact, ~2 cores
+    of background marking; the CPU profile spends 300-800 ms of each second in GC, so the main
+    loop misses the 3 s liveness probe and a swipe's 20 s bound. V8's
+    `--maximum-global-heap-limit-factor=8` left the limit unchanged, and 3 GiB ARM64 memories
+    (experiment only, 6.4 GB for the two) still wedged.
+    The fix is guest memory committed as used (`knlnks/lazy-guest-mem-experiment`), which needs
+    non-movable arrays that survive a grow: TikTok allocates 62 of them (1.8 MB) during launch,
+    and a grow detaches every view over the old buffer. Resizable-buffer views (slower element
+    kinds for every byte[], Web APIs reject them) or a shared memory (cross-origin isolation) are
+    the known ways; both were rejected before and remain open.
+  - TikTok's other reported gaps are optional: 27 missing classes are app and SDK classes the APK
+    does not ship (Lynx devtools, Kakao/Line BPEA, MIUI referrer, AppsFlyer LVL), probed by
+    reflection; 17 placeholders are void or false service answers; its `E/` lines are its hook
+    libraries failing to find libart. The one native requirement, ARM64 syscall 291 (statx),
+    answers ENOSYS as a pre-4.11 kernel would; TikTok's own code issues it (bionic's stat calls do not).
+
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
   startup blocker after the shared-mapping and SIGILL fixes. The US build
   gates startup on Play Age Signals (`R.bool.is_age_gate_enabled`); the

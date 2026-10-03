@@ -615,8 +615,9 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
 - **Gates on the merge:** typecheck, `bun run test` (1097), FitNotes smoke, `fwtest` 30/30,
   `textcmp` 72/72, fast e2e 7/7, and `lat` cold and warm (worst gated tap 123 ms). Live flows,
   run one at a time: YouTube (3/3 after its flow taps the film by text, since a sponsored card
-  can cover the old point), Lichess, Harmonic, ChatGPT and Reddit pass. TikTok and Resy fail on
-  live content, as they do at `304c0529`.
+  can cover the old point), Lichess, Harmonic, ChatGPT and Reddit pass. Resy and Reddit now pass
+  repeatedly (UI dumps report view ids and every shown process's windows; history, 2026-10-02).
+  TikTok wedges under V8 memory pressure from two 4 GiB guest memories, not live content.
 - **Open:** a loopback media URL an app serves in-process (YouTube's
   `http://localhost:32768/exocache`) goes to the dev server's `/proxy` instead of the guest.
 - **Device decisions (made by the user):** the device reports the Pixel 9's identity
@@ -809,8 +810,8 @@ smoke and the fast e2e (7/7) when it landed; the history's 2026-10-04 entries re
 4. **Performance (§4).** D-mode launches compile about 45% more classes than TS mode did; next
    are build-time AOT for the platform prefixes (§4.1) and the boot image (§4.3).
 
-**Known limits:** Reddit's flow is timing-sensitive (microG's One Tap sheet in its own process
-takes taps); Resy and TikTok fail their live flows on live content; Clash of Clans and Clash
+**Known limits:** TikTok's live flow wedges under V8's global memory limit (two 4 GiB guest
+memories; guest memory committed as used is open); Clash of Clans and Clash
 Royale fail their anti-tamper checks; activities run as one task per process.
 
 **How to work here** is unchanged from the previous handoff below, with one change: `scratch-d.ts`
@@ -1367,7 +1368,6 @@ Known flakes, which are not regressions:
 - Komikku's restore step rarely throws a DOM "file not found" error; it was not shown to be new.
 - Komikku's step after "Get started" occasionally settles on pixels mid-transition, so the next tap
   misses (2 of 14 parallel runs after the logging flip, 0 of 24 before; step times match).
-- Resy times out.
 - `TCKInstant` has one test whose name embeds `Instant.now()`.
 - Under five suites at once, ojluni-time's TestZoneTextPrinterParser (86 s alone) exceeds the 240 s
   class timeout; rerun it alone.
