@@ -41,12 +41,12 @@ const sysAsync = (cpu: Cpu, r: number | Promise<number>): number | Promise<numbe
 /** the call's socket, or what it fails with */
 const socketFor = (cpu: Cpu, fd: number): Socket | number => { const s = socketOf(fd); return typeof s === "number" ? fail(cpu, -s) : s; };
 
-/** recvmsg's msg_control and where its length goes back */
-interface Control { at: () => number; capacity: number; lengthAt: () => number }
-/** recv(2)/recvfrom(2)/recvmsg(2) into the guest's buffers, which the bytes reach once they arrive;
- *  the sender's address goes to `name` and its length to `nameLength`, msg_flags to
- *  `messageFlags` and the ancillary data to `control` */
-function receive(cpu: Cpu, fd: number, s: Socket, buffers: GuestBuffer[], flags: number, name = 0, nameLength = 0, messageFlags = 0, control: Control | null = null): number | Promise<number> {
+/** where recvfrom(2)/recvmsg(2) report what came with the bytes: the sender's sockaddr and its
+ *  length, msg_flags, and msg_control with where its length goes back */
+interface Results { name: number; nameLength: number; messageFlags: number; control: { at: () => number; capacity: number; lengthAt: () => number } | null }
+const NO_RESULTS: Results = { name: 0, nameLength: 0, messageFlags: 0, control: null };
+/** recv(2)/recvfrom(2)/recvmsg(2) into the guest's buffers, which the bytes reach once they arrive */
+function receive(cpu: Cpu, fd: number, s: Socket, buffers: GuestBuffer[], flags: number, { name, nameLength, messageFlags, control }: Results): number | Promise<number> {
   if (name && !nameLength) return fail(cpu, E.FAULT);
   if (name && mem.ld32(nameLength) < 0) return fail(cpu, E.INVAL);
   const total = buffers.reduce((n, b) => n + b.length, 0), target = new Uint8Array(total);
@@ -156,7 +156,7 @@ function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: num
 /** recvfrom(2): a descriptor that is no socket takes a plain read */
 function recvfrom(cpu: Cpu, fd: number, destination: number, length: number, flags: number, source = 0, sourceLength = 0): number | Promise<number> {
   const s = socketOf(fd);
-  if (typeof s !== "number") return length && !destination ? fail(cpu, E.FAULT) : receive(cpu, fd, s, [guestBuffer(destination, length)], flags, source, sourceLength);
+  if (typeof s !== "number") return length && !destination ? fail(cpu, E.FAULT) : receive(cpu, fd, s, [guestBuffer(destination, length)], flags, { ...NO_RESULTS, name: source, nameLength: sourceLength });
   if (source || sourceLength) return fail(cpu, E.NOTCONN);
   return fdRead(cpu, fd, destination, length);
 }
@@ -204,7 +204,7 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
     const m = readMsghdr(msg);
     if (m.iovCount < 0 || m.iovCount > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
     const control = { at: anchor(m.control), capacity: m.controlLength, lengthAt: anchor(m.controlLengthAt) };
-    return receive(cpu, fd, s, iovecs(m.iov, m.iovCount), flags, m.name, m.nameLengthAt, m.flagsAt, control);
+    return receive(cpu, fd, s, iovecs(m.iov, m.iovCount), flags, { name: m.name, nameLength: m.nameLengthAt, messageFlags: m.flagsAt, control });
   },
   shutdown: (cpu, a) => { const s = socketFor(cpu, a.i()), how = a.i(); return typeof s === "number" ? s : sys(cpu, s.shutdown(how)); },
   setsockopt: (cpu, a) => setsockopt(cpu, a.i(), a.i(), a.i(), a.p(), a.u()),
