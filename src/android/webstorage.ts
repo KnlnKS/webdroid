@@ -10,7 +10,7 @@ import { boxLong } from "../jvm/natives/jbox";
 import { installTime } from "./packages";
 import { onMain } from "./mainloop";
 import { appHost } from "./apphost";
-import { rendererOrigin, rendererStorage, type StorageOp } from "../shell/webbridge";
+import { rendererOrigin, rendererStorage, type StorageOp } from "../shell/webrenderer";
 import type { PackageState } from "../shell/packagedata";
 
 /** kept with the install */
@@ -22,17 +22,17 @@ export function webOrigins(pkg: string): string[] {
     return Array.isArray(saved) ? saved.filter((o): o is string => typeof o === "string") : [];
   } catch { return []; }
 }
-/** the renderer origin of `pkg`'s pages of `webOrigin`, noted among those its data holds. The install
- *  time is part of it, so a reinstall starts on origins of its own. */
+/** the renderer origin `pkg`'s pages of `webOrigin` render on. The install time is part of it, so a
+ *  reinstall starts on origins of its own. */
+const rendererOf = (pkg: string, webOrigin: string) => rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
+/** the renderer origin of `pkg`'s pages of `webOrigin`, noted among those its data holds */
 export function webRenderer(pkg: string, webOrigin: string): Promise<string> {
   const known = webOrigins(pkg);
   if (!known.includes(webOrigin)) {
     try { globalThis.localStorage?.setItem(originsKey(pkg), JSON.stringify([...known, webOrigin])); } catch { /* storage can be unavailable */ }
   }
-  return rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
+  return rendererOf(pkg, webOrigin);
 }
-/** the renderer origin a noted `webOrigin` of `pkg` holds storage on, without noting it again */
-const rendererOf = (pkg: string, webOrigin: string) => rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
 
 // the quota manager runs its tasks in order: a query after a delete sees it done
 let lane: Promise<unknown> = Promise.resolve();
@@ -64,8 +64,8 @@ const answer = (callback: JObj | null, value: () => unknown) => {
 };
 /** usage and quota of an origin; the quota manager answers an origin without data with no usage */
 const usageAndQuota = (origin: string) => inOrder(async () => {
-  const known = noted(origin), web = URL.parse(origin)?.origin;
-  return known ? await storageOf(pkg(), known, "usage") : web && web !== "null" ? await rendererStorage(await rendererOf(pkg(), web), "usage") : null;
+  const web = URL.parse(origin)?.origin, known = noted(origin) ?? (web !== "null" ? web : undefined);
+  return known ? storageOf(pkg(), known, "usage") : null;
 });
 rt.register({
   name: "webdroid/WebStorage", ctor: class extends JObj {}, sup: "android/webkit/WebStorage",
