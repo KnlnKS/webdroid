@@ -62,9 +62,7 @@ export let notificationStore = new NotificationStore();
 export function useNotificationStore(store: NotificationStore): void { notificationStore = store; }
 
 const fail = (cls: string, message: string | null): never => { throw rt.mkThrowable(cls, message); };
-const get = (n: JObj, name: string): any => getDeclared(n, N, name);
-const set = (n: JObj, values: Record<string, unknown>) => setDeclared(n, N, values);
-/** the order an ArrayMap keyed by strings iterates in */
+/** ArrayMap iterates string keys by their Java hash. */
 const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
   items.map((item, i) => ({ item, hash: stringHash(key(item)), i })).sort((a, b) => a.hash - b.hash || a.i - b.i).map(({ item }) => item);
 
@@ -344,7 +342,7 @@ function* groupHelperPosted(r: PostedNotification, notification: JObj): Gen<void
   let members = notificationStore.ungrouped.get(pk);
   if (!members) notificationStore.ungrouped.set(pk, members = new Map());
   const icon = yield* iconIdentity(yield vcall(notification, "getSmallIcon", "()Landroid/graphics/drawable/Icon;"));
-  members.set(r.key, { flags: r.flags, icon, color: get(notification, "color"), visibility: get(notification, "visibility") });
+  members.set(r.key, { flags: r.flags, icon, color: getDeclared<number>(notification, N, "color"), visibility: getDeclared<number>(notification, N, "visibility") });
   if (members.size < AUTOGROUP_AT_COUNT && !hasSummary) return;
   const flags = summaryFlags(members), keys = [...members.keys()];
   if (hasSummary) yield* updateAutobundledSummary(r, flags, [...members.values()]);
@@ -383,15 +381,15 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
   builder = yield vcall(builder, "setColor", `(I)${B}`, look.color);
   builder = yield vcall(builder, "setVisibility", `(I)${B}`, look.visibility);
   const summary = yield vcall(builder, "build", `()L${N};`);
-  const extras = get(summary, "extras");
+  const extras = getDeclared<JObj>(summary, N, "extras");
   yield vcall(extras, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "android.appInfo",
-    yield vcall(get(triggering, "extras"), "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "android.appInfo"));
+    yield vcall(getDeclared<JObj>(triggering, N, "extras"), "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "android.appInfo"));
   const launch = yield vcall(yield* getPM(), "getLaunchIntentForPackage", "(Ljava/lang/String;)Landroid/content/Intent;", trigger.pkg);
-  if (launch && context) set(summary, { contentIntent: yield scall("android/app/PendingIntent", "getActivity",
+  if (launch && context) setDeclared(summary, N, { contentIntent: yield scall("android/app/PendingIntent", "getActivity",
     "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 0, launch, 0x4000000) });
   const record: PostedNotification = {
     ...trigger, key: `${keyOf(trigger.userId, trigger.pkg, 0x7fffffff, RANKER_GROUP, trigger.uid)}|${RANKER_GROUP}`, id: 0x7fffffff, tag: RANKER_GROUP,
-    postTime: BigInt(Date.now()), flags: get(summary, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(parcelled(summary)),
+    postTime: BigInt(Date.now()), flags: getDeclared<number>(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(parcelled(summary)),
   };
   notificationStore.autobundled.set(pk, record.key);
   if (!hasPermission(record.uid) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
@@ -404,10 +402,11 @@ function* updateAutobundledSummary(trigger: PostedNotification, flags: number, m
   if (!record) return;
   const summary = yield* awaited(unparcelled(N, record.data)), look = yield* summaryLook(trigger.pkg, members);
   const sameLook = (yield* iconIdentity(yield vcall(summary, "getSmallIcon", "()Landroid/graphics/drawable/Icon;"))) === (yield* iconIdentity(look.icon))
-    && get(summary, "color") === look.color && get(summary, "visibility") === look.visibility;
+    && getDeclared<number>(summary, N, "color") === look.color && getDeclared<number>(summary, N, "visibility") === look.visibility;
   if (record.flags === flags && sameLook) return;
-  set(summary, { flags, color: look.color, visibility: look.visibility });
+  setDeclared(summary, N, { flags });
   yield vcall(summary, "setSmallIcon", "(Landroid/graphics/drawable/Icon;)V", look.icon);
+  setDeclared(summary, N, { color: look.color, visibility: look.visibility });
   record.flags = flags;
   record.data = yield* awaited(parcelled(summary));
 }
@@ -430,7 +429,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
   const info = yield vcall(yield* getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
   yield scall(N, "addFieldsFromContext", "(Landroid/content/pm/ApplicationInfo;Landroid/app/Notification;)V", info, n);
   const target = targetSdk(pkg);
-  let flags: number = get(n, "flags");
+  let flags: number = getDeclared<number>(n, N, "flags");
   // only ActivityManagerService's foreground services and JobScheduler's user-initiated jobs carry
   // these, and their notifications do not cancel on a tap
   flags &= ~FLAG_USER_INITIATED_JOB;
@@ -439,24 +438,25 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
   const call: number = yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`));
   flags = flags & FLAG_ONGOING_EVENT && (media || call) ? flags | FLAG_NO_DISMISS : flags & ~FLAG_NO_DISMISS;
   flags &= ~(FLAG_CAN_COLORIZE | FLAG_FSI_REQUESTED_BUT_DENIED);
-  const extras: JObj = get(n, "extras");
+  const extras: JObj = getDeclared<JObj>(n, N, "extras");
   for (const key of ["android.allowDuringSetup", "android.substName"]) yield vcall(extras, "remove", "(Ljava/lang/String;)V", key);
-  if (get(n, "fullScreenIntent") && !canUseFullScreenIntent(pkg, target)) {
+  if (getDeclared<JObj | null>(n, N, "fullScreenIntent") && !canUseFullScreenIntent(pkg, target)) {
     // makeStickyHun: the full-screen intent becomes the content intent of a persistent heads-up
     if (packages.get(pkg)?.permissions.has("android.permission.USE_FULL_SCREEN_INTENT")) flags |= FLAG_FSI_REQUESTED_BUT_DENIED;
-    set(n, { contentIntent: get(n, "contentIntent") || get(n, "fullScreenIntent"), fullScreenIntent: null });
+    if (!getDeclared<JObj | null>(n, N, "contentIntent")) setDeclared(n, N, { contentIntent: getDeclared<JObj | null>(n, N, "fullScreenIntent") });
+    setDeclared(n, N, { fullScreenIntent: null });
   }
-  const actions = get(n, "actions") as (JObj | null)[] | null;
+  const actions = getDeclared<(JObj | null)[] | null>(n, N, "actions");
   if (actions?.includes(null)) {
     const kept = actions.filter((a) => a !== null);
-    set(n, { actions: kept.length ? jarray(kept, `L${N}$Action;`) : null });
+    setDeclared(n, N, { actions: kept.length ? jarray(kept, `L${N}$Action;`) : null });
   }
   if ((yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$MediaStyle`))) || (yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$DecoratedMediaCustomViewStyle`)))) {
     for (const key of ["android.mediaRemoteDevice", "android.mediaRemoteIcon", "android.mediaRemoteIntent"]) yield vcall(extras, "remove", "(Ljava/lang/String;)V", key);
     // MEDIA_STYLE_NOTIFICATION_NOT_DISMISSABLE, from Android 14
     if (target >= 34) flags |= FLAG_NO_CLEAR;
   }
-  set(n, { flags });
+  setDeclared(n, N, { flags });
 }
 /** checkUseFullScreenIntentPermission: free below Android 10, then USE_FULL_SCREEN_INTENT and its app op */
 function canUseFullScreenIntent(pkg: string, target: number): boolean {
@@ -480,7 +480,7 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
   const notifyUid = resolveNotificationUid(opPkg, pkg!, uid, userId);
   const n = yield* copyOf(N, notification!);
   // applyForegroundServiceNotification: the app may update its foreground service's notification
-  const foreground = fromService || tag === null && notificationStore.foreground.has(foregroundKey(pkg!, id)) && (get(n, "flags") & FLAG_FOREGROUND_SERVICE) !== 0;
+  const foreground = fromService || tag === null && notificationStore.foreground.has(foregroundKey(pkg!, id)) && (getDeclared<number>(n, N, "flags") & FLAG_FOREGROUND_SERVICE) !== 0;
   yield* fixNotification(n, pkg!, foreground);
   const prefs = yield* preferences(pkg!);
   const channelId: string | null = yield vcall(n, "getChannelId", "()Ljava/lang/String;");
@@ -500,19 +500,19 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
       return;
     }
   }
-  if (!foreground && (yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`))) && !get(n, "fullScreenIntent") && !(get(n, "flags") & FLAG_FSI_REQUESTED_BUT_DENIED))
+  if (!foreground && (yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`))) && !getDeclared<JObj | null>(n, N, "fullScreenIntent") && !(getDeclared<number>(n, N, "flags") & FLAG_FSI_REQUESTED_BUT_DENIED))
     fail("java/lang/IllegalArgumentException", `${key} Not posted. CallStyle notifications must be for a foreground service or user initated job or use a fullScreenIntent.`);
   // a media notification is posted even when its app may not post others
   const media: number = yield vcall(n, "isMediaNotification", "()Z");
   if (!media && (!hasPermission(notifyUid) || (yield vcall(channel, "getImportance", "()I")) === IMPORTANCE_NONE)) return;
   enqueueRate(pkg!, performance.now(), true);
   // handleGroupedNotificationLocked: a summary flag without an app group is dropped
-  let flags: number = get(n, "flags");
+  let flags: number = getDeclared<number>(n, N, "flags");
   const group: string | null = yield vcall(n, "getGroup", "()Ljava/lang/String;"), sortKey: string | null = yield vcall(n, "getSortKey", "()Ljava/lang/String;");
   if (flags & FLAG_GROUP_SUMMARY && group === null && sortKey === null) flags &= ~FLAG_GROUP_SUMMARY;
   if (old) flags |= old.flags & FLAG_FOREGROUND_SERVICE;
   if (flags & FLAG_FOREGROUND_SERVICE) flags |= FLAG_NO_CLEAR;
-  set(n, { flags });
+  setDeclared(n, N, { flags });
   const record: PostedNotification = {
     key, pkg: pkg!, opPkg: opPkg ?? pkg!, id, tag, uid: notifyUid, pid, userId, postTime: BigInt(Date.now()),
     channel: yield vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: yield* awaited(parcelled(n)),
@@ -556,7 +556,7 @@ export const stopForegroundNotification = driven(function* (id: number, remove: 
   if (!r) return;
   if (remove) return yield* removeRecords([r]);
   const n = yield* awaited(unparcelled(N, r.data));
-  set(n, { flags: r.flags &= ~FLAG_FOREGROUND_SERVICE });
+  setDeclared(n, N, { flags: r.flags &= ~FLAG_FOREGROUND_SERVICE });
   r.data = yield* awaited(parcelled(n));
 });
 

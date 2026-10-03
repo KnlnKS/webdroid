@@ -28,7 +28,7 @@ export function vsync(): Promise<void> {
   });
 }
 
-interface Receiver { looper: NativeLooper; receiver: JObj; data: JObj; scheduled: boolean }
+interface Receiver { looper: NativeLooper; receiver: JObj; data: JObj }
 const scheduled = new Set<Receiver>();
 let frame = 0;
 const DATA = "android/view/DisplayEventReceiver$VsyncEventData", TIMELINE = DATA + "$FrameTimeline";
@@ -74,7 +74,6 @@ export function deliverVsync(): void {
   latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
   for (const r of scheduled) {
-    r.scheduled = false;
     r.looper.post(() => {
       fill(r.data as never);
       // the main thread's frame is the Choreographer.doFrame this vsync starts; it completes when
@@ -96,13 +95,10 @@ rt.registerJnis("android/view/DisplayEventReceiver", {
     (receiver: JObj, data: JObj, queue: Record<string, bigint>) => {
       const r = ref(receiver), d = ref(data);
       if (!r || !d) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to initialize display event receiver.");
-      return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d, scheduled: false } satisfies Receiver);
+      return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d } satisfies Receiver);
     },
   "nativeGetDisplayEventReceiverFinalizer()J": () => FINALIZER,
-  "nativeScheduleVsync(J)V": (ptr: bigint) => {
-    const r = deref<Receiver>(ptr);
-    if (!r.scheduled) { r.scheduled = true; scheduled.add(r); }
-  },
+  "nativeScheduleVsync(J)V": (ptr: bigint) => { scheduled.add(deref<Receiver>(ptr)); },
   "nativeGetLatestVsyncEventData(J)Landroid/view/DisplayEventReceiver$VsyncEventData;": async () => {
     const data = await newObj(DATA, "()V");
     fill(data);

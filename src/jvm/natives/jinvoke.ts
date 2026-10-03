@@ -6,8 +6,8 @@
 import { parseMethodDesc, mangleMethod, descToName, jarray, VARHANDLE_MODES } from "../abi";
 import { JObj, rt, driven, type Gen, type Runtime } from "../runtime";
 import type { DexFile } from "../dex";
-import { vcall, type JClass } from "./jlang";
-import { boxReturn, JMethod, unboxArg, classDesc, classForDesc, classFields, classMethods } from "./jreflect";
+import { vcall, classDesc, type JClass } from "./jlang";
+import { boxReturn, JMethod, unboxArg, classForDesc, classFields, classMethods } from "./jreflect";
 
 // ── MethodType
 

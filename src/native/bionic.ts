@@ -17,7 +17,7 @@ import { processEnv } from "../shell/environment";
 import { procIdentity } from "../shell/procfs";
 import { PROPERTY_AREA_PATH, propertyArea } from "../shell/properties";
 import { vfs } from "../shell/vfs";
-import { targetSdkVersion } from "../jvm/natives/jreflect";
+import { targetSdkVersion } from "../jvm/natives/jvmruntime";
 
 /** device paths, in the order the linker initializes them (dependencies first) */
 const BIONIC_LIBS = ["/apex/com.android.runtime/lib64/bionic/libdl.so", "/apex/com.android.runtime/lib64/bionic/libc.so",

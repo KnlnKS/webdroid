@@ -99,6 +99,10 @@ Inputs start strictly before the window ends. `--interval <ms>` overrides their 
 `--setup-shots` records setup screenshots and counter snapshots outside the timing window.
 Require matching `plannedInputs`/`inputs`
 and `actionInFlight: false` for complete interaction windows; blocked actions are reported.
+Missing text targets fail setup immediately. Invalid interaction windows retain their report
+with `valid: false` and reasons in `invalid`, and exit nonzero. A static screen with no
+presentations cannot establish interaction performance. Use `--setup-min-wait` when setup
+must outlast a splash; inspect `setup` and the final screen before comparing rates.
 `--input-offsets <file.json>` supplies strictly increasing millisecond offsets within the
 window, one ordinary action per offset, cycling the exercise list (or once per action with
 `--exercise-once`). It replaces `--interval`; skipped or unfinished actions invalidate an

@@ -12,7 +12,8 @@ export const ABIS_64: readonly string[] = ["arm64-v8a"], ABIS_32: readonly strin
 const abiLists = (prefix: string) => ({
   [`${prefix}abilist`]: [...ABIS_64, ...ABIS_32].join(","), [`${prefix}abilist32`]: ABIS_32.join(","), [`${prefix}abilist64`]: ABIS_64.join(","),
 });
-const fixed: Record<string, string> = {
+// Maps, so a key such as "constructor" is not a property
+const fixed = new Map(Object.entries({
   // ART's 32-bit target, unless the build names one, configured as the build configures arm64's
   "dalvik.vm.isa.arm.variant": DEVICE_PROPERTIES["dalvik.vm.isa.arm64.variant"],
   "dalvik.vm.isa.arm.features": DEVICE_PROPERTIES["dalvik.vm.isa.arm64.features"],
@@ -24,15 +25,15 @@ const fixed: Record<string, string> = {
   "fw.revocable_fd": "true",
   // a product without a camera disables cameraserver, so CameraManager lists no camera
   "config.disable_cameraservice": "true",
-};
-const live: Record<string, () => string> = {
+}));
+const live = new Map(Object.entries({
   "persist.sys.timezone": () => device.timezone,
   // DisplayMetrics.DENSITY_DEVICE
   "ro.sf.lcd_density": () => String(device.densityDpi),
-};
+}));
 
-export const hasProperty = (key: string): boolean => key in live || key in fixed;
-export const propertyValue = (key: string): string | null => live[key]?.() ?? fixed[key] ?? null;
+export const hasProperty = (key: string): boolean => live.has(key) || fixed.has(key);
+export const propertyValue = (key: string): string | null => live.get(key)?.() ?? fixed.get(key) ?? null;
 /** bionic's bound on a value, its terminator included */
 export const PROP_VALUE_MAX = 92;
 
@@ -59,7 +60,7 @@ const LONG_FLAG = 1 << 16, LONG_ERROR_SIZE = 56, LONG_LEGACY_ERROR = utf8.enc.en
 
 /** every property, as bionic's ContextsPreSplit reads /dev/__properties__ */
 export function propertyArea(): Uint8Array {
-  const entries = Object.keys({ ...fixed, ...live }).map((key) => [utf8.enc.encode(key), utf8.enc.encode(propertyValue(key)!)] as const);
+  const entries = [...new Set([...fixed.keys(), ...live.keys()])].map((key) => [utf8.enc.encode(key), utf8.enc.encode(propertyValue(key)!)] as const);
   // at most a node per segment, a record per key and a long value, each padded by under 4 bytes
   const bound = entries.reduce((n, [k, v]) => n + (k.filter((c) => c === 46).length + 1) * (BT_NAME + 4) + 2 * k.length + INFO_NAME + 4 +
     (v.length < PROP_VALUE_MAX ? 0 : v.length + 4), BT_NAME);

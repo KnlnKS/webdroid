@@ -67,7 +67,7 @@ const receiverOf = (h: bigint) => deref<{ channel: Channel }>(h);
 rt.registerJnis("android/view/InputEventReceiver", {
   "nativeInit(Ljava/lang/ref/WeakReference;Landroid/view/InputChannel;Landroid/os/MessageQueue;)J":
     (weak: JObj, input: JObj, queue: Record<string, bigint>) => {
-      const c = channelOf(input as unknown as JObj);
+      const c = channelOf(input);
       c.receiver = { looper: deref<NativeLooper>(queue[PTR]), receiver: vcall(weak, "get", "()Ljava/lang/Object;") };
       deliverFocus(c);
       return handle({ channel: c });

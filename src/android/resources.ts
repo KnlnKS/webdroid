@@ -1,7 +1,7 @@
 // AOSP's Resources as the shell builds them, the way LoadedApk has ResourcesManager build an app's,
 // and the device configuration they take.
 
-import { awaited, rt, driven, setDeclared, type Gen, type JObj } from "../jvm/runtime";
+import { awaited, driven, getDeclared, setDeclared, type Gen, type JObj } from "../jvm/runtime";
 import { newObj, vcall, scall } from "../jvm/natives/jlang";
 import { CONFIG_FIELDS, type JConfiguration, deviceConfiguration, javaLocales } from "./resnative";
 import { device } from "../shell/config";
@@ -50,10 +50,10 @@ export const applyDeviceConfiguration = driven(function* applyDeviceConfiguratio
 export const javaConfiguration = driven(function* javaConfiguration(c: JConfiguration): Gen<JObj> {
   const config: JObj = yield newObj("android/content/res/Configuration", "()V");
   yield vcall(config, "setToDefaults", "()V");
-  for (const k of CONFIG_FIELDS) (config as Record<string, number>)[rt.fieldProp("android/content/res/Configuration", k)!] = c[k];
+  for (const k of CONFIG_FIELDS) setDeclared(config, "android/content/res/Configuration", { [k]: c[k] });
   yield vcall(config, "setLocales", "(Landroid/os/LocaleList;)V", yield* awaited(javaLocales(c.locales)));
   // the display's window configuration, which the global configuration carries on a device
-  const windowConfig = (config as Record<string, unknown>)[rt.fieldProp("android/content/res/Configuration", "windowConfiguration")!];
+  const windowConfig = getDeclared(config, "android/content/res/Configuration", "windowConfiguration");
   const bounds = yield newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height);
   for (const set of ["setBounds", "setAppBounds", "setMaxBounds"]) yield vcall(windowConfig, set, "(Landroid/graphics/Rect;)V", bounds);
   yield vcall(windowConfig, "setWindowingMode", "(I)V", 1);

@@ -1,5 +1,4 @@
 import { declaredField } from "../../src/jvm/runtime";
-// Bitmap, BitmapFactory, BitmapRegionDecoder and ImageDecoder against the reference AVD.
 import { newObj, vcall, scall } from "../../src/jvm/natives/jlang";
 import { mangleStaticField } from "../../src/jvm/abi";
 import { exercise, same, thrown, statics, listener, ltrb } from "./harness";

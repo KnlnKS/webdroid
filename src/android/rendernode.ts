@@ -14,7 +14,7 @@ import { perf } from "../perf";
 import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
-import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, rotateM, about, invert, isIdentity, applyMatrix, matrixAt } from "./matrix";
+import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt } from "./matrix";
 import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas";
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
@@ -43,7 +43,8 @@ export class NativeRenderNode {
   pivotX = 0; pivotY = 0; pivotExplicit = false;
   /** mMatrixOrPivotDirty, and the transform updateMatrix computed (null before the first) */
   dirty = false; transform: Mat | null = null;
-  readonly camera = new Camera3D();
+  private camera3d: Camera3D | null = null;
+  get camera(): Camera3D { return this.camera3d ??= new Camera3D(); }
   clipFlags = CLIP_TO_BOUNDS; clipL = 0; clipT = 0; clipR = 0; clipB = 0;
   staticMatrix: Mat | null = null; animationMatrix: Mat | null = null;
   outline = Outline.None; outlineClip = false; outlineAlpha = 0; outlineRadius = 0;
@@ -57,7 +58,7 @@ export class NativeRenderNode {
   stretch: { x: number; y: number; maxX: number; maxY: number } | null = null;
   positionListener: object | null = null;
   /** the bounds last reported to the position listener */
-  position: string | null = null;
+  position: [number, number, number, number] | null = null;
   effectInput: OffscreenCanvas | null = null; effectCanvas: NativeCanvas | null = null;
   drawing = false;
   constructor(readonly name: string | null) {}
@@ -71,7 +72,7 @@ export class NativeRenderNode {
     if (!this.pivotExplicit) { this.pivotX = f32(this.width / 2); this.pivotY = f32(this.height / 2); }
     const px = this.pivotX, py = this.pivotY;
     if (isZero(this.rotationX) && isZero(this.rotationY)) {
-      this.transform = mul(mul(translateM(this.tx, this.ty), about(rotateM(this.rotation), px, py)), about(scaleM(this.scaleX, this.scaleY), px, py));
+      setPivotedTransform(this.transform ??= identity(), this.tx, this.ty, this.rotation, this.scaleX, this.scaleY, px, py);
     } else {
       const cam = this.camera, t3d = identity();
       cam.stack.push(cam.top.slice());
@@ -134,6 +135,7 @@ function setViewProperties(ctx: Ctx2D, n: NativeRenderNode): void {
   else if (n.animationMatrix) applyMatrix(ctx, n.animationMatrix);
   if (n.hasTransform()) applyMatrix(ctx, n.transform!);
 }
+const sameCoordinate = (a: number, b: number) => a === b || Number.isNaN(a) && Number.isNaN(b);
 /** PositionListenerTrampoline::onPositionUpdated: the node's bounds through the frame's transform,
  *  rounded when it only translates, reported when they changed */
 function notePosition(ctx: Ctx2D, n: NativeRenderNode): void {
@@ -141,14 +143,21 @@ function notePosition(ctx: Ctx2D, n: NativeRenderNode): void {
   setViewProperties(ctx, n);
   const m = ctx.getTransform();
   ctx.restore();
-  const xs = [0, n.width].flatMap((x) => [0, n.height].map((y) => m.a * x + m.c * y + m.e));
-  const ys = [0, n.width].flatMap((x) => [0, n.height].map((y) => m.b * x + m.d * y + m.f));
-  const round = m.b === 0 && m.c === 0 && m.a === 1 && m.d === 1 ? Math.round : (v: number) => v;
-  const b = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => Math.trunc(round(v)));
-  const key = b.join();
-  if (key === n.position) return;
-  n.position = key;
-  positionUpdates.push([n.positionListener!, b[0], b[1], b[2], b[3]]);
+  const ax = m.a * n.width, cy = m.c * n.height, bx = m.b * n.width, dy = m.d * n.height;
+  const x0 = m.a * 0, y0 = m.b * 0, x1 = m.c * 0, y1 = m.d * 0;
+  let l = Math.min(x0 + x1 + m.e, x0 + cy + m.e, ax + x1 + m.e, ax + cy + m.e);
+  let t = Math.min(y0 + y1 + m.f, y0 + dy + m.f, bx + y1 + m.f, bx + dy + m.f);
+  let r = Math.max(x0 + x1 + m.e, x0 + cy + m.e, ax + x1 + m.e, ax + cy + m.e);
+  let b = Math.max(y0 + y1 + m.f, y0 + dy + m.f, bx + y1 + m.f, bx + dy + m.f);
+  if (m.b === 0 && m.c === 0 && m.a === 1 && m.d === 1) {
+    l = Math.round(l); t = Math.round(t); r = Math.round(r); b = Math.round(b);
+  }
+  l = Math.trunc(l); t = Math.trunc(t); r = Math.trunc(r); b = Math.trunc(b);
+  const last = n.position;
+  if (last && sameCoordinate(last[0], l) && sameCoordinate(last[1], t) && sameCoordinate(last[2], r) && sameCoordinate(last[3], b)) return;
+  if (last) { last[0] = l; last[1] = t; last[2] = r; last[3] = b; }
+  else n.position = [l, t, r, b];
+  positionUpdates.push([n.positionListener!, l, t, r, b]);
 }
 /** RenderNodeDrawable: the node's display list replayed into ctx under its properties */
 export function drawNodeInto(ctx: Ctx2D, n: NativeRenderNode) {

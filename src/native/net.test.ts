@@ -5,9 +5,10 @@ import { defineHost, ldp, lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
 import { mem } from "./mem";
-import { NET_SYSCALLS, netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, AF_INET, AF_INET6, SOL_SOCKET } from "./net";
+import { NET_SYSCALLS, netInit, socketCreate, socketBind, socketListen, socketConnect, socketAccept, socketSend, socketReceive, socketShutdown, socketName, socketOption, socketClose, SOL_SOCKET } from "./net";
 import { E } from "./abi";
 import { FS_SYSCALLS } from "./fs";
+import { AF_INET, AF_INET6 } from "./net-address";
 
 test("a loopback TCP connection stays in the process, with Linux's errors", async () => {
   const SOCK_STREAM = 1, SOCK_NONBLOCK = 0x800, SO_ERROR = 4, any6 = new Array(16).fill(0);

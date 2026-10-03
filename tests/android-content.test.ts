@@ -16,7 +16,7 @@ import { parsePackageArchive, apkCertificates } from "../src/android/packagearch
 import { registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { hostedService } from "../src/android/binder";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
-import { Resources, rvString, newSV } from "../src/android/res";
+import { Resources, NativeTheme, rvString, newSV } from "../src/android/res";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { mkComponentName, newIntent } from "../src/android/intent";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
@@ -474,6 +474,15 @@ describe("resource-value-density", () => {
       if (resolve) res.resolveReference(value);
       expect([value.t, value.d, value.density, value.resid]).toEqual(expected);
     }
+    const theme = new NativeTheme(res), attr = 0x7f020000;
+    theme.entries.set(attr, { t: TV.REFERENCE, d: 0x7f010000, pkg: 0x7f, flags: 0 });
+    const selected = theme.resolvedAttribute(attr);
+    const other = new Resources(null, {}, undefined, true);
+    other.setApks([]);
+    expect(theme.resolvedAttribute(attr)).toBe(selected);
+    config.density = table.device.density = 160;
+    res.invalidate();
+    expect(theme.resolvedAttribute(attr)).toMatchObject({ d: 1, density: 160 });
   });
 });
 

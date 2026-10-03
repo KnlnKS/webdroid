@@ -357,12 +357,12 @@ const checkOp = driven(function* (code: number, uid: number, pkg: string | null)
 const noteOp = driven(function* (code: number, uid: number, pkg: string | null, tag: string | null): Gen<JObj> {
   return yield newObj("android/app/SyncNotedAppOp", "(IILjava/lang/String;Ljava/lang/String;)V", owns(uid, pkg) ? yield* opMode(code, pkg!) : MODE_ERRORED, code, tag, pkg);
 });
-const SOURCE = "android/content/AttributionSourceState";
+const sourceField = <T>(state: JObj, name: string) => getDeclared<T>(state, "android/content/AttributionSourceState", name);
 const noteFor = (code: number, state: JObj) =>
-  noteOp(code, getDeclared(state, SOURCE, "uid") as number, getDeclared(state, SOURCE, "packageName") as string | null, getDeclared(state, SOURCE, "attributionTag") as string | null);
+  noteOp(code, sourceField(state, "uid"), sourceField(state, "packageName"), sourceField(state, "attributionTag"));
 /** a proxied op is noted for the proxy (an app is never a trusted proxy) and then the app it serves */
 const noteProxyOp = driven(function* (code: number, state: JObj): Gen<JObj> {
-  const proxy = yield* awaited(noteFor(code, state)), next = getDeclared(state, SOURCE, "next") as JObj[] | null;
+  const proxy = yield* awaited(noteFor(code, state)), next = sourceField<JObj[] | null>(state, "next");
   return next?.length && (yield vcall(proxy, "getOpMode", "()I")) === MODE_ALLOWED ? yield* awaited(noteFor(code, next[0])) : proxy;
 });
 rt.register({ name: "webdroid/AppOpsService", ctor: class extends JObj {}, sup: "com/android/internal/app/IAppOpsService$Stub", methods: {
@@ -418,8 +418,8 @@ rt.register({ name: "webdroid/PermissionCheckerService", ctor: class extends JOb
   "checkPermission(Ljava/lang/String;Landroid/content/AttributionSourceState;Ljava/lang/String;ZZZI)I":
     driven(function* (permission: string, source: JObj, _message: string | null, _delivery: number, _start: number, fromDatasource: number) {
       for (let current: JObj | undefined = source, first = true; current; first = false) {
-        if (!(first && fromDatasource) && (yield* awaited(checkUidPermission(permission, getDeclared(current, SOURCE, "uid")))) !== 0) return 2; // PERMISSION_HARD_DENIED
-        current = getDeclared<JObj[] | null>(current, SOURCE, "next")?.[0];
+        if (!(first && fromDatasource) && (yield* awaited(checkUidPermission(permission, sourceField<number>(current, "uid")))) !== 0) return 2; // PERMISSION_HARD_DENIED
+        current = sourceField<JObj[] | null>(current, "next")?.[0];
       }
       return 0;
     }),

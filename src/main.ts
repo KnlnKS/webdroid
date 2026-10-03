@@ -1,5 +1,6 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import { codeStats } from "./jvm/codecache";
+import { pendingCompilations } from "./jvm/tiering";
 import "./natives";
 import { PROCESS_PID } from "./android/os";
 import { recordVsync, vsyncScheduled } from "./android/vsync";
@@ -27,7 +28,7 @@ import { jitStats } from "./native/core";
 import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics";
 import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
-import { fixProcessBitness } from "./jvm/natives/jreflect";
+import { fixProcessBitness } from "./jvm/natives/jvmruntime";
 import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
@@ -145,7 +146,7 @@ const wd = {
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj: (cls: string, desc?: string, ...args: unknown[]) => onMain(() => newObj(cls, desc, ...args)),
   vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
-  code: codeStats,
+  code: () => ({ ...codeStats(), deferred: pendingCompilations() }),
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, app: () => appHost, back,
   background: (ms = 1000) => processBroker().background(ms),

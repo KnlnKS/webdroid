@@ -30,6 +30,20 @@ export const snap = (v: number) => (Math.abs(v) <= 1 / 4096 ? 0 : v);
 export const rotateM = (deg: number): Mat => { const r = deg * Math.PI / 180; return sinCosM(snap(Math.sin(r)), snap(Math.cos(r))); };
 /** the same transform taken about (px, py) rather than the origin */
 export const about = (m: Mat, px: number, py: number): Mat => mul(translateM(px, py), mul(m, translateM(-px, -py)));
+/** T * pivot(R) * pivot(S), retaining the general composition's arithmetic order. */
+export function setPivotedTransform(out: Mat, tx: number, ty: number, rotation: number, sx: number, sy: number, px: number, py: number): void {
+  if (!Number.isFinite(px + py + tx + ty + rotation + sx + sy)) {
+    out.set(mul(mul(translateM(tx, ty), about(rotateM(rotation), px, py)), about(scaleM(sx, sy), px, py)));
+    return;
+  }
+  const rad = rotation * Math.PI / 180, s = snap(Math.sin(rad)), c = snap(Math.cos(rad));
+  const x = sx * -px + px, y = sy * -py + py;
+  out[0] = c * sx + 0; out[1] = -s * sy + 0;
+  out[2] = c * x + -s * y + (c * -px + -s * -py + px + tx);
+  out[3] = s * sx + 0; out[4] = c * sy + 0;
+  out[5] = s * x + c * y + (s * -px + c * -py + py + ty);
+  out[6] = 0; out[7] = 0; out[8] = 1;
+}
 export function invert(m: Mat): Mat | null {
   const [a, b, c, d, e, f, g, h, i] = m;
   const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);

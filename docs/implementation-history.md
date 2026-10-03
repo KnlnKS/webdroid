@@ -2663,3 +2663,279 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   while the page is hidden, as `requestVideoFrameCallback` does. General view
   elevation shadows remain unimplemented: goldens here are Material 3 and flat,
   so none calibrates them.
+- Native callback allocation pass (2026-10-02). Every JNI `Call<Type>Method`
+  previously parked the guest because `invoke` was async, even when Java
+  returned synchronously. It now parks only for class initialization or a
+  suspended callback; exception conversion, calling-thread identity and
+  pinned-array synchronization still enclose the complete invocation. Cpu
+  call frames reuse their architectural byte view, allocate stack-argument
+  storage only when registers spill, and drain idle waiters only when present.
+  Against 304c0529, a Bun scratch probe entering an A64 `CallStaticIntMethod`
+  through `Cpu.call` (100k calls/sample, five samples after 10k warmup, loaded
+  platform jars) went from median 64.71 to 47.60 ms; guest parks fell from
+  100k to zero. This isolates a synchronous callback, not app latency or FPS.
+  The 39 CPU/JNI/cache tests passed, including both ABIs, signal ordering,
+  floating argument spills, suspended class initialization and callback
+  rejection; TypeScript checking passed. The scheduler and JIT architecture
+  remain intact: historical native profiles still identify compiled guest
+  execution and region transitions as the larger native-game costs.
+- Native JIT batches no longer make a JS-owned copy before WebAssembly
+  compilation. The [WebAssembly JS API](https://www.w3.org/TR/2026/CRD-wasm-js-api-2-20260224/)
+  snapshots the BufferSource synchronously for both `Module` and asynchronous
+  `instantiate`, so a view into the emission buffer suffices. This removes one
+  allocation and copy of up to 1 MiB per batch; no FPS gain is claimed. Existing
+  cache/JIT tests passed, and a scratch Bun probe overwriting the source after
+  `instantiate` returned still compiled the original bytes successfully.
+- RenderNode allocation pass (2026-10-02). Every ordinary 2D transform update
+  built 13 temporary Float64Arrays through general matrix multiplication.
+  Scalar composition now writes the node's retained matrix, keeping the
+  original arithmetic grouping; 3D and nonfinite inputs retain their existing
+  path. Camera3D is allocated on first use. Position listeners retain numeric
+  bounds instead of allocating corner arrays and string keys each frame,
+  preserving NaN and signed-zero deduplication. Recording contexts consult
+  their method cache before reading the native context again.
+  Scratch differential probes found no differences across 10k transforms
+  (Object.is) or 10k position cases including nonfinite coordinates. Seven
+  V8 samples of 100k transform updates measured median 292.8 ms before and
+  2.3 ms after; Bun measured 28.3 and 1.51 ms. These isolate allocation and
+  arithmetic, not app performance: verified Mihon settings scrolling remained
+  equivalent, 69.91 versus 69.66 presentations/s. All 16 graphics tests and
+  the existing browser Canvas, render-effect and runtime-shader probes passed.
+  A compact display-list rewrite remains unproven: first measure argument-array
+  allocation and command distributions. Moving individual Canvas2D commands to
+  Wasm would add crossings; a renderer rewrite needs a batched rendering boundary.
+
+- JVM allocation and tiering pass (2026-10-02, base `304c0529`). Short UTF-16
+  conversion reuses numeric scratch arrays by length below 128 code units; typed
+  reads cannot re-enter Java and the cache retains no caller objects. A V8 probe
+  of 40M conversions reduced scavenges from 16,466 to 8,425, with only 0–5% timing
+  improvement. Cold-frame pooling was removed after V8 probes slowed by 1.6–2.0x;
+  clearing registers and managing pools outweighed fresh allocations. Replacing
+  superclass `.call` with `super` was neutral: V8 already inlined the existing
+  call shape. Static live-register analysis suggested only 8–15% fewer saved
+  slots in the inspected DEX sets, insufficient evidence for an OSR/liveness rewrite.
+- Idle code emission previously persisted source for the next launch while this
+  launch continued interpreting it. It now binds that same source and retargets
+  method cells during idle time; resumable code is prepared only after a cold
+  frame actually suspends. Existing suspended frames retain their method state.
+  The existing 32 MiB source allowance reserves 8 MiB for demand promotion; idle
+  installation cannot disable a method's later demand promotion. The allowance
+  accounts for source, not total heap; persisted/worker bodies already follow
+  a separate path. A 16 MiB idle limit lost much of the benefit to startup code;
+  24 MiB is measured tuning, not a universal optimum. An idle callback still
+  cannot preempt one large compilation. The core tier test covers a suspended
+  frame crossing installation, source reuse and demand promotion after the idle
+  allowance fills. A bulk worker experiment emitting every baseline-profile
+  resumable body was removed: Mihon added 44.6 MB to 32.1 MB of entry source,
+  retaining unused offered bodies. See [performance boundaries](decisions/0003-performance-boundaries.md)
+  for the architecture audit and remaining Wasm/batching experiments.
+- Performance capture validation (2026-10-02). The first Mihon scrolling sample
+  missed More/Settings during its splash, then reported advancing ticks with no
+  presentations on a static library screen. It was discarded. `perf-browser`
+  now fails missing setup targets and marks hidden/stalled, incomplete-input or
+  zero-presentation interaction windows invalid while preserving their reports.
+  Explicit setup readiness produced valid settings scrolls. Never interpret
+  shell ticks as FPS or an invalid window as a faster implementation.
+
+- Final performance samples (2026-10-02, `8e00b97d`). The cold latency gate
+  passed with per-app maxima of 71 ms (Calculator), 26 ms (FitNotes), 131 ms
+  (Mihon); the warm gate passed at 84/28/150 ms. The initial baseline cold gate
+  peaked at 97 ms and a later baseline Mihon run at 130 ms. These are individual
+  shared-host samples, not evidence of a wall-time speedup. The user explicitly
+  approved continuing while another checkout ran browser tests. During a later
+  scrolling sample, external parallel Bun workers consumed hundreds of percent
+  CPU; no unrelated processes were stopped. Cold-call reductions are clearer:
+  final FitNotes repeated date navigation had zero versus 1,666–2,408 baseline;
+  Mihon's repeated theme switches had 2,913/2,183 versus 8,448/6,002 in the later
+  baseline run (the initial baseline was itself variable at 1,284/5,879).
+  Final scrolling samples were valid but noisy: candidate 32.00, baseline 38.58,
+  candidate repeat 62.58 presentations/s, following the earlier 69.91/69.66 pair
+  before idle installation. All completed 11/11 inputs with visible advancing
+  ticks, presentations and healthy process diagnostics. The final repeat retained
+  25,573,689 source bytes versus baseline 4,471,890; post-GC heap was 610.5 versus
+  617.7 MiB, one sample each. Do not infer a general memory or FPS improvement.
+  Reports are under ignored `webdroid-shots/performance/`; reproduce scrolling
+  with `perf-browser --flow mihon-app --after settings --exercise
+  settings-scroll,settings-scroll-back --interval 1000 --ms 12000
+  --setup-min-wait 6500`, alternating immutable revisions on private ports.
+
+  Lichess tools/home interaction likewise completed 11/11 inputs using SwiftShader:
+  the earlier baseline was 16.67 presentations/s, final candidate 14.75, following
+  baseline repeat 10.25. All three processes answered diagnostics; the existing
+  `androidx/window/sidecar/SidecarProvider` missing class was unchanged, with no
+  native requirements or runtime errors. This variability does not isolate a
+  native FPS gain. Candidate cold calls fell to 470 from the initial baseline's
+  4,432, but guest execution remained the dominant cost. The candidate's tools
+  screen and Mihon's scrolled settings screen were visually inspected.
+
+- Verification for the performance pass: final typecheck and all 1,183 unit tests
+  passed (76,148 assertions). FitNotes (4,213 classes), Mihon (21,918) and Lichess
+  (3,300) smoke-compiled with zero method failures; framework checks passed 30/30.
+  Both baseline and candidate completed all seven serialized quick flows, 105
+  steps each, with every process's diagnostics available and no new missing APIs,
+  native requirements or runtime errors. Komikku's 11 existing SQLite diagnostic
+  messages were identical. Three Android visual checkpoint scores matched exactly.
+  The initial baseline FitNotes PNG caught a spinner despite the same UI tree as
+  the candidate's completed workout; repeating baseline FitNotes produced a PNG
+  byte-identical to the candidate. Goldens were unchanged. This covers the local
+  reproducible lane and the measured Lichess interaction, not the full live/corpus
+  matrix or arbitrary APK compatibility. Cold/warm latency gates pass, but the
+  shared host prevents a reliable overall FPS conclusion.
+
+- Performance review fixes (2026-10-02, review base `3ad7aa3e`). Deferred emission
+  was keyed by DEX/method in the persistence cache, but its closure installed code
+  into one Runtime. Two runtimes reaching the same method before idle time left
+  the first cold; a source already pending persistence could suppress a later
+  instance's installation entirely. `jvm/tiering.ts` now owns per-instance jobs,
+  promotion, resumption and retargeting; `jvm/compiler.ts` owns DEX emission and
+  drops from 1,007 to 840 lines. One queue handles idle and deferred demand work,
+  independently of Cache Storage. Persistence retains DEX-key deduplication and
+  first-call phase attribution; a coalesced retry saves bodies emitted after the
+  first batch without needing another method call to trigger a write.
+  The core tier test drives the real queue across multiple runtimes, pending
+  source, suspended frames, late-loaded factories and the idle allowance.
+- The old idle resume callback charged emitted source even when `resume()` bound
+  a late-loaded factory. Budget accounting now happens only after creating a new
+  resumable function, once per instance. Demand-created resume source is counted
+  too, but mandatory resumption is never blocked by the allowance. Idle-rejected
+  source is not retained for later demand compilation. A separate cache lifecycle
+  probe verified startup/later chunks and one delayed save after throttling.
+  Pivoted affine composition and its exceptional-value fallback now share the
+  matrix module; RenderNode keeps destination ownership and invalidation. The
+  existing graphics test compares ordinary, signed-zero, snapped, extreme and
+  non-finite values against generic composition and verifies destination reuse.
+- Review-fix validation (`4f055580`, `82836a61`): typecheck passed; the standalone
+  full suite passed 1,183 tests / 76,265 assertions, and all nine browser probes
+  passed separately. An earlier full suite overlapping typecheck failed the
+  drawable-span probe with `JThrowable`. The review baseline's overlapping run
+  failed that probe and two others with SyntaxErrors, so an identical cause is
+  not established; isolated drawable probes passed on both revisions. No test
+  expectations or timeouts were relaxed. FitNotes/Mihon/Lichess smoke compilation
+  again had zero method failures, and framework checks passed 30/30.
+  Cold latency maxima were 82/26/113 ms for Calculator/FitNotes/Mihon; warm maxima
+  were 31/24/93 ms, with zero cold calls for every gated warm tap. The review
+  baseline's cold maxima were 64/20/106 ms. Demand resume accounting consumes
+  previously uncounted capacity, so it can leave less room for idle entry bodies;
+  Mihon's repeated cold-launch theme taps made 4,466/3,309 cold calls versus
+  2,847/2,108 in that baseline sample. These are qualified shared-host samples,
+  not a demonstrated latency or FPS improvement from the review fixes.
+  All seven serialized quick flows passed (105 steps, 314 process snapshots),
+  with every process returning diagnostics, no new missing APIs/native requirements
+  or runtime errors, and no draw/layout/GL errors or wedged/timed-out steps. All
+  four visual checkpoint scores exactly matched the pre-fix capture; Komikku's
+  existing SQLite messages were unchanged. Goldens remain unchanged. Review logs
+  and captures are under ignored `webdroid-shots/performance/review-*`.
+
+- Branch maintainability review (2026-10-02, against `main`, working baseline
+  `4123b7b7`). The review began with 576 changed files; the parallel audit concentrated
+  on JVM resolution/persistence, native networking and Android service boundaries.
+  `DexLink` now owns per-DEX resolution caches with shared prototype methods,
+  replacing a duplicate interface and ten closures per DEX. Defining-runtime
+  ownership, initialization and tier-retargeting remain unchanged. `runtime.ts`
+  falls from 1,321 to 1,218 lines; its coupled class linking/initialization and
+  runtime-bound String constructors remain a decomposition concern, not an
+  unconditional approval of the file's size.
+- Network address parsing, resolution, interfaces and constants now have one
+  owner, `native/net-address.ts`, which both the socket core and netd adapter use.
+  This removes the direct `net.ts`/`unix.ts` cycle and brings `net.ts` from 1,088
+  to 997 lines. The two sockaddr serializers were left separate because their
+  behavior differs for non-IPv4 inputs. Android account, widget and notification
+  code uses the canonical declared-field helpers; notification ordering reuses
+  Java's string hash. The vsync receiver Set is now its sole scheduling state,
+  eliminating the mirrored boolean. Widget provider metadata parsing remains
+  outside the existing device-service tests' exercised paths.
+- Two correctness findings were fixed at their shared owners. System property
+  lookup used an ordinary object, so `toString` fabricated a value, `constructor`
+  returned an object and `__proto__` threw. A Map now represents exactly the
+  configured properties; one Java-facing regression test covers absent names.
+  Code-cache saves cleared pending source before asynchronous storage succeeded.
+  They now retain a snapshot until all writes succeed and remove only its matching
+  entries, preserving concurrent additions and failed writes for the existing
+  save triggers. A temporary failure-injection probe reproduced the starting
+  revision's loss and verified open/put failure, recovery and concurrent additions;
+  no retry loop was added. The probe is saved with the ignored review artifacts.
+- Review validation: typecheck, 30 framework checks, and FitNotes/Mihon smoke
+  compilation passed (4,213/21,918 classes, zero method failures). The final
+  uninstrumented suite passed 1,184 tests / 76,274 assertions; the clean starting
+  revision passed 1,183 / 76,265. An earlier candidate run failed five concurrent
+  browser probes with SyntaxErrors. Instrumented repeats received byte-identical
+  bundles and passed, as did isolated browser runs. The original failure's cause
+  remains unisolated; a matching baseline failure was not reproduced, and the
+  harness, timeouts and expectations were not changed.
+- The first serialized quick matrix reached 6/7 flows: Mihon onboarding parked
+  during Java main-queue dispatch with no reported exception or missing/native
+  requirement. Vsync had posted and host ticks advanced, but queued Java messages
+  stopped draining. A matched starting-revision onboarding run passed, followed
+  by a candidate repeat with a byte-identical checkpoint PNG. The second complete
+  serialized matrix passed all 7 flows / 105 steps: 311 process snapshots answered,
+  every step rendered, shell ticks advanced, and no missing APIs, native requirements,
+  layout/draw/GL errors, timeouts or wedges were observed. Komikku retained its
+  11 configured expected SQLite diagnostics. The first wedge remains an unisolated
+  intermittent failure; neither the passing repeat nor the baseline pass explains
+  its cause. Goldens are unchanged. Captures and logs live under ignored
+  `webdroid-shots/quality-review/`; the full live/corpus matrix was not rerun.
+- Cold and warm latency gates passed. Per-app maxima for Calculator/FitNotes/Mihon
+  were 40/24/146 ms cold and 61/23/97 ms warm. Mihon's cold sample has little
+  margin against 150 ms. These are gate samples without a matched performance
+  baseline, not evidence of a general speedup or FPS gain.
+
+- Branch quality follow-up (2026-10-02, against `main`, working baseline
+  `6a7f1920`). The parallel review concentrated on JVM ownership and initialization,
+  Android resource selection, native descriptors/syscalls and the shell boundary.
+  Unsafe and VM array allocation/process configuration now live outside reflection;
+  Class descriptors have one owner beside `JClass`, and the two Unsafe registrations
+  share their read-modify-write implementations. `jreflect.ts` drops from 1,365 to
+  1,022 lines. An accessor cache keyed only by a native JS property reused integer
+  accessors for floating fields with that property: `getInt` returned 1.5 instead
+  of its IEEE bits, 1069547520. The key now includes the JVM descriptor, with one
+  core regression covering integer/float and long/double access.
+- Class initialization's timeout escape was unreachable: same-thread requests
+  returned before the only call that could enable its timer, and the other caller
+  always disabled it. The timer, fallback state and associated branches are gone;
+  the original success/error Promise chain retains its settlement timing.
+  `runtime.ts` falls from 1,218 to 1,199 lines, but remains above main's 955 lines.
+  Native member installation and String-constructor bridging remain concrete
+  decomposition candidates; this pass does not waive that ownership concern.
+- Resource selection generations now belong to each `Resources`, preventing a new
+  unrelated AssetManager from flushing every theme's resolved values. The existing
+  resource test reproduced that unnecessary invalidation and now checks both cache
+  isolation and reselection after an owning-resource change. `NativeTheme` requires
+  its resource owner at construction and no longer masquerades as a Java object.
+  Global qualifier changes still invalidate registered resources; configured native
+  managers, theme copying and rebasing retain their explicit invalidation paths.
+- Native descriptors now read append/nonblocking behavior from `statusFlags`,
+  removing mirrored booleans and their synchronization at creation, accept and
+  `fcntl`. A temporary probe exercised append, positional writes, duplicated
+  descriptors, pipes and Unix sockets on both ABIs. The ARM64 `rt_sigtimedwait`
+  adapter separately consumed a non-null output pointer twice, shifting its
+  timeout to the sigset-size argument and faulting at address 0x8. It now reads
+  that virtual pointer once; one core test covers immediate/delayed siginfo and
+  zero-timeout delivery. No app-specific behavior or visual goldens changed.
+- Integrated validation: full typecheck passed; the standalone suite passed all
+  1,186 tests / 76,293 assertions, including browser probes. The descriptor audit
+  retained its checked-in 29 mismatches in nine classes. Framework checks passed
+  30/30, and FitNotes/Mihon smoke compilation passed with 4,213/21,918 classes and
+  zero method failures. The serialized quick matrix passed all seven flows and
+  105 steps. All 313 process snapshots supplied diagnostics, every step had a
+  presented frame and shell ticks advanced in each flow. There were no new missing
+  APIs, native requirements, layout/draw/GL errors, wedges or timeouts; Komikku
+  retained its 11 configured expected SQLite messages. The four visual checkpoints
+  passed their existing limits. No matched visual/performance baseline or full
+  live/corpus matrix was run, so these results establish the tested paths only.
+  Logs and diagnostic summaries are in ignored
+  `webdroid-shots/quality-review-followup/`; step captures are in
+  `tests/e2e/actual-fast/`. The broad optional descriptor-state model and native
+  `setsockopt` suppressing unsupported-option errors remain review concerns; the
+  latter inherits main's success behavior and was not changed speculatively.
+- Cold and warm latency gates passed, with Calculator/FitNotes/Mihon maxima
+  of 72/38/142 ms cold and 43/43/97 ms warm. Mihon
+  retains limited cold margin against 150 ms. These are individual gate samples,
+  not evidence of an overall speedup or FPS improvement.
+- Deslop follow-up (2026-10-02, baseline `18251cfa`): removed redundant VM prose,
+  casts and socket-to-descriptor forwarding; reused declared-field helpers and
+  V8's profile types without intended behavior changes. Typecheck and the normal
+  full suite passed (1,186 tests / 76,293 assertions); profile summaries matched
+  the original in full, time-cut and tap-window modes. No tests were added.
+  The combined Android content/device-services invocation failed `databaseList`
+  on both revisions after sharing package state; both suites passed separately.
+  Logs are in ignored `webdroid-shots/deslop/`.

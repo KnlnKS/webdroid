@@ -1,14 +1,7 @@
-// Compiled method bodies persisted across launches (docs/bytecode-first-plan.md §4.4). A launch
-// records the source of every hot and resumable body it compiles; the next launch of the same
-// package, on the same build, installs those bodies from scripts in Cache Storage instead of
-// preparing, interpreting and compiling them again, and the service worker serving the scripts
-// lets V8 reuse their code cache. A body's source depends only on its dex and the build, so the
-// key is the dex signature and method index. Saves append a chunk of the bodies not yet written,
-// so their cost follows what is new rather than what the app has accumulated. Bodies a launch
-// first needed before its first frame go to startup chunks, which the next launch awaits; the
-// rest load after that launch's first frame, so they do not delay it. Bodies of the platform's
-// dex are the same for every app, so they persist in one store all packages share: an app's first
-// launch runs the framework code earlier launches of other apps compiled.
+// Compiled bodies persist by build, DEX and method (docs/bytecode-first-plan.md §4.4).
+// Cache Storage scripts let V8 reuse compiled code across launches. Saves append new bodies;
+// startup chunks load before launch, later chunks after the first frame. Platform bodies share
+// a store across apps.
 
 import { inputSettled } from "./yield";
 import { BYTECODE } from "./provenance";
@@ -36,14 +29,12 @@ let later: string[] | null = null;
 let compact = false;
 /** bodies compiled in this launch and not yet written */
 const pending = new Map<string, { source: string; phase: Phase }>();
-/** methods that ran without a hot body: theirs is emitted in idle time, so the next launch runs it hot */
-const deferred = new Map<string, () => string>();
 /** the phase of each method's first call, by entry key: a startup method promoted later is still startup */
 const firstUse = new Map<string, Phase>();
 const entryOf = (key: string) => key.slice(0, -1) + "e";
 
 /** where this launch persists, what it loaded and what it has yet to write */
-export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) => !isPlatformKey(key)).length, pending: pending.size, deferred: deferred.size, later: later?.length ?? 0 });
+export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) => !isPlatformKey(key)).length, pending: pending.size, later: later?.length ?? 0 });
 
 export const codeKey = (dexId: string, methodIdx: number, form: "e" | "r") => `${dexId}:${methodIdx}:${form}`;
 
@@ -81,17 +72,11 @@ function record(key: string, source: string, form: "e" | "r"): void {
   const at = firstUse.get(entryOf(key)) ?? phase;
   if (form === "e") firstUse.set(key, at);
   pending.set(key, { source, phase: at });
-  deferred.delete(key);
   idle();
 }
 
-/** a body a method has not compiled yet but the next launch will want; `make` emits it */
-export function recordLater(key: string, make: () => string): void {
-  if (claim(key) || loaded[key] || pending.has(key)) return;
-  deferred.set(key, make);
-  if (!firstUse.has(key)) firstUse.set(key, phase);
-  idle();
-}
+/** The first call determines the persisted phase, even if compilation happens after startup. */
+export function recordUse(key: string): void { if (!firstUse.has(key)) firstUse.set(key, phase); }
 
 /** A compile worker's bodies (factory sources). Those the page has not compiled meanwhile import
  *  as a module, which V8 compiles off the main thread and finalizes there, and install like
@@ -189,27 +174,30 @@ let importChunk: (path: string) => Promise<Record<string, Factory>> = async () =
 export function startupDone(): void {
   if (phase === "l") return;
   phase = "l";
+  idle();
   const paths = later ?? [];
   void Promise.all(paths.map(importChunk)).then((modules) => {
     for (const bodies of modules) for (const key in bodies) loaded[key] ??= bodies[key];
     later = null;
+    if (compact) idle();
   }).catch((e) => console.warn("[webdroid] persisted code unavailable", e));
 }
 
 let idling = false;
-/** emit deferred bodies while the page is idle, then write what is pending */
+/** write new bodies outside the current Java call */
 function idle(): void {
   if (idling || !dir || typeof requestIdleCallback === "undefined") return;
   idling = true;
-  requestIdleCallback(function work(deadline) {
-    for (const [key, make] of deferred) {
-      if (deadline.timeRemaining() < 1) { requestIdleCallback(work); return; }
-      deferred.delete(key);
-      try { recordBody(key, make(), key.endsWith(":r") ? "r" : "e"); } catch { /* it compiles on demand instead */ }
+  requestIdleCallback(function work() {
+    if (!(pending.size || compact && !later)) { idling = false; return; }
+    const delay = phase === "l" && !lastSave ? 0 : 30_000 - (performance.now() - lastSave);
+    if (delay > 0) {
+      if (phase === "l") setTimeout(() => requestIdleCallback(work, { timeout: 60_000 }), delay);
+      else idling = false;
+      return;
     }
     idling = false;
-    // the first save follows startup, so a launch that ends early keeps it without a pagehide write
-    if (phase === "l" && !lastSave || performance.now() - lastSave > 30_000) void saveCode();
+    void saveCode();
   }, { timeout: 60_000 });
 }
 
@@ -229,13 +217,15 @@ function saveCode(): Promise<void> {
       chunk.push([key, source]);
     };
     if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!offered.has(key) && !pending.has(key)) add(key, startupKeys.has(key) ? "s" : "l", factory.toString());
-    for (const [key, { source, phase }] of pending) add(key, phase, source);
-    pending.clear();
+    const batch = [...pending];
+    for (const [key, { source, phase }] of batch) add(key, phase, source);
     lastSave = performance.now();
     const cache = await caches.open(CACHE), old = rewrite ? await cache.keys() : [], stamp = Date.now().toString(36);
     // all at once: a pagehide save gets no time for a second write after the first
     await Promise.all([...chunks].map(([name, bodies]) =>
       cache.put(`${name}-${stamp}.js`, new Response(codeText(bodies), { headers: { "content-type": "text/javascript" } }))));
+    // Keep failed writes queued, and leave bodies recorded during this save for the next one.
+    for (const [key, body] of batch) if (pending.get(key) === body) pending.delete(key);
     if (rewrite) for (const request of old) {
       const path = new URL(request.url).pathname;
       if (path.startsWith(dir) || path.startsWith(platformDir!)) void cache.delete(request);

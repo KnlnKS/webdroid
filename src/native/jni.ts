@@ -179,28 +179,40 @@ function syncPinned(args: unknown[], toJava: boolean): void {
     if (at) for (const p of at) (toJava ? copyIn : copyOut)(pinned.get(p)!.type, arr, p, 0, (arr as { length: number }).length);
   }
 }
-async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): Promise<HostRet> {
+function invokeBody(java: <T>(call: () => T) => T, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): unknown {
+  let fn: unknown;
+  if (m.isStatic) {
+    self = m.info.ctor;
+    fn = m.info.ctor[m.mangled];
+  } else {
+    if (self === null || self === undefined) throw throwable("java/lang/NullPointerException", "JNI call on null " + m.name);
+    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as Record<string, unknown>)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc);
+  }
+  if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
+  return java(() => fn.apply(self, args));
+}
+
+function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): HostRet | Promise<HostRet> {
   const java = caller(cpu.jthread);
   const synced = pinned.size > 0;
   if (synced) syncPinned(args, true);
+  let pending = false;
   try {
-    let fn: any;
-    if (m.isStatic) {
-      const p = (m.info.owner ?? rt).initClass(m.info); if (p) await p;
-      self = m.info.ctor;
-      fn = m.info.ctor[m.mangled];
-    } else {
-      if (self === null || self === undefined) throw throwable("java/lang/NullPointerException", "JNI call on null " + m.name);
-      fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as any)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc);
+    const p = m.isStatic ? (m.info.owner ?? rt).initClass(m.info) : null;
+    const r = p ? p.then(() => invokeBody(java, m, self, args, nonvirtual)) : invokeBody(java, m, self, args, nonvirtual);
+    if (r instanceof Promise) {
+      pending = true;
+      return r.then(value => retWord(m.ret, value, cpu)).catch(e => {
+        pend(cpu, rt.jx(e));
+        return m.ret === "J" || m.ret === "D" ? 0n : 0;
+      }).finally(() => { if (synced) syncPinned(args, false); });
     }
-    if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
-    const r = java(() => fn.apply(self, args));
-    return retWord(m.ret, r instanceof Promise ? await r : r, cpu);
+    return retWord(m.ret, r, cpu);
   } catch (e) {
     pend(cpu, rt.jx(e));
     return m.ret === "J" || m.ret === "D" ? 0n : 0;
   } finally {
-    if (synced) syncPinned(args, false);
+    if (synced && !pending) syncPinned(args, false);
   }
 }
 

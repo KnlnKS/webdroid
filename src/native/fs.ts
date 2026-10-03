@@ -27,10 +27,10 @@ interface Inotify { watches: Map<number, { path: string; mask: number; dir: bool
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
-  path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
+  path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   /** a writable /proc file, whose writes procWrite takes */
   proc?: boolean;
-  timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
+  timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
   /** an AF_UNIX socket's type (unix.ts): SOCK_DGRAM and SOCK_SEQPACKET keep each write whole */
   unix?: number;
   /** a bound AF_UNIX socket's name, and once it listens the connections it has yet to accept */
@@ -93,7 +93,7 @@ const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length 
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
-const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, append: false, statusFlags: 0, references: 1 });
+const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
 const closeOnExec = new Set<number>();
 export const openFd = (fd: number): Fd | undefined => fds.get(fd);
@@ -122,8 +122,6 @@ setNativePollProvider({
     waiters.push(wake);
     return () => { const index = waiters.indexOf(wake); if (index >= 0) waiters.splice(index, 1); };
   },
-  read(cpu, fd, destination, length) { return fds.has(fd) ? fdRead(cpu, fd, destination, length) : null; },
-  write(cpu, fd, source, length) { return fds.has(fd) ? fdWrite(cpu, fd, source, length) : null; },
 });
 
 function atPath(cpu: Cpu, dirfd: number, path: string): string | number {
@@ -216,7 +214,7 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   if (fifo) {
     if (acc !== 0) { fifo.writers++; fifo.closed = false; }
     return put({ ...fdBase(path), content: existing, rpipe: acc !== 1 ? fifo : undefined, wpipe: acc !== 0 ? fifo : undefined, write: acc !== 0,
-      nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+      statusFlags: flags & (O_ACCMODE | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
   }
   if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
   if (!existing) {
@@ -226,7 +224,7 @@ export function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     vfs.write(path, new Uint8Array(0));
   } else if (flags & O_CREAT && flags & O_EXCL) return fail(cpu, E.EXIST);
   if (flags & O_TRUNC && acc !== 0) vfs.write(path, new Uint8Array(0));
-  return put({ ...fdBase(path), content: vfs.open(path)!, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+  return put({ ...fdBase(path), content: vfs.open(path)!, write: acc !== 0, statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
 }
 function put(f: Fd, cloexec = false, min = 0): number { const fd = allocateFd(min); fds.set(fd, f); if (cloexec) closeOnExec.add(fd); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
@@ -255,8 +253,7 @@ export function javaShutdownFd(fd: number, how: number): number {
 export function unixSocket(type: number): number {
   const kind = (type & 15) === 3 ? SOCK_DGRAM : type & 15;                       // unix_create makes SOCK_RAW a datagram socket
   if (kind !== SOCK_STREAM && kind !== SOCK_DGRAM && kind !== SOCK_SEQPACKET) return -E.SOCKTNOSUPPORT;
-  const nb = !!(type & O_NONBLOCK);
-  return put({ ...fdBase("socketpair"), unix: kind, rpipe: kind === SOCK_DGRAM ? newPipe(1) : undefined, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC));
+  return put({ ...fdBase("socketpair"), unix: kind, rpipe: kind === SOCK_DGRAM ? newPipe(1) : undefined, statusFlags: 2 | (type & O_NONBLOCK) }, !!(type & O_CLOEXEC));
 }
 export const isUnixSocket = (fd: number): boolean => !!fds.get(fd)?.unix;
 /** connect a unix socket to an in-process peer: each write reaches `receive` whole, and what it
@@ -298,10 +295,10 @@ export function unixAccept(fd: number, flags = 0): number | Promise<number> {
     if (fds.get(fd) !== f) return -E.BADF;
     const connection = f.listener!.pending.shift();
     if (connection) {
-      if (flags & O_NONBLOCK) { connection.nonblock = true; connection.statusFlags |= O_NONBLOCK; }
+      connection.statusFlags |= flags & O_NONBLOCK;
       return put(connection, !!(flags & O_CLOEXEC));
     }
-    if (f.nonblock) return -EAGAIN;
+    if (f.statusFlags & O_NONBLOCK) return -EAGAIN;
     return new Promise<void>((resolve) => f.listener!.wake.push(resolve)).then(next);
   };
   return next();
@@ -370,7 +367,7 @@ export function unixReceive(fd: number, target: Uint8Array, flags: number, from?
   };
   const now = attempt();
   if (now !== null) return now;
-  if (f.nonblock || flags & MSG_DONTWAIT) return -EAGAIN;
+  if (f.statusFlags & O_NONBLOCK || flags & MSG_DONTWAIT) return -EAGAIN;
   const wait = (): Promise<number> => new Promise<void>((resolve) => pipe.wake.push(resolve)).then(() => fds.get(fd) !== f ? -E.BADF : attempt() ?? wait());
   return wait();
 }
@@ -506,7 +503,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
     return 8;
   }
   if (!f.write) return fail(cpu, E.BADF);
-  if (f.append) f.pos = f.content.len;
+  if (f.statusFlags & O_APPEND) f.pos = f.content.len;
   vfs.writeAt(f.content, f.pos, bytes);
   f.pos += n;
   return n;
@@ -566,7 +563,7 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
   if (f.inotify) {
     const q = f.inotify.pipe.q;
     if (!q.length) {
-      if (f.nonblock) return fail(cpu, EAGAIN);
+      if (f.statusFlags & O_NONBLOCK) return fail(cpu, EAGAIN);
       const at = anchor(p);
       return new Promise<void>((resolve) => f.inotify!.pipe.wake.push(resolve)).then(() => fdRead(cpu, fd, at(), n));
     }
@@ -583,7 +580,7 @@ export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): numbe
   if (f.rpipe || f.event) {
     if (!ready(f)) {
       if (f.rpipe?.closed) return 0;
-      if (f.nonblock) return fail(cpu, EAGAIN);
+      if (f.statusFlags & O_NONBLOCK) return fail(cpu, EAGAIN);
       const dst = anchor(p);
       return new Promise<void>((r) => waitOn(f, r)).then(() => fdRead(cpu, fd, dst(), n));
     }
@@ -717,9 +714,9 @@ function fillStatfs(b: number): void {
 }
 /** pipe2(2): the read end, then the write end */
 export function javaPipeFds(flags: number): [number, number] {
-  const p = newPipe(1), nb = !!(flags & O_NONBLOCK), cloexec = !!(flags & O_CLOEXEC);
-  return [put({ ...fdBase("pipe"), rpipe: p, nonblock: nb, statusFlags: nb ? O_NONBLOCK : 0 }, cloexec),
-    put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }, cloexec)];
+  const p = newPipe(1), statusFlags = flags & O_NONBLOCK, cloexec = !!(flags & O_CLOEXEC);
+  return [put({ ...fdBase("pipe"), rpipe: p, statusFlags }, cloexec),
+    put({ ...fdBase("pipe"), wpipe: p, write: true, statusFlags: 1 | statusFlags }, cloexec)];
 }
 export function makePipe(out: number, flags: number): number {
   const [read, write] = javaPipeFds(flags);
@@ -730,7 +727,7 @@ function makeInotify(cpu: Cpu | null, flags: number): number {
   if (flags & ~(IN_NONBLOCK | IN_CLOEXEC)) return fail(cpu, E.INVAL);
   const pipe = newPipe(0), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
   inotifies.add(state);
-  return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, nonblock: !!(flags & IN_NONBLOCK), statusFlags: flags & IN_NONBLOCK }, !!(flags & O_CLOEXEC));
+  return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, statusFlags: flags & IN_NONBLOCK }, !!(flags & O_CLOEXEC));
 }
 function inotifyAddWatch(cpu: Cpu | null, fd: number, name: string, mask: number): number {
   const path = vfs.norm(name), state = fds.get(fd)?.inotify;
@@ -868,11 +865,7 @@ function fdFcntl(cpu: Cpu | null, fd: number, cmd: number, arg: number): number 
   if (cmd === F_GETFD) return closeOnExec.has(fd) ? 1 : 0;
   if (cmd === F_SETFD) { if (arg & 1) closeOnExec.add(fd); else closeOnExec.delete(fd); return 0; }
   if (cmd === F_GETFL) return f.statusFlags;
-  if (cmd === F_SETFL) {
-    f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (arg & (O_APPEND | O_NONBLOCK));
-    f.append = !!(f.statusFlags & O_APPEND);
-    f.nonblock = !!(f.statusFlags & O_NONBLOCK);
-  }
+  if (cmd === F_SETFL) f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (arg & (O_APPEND | O_NONBLOCK));
   return 0;
 }
 const FIONREAD = 0x541b;
@@ -1009,7 +1002,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   timerfd_create: (cpu, a) => {
     const clock = a.i(), flags = a.i();
     if (![0, 1, 7].includes(clock) || flags & ~(O_NONBLOCK | O_CLOEXEC)) return fail(cpu, E.INVAL);
-    return put({ ...fdBase("timerfd"), timer: { clock, next: 0, interval: 0 }, event: { count: 0, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+    return put({ ...fdBase("timerfd"), timer: { clock, next: 0, interval: 0 }, event: { count: 0, wake: [] }, statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC));
   },
   timerfd_settime: (cpu, a) => {
     const fd = a.i(), flags = a.i(), value = a.p(), old = a.p(), f = fds.get(fd);
@@ -1031,7 +1024,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
     if (!f.timer) return fail(cpu, E.INVAL);
     timerState(f.timer, out); return 0;
   },
-  eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC)); },
+  eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC)); },
   epoll_create1: (cpu, a) => {
     const flags = a.i();
     if (flags & ~O_CLOEXEC) return fail(cpu, E.INVAL);

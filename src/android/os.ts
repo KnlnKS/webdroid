@@ -12,7 +12,7 @@ import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
 import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize } from "../jvm/natives/jlang";
 import { E, ERRSTR, strerror } from "../native/abi";
-import { is64BitProcess } from "../jvm/natives/jreflect";
+import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";

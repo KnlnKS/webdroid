@@ -9,11 +9,13 @@ import { E, ERRSTR } from "../native/abi";
 import { javaDup2Fd, unixSocketPair, javaShutdownFd, unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption } from "../native/fs";
 import { sunPath, sunPathBytes, unixConnectPath } from "../native/unix";
 import {
-  AF_UNIX, AF_INET, AF_INET6, POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, INTERFACES, GROUP_OPTIONS,
+  POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, GROUP_OPTIONS,
   socketCreate, socketConnect, socketBind, socketListen, socketAccept, socketShutdown, socketSend, socketReceive, socketName,
-  socketOption, setSocketOption, socketGroup, pollEntries, resolveHost, hostOf, gaiText, endpointOf, addressText,
-  parseIpv6, isNativeSocket, type Endpoint, type PollEntry,
+  socketOption, setSocketOption, socketGroup, pollEntries, isNativeSocket, type PollEntry,
 } from "../native/net";
+import {
+  AF_UNIX, AF_INET, AF_INET6, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME, INTERFACES, resolveHost, hostOf, gaiText, endpointOf, addressText, parseIpv6, type Endpoint,
+} from "../native/net-address";
 import { parseIpv4 } from "../shell/relay";
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
@@ -204,8 +206,8 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       : Promise.all(addresses.map((address) => inetAddress({ address }))).then((list) => jarray(list, INET)));
   },
   [`getnameinfo(${INET}I)Ljava/lang/String;`]: (address: JObj | null, flags: number) => after(endpoint(address, 0), (ep) => {
-    const name = flags & 2 /* NI_NUMERICHOST */ ? null : hostOf(ep.address);
-    if (name === null && flags & 4 /* NI_NAMEREQD */) return gaiError("getnameinfo", 8 /* EAI_NONAME */);
+    const name = flags & NI_NUMERICHOST ? null : hostOf(ep.address);
+    if (name === null && flags & NI_NAMEREQD) return gaiError("getnameinfo", EAI_NONAME);
     return name ?? addressText(ep.address);
   }),
   "gai_strerror(I)Ljava/lang/String;": (code: number) => gaiText(code),

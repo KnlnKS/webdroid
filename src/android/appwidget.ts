@@ -4,7 +4,7 @@
 // parseAppWidgetProviderInfo does (decoded from the reference AVD's services.jar); no host has
 // bound a widget id, so every id is unknown, updates to one reach nothing, and pinning is
 // unsupported.
-import { awaited, JObj, declaredField, rt, noops, driven, type Gen } from "../jvm/runtime";
+import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jlang";
 import { callingIdentity, hostStub, serviceContext } from "./binder";
@@ -13,8 +13,6 @@ import { packages } from "./packages";
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
 const INFO = "android/appwidget/AppWidgetProviderInfo";
 const GET_META_DATA = 0x80, MATCH_DIRECT_BOOT_AWARE = 0x40000, MATCH_DIRECT_BOOT_UNAWARE = 0x80000;
-const set = (o: JObj, name: string, value: unknown) => { (o as unknown as Record<string, unknown>)[declaredField(INFO, name)] = value; };
-const get = <T>(o: unknown, cls: string, name: string) => (o as Record<string, T>)[declaredField(cls, name)];
 
 /** R.styleable.AppWidgetProviderInfo: [index, field, kind, default] in parseAppWidgetProviderInfo's order */
 const ATTRIBUTES: [number, string, "dimension" | "int" | "resource", number | string][] = [
@@ -40,11 +38,13 @@ function* parseProvider(pm: JObj, activity: JObj): Gen<JObj | null> {
     let type: number;
     while ((type = yield vcall(parser, "next", "()I")) !== 1 && type !== 2);
     if ((yield vcall(parser, "getName", `()${S}`)) !== "appwidget-provider") return null;
-    const pkg = get<string>(activity, "android/content/pm/PackageItemInfo", "packageName");
+    const pkg = getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "packageName");
     const info = yield newObj(INFO);
-    set(info, "provider", yield newObj("android/content/ComponentName", `(${S}${S})V`, pkg, get<string>(activity, "android/content/pm/PackageItemInfo", "name")));
-    set(info, "providerInfo", activity);
-    const app = get<JObj>(activity, "android/content/pm/ComponentInfo", "applicationInfo");
+    setDeclared(info, INFO, {
+      provider: yield newObj("android/content/ComponentName", `(${S}${S})V`, pkg, getDeclared<string>(activity, "android/content/pm/PackageItemInfo", "name")),
+      providerInfo: activity,
+    });
+    const app = getDeclared<JObj>(activity, "android/content/pm/ComponentInfo", "applicationInfo");
     const res = yield vcall(pm, "getResourcesForApplication", "(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;", app);
     const a: JObj = yield vcall(res, "obtainAttributes", `(Landroid/util/AttributeSet;[I)L${TA};`, attrs,
       yield staticField("com/android/internal/R$styleable", "AppWidgetProviderInfo"));
@@ -53,15 +53,15 @@ function* parseProvider(pm: JObj, activity: JObj): Gen<JObj | null> {
       const fallbackValue = typeof fallback === "string" ? values[fallback] : fallback;
       if (kind === "dimension") {
         const value = yield vcall(a, "peekValue", "(I)Landroid/util/TypedValue;", index);
-        values[name] = value ? get<number>(value, "android/util/TypedValue", "data") : fallbackValue;
+        values[name] = value ? getDeclared<number>(value, "android/util/TypedValue", "data") : fallbackValue;
       } else values[name] = yield* awaited(read(a, kind, index, fallbackValue));
-      set(info, name, values[name]);
     }
     const configure: string | null = yield vcall(a, "getString", `(I)${S}`, 5);
-    if (configure) set(info, "configure", yield newObj("android/content/ComponentName", `(${S}${S})V`, pkg, configure));
-    set(info, "label", String(yield vcall(yield vcall(activity, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm), "toString", `()${S}`)));
-    set(info, "icon", yield vcall(activity, "getIconResource", "()I"));
-    for (const [index, name, kind, fallback] of LATE_ATTRIBUTES) set(info, name, yield* awaited(read(a, kind, index, fallback)));
+    if (configure) setDeclared(info, INFO, { configure: yield newObj("android/content/ComponentName", `(${S}${S})V`, pkg, configure) });
+    setDeclared(info, INFO, { label: String(yield vcall(yield vcall(activity, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm), "toString", `()${S}`)) });
+    setDeclared(info, INFO, { icon: yield vcall(activity, "getIconResource", "()I") });
+    for (const [index, name, kind, fallback] of LATE_ATTRIBUTES) values[name] = yield* awaited(read(a, kind, index, fallback));
+    setDeclared(info, INFO, values);
     yield vcall(a, "recycle", "()V");
     return info;
   } finally {
@@ -74,7 +74,7 @@ function* installedProviders(): Gen<JObj[]> {
     yield newObj("android/content/Intent", `(${S})V`, "android.appwidget.action.APPWIDGET_UPDATE"), GET_META_DATA | MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE);
   const providers: JObj[] = [];
   for (const ri of (yield vcall(receivers, "toArray", "()[Ljava/lang/Object;")) as JObj[]) {
-    const info = yield* parseProvider(pm, get<JObj>(ri, "android/content/pm/ResolveInfo", "activityInfo"));
+    const info = yield* parseProvider(pm, getDeclared<JObj>(ri, "android/content/pm/ResolveInfo", "activityInfo"));
     if (info) providers.push(info);
   }
   return providers;
@@ -92,8 +92,8 @@ rt.register({ name: "webdroid/AppWidgetService", ctor: class extends JObj {}, su
   [`getInstalledProvidersForProfile(II${S})Landroid/content/pm/ParceledListSlice;`]: driven(function* (categories: number, _profile: number, pkg: string | null) {
     const matching: JObj[] = [];
     for (const info of yield* installedProviders()) {
-      const provider = get<JObj>(info, INFO, "provider");
-      if ((get<number>(info, INFO, "widgetCategory") & categories) && (pkg === null || (yield vcall(provider, "getPackageName", `()${S}`)) === pkg)) matching.push(info);
+      const provider = getDeclared<JObj>(info, INFO, "provider");
+      if ((getDeclared<number>(info, INFO, "widgetCategory") & categories) && (pkg === null || (yield vcall(provider, "getPackageName", `()${S}`)) === pkg)) matching.push(info);
     }
     return newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(matching));
   }),

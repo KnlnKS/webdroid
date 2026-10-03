@@ -7,6 +7,8 @@ import { declaredField } from "../src/jvm/runtime";
 import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { canvasOver, canvasOf } from "../src/android/canvas";
 import { glSurfaces } from "../src/native/egl-current";
+import { NativeRenderNode } from "../src/android/rendernode";
+import { about, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jlang";
@@ -172,6 +174,40 @@ describe("lighting-color-filter", () => {
 });
 
 describe("matrix", () => {
+  test("RenderNode composes rotation and scale about its implicit or explicit pivot", () => {
+    const node = new NativeRenderNode(null);
+    node.setSide("right", 100); node.setSide("bottom", 80);
+    node.setTransform("rotation", 90); node.setTransform("tx", 7);
+    node.setTransform("scaleX", 2); node.setTransform("scaleY", 3);
+    node.updateMatrix();
+    expect(mapPoint(node.transform!, 50, 40)).toEqual([57, 40]);
+    expect(mapPoint(node.transform!, 0, 0)).toEqual([177, -60]);
+    node.setPivot("pivotX", 10); node.setPivot("pivotY", 20);
+    node.updateMatrix();
+    expect(mapPoint(node.transform!, 10, 20)).toEqual([17, 20]);
+    node.setTransform("rotationX", 30); node.updateMatrix();
+    node.setTransform("rotationX", 0); node.setTransform("rotation", 0);
+    node.setTransform("scaleX", 1); node.setTransform("scaleY", 1);
+    node.updateMatrix();
+    expect(mapPoint(node.transform!, 0, 0)).toEqual([7, 0]);
+    const retained = node.transform;
+    for (const [tx, ty, rotation, sx, sy, px, py] of [
+      [0, -0, -0, -0, 1, 0, -0], [7.5, -13, 37, -2, 0.25, 11, -17],
+      [1, 2, 0.01, 2, 3, 4, 5], [1, 2, 0.02, 2, 3, 4, 5],
+      [3e38, -3e38, 180, 3e38, -3e38, 3e38, -3e38],
+      [NaN, 0, 0, 1, 1, 0, 0], [0, Infinity, 0, 1, 1, 0, 0],
+      [0, 0, Infinity, 1, 1, 0, 0], [0, 0, 0, -Infinity, 1, 0, 0],
+      [0, 0, 0, 1, 1, Infinity, 0], [0, 0, 0, 1, 1, 0, 0],
+    ]) {
+      node.setTransform("tx", tx); node.setTransform("ty", ty); node.setTransform("rotation", rotation);
+      node.setTransform("scaleX", sx); node.setTransform("scaleY", sy);
+      node.setPivot("pivotX", px); node.setPivot("pivotY", py); node.updateMatrix();
+      const expected = mul(mul(translateM(tx, ty), about(rotateM(rotation), px, py)), about(scaleM(sx, sy), px, py));
+      expect(node.transform).toBe(retained);
+      for (let i = 0; i < 9; i++) expect(Object.is(node.transform![i], expected[i])).toBe(true);
+    }
+  });
+
   rt.linkNatives();
 
   test("Matrix.set copies independently and null restores identity", async () => {

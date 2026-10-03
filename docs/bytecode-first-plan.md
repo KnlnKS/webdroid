@@ -583,11 +583,37 @@ fixtures under `tests/fixtures/oracle/` and replay them in `bun test`.
 ## 9. Progress and handoff
 
 Last updated 2026-10-05 (Stage E: 2026-10-01). Stage F is merged into `knlnks/bytecode` (not pushed);
-read "Stage F handoff" first, then "Latest handoff".
+For this performance branch, read the §4 performance follow-up first. For the platform
+migration, read "Stage F handoff", then "Latest handoff".
 The older handoffs below it are history: where they list next steps for
 Stage B or C, the newer ones supersede them. Each commit message states what it measured; the
 implementation history's 2026-09-30/2026-10-01 entries in "JVM, DEX and process ownership" record
 each unit's findings. Stage E is complete on this branch: its handoff is "Stage E handoff" below.
+
+### §4 performance follow-up (2026-10-02): reuse idle work and retained state
+
+The `knlnks/bytecode-codex-performance` worktree starts at `304c0529`. The requested
+nested branch name could not coexist with the existing `knlnks/bytecode` Git ref.
+[Decision 0003](decisions/0003-performance-boundaries.md) records the system-wide audit,
+JS/Wasm ownership, adopted changes and rejected experiments. Synchronous JNI callbacks
+now stay in the guest slice; RenderNodes retain affine/position state, short string
+conversion retains numeric scratch, and JIT batches avoid a redundant byte copy.
+Already-emitted idle code now installs in the current launch, within a 24 MiB allowance
+that reserves 8 MiB of the existing source budget for later demand promotion. No Java
+method, class initializer or app-specific substitute executes in anticipation.
+The maintainability review separated per-instance installation into `jvm/tiering.ts`
+from DEX-keyed source persistence, corrected resumable-source accounting, and moved
+affine composition into the matrix owner. After those fixes, cold/warm latency gates
+passed at 113/93 ms maximum. The history records regression cases and evidence limits.
+
+The initial performance pass's cold/warm gates passed (maxima 131/150 ms). Repeated FitNotes date navigation
+makes zero cold calls, versus 1,666–2,408 at the starting commit. In the later matched
+Mihon comparison, repeated theme changes fell from 8,448/6,002 to 2,913/2,183 cold calls.
+This is less interpreter work, not proof of a large FPS improvement. Another checkout
+runs browser tests on this host; the user explicitly accepted qualified timing results.
+The implementation history records full validation and measurement limits. Do not
+replace the native core or JVM wholesale based on these microbenchmarks; measure
+Java-to-guest suspension and batched display-list replay next.
 
 ### §4 follow-up (2026-10-02): the code store works across realms; no platform image
 
@@ -1543,7 +1569,7 @@ android/content/res/`):
   through XmlBlock (today the TS inflater parses AXML itself). String reads with spans
   (StringBlock styles).
 - **Done (step 1): natives.** 94 of 97 have libandroidfw semantics over one AssetManager2
-  (`res.ts` `Resources`, `JTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
+  (`res.ts` `Resources`, `NativeTheme`, `resolveAttributes`; natives in `assetmanager.ts`), which the TS
   stack uses too. Left: ObbScanner and ResourceTimer (unreached), resolution logging (answers "") and fd-backed ApkAssets (served by path). `WEBDROID_BYTECODE=android/content/res/ bun run fwtest android/content/res/`
   runs AOSP's Resources end to end headless. Measurements are in the history entry.
 - **Done (steps 2-5), the default since 131efb48:** apps boot through AOSP's ApkAssets, AssetManager and Resources

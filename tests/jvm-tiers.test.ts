@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Runtime, JObj, stubs, isPlaceholderMethod } from "../src/jvm/runtime";
 import { DexFile } from "../src/jvm/dex";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 import { setLazyMethods } from "../src/jvm/compiler";
 import { perf } from "../src/perf";
+import * as codecache from "../src/jvm/codecache";
 import { configureJvm, jvmProfiler } from "../src/jvm/profile";
 
 const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
@@ -262,4 +263,74 @@ test("persisted bodies install hot from the first call and behave as compiled on
     expect(await call(9007199254740993n)).toBe(expected);
     expect(perf.coldCalls).toBe(cold);
   } finally { useCode({}); }
+});
+
+test("idle preparation belongs to each method instance and preserves suspended frames and cached bodies", async () => {
+  const callbacks: IdleRequestCallback[] = [];
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "requestIdleCallback");
+  Object.defineProperty(globalThis, "requestIdleCallback", { configurable: true,
+    value: (callback: IdleRequestCallback) => { callbacks.push(callback); return callbacks.length; } });
+  const flush = () => { while (callbacks.length) callbacks.shift()!({ timeRemaining: () => 1000, didTimeout: false }); };
+  try {
+    const f = await fixture("cold"), sibling = await fixture("cold");
+    const call = f.fn("suspended", "(II)I"), other = sibling.fn("suspended", "(II)I");
+    f.park();
+    const first = call(1, 7), pending = await f.next();
+    other(0, 7);
+    flush();
+    pending.resolve(7);
+    expect(await first).toBe(8);
+    const compiledBytes = f.R.hotSourceBytes;
+    expect(compiledBytes).toBeGreaterThan(sibling.R.hotSourceBytes);
+    const read = spyOn(f.R.link("JvmTierProbe").dex!, "code");
+    try {
+      const cold = perf.coldCalls, second = call(1, 8);
+      (await f.next()).resolve(8);
+      expect(await second).toBe(9);
+      expect(other(0, 8)).toBe(9);
+      expect(perf.coldCalls).toBe(cold);
+      expect(f.R.hotSourceBytes).toBe(compiledBytes);
+      expect(read).not.toHaveBeenCalled();
+      expect(f.thread()).toBe(f.main);
+    } finally { read.mockRestore(); }
+    // Source recorded by another instance must not prevent this instance warming.
+    const later = await fixture("cold"), third = later.fn("suspended", "(II)I");
+    third(0, 7); flush();
+    const cold = perf.coldCalls;
+    expect(third(0, 8)).toBe(9);
+    expect(perf.coldCalls).toBe(cold);
+
+    const cached = await fixture("cold"), fourth = cached.fn("suspended", "(II)I");
+    cached.park(); const suspended = fourth(1, 7), completion = await cached.next();
+    const rec = cached.R.link("JvmTierProbe").lazy!.find((r) => r.name === "suspended")!;
+    let bytesAtBind = -1;
+    codecache.useCode({ [codecache.codeKey(rec.dex.id, rec.m.methodIdx, "r")]: () => {
+      bytesAtBind = cached.R.hotSourceBytes;
+      return () => 0;
+    } });
+    flush();
+    expect(bytesAtBind).toBeGreaterThan(0);
+    expect(cached.R.hotSourceBytes).toBe(bytesAtBind);
+    completion.resolve(7);
+    expect(await suspended).toBe(8);
+
+    const reserved = await fixture("cold"), wide = reserved.fn("wide", "(J)J");
+    reserved.R.hotSourceBytes = 24 * 1024 * 1024;
+    wide(1n); flush();
+    const before = perf.coldCalls;
+    wide(1n);
+    expect(perf.coldCalls).toBe(before + 1);
+    expect(reserved.R.hotSourceBytes).toBe(24 * 1024 * 1024);
+    for (let i = 0; i < 31; i++) wide(1n);
+    flush();
+    const promoted = perf.coldCalls;
+    wide(1n);
+    expect(perf.coldCalls).toBe(promoted);
+    expect(reserved.R.hotSourceBytes).toBeGreaterThan(24 * 1024 * 1024);
+  } finally {
+    codecache.useCode({});
+    flush();
+    if (previous) Object.defineProperty(globalThis, "requestIdleCallback", previous);
+    else Reflect.deleteProperty(globalThis, "requestIdleCallback");
+  }
 });

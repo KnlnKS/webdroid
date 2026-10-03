@@ -68,3 +68,35 @@ test("JNI callbacks retain their caller after suspended class initialization", a
     expect(cpu.exc).toBeNull();
   } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
 });
+
+for (const a64 of [false, true]) test(`${a64 ? "A64" : "ARM32"} JNI callbacks park only when Java suspends`, async () => {
+  setA64(a64); jniInit();
+  const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);
+  let body: () => unknown = () => 42;
+  const cls = `test/JniCallback${+a64}`;
+  rt.register({ name: cls, ctor: class extends JObj {}, methods: { "static value()I": () => { expect(curThread).toBe(thread); return body(); } } });
+  try {
+    await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out, 0x10006]);
+    const env = ldp(out), table = ldp(env);
+    const call = (slot: number, ...args: number[]) => cpu.call(ldp(table + slot * PTR), [env, ...args]);
+    const klass = await call(6, cstr(cls)), method = await call(113, klass, cstr("value"), cstr("()I"));
+    const immediate = call(129, klass, method);
+    expect(cpu.parked).toBe(false);
+    expect(await immediate).toBe(42);
+
+    const deferred = Promise.withResolvers<number>();
+    body = () => deferred.promise;
+    const suspended = call(129, klass, method);
+    expect(cpu.parked).toBe(true);
+    deferred.resolve(73);
+    expect(await suspended).toBe(73);
+
+    const failure = rt.mkThrowable("java/lang/IllegalStateException", "callback failed");
+    for (const asynchronous of [false, true]) {
+      body = () => { if (asynchronous) return Promise.reject(failure); throw failure; };
+      expect(await call(129, klass, method)).toBe(0);
+      expect(cpu.exc).toBe(failure);
+      cpu.exc = null;
+    }
+  } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
+});

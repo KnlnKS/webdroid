@@ -54,7 +54,7 @@ const currentState = driven(function* currentState$(r: Record): Gen {
   return vcall(builder, "build", `()L${PS};`);
 });
 
-const R = (f: (r: Record, ...a: any[]) => unknown) => function (this: JRecordBinder, ...a: unknown[]) { return f(this.r, ...a); };
+const R = <A extends unknown[], T>(f: (r: Record, ...a: A) => T) => function (this: JRecordBinder, ...a: A): T { return f(this.r, ...a); };
 rt.register({ name: "webdroid/MediaSessionRecord", ctor: JRecordBinder, sup: MS + "ISession$Stub", methods: {
   [`getController()L${MS}ISessionController;`]: R((r) => r.controller),
   "setFlags(I)V": R((r, flags: number) => { r.flags = BigInt(flags); }),

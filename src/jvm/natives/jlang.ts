@@ -182,6 +182,12 @@ function monWait(obj: object | string, ms: number): Promise<void> {
   return rt.monitors.wait(obj, thread, (arm) => park(thread, arm, ms > 0 ? ms : undefined));
 }
 
+export function classDesc(c: JClass | null): string {
+  if (c?.primName) return PRIM_DESC[c.primName] ?? "I";
+  if (c?.arrDesc) return c.arrDesc;
+  return c?.ci ? "L" + c.ci.name + ";" : "Ljava/lang/Object;";
+}
+
 export class JClass extends JObj {
   ci: ClassInfo | null = null;
   /** ART's per-class extension data (ClassValue's map lives there), made on first request */

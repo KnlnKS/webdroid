@@ -11,7 +11,7 @@ import { handle, deref, release, FINALIZER } from "./handles";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { i8, u8, jarray } from "../jvm/abi";
 import {
-  Resources, JTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
+  Resources, NativeTheme, type Apk, type SV, newSV, resolveAttributes, STYLE_NUM_ENTRIES,
 } from "./res";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent, type XmlNode } from "./axml";
 import { sizeClass, type Arsc } from "./arsc";
@@ -362,40 +362,36 @@ delegate("android/content/res/AssetManager", {
   "nativeGetLastResourceResolution(J)Ljava/lang/String;": () => "",
 
   // themes
-  "nativeThemeCreate(J)J": (h: bigint) => {
-    const t = new JTheme();
-    t.res = assets(h);
-    return handle(t);
-  },
+  "nativeThemeCreate(J)J": (h: bigint) => handle(new NativeTheme(assets(h))),
   "nativeGetThemeFreeFunction()J": () => FINALIZER,
-  "nativeThemeApplyStyle(JJIZ)V": (_h: bigint, th: bigint, styleId: number, force: number) => deref<JTheme>(th).apply(styleId, !!force),
+  "nativeThemeApplyStyle(JJIZ)V": (_h: bigint, th: bigint, styleId: number, force: number) => deref<NativeTheme>(th).apply(styleId, !!force),
   "nativeThemeRebase(JJ[I[ZI)V": (h: bigint, th: bigint, styleIds: Int32Array, force: Int8Array, n: number) => {
     const styles: number[] = [];
     for (let i = 0; i < n; i++) styles.push(styleIds[i], force[i] ? 1 : 0);
-    deref<JTheme>(th).rebase(assets(h), styles);
+    deref<NativeTheme>(th).rebase(assets(h), styles);
   },
   "nativeThemeCopy(JJJJ)V": (dstAm: bigint, dst: bigint, _srcAm: bigint, src: bigint) => {
-    const d = deref<JTheme>(dst);
+    const d = deref<NativeTheme>(dst);
     d.res = assets(dstAm);
-    d.setTo(deref<JTheme>(src));
+    d.setTo(deref<NativeTheme>(src));
   },
   "nativeThemeGetAttributeValue(JJILandroid/util/TypedValue;Z)I": (h: bigint, th: bigint, attrId: number, tv: TypedValueLike, resolve: number) => {
     const res = assets(h), v = SVAL;
-    if (!deref<JTheme>(th).getAttribute(attrId, v)) return -1;
+    if (!deref<NativeTheme>(th).getAttribute(attrId, v)) return -1;
     if (resolve && !res.resolveReference(v)) return -1;
     return copyValue(res, v, tv);
   },
-  "nativeThemeGetChangingConfigurations(J)I": (th: bigint) => deref<JTheme>(th).flags,
+  "nativeThemeGetChangingConfigurations(J)I": (th: bigint) => deref<NativeTheme>(th).flags,
   "nativeThemeDump(JJILjava/lang/String;Ljava/lang/String;)V": () => {},
 
   // obtainStyledAttributes, which is what every widget constructor is really doing
   "nativeApplyStyle(JJIIJ[IJJ)V": (h: bigint, th: bigint, defStyleAttr: number, defStyleRes: number, xml: bigint, attrs: Int32Array, outValues: bigint, outIndices: bigint) => {
     const st = xml ? state(xml) : null;
-    resolveAttributes(assets(h), deref<JTheme>(th), st?.node ?? null, st?.sourceResId ?? 0, defStyleAttr, defStyleRes,
+    resolveAttributes(assets(h), deref<NativeTheme>(th), st?.node ?? null, st?.sourceResId ?? 0, defStyleAttr, defStyleRes,
       attrs, null, deref<Int32Array>(outValues), deref<Int32Array>(outIndices));
   },
   "nativeResolveAttrs(JJII[I[I[I[I)Z": (h: bigint, th: bigint, defStyleAttr: number, defStyleRes: number, values: Int32Array | null, attrs: Int32Array, outValues: Int32Array, outIndices: Int32Array | null) => {
-    resolveAttributes(assets(h), deref<JTheme>(th), null, 0, defStyleAttr, defStyleRes, attrs, values?.length ? values : null, outValues, outIndices);
+    resolveAttributes(assets(h), deref<NativeTheme>(th), null, 0, defStyleAttr, defStyleRes, attrs, values?.length ? values : null, outValues, outIndices);
     return 1;
   },
   "nativeRetrieveAttributes(JJ[I[I[I)Z": (h: bigint, xml: bigint, attrs: Int32Array, outValues: Int32Array, outIndices: Int32Array | null) => {
@@ -404,7 +400,7 @@ delegate("android/content/res/AssetManager", {
   },
   "nativeAttributeResolutionStack(JJIII)[I": (h: bigint, th: bigint, xmlStyle: number, defStyleAttr: number, defStyleRes: number) => {
     const res = assets(h), v = SVAL;
-    if (defStyleAttr && deref<JTheme>(th).getAttribute(defStyleAttr, v) && v.t === TV.REFERENCE) defStyleRes = v.d;
+    if (defStyleAttr && deref<NativeTheme>(th).getAttribute(defStyleAttr, v) && v.t === TV.REFERENCE) defStyleRes = v.d;
     return Int32Array.from([...styleStack(res, xmlStyle), ...styleStack(res, defStyleRes)]);
   },
 
