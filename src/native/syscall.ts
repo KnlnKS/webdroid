@@ -7,7 +7,7 @@ import { mem, anchor } from "./mem";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { calledMissing, type HostFn, type HostRet, type ArgReader, PTR } from "./host";
 import { E, PAGE_SIZE } from "./abi";
-import { cpuByOsTid, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
+import { cpuByOsTid, exitGroup, setRawSyscall, type Cpu } from "./cpu";
 import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
 import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
@@ -70,7 +70,7 @@ const A64: Record<number, HostFn> = {
   },
   73: (cpu, a) => { const fds = a.p(), n = a.u(), ts = a.p(); return nativePoll(cpu, fds, n, millis(ts)); }, // ppoll
   93: (cpu) => { cpu.finished = true; return Promise.resolve(0); },               // exit: this thread
-  94: (cpu, a) => { console.warn(`[native] exit_group(${a.i()}) from ${cpu.name}`); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
+  94: (cpu, a) => exitGroup(cpu, a.i(), "exit_group"),
   96: (cpu, a) => { cpu.clearChildTid = a.va(); return cpu.osTid; },               // set_tid_address
   98: (cpu, a) => { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); return futex(cpu, addr, op, val, ts); },
   99: () => 0,                                                                   // set_robust_list: no process-shared robust mutexes to recover

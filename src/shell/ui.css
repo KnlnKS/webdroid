@@ -71,7 +71,7 @@ input { display: block; width: 100%; margin-top: 6px; padding: 8px; font-family:
 #recovery { margin-top: 14px; }
 #recovery button { font-size: 13px; }
 #notice { color: #f2bdb7; border-left: 2px solid #e3968e; padding: 0 0 0 12px; margin-bottom: 20px; font-size: 14px; overflow-wrap: anywhere; }
-#root[data-state="failed"] #state-dot { background: #f2a59b; }
+#root[data-state="failed"] #state-dot, #root[data-state="exited"] #state-dot { background: #f2a59b; }
 #root[data-state="loading"] #state-dot { background: #e8ce94; }
 #root[data-state="loading"] #local-loader { opacity: .65; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; color: var(--muted); margin: 0; }

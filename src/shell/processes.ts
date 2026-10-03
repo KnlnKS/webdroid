@@ -10,7 +10,8 @@ import { appHost } from "../android/apphost";
 import { asSystem, binderTransport, receiveTransaction, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportBinder, importBinder, exportParcel, parcelled, unparcelled, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
-import { PROCESS_PID } from "../android/os";
+import { PROCESS_PID, processTransport } from "../android/os";
+import { exitProcess, onProcessExit, type ExitStatus } from "../process-exit";
 import { after, callUncaught, reportUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, serviceTransport } from "../android/server/activeservices";
@@ -69,6 +70,8 @@ type ProcessEndpoint = {
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
+  /** the kernel's SIGKILL: the process ends where it stands */
+  kill: (signal: number) => void;
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
@@ -312,6 +315,20 @@ class ProcessBroker {
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
+  /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
+   *  its other processes); other signals are ART's to handle in the target and are not modelled */
+  signal(callerPid: number, pid: number, signal: number): void {
+    const caller = this.entry(callerPid), target = this.entries.get(pid);
+    if (signal !== 9 || !target || target.dead || target.uid !== caller.uid) return;
+    void target.ready.then((endpoint) => endpoint.kill(signal), () => {});
+  }
+  /** a process ended: ActivityManagerService.appDiedLocked's notice, from the process itself */
+  died(pid: number, status: ExitStatus): void {
+    const entry = this.entries.get(pid);
+    if (!entry || entry.dead) return;
+    console.warn(`[process] ${entry.process} (pid ${pid}) has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`);
+    this.fail(pid, "Process has died");
+  }
   /** whether a process shown on screen, or one serving such a process, waits on `pid`: as binder
    *  calls inherit their caller's priority and a service bound from the top app runs in its
    *  scheduling group, process start included */
@@ -431,6 +448,8 @@ async function remote<T>(pending: Promise<T>): Promise<T> {
 }
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
+  onProcessExit((status) => broker.died(PROCESS_PID, status));
+  processTransport.signal = (pid, signal) => broker.signal(PROCESS_PID, pid, signal);
   clipboardTransport.set = data => broker.setClipboard(PROCESS_PID, data);
   clipboardTransport.get = () => broker.getClipboard(PROCESS_PID);
   clipboardTransport.listen = active => broker.watchClipboard(PROCESS_PID, active);
@@ -496,6 +515,7 @@ export function connectProcess(): ProcessEndpoint {
   });
   return {
     clipboardChanged: async () => clipboardChanged(),
+    kill: (signal) => exitProcess({ signal }),
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device")).pressBack();
       return asBroker(function* (): Gen<void> {

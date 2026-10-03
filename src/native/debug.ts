@@ -4,8 +4,9 @@ import { hostTrace, calledMissing, unresolved, probed, hostCounts, slotName } fr
 import { killLog } from "./proc";
 import { futexStats } from "./pthread";
 import { jniMissing, jniTrace, registered } from "./jni";
-import { cpus, codeStats, stepMode, setStepMode, profile, slice, hasProcessExited, yieldStats, sigHandlers, watchPcs, lastFault, invalidations } from "./cpu";
+import { cpus, codeStats, stepMode, setStepMode, profile, slice, yieldStats, sigHandlers, watchPcs, lastFault, invalidations } from "./cpu";
 import { mem } from "./mem";
+import { processExited } from "../process-exit";
 import { core, jitStats } from "./core";
 import { netDebug } from "./net";
 
@@ -29,7 +30,7 @@ export const native = {
     ...(c.a64 ? { h: [...Array(32)].map((_, i) => (c.w[2 * i + 1] >>> 0).toString(16)) } : {}),
     finished: c.finished, pending: !!c.pending, parked: c.parked, depth: c.depth, state: c.state, frames: [...c.frames], loops: c.loops, sigLog: c.sigLog.slice(-40), signals: [...c.signals], handling: [...c.handling], sigWait: !!c.sigWait,
   })),
-  calledMissing, unresolved, probed, jniMissing, registered, exited: hasProcessExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
+  calledMissing, unresolved, probed, jniMissing, registered, exited: processExited, sigHandlers: () => [...sigHandlers].map(([s, h]) => [s, symbolizePc(h.fn)]), yieldStats, killLog, futexStats: () => Object.fromEntries(futexStats),
   blocks: codeStats, jit: jitStats,
   /** the wasm core itself: jit_fallback(lo, hi) + invalidate_range(addr, size) bisect a miscompile without a reload */
   core,

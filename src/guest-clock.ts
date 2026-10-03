@@ -1,3 +1,5 @@
+import { processExited } from "./process-exit";
+
 export type GuestTimer = ReturnType<typeof setTimeout> | number;
 
 type Scheduled = {
@@ -126,9 +128,11 @@ const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
 // would wrap and fire at once, so it waits the longest a timer can instead (~24.8 days)
 export const MAX_TIMER_DELAY = 0x7fffffff;
 export const guestNow = clock ? () => clock.nowMs : realNow;
+// a dead process's timers never fire
+const live = (callback: () => void) => () => { if (!processExited()) callback(); };
 export const setGuestTimeout = clock
-  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(callback, delayMs, realm)
-  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY));
+  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(live(callback), delayMs, realm)
+  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(live(callback), Math.min(delayMs, MAX_TIMER_DELAY));
 export const clearGuestTimeout = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearTimeout(timer as ReturnType<typeof setTimeout>); };

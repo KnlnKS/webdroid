@@ -1,0 +1,21 @@
+// The end of this realm's process. The kernel's do_group_exit takes every thread at once; here a
+// dead realm runs nothing further: native run loops park at their next turn, suspended Java frames
+// never resume, and yields, guest timers and entries from host code never return.
+
+/** how the process ended, as wait(2) tells it: an exit status, or the signal that killed it */
+export type ExitStatus = { code: number; signal?: undefined } | { signal: number; code?: undefined };
+let status: ExitStatus | null = null;
+const listeners: ((status: ExitStatus) => void)[] = [];
+export const processExited = (): boolean => status !== null;
+export const exitStatus = (): ExitStatus | null => status;
+/** what anything that would run on in a dead process waits for */
+export const never = (): Promise<never> => new Promise<never>(() => {});
+/** run `f` once when the process ends (the broker's death notice, the shell's display) */
+export function onProcessExit(f: (status: ExitStatus) => void): void { listeners.push(f); }
+export function exitProcess(how: ExitStatus): void {
+  if (status) return;
+  status = how;
+  for (const f of listeners) {
+    try { f(how); } catch (error) { console.error("[process exit]", error); }
+  }
+}

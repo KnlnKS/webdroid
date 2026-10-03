@@ -7,7 +7,7 @@ import { syncShared, trackSharedMap, trackPrivateMap } from "../native/mappings"
 import { awaited, rt, JObj, noops, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
 import { i8, jarray, utf8 } from "../jvm/abi";
 import { once } from "../jvm/suspend";
-import { markProcessExited } from "../native/cpu";
+import { exitProcess, never } from "../process-exit";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
@@ -65,11 +65,19 @@ function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
-const killProcess = (pid: number) => { console.warn("Process.killProcess", pid); markProcessExited(); };
-// System.exit and Runtime.halt end the process as killProcess does
-rt.registerJni("java/lang/Runtime", "nativeExit(I)V", () => killProcess(PROCESS_PID));
-// android.os.Process runs from bytecode; its natives answer for this one process
+/** the other processes of the page, through the broker: kill(2) for a pid this one may signal */
+export const processTransport = { signal: (_pid: number, _signal: number): void => {} };
+// Runtime.exit runs the shutdown hooks from bytecode first; halt does not. Neither returns.
+rt.registerJni("java/lang/Runtime", "nativeExit(I)V", (code: number) => { exitProcess({ code: code & 0xff }); return never(); });
 const SIGNAL_KILL = 9;
+/** Process.sendSignal: SIGKILL ends this process, as killProcess(myPid()) does; another
+ *  process's pid goes to the broker */
+function sendSignal(pid: number, signal: number): void | Promise<never> {
+  if (pid !== PROCESS_PID) return processTransport.signal(pid, signal);
+  if (signal !== SIGNAL_KILL) return;
+  exitProcess({ signal });
+  return never();
+}
 const threadPriorities = new Map<number, number>();
 const totalMemory = () => BigInt(device.cpu.memKb) * 1024n;
 const idForName = (name: string | null) => androidGroupId(name ?? rt.npe());
@@ -88,8 +96,8 @@ rt.registerJnis("android/os/Process", {
   "setArgV0Native(Ljava/lang/String;)V": (name: string) => { procIdentity.name = name; },
   "getTotalMemory()J": totalMemory,
   "getFreeMemory()J": () => totalMemory() / 2n,
-  "sendSignal(II)V": (pid: number, signal: number) => { if (pid === PROCESS_PID && signal === SIGNAL_KILL) killProcess(pid); },
-  "sendSignalQuiet(II)V": (pid: number, signal: number) => { if (pid === PROCESS_PID && signal === SIGNAL_KILL) killProcess(pid); },
+  "sendSignal(II)V": sendSignal,
+  "sendSignalQuiet(II)V": sendSignal,
 });
 // android.os.Trace runs from bytecode over atrace's natives: nothing traces this page, so no tag is
 // enabled and every event is dropped, as atrace drops them with no tracing session

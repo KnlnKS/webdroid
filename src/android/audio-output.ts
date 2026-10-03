@@ -1,5 +1,7 @@
-// The audio output: one shared Web Audio context (never closed), the PCM a Java AudioTrack or an
+// The audio output: one shared Web Audio context (closed when the process dies), the PCM a Java AudioTrack or an
 // AAudio stream schedules on it, and what is sounding there for AudioManager.isMusicActive.
+
+import { onProcessExit } from "../process-exit";
 
 let actx: AudioContext | null = null;
 export const audioContext = (): AudioContext => (actx ??= new AudioContext());
@@ -17,6 +19,11 @@ const sounding = new Set<object>();
 export const setSounding = (source: object, on: boolean): void => { if (on) sounding.add(source); else sounding.delete(source); };
 /** AudioManager.isMusicActive: a MediaPlayer or a SoundPool stream is sounding right now */
 export const isMusicActive = (): number => +(sounding.size > 0);
+// a dead process sounds nothing: its scheduled PCM and its players' elements stop with it
+onProcessExit(() => {
+  void actx?.close();
+  for (const source of sounding) if (typeof HTMLMediaElement !== "undefined" && source instanceof HTMLMediaElement) source.pause();
+});
 
 type Entry = { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null; consumed?: () => void };
 export type PcmConfig = { rate: number; channels: number; bytesPerSample: number; sessionId: number };

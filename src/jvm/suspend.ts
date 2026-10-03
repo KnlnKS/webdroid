@@ -1,3 +1,5 @@
+import { never, processExited } from "../process-exit";
+
 // Suspended activations share one Promise per pending operation. Every frame on the stack that
 // is waiting for it (compiled, cold or a generator native) joins the same continuation list, and
 // when the operation settles the list resumes innermost to outermost in a single microtask:
@@ -56,6 +58,7 @@ export function suspendWith(pending: Promise<unknown>, k: Continuation): Promise
 }
 
 function unwind(list: Continuation[], s: number, value: unknown, threw: boolean): unknown {
+  if (processExited()) return never();
   const was = enterStrand(s);
   try { return resume(list, value, threw); } finally { strand = was; }
 }

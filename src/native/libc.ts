@@ -6,7 +6,7 @@
 import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
 import { E, strerror, PAGE_SIZE } from "./abi";
-import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
+import { exitGroup, invalidateRange, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs";
@@ -354,8 +354,8 @@ export function libcInit(): void {
     __errno: (cpu) => cpu.errnoAddr,
     __set_errno: (cpu, a) => { setErrno(cpu, a.i()); return -1; },
     abort: (cpu) => abortThread(cpu),
-    exit: (cpu, a) => { console.warn("[native] exit(" + a.i() + ")"); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
-    _exit: (cpu, a) => { console.warn(`[native] _exit(${a.i()}) from ${cpu.name} lr=${(cpu.lr >>> 0).toString(16)}`); markProcessExited(); cpu.finished = true; return new Promise<never>(() => {}); },
+    exit: (cpu, a) => exitGroup(cpu, a.i(), "exit"),
+    _exit: (cpu, a) => exitGroup(cpu, a.i(), "_exit"),
     atexit: () => 0,
     __cxa_atexit: () => 0,
     __cxa_finalize: () => 0,

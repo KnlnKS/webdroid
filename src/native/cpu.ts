@@ -12,6 +12,7 @@ import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MAIN_STACK_SIZE, MEM_S
 import { perf } from "../perf";
 import { answeringInput, yieldToLoop, yieldStats } from "../jvm/yield";
 import { procIdentity, processTid } from "../shell/procfs";
+import { exitProcess, never, processExited } from "../process-exit";
 export { NativeFault, yieldToLoop, yieldStats };
 
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2, IllegalInstruction = 3 }
@@ -64,11 +65,15 @@ export function setStepMode(on: boolean): void {
 const stepPrev = new Int32Array(64);
 const RN = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"];
 const XN = [...Array(31)].map((_, i) => `x${i}`).concat(["sp"]);
-let processExited = false;
 /** slice-boundary pc samples (one per budget exit; `slice.instr` sets how fine): a free statistical profile */
 export const profile = { on: true, samples: new Map<number, number>() };
-export function markProcessExited(): void { processExited = true; }
-export const hasProcessExited = (): boolean => processExited;
+/** exit_group(2): the process ends with `code`, and the calling thread never returns */
+export function exitGroup(cpu: Cpu, code: number, how: string): Promise<never> {
+  console.warn(`[native] ${how}(${code}) from ${cpu.name} lr=${(cpu.lr >>> 0).toString(16)}`);
+  exitProcess({ code: code & 0xff });
+  cpu.finished = true;
+  return never();
+}
 /** why code pages were invalidated, by cause (wd.native.invalidations) */
 export const invalidations = new Map<string, number>();
 export function invalidateRange(addr: number, size: number, reason = "range"): void {
@@ -566,7 +571,7 @@ export class Cpu {
     try {
       for (;;) {
         turn.own();
-        if (processExited) { turn.release(); await new Promise<never>(() => {}); }
+        if (processExited()) { turn.release(); await never(); }
         for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(turn, sig);
         const t0 = performance.now(), ic0 = this.ic;
         let sliceMs = 0;
@@ -815,7 +820,7 @@ export const abortMessageSource = { text: (): string => "" };
  * "Fatal signal" line and the tombstone's head and backtrace) before the kernel's default runs.
  */
 export function dieOfSignal(cpu: Cpu, sig: number, info: { code: number; addr: number } | null = null): Promise<never> {
-  if (!processExited) {
+  if (!processExited()) {
     const name = SIGNAL_NAMES[sig] ?? "?", process = `pid ${cpu.pid} (${procIdentity.name})`, code = info ? `, code ${info.code}` : "";
     if (has(DUMPS_CORE, sig)) {
       const abort = abortMessageSource.text();
@@ -826,9 +831,9 @@ export function dieOfSignal(cpu: Cpu, sig: number, info: { code: number; addr: n
         ...(abort ? [`Abort message: '${abort}'`] : []),
         "backtrace:", ...backtraceHook(cpu).map((frame, i) => `  #${String(i).padStart(2, "0")} ${frame}`)].join("\n"));
     } else console.warn(`[native] ${process} killed by signal ${sig} (${name})`);
-    markProcessExited();
+    exitProcess({ signal: sig });
   }
-  return new Promise<never>(() => {});
+  return never();
 }
 
 let symbolizeHook: (pc: number) => string = (pc) => "0x" + pc.toString(16);

@@ -8,6 +8,7 @@ import { coldStack, type ColdMethod } from "../cold";
 import { currentStrand, enterStrand, inStrand, newStrand, once } from "../suspend";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
+import { never, processExited } from "../../process-exit";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
@@ -60,6 +61,7 @@ export function vcallAsync(obj: unknown, name: string, desc: string, ...args: un
 /** A call no Java frame waits on (a listener, a posted task): its exception, thrown now or when
  *  it resumes, goes to the uncaught handler rather than to the native that dispatched it. */
 export function callUncaught(call: () => unknown): void {
+  if (processExited()) return;
   try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(reportUncaught); } catch (e) { reportUncaught(e); }
 }
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
@@ -68,6 +70,7 @@ export function vcallOn(thread: JThread, obj: unknown, name: string, desc: strin
 /** `call` on `thread`, which owns the turn while it runs, as chain `chain` or else a new one: the
  *  running chain need not wait for an entry, and must not run on as it while the entry suspends */
 export function callOn<T>(thread: JThread, call: () => T, chain = 0): T {
+  if (processExited()) return never() as T;
   const previous = curThread, was = owned, outer = enterStrand(chain || newStrand());
   setCurThread(thread);
   try { return call(); } finally { setCurThread(previous); owned = was; enterStrand(outer); }

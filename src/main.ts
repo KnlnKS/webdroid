@@ -37,6 +37,7 @@ import { connectProcess, registerForegroundProcess, processPresentation, process
 import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
+import { onProcessExit } from "./process-exit";
 
 strictThreadOwnership();
 const params = new URLSearchParams(location.search);
@@ -110,7 +111,16 @@ async function boot(file: string, local?: File) {
     const t0 = performance.now();
     connectProcess();
     runtimeStarted = true;
-    const label = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
+    let shown = file;
+    // the task goes with its process (ActivityRecord.handleAppDied removes an activity with no saved
+    // state; a first crash shows no dialog) and the launcher returns. The app's classes stay
+    // linked in this page, so opening it again starts a fresh one.
+    onProcessExit((status) => {
+      processPresentation.visible = false;
+      const reopen = () => { const url = new URL(location.href); url.searchParams.set("apk", file); location.replace(url.href); };
+      shell.setState({ kind: "exited", file, label: shown, crashed: status.signal !== undefined && status.signal !== 9, retry: local ? null : reopen });
+    });
+    const label = shown = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
     // a device's Play services are up before an app launches: here their realm boots after the
     // app's first frame rather than competing with it
     void firstPresented.then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))

@@ -1,4 +1,5 @@
 import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
+import { never, processExited } from "../process-exit";
 
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
 // MessageChannel is not subject to the nested-setTimeout clamp (4 ms once the chain is nested),
@@ -27,6 +28,7 @@ let background = (): boolean => false;
 export function setBackgroundRealm(isBackground: () => boolean): void { background = isBackground; }
 const scheduler = (globalThis as { scheduler?: { postTask(task: () => void, options: { priority: string }): Promise<void> } }).scheduler;
 export function yieldToLoop(): Promise<void> {
+  if (processExited()) return never();
   if (scheduler && background()) return scheduler.postTask(() => {}, { priority: "background" });
   if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { yieldStats.pushes++; if (waiters.push(r) === 1) chan.port2.postMessage(0); });

@@ -3,7 +3,9 @@ import { device, parseScreen, storeScreen, type Screen } from "./config";
 type SessionState =
   | { kind: "loading"; file: string; stage: string }
   | { kind: "running"; file: string; label: string }
-  | { kind: "failed"; file: string; error: unknown; retry: (() => void) | null };
+  | { kind: "failed"; file: string; error: unknown; retry: (() => void) | null }
+  /** the app's process ended: on a device the launcher returns; its classes stay in this page */
+  | { kind: "exited"; file: string; label: string; crashed: boolean; retry: (() => void) | null };
 
 export function errorText(error: unknown): string {
   if (typeof error === "object" && error !== null) {
@@ -33,7 +35,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
 
   function updateAvailability() {
     const busy = session?.kind === "loading";
-    const started = session?.kind === "running" || (session?.kind === "failed" && !session.retry);
+    const started = session?.kind === "running" || session?.kind === "exited" || (session?.kind === "failed" && !session.retry);
     choose.disabled = picker.disabled = busy || started;
     launcher.inert = busy || started;
     samples.hidden = started || !launcher.childElementCount;
@@ -57,12 +59,12 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   back.addEventListener("click", actions.back);
   choose.addEventListener("click", () => picker.click());
   retry.addEventListener("click", () => {
-    if (session?.kind === "failed") session.retry?.();
+    if (session?.kind === "failed" || session?.kind === "exited") session.retry?.();
   });
 
   function openFiles(files: FileList) {
     if (session?.kind === "loading") return;
-    if (session?.kind === "running" || (session?.kind === "failed" && !session.retry)) {
+    if (session?.kind === "running" || session?.kind === "exited" || (session?.kind === "failed" && !session.retry)) {
       announce("Return home to open another app in a fresh session.");
       return;
     }
@@ -113,16 +115,19 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       root.dataset.state = next.kind;
       updateAvailability();
       document.querySelector<HTMLElement>("#session")!.hidden = next.kind === "running";
-      document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" ? next.label : next.file;
-      const failed = next.kind === "failed";
-      document.querySelector<HTMLElement>("#recovery")!.hidden = !failed;
+      document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" || next.kind === "exited" ? next.label : next.file;
+      const failed = next.kind === "failed", ended = failed || next.kind === "exited";
+      document.querySelector<HTMLElement>("#recovery")!.hidden = !ended;
       const hint = document.querySelector<HTMLElement>("#recovery-hint")!;
-      hint.hidden = !failed;
+      hint.hidden = !ended;
       const details = document.querySelector<HTMLDetailsElement>("#error-details")!;
       details.hidden = !failed;
       details.open = false;
-      retry.hidden = !failed || !next.retry;
-      status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running" : "Couldn’t open this app";
+      retry.hidden = !ended || !next.retry;
+      retry.textContent = next.kind === "exited" ? "Open again" : "Try again";
+      status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running"
+        : next.kind === "exited" ? (next.crashed ? "The app stopped" : "The app closed") : "Couldn’t open this app";
+      if (next.kind === "exited") hint.textContent = next.retry ? "Its process ended. Open it again in a fresh session." : "Its process ended. Reload to start a fresh session, then choose your package again.";
       if (failed) {
         hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
         document.querySelector<HTMLElement>("#error-message")!.textContent = errorText(next.error);

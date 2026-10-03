@@ -1,6 +1,7 @@
 import { PcmOutput, outputSampleRate, newAudioSessionId } from "../android/audio-output";
 import { JThread, reportUncaught } from "../jvm/natives/jlang";
-import { Cpu, bindCpu, hasProcessExited } from "./cpu";
+import { Cpu, bindCpu } from "./cpu";
+import { processExited } from "../process-exit";
 import { hostLib, stp, ptr, type HostFn } from "./host";
 import { mem, anchor } from "./mem";
 
@@ -43,7 +44,7 @@ class Stream {
   }
   async fill(): Promise<void> {
     const track = this.track;
-    while (this.state === AAUDIO_STREAM_STATE_STARTED && !hasProcessExited() && track.queuedSec() * track.rate + this.frames <= this.size) {
+    while (this.state === AAUDIO_STREAM_STATE_STARTED && !processExited() && track.queuedSec() * track.rate + this.frames <= this.size) {
       const result = await this.cpu.call(this.config.callback, [this.handle, this.config.context, this.buffer, this.frames], "AAudio data callback");
       if (this.state !== AAUDIO_STREAM_STATE_STARTED) break;
       if (result !== 0) { this.stop(); break; }

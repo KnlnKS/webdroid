@@ -1,4 +1,4 @@
-import { hasProcessExited } from "./cpu";
+import { processExited } from "../process-exit";
 import { hostLib, PTR, ldp, stp } from "./host";
 import { clockTime, fail, readTs, writeTs } from "./libc";
 import { KLAYOUT } from "./syscall";
@@ -16,9 +16,9 @@ const SIGEVENT = { value: 0, notify: 8, function: 12, attributes: 16 };
 /** fire(expirations) once the clock passes the next expiry, then wait for the one after */
 export function armClockTimer(timer: ClockTimer, fire: (count: number) => void): void {
   disarmClockTimer(timer);
-  if (!timer.next || hasProcessExited()) return;
+  if (!timer.next || processExited()) return;
   timer.timeout = setGuestTimeout(() => {
-    if (hasProcessExited()) return;
+    if (processExited()) return;
     const now = clockTime(timer.clock);
     if (now >= timer.next) {
       const count = timer.interval ? Math.floor((now - timer.next) / timer.interval) + 1 : 1;
