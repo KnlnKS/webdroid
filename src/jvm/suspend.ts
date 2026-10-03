@@ -35,6 +35,10 @@ function unwind(list: Continuation[], from: number, value: unknown, threw: boole
   return value;
 }
 
+/** `v` as a promise any number of frames may await: a pending Java result is a suspension, which
+ *  every frame awaiting it joins, so a second waiter would resume inside the first one's stack */
+export async function shareable<T>(v: T | Promise<T>): Promise<T> { return v; }
+
 /** a value computed by its first asker and kept. Askers meanwhile wait on a promise of their own
  *  (the first asker's carries its frames, suspendWith); a failure is not kept, so the next asker
  *  computes again. */

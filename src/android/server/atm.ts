@@ -6,7 +6,7 @@
 import { rt, JObj, noops, stubs, declaredField, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { after, callUncaught, newObj, vcall, scall, reportUncaught, linkInit } from "../../jvm/natives/jlang";
 import { mangleStaticField } from "../../jvm/abi";
-import { once } from "../../jvm/suspend";
+import { once, shareable } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows } from "./wm";
 import { notifyDisplayChanged } from "../display";
@@ -75,11 +75,11 @@ function pause(r: ActivityRecord): Promise<void> {
   if (r.state !== "resumed") return Promise.resolve();
   r.state = "pausing";
   const reported = Promise.withResolvers<void>();
-  // a promise of its own, which every pause of `r` waits on
-  const done = (async () => { await rt.drive(function* (): Gen<void> {
+  // every pause of `r` waits on it
+  const done = shareable(rt.drive(function* (): Gen<void> {
     yield* schedule(r.app, yield topResumedItem(r, false), yield item("PauseActivityItem", "Landroid/os/IBinder;ZZZZ", r.token, +r.finishing, 0, 0, 0));
     yield reported.promise;
-  }()); })();
+  }()));
   r.pausing = { done, settle: reported.resolve };
   return done;
 }
