@@ -126,14 +126,14 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
     coldStack.length = depth - 1;
     // A frame that has suspended hands the thread back on completion; one still suspended
     // released it already, and a hot handoff inherits the obligation.
-    if (f.$s && !suspended) R.su(f.$th);
+    if (f.$s && !suspended) R.su();
     if (profiled) jvmProfiler.add(method.name, "coldRun", performance.now() - started);
   }
 }
 
 function suspend(method: ColdMethod, f: ColdFrame, receiver: unknown, pc: number, pending: Promise<unknown>): Promise<unknown> {
   const delivers = f.$w === 1;
-  if (f.$s) f.R.su(f.$th);
+  if (f.$s) f.R.su();
   f.$s = 1;
   if (method.suspended) { method.suspended(); method.suspended = undefined; }
   if (jvmProfiler.enabled) jvmProfiler.suspension(method.name);

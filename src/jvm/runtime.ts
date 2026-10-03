@@ -6,7 +6,7 @@
 // when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
-import { currentStrand, enterStrand, inStrand, ownStrand, suspendWith, waitFor, waitsFor } from "./suspend";
+import { currentStrand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
@@ -15,6 +15,7 @@ import type { CompiledCtor, ResumeBody } from "./tiering";
 import { DexLink, instanceFieldOf, findStaticOwner } from "./link";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
+import { initialize } from "./clinit";
 import { isBytecode, isStageD } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
@@ -63,16 +64,6 @@ export type Gen<T = any> = Generator<unknown, T, any>;
 export function* awaited<T>(v: T | Promise<T>): Gen<T> { return yield v; }
 /** makes a method's TS body from its AOSP body; `C` is the class, not yet holding instances */
 export type Intrinsic = (base: (this: any, ...args: any[]) => any, C?: any) => (this: any, ...args: any[]) => any;
-
-/** A class constructor holds the class's statics and static methods. V8 turns one into a dictionary
- *  as <clinit> first stores to them, after which `new C()` and static loads take a slow path (4x for
- *  BigInteger's constructor). An object made a prototype, as every superclass already is, gets
- *  fast properties back. */
-function fastStatics(C: object) {
-  function Holder() {}
-  Holder.prototype = C;
-  return new (Holder as unknown as new () => object)();
-}
 
 const placeholderMethods = new WeakSet<Function>();
 
@@ -184,16 +175,16 @@ export class Runtime {
   onMissing: (what: string) => void = () => {};
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   onUncaught: (throwable: unknown) => void = () => {};
-  /** current-thread hooks (set by jlang): a resumed activation pins its thread (st) and releases it
-   *  when it finishes or suspends again (su), so a parked worker never leaves its identity behind
-   *  for what the event loop runs next. One running from its caller's call leaves the thread to
-   *  that caller, which goes on as its own thread whether or not the callee suspended. */
   /** the running thread; every compiled frame that can suspend reads it on entry, where a field
    *  load costs less than a call */
   cur: unknown = null;
   th(): unknown { return this.cur; }
+  /** current-thread hooks (set by jentry): a resumed activation pins its thread (st) and releases it
+   *  when it finishes or suspends again (su), so a parked worker never leaves its identity behind
+   *  for what the event loop runs next. One running from its caller's call leaves the thread to
+   *  that caller, which goes on as its own thread whether or not the callee suspended. */
   st: (t: unknown) => void = () => {};
-  su: (t: unknown) => void = () => {};
+  su: () => void = () => {};
   monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
   /** monitor-enter and monitor-exit, given the monitor the compiled site loaded from the object: a
    *  load shared by every lock, in Monitors, was megamorphic and cost about 10 ns a synchronized call.
@@ -225,11 +216,11 @@ export class Runtime {
     for (;;) {
       let step: IteratorResult<unknown, T>;
       try { step = threw ? g.throw(input) : g.next(input); }
-      catch (e) { if (resumed) this.su(thread); throw e; }
-      if (step.done) { if (resumed) this.su(thread); return step.value; }
+      catch (e) { if (resumed) this.su(); throw e; }
+      if (step.done) { if (resumed) this.su(); return step.value; }
       const value = step.value;
       if (value instanceof Promise) {
-        if (resumed) this.su(thread);
+        if (resumed) this.su();
         return suspendWith(value, (v, threw) => { this.st(thread); return this.driveStep(g, v, threw, thread, true); }) as Promise<T>;
       }
       input = value; threw = false;
@@ -253,7 +244,6 @@ export class Runtime {
   /** the classes whose throwables skip their stack capture while a call their handlers discard
    *  runs (discard.ts); one object, which forked realms share */
   quiet = { types: null as string | null };
-  private clinitDepth = 0;
 
   hotSourceBytes = 0;
   parent: Runtime | null = null;
@@ -768,115 +758,11 @@ export class Runtime {
   /** returns promise only if init work needed. `from` = class whose <clinit> performs the access */
   initClass(info: ClassInfo, from?: ClassInfo): Promise<void> | null {
     if (info.owner && info.owner !== this) return info.owner.initClass(info, from);
-    // Preparation (defining the methods) is NOT initialization: every reentrancy escape below
-    // returns without running <clinit>, and a caller that then looks a method up on a
+    // Preparation (defining the methods) is NOT initialization: every reentrancy escape of
+    // initialize returns without running <clinit>, and a caller that then looks a method up on a
     // still-uncompiled prototype silently inherits the SUPERCLASS's method instead.
     this.ensureCompiled(info);
-    if (info.state === 1) {
-      if (!info.initP || info === from) return null; // sync-prefix / self reentrancy
-      // JLS 12.4.2 step 3: a request from the thread already initializing this class is
-      // recursive and completes at once with the statics as they are. The `from` tag only
-      // sees <clinit>-to-<clinit> edges; <clinit> → constructor → sget of its own class is the
-      // common shape (kotlinx's ChannelSegment reads BufferedChannelKt.SEGMENT_SIZE while
-      // BufferedChannelKt's <clinit> builds NULL_SEGMENT). Main-loop jobs and host turns share
-      // their Java thread, so "the thread" is that thread as the chain that started the <clinit>,
-      // across its suspensions: another job on it would not run on a device before init finished.
-      const s = currentStrand();
-      if (info.initThread === this.th() && info.initStrand === s) return null;
-      // a cycle: the <clinit>'s chain waits, through class initializations and locks, on this
-      // one. Two threads' clinits waiting on each other deadlock a JVM; here the request proceeds
-      // with partial statics, as a same-thread cycle would, rather than hang the page.
-      if (waitsFor(info.initStrand, s)) return null;
-      // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
-      // thread, and here every other chain on its thread, blocks until it completes, however
-      // long a heavy static initializer takes
-      return waitFor(s, info.initStrand, info.initP);
-    }
-    if (info.state !== 0) {
-      if (info.state === 3) throw Object.assign(this.mkThrowable("java/lang/NoClassDefFoundError",
-        `Rejecting re-init on previously-failed class java.lang.Class<${dotName(info.name)}>`), { cause: info.initError });
-      return null;
-    }
-    info.state = 1;
-    info.initThread = this.th();
-    info.initStrand = ownStrand();
-
-    // Initialize synchronously for as long as nothing actually suspends: only the step that
-    // really yields gets a promise, and the rest of the sequence continues from there. An
-    // always-async initializer would make every first touch of a class await, so no method
-    // containing an sget, a new-instance or an invoke-static could run synchronously.
-    const rest = (): Promise<void> | null => {
-      const outer = this.clinitDepth++ === 0, started = outer ? performance.now() : 0;
-      try { return this.runClinit(info); }
-      finally { this.clinitDepth--; if (outer) perf.clinitMs += performance.now() - started; }
-    };
-
-    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.initStrand = 0; fastStatics(info.ctor); };
-    /** JLS 12.4.2: the class becomes erroneous; an Exception reaches the caller wrapped in an
-     *  ExceptionInInitializerError, and every later initialization fails with NoClassDefFoundError */
-    const failed = (e: unknown) => {
-      settle();
-      info.state = 3;
-      const t = this.jx(e);
-      const what = (x: unknown): string => { const o = x as { constructor?: { $i?: { name: string } }; msg?: unknown; cause?: unknown } | null;
-        return o ? `${o.constructor?.$i?.name ?? "?"}: ${o.msg}${o.cause && o.cause !== o ? " <- " + what(o.cause) : ""}` : String(x); };
-      console.warn("[webdroid clinit-failed]", info.name, what(t), (t as { jsErr?: Error }).jsErr?.stack?.split("\n").slice(1, 6).join(" | ") ?? "");
-      return info.initError = this.iof(t, "java/lang/Error") ? t : Object.assign(this.mkThrowable("java/lang/ExceptionInInitializerError", null), { cause: t });
-    };
-    /** hand the remaining steps to the microtask queue, from the one that yielded */
-    const async = (pending: Promise<unknown>, after: (() => Promise<void> | null) | null): Promise<void> => {
-      info.initP = (async () => {
-        try {
-          await pending;
-          // the <clinit> run here is its chain's, and releases its thread
-          const more = inStrand(info.initStrand, () => { try { return after?.(); } finally { this.su(null); } });
-          if (more) await more;
-        } catch (e) { throw failed(e); }
-        settle();
-      })();
-      return info.initP;
-    };
-
-    // a host turn's chain takes its identity here, so the <clinit>'s suspensions and callbacks keep it
-    const outer = enterStrand(info.initStrand);
-    try {
-      const sup = info.superInfo && info.superInfo.state !== 2 ? this.initClass(info.superInfo, info) : null;
-      if (sup) return async(sup, rest);
-      const pending = rest();
-      if (pending) return async(pending, null);
-    } catch (e) { throw failed(e); }
-    finally { enterStrand(outer); }
-    settle();
-    return null;
-  }
-
-  /** the class's own initialization: constant statics, then <clinit> or the native clinit hook */
-  private runClinit(info: ClassInfo): Promise<void> | null {
-    this.quiet.types = null;
-    for (const i of info.interfaces) this.ensureCompiled(i);   // defaults copy down
-    this.ensureCompiled(info);
-    let r: unknown;
-    if (info.native) {
-      const spec = this.natives.get(info.name);
-      if (spec?.clinit) r = spec.clinit();
-      else if (spec?.platformClinit && Object.hasOwn(info.ctor, "$clinit")) { this.st(info.initThread); r = info.ctor.$clinit.call(info.ctor); }
-    } else if (info.def) {
-      const dex = info.dex!;
-      if (info.def.staticValuesOff) {
-        const vals = dex.encodedArray(info.def.staticValuesOff);
-        for (let i = 0; i < vals.length; i++) {
-          const fr = dex.field(info.def.staticFields[i].fieldIdx);
-          info.ctor[info.staticFieldTable.get(fr.name + ":" + dex.type(fr.type))!] = this.encToJs(dex, vals[i]);
-        }
-      }
-      // own property only: JS constructors inherit statics, and a subclass without a
-      // <clinit> must not re-run its super's (which would replace identity-compared
-      // sentinels the super's callers already hold)
-      const clinit = Object.hasOwn(info.ctor, "$clinit") ? info.ctor.$clinit : undefined;
-      this.st(info.initThread); // <clinit> runs on the initiating thread, whatever ran meanwhile
-      if (clinit) r = clinit.call(info.ctor);
-    }
-    return r instanceof Promise ? r : null;
+    return info.state === 2 ? null : initialize(this, info, from);
   }
 
   ensureCompiled(info: ClassInfo): void {

@@ -263,7 +263,7 @@ async function probe() {
   const canvas = new OffscreenCanvas(4, 4), ctx = canvas.getContext("2d")!;
   ctx.drawImage(glSurfaces.current!.target!.present!, 0, 0);
   const pixel = [...ctx.getImageData(1, 1, 1, 1).data];
-  rt.su(first);
+  rt.su();
   const mainEmpty = gl === null;
   const callback = rt.make("java/lang/Object");
   Object.assign(callback, { [mangleMethod("run", "()V")]: () => gl === firstGL });
