@@ -118,6 +118,77 @@ function fvarAxes(b: Uint8Array, t: Tables | null): FvarAxis[] {
   return axes;
 }
 
+// FreeType's fixed-point helpers: rounded, on magnitudes
+const mulDiv = (a: number, b: number, c: number) => Math.sign(a) * Math.sign(b) * Math.sign(c) * Math.floor((Math.abs(a) * Math.abs(b) + (Math.abs(c) >> 1)) / Math.abs(c));
+const T_AVAR = 0x61766172, T_HVAR = 0x48564152, T_HMTX = 0x686d7478;
+/** A varied face's advances in font units as FreeType loads them for Skia: design coordinates
+ *  normalized in 16.16 and mapped through avar (FreeType keeps that precision where HarfBuzz rounds
+ *  to 2.14), HVAR's deltas summed with each region's scalar and rounded to whole units. Null when
+ *  the face has no HVAR or every axis is at its default. */
+export function variedAdvances(b: Uint8Array, ttcIndex: number, coords: readonly (readonly [number, number])[]): ((glyph: number) => number) | null {
+  const t = sfntTables(b, ttcIndex), hvar = t?.at.get(T_HVAR), hmtx = t?.at.get(T_HMTX), hhea = t?.at.get(T_HHEA);
+  if (!t || hvar === undefined || hmtx === undefined || hhea === undefined) return null;
+  const dv = t.dv, axes = fvarAxes(b, t), fixed = (v: number) => Math.round(v * 65536);
+  const nc = axes.map((a) => {
+    const v = fixed(Math.min(a.max, Math.max(a.min, coords.reduce((v, [tag, value]) => tag === a.tag ? value : v, a.def)))), def = fixed(a.def);
+    return v > def ? (v >= fixed(a.max) ? 0x10000 : mulDiv(v - def, 0x10000, fixed(a.max) - def))
+      : v < def ? (v <= fixed(a.min) ? -0x10000 : mulDiv(v - def, 0x10000, def - fixed(a.min))) : 0;
+  });
+  const avar = t.at.get(T_AVAR);
+  if (avar !== undefined) for (let i = 0, at = avar + 8; i < Math.min(dv.getUint16(avar + 6), nc.length); i++) {
+    const n = dv.getUint16(at), pair = (j: number) => [dv.getInt16(at + 2 + j * 4) * 4, dv.getInt16(at + 4 + j * 4) * 4];
+    for (let j = 1; j < n; j++) {
+      const [f0, t0] = pair(j - 1), [f1, t1] = pair(j);
+      if (nc[i] < f1) { nc[i] = mulDiv(nc[i] - f0, t1 - t0, f1 - f0) + t0; break; }
+    }
+    at += 2 + n * 4;
+  }
+  if (nc.every((c) => c === 0)) return null;
+  const store = hvar + dv.getUint32(hvar + 4), mapAt = dv.getUint32(hvar + 8), regionList = store + dv.getUint32(store + 2);
+  const regionAxes = dv.getUint16(regionList), scalars = Array.from({ length: dv.getUint16(regionList + 2) }, (_, r) => {
+    let scalar = 0x10000;
+    for (let a = 0; a < regionAxes && a < nc.length; a++) {
+      const at = regionList + 4 + (r * regionAxes + a) * 6, start = dv.getInt16(at) * 4, end = dv.getInt16(at + 4) * 4;
+      let peak = dv.getInt16(at + 2) * 4;
+      if (start < 0 && end > 0 || start > peak || peak > end) peak = 0;
+      const c = nc[a];
+      if (peak === c || peak === 0) continue;
+      if (c <= start || c >= end) return 0;
+      scalar = c < peak ? mulDiv(scalar, c - start, peak - start) : mulDiv(scalar, end - c, end - peak);
+    }
+    return scalar;
+  });
+  const metrics = dv.getUint16(hhea + 34), glyphs = new Map<number, number>();
+  return (glyph) => {
+    let units = glyphs.get(glyph);
+    if (units !== undefined) return units;
+    units = dv.getUint16(hmtx + Math.min(glyph, metrics - 1) * 4);
+    let outer = 0, inner = glyph;
+    if (mapAt) {
+      const map = hvar + mapAt, format = b[map], entry = b[map + 1], count = format ? dv.getUint32(map + 2) : dv.getUint16(map + 2);
+      const size = (entry >> 4 & 3) + 1, bits = (entry & 15) + 1, at = map + (format ? 6 : 4) + Math.min(glyph, count - 1) * size;
+      let v = 0;
+      for (let k = 0; k < size; k++) v = v * 256 + b[at + k];
+      outer = v >>> bits; inner = v & (1 << bits) - 1;
+    }
+    if (outer < dv.getUint16(store + 6)) {
+      const data = store + dv.getUint32(store + 8 + outer * 4), items = dv.getUint16(data), words = dv.getUint16(data + 2), regions = dv.getUint16(data + 4);
+      if (inner < items) {
+        const long = (words & 0x8000) !== 0, wide = words & 0x7fff, big = long ? 4 : 2, small = long ? 2 : 1;
+        let at = data + 6 + regions * 2 + inner * (wide * big + (regions - wide) * small), sum = 0;
+        for (let k = 0; k < regions; k++) {
+          const d = k < wide ? (long ? dv.getInt32(at) : dv.getInt16(at)) : (long ? dv.getInt16(at) : dv.getInt8(at));
+          at += k < wide ? big : small;
+          sum += scalars[dv.getUint16(data + 6 + k * 2)] * d;
+        }
+        units += Math.floor((sum + 0x8000) / 0x10000);
+      }
+    }
+    glyphs.set(glyph, units);
+    return units;
+  };
+}
+
 /** CmapCoverage: the code points a face's best Unicode cmap (format 12, else 4) maps, as sorted
  *  inclusive [first, last] pairs */
 function cmapCoverage(b: Uint8Array, t: Tables | null): Uint32Array {

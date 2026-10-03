@@ -186,8 +186,8 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   await typeface(await create(null, 1), "Bold", "40 -18.554688 4.8828125 | 39@0 Roboto-Regular.ttf | 84@13 | 81@24 | 73@29");
   await typeface(medium, "Med", "39 -18.554688 4.8828125 | 50@0 Roboto-Regular.ttf | 74@17 | 73@28");
   await typeface(await create(null, 2), "Ital", "27 -18.554688 4.8828125 | 46@0 Roboto-Regular.ttf | 89@5 | 70@11 | 81@22");
-  // the device: 80@19, 30: FreeType's hinter widens l (5.498 px at wght 900) to 6
-  await typeface(await scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, medium, 900, 0), "Blk", "29 -18.554688 4.8828125 | 39@0 Roboto-Regular.ttf | 81@13 | 80@18");
+  // FreeType rounds l's advance at wght 900 (5.496 px) to 26.6 (5.5) and then to 6
+  await typeface(await scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, medium, 900, 0), "Blk", "30 -18.554688 4.8828125 | 39@0 Roboto-Regular.ttf | 81@13 | 80@19");
   await set("setTypeface", `(${T})${T}`, null);
   await set("setFakeBoldText", "(Z)V", 1);
   await shaped("Fb", "22 -18.554688 4.8828125 | 43@0 Roboto-Regular.ttf | 71@11");
@@ -219,4 +219,25 @@ await exercise("TextRunShaper, PositionedGlyphs, Font.getGlyphBounds (device val
   same("text bounds and metrics", [await textBounds("Agj office"), await textBounds("日本語"), await vcall(paint, "measureText", "(Ljava/lang/String;)F", "日本語"),
     await vcall(fmi, "toString", "()Ljava/lang/String;")].join(" | "),
     "0 -31 166 9 | 7 -34 119 4 | 120 | FontMetricsInt: top=-47 ascent=-46 descent=12 bottom=12 leading=0");
+});
+
+// getTextWidths of printable ASCII in the default family across weights and sizes, hinting on and
+// off, as `bun run textcmp --record` printed them on the reference AVD
+await exercise("Paint.getTextWidths across weights and hinting (device values)", async () => {
+  await loadSystemFonts();
+  const ascii = Array.from({ length: 0x5e }, (_, i) => String.fromCharCode(0x21 + i)).join(""), T = "Landroid/graphics/Typeface;";
+  const DEFAULT = await scall("android/graphics/Typeface", "defaultFromStyle", `(I)${T}`, 0);
+  const rows = (await Bun.file("tests/fixtures/textwidths-device.txt").text()).trim().split("\n").map((l) => l.split(" "));
+  const bad: string[] = [];
+  for (const [, weight, size, hinting, ...want] of rows) {
+    const paint = await newObj("android/graphics/Paint", "(I)V", 1);
+    await vcall(paint, "setTypeface", `(${T})${T}`, await scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, DEFAULT, +weight, 0));
+    await vcall(paint, "setTextSize", "(F)V", Math.fround(+size));
+    await vcall(paint, "setHinting", "(I)V", +hinting);
+    const widths = new Float32Array(ascii.length);
+    await vcall(paint, "getTextWidths", "(Ljava/lang/String;[F)I", ascii, widths);
+    widths.forEach((w, i) => { if (w !== Math.fround(+want[i])) bad.push(`${weight}/${size}/${hinting} '${ascii[i]}' ${w} device ${want[i]}`); });
+  }
+  if (process.env.FWTEST_WIDTHS) console.log(bad.join("\n"));
+  if (bad.length) throw new Error(`${bad.length} of ${rows.length * ascii.length}: ${bad.slice(0, 6).join(", ")}`);
 });
