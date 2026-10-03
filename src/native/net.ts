@@ -11,7 +11,11 @@ import { hostLib, PTR, stp, ldp, ldLong, stLong, type HostFn, type HostRet, ptr 
 import { mem, anchor } from "./mem";
 import { fail } from "./libc";
 import { allocateFd, releaseFd } from "./fd";
-import { unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption, unixSend, unixReceive, gather, openFd, javaShutdownFd, fdRead, fdWrite } from "./fs";
+import {
+  unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption, unixSetOption, unixSend, unixReceive, gather, openFd,
+  javaShutdownFd, fdRead, fdWrite, brokenPipe, installPassed, releasePassed, processCredentials, unixPeerCredentials, unixPassesCredentials, type Received,
+} from "./fs";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 import { unixAt, unixConnectPath, sockaddrUn, sunPath } from "./unix";
 import {
   AF_UNSPEC, AF_UNIX, AF_INET, AF_INET6, AI_NUMERICHOST, NI_NUMERICHOST, NI_NAMEREQD, EAI_NONAME,
@@ -35,6 +39,7 @@ const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x40
 const EAI_BADFLAGS = 3, EAI_FAMILY = 5;
 const EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
 export const MSG_PEEK = 0x2, MSG_TRUNC = 0x20, MSG_DONTWAIT = 0x40;
+const MSG_CTRUNC = 0x8, MSG_CMSG_CLOEXEC = 0x40000000, SO_PEERCRED = 17, SCM_RIGHTS = 1, SCM_CREDENTIALS = 2;
 const SHUT_RD = 0, SHUT_WR = 1, SHUT_RDWR = 2;
 const UDP_MAX_PAYLOAD = 65_507;
 const UDP_QUEUE_PACKETS = 256, UDP_QUEUE_BYTES = 1 << 20;
@@ -149,8 +154,8 @@ const timeoutOf = (socket: Socket, name: number) => option(socket, SOL_SOCKET, n
 function block<T>(fd: number, socket: Socket, attempt: () => T | null, timeoutOption: number): Promise<T | number> {
   return new Promise((resolve) => {
     const ms = timeoutOf(socket, timeoutOption);
-    let timer: ReturnType<typeof setTimeout> | undefined, unsubscribe: (() => void) | undefined;
-    const done = (value: T | number) => { if (timer !== undefined) clearTimeout(timer); unsubscribe?.(); resolve(value); };
+    let timer: GuestTimer | undefined, unsubscribe: (() => void) | undefined;
+    const done = (value: T | number) => { clearGuestTimeout(timer); unsubscribe?.(); resolve(value); };
     const retry = () => {
       unsubscribe?.(); unsubscribe = undefined;
       if (sockets.get(fd)?.socket !== socket) return done(-E.BADF);
@@ -158,7 +163,7 @@ function block<T>(fd: number, socket: Socket, attempt: () => T | null, timeoutOp
       if (result !== null) return done(result);
       unsubscribe = watchSocket(socket, retry);
     };
-    if (ms > 0) timer = setTimeout(() => done(-E.AGAIN), ms);
+    if (ms > 0) timer = setGuestTimeout(() => done(-E.AGAIN), ms);
     unsubscribe = watchSocket(socket, retry);
   });
 }
@@ -568,14 +573,7 @@ export function socketClose(fd: number): number {
   const socket = descriptor.socket;
   sockets.delete(fd);
   releaseFd(fd);
-  if (--socket.references === 0) {
-    (bound[socket.kind] as Set<Socket>).delete(socket);
-    if (socket.kind === "stream") {
-      socket.stream?.close();
-      for (const pending of socket.backlog?.splice(0) ?? []) pending.stream?.close();
-    } else socket.relay?.close();
-  }
-  wake(socket);
+  releaseSocket(socket);
   return 0;
 }
 export const nativeSocketClose = (cpu: Cpu | null, fd: number): number => sys(cpu, socketClose(fd));
@@ -595,6 +593,27 @@ export function nativeSocketDup(cpu: Cpu | null, fd: number, min = 0, cloexec = 
   descriptor.socket.references++;
   sockets.set(duplicate, { socket: descriptor.socket, cloexec });
   return duplicate;
+}
+
+/** SCM_RIGHTS's hold on a socket while a message carries it: one more reference, installed at the
+ *  lowest free number when the message is read, or released */
+export type NetSocket = Socket;
+export const heldSocket = (fd: number): NetSocket | null => socketOf(fd);
+export const retainSocket = (socket: NetSocket): NetSocket => { socket.references++; return socket; };
+export function installSocket(socket: NetSocket, cloexec: boolean): number {
+  const fd = allocateFd();
+  sockets.set(fd, { socket, cloexec });
+  return fd;
+}
+export function releaseSocket(socket: NetSocket): void {
+  if (--socket.references === 0) {
+    (bound[socket.kind] as Set<Socket>).delete(socket);
+    if (socket.kind === "stream") {
+      socket.stream?.close();
+      for (const pending of socket.backlog?.splice(0) ?? []) pending.stream?.close();
+    } else socket.relay?.close();
+  }
+  wake(socket);
 }
 
 export function nativeSocketFcntl(cpu: Cpu | null, fd: number, command: number, value: number): number {
@@ -617,8 +636,9 @@ function sysAsync(cpu: Cpu | null, r: number | Promise<number>): number | Promis
 export function nativeSocketRead(cpu: Cpu | null, fd: number, destination: number, length: number): number | Promise<number> {
   return nativeReceive(cpu, fd, [guestBuffer(destination, length)], 0);
 }
-export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: number): number {
-  return sys(cpu, socketSend(fd, mem.u8.subarray(source, source + length)));
+export function nativeSocketWrite(cpu: Cpu, fd: number, source: number, length: number, flags = 0): number {
+  const r = socketSend(fd, mem.u8.subarray(source, source + length));
+  return r === -E.PIPE && socketOf(fd)?.kind === "stream" ? brokenPipe(cpu, flags) : sys(cpu, r);
 }
 
 export function nativePollEvents(fd: number, events: number): number {
@@ -655,18 +675,18 @@ export function pollEntries(entries: PollEntry[], timeout: number, signal?: Abor
   const immediate = scan();
   if (immediate || timeout === 0 || signal?.aborted) return immediate;
   return new Promise<number>((resolve) => {
-    let finished = false, timer: ReturnType<typeof setTimeout> | undefined;
+    let finished = false, timer: GuestTimer | undefined;
     const cleanups: (() => void)[] = [];
     const finish = () => {
       if (finished) return;
       finished = true;
       for (const cleanup of cleanups) cleanup();
-      if (timer !== undefined) clearTimeout(timer);
+      clearGuestTimeout(timer);
       resolve(scan());
     };
     for (const e of entries) if (e.fd >= 0) cleanups.push(watchNativeFd(e.fd, finish));
     if (signal) { signal.addEventListener("abort", finish, { once: true }); cleanups.push(() => signal.removeEventListener("abort", finish)); }
-    if (timeout >= 0) timer = setTimeout(finish, timeout);
+    if (timeout >= 0) timer = setGuestTimeout(finish, timeout);
   });
 }
 
@@ -778,20 +798,29 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
 interface GuestBuffer { at: () => number; length: number }
 const guestBuffer = (p: number, length: number): GuestBuffer => ({ at: anchor(p), length });
 const NO_ADDRESS = new Uint8Array(0);
+/** recvmsg's msg_control and where its length goes back */
+interface Control { at: () => number; capacity: number; lengthAt: () => number }
 /** recv(2)/recvfrom(2)/recvmsg(2) on any socket into the guest's buffers, which the bytes reach once
- *  they arrive; the sender's address goes to `name` and its length to `nameLength`, and msg_flags to
- *  `messageFlags` */
-function nativeReceive(cpu: Cpu | null, fd: number, buffers: GuestBuffer[], flags: number, name = 0, nameLength = 0, messageFlags = 0): number | Promise<number> {
+ *  they arrive; the sender's address goes to `name` and its length to `nameLength`, msg_flags to
+ *  `messageFlags` and the ancillary data to `control` */
+function nativeReceive(cpu: Cpu | null, fd: number, buffers: GuestBuffer[], flags: number, name = 0, nameLength = 0, messageFlags = 0, control: Control | null = null): number | Promise<number> {
   const unix = isUnixSocket(fd), socket = socketOf(fd);
   if (!unix && !socket) return fail(cpu, E.BADF);
   if (name && !nameLength) return fail(cpu, E.FAULT);
   if (name && mem.ld32(nameLength) < 0) return fail(cpu, E.INVAL);
   const total = buffers.reduce((n, b) => n + b.length, 0), target = new Uint8Array(total);
-  const from = { source: null as Endpoint | null, name: "" }, nameAt = anchor(name), lengthAt = anchor(nameLength), flagsAt = anchor(messageFlags);
+  const from: Received & { source: Endpoint | null } = { source: null, name: "", rights: control ? [] : null };
+  const nameAt = anchor(name), lengthAt = anchor(nameLength), flagsAt = anchor(messageFlags);
   // a datagram's whole length, which tells a short buffer it was cut
   const n = unix ? unixReceive(fd, target, flags, from) : socketReceive(fd, target, socket!.kind === "datagram" ? flags | MSG_TRUNC : flags, from);
   const land = (n: number): number => {
     if (n < 0) return fail(cpu, -n);
+    let cut = 0;
+    if (control) {
+      const { used, truncated } = unix ? putControl(control.at(), control.capacity, unixPassesCredentials(fd), from.rights!, !!(flags & MSG_CMSG_CLOEXEC)) : { used: 0, truncated: false };
+      stLong(control.lengthAt(), used);
+      if (truncated) cut = MSG_CTRUNC;
+    }
     const copied = Math.min(n, total);
     for (let i = 0, at = 0; at < copied; i++) {
       const k = Math.min(buffers[i].length, copied - at);
@@ -802,10 +831,57 @@ function nativeReceive(cpu: Cpu | null, fd: number, buffers: GuestBuffer[], flag
       const sockaddr = unix ? from.name ? sockaddrUn(from.name) : NO_ADDRESS : from.source ? sockaddrOf(socket!.family, from.source) : NO_ADDRESS;
       putSockaddr(sockaddr, nameAt(), lengthAt(), mem.ld32(lengthAt()));
     }
-    if (messageFlags) mem.st32(flagsAt(), n > total ? MSG_TRUNC : 0);
+    if (messageFlags) mem.st32(flagsAt(), (n > total ? MSG_TRUNC : 0) | cut);
     return flags & MSG_TRUNC ? n : copied;
   };
   return n instanceof Promise ? n.then(land) : land(n);
+}
+
+/** struct cmsghdr's size (cmsg_len is a size_t) and CMSG_ALIGN */
+const cmsgHeader = () => PTR === 8 ? 16 : 12;
+const cmsgAlign = (n: number) => (n + PTR - 1) & -PTR;
+/** recvmsg's ancillary data, as scm_recv lays it into msg_control: SCM_CREDENTIALS when the socket
+ *  passes them, then SCM_RIGHTS with the descriptors that fit installed; the rest are released and
+ *  the cut is MSG_CTRUNC, as is a message put_cmsg shortens */
+function putControl(at: number, capacity: number, credentials: boolean, passed: Parameters<typeof releasePassed>[0], cloexec: boolean): { used: number; truncated: boolean } {
+  const header = cmsgHeader();
+  let used = 0, truncated = false;
+  const cmsg = (type: number, data: Uint8Array) => {
+    const room = at ? capacity - used : 0;
+    if (room < header) { truncated = true; return; }
+    const length = Math.min(header + data.length, room);
+    if (length < header + data.length) truncated = true;
+    stLong(at + used, length);
+    mem.st32(at + used + PTR, SOL_SOCKET); mem.st32(at + used + PTR + 4, type);
+    mem.write(at + used + header, data.subarray(0, length - header));
+    used += Math.min(cmsgAlign(header + data.length), room);
+  };
+  if (credentials) { const c = processCredentials(); cmsg(SCM_CREDENTIALS, new Uint8Array(Int32Array.of(c.pid, c.uid, c.gid).buffer)); }
+  if (passed.length) {
+    const room = at ? capacity - used : 0, fit = room > header ? Math.min(passed.length, (room - header) >> 2) : 0;
+    if (fit < passed.length) truncated = true;
+    if (fit) cmsg(SCM_RIGHTS, new Uint8Array(Int32Array.from(passed.slice(0, fit), (p) => installPassed(p, cloexec)).buffer));
+    releasePassed(passed.slice(fit));
+  }
+  return { used, truncated };
+}
+/** sendmsg's ancillary data: SCM_RIGHTS's descriptors, and SCM_CREDENTIALS checked as Linux checks an
+ *  unprivileged sender's (its own pid, uid and gid); -errno for what the kernel refuses */
+function readControl(control: number, length: number): number[] | number {
+  const header = cmsgHeader(), passing: number[] = [], own = processCredentials();
+  for (let off = 0; off + header <= length;) {
+    const at = control + off, len = ldLong(at), level = mem.ld32(at + PTR), type = mem.ld32(at + PTR + 4);
+    if (len < header || off + len > length) return -E.INVAL;
+    if (level === SOL_SOCKET) {
+      if (type === SCM_RIGHTS) for (let i = header; i + 4 <= len; i += 4) passing.push(mem.ld32(at + i));
+      else if (type === SCM_CREDENTIALS) {
+        if (len !== header + 12) return -E.INVAL;
+        if (mem.ld32(at + header) !== own.pid || mem.ld32(at + header + 4) !== own.uid || mem.ld32(at + header + 8) !== own.gid) return -E.PERM;
+      } else return -E.INVAL;
+    }
+    off += cmsgAlign(len);
+  }
+  return passing;
 }
 
 function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number, peer: boolean): number {
@@ -825,8 +901,20 @@ function nativeGetsockopt(cpu: Cpu, fd: number, level: number, name: number, val
   const unix = isUnixSocket(fd);
   if (!unix && !sockets.has(fd)) return notSocket(cpu, fd);
   if (!value || !length || mem.ld32(length) < 4) return fail(cpu, E.FAULT);
+  if (unix && level === SOL_SOCKET && name === SO_PEERCRED) {
+    const c = unixPeerCredentials(fd), n = Math.min(mem.ld32(length), 12);
+    if (typeof c === "number") return fail(cpu, -c);
+    mem.write(value, new Uint8Array(Int32Array.of(c.pid, c.uid, c.gid).buffer, 0, n));
+    mem.st32(length, n);
+    return 0;
+  }
   const result = unix ? unixSocketOption(fd, level, name) : socketOption(fd, level, name);
   if (result < 0) return fail(cpu, -result);
+  if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) {
+    if (mem.ld32(length) < 2 * PTR) return fail(cpu, E.INVAL);
+    stLong(value, Math.floor(result / 1000)); stLong(value + PTR, result % 1000 * 1000); mem.st32(length, 2 * PTR);
+    return 0;
+  }
   if (level === SOL_SOCKET && name === SO_LINGER && mem.ld32(length) >= 8) {
     mem.st32(value, +(result > 0)); mem.st32(value + 4, Math.max(0, result - 1)); mem.st32(length, 8);
     return 0;
@@ -836,35 +924,38 @@ function nativeGetsockopt(cpu: Cpu, fd: number, level: number, name: number, val
   return 0;
 }
 function nativeSetsockopt(cpu: Cpu, fd: number, level: number, name: number, value: number, length: number): number {
-  // an AF_UNIX socket keeps no option: its socket-level ones are accepted with nothing to observe
-  if (isUnixSocket(fd)) return level === SOL_SOCKET ? 0 : fail(cpu, E.NOPROTOOPT);
-  if (!sockets.has(fd)) return notSocket(cpu, fd);
-  if (level === IPPROTO_IP && (name === IP_ADD_MEMBERSHIP || name === IP_DROP_MEMBERSHIP) && value && length >= 8)
+  const unix = isUnixSocket(fd);
+  if (!unix && !sockets.has(fd)) return notSocket(cpu, fd);
+  const set = unix ? unixSetOption : setSocketOption;
+  if (!unix && level === IPPROTO_IP && (name === IP_ADD_MEMBERSHIP || name === IP_DROP_MEMBERSHIP) && value && length >= 8)
     return sys(cpu, socketGroup(fd, name === IP_ADD_MEMBERSHIP, Array.from(mem.bytes(value, 4)), length >= 12 ? mem.ld32(value + 8) : 0));
-  if (level === SOL_SOCKET && name === SO_LINGER) return value && length >= 8 ? sys(cpu, setSocketOption(fd, level, name, mem.ld32(value) ? mem.ld32(value + 4) : -1)) : fail(cpu, E.INVAL);
+  if (level === SOL_SOCKET && name === SO_LINGER) return value && length >= 8 ? sys(cpu, set(fd, level, name, mem.ld32(value) ? mem.ld32(value + 4) : -1)) : fail(cpu, E.INVAL);
   if (level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO)) {
     if (!value || length < 2 * PTR) return fail(cpu, E.INVAL);
-    const seconds = PTR === 8 ? Number(mem.ld64(value)) : mem.ld32(value), micros = PTR === 8 ? Number(mem.ld64(value + 8)) : mem.ld32(value + 4);
-    return sys(cpu, setSocketOption(fd, level, name, seconds * 1000 + Math.ceil(micros / 1000)));
+    const seconds = ldLong(value), micros = ldLong(value + PTR);
+    if (micros < 0 || micros >= 1_000_000) return fail(cpu, E.DOM);
+    return sys(cpu, set(fd, level, name, seconds < 0 ? 0 : seconds * 1000 + Math.ceil(micros / 1000)));
   }
   if (!value || length < 1) return fail(cpu, E.INVAL);
   // an option the model does not keep is accepted as the kernel would, with nothing to observe
-  const r = setSocketOption(fd, level, name, length >= 4 ? mem.ld32(value) : mem.u8[value]);
+  const r = set(fd, level, name, length >= 4 ? mem.ld32(value) : mem.u8[value]);
   return r === -E.NOPROTOOPT ? 0 : sys(cpu, r);
 }
 
-/** sendto(2)/sendmsg(2) of `bytes` on any socket, to the sockaddr at `destination` if there is one */
-function nativeSendTo(cpu: Cpu, fd: number, bytes: Uint8Array, destination: number, destinationLength: number): number {
+/** sendto(2)/sendmsg(2) of `bytes` on any socket, to the sockaddr at `destination` if there is one,
+ *  an AF_UNIX one passing the descriptors `passing`. A stream whose reader is gone raises SIGPIPE. */
+function nativeSendTo(cpu: Cpu, fd: number, bytes: Uint8Array, destination: number, destinationLength: number, flags = 0, passing: number[] = []): number {
   const named = !!(destination || destinationLength);
+  const sent = (r: number, stream: boolean) => r === -E.PIPE && stream ? brokenPipe(cpu, flags) : sys(cpu, r);
   if (isUnixSocket(fd)) {
-    if (!named) return sys(cpu, unixSend(fd, bytes));
-    if (!destination || destinationLength < 2 || mem.ld16u(destination) !== AF_UNIX) return fail(cpu, E.INVAL);
-    return sys(cpu, unixSend(fd, bytes, sunPath(mem.bytes(destination + 2, destinationLength - 2))));
+    if (named && (!destination || destinationLength < 2 || mem.ld16u(destination) !== AF_UNIX)) return fail(cpu, E.INVAL);
+    const path = named ? sunPath(mem.bytes(destination + 2, destinationLength - 2)) : null;
+    return sent(unixSend(fd, bytes, path, passing), unixSocketOption(fd, SOL_SOCKET, SO_TYPE) === SOCK_STREAM);
   }
   if (!sockets.has(fd)) return notSocket(cpu, fd);
   const endpoint = named ? readEndpoint(cpu, fd, destination, destinationLength, true) : null;
   if (named && !endpoint) return -1;
-  return sys(cpu, socketSend(fd, bytes, endpoint));
+  return sent(socketSend(fd, bytes, endpoint), socketOf(fd)!.kind === "stream");
 }
 
 function copyText(text: string, destination: number, capacity: number): boolean {
@@ -965,11 +1056,10 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
   accept: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), 0),
   accept4: (cpu, args) => nativeAccept(cpu, args.i(), args.p(), args.p(), args.i()),
   sendto: (cpu, args) => {
-    const fd = args.i(), source = args.p(), length = args.u();
-    args.i(); const destination = args.p(), destinationLength = args.u();
+    const fd = args.i(), source = args.p(), length = args.u(), flags = args.i(), destination = args.p(), destinationLength = args.u();
     if (!isNativeSocket(fd) && !isUnixSocket(fd)) return destination || destinationLength ? fail(cpu, E.ISCONN) : fdWrite(cpu, fd, source, length);
     if (length && !source) return fail(cpu, E.FAULT);
-    return nativeSendTo(cpu, fd, mem.bytes(source, length), destination, destinationLength);
+    return nativeSendTo(cpu, fd, mem.bytes(source, length), destination, destinationLength, flags);
   },
   recvfrom: (cpu, args) => {
     const fd = args.i(), destination = args.p(), length = args.u(), flags = args.i();
@@ -978,14 +1068,16 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
     if (source || sourceLength) return fail(cpu, E.NOTCONN);
     return fdRead(cpu, fd, destination, length);
   },
-  // no ancillary data: none is sent (SCM_RIGHTS included) and none is received
+  // ancillary data is AF_UNIX's SCM_RIGHTS and SCM_CREDENTIALS; an internet socket sends none
   sendmsg: (cpu, args) => {
-    const fd = args.i(), msg = args.p();
-    if (!isNativeSocket(fd) && !isUnixSocket(fd)) return notSocket(cpu, fd);
+    const fd = args.i(), msg = args.p(), flags = args.i(), unix = isUnixSocket(fd);
+    if (!isNativeSocket(fd) && !unix) return notSocket(cpu, fd);
     const count = ldLong(msg + MSG.iovLength * PTR);
     if (count < 0 || count > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
-    if (ldp(msg + MSG.control * PTR) && ldLong(msg + MSG.controlLength * PTR)) return fail(cpu, E.INVAL);
-    return nativeSendTo(cpu, fd, gather(ldp(msg + MSG.iov * PTR), count), ldp(msg + MSG.name * PTR), mem.ld32(msg + MSG.nameLength * PTR));
+    const control = ldp(msg + MSG.control * PTR), controlLength = ldLong(msg + MSG.controlLength * PTR);
+    const passing = control && controlLength ? unix ? readControl(control, controlLength) : -E.INVAL : [];
+    if (typeof passing === "number") return fail(cpu, -passing);
+    return nativeSendTo(cpu, fd, gather(ldp(msg + MSG.iov * PTR), count), ldp(msg + MSG.name * PTR), mem.ld32(msg + MSG.nameLength * PTR), flags, passing);
   },
   recvmsg: (cpu, args) => {
     const fd = args.i(), msg = args.p(), flags = args.i();
@@ -993,8 +1085,8 @@ export const NET_SYSCALLS: Record<string, HostFn> = {
     const iov = ldp(msg + MSG.iov * PTR), count = ldLong(msg + MSG.iovLength * PTR);
     if (count < 0 || count > UIO_MAXIOV) return fail(cpu, E.MSGSIZE);
     const buffers = Array.from({ length: count }, (_, i) => guestBuffer(ldp(iov + i * 2 * PTR), ldLong(iov + i * 2 * PTR + PTR)));
-    stLong(msg + MSG.controlLength * PTR, 0);
-    return nativeReceive(cpu, fd, buffers, flags, ldp(msg + MSG.name * PTR), msg + MSG.nameLength * PTR, msg + MSG.flags * PTR);
+    const control = { at: anchor(ldp(msg + MSG.control * PTR)), capacity: ldLong(msg + MSG.controlLength * PTR), lengthAt: anchor(msg + MSG.controlLength * PTR) };
+    return nativeReceive(cpu, fd, buffers, flags, ldp(msg + MSG.name * PTR), msg + MSG.nameLength * PTR, msg + MSG.flags * PTR, control);
   },
   shutdown: (cpu, args) => { const fd = args.i(), how = args.i(); return sys(cpu, isUnixSocket(fd) ? javaShutdownFd(fd, how) : socketShutdown(fd, how)); },
   setsockopt: (cpu, args) => nativeSetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.u()),

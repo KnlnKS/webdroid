@@ -4,6 +4,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, systemClassLoader } from "../src/jvm/natives/jlang";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { scall, mountApexData, loadFrameworkJar } from "./java";
+import { vfs } from "../src/shell/vfs";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
@@ -247,6 +248,27 @@ describe("localsocket", () => {
     await vcall(server, "close", "()V");
     const late = await newObj("android/net/LocalSocket");
     await expect(vcallAsync(late, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"))).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+  });
+  test("LocalSocket passes descriptors and credentials through the kernel, and its timeout reads EAGAIN", async () => {
+    const pair: JObj[] = [await newObj("java/io/FileDescriptor"), await newObj("java/io/FileDescriptor")];
+    await scall("android/system/Os", "socketpair", "(IIILjava/io/FileDescriptor;Ljava/io/FileDescriptor;)V", 1, 1, 0, pair[0], pair[1]);
+    const socket = (fd: JObj) => newObj("android/net/LocalSocket", "(Ljava/io/FileDescriptor;)V", fd);
+    const [a, b] = [await socket(pair[0]), await socket(pair[1])];
+    vfs.write("/tmp/passed.txt", Uint8Array.of(42));
+    const file = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/passed.txt");
+    const fds = rt.oa(1, "Ljava/io/FileDescriptor;");
+    fds[0] = await vcall(file, "getFD", "()Ljava/io/FileDescriptor;");
+    await vcall(a, "setFileDescriptorsForSend", "([Ljava/io/FileDescriptor;)V", fds);
+    await vcall(await vcall(a, "getOutputStream", "()Ljava/io/OutputStream;"), "write", "(I)V", 7);
+    await vcall(file, "close", "()V");
+    expect(await vcall(await vcall(b, "getInputStream", "()Ljava/io/InputStream;"), "read", "()I")).toBe(7);
+    const [passed] = await vcall(b, "getAncillaryFileDescriptors", "()[Ljava/io/FileDescriptor;");
+    expect(await vcall(await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", passed), "read", "()I")).toBe(42);
+    const credentials = await vcall(b, "getPeerCredentials", "()Landroid/net/Credentials;");
+    expect(await vcall(credentials, "getUid", "()I")).toBe(await scall("android/os/Process", "myUid", "()I"));
+    await vcall(b, "setSoTimeout", "(I)V", 20);
+    await expect(vcallAsync(await vcall(b, "getInputStream", "()Ljava/io/InputStream;"), "read", "()I")).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+    for (const s of [a, b]) await vcall(s, "close", "()V");
   });
   test("closing a LocalServerSocket ends the streams of connections it never accepted", async () => {
     const address = await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.pending");

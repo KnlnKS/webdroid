@@ -137,7 +137,9 @@ export class Cpu {
   signalInterrupt: (() => void) | null = null;
   private deferredSignalDepths = new Set<number>();
   deferSignalsUntilResume(): void { if (this.depth) this.deferredSignalDepths.add(this.depth); }
-  signalMask = 0n;
+  /** an app thread's mask on the reference device (/proc/<pid>/task/<tid>/status SigBlk 0x80001204):
+   *  ART's Runtime::BlockSignals (SIGQUIT, SIGUSR1, SIGPIPE) and bionic's reserved signal 32 */
+  signalMask = 0x80001204n;
   alternateStack: { sp: bigint; size: bigint; flags: number } | null = null;
   alternateActive = false;
   /** the handlers running, innermost last: the stack range each runs on, and the state a

@@ -6,7 +6,7 @@ import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
 import { E, ERRSTR } from "../native/abi";
-import { javaDup2Fd, unixSocketPair, javaShutdownFd, unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption } from "../native/fs";
+import { javaDup2Fd, unixSocketPair, javaShutdownFd, unixSocket, isUnixSocket, unixBind, unixListen, unixAccept, unixSocketName, unixSocketOption, unixSetOption, unixSend, unixReceive, unixPeerCredentials } from "../native/fs";
 import { sunPath, sunPathBytes, unixConnectPath } from "../native/unix";
 import {
   POLLIN, POLLERR, MSG_DONTWAIT, SOL_SOCKET, IPPROTO_IP, GROUP_OPTIONS,
@@ -20,7 +20,7 @@ import { parseIpv4 } from "../shell/relay";
 
 const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSocketAddress", ISA_HOLDER = "java/net/InetSocketAddress$InetSocketAddressHolder";
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";
-const SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, IP_MULTICAST_IF = 32, SO_BINDTODEVICE = 25;
+const SO_PEERCRED = 17, SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, IP_MULTICAST_IF = 32, SO_BINDTODEVICE = 25;
 
 /** a bytecode throwable, thrown once made */
 const thrown = (cls: string, desc: string, ...args: unknown[]): Promise<never> => after(newObj(cls, desc, ...args), (e) => { throw e; });
@@ -68,13 +68,17 @@ function fillSocketAddress(target: JObj | null, ep: Endpoint | null): void | Pro
 function connect(d: JObj | null, ep: Endpoint) { return waited("connect", socketConnect(fdInt(d), ep), () => {}); }
 function bind(d: JObj | null, ep: Endpoint) { sys("bind", socketBind(fdInt(d), ep)); }
 function sendto(d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, ep: Endpoint | null) {
-  return writeBytes(buffer, offset, count, (bytes) => ioResult("sendto", socketSend(fdInt(d), bytes, ep)));
+  const fd = fdInt(d);
+  return writeBytes(buffer, offset, count, (bytes) => ioResult("sendto", isUnixSocket(fd) ? unixSend(fd, bytes) : socketSend(fd, bytes, ep)));
 }
 const intOption = (fn: string, d: JObj | null, level: number, name: number) => {
   const fd = fdInt(d);
   return ioResult(fn, isNativeSocket(fd) ? socketOption(fd, level, name) : unixSocketOption(fd, level, name));
 };
-const setIntOption = (fn: string, d: JObj | null, level: number, name: number, value: number) => sys(fn, setSocketOption(fdInt(d), level, name, value));
+const setIntOption = (fn: string, d: JObj | null, level: number, name: number, value: number) => {
+  const fd = fdInt(d);
+  sys(fn, (isUnixSocket(fd) ? unixSetOption : setSocketOption)(fd, level, name, value));
+};
 /** getaddrinfo's EAI_* as android.system.GaiException */
 const gaiError = (fn: string, code: number) => thrown("android/system/GaiException", "(Ljava/lang/String;I)V", fn, code);
 /** getsockname/getpeername: an InetSocketAddress, or an AF_UNIX socket's UnixSocketAddress over its sun_path */
@@ -166,6 +170,12 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     if (level !== SOL_SOCKET || name !== SO_RCVTIMEO && name !== SO_SNDTIMEO || sec < 0n || usec < 0n || usec >= 1_000_000n) throw errno("setsockopt", E.INVAL);
     setIntOption("setsockopt", d, level, name, Number(sec) * 1000 + Math.ceil(Number(usec) / 1000));
   },
+  [`getsockoptUcred(${FD}II)Landroid/system/StructUcred;`]: (d: JObj | null, level: number, name: number) => {
+    if (level !== SOL_SOCKET || name !== SO_PEERCRED) throw errno("getsockopt", E.NOPROTOOPT);
+    const c = unixPeerCredentials(fdInt(d));
+    if (typeof c === "number") throw errno("getsockopt", -c);
+    return newObj("android/system/StructUcred", "(III)V", c.pid, c.uid, c.gid);
+  },
   [`getsockoptInAddr(${FD}II)${INET}`]: (d: JObj | null, level: number, name: number) => {
     const v = intOption("getsockopt", d, level, name);
     return inetAddress({ address: level === IPPROTO_IP && name === IP_MULTICAST_IF && v > 255 ? [v >>> 24, v >> 16 & 255, v >> 8 & 255, v & 255] : [0, 0, 0, 0] });
@@ -193,7 +203,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
   [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
     const from = { source: null as Endpoint | null }, fd = fdInt(d);
     const n = readBytes("recvfrom", buffer, offset, count, (target) => {
-      const r = socketReceive(fd, target, flags, from);
+      const r = isUnixSocket(fd) ? unixReceive(fd, target, flags) : socketReceive(fd, target, flags, from);
       return r instanceof Promise ? r.then((v) => closedUnder("recvfrom", v)) : r;
     });
     return after(n, (received) => after(fillSocketAddress(source, from.source), () => received));

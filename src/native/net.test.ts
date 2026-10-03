@@ -114,3 +114,48 @@ test("an LP64 msghdr carries a UDP datagram and its sender through sendmsg and r
     for (const fd of [receiver, sender]) expect(await call("close", fd)).toBe(0);
   } finally { mem.free(scratch); cpu.dispose(); setA64(false); }
 });
+
+test("AF_UNIX passes descriptors and credentials, times out receives and breaks pipes as Linux does", async () => {
+  setA64(true); kernelInit();
+  const cpu = new Cpu(mainThread, "scm-test"), scratch = mem.malloc(512);
+  const call = (name: string, ...args: number[]) => cpu.call(defineHost(name, { ...NET_SYSCALLS, ...FS_SYSCALLS }[name]), args);
+  const pair = scratch, msg = scratch + 16, iov = scratch + 80, data = scratch + 96, control = scratch + 128, option = scratch + 256, pipe = scratch + 288;
+  const message = (controlLength: number) => {
+    mem.memset(msg, 0, 56);
+    mem.st64(msg + 16, BigInt(iov)); mem.st64(msg + 24, 1n); mem.st64(msg + 32, BigInt(control)); mem.st64(msg + 40, BigInt(controlLength));
+    mem.st64(iov, BigInt(data)); mem.st64(iov + 8, 4n);
+  };
+  try {
+    expect(await call("socketpair", 1, 1, 0, pair)).toBe(0);
+    const a = mem.ld32(pair), b = mem.ld32(pair + 4);
+    expect(await call("pipe2", pipe, 0)).toBe(0);
+    const [readEnd, writeEnd] = [mem.ld32(pipe), mem.ld32(pipe + 4)];
+    // SCM_RIGHTS: the write end travels, and outlives the sender's descriptor
+    mem.write(data, [1, 2, 3, 4]);
+    message(24);
+    mem.st64(control, 20n); mem.st32(control + 8, 1); mem.st32(control + 12, 1); mem.st32(control + 16, writeEnd);
+    expect(await call("sendmsg", a, msg, 0)).toBe(4);
+    expect(await call("close", writeEnd)).toBe(0);
+    mem.st32(option, 1);
+    expect(await call("setsockopt", b, 1, 16 /* SO_PASSCRED */, option, 4)).toBe(0);
+    message(64);
+    expect(await call("recvmsg", b, msg, 0x40000000 /* MSG_CMSG_CLOEXEC */)).toBe(4);
+    expect(Number(mem.ld64(msg + 40))).toBe(32 + 24);
+    expect([Number(mem.ld64(control)), mem.ld32(control + 8), mem.ld32(control + 12), Number(mem.ld64(control + 32)), mem.ld32(control + 44)]).toEqual([28, 1, 2, 20, 1]);
+    const received = mem.ld32(control + 48);
+    expect(await call("write", received, data, 2)).toBe(2);
+    expect(await call("read", readEnd, data + 8, 4)).toBe(2);
+    // SO_RCVTIMEO: EAGAIN once it passes
+    mem.st64(option, 0n); mem.st64(option + 8, 20_000n);
+    expect(await call("setsockopt", b, 1, 20 /* SO_RCVTIMEO */, option, 16)).toBe(0);
+    expect(await call("read", b, data, 4)).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(E.AGAIN);
+    // EPIPE once the reader is gone, raising SIGPIPE (blocked, so pending) unless MSG_NOSIGNAL
+    expect(await call("close", b)).toBe(0);
+    expect(await call("sendto", a, data, 1, 0x4000 /* MSG_NOSIGNAL */, 0, 0)).toBe(-1);
+    expect([mem.ld32(cpu.errnoAddr), cpu.signals.includes(13)]).toEqual([E.PIPE, false]);
+    expect(await call("write", a, data, 1)).toBe(-1);
+    expect(cpu.signals.includes(13)).toBe(true);
+    for (const fd of [a, readEnd, received]) expect(await call("close", fd)).toBe(0);
+  } finally { mem.free(scratch); cpu.dispose(); setA64(false); }
+});
