@@ -2209,7 +2209,14 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     rt.drive's pending result, a suspension whose continuation list a second caller's frames joined
     and which settles only when the first caller's whole chain (here the main looper's) ends. The
     second `getInstalledPackages` waited on it forever; `once` now shares the build (12/12 launch).
-    `scripts/generators.ts` catches only `??=` of such a result, not a `Map.set`.
+    `scripts/generators.ts` now reports such a result kept by `??=`, `||=`, `Map.set`, a property
+    or element store, or a variable its function does not own, directly or through a local; it
+    found no other site.
+  - Memory: the offered chunks were modules, whose records keep every function they compiled for
+    the realm's life (dropping unclaimed factories freed 2 MB). They now run as classic scripts,
+    which block the main thread as long (5-6 ms for 3,000 bodies), and the unclaimed bodies are
+    dropped 30 s after the last claim. Heap 100 s into a launch: Mihon 669 -> 559 MB, Komikku 710
+    -> 600 MB; tap cold calls and latency unchanged (Komikku n=9, Mihon n=5).
   - Open: TikTok (no guest session on this host) is unmeasured; its swipe's 9,500-class message is
     class linking, which a worker's runtime cannot do for the page.
 

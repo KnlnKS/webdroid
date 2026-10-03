@@ -701,8 +701,10 @@ lazy-method installation and mangling (~120 ms of a warm FitNotes launch), clini
 First launches (§4.4, `knlnks/open-aot`, 2026-10-03): the compile worker emits the launch
 components and what they and the profile call, after the profile, for every APK; idle preparation
 takes the newest methods first. Cold taps run 35-60% fewer cold calls (Mihon's second dark tap
-6.4k -> 2.6k, Komikku's first 12.3k -> 5.1k) at unchanged first frames and +49-65 MB of page heap.
-A memoised ApplicationInfo suspension that hung Mihon's launch is fixed (history, 2026-10-03).
+6.4k -> 2.6k, Komikku's first 12.3k -> 5.1k) at unchanged first frames. Offered bodies run as
+classic scripts and the unclaimed ones are dropped once claims stop (Mihon 669 -> 559 MB after
+launch). A memoised ApplicationInfo suspension that hung Mihon's launch is fixed, and
+`scripts/generators.ts` reports a pending Java result kept in any cache (history, 2026-10-03).
 
 **Post-flip matrix (2026-10-02).** `--full --jobs 1` without Genshin: the seven local flows render
 every step (FitNotes 39/39 at 7.4% content); live flows run one at a time render Harmonic 14/14,
