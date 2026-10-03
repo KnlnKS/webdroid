@@ -495,6 +495,45 @@ describe("thread-group", () => {
   });
 });
 
+describe("uncaught-exceptions", () => {
+  class Recorder extends JObj { tag = ""; }
+  const seen: [string, unknown, unknown][] = [];
+  rt.register({ name: "test/UncaughtRecorder", ctor: Recorder, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"], methods: {
+    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": function (this: Recorder, t: unknown, e: unknown) { seen.push([this.tag, t, e]); },
+  } });
+  const failure = rt.mkThrowable("java/lang/IllegalStateException", "escaped");
+  rt.register({ name: "test/Throwing", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": () => { throw failure; } } });
+  rt.linkNatives();
+  const recorder = async (tag: string) => Object.assign(await newObj("test/UncaughtRecorder") as Recorder, { tag });
+
+  test("Thread.dispatchUncaughtException runs the pre-handler, then the thread's handler or its group's default", async () => {
+    const T = rt.link("java/lang/Thread").ctor, H = "(Ljava/lang/Thread$UncaughtExceptionHandler;)V";
+    await vcall(T, "setUncaughtExceptionPreHandler", H, await recorder("pre"));
+    await vcall(T, "setDefaultUncaughtExceptionHandler", H, await recorder("default"));
+    try {
+      const thread = await newObj("java/lang/Thread", "(Ljava/lang/Runnable;)V", await newObj("test/Throwing"));
+      await vcall(thread, "start", "()V");
+      await vcall(thread, "join", "()V");
+      expect(seen).toEqual([["pre", thread, failure], ["default", thread, failure]]);
+      seen.length = 0;
+      const own = await newObj("java/lang/Thread", "(Ljava/lang/Runnable;)V", await newObj("test/Throwing"));
+      await vcall(own, "setUncaughtExceptionHandler", H, await recorder("own"));
+      await vcall(own, "start", "()V");
+      await vcall(own, "join", "()V");
+      expect(seen.map(([tag]) => tag)).toEqual(["pre", "own"]);
+      // a host-entered call no Java frame waits on escapes the thread that made it
+      seen.length = 0;
+      callUncaught(() => { throw failure; });
+      await Bun.sleep(0);
+      expect(seen).toEqual([["pre", mainThread, failure], ["default", mainThread, failure]]);
+    } finally {
+      seen.length = 0;
+      await vcall(T, "setUncaughtExceptionPreHandler", H, null);
+      await vcall(T, "setDefaultUncaughtExceptionHandler", H, null);
+    }
+  });
+});
+
 describe("thread-enumeration", () => {
   class WaitingTask extends JObj { finish: (() => void) | null = null; }
   rt.register({ name: "test/EnumerationTask", ctor: WaitingTask, ifaces: ["java/lang/Runnable"], methods: {

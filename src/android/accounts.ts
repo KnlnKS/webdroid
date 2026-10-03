@@ -5,7 +5,7 @@
 // service, call its IAccountAuthenticator with a response Stub, and relay what it reports.
 import { awaited, JObj, rt, noops, getDeclared, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { newObj, scall, vcall, reportUncaught, callUncaught, after } from "../jvm/natives/jlang";
+import { newObj, scall, vcall, logUncaught, systemUncaught, after } from "../jvm/natives/jlang";
 import { boxInt } from "../jvm/natives/jbox";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { appHost } from "./apphost";
@@ -49,7 +49,7 @@ let accountStore = new AccountStore(), stopAccountUpdates = () => {};
 const CHANGED = ["android.accounts.action.VISIBLE_ACCOUNTS_CHANGED", "android.accounts.LOGIN_ACCOUNTS_CHANGED"];
 function accountsChanged(): void {
   if (!appHost) return;
-  for (const action of CHANGED) callUncaught(() => onMain(() => after(newIntent(action),
+  for (const action of CHANGED) systemUncaught(() => onMain(() => after(newIntent(action),
     (intent) => deliverBroadcast(intent, null, false, { code: 0, data: null, extras: null, aborted: false }, null))));
 }
 export function useAccountStore(store: AccountStore): () => void {
@@ -129,7 +129,7 @@ class JAccountSession extends JObj {
   /** the response to answer, and the session closed unless it waits on an activity */
   take(keepOpen: boolean): JObj | null {
     const response = this.response;
-    if (!keepOpen) { this.response = null; callUncaught(this.unbind); }
+    if (!keepOpen) { this.response = null; systemUncaught(this.unbind); }
     return response;
   }
 }
@@ -170,7 +170,7 @@ const session = driven(function* (type: string, response: JObj, call: (authentic
     const authenticator = yield scall("android/accounts/IAccountAuthenticator$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/accounts/IAccountAuthenticator;", binder);
     yield asSystem(() => call(authenticator, s));
   } catch (error) {
-    reportUncaught(error);
+    logUncaught(error);
     const lost = s.take(false);
     if (lost) yield fail(lost, ERROR_REMOTE, "bind failure");
   }

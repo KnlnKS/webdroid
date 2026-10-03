@@ -4,7 +4,7 @@
 // IContentService. Sync is answered as a device with no sync adapters.
 import { awaited, rt, JObj, driven, noops, stubs, type Gen } from "../../jvm/runtime";
 import { newArrayList } from "../../jvm/natives/jcoll";
-import { vcall, reportUncaught } from "../../jvm/natives/jlang";
+import { vcall, logUncaught } from "../../jvm/natives/jlang";
 import { jarray } from "../../jvm/abi";
 import { hostStub } from "../binder";
 import { mkUri, uriParts, uriText, type JUri } from "../net";
@@ -35,7 +35,7 @@ export const notifyContent = driven(function* notifyContent$(uri: string, origin
   for (const o of observers.filter((o) => notified(o, changed, flags))) {
     const self = origin !== null && o.key === origin;
     if (self && !selfNotify) continue;
-    try { yield o.deliver(uri, self, flags); } catch (error) { reportUncaught(error); }
+    try { yield o.deliver(uri, self, flags); } catch (error) { logUncaught(error); }
   }
 });
 

@@ -3,7 +3,7 @@
 // receivers through scheduleReceiver. An ordered delivery waits for the receiver's finishReceiver,
 // whose result the next receiver starts from; the sender's result receiver hears the last.
 import { awaited, JObj, driven, type Gen } from "../../jvm/runtime";
-import { callUncaught, newObj, vcall } from "../../jvm/natives/jlang";
+import { systemUncaught, newObj, vcall } from "../../jvm/natives/jlang";
 import { notConnected } from "../binder";
 import { PROCESS_UID } from "../os";
 import { appHost } from "../apphost";
@@ -108,7 +108,7 @@ export const broadcastQueueMethods = {
       if (receiver) {
         registered.set(receiver, { filter, permission, flags, pkg });
         const none: BroadcastResult = { code: 0, data: null, extras: null, aborted: false };
-        for (const sticky of stickies) callUncaught(() => scheduleRegistered(receiver, sticky, none, false, true, SYSTEM));
+        for (const sticky of stickies) systemUncaught(() => scheduleRegistered(receiver, sticky, none, false, true, SYSTEM));
       }
       return stickies[0] ?? null;
     }),
@@ -116,7 +116,7 @@ export const broadcastQueueMethods = {
   "broadcastIntentWithFeature(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/content/Intent;Ljava/lang/String;Landroid/content/IIntentReceiver;ILjava/lang/String;Landroid/os/Bundle;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;ILandroid/os/Bundle;ZZI)I":
     (_caller: JObj, _feature: string | null, intent: JObj, _type: string | null, resultTo: JObj | null, code: number, data: string | null, extras: JObj | null,
       permissions: string[] | null, _excluded: unknown, _excludedPackages: unknown, _op: number, _options: unknown, serialized: number) => {
-      callUncaught(() => broadcastIntent(intent, [...permissions ?? []], !!serialized, resultTo, { code, data, extras, aborted: false }));
+      systemUncaught(() => broadcastIntent(intent, [...permissions ?? []], !!serialized, resultTo, { code, data, extras, aborted: false }));
       return 0;
     },
   "finishReceiver(Landroid/os/IBinder;ILjava/lang/String;Landroid/os/Bundle;ZI)V": (who: JObj, code: number, data: string | null, extras: JObj | null, aborted: number) => {

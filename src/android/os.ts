@@ -11,7 +11,7 @@ import { exitProcess, never } from "../process-exit";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, reportUncaught, newObj, after, checkFromIndexSize } from "../jvm/natives/jlang";
+import { vcall, curThread, mainThread, JThread, JThrowable, logUncaught, newObj, after, checkFromIndexSize } from "../jvm/natives/jlang";
 import { E, ERRSTR, strerror } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
@@ -171,7 +171,7 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
         if (key !== undefined && pfdBackings.get(key) === shared) pfdBackings.delete(key);
         vfs.delete(shared.path, false);
       }
-    })().catch(reportUncaught);
+    })().catch(logUncaught);
   });
   return fd;
 }

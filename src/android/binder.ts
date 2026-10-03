@@ -1,7 +1,9 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { callOn, callUncaught, curThread, JThread, scall, vcall, after, linkInit, reportUncaught, newObj } from "../jvm/natives/jlang";
+import { callOn, curThread, JThread, scall, vcall, after, linkInit, logUncaught, newObj } from "../jvm/natives/jlang";
+import { inStrand, newStrand } from "../jvm/suspend";
+import { exitProcess, processExited } from "../process-exit";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
@@ -141,11 +143,32 @@ function setWorkSource(uid: number, propagate: boolean): bigint {
 }
 const transactionCaller = (): Caller | undefined => callers.get(curThread);
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
+const SIGABRT = 6;
+/** an exception escaping a stub's method, as JavaBBinder's report_exception takes it: logged,
+ *  except that an Error is fatal (LOG_ALWAYS_FATAL aborts the process) */
+function reportException(e: unknown, message: string): void {
+  const je = rt.jx(e);
+  console.error(`[Binder] ${message}`);
+  logUncaught(je);
+  if (!rt.iof(je, "java/lang/Error") || processExited()) return;
+  console.error(`Fatal signal ${SIGABRT} (SIGABRT), pid ${PROCESS_PID}\nAbort message: '${message}'`);
+  exitProcess({ signal: SIGABRT });
+}
+/** a call into a local stub that no caller waits on (a oneway transaction, a death notice), as
+ *  Binder.execTransact makes it: a RuntimeException is logged, and anything else is reported */
+export function binderUncaught(call: () => unknown, message = "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)"): void {
+  if (processExited()) return;
+  const escaped = (e: unknown) => {
+    if (rt.iof(rt.jx(e), "java/lang/RuntimeException")) console.warn("[Binder] Caught a RuntimeException from the binder stub implementation.", rt.jx(e));
+    else reportException(e, message);
+  };
+  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(escaped); } catch (e) { escaped(e); }
+}
 /** a oneway call to a local binder: made on a fresh turn of the caller's thread, which neither
  *  waits for the callee nor hears of its failure */
 export function oneway(target: JObj, name: string, desc: string, ...args: unknown[]): void {
   const thread = curThread;
-  queueMicrotask(() => callUncaught(() => callOn(thread, () => vcall(target, name, desc, ...args))));
+  queueMicrotask(() => binderUncaught(() => callOn(thread, () => vcall(target, name, desc, ...args))));
 }
 /** a cross-process transport's call before the broker connects it */
 export const notConnected = async (): Promise<never> => { throw rt.mkThrowable("android/os/RemoteException", "Process transport unavailable"); };
@@ -183,12 +206,12 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
       yield fillParcel(data, request.data);
       let handled = 0;
       try { handled = yield vcall(binder, "execTransact", "(IJJI)Z", request.code, dataPtr, replyPtr, request.flags); }
-      catch (error) { reportUncaught(error); } // "Uncaught remote exception!": the caller sees UNKNOWN_TRANSACTION
+      catch (error) { reportException(error, "*** Uncaught remote exception!  (Exceptions are not yet supported across processes.)"); } // the caller sees UNKNOWN_TRANSACTION
       return { handled, data: yield* awaited(exportParcel(reply)) };
     } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
   }()));
   if (!(request.flags & 1)) return run();
-  const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(reportUncaught);
+  const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(logUncaught);
   oneWay.set(request.handle.id, pending);
   void pending.finally(() => { if (oneWay.get(request.handle.id) === pending) oneWay.delete(request.handle.id); });
   return { handled: 1, data: await exportParcel(new NativeParcel()) };
@@ -301,7 +324,8 @@ rt.registerJnis("android/os/BinderProxy", {
     if (!deaths.has(recipient)) deaths.set(recipient, binderTransport.watch(target.pid, () => {
       deaths.delete(recipient);
       // binderDied arrives on a binder thread
-      callUncaught(() => withCallingIdentity(SYSTEM_CALLER, () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this)));
+      binderUncaught(() => withCallingIdentity(SYSTEM_CALLER, () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this)),
+        "*** Uncaught exception returned from death notification!");
     }));
   },
   "unlinkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JObj, recipient: unknown) {

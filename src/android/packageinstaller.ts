@@ -2,7 +2,7 @@
 // a session stages each written file under /data/app/vmdl<id>.tmp, as PackageInstallerSession
 // does, and its commit installs a single base APK through the package registry.
 import { awaited, JObj, rt, noops, setDeclared, getDeclared, driven, type Gen } from "../jvm/runtime";
-import { callUncaught, scall, vcall, after, newObj } from "../jvm/natives/jlang";
+import { systemUncaught, scall, vcall, after, newObj } from "../jvm/natives/jlang";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -10,7 +10,7 @@ import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
-import { newStub } from "./binder";
+import { binderUncaught, newStub } from "./binder";
 import { putExtra, type JIntent } from "./intent";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
@@ -27,7 +27,7 @@ function session(id: number): Session {
   return value;
 }
 function notify(name: string, desc: string, ...args: unknown[]): void {
-  for (const callback of callbacks) callUncaught(() => vcall(callback, name, desc, ...args));
+  for (const callback of callbacks) binderUncaught(() => vcall(callback, name, desc, ...args));
 }
 function finish(s: Session, success: boolean): void {
   sessions.delete(s.id);
@@ -51,7 +51,7 @@ function* commit$(s: Session, sender: JObj): Gen<void> {
   if (installed !== null) {
     const uri = yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", installed, null);
     const added: JIntent = yield newObj("android/content/Intent", `(${S}Landroid/net/Uri;)V`, "android.intent.action.PACKAGE_ADDED", uri);
-    callUncaught(() => broadcastIntent(added, [], false));
+    systemUncaught(() => broadcastIntent(added, [], false));
     yield putExtra(result, "android.content.pm.extra.PACKAGE_NAME", installed, S);
     yield putExtra(result, "android.content.pm.extra.STATUS", STATUS_SUCCESS, "I");
   } else {
@@ -89,7 +89,7 @@ rt.register({ name: "webdroid/PackageInstallerSession", ctor: JSessionService, s
     const s = unsealed(this);
     if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
     s.sealed = true;
-    callUncaught(() => rt.drive(commit$(s, sender)));
+    systemUncaught(() => rt.drive(commit$(s, sender)));
   },
   "abandon()V": function (this: JSessionService) { const s = this.session; if (s && sessions.has(s.id)) finish(s, false); },
   "getInstallFlags()I": () => 0,

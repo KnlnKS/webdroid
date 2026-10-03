@@ -88,8 +88,9 @@ let mainHandlerObj: JObj | null = null, hostHandler: JObj | null = null, startin
 const ready = Promise.withResolvers<void>();
 
 /** ActivityThread.main's first and last steps: prepare the main looper, then loop on it for good.
- *  An exception escaping a message goes to the main thread's uncaught handler and the loop goes on,
- *  where a device would kill the process. */
+ *  An exception escaping a message goes to the main thread's uncaught handler, whose default
+ *  (KillApplicationHandler) ends the process; past an app's handler that returns, the loop goes
+ *  on where a device's main thread would end. */
 export function startMainLooper(): Promise<void> {
   return starting ??= (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
     // as after the zygote: System is initialized before the loop's first SystemClock read

@@ -59,10 +59,19 @@ export function vcallAsync(obj: unknown, name: string, desc: string, ...args: un
   try { return Promise.resolve(vcall(obj, name, desc, ...args)); } catch (e) { return Promise.reject(e); }
 }
 /** A call no Java frame waits on (a listener, a posted task): its exception, thrown now or when
- *  it resumes, goes to the uncaught handler rather than to the native that dispatched it. */
+ *  it resumes, escapes the thread that made it, which dispatches it to its uncaught handler
+ *  rather than to the native that dispatched it. */
 export function callUncaught(call: () => unknown): void {
   if (processExited()) return;
-  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(reportUncaught); } catch (e) { reportUncaught(e); }
+  const thread = curThread, escaped = (e: unknown) => reportUncaught(e, thread);
+  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(escaped); } catch (e) { escaped(e); }
+}
+/** system_server's work that no Java frame waits on. There its own default handler would end
+ *  system_server and the runtime would restart; this page cannot restart it under the apps it
+ *  hosts, so the exception is logged. */
+export function systemUncaught(call: () => unknown): void {
+  if (processExited()) return;
+  try { const r = inStrand(newStrand(), call); if (r instanceof Promise) r.catch(logUncaught); } catch (e) { logUncaught(e); }
 }
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));
@@ -632,12 +641,17 @@ rt.register({
   },
 });
 
-/** log a throwable that escaped every handler and tell the development shell */
-export function reportUncaught(e: unknown) {
+/** a throwable that escaped every Java frame of `thread`: Thread.dispatchUncaughtException,
+ *  as ART calls it when a thread's run loop ends in an exception */
+export function reportUncaught(e: unknown, thread: JThread = mainThread): void {
+  void dispatchUncaught(thread, e);
+}
+/** log a throwable no Java handler takes and tell the development shell */
+export function logUncaught(e: unknown): void {
   const je = rt.jx(e);
   // the cause chain travels with the throwable and is usually where the real failure is named
   let causes = "";
-  const next = (t: JThrowable) => { const c = causeOf(t); return c instanceof Promise ? null : c; };
+  const next = (t: JThrowable) => { const c = callOn(mainThread, () => causeOf(t)); return c instanceof Promise ? null : c; };
   for (let c = je && next(je), depth = 0; c && depth < 8; c = next(c), depth++) {
     causes += `\n  caused by ${(c.constructor as any)?.$i?.name ?? "?"}: ${c.msg ?? ""}`;
   }
@@ -1244,23 +1258,21 @@ mainThread.alive = 1;
 rt.th = () => curThread;
 rt.st = (t) => setCurThread(t as JThread);
 rt.su = releaseThread;
-class JDefaultUEH extends JObj {}
-rt.register({
-  name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
-  methods: {
-    // AOSP's LoggingHandler prints the whole trace; the "Caused by" chain is what names the real
-    // fault, and the JS stack locates one a native raised
-    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": driven(function* (_t: unknown, e: unknown): Gen {
-      if (e instanceof JThrowable) console.error("[uncaughtException]", yield* awaited(stackTraceText(e)), "\n" + e.jsStack);
-      else console.error("[uncaughtException]", e);
-    }),
-  },
-});
-let defaultUEH: unknown = new JDefaultUEH();
-/** Thread.dispatchUncaughtException: the thread's handler, else the default one */
+// the default handler and the pre-handler, which RuntimeInit.commonInit sets (KillApplicationHandler,
+// LoggingHandler); until then a ThreadGroup prints the trace to System.err
+let defaultUEH: unknown = null, preUEH: unknown = null;
+const UEH = "(Ljava/lang/Thread;Ljava/lang/Throwable;)V";
+/** the thread's handler, else its group (libcore's Thread.getUncaughtExceptionHandler) */
+const uncaughtHandler = (t: JThread): unknown => t.ueh ?? t.group ?? mainThreadGroup();
+/** ART's Thread::HandleUncaughtExceptions: Thread.dispatchUncaughtException on the thread, whose
+ *  own exception is cleared. A JS error is the Java throwable its frames would have seen. */
 export async function dispatchUncaught(t: JThread, e: unknown): Promise<void> {
-  try { await vcallOn(t, t.ueh ?? defaultUEH, "uncaughtException", "(Ljava/lang/Thread;Ljava/lang/Throwable;)V", t, rt.jx(e)); }
-  catch (inner) { console.error("[thread " + t.jname + "] uncaught handler failed", rt.jx(inner)); }
+  if (processExited()) return;
+  // the development report, with the JS stack that locates a throwable a native raised
+  const je = rt.jx(e);
+  logUncaught(je);
+  try { await vcallOn(t, t, "dispatchUncaughtException", "(Ljava/lang/Throwable;)V", je); }
+  catch (inner) { console.error("[thread " + t.jname + "] uncaught exception handler threw"); logUncaught(inner); }
 }
 export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
 /** run as `t` from here: the code that follows owns the turn as that thread */
@@ -1336,7 +1348,7 @@ function startThread(t: JThread): void {
       catch (e) { await dispatchUncaught(t, e); }
       finally {
         t.alive = 0;
-        try { await vcallOn(t, t.group, "threadTerminated", "(Ljava/lang/Thread;)V", t); } catch (e) { reportUncaught(e); }
+        try { await vcallOn(t, t.group, "threadTerminated", "(Ljava/lang/Thread;)V", t); } catch (e) { logUncaught(e); }
         threadExit.hook?.(t);
         resolve();
       }
@@ -1414,9 +1426,16 @@ rt.register({
       return m;
     }),
     "static getDefaultUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,
-    "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": function (this: JThread) { return this.ueh ?? defaultUEH; },
-    "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": function (this: JThread, h: unknown) { this.ueh = h; },
     "static setDefaultUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": (h: unknown) => { defaultUEH = h; },
+    "static getUncaughtExceptionPreHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => preUEH,
+    "static setUncaughtExceptionPreHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": (h: unknown) => { preUEH = h; },
+    // a terminated thread has left its group, and has no handler unless it set one
+    "getUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": function (this: JThread) { return this.started && !this.alive ? this.ueh : uncaughtHandler(this); },
+    "setUncaughtExceptionHandler(Ljava/lang/Thread$UncaughtExceptionHandler;)V": function (this: JThread, h: unknown) { this.ueh = h; },
+    "dispatchUncaughtException(Ljava/lang/Throwable;)V": driven(function* (this: JThread, e: unknown): Gen {
+      if (preUEH) { try { yield vcall(preUEH, "uncaughtException", UEH, this, e); } catch { /* the pre-handler's failure is ignored */ } }
+      yield vcall(yield uncaughtHandler(this), "uncaughtException", UEH, this, e);
+    }),
     "static sleep(J)V": (ms: bigint) => park(curThread, () => () => {}, Number(ms)),
     "static sleep(JI)V": (ms: bigint, nanos: number) => {
       if (ms < 0n || nanos < 0 || nanos > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout value is negative or nanos out of range");

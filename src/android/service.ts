@@ -1,7 +1,7 @@
 // System services and binder-ish plumbing, and FileObserver's inotify.
 
 import { awaited, rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, reportUncaught } from "../jvm/natives/jlang";
+import { newObj, vcall, logUncaught } from "../jvm/natives/jlang";
 import { utf8 } from "../jvm/abi";
 import { javaInotifyAddWatch, javaInotifyInit, javaInotifyRmWatch, javaReadFd } from "../native/fs";
 import { newArrayList } from "../jvm/natives/jcoll";
@@ -64,7 +64,7 @@ rt.registerJnis("android/os/FileObserver$ObserverThread", {
         const len = view.getUint32(at + 12, true), name = buf.subarray(at + 16, at + 16 + len);
         const path = len ? utf8.dec.decode(name.subarray(0, name.indexOf(0) < 0 ? len : name.indexOf(0))) : null;
         try { yield vcall(this, "onEvent", "(IILjava/lang/String;)V", view.getInt32(at, true), view.getInt32(at + 4, true), path); }
-        catch (error) { reportUncaught(error); }
+        catch (error) { logUncaught(error); }
         at += 16 + len;
       }
     }

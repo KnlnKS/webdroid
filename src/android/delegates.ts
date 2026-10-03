@@ -23,10 +23,9 @@ import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
 import { NativeBitmap, colorLongAt } from "./bitmap";
-import { newObj, vcall, scall, after, callOn, mainThread } from "../jvm/natives/jlang";
+import { vcall, scall, after, callOn, mainThread } from "../jvm/natives/jlang";
 import { asZygote } from "./os";
 import { hasProperty, propertyValue as propValue } from "../shell/properties";
-import { lambda } from "../jvm/natives/jlambda";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
 import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
@@ -678,23 +677,19 @@ delegate("android/os/SystemProperties", {
 });
 
 /** What the zygote sets up in a forked process before app code runs: libcore's MIME table is
- *  framework.jar's, System.out and System.err reach logcat, the default time zone follows
- *  persist.sys.timezone, java.util.logging reaches logcat with the default HTTP user agent set, the JCA providers are installed and warmed,
- *  Typeface is initialized and the hyphenators registered; the device's languages are set and the
- *  text paint classes, whose constructors read them, initialized. The font map is bindApplication's. */
+ *  framework.jar's, System.out and System.err reach logcat, RuntimeInit.commonInit's uncaught
+ *  exception handlers (LoggingHandler, KillApplicationHandler), time zone, logging, HTTP user
+ *  agent and socket tagger are set, the JCA providers are installed and warmed, Typeface is
+ *  initialized and the hyphenators registered; the device's languages are set and the text paint
+ *  classes, whose constructors read them, initialized. The font map is bindApplication's. */
 export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
   // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
   yield asZygote(() => rt.initClass(rt.link("java/lang/System")));
   // ZygoteInit.main: DDMS handlers and libcore's MimeMap over framework.jar's mime.types
   yield scall("com/android/internal/os/RuntimeInit", "preForkInit", "()V");
   yield scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");
-  const hooks = rt.link("dalvik/system/RuntimeHooks");
-  yield rt.initClass(hooks);
-  yield vcall(hooks.ctor, "setTimeZoneIdSupplier", "(Ljava/util/function/Supplier;)V", lambda("java/util/function/Supplier", "get()Ljava/lang/Object;", () => propValue("persist.sys.timezone")));
-  yield vcall(yield scall("java/util/logging/LogManager", "getLogManager", "()Ljava/util/logging/LogManager;"), "reset", "()V");
-  yield newObj("com/android/internal/logging/AndroidConfig");
-  yield scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http.agent",
-    yield scall("com/android/internal/os/RuntimeInit", "getDefaultUserAgent", "()Ljava/lang/String;"));
+  // ZygoteInit.zygoteInit, in the forked process
+  yield scall("com/android/internal/os/RuntimeInit", "commonInit", "()V");
   // ZygoteInit.preload: AndroidKeyStoreProvider installed, every provider's services resolved
   yield scall("com/android/internal/os/ZygoteInit", "warmUpJcaProviders", "()V");
   yield* preloadFonts();

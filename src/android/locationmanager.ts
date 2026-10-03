@@ -6,7 +6,7 @@
 // grant is not fudged here) and a caller without either sees no providers.
 import { awaited, JObj, noops, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jcoll";
-import { after, newObj, scall, vcall, reportUncaught, callUncaught } from "../jvm/natives/jlang";
+import { after, newObj, scall, vcall, logUncaught, callUncaught } from "../jvm/natives/jlang";
 import { once } from "../jvm/suspend";
 import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain } from "./mainloop";
@@ -119,7 +119,7 @@ function subscribe(key: unknown, provider: string, request: Request, on: {
     deliver(() => on.location(fix));
   };
   locationTransport.subscribe(subscription.id, request.high, provider !== "passive" && request.interval !== PASSIVE_INTERVAL,
-    (event) => { events = events.then(() => receive(event)).catch(reportUncaught); });
+    (event) => { events = events.then(() => receive(event)).catch(logUncaught); });
 }
 function distanceM(a: LocationFix, b: LocationFix): Promise<number> {
   const results = new Float32Array(1);

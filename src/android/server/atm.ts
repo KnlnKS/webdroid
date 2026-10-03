@@ -4,7 +4,7 @@
 // new one once that pause is reported, and stops what it covers when it goes idle; finishing
 // pauses, resumes the one below with any result it is owed, then stops and destroys.
 import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, callUncaught, newObj, vcall, scall, reportUncaught, staticField } from "../../jvm/natives/jlang";
+import { after, systemUncaught, newObj, vcall, scall, logUncaught, staticField } from "../../jvm/natives/jlang";
 import { once, shareable } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { configurations, resizeWindows, setClientVisible } from "./wm";
@@ -285,18 +285,18 @@ export const startActivityFor = driven(function* (app: JObj, intent: JObj, resol
     const source = byToken(resultTo), resultRecord = requestCode >= 0 && !source?.finishing ? source : null;
     const q = yield* awaited(intentQuery(intent)), system = systemActivity(q, false) ??
       (info && getDeclared<string>(info, AI, "packageName") === "android" && getDeclared<string>(info, AI, "name") === SYSTEM_ACTIVITY ? systemActivity(q) : null);
-    if (system) { callUncaught(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode))); return START_SUCCESS; }
+    if (system) { systemUncaught(() => rt.drive(runSystemActivity(system, intent, resultRecord, resultWho, requestCode))); return START_SUCCESS; }
     if (!info) return START_INTENT_NOT_RESOLVED;
     const copy = yield newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
     yield vcall(copy, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;", yield vcall(info, "getComponentName", "()Landroid/content/ComponentName;"));
     const pkg = getDeclared<string>(info, AI, "packageName"), process = getDeclared<string>(info, AI, "processName");
     // the pause a local start waits for runs on the caller's main thread, so the call returns once it
     // is under way, as ActivityStarter returns once the pause is scheduled
-    if (runsHere(pkg, process)) callUncaught(() => rt.drive(startActivity(app, copy, info, resultRecord, resultWho, requestCode)));
+    if (runsHere(pkg, process)) systemUncaught(() => rt.drive(startActivity(app, copy, info, resultRecord, resultWho, requestCode)));
     else if (activityTransport.launch) {
       yield activityTransport.launch(pkg, process, getDeclared<string>(info, AI, "name").replaceAll(".", "/"), copy, resultRecord ? {
         caller: { pkg: appHost!.pkg, cls: getDeclared<string>(resultRecord.info, AI, "name") },
-        deliver: (resultCode, data) => callUncaught(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data)))),
+        deliver: (resultCode, data) => systemUncaught(() => asSystem(() => rt.drive(deliverResult(resultRecord, resultWho, requestCode, resultCode, data)))),
       } : undefined);
     }
     else return START_INTENT_NOT_RESOLVED;
@@ -308,7 +308,7 @@ const RESULT_OK = -1;
  *  browser): it covers its caller, which resumes with any result it asked for */
 function* runSystemActivity(run: SystemHandler, intent: JObj, resultTo: ActivityRecord | null, resultWho: string | null, requestCode: number): Gen<void> {
   let data: JObj | null = null;
-  try { data = yield* awaited(run(intent)); } catch (error) { reportUncaught(error); }
+  try { data = yield* awaited(run(intent)); } catch (error) { logUncaught(error); }
   yield* deliverResult(resultTo ?? stack.at(-1) ?? null, resultWho, requestCode, data ? RESULT_OK : RESULT_CANCELED, data);
 }
 /** a result from an activity that covered `to` elsewhere (the browser, another process): the
@@ -385,7 +385,7 @@ function* navigateUpTo(r: ActivityRecord, dest: JObj, resultCode: number, result
   const reuse = parent && (getDeclared<number>(parent.info, AI, "launchMode") !== LAUNCH_MULTIPLE ||
     ((yield vcall(dest, "getFlags", "()I")) & FLAG_ACTIVITY_CLEAR_TOP) !== 0);
   const restarted = parent && !reuse && (yield* awaited(startActivityFor(r.app, dest))) === START_SUCCESS;
-  callUncaught(() => rt.drive(function* () {
+  systemUncaught(() => rt.drive(function* () {
     for (const c of covered) yield* finish(c, RESULT_CANCELED, null);
     if (reuse) yield* newIntent(parent!, dest);
     if (restarted) yield* finish(parent!, resultCode, resultData);
@@ -424,7 +424,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
   "finishActivity(Landroid/os/IBinder;ILandroid/content/Intent;I)Z": (token: JObj, resultCode: number, data: JObj | null) => {
     const r = byToken(token);
     if (!r) return 0;
-    callUncaught(() => rt.drive(finish(r, resultCode, data)));
+    systemUncaught(() => rt.drive(finish(r, resultCode, data)));
     return 1;
   },
   "navigateUpTo(Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;ILandroid/content/Intent;)Z":
@@ -441,7 +441,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     if (!r) return 0;
     const affinity = getDeclared<string | null>(r.info, AI, "taskAffinity"), doomed: ActivityRecord[] = [];
     for (let i = stack.indexOf(r); i >= 0 && getDeclared<string | null>(stack[i].info, AI, "taskAffinity") === affinity; i--) doomed.push(stack[i]);
-    callUncaught(() => rt.drive(function* () { for (const d of doomed.reverse()) yield* finish(d, RESULT_CANCELED, null); }()));
+    systemUncaught(() => rt.drive(function* () { for (const d of doomed.reverse()) yield* finish(d, RESULT_CANCELED, null); }()));
     return 1;
   },
   // back on a root activity: AOSP moves a launcher-started task back; one task, so it finishes
@@ -460,7 +460,7 @@ rt.register({ name: "webdroid/ActivityClientController", ctor: class extends JOb
     const r = byToken(token);
     if (!r || r.orientation === orientation) return;
     r.orientation = orientation;
-    if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) callUncaught(configurationChanged);
+    if (stack.at(-1) === r && displayHooks.requestOrientation?.(orientation)) systemUncaught(configurationChanged);
   },
   "willActivityBeVisible(Landroid/os/IBinder;)Z": (token: JObj) => +(stack.at(-1)?.token === token),
   "convertToTranslucent(Landroid/os/IBinder;Landroid/os/Bundle;)Z": (token: JObj) => setTranslucent(token, true),
@@ -492,7 +492,7 @@ rt.register({ name: "webdroid/AppTask", ctor: class extends JObj {}, sup: "andro
       id: TASK_ID, persistentId: TASK_ID, taskId: TASK_ID, numActivities: stack.length, isRunning: +(stack.length > 0),
       baseIntent: stack[0]?.intent ?? null, baseActivity: yield component(stack[0]), topActivity: yield component(stack.at(-1)) });
   }),
-  "finishAndRemoveTask()V": () => callUncaught(() => rt.drive(clearAbove(null))),
+  "finishAndRemoveTask()V": () => systemUncaught(() => rt.drive(clearAbove(null))),
   // one task is shown at a time, and there are no recents to exclude it from
   ...noops("moveToFront(Landroid/app/IApplicationThread;Ljava/lang/String;)V", "setExcludeFromRecents(Z)V"),
 } });

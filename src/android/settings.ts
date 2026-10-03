@@ -8,7 +8,7 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
-import { vcall, scall, staticField, callUncaught, newObj } from "../jvm/natives/jlang";
+import { vcall, scall, staticField, systemUncaught, newObj } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
 import { once } from "../jvm/suspend";
@@ -31,7 +31,7 @@ export function useSettingsStore(shared: SettingsStore): () => void {
 export const settingsStore = (): SettingsStore => store;
 /** SettingsProvider.notifyForSettingsChange: notifyChange(uri, null, syncToNetwork) as the system */
 function settingsChanged(table: SettingsTable, name: string): void {
-  callUncaught(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)));
+  systemUncaught(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)));
 }
 
 /** UiModeManagerService persists the device's night mode as Secure.UI_NIGHT_MODE once it is set:

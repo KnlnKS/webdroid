@@ -5,7 +5,7 @@
 // focus or blur that control and report the ime() insets source to the windows (wm.ts).
 import { once } from "../../jvm/suspend";
 import { rt, JObj, noops, stubs, getDeclared, driven, type Gen } from "../../jvm/runtime";
-import { after, callUncaught, scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
+import { after, callUncaught, systemUncaught, scall, staticField, newObj, vcall } from "../../jvm/natives/jlang";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostStub } from "../binder";
 import { onMain } from "../mainloop";
@@ -64,7 +64,7 @@ function showSoftInput(visible: boolean): number {
   if (visible && shown) return RESULT_UNCHANGED_SHOWN;
   shown = visible;
   showInput(visible);
-  callUncaught(() => setImeShown(visible));
+  systemUncaught(() => setImeShown(visible));
   return visible ? RESULT_SHOWN : RESULT_HIDDEN;
 }
 let shown = false;

@@ -2,14 +2,14 @@
 // scheduler (the broker's, across processes), and an OnAlarmListener's alarm fires in this process
 // by calling its IAlarmListener. Exact alarms need the permission AlarmManagerService asks for.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, reportUncaught, callUncaught, after } from "../jvm/natives/jlang";
+import { newObj, vcall, logUncaught, callUncaught, after } from "../jvm/natives/jlang";
 import { onMain } from "./mainloop";
 import { operationId, localPendingIntents } from "./pendingintent";
 import { Alarms } from "../shell/alarms";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis, type GuestTimer } from "../guest-clock";
 import { packages, usesSdk } from "./packages";
 
-const localAlarms = new Alarms(localPendingIntents, uptimeMillis, reportUncaught);
+const localAlarms = new Alarms(localPendingIntents, uptimeMillis, logUncaught);
 export const alarmTransport = {
   schedule: (id: number, type: number, at: number, interval: number) => localAlarms.schedule(id, type, at, interval),
   cancel: (id: number) => localAlarms.cancel(id),

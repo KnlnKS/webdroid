@@ -13,7 +13,7 @@ import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit, type ExitStatus } from "../process-exit";
-import { after, callUncaught, reportUncaught } from "../jvm/natives/jlang";
+import { after, systemUncaught, logUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
 import { ServiceRecords, type ServiceBinding, type ServiceRestart, type ServiceState } from "./servicerecords";
@@ -99,7 +99,7 @@ class ProcessBroker {
       throw rt.mkThrowable("android/app/PendingIntent$CanceledException", "Creator package is unavailable");
     await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
-  readonly alarms = new Alarms(this.intents, uptimeMillis, reportUncaught);
+  readonly alarms = new Alarms(this.intents, uptimeMillis, logUncaught);
   /** `codec` is the creator's: its JVM compares and merges the intents */
   async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents: ParcelData[] | undefined, codec: IntentCodec): Promise<number | null> {
     const caller = this.entry(pid), owner = packages.get(pkg);
@@ -515,7 +515,7 @@ export function connectProcess(): ProcessEndpoint {
   };
   activityTransport.finished = (id, code, data) => {
     setVisible(false);
-    callUncaught(() => after(data && encodeIntent(data), (encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)));
+    systemUncaught(() => after(data && encodeIntent(data), (encoded) => broker.finishActivity(PROCESS_PID, id, code, encoded)));
   };
   broker.files.attach(PROCESS_PID, vfs);
   useSQLiteStore(broker.databases);

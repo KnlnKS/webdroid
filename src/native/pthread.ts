@@ -7,7 +7,7 @@ import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
-import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
+import { JThread, logUncaught, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail, clockTime, utf8 } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { guestSleep, MAX_TIMER_DELAY } from "../guest-clock";
@@ -89,7 +89,7 @@ async function runKeyDestructors(cpu: Cpu): Promise<void> {
 threadExit.hook = (t) => {
   const cpu = cpuOf(t);
   if (!cpu || cpu.loops || cpu.depth) return;
-  void runCleanupHandlers(cpu).then(() => runKeyDestructors(cpu)).then(() => cpu.endThread()).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
+  void runCleanupHandlers(cpu).then(() => runKeyDestructors(cpu)).then(() => cpu.endThread()).catch(logUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
 };
 const onceWaiters = new AddrMap<(() => void)[]>();
 
@@ -221,7 +221,7 @@ function launch(cpu: Cpu, body: () => Promise<void>, exit: () => void): Promise<
     // window owns the base register file, so the thread's code must wait for it.
     await cpu.awaitIdleBase();
     cpu.depth++;
-    try { await body(); } catch (e) { reportUncaught(e); }
+    try { await body(); } catch (e) { reportUncaught(e, cpu.jthread); }
     finally {
       cpu.signals.length = 0;
       await cpu.awaitIdleBase();
