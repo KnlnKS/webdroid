@@ -6,7 +6,7 @@ import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
 import { pageShared } from "../shell/pageshared";
 import { after } from "../jvm/natives/jlang";
-import { servedFont } from "./fonts";
+import { servedFont, platformFontBytes } from "./fonts";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -113,14 +113,17 @@ type Skia = { loadSkia: typeof loadSkia; drawSkiaText: typeof drawSkiaText; stro
 declare global { interface Window { __wdSkia?: Skia } }
 const page = pageShared("__wdSkia", () => ({ loadSkia, drawSkiaText, strokeCommands, pathOp }));
 
+/** the bytes as a buffer of their own, which CanvasKit and the CPAL reader take whole */
+const ownBuffer = (b: Uint8Array): ArrayBuffer =>
+  b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer as ArrayBuffer : b.slice().buffer;
 /** CanvasKit and the faces it draws bitmap text in, loaded once per tab; text falls back to Canvas2D
  *  without them */
 export function loadSkia(): Promise<void> {
   if (page.loadSkia !== loadSkia) return page.loadSkia();
   return loading ??= Promise.all([
     canvasKit(),
-    fetch(`/vendor/aosp${SKIA_TEXT_FACE}`).then(response => response.arrayBuffer()),
-    fetch(`/vendor/aosp${SKIA_EMOJI_FACE}`).then(response => response.arrayBuffer()),
+    platformFontBytes(SKIA_TEXT_FACE).then(ownBuffer),
+    platformFontBytes(SKIA_EMOJI_FACE).then(ownBuffer),
   ]).then(([canvasKit, data, emojiData]) => {
     const typeface = canvasKit.Typeface.MakeFreeTypeFaceFromData(data);
     if (!typeface) throw new Error("Roboto unavailable to Skia");
