@@ -51,6 +51,13 @@ type Files = (path: string) => Uint8Array | null;
 /** AOSP's screen size class for a smallest-width in dp */
 export const sizeClass = (swdp: number): number => swdp >= 720 ? 4 : swdp >= 480 ? 3 : swdp >= 320 ? 2 : 1;
 
+/** a NUL-terminated UTF-16 field of up to `max` units */
+function utf16z(view: DataView, at: number, max: number): string {
+  let s = "";
+  for (let i = 0; i < max; i++) { const c = view.getUint16(at + i * 2, true); if (!c) break; s += String.fromCharCode(c); }
+  return s;
+}
+
 export class Arsc {
   values!: StringPool;
   pkgId = 0x7f;
@@ -99,12 +106,7 @@ export class Arsc {
 
   private parsePackage(view: DataView, base: number, headerSize: number, size: number, remap: Remap) {
     const pkgId = view.getUint32(base + 8, true);
-    let name = "";
-    for (let i = 0; i < 128; i++) {
-      const c = view.getUint16(base + 12 + i * 2, true);
-      if (!c) break;
-      name += String.fromCharCode(c);
-    }
+    const name = utf16z(view, base + 12, 128);
     const first = this.packages.size === 0;
     let pkg = this.packages.get(pkgId);
     if (!pkg) this.packages.set(pkgId, pkg = { name, types: new Map() });
@@ -131,10 +133,9 @@ export class Arsc {
         if (old) for (let i = 0; i < Math.min(old.length, count); i++) flags[i] |= old[i];
         this.specs.set(key, flags);
       } else if (ctype === 0x0204) {
-        const text = (at: number) => { let t = ""; for (let i = 0; i < 256; i++) { const c = view.getUint16(at + i * 2, true); if (!c) break; t += String.fromCharCode(c); } return t; };
         let named = this.overlayables.get(name);
         if (!named) this.overlayables.set(name, named = new Map());
-        named.set(text(pos + 8), text(pos + 520));
+        named.set(utf16z(view, pos + 8, 256), utf16z(view, pos + 520, 256));
       }
       pos += csize;
     }
