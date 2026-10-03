@@ -174,6 +174,15 @@ describe("environment", () => {
   rt.linkNatives();
   beforeAll(app);
 
+  test("system properties distinguish configured keys from absent names", async () => {
+    const cls = "android/os/SystemProperties";
+    expect(await scall(cls, "get", "(Ljava/lang/String;)Ljava/lang/String;", "dalvik.vm.heapgrowthlimit")).toBe("192m");
+    for (const key of ["webdroid.absent", "toString", "constructor", "__proto__"]) {
+      expect(await scall(cls, "get", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", key, "absent")).toBe("absent");
+      expect(await scall(cls, "find", "(Ljava/lang/String;)Landroid/os/SystemProperties$Handle;", key)).toBe(null);
+    }
+  });
+
   test("AOSP's Environment finds shared storage through the storage service's volume", async () => {
     const env = "android/os/Environment", dir = await scall(env, "getExternalStorageDirectory", "()Ljava/io/File;");
     expect(await vcall(dir, "getPath", "()Ljava/lang/String;")).toBe("/sdcard");

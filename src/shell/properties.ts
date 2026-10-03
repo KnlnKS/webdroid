@@ -4,21 +4,21 @@
 import { device } from "./config";
 import { utf8 } from "../jvm/abi";
 
-const properties: Record<string, () => string> = {
-  "persist.sys.timezone": () => device.timezone,
+const properties = new Map<string, () => string>([
+  ["persist.sys.timezone", () => device.timezone],
   // DisplayMetrics.DENSITY_DEVICE
-  "ro.sf.lcd_density": () => String(device.densityDpi),
+  ["ro.sf.lcd_density", () => String(device.densityDpi)],
   // the reference AVD's heap limits, which ActivityManager reports as the memory classes
-  "dalvik.vm.heapgrowthlimit": () => "192m", "dalvik.vm.heapsize": () => "576m",
+  ["dalvik.vm.heapgrowthlimit", () => "192m"], ["dalvik.vm.heapsize", () => "576m"],
   // PackageInstaller.Session writes through the staged file's descriptor (AOSP's revocable-fd
   // mode) rather than over a FileBridge socket, which needs a server thread there is none of
-  "fw.revocable_fd": () => "true",
+  ["fw.revocable_fd", () => "true"],
   // a product without a camera disables cameraserver, so CameraManager lists no camera
-  "config.disable_cameraservice": () => "true",
-};
+  ["config.disable_cameraservice", () => "true"],
+]);
 
-export const hasProperty = (key: string): boolean => key in properties;
-export const propertyValue = (key: string): string | null => properties[key]?.() ?? null;
+export const hasProperty = (key: string): boolean => properties.has(key);
+export const propertyValue = (key: string): string | null => properties.get(key)?.() ?? null;
 /** bionic's bound on a value, its terminator included */
 export const PROP_VALUE_MAX = 92;
 
@@ -44,7 +44,7 @@ const BT_PROP = 4, BT_LEFT = 8, BT_RIGHT = 12, BT_CHILDREN = 16, BT_NAME = 20, I
 
 /** every property, as bionic's ContextsPreSplit reads /dev/__properties__ */
 export function propertyArea(): Uint8Array {
-  const entries = Object.keys(properties).map((key) => [utf8.enc.encode(key), utf8.enc.encode(propertyValue(key)!)] as const);
+  const entries = [...properties].map(([key, value]) => [utf8.enc.encode(key), utf8.enc.encode(value())] as const);
   // at most a node per segment and a record per key, each padded by under 4 bytes
   const bound = entries.reduce((n, [k]) => n + (k.filter((c) => c === 46).length + 1) * (BT_NAME + 4) + 2 * k.length + INFO_NAME + 4, BT_NAME);
   const bytes = new Uint8Array(HEADER + bound), view = new DataView(bytes.buffer);
