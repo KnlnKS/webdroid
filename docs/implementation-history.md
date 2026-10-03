@@ -2182,6 +2182,21 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - Komikku's restore step then failed 3 of 10 runs (0 of 5 at the base) on OPFS's NotFoundError
     from a document removed while a listing or lookup read it; documents.ts answers such a
     document as gone, and komikku passed 6 of 6. The failing operation itself was not captured.
+- 2026-10-03, Mihon's warm theme taps (lat, the gate's tightest scenario):
+  - Breakdown at load 4: dark-warm 95 ms = main thread 77 ms, app background threads 15 ms (OkHttp
+    and certificate parsing, coroutine workers, Firebase, DataStore), host 3 ms. Each tap relaunches
+    the activity (about 14 ms) and Compose composes the screen from scratch (55-75 ms); draw is under
+    1 ms. The 66-67 hosted binder calls per tap cost 3 ms, 0.2 ms of it the parcel copies.
+  - Compiled prologues read their thread from `R.cur` instead of calling `R.th()`, which V8 did not
+    inline: 2.4-3.0 ms of self time per tap.
+  - Rejected (branch `knlnks/open-mihontap`): app threads at default priority yielding behind input,
+    with priority inheritance through monitor, class-init and FutureTask/lock-owner waits. Against
+    39b8a5b5 it is within noise (warm dark-warm mean 98 vs 96 ms, cold 117 vs 113, 4 pairs each at
+    load 6-12); the earlier gain was the prologue change.
+  - Launches that never drew a first frame under load (5 in about 45 hunted runs, on every build)
+    were the shared ApplicationInfo suspension fixed above; 48 runs after it had none.
+  - Remaining: the main thread's Java work, 63-80 ms per tap, spread over Compose's runtime with no
+    dominant helper.
 - 2026-10-03, first-launch compilation past the baseline profile (§4.4, branch `knlnks/open-aot`):
   - Coverage: through Mihon's lat scenario 3,692 app methods ran cold outside its 18,274-method
     profile (the profiled classes hold 595 of them). Breadth first from the profile and the launch
