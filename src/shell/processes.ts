@@ -15,7 +15,8 @@ import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit, type ExitStatus } from "../process-exit";
 import { after, callUncaught, reportUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
-import { hostedServices, serviceTransport } from "../android/server/activeservices";
+import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
+import { ServiceRecords, type ServiceBinding, type ServiceRestart, type ServiceState } from "./servicerecords";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
@@ -59,8 +60,8 @@ const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastD
 const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
   after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
-type ServiceRequest = { kind: "bind"; intent: ParcelData; key: string; flags?: number } | { kind: "unbind"; key: string }
-  | { kind: "stop"; intent: ParcelData } | { kind: "peek"; intent: ParcelData }
+type ServiceRequest = { kind: "bind"; cls: string; intent: ParcelData; key: string; flags: number } | { kind: "unbind"; key: string }
+  | { kind: "stop"; cls: string; intent: ParcelData } | { kind: "peek"; intent: ParcelData } | ({ kind: "restart" } & ServiceRestart)
   | { kind: "start"; intent: ParcelData; foreground: boolean }
   | { kind: "pending"; operation: PendingOperation; fill: ParcelData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
@@ -76,6 +77,8 @@ type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
+  /** IServiceConnection.connected for a binding this process holds by its key */
+  serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
@@ -87,7 +90,6 @@ type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HT
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
   foregroundClients: number;
-  bindings: Map<string, { pkg: string; process: string }>;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
 class ProcessBroker {
   readonly files = new PrivateFiles();
@@ -140,6 +142,10 @@ class ProcessBroker {
   private activities: { id: number; pid: number; caller: number; previous: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
   private booted = false;
+  private services = new ServiceRecords((pkg, process, restart) => {
+    const entry = this.connect(pkg, process);
+    detached(this.request(entry, (endpoint) => endpoint.service({ kind: "restart", ...restart })));
+  }, (binding) => this.connection(binding, null, true));
 
   /** sent from the page's realm, which is up at boot */
   async boot(): Promise<void> {
@@ -151,7 +157,6 @@ class ProcessBroker {
     }());
     await this.broadcast(null, data, targets, ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
-
 
   foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
   /** the foreground process's window when it runs in a frame of its own */
@@ -288,7 +293,7 @@ class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, bindings: new Map(), watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -304,6 +309,7 @@ class ProcessBroker {
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
+    this.services.processStarted(pkg, process);
     return entry;
   }
   async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[] }> {
@@ -324,8 +330,12 @@ class ProcessBroker {
     entry.dead = true; entry.reject(error);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
-    for (const [key, binding] of entry.bindings) detached(this.service(null, binding.pkg, binding.process, { kind: "unbind", key }));
-    entry.bindings.clear();
+    for (const binding of this.services.bindingsOf(pid)) {
+      this.services.unbind(binding.key);
+      const host = this.byName.get(binding.pkg + "/" + binding.process);
+      if (host && !host.dead) detached(this.request(host, (endpoint) => endpoint.service({ kind: "unbind", key: binding.key })));
+    }
+    this.services.processDied(entry.pkg, entry.process);
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
@@ -369,22 +379,42 @@ class ProcessBroker {
     const target = this.entry(request.handle.pid);
     return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid })));
   }
+  /** a binding's key is the client's, made unique across clients */
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     const caller = pid === null ? null : this.entry(pid);
-    if (request.kind === "unbind") caller?.bindings.delete(request.key);
+    if (request.kind === "bind" || request.kind === "unbind") request = { ...request, key: pid + "/" + request.key };
+    if (request.kind === "unbind") this.services.unbind(request.key);
+    if (request.kind === "stop") this.services.stop(pkg, request.cls);
     // only a start, a bind or a pending operation brings up the service's process
     const entry = request.kind === "unbind" || request.kind === "stop" || request.kind === "peek" ? this.byName.get(pkg + "/" + process) : this.connect(pkg, process);
     if (!entry || entry.dead) return null;
-    const binding = request.kind === "bind" ? { pkg, process } : null;
-    if (request.kind === "bind" && binding) caller?.bindings.set(request.key, binding);
+    if (request.kind === "bind") this.services.bind(pkg, process, request.cls, { client: pid ?? 0, key: request.key, intent: request.intent, flags: request.flags });
+    const sent = request;
     try {
-      const result = await this.inherit(caller, entry, () => this.request(entry, endpoint => endpoint.service(request)));
+      const result = await this.inherit(caller, entry, () => this.request(entry, endpoint => endpoint.service(sent)));
       if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
       return result;
     } catch (error) {
-      if (request.kind === "bind" && caller?.bindings.get(request.key) === binding) caller.bindings.delete(request.key);
+      if (sent.kind === "bind") this.services.unbind(sent.key);
       throw error;
     }
+  }
+  /** a hosting process's report of its service's start state, which the broker keeps */
+  serviceRecord(pid: number, cls: string, state: ServiceState | null): void {
+    const host = this.entry(pid);
+    this.services.report(host.pkg, host.process, cls, state && structuredClone(state));
+  }
+  /** a service published its binder for another process's binding, or went away */
+  serviceConnected(pid: number, key: string, binder: BinderHandle | null, dead: boolean): void {
+    const host = this.entry(pid), binding = this.services.binding(key);
+    if (!binding || binding.pkg !== host.pkg || binding.process !== host.process) return;
+    if (dead) this.services.unbind(key);
+    this.connection(binding, binder, dead);
+  }
+  private connection(binding: ServiceBinding, binder: BinderHandle | null, dead: boolean): void {
+    if (!this.alive(binding.client)) return;
+    const key = binding.key.slice(binding.key.indexOf("/") + 1);
+    detached(this.request(this.entry(binding.client), (endpoint) => endpoint.serviceConnected(key, binder, dead)));
   }
   /** getContentProviderImpl for a provider in another process: checkContentProviderPermission,
    *  then the binder its process publishes, starting it. The provider enforces each call's
@@ -525,12 +555,14 @@ export function connectProcess(): ProcessEndpoint {
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
   const service = (pkg: string, process: string, request: ServiceRequest) => remote(broker.service(PROCESS_PID, pkg, process, request));
-  serviceTransport.bind = driven(function* (owner, process, intent, key, flags) {
-    return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "bind", intent: yield* awaited(encodeIntent(intent)), key, flags }))));
+  serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
+    yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
   });
   serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
   serviceTransport.start = driven(function* (owner, process, intent, foreground) { yield service(owner.pkg, process, { kind: "start", intent: yield* awaited(encodeIntent(intent)), foreground }); });
-  serviceTransport.stop = driven(function* (owner, process, intent) { yield service(owner.pkg, process, { kind: "stop", intent: yield* awaited(encodeIntent(intent)) }); });
+  serviceTransport.stop = driven(function* (owner, process, cls, intent) { yield service(owner.pkg, process, { kind: "stop", cls, intent: yield* awaited(encodeIntent(intent)) }); });
+  serviceTransport.record = (cls, state) => broker.serviceRecord(PROCESS_PID, cls, state);
+  serviceTransport.connected = (key, binder, dead) => broker.serviceConnected(PROCESS_PID, key, exportBinder(binder), dead);
   serviceTransport.peek = driven(function* (owner, process, intent) {
     return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
   });
@@ -561,12 +593,14 @@ export function connectProcess(): ProcessEndpoint {
     service: (request) => asBroker(function* (): Gen<BinderHandle | null> {
       if (request.kind === "pending") { yield executePendingIntent(request.operation, request.fill, request.alarmCount); return null; }
       if (request.kind === "unbind") { yield hostedServices.unbind(request.key); return null; }
+      if (request.kind === "restart") { yield hostedServices.restart(request.intent, request.state, request.binds); return null; }
       const intent = yield* awaited(decodeIntent(request.intent));
-      if (request.kind === "bind") return exportBinder(yield* awaited(hostedServices.bind(intent, request.key, request.flags)));
+      if (request.kind === "bind") { yield hostedServices.bind(intent, request.key, request.flags); return null; }
       if (request.kind === "peek") return exportBinder(yield* awaited(hostedServices.peek(intent)));
       yield hostedServices[request.kind](intent);
       return null;
     }()),
+    serviceConnected: (key, binder, dead) => asBroker(function* (): Gen<void> { remoteServiceConnected(key, yield* awaited(importBinder(binder)), dead); }()),
   };
 }
 export function registerForegroundProcess(): void {
