@@ -9,7 +9,7 @@ import { readInt, readLong, writeInt, writeLong, readFloat, writeFloat, type Nat
 
 const ME = "android/view/MotionEvent", PC = "android/view/MotionEvent$PointerCoords", PP = "android/view/MotionEvent$PointerProperties";
 const HISTORY_CURRENT = -0x80000000;
-export const AXIS_X = 0, AXIS_Y = 1, AXIS_PRESSURE = 2, AXIS_SIZE = 3, AXIS_ORIENTATION = 8, AXIS_RELATIVE_X = 27, AXIS_RELATIVE_Y = 28;
+export const AXIS_X = 0, AXIS_Y = 1, AXIS_ORIENTATION = 8, AXIS_RELATIVE_X = 27, AXIS_RELATIVE_Y = 28;
 const SOURCE_CLASS_POINTER = 2, SOURCE_CLASS_POSITION = 8, SOURCE_CLASS_JOYSTICK = 16, SOURCE_MOUSE_RELATIVE = 0x20004;
 /** AMOTION_EVENT_PRIVATE_FLAG_SUPPORTS_ORIENTATION and _SUPPORTS_DIRECTIONAL_ORIENTATION: kept from Java */
 const SUPPORTS_ORIENTATION = 0x80;
@@ -209,9 +209,9 @@ export class NativeMotionEvent {
 
 let ptrField = "";
 const ptrOf = (ev: object) => (ev as Record<string, bigint>)[ptrField ||= declaredField(ME, "mNativePtr")];
-const eventAt = (h: bigint) => deref<NativeMotionEvent>(h);
+const at = (h: bigint) => deref<NativeMotionEvent>(h);
 /** the native event behind a Java MotionEvent */
-export const motionOf = (ev: object): NativeMotionEvent => eventAt(ptrOf(ev));
+export const motionOf = (ev: object): NativeMotionEvent => at(ptrOf(ev));
 
 // ── JNI
 const iae = (msg: string) => rt.mkThrowable("java/lang/IllegalArgumentException", msg);
@@ -260,6 +260,8 @@ const pcFields = (): PCFields => pcf ??= {
   relativeY: declaredField(PC, "relativeY"), isResampled: declaredField(PC, "isResampled"), bits: declaredField(PC, "mPackedAxisBits"),
   values: declaredField(PC, "mPackedAxisValues"),
 };
+let ppf: [id: string, toolType: string] | null = null;
+const ppFields = () => ppf ??= [declaredField(PP, "id"), declaredField(PP, "toolType")];
 /** the axes PointerCoords keeps as fields, in field order with their axis */
 const FIELD_AXES: [keyof PCFields, number][] = [["x", 0], ["y", 1], ["pressure", 2], ["size", 3], ["touchMajor", 4], ["touchMinor", 5],
   ["toolMajor", 6], ["toolMinor", 7], ["orientation", 8], ["relativeX", 27], ["relativeY", 28]];
@@ -390,7 +392,6 @@ const AXIS_LABELS = [
   ..."GESTURE_X_OFFSET GESTURE_Y_OFFSET GESTURE_SCROLL_X_DISTANCE GESTURE_SCROLL_Y_DISTANCE GESTURE_PINCH_SCALE_FACTOR GESTURE_SWIPE_FINGER_COUNT".split(" "),
 ];
 
-const at = eventAt;
 rt.registerJnis(ME, {
   "nativeInitialize(JIIIIIIIIIFFFFJJI[Landroid/view/MotionEvent$PointerProperties;[Landroid/view/MotionEvent$PointerCoords;)J": (ptr: bigint,
     deviceId: number, source: number, displayId: number, action: number, flags: number, edgeFlags: number, metaState: number, buttonState: number,
@@ -399,7 +400,7 @@ rt.registerJnis(ME, {
     pointerArrays(count, props, coords);
     const xform = Float32Array.of(1, 0, xOffset, 0, 1, yOffset), inv = inverse(xform);
     const ids: number[] = [], tools: number[] = [], raw: Coords[] = [];
-    const id = declaredField(PP, "id"), tool = declaredField(PP, "toolType");
+    const [id, tool] = ppFields();
     flags &= ~PRIVATE_FLAGS;
     for (let i = 0; i < count; i++) {
       const pp = props![i], pc = coords![i];
@@ -437,7 +438,8 @@ rt.registerJnis(ME, {
     const e = at(ptr);
     checkPointer(e, i);
     if (!out) throw npe("pointerProperties must not be null");
-    out[declaredField(PP, "id")] = e.ids[i]; out[declaredField(PP, "toolType")] = e.tools[i];
+    const [id, tool] = ppFields();
+    out[id] = e.ids[i]; out[tool] = e.tools[i];
   },
   "nativeReadFromParcel(JLandroid/os/Parcel;)J": (ptr: bigint, p: JObj) => {
     const e = ptr ? at(ptr) : new NativeMotionEvent();
