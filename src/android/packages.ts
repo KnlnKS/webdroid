@@ -97,18 +97,28 @@ export const componentState = {
 /**
  * When this package was installed, epoch ms. An app's data directory IS its installation
  * here, so the first boot that has no persisted state is the install, and the timestamp is
- * kept with that state (wd.reset wipes it along with the rest of the "install").
+ * kept with that state until the package is removed. A package this process no longer has
+ * (a request in flight across its removal) records none.
  */
 export function installTime(pkg: string): bigint {
   const key = "wd:install:" + pkg;
   let ms = Number(globalThis.localStorage?.getItem(key) ?? 0);
   if (!ms) {
     ms = Date.now();
-    try { globalThis.localStorage?.setItem(key, String(ms)); } catch { /* private mode */ }
+    try { if (packages.has(pkg)) globalThis.localStorage?.setItem(key, String(ms)); } catch { /* private mode */ }
   }
   return BigInt(ms);
 }
 
+/** the uid a package was given, without assigning one */
+export const knownUid = (pkg: string): number | undefined => uids.get(pkg);
+/** the package's install state (its install time and what is kept with it), as its removal drops it */
+export function forgetInstall(pkg: string): void {
+  const storage = globalThis.localStorage, key = "wd:install:" + pkg;
+  try {
+    for (let i = storage?.length ?? 0; i--;) { const k = storage!.key(i)!; if (k === key || k.startsWith(key + ":")) storage!.removeItem(k); }
+  } catch { /* storage can be unavailable */ }
+}
 export function packageUid(pkg: string): number {
   const old = uids.get(pkg);
   if (old !== undefined) return old;

@@ -84,7 +84,11 @@ const encodeParam = (p: Param): [number, number, string] =>
   [p.tag, p.kind, p.v instanceof Uint8Array ? p.v.toBase64() : typeof p.v === "bigint" ? p.v.toString() : String(p.v)];
 const decodeParam = ([tag, kind, s]: [number, number, string]): Param =>
   ({ tag, kind, v: kind === KIND.blob ? Uint8Array.fromBase64(s) : kind === KIND.longInteger || kind === KIND.dateTime ? BigInt(s) : kind === KIND.boolValue ? s === "true" : Number(s) });
-const storeKey = () => "wd:keystore2:" + PROCESS_UID;
+const storeKey = (uid = PROCESS_UID) => "wd:keystore2:" + uid;
+/** AppDataHelper.clearKeystoreData: every key of the app's uid */
+export function clearKeystore(uid: number): void {
+  try { globalThis.localStorage?.removeItem(storeKey(uid)); } catch { /* storage can be unavailable */ }
+}
 let cache: { raw: string | null; entries: Entry[] } = { raw: null, entries: [] };
 function entries(): Entry[] {
   let raw: string | null = null;

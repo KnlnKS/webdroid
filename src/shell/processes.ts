@@ -13,6 +13,8 @@ import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
 import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit, type ExitStatus } from "../process-exit";
+import { noteAppKill, type KillNote } from "../android/server/appexitinfo";
+import type { PackageDataChange } from "./packagedata";
 import { after, systemUncaught, logUncaught } from "../jvm/natives/jlang";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
@@ -23,7 +25,7 @@ import { device, formatScreen } from "./config";
 import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult, type Sender } from "../android/server/broadcastqueue";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
-import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider } from "../android/pm";
+import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
 import { checkPermission, PermissionStore, usePermissionStore } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, useSQLiteStore } from "../android/sqlite";
@@ -50,7 +52,7 @@ async function someDenied(permissions: string[], pkg: string): Promise<boolean> 
  *  it answers whichever process's JVM has ended, the page's included. */
 const asBroker = <T>(work: Gen<T>): Promise<T> => asSystem(() => rt.drive(work));
 const detached = (work: Promise<unknown>) => void work.catch((error) => console.error("[broker]", error));
-type Receiver = { pkg: string; cls: string; priority: number };
+export type Receiver = { pkg: string; cls: string; priority: number };
 /** the manifest receivers an intent reaches, as the sending process's package manager resolves them */
 function* receivers(intent: JObj): Gen<Receiver[]> {
   return (yield* awaited(queryReceivers(intent))).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
@@ -82,8 +84,10 @@ type ProcessEndpoint = {
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
-  /** the kernel's SIGKILL: the process ends where it stands */
-  kill: (signal: number) => void;
+  /** a package was removed: this process's package manager forgets it */
+  packageRemoved: (pkg: string) => void;
+  /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
+  kill: (signal: number, note?: KillNote) => void;
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
@@ -348,6 +352,26 @@ class ProcessBroker {
     if (signal !== 9 || !target || target.dead || target.uid !== caller.uid) return;
     void target.ready.then((endpoint) => endpoint.kill(signal), () => {});
   }
+  /** forceStopPackageLocked: the package's services go without restarting, and every process of its
+   *  uid dies */
+  async forceStop(pkg: string, note?: KillNote): Promise<void> {
+    this.services.forceStop(pkg);
+    const uid = packages.get(pkg)?.uid;
+    await Promise.all([...this.entries.values()].filter((e) => !e.dead && (e.pkg === pkg || e.uid === uid))
+      .map((e) => e.ready.then((endpoint) => endpoint.kill(9, note), () => {})));
+  }
+  /** a removed package leaves every process's package manager, this one's too */
+  async packageRemoved(pkg: string): Promise<void> {
+    forgetRemoved(pkg);
+    await Promise.all([...this.entries.values()].filter((e) => !e.dead).map((e) => e.ready.then((endpoint) => endpoint.packageRemoved(pkg), () => {})));
+  }
+  /** system_server's part in a package's data change, which outlives its caller (the caller may be
+   *  the package): the package stops, its data is cleared or removed, then `broadcasts` go out */
+  async changePackageData(pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[]): Promise<void> {
+    const { changePackageData } = await import("./packagedata");
+    await changePackageData(this, pkg, change);
+    for (const { data, targets } of broadcasts) await this.broadcast(null, data, targets, [], false);
+  }
   /** a process ended: ActivityManagerService.appDiedLocked's notice, from the process itself */
   died(pid: number, status: ExitStatus): void {
     const entry = this.entries.get(pid);
@@ -475,6 +499,12 @@ class ProcessBroker {
   }
 }
 
+/** a removed package leaves this process's package manager, with the archive it would register again from */
+function forgetRemoved(pkg: string): void {
+  packages.delete(pkg);
+  packedArchives.delete(installedPath(pkg));
+  vfs.delete(installedPath(pkg));
+}
 declare global { interface Window { __wdProcesses?: ProcessBroker; } }
 export function processBroker(): ProcessBroker {
   const root = window.parent;
@@ -568,7 +598,8 @@ export function connectProcess(): ProcessEndpoint {
   });
   return {
     clipboardChanged: async () => clipboardChanged(),
-    kill: (signal) => exitProcess({ signal }),
+    packageRemoved: forgetRemoved,
+    kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device")).pressBack();
       return asBroker(function* (): Gen<void> {

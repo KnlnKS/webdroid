@@ -23,7 +23,8 @@ import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
 import { onMain, mainDbg } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
 import { setWebLayer, webViewInfo } from "./android/webkit";
-import { clearWebData } from "./android/webstorage";
+import { packagesWithData, removePackageData } from "./shell/packagedata";
+import { clearUserData, deletePackage } from "./android/appdata";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
 import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics";
@@ -223,17 +224,17 @@ const wd = {
       new Promise((r) => { id = setTimeout(() => r(false), ms); }),
     ]);
   },
-  // wipe persisted app state (sqlite + prefs + the picked directories) so a run starts fresh
+  // a fresh install of every app: each package's data and install state as its removal takes them,
+  // with the shared storage and the picked directories
   reset: async () => {
-    // each app's WebView storage lives on renderer origins only a frame on them can clear
-    const webData = Object.keys(localStorage).flatMap((k) => /^wd:install:(.+):webview$/.exec(k)?.[1] ?? []).map(clearWebData);
-    await Promise.all([clearRoots(), clearPickedDocuments(), processBroker().files.clear(), ...webData]);
-    const gone: string[] = [];
-    for (const k of Object.keys(localStorage)) {
-      if (/^wd:(db|prefs|install|keystore2?|web-cookies):/.test(k)) { localStorage.removeItem(k); gone.push(k); }
-    }
-    return gone;
+    const broker = processBroker(), names = packagesWithData(broker);
+    await Promise.all(names.map((pkg) => removePackageData(broker, pkg)));
+    await Promise.all([clearRoots(), clearPickedDocuments(), broker.files.clear()]);
+    return names;
   },
+  // an app's data cleared as Settings' "Clear storage" does, and its uninstall as the launcher's
+  clearData: async (pkg: string) => (await onMain(() => clearUserData(pkg, false, false, null))).done,
+  uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
   type: async (s: string) => {
     kbd.value = s;
     await imeInput(s);

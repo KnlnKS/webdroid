@@ -130,6 +130,16 @@ function retire(file: SharedDatabase) {
   if (file.saving) clearTimeout(file.saving);
   C.FS.unlink(file.name);
 }
+/** the snapshots an older build kept for databases under `dirs`, which go with an app's data */
+export function forgetLegacySnapshots(dirs: string[]): void {
+  const storage = globalThis.localStorage;
+  try {
+    for (let i = storage?.length ?? 0; i--;) {
+      const key = storage!.key(i)!;
+      if (key.startsWith("wd:db:") && dirs.some((dir) => key.startsWith("wd:db:" + dir + "/"))) storage!.removeItem(key);
+    }
+  } catch { /* storage can be unavailable */ }
+}
 /** a snapshot an older build kept in localStorage */
 function legacySnapshot(path: string): Uint8Array | null {
   try {

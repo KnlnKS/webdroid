@@ -19,6 +19,7 @@ import { propertyValue } from "../shell/properties";
 import { onMain } from "./mainloop";
 import { mkUri } from "./net";
 import { appHost } from "./apphost";
+import { onProcessExit } from "../process-exit";
 import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, rendererPattern, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { webRenderer } from "./webstorage";
@@ -198,6 +199,8 @@ function unbridge(h: FrameHold) {
   h.port?.close(); h.port = null;
 }
 function release(h: FrameHold) { unbridge(h); h.el?.remove(); h.el = null; releaseFunctor(h.functor); }
+// a page's renderer ends with its app's process, closing what it held open on its origin
+onProcessExit(() => { for (const view of live) release(view.hold); live.clear(); });
 // Chromium destroys an AwContents once its WebView is garbage collected (a CleanupReference), so
 // an app that drops a WebView without destroy() does not keep its page. Page-side callbacks and the
 // bridge therefore reach a provider only weakly; detaching alone keeps the page, as apps reattach.

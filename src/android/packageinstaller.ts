@@ -10,7 +10,10 @@ import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
-import { binderUncaught, newStub } from "./binder";
+import { binderUncaught, callingIdentity, newStub } from "./binder";
+import { packages } from "./packages";
+import { checkUidPermission } from "./permissions";
+import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata";
 import { putExtra, type JIntent } from "./intent";
 
 const PI = "android/content/pm/PackageInstaller", S = "Ljava/lang/String;";
@@ -129,6 +132,26 @@ rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj
   [`getSessionInfo(I)L${PI}$SessionInfo;`]: (id: number) => { const s = sessions.get(id); return s ? rt.drive(sessionInfo$(s)) : null; },
   [`getMySessions(${S}I)Landroid/content/pm/ParceledListSlice;`]: driven(function* getMySessions$(installer: string | null): Gen { return yield* sessionList$(installer); }),
   "getAllSessions(I)Landroid/content/pm/ParceledListSlice;": driven(function* getAllSessions$(): Gen { return yield* sessionList$(undefined); }),
+  // with DELETE_PACKAGES the package goes at once; otherwise (REQUEST_DELETE_PACKAGES from P) the
+  // status asks the caller to start the uninstaller, which asks the user
+  [`uninstall(Landroid/content/pm/VersionedPackage;${S}ILandroid/content/IntentSender;I)V`]: driven(function* uninstall$(versioned: JObj, caller: string | null, flags: number, sender: JObj | null): Gen {
+    const { uid } = callingIdentity(), record = caller === null ? undefined : packages.get(caller);
+    if (record?.uid !== uid) throw rt.mkThrowable("java/lang/SecurityException", `Specified package ${caller} under uid ${uid} but it is not`);
+    if (!sender) throw rt.mkThrowable("java/lang/NullPointerException", "statusReceiver can't be null");
+    const pkg: string = yield vcall(versioned, "getPackageName", `()${S}`), version: bigint = yield vcall(versioned, "getLongVersionCode", "()J");
+    const observer: JObj = yield deleteObserver(pkg, sender);
+    if (yield mayDeletePackages()) {
+      systemUncaught(() => after(deleteVersioned(pkg, version), (code) => vcall(observer, "onPackageDeleted", `(${S}I${S})V`, pkg, code, null)));
+      return;
+    }
+    if (record.sdk.target >= 28 && (yield checkUidPermission("android.permission.REQUEST_DELETE_PACKAGES", uid)) !== 0)
+      throw notHeld(uid, "android.permission.REQUEST_DELETE_PACKAGES");
+    const intent: JIntent = yield newObj("android/content/Intent", `(${S})V`, "android.intent.action.UNINSTALL_PACKAGE");
+    yield vcall(intent, "setData", "(Landroid/net/Uri;)Landroid/content/Intent;", yield scall("android/net/Uri", "fromParts", `(${S}${S}${S})Landroid/net/Uri;`, "package", pkg, null));
+    yield putExtra(intent, "android.content.pm.extra.CALLBACK", yield newObj("android/content/pm/PackageManager$UninstallCompleteCallback", "(Landroid/os/IBinder;)V", observer), "Landroid/os/Parcelable;");
+    yield putExtra(intent, "android.content.pm.extra.DELETE_FLAGS", flags, "I");
+    yield vcall(observer, "onUserActionRequired", "(Landroid/content/Intent;)V", intent);
+  }),
   "registerCallback(Landroid/content/pm/IPackageInstallerCallback;I)V": (callback: JObj) => { callbacks.add(callback); },
   "unregisterCallback(Landroid/content/pm/IPackageInstallerCallback;)V": (callback: JObj) => { callbacks.delete(callback); },
 } });

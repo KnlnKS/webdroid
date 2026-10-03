@@ -25,6 +25,20 @@ class PreferenceStore {
     } catch { /* corrupt */ }
     return values;
   }
+  /** the files named `prefix`..., held or persisted */
+  names(prefix: string): string[] {
+    const names = new Set([...this.files.keys()].filter((name) => name.startsWith(prefix)));
+    const storage = globalThis.localStorage;
+    for (let i = 0; storage && i < storage.length; i++) {
+      const key = storage.key(i)!;
+      if (key.startsWith("wd:prefs:" + prefix)) names.add(key.slice("wd:prefs:".length));
+    }
+    return [...names];
+  }
+  remove(name: string): void {
+    this.files.delete(name);
+    try { globalThis.localStorage?.removeItem("wd:prefs:" + name); } catch { /* storage can be unavailable */ }
+  }
   persist(name: string, values: Map<string, PreferenceValue>): boolean {
     this.files.set(name, values);
     try {

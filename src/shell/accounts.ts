@@ -26,5 +26,13 @@ export class AccountStore {
     globalThis.localStorage?.setItem("wd:accounts", JSON.stringify(this.records));
     for (const listener of this.listeners) listener();
   }
+  /** AccountManagerService on a package's removal: the accounts its authenticator kept, and their
+   *  visibility to it */
+  removePackage(pkg: string): void {
+    const kept = this.records.filter((s) => s.owner !== pkg);
+    for (const s of kept) delete s.visibility[pkg];
+    this.loaded = kept;
+    this.persist();
+  }
   watch(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
 }

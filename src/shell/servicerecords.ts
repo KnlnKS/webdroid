@@ -77,6 +77,10 @@ export class ServiceRecords {
       if (!this.schedule(r)) this.bringDown(r);
     }
   }
+  /** ActiveServices.forceStopPackageLocked: the package's services go down without restarting */
+  forceStop(pkg: string): void {
+    for (const r of [...this.records.values()]) if (r.pkg === pkg) this.bringDown(r);
+  }
   /** attachApplicationLocked: a process starting runs its services waiting to restart now */
   processStarted(pkg: string, process: string): void {
     for (const r of [...this.records.values()]) if (r.pkg === pkg && r.process === process && r.timer !== null) this.perform(r);

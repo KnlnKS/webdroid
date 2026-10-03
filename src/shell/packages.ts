@@ -24,3 +24,9 @@ export async function persistPackage(path: string, bytes: Uint8Array): Promise<v
   transaction.objectStore("apks").put(bytes, path);
   await txDone(transaction);
 }
+export async function forgetPackage(path: string): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const transaction = (await store()).transaction("apks", "readwrite");
+  transaction.objectStore("apks").delete(path);
+  await txDone(transaction);
+}

@@ -31,6 +31,8 @@ export class PrivateFiles {
     view.prepare = (pkg) => this.prepare(pkg);
     view.flush = () => this.flush();
     view.onWrite = (path, change) => {
+      // a process that has died writes nothing more
+      if (this.views.get(pid) !== view) return;
       const relative = appPath.exec(path);
       if (!relative && !sharedPath(path)) return;
       const cache = !!relative && /^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "");
@@ -120,6 +122,17 @@ export class PrivateFiles {
       this.load("@shared", ["/sdcard/"], sharedPath),
       this.load(pkg, roots.map((root) => root + pkg + "/"), () => true),
     ]);
+  }
+  /** installd's clearAppData: the package's data directories and its external app directories */
+  async clearPackage(pkg: string): Promise<void> {
+    await this.prepare(pkg);
+    const dirs = [...roots, "/sdcard/Android/media/"].map((root) => root + pkg);
+    for (const path of new Set([...dirs, ...this.values.keys()])) {
+      if (!dirs.some((dir) => path === dir || path.startsWith(dir + "/"))) continue;
+      this.update(path, null);
+      this.pending.set(path, null);
+    }
+    await this.flush();
   }
   flush(): Promise<void> {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }

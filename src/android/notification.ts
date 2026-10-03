@@ -57,6 +57,14 @@ class NotificationStore {
   readonly ungrouped = new Map<string, Map<string, Ungrouped>>();
   /** pkg|id of each foreground service's notification (ActiveServices' ServiceRecord.foregroundId) */
   readonly foreground = new Set<string>();
+  /** INotificationManager.clearData: the package's notifications go, with the grouping state they
+   *  kept, and its channels unless it cleared its own data (PreferencesHelper.clearData) */
+  clearData(pkg: string, fromApp: boolean): void {
+    for (let i = this.posted.length; i--;) if (this.posted[i].pkg === pkg) this.posted.splice(i, 1);
+    for (const key of [...this.autobundled.keys(), ...this.ungrouped.keys()]) if (key.endsWith("|" + pkg)) { this.autobundled.delete(key); this.ungrouped.delete(key); }
+    for (const key of this.foreground) if (key.startsWith(pkg + "|")) this.foreground.delete(key);
+    if (!fromApp) preferenceStore.remove(policyFile(pkg));
+  }
 }
 export let notificationStore = new NotificationStore();
 export function useNotificationStore(store: NotificationStore): void { notificationStore = store; }

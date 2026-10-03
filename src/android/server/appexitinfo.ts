@@ -10,7 +10,7 @@ import { wallMillis } from "../../guest-clock";
 import { foreground } from "./atm";
 import { logLine } from "../../native/libc";
 
-export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5;
+export const REASON_EXIT_SELF = 1, REASON_SIGNALED = 2, REASON_CRASH = 4, REASON_CRASH_NATIVE = 5, REASON_USER_REQUESTED = 10;
 export type ExitRecord = {
   pid: number; uid: number; process: string; pkg: string; reason: number; status: number; importance: number; timestamp: number;
   description: string | null; state: string | null; tombstone: string | null;
@@ -26,6 +26,10 @@ const storageKey = (pkg: string) => "wd:exit-info:" + pkg;
 const base64 = (bytes: Uint8Array): string => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
 export const unbase64 = (s: string): Uint8Array => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
+/** AppExitInfoTracker.onPackageRemoved */
+export function forgetExitRecords(pkg: string): void {
+  try { globalThis.localStorage?.removeItem(storageKey(pkg)); } catch { /* storage can be unavailable */ }
+}
 /** a package's records, newest first */
 export function exitRecords(pkg: string): ExitRecord[] {
   try {
@@ -43,6 +47,9 @@ const processName = () => PROCESS_NAME || appHost?.pkg || "";
 let noted: { reason: number; description: string; dialog: boolean } | null = null;
 /** IActivityManager.setProcessStateSummary's bytes, recorded with the exit */
 let stateSummary: Uint8Array | null = null;
+/** the reason the system killed this process with (ProcessList.noteAppKill) */
+export type KillNote = { reason: number; description: string };
+export function noteAppKill(note: KillNote): void { noted ??= { ...note, dialog: false }; }
 export function setProcessStateSummary(state: Uint8Array | null): void { stateSummary = state && state.slice(); }
 
 /** the bound application's ApplicationInfo.flags, which am_crash records (-1 with none bound) */

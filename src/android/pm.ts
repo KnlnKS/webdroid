@@ -7,7 +7,7 @@ import { awaited, JObj, rt, noops, setDeclared, driven, type Gen } from "../jvm/
 import { jarray, strArray, intBitsToFloat, hexBytes, sameBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import { uuidDefault } from "./os";
-import { vcall, after, newObj } from "../jvm/natives/jlang";
+import { vcall, after, newObj, systemUncaught } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -23,7 +23,8 @@ import { systemActivity, SYSTEM_ACTIVITY, intentQuery$, type IntentQuery } from 
 import { intentTarget$, manifestFilter$, matches$ } from "./intent-filter";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, componentState, installTime, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/digest";
-import { hostStub, parceledList } from "./binder";
+import { hostStub, oneway, parceledList } from "./binder";
+import { deleteVersioned, enforceDeletePackages } from "./appdata";
 import { installerService } from "./packageinstaller";
 import { checkPermission } from "./permissions";
 
@@ -192,7 +193,7 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
   }
   return ai;
 }
-const longVersionCode = (root: XmlNode) => BigInt((attr(root, "versionCode")?.data ?? 0) >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
+export const longVersionCode = (root: XmlNode) => BigInt((attr(root, "versionCode")?.data ?? 0) >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
 
 const appInfos = new WeakMap<PackageRecord, Map<number, JObj | Promise<JObj>>>();
 /** the package's ApplicationInfo for these flags; equal answers share one, which each caller gets a copy of */
@@ -708,6 +709,14 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
   }),
   [`getInstallerPackageName(${S})${S}`]: (pkg: string) => after(packageRecord(pkg), (record) => { if (!record) throw unknownPackage(pkg); return null; }),
   "getPackageInstaller()Landroid/content/pm/IPackageInstaller;": () => installerService(),
+  // DELETE_PACKAGES deletes without asking; the observer hears the result once the package is gone
+  [`deletePackageAsUser(${S}ILandroid/content/pm/IPackageDeleteObserver;II)V`]: (pkg: string, version: number, observer: JObj | null) =>
+    after(enforceDeletePackages(), () => systemUncaught(() => after(deleteVersioned(pkg, BigInt(version)), (code) => observer && oneway(observer, "packageDeleted", `(${S}I)V`, pkg, code)))),
+  [`deletePackageVersioned(Landroid/content/pm/VersionedPackage;Landroid/content/pm/IPackageDeleteObserver2;II)V`]: driven(function* deletePackageVersioned$(versioned: JObj, observer: JObj | null): Gen {
+    yield enforceDeletePackages();
+    const pkg: string = yield vcall(versioned, "getPackageName", `()${S}`), version: bigint = yield vcall(versioned, "getLongVersionCode", "()J");
+    systemUncaught(() => after(deleteVersioned(pkg, version), (code) => observer && oneway(observer, "onPackageDeleted", `(${S}I${S})V`, pkg, code, null)));
+  }),
   // installs need no user approval here, so a package asking for the permission may request them
   [`canRequestPackageInstalls(${S}I)Z`]: (pkg: string) =>
     after(packageRecord(pkg), (record) => record?.permissions.has("android.permission.REQUEST_INSTALL_PACKAGES") ? 1 : 0),

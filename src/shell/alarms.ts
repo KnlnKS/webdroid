@@ -11,6 +11,10 @@ export class Alarms {
     if (!alarm) return;
     this.entries.delete(id); alarm.unwatch(); this.arm();
   }
+  /** AlarmManagerInternal.removeAlarmsForUid */
+  removeForUid(uid: number): void {
+    for (const id of [...this.entries.keys()]) if (this.intents.get(id)?.uid === uid) this.cancel(id);
+  }
   schedule(id: number, type: number, at: number, interval: number): void {
     this.cancel(id);
     const unwatch = this.intents.watch(id, () => this.cancel(id));

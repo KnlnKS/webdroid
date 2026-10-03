@@ -40,6 +40,11 @@ export class PermissionStore {
     }
     return grants;
   }
+  /** resetRuntimePermissions: every runtime grant the package's requests made */
+  revoke(pkg: string) {
+    this.packages.delete(pkg);
+    try { globalThis.localStorage?.removeItem("wd:permissions:" + pkg); } catch { /* storage can be unavailable */ }
+  }
   grant(pkg: string, names: string[]) {
     const grants = this.get(pkg); for (const name of names) grants.add(name);
     globalThis.localStorage?.setItem("wd:permissions:" + pkg, JSON.stringify([...grants]));

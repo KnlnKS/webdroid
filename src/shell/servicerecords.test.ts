@@ -48,3 +48,14 @@ test("an unfinished start is redelivered after twice the time it ran", () => {
   expect(restarts[0].state?.starts.map((si) => si.delivered)).toEqual([null]);
   dispose();
 });
+
+test("a force stop brings the package's services down for good", () => {
+  const { r, restarts, gone, record, dispose } = records();
+  r.report("p", "p", "Sticky", state({}));
+  r.bind("p", "p", "Sticky", { client: 2, key: "2/a", intent, flags: 1 });
+  r.forceStop("p");
+  r.processDied("p", "p");
+  r.processStarted("p", "p");
+  expect([record("Sticky"), restarts.length, gone]).toEqual([undefined, 0, ["2/a"]]);
+  dispose();
+});

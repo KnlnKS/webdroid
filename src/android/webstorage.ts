@@ -12,7 +12,7 @@ import { onMain } from "./mainloop";
 import { appHost } from "./apphost";
 import { rendererOrigin, rendererStorage, type StorageOp } from "../shell/webbridge";
 
-/** kept with the install, so the shell's reset removes it with the rest */
+/** kept with the install */
 const originsKey = (pkg: string) => "wd:install:" + pkg + ":webview";
 /** the web origins `pkg`'s WebViews have rendered */
 export function webOrigins(pkg: string): string[] {
@@ -42,12 +42,12 @@ function inOrder<T>(task: () => Promise<T>): Promise<T> {
 }
 const storageOf = (pkg: string, webOrigin: string, op: StorageOp) => rendererOf(pkg, webOrigin).then((origin) => rendererStorage(origin, op));
 
-/** everything `pkg`'s WebViews stored, as clearing its data or uninstalling it removes its WebView
- *  data directory; the cookie jar goes with it */
+/** everything `pkg`'s WebViews stored on their renderer origins, as clearing its data or uninstalling
+ *  it removes its WebView data directory (the cookie jar's owner clears that) */
 export function clearWebData(pkg: string): Promise<void> {
   return inOrder(async () => {
     await Promise.all(webOrigins(pkg).map((o) => storageOf(pkg, o, "all")));
-    try { globalThis.localStorage?.removeItem(originsKey(pkg)); globalThis.localStorage?.removeItem("wd:web-cookies:" + pkg); } catch { /* storage can be unavailable */ }
+    try { globalThis.localStorage?.removeItem(originsKey(pkg)); } catch { /* storage can be unavailable */ }
   });
 }
 

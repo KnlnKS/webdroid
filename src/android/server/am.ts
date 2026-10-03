@@ -21,6 +21,7 @@ import { callingIdentity, newStub, parceledList } from "../binder";
 import { packages } from "../packages";
 import { checkUidPermission } from "../permissions";
 import { mkPfd } from "../os";
+import { clearUserData } from "../appdata";
 
 const GET_SHARED_LIBRARY_FILES = 0x400n, GET_META_DATA = 0x80n;
 /** the package manager, as system_server's services reach it */
@@ -156,6 +157,15 @@ export const activityManagerMethods = {
     if (state && state.length > MAX_STATE_SUMMARY) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Data size is too large");
     setProcessStateSummary(state && new Uint8Array(state.buffer, state.byteOffset, state.length));
   },
+  // the package's own uid clears its data; another's needs CLEAR_APP_USER_DATA
+  "clearApplicationUserData(Ljava/lang/String;ZLandroid/content/pm/IPackageDataObserver;I)Z": driven(function* (pkg: string | null, keepState: number, observer: JObj | null): Gen<number> {
+    const { pid, uid } = callingIdentity(), record = pkg === null ? undefined : packages.get(pkg);
+    if (record?.uid !== uid && (yield* awaited(checkUidPermission(CLEAR_APP_USER_DATA, uid))) !== 0)
+      throw rt.mkThrowable("java/lang/SecurityException", `PID ${pid} does not have permission ${CLEAR_APP_USER_DATA} to clear data of package ${pkg}`);
+    if (!record) console.warn("[ActivityManager] Invalid packageName: " + pkg);
+    yield clearUserData(pkg ?? "", record?.uid === uid, !!keepState, observer);
+    return record ? 1 : 0;
+  }),
   "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": driven(function* (pkg: string | null, pid: number, maxNum: number): Gen<JObj> {
     const uid = callingIdentity().uid;
     const owner = pkg === null ? uid : packages.get(pkg)?.uid;
@@ -171,7 +181,7 @@ export const activityManagerMethods = {
   }),
 };
 const CRASH_INFO = "android/app/ApplicationErrorReport$CrashInfo", EXIT_INFO = "android/app/ApplicationExitInfo";
-const DUMP = "android.permission.DUMP";
+const DUMP = "android.permission.DUMP", CLEAR_APP_USER_DATA = "android.permission.CLEAR_APP_USER_DATA";
 /** ActivityManagerService's limit on a process state summary */
 const MAX_STATE_SUMMARY = 128;
 /** a record as ApplicationExitInfo, with a native crash's tombstone behind its retriever */

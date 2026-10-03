@@ -61,6 +61,11 @@ export class WebCookies {
     this.changed();
     return before.length !== saved.cookies.length;
   }
+  /** the jar's removal with its app */
+  forget() {
+    this.remove();
+    try { localStorage.removeItem(this.key); } catch {}
+  }
   flush() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
