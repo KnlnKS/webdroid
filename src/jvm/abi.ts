@@ -136,6 +136,8 @@ export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {
 }
 export const strArray = (a: readonly string[]) => jarray([...a], "Ljava/lang/String;");
 
+// Typed code-unit reads and fromCharCode cannot re-enter; retain only numeric scratch by length.
+const shortStringUnits: number[][] = [];
 const utf16 = new TextDecoder("utf-16le", { fatal: true, ignoreBOM: true });
 /** code units → string, chunked to stay under the argument limit */
 export function charsToString(chars: Uint16Array | Uint8Array, off: number, len: number): string {
@@ -147,7 +149,7 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
   // fromCharCode reads a plain array's elements faster than a typed array's (about 2x in V8 below
   // 40 code units); a subarray also allocates a view, which the whole-array case skips
   if (len < 128) {
-    const units = new Array<number>(len);
+    const units = shortStringUnits[len] ??= new Array<number>(len);
     for (let i = 0; i < len; i++) units[i] = chars[off + i];
     return Reflect.apply(String.fromCharCode, null, units);
   }
