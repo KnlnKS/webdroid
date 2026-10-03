@@ -6,7 +6,7 @@
 // when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
-import { suspendWith } from "./suspend";
+import { currentStrand, enterStrand, ownStrand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
@@ -104,7 +104,8 @@ export class ClassInfo {
   initError: unknown = null;          // what the failed <clinit> threw
   initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
   assumeReentrant = false;            // a wait on this clinit timed out once: stop waiting (same-chain cycle)
-  initThread: unknown = null;         // thread running the in-flight clinit (JLS recursive-request check)
+  initThread: unknown = null;         // thread and call chain running the in-flight clinit
+  initStrand = 0;                     // (JLS recursive-request check)
   stub = false;                       // auto-stubbed unknown class (Class.forName must throw CNFE)
   waitingOn: ClassInfo | null = null; // class this one's clinit currently awaits (cycle detection)
   fieldTable = new Map<string, string>(); // own instance fields: name → mangled
@@ -831,8 +832,9 @@ export class Runtime {
     let esc: ReturnType<typeof setTimeout> | undefined;
     const p = timed
       ? Promise.race([info.initP!, new Promise<void>((res) => {
-          // short escape: legit cross-chain waits resolve in microtasks; anything longer
-          // is almost certainly a same-chain clinit cycle through methods we can't tag.
+          // short escape: a job interleaved on the initializing thread mostly waits out a
+          // <clinit>'s last suspension; anything longer is more likely a cycle through a host
+          // callback that lost its chain than a slow initializer, and proceeds as JLS re-entry.
           // Remember it so the next several hundred accesses don't each pay the timeout.
           // The timer must be cleared when the race is won: left armed, it would mark a class
           // reentrant after a healthy wait, and later reads would stop waiting for a <clinit>
@@ -858,17 +860,20 @@ export class Runtime {
       // recursive and completes at once with the statics as they are. The `from` tag only
       // sees <clinit>-to-<clinit> edges; <clinit> → constructor → sget of its own class is the
       // common shape (kotlinx's ChannelSegment reads BufferedChannelKt.SEGMENT_SIZE while
-      // BufferedChannelKt's <clinit> builds NULL_SEGMENT).
-      if (info.initThread === this.th()) return null;
+      // BufferedChannelKt's <clinit> builds NULL_SEGMENT). Main-loop jobs and host turns share
+      // their Java thread, so "the thread" is that thread as the chain that started the <clinit>,
+      // across its suspensions: another job on it would not run on a device before init finished.
+      if (info.initThread === this.th() && info.initStrand === currentStrand()) return null;
       // clinit cycle (info's chain transitively waits on `from`) → JVM same-thread
       // semantics: proceed with partial statics instead of deadlocking. A loop in the wait
       // chain (two threads' clinits waiting on each other, which a JVM would deadlock on) also
       // proceeds with partial statics rather than hanging the page.
       for (let c = info.waitingOn, n = 0; c; c = c.waitingOn) if (c === from || ++n > 64) return null;
       // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
-      // thread blocks until it completes, however long a heavy static initializer takes. The
-      // timed escape stays for the same thread, where a cycle through untagged methods is
-      // indistinguishable from a wait that will never end.
+      // thread blocks until it completes, however long a heavy static initializer takes. Another
+      // chain on the same thread waits with the timed escape: the <clinit>'s own chain continued
+      // from a host callback that did not carry it, or a <clinit> awaiting work only this chain
+      // would deliver, is indistinguishable from a wait that will never end.
       return this.awaitInit(info, from, info.initThread === this.th());
     }
     if (info.state !== 0) {
@@ -878,6 +883,7 @@ export class Runtime {
     }
     info.state = 1;
     info.initThread = this.th();
+    info.initStrand = ownStrand();
 
     // Initialize synchronously for as long as nothing actually suspends: only the step that
     // really yields gets a promise, and the rest of the sequence continues from there. An
@@ -889,7 +895,7 @@ export class Runtime {
       finally { this.clinitDepth--; if (outer) perf.clinitMs += performance.now() - started; }
     };
 
-    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; fastStatics(info.ctor); };
+    const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.initStrand = 0; info.assumeReentrant = false; fastStatics(info.ctor); };
     /** JLS 12.4.2: the class becomes erroneous; an Exception reaches the caller wrapped in an
      *  ExceptionInInitializerError, and every later initialization fails with NoClassDefFoundError */
     const failed = (e: unknown) => {
@@ -906,7 +912,8 @@ export class Runtime {
       info.initP = (async () => {
         try {
           await pending;
-          const more = (() => { try { return after?.(); } finally { this.su(null); } })(); // the <clinit> run here releases its thread
+          // the <clinit> run here is its chain's, and releases its thread
+          const more = (() => { const was = enterStrand(info.initStrand); try { return after?.(); } finally { this.su(null); enterStrand(was); } })();
           if (more) await more;
         } catch (e) { throw failed(e); }
         settle();
@@ -914,12 +921,15 @@ export class Runtime {
       return from ? this.awaitInit(info, from, false) : info.initP;
     };
 
+    // a host turn's chain takes its identity here, so the <clinit>'s suspensions and callbacks keep it
+    const outer = enterStrand(info.initStrand);
     try {
       const sup = info.superInfo && info.superInfo.state !== 2 ? this.initClass(info.superInfo, info) : null;
       if (sup) return async(sup, rest);
       const pending = rest();
       if (pending) return async(pending, null);
     } catch (e) { throw failed(e); }
+    finally { enterStrand(outer); }
     settle();
     return null;
   }

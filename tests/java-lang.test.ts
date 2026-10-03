@@ -2,7 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread } from "../src/jvm/natives/jlang";
 import { boxDouble, boxFloat, boxInt } from "../src/jvm/natives/jbox";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
@@ -264,6 +264,26 @@ describe("class-init", () => {
     expect((first!.cause as { msg: string }).msg).toBe("boom");
     expect(rt.iof(second, "java/lang/NoClassDefFoundError")).toBe(1);
     expect(second!.cause).toBe(first);
+  });
+
+  test("a suspended <clinit>'s chain re-enters its class at once; another job on its thread waits", async () => {
+    const gate = Promise.withResolvers<void>();
+    class Interleaved extends JObj { static ready = 0; }
+    let reentry: unknown;
+    rt.register({ name: "test/InterleavedInit", ctor: Interleaved, clinit: () => rt.drive(function* () {
+      yield gate.promise;
+      reentry = rt.initClass(info);
+      Interleaved.ready = 1;
+    }()) });
+    const info = rt.link("test/InterleavedInit");
+    const first = callOn(mainThread, () => rt.initClass(info));
+    const second = callOn(mainThread, () => rt.initClass(info));
+    expect(second).toBeInstanceOf(Promise);
+    const seen = second!.then(() => Interleaved.ready);
+    gate.resolve();
+    expect(await seen).toBe(1);
+    expect(reentry).toBeNull();
+    await first;
   });
 });
 

@@ -8,18 +8,33 @@ type Continuation = (value: unknown, threw: boolean) => unknown;
 const FRAMES = Symbol("continuations");
 type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
 
+/** The call chain running now, across its suspensions: the frames a chain suspends resume as that
+ *  chain, so class initialization tells its own chain's re-entry from another job interleaved on
+ *  the same Java thread. 0 is a host turn's chain that has not suspended yet. */
+let strand = 0, strands = 0;
+export const currentStrand = (): number => strand;
+/** continue as chain `s`; returns the chain to restore */
+export function enterStrand(s: number): number { const was = strand; strand = s; return was; }
+/** the current chain, given an identity apart from other host turns' if it has none yet */
+export const ownStrand = (): number => strand || ++strands;
+
 /** Wait on `pending` with `k`: the returned Promise settles with the outermost frame's result. */
 export function suspendWith(pending: Promise<unknown>, k: Continuation): Promise<unknown> {
   const frames = (pending as Suspension)[FRAMES];
   if (frames) { frames.push(k); return pending; }
-  const list = [k];
-  const suspension: Suspension = pending.then((value) => unwind(list, 0, value, false), (error) => unwind(list, 0, error, true));
+  const list = [k], s = ownStrand();
+  const suspension: Suspension = pending.then((value) => unwind(list, s, value, false), (error) => unwind(list, s, error, true));
   suspension[FRAMES] = list;
   return suspension;
 }
 
-function unwind(list: Continuation[], from: number, value: unknown, threw: boolean): unknown {
-  for (let i = from; i < list.length; i++) {
+function unwind(list: Continuation[], s: number, value: unknown, threw: boolean): unknown {
+  const was = enterStrand(s);
+  try { return resume(list, value, threw); } finally { strand = was; }
+}
+
+function resume(list: Continuation[], value: unknown, threw: boolean): unknown {
+  for (let i = 0; i < list.length; i++) {
     let result: unknown;
     try { result = list[i](value, threw); }
     catch (error) { value = error; threw = true; continue; }

@@ -5,7 +5,7 @@ import { awaited, rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Ru
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
-import { once } from "../suspend";
+import { currentStrand, enterStrand, once, ownStrand } from "../suspend";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
@@ -65,18 +65,19 @@ export function callUncaught(call: () => unknown): void {
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));
 }
-/** `call` on `thread`, which owns the turn while it runs */
-export function callOn<T>(thread: JThread, call: () => T): T {
-  const previous = curThread, was = owned;
+/** `call` on `thread`, which owns the turn while it runs, as the chain that entered it (a new one
+ *  from a host turn) */
+export function callOn<T>(thread: JThread, call: () => T, chain = currentStrand()): T {
+  const previous = curThread, was = owned, outer = enterStrand(chain || ownStrand());
   setCurThread(thread);
-  try { return call(); } finally { setCurThread(previous); owned = was; }
+  try { return call(); } finally { setCurThread(previous); owned = was; enterStrand(outer); }
 }
-/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread that asked (if one
- *  owned the turn that asked) */
+/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread and chain that asked
+ *  (if a thread owned the turn that asked) */
 export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
   if (!(r instanceof Promise)) return f(r);
-  const thread = curThread;
-  return owned ? r.then((v) => callOn(thread, () => f(v))) : r.then(f);
+  const thread = curThread, chain = currentStrand();
+  return owned ? r.then((v) => callOn(thread, () => f(v), chain)) : r.then(f);
 }
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
