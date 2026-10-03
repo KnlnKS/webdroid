@@ -2246,6 +2246,15 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     drops. ENETUNREACH from recvmsg had made QUIC fail over to TCP at once before. Replies
     now name their source as the guest dialed it; YouTube passes 16/16 with QUIC carrying
     its traffic. Module-level constants that depend on PTR are wrong for arm64.
+  - 2026-10-03: YouTube's video-open then failed intermittently. The relay and the guest's QUIC
+    were exonerated:
+    - Server and guest packet counts agreed, with no send failures and no queue drops.
+    - 5% injected upstream loss recovered.
+    - With UDP blocked entirely, the flow failed the same way in the same period.
+    The cause was live content: a sponsored card up to 1,600 px tall sometimes sits above the
+    film, so the fixed tap at y=1350 opened the ad. The fast lane now taps the film's text
+    anchor, and passed 4/4 with an ad above it each time. Logging every datagram to the console
+    slowed boot past the 18 s launch bound, so instrument with counters only.
 - **2026-10-02, Stage E2 follow-up: the serialized font map, hyphenation, emoji and heavy weights.**
   - Every realm loaded the system font map twice: the zygote ran `loadPreinstalledSystemFontMap`,
     and bindApplication, handed no map, called `setSystemFontMap(null)`, which parses
