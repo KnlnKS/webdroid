@@ -601,8 +601,12 @@ conversion retains numeric scratch, and JIT batches avoid a redundant byte copy.
 Already-emitted idle code now installs in the current launch, within a 24 MiB allowance
 that reserves 8 MiB of the existing source budget for later demand promotion. No Java
 method, class initializer or app-specific substitute executes in anticipation.
+The maintainability review separated per-instance installation into `jvm/tiering.ts`
+from DEX-keyed source persistence, corrected resumable-source accounting, and moved
+affine composition into the matrix owner. After those fixes, cold/warm latency gates
+passed at 113/93 ms maximum. The history records regression cases and evidence limits.
 
-The final cold/warm latency gates pass (maxima 131/150 ms). Repeated FitNotes date navigation
+The initial performance pass's cold/warm gates passed (maxima 131/150 ms). Repeated FitNotes date navigation
 makes zero cold calls, versus 1,666–2,408 at the starting commit. In the later matched
 Mihon comparison, repeated theme changes fell from 8,448/6,002 to 2,913/2,183 cold calls.
 This is less interpreter work, not proof of a large FPS improvement. Another checkout

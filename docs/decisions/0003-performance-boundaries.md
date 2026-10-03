@@ -51,6 +51,16 @@ These are useful boundaries, not reasons to keep every implementation unchanged.
    promotion; reaching the idle allowance must not disable future promotion.
    This counts source string length, not retained heap. No method or class initializer executes early.
 
+Live tier installation belongs to each linked method instance in `jvm/tiering.ts`;
+DEX source emission stays in `jvm/compiler.ts`. Persistence deduplicates source by
+DEX identity, but cannot deduplicate installation into different runtimes. The tier
+queue therefore keys jobs by method instance and works without Cache Storage.
+Only newly compiled resumable source consumes the source allowance, including
+demand compilation; binding a persisted factory consumes none. Required resumption
+remains uncapped. Source rejected by the idle allowance is not retained for demand.
+The matrix module owns pivoted affine composition, including the generic fallback;
+RenderNode owns its retained destination and invalidation.
+
 The implementation history records measurements and rejected experiments. Large
 isolated speedups in matrix arithmetic and fewer JNI parks do not establish a
 large overall speedup: initial matched Mihon scrolling was effectively unchanged.

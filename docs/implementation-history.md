@@ -2524,3 +2524,47 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   reproducible lane and the measured Lichess interaction, not the full live/corpus
   matrix or arbitrary APK compatibility. Cold/warm latency gates pass, but the
   shared host prevents a reliable overall FPS conclusion.
+
+- Performance review fixes (2026-10-02, review base `3ad7aa3e`). Deferred emission
+  was keyed by DEX/method in the persistence cache, but its closure installed code
+  into one Runtime. Two runtimes reaching the same method before idle time left
+  the first cold; a source already pending persistence could suppress a later
+  instance's installation entirely. `jvm/tiering.ts` now owns per-instance jobs,
+  promotion, resumption and retargeting; `jvm/compiler.ts` owns DEX emission and
+  drops from 1,007 to 840 lines. One queue handles idle and deferred demand work,
+  independently of Cache Storage. Persistence retains DEX-key deduplication and
+  first-call phase attribution; a coalesced retry saves bodies emitted after the
+  first batch without needing another method call to trigger a write.
+  The core tier test drives the real queue across multiple runtimes, pending
+  source, suspended frames, late-loaded factories and the idle allowance.
+- The old idle resume callback charged emitted source even when `resume()` bound
+  a late-loaded factory. Budget accounting now happens only after creating a new
+  resumable function, once per instance. Demand-created resume source is counted
+  too, but mandatory resumption is never blocked by the allowance. Idle-rejected
+  source is not retained for later demand compilation. A separate cache lifecycle
+  probe verified startup/later chunks and one delayed save after throttling.
+  Pivoted affine composition and its exceptional-value fallback now share the
+  matrix module; RenderNode keeps destination ownership and invalidation. The
+  existing graphics test compares ordinary, signed-zero, snapped, extreme and
+  non-finite values against generic composition and verifies destination reuse.
+- Review-fix validation (`4f055580`, `82836a61`): typecheck passed; the standalone
+  full suite passed 1,183 tests / 76,265 assertions, and all nine browser probes
+  passed separately. An earlier full suite overlapping typecheck failed the
+  drawable-span probe with `JThrowable`. The review baseline's overlapping run
+  failed that probe and two others with SyntaxErrors, so an identical cause is
+  not established; isolated drawable probes passed on both revisions. No test
+  expectations or timeouts were relaxed. FitNotes/Mihon/Lichess smoke compilation
+  again had zero method failures, and framework checks passed 30/30.
+  Cold latency maxima were 82/26/113 ms for Calculator/FitNotes/Mihon; warm maxima
+  were 31/24/93 ms, with zero cold calls for every gated warm tap. The review
+  baseline's cold maxima were 64/20/106 ms. Demand resume accounting consumes
+  previously uncounted capacity, so it can leave less room for idle entry bodies;
+  Mihon's repeated cold-launch theme taps made 4,466/3,309 cold calls versus
+  2,847/2,108 in that baseline sample. These are qualified shared-host samples,
+  not a demonstrated latency or FPS improvement from the review fixes.
+  All seven serialized quick flows passed (105 steps, 314 process snapshots),
+  with every process returning diagnostics, no new missing APIs/native requirements
+  or runtime errors, and no draw/layout/GL errors or wedged/timed-out steps. All
+  four visual checkpoint scores exactly matched the pre-fix capture; Komikku's
+  existing SQLite messages were unchanged. Goldens remain unchanged. Review logs
+  and captures are under ignored `webdroid-shots/performance/review-*`.
