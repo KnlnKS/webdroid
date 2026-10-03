@@ -69,7 +69,8 @@ rescores an existing full capture without launching a browser. `--test` selects 
 each mode.
 
 `WEBDROID_CPU_THROTTLE=2` slows the page's CPU by that factor (CDP), to reproduce races that host
-load exposes.
+load exposes. `WEBDROID_SITE_ISOLATION=0` drops `--site-per-process`, so a WebView page shares the
+app's renderer thread, as in Safari and Chrome on Android.
 
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. Leave it unset when measuring stock-browser behavior.

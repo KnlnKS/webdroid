@@ -58,6 +58,27 @@ export function installClientHints(hints: ClientHints): void {
   Object.defineProperty(navigator, "userAgentData", { value: data, configurable: true, enumerable: true });
 }
 
+/** document.cookie's cookies once the page sets `value` at `page`, as the jar will store it: a
+ *  cookie it would refuse, or one this document cannot see, is left out */
+export function setDocumentCookie(cookies: { text: string; expires: number }[], value: string, page: string): { text: string; expires: number }[] {
+  const [pair, ...attributes] = value.split(";"), at = pair.indexOf("=");
+  const name = at < 0 ? "" : pair.slice(0, at).trim(), text = at < 0 ? pair.trim() : name + "=" + pair.slice(at + 1).trim();
+  const url = new URL(page), path = url.pathname || "/";
+  let expires = 0, maxAge = false;
+  for (const attribute of attributes) {
+    const eq = attribute.indexOf("="), key = (eq < 0 ? attribute : attribute.slice(0, eq)).trim().toLowerCase(), v = eq < 0 ? "" : attribute.slice(eq + 1).trim();
+    if (key === "max-age" && /^-?\d+$/.test(v)) { maxAge = true; expires = Number(v) <= 0 ? -1 : Date.now() + Number(v) * 1000; }
+    else if (key === "expires" && !maxAge && !Number.isNaN(Date.parse(v))) expires = Date.parse(v) <= Date.now() ? -1 : Date.parse(v);
+    else if (key === "domain" && v) {
+      const domain = v.replace(/^\./, "").toLowerCase();
+      if (url.hostname !== domain && !url.hostname.endsWith("." + domain)) return cookies;
+    } else if (key === "path" && v.startsWith("/") && !(path === v || path.startsWith(v) && (v.endsWith("/") || path[v.length] === "/"))) return cookies;
+    else if (key === "secure" && url.protocol !== "https:" || key === "httponly") return cookies;
+  }
+  const kept = cookies.filter((c) => (c.text.includes("=") ? c.text.slice(0, c.text.indexOf("=")) : "") !== name);
+  return expires < 0 ? kept : [...kept, { text, expires }];
+}
+
 export const WEB_INJECT = `<script>(function(){
 // Wrangler can insert __name into functions embedded through toString().
 const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
@@ -100,13 +121,43 @@ function call(body) {
   if (result.error) throw Error(result.error);
   return result.value;
 }
-Object.defineProperty(document, "cookie", {get: () => call({kind: "cookie"}), set: value => call({kind: "cookie", value: String(value)})});
+const send = data => parent.postMessage({bridge: id, ...data}, "*");
+// The renderer may share the app's thread (no site isolation), which cannot answer a synchronous call
+// while the page waits. document.cookie reads the cookies the app sends this document; a write
+// applies here and reaches the jar in order, whose answer replaces them once it has every write.
+let cookies = config.cookies ?? [], written = 0;
+const setCookie = (${setDocumentCookie.toString()});
+Object.defineProperty(document, "cookie", {
+  get: () => cookies.filter(c => !c.expires || c.expires > Date.now()).map(c => c.text).join("; "),
+  set: value => {
+    value = String(value);
+    if (/^https?:/.test(config.page ?? "")) cookies = setCookie(cookies, value, config.page);
+    send({kind: "cookie", value, seq: ++written});
+  },
+});
+// A JavaScript interface call is synchronous. Whether the app can answer while the page waits is
+// probed once: from a renderer that shares its thread, calls returning nothing are posted and calls
+// returning a value cannot be made.
+let shared = config.sharedThread;
+function sharesThread() {
+  if (shared === undefined) {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", location.origin + "/webview-call?timeout=1500&id=" + encodeURIComponent(id), false);
+    xhr.send('{"kind":"probe"}');
+    if (xhr.status === 200 || xhr.status === 504) send({kind: "thread", shared: shared = xhr.status === 504});
+  }
+  return shared;
+}
 for (const [name, methods] of Object.entries(config.interfaces ?? {})) {
   const object = Object.create(null);
-  for (const method of methods) object[method] = (...args) => call({kind: "invoke", object: name, method, args});
+  for (const [method, returns] of Object.entries(methods)) object[method] = (...args) => {
+    const body = {kind: "invoke", object: name, method, args: JSON.parse(JSON.stringify(args))};
+    if (!sharesThread()) return call(body);
+    if (returns) throw Error("A WebView JavaScript interface result needs the page in a renderer apart from the app's (site isolation)");
+    send(body);
+  };
   Object.defineProperty(window, name, {value: object, configurable: true});
 }
-const send = data => parent.postMessage({bridge: id, ...data}, "*");
 const formRequest = (${webFormRequest.toString()});
 (${installWebLocation.toString()})(config, (url, replace) => send({kind: "navigate", url, replace}));
 addEventListener("hashchange", event => { if (event.isTrusted) send({kind: "fragment", url: config.page}); });
@@ -143,6 +194,7 @@ addEventListener("message", event => {
     try { value = JSON.stringify((0, eval)(event.data.script)) ?? "null"; } catch {}
     send({kind: "evaluated", seq: event.data.seq, value});
   } else if (event.data.kind === "stop") window.stop();
+  else if (event.data.kind === "cookies" && event.data.ack >= written) cookies = event.data.list;
   else if (event.data.kind === "snapshot") {
     (${snapshotDocument.toString()})(document).then(result => send({kind: "snapshot", seq: event.data.seq, ...result}),
       error => send({kind: "snapshot", seq: event.data.seq, error: String(error)}));
@@ -157,7 +209,10 @@ addEventListener("message", async event => {
   if (!event.isTrusted || event.source !== parent || event.data?.bridge !== id || event.data.kind !== "load" || !event.ports[0]) return;
   try {
     const port = event.ports[0], send = port.postMessage.bind(port), service = navigator.serviceWorker;
-    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces, clientHints: event.data.clientHints, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
+    const context = {id, page: new URL(location.href).searchParams.get("__wd_url"), agent: event.data.userAgent, interfaces: event.data.interfaces,
+      cookies: event.data.cookies, clientHints: event.data.clientHints, sharedThread: event.data.sharedThread, intercept: new URL(location.href).searchParams.get("__wd_intercept") === "1"};
+    // the document's own response may set cookies before it is written
+    addEventListener("message", event => { if (event.source === parent && event.data?.bridge === id && event.data.kind === "cookies") context.cookies = event.data.list; });
     const stop = Event.prototype.stopImmediatePropagation;
     const controller = Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, "controller").get.bind(service);
     service.addEventListener("message", event => {

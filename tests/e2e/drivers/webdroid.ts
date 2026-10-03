@@ -25,8 +25,11 @@ function pageUrl(screen: CaptureScreen, controlled: boolean): string {
   return u.href;
 }
 
+// WEBDROID_SITE_ISOLATION=0 keeps Playwright's default, which shares a WebView page's renderer with
+// the app as Safari and Chrome on Android do
+const ISOLATED = process.env.WEBDROID_SITE_ISOLATION !== "0";
 const LAUNCH_ARGS = [
-  "--site-per-process",
+  ...(ISOLATED ? ["--site-per-process"] : []),
   "--font-render-hinting=none", "--disable-lcd-text",
   "--force-device-scale-factor=1", "--hide-scrollbars",
   ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []),
@@ -45,7 +48,7 @@ export const launchBrowser = (gpu: "software" | "hardware" = "software") => chro
   headless: true,
   channel: gpu === "hardware" ? "chromium" : undefined,
   args: [...LAUNCH_ARGS, ...(gpu === "software" ? ["--use-gl=angle", "--use-angle=swiftshader", "--disable-partial-raster", "--disable-skia-runtime-opts"] : [])],
-  ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process", ...(gpu === "hardware" ? ["--enable-unsafe-swiftshader"] : [])],
+  ignoreDefaultArgs: [...(ISOLATED ? ["--disable-features=IsolateOrigins,site-per-process"] : []), ...(gpu === "hardware" ? ["--enable-unsafe-swiftshader"] : [])],
 });
 
 type LaunchOpts = {

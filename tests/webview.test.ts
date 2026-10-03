@@ -361,3 +361,25 @@ describe("WebView client hints", () => {
     } finally { await page.close(); }
   });
 });
+
+describe("WebView cookies", () => {
+  const upstream = "https://upstream.example/dir/page";
+
+  test.concurrent("document.cookie reads the app's cookies and applies the page's writes until the jar answers", async () => {
+    const page = await rendererPage("/dir/page", "<!doctype html><p>page</p>", upstream,
+      { id: "cookie-probe", page: upstream, cookies: [{ text: "a=1", expires: 0 }, { text: "gone=1", expires: 1 }] }, true);
+    try {
+      expect(await page.evaluate(() => {
+        const posted: unknown[] = [];
+        addEventListener("message", (event) => { if (event.data?.kind === "cookie") posted.push(event.data.seq); });
+        const before = document.cookie;
+        for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly"]) document.cookie = value;
+        const written = document.cookie;
+        // the jar's answer to an earlier write is not the cookies the page has since written
+        postMessage({ bridge: "cookie-probe", kind: "cookies", ack: 1, list: [{ text: "x=1", expires: 0 }] }, "*");
+        postMessage({ bridge: "cookie-probe", kind: "cookies", ack: 5, list: [{ text: "b=2", expires: 0 }, { text: "z=9", expires: 0 }] }, "*");
+        return new Promise<unknown>((resolve) => setTimeout(() => resolve([before, written, document.cookie, posted]), 50));
+      })).toEqual(["a=1", "b=2", "b=2; z=9", [1, 2, 3, 4, 5]]);
+    } finally { await page.close(); }
+  });
+});

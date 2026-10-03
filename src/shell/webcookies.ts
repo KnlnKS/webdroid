@@ -1,10 +1,14 @@
 import { CookieJar, Cookie, getPublicSuffix } from "tough-cookie";
 
+/** a cookie as document.cookie shows it, and when it expires (0: with the session) */
+export type DocumentCookie = { text: string; expires: number };
+
 export class WebCookies {
   accept = true;
   private jar = new CookieJar();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private key: string;
+  private watchers = new Set<() => void>();
   constructor(pkg: string) {
     this.key = "wd:web-cookies:" + pkg;
     try { const saved = localStorage.getItem(this.key); if (saved) this.jar = CookieJar.deserializeSync(saved); } catch {}
@@ -18,6 +22,7 @@ export class WebCookies {
       const cookie = Cookie.parse(value);
       if (!cookie || cookie.sameSite === "none" && !cookie.secure || !this.jar.setCookieSync(cookie, url, { http, ignoreError: true })) return false;
       if (!this.timer) this.timer = setTimeout(() => this.flush(), 0);
+      this.changed();
       return true;
     } catch { return false; }
   }
@@ -31,12 +36,25 @@ export class WebCookies {
       return this.jar.getCookieStringSync(url, { sameSiteContext: same ? "strict" : "none" });
     } catch { return ""; }
   }
+  /** what document.cookie reads at `url` */
+  document(url: string): DocumentCookie[] {
+    try {
+      return this.jar.getCookiesSync(url, { http: false, sort: true }).map((c) => {
+        const expires = c.expiryTime() ?? Infinity;
+        return { text: c.cookieString(), expires: Number.isFinite(expires) ? expires : 0 };
+      });
+    } catch { return []; }
+  }
+  /** `f` after each change, until the returned function is called */
+  watch(f: () => void): () => void { this.watchers.add(f); return () => this.watchers.delete(f); }
+  private changed() { for (const f of this.watchers) f(); }
   has(): boolean { return this.active().length > 0; }
   remove(sessionOnly = false): boolean {
     const saved = this.jar.serializeSync()!, before = this.active();
     saved.cookies = sessionOnly ? before.filter(c => c.maxAge !== undefined || c.expires !== undefined) : [];
     this.jar = CookieJar.deserializeSync(saved);
     this.flush();
+    this.changed();
     return before.length !== saved.cookies.length;
   }
   flush() {

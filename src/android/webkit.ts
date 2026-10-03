@@ -2,7 +2,8 @@
 // runs from bytecode; WebViewFactory loads this module's WebViewFactoryProvider where it would load
 // Chromium's, and each WebView's WebViewProvider shows its page in a DOM frame over the display,
 // placed where the WebView's draw functor composes. JavaScript interfaces use a separate renderer
-// so synchronous page calls can wait while the Java runtime continues executing.
+// so synchronous page calls can wait while the Java runtime continues executing; a browser that
+// runs that renderer on this thread gets only the calls that return nothing, posted.
 
 import { awaited, rt, JObj, type NativeSpec, type ClassInfo, stubs, fieldGetters, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jmethod } from "../jvm/abi";
@@ -20,6 +21,7 @@ import { webCookies, thirdPartyCookies, cookieManager } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
 import { WEB_INJECT, webFormRequest, webViewBrands, type ClientHints } from "../shell/webinject";
+import type { WebCookies } from "../shell/webcookies";
 import { snapshotDocument } from "../shell/websnapshot";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
@@ -55,6 +57,8 @@ function clientHints(): ClientHints {
     model: propertyValue("ro.product.model") ?? "", platformVersion: [0, 1, 2].map((i) => release[i] || "0").join("."),
     architecture: "", bitness: "", wow64: false, formFactors: ["Mobile"] };
 }
+/** whether a bridged page's renderer shares this thread, as its first interface call found */
+let sharedRenderer: boolean | undefined;
 const FACTORY = "webdroid/WebViewFactoryProvider";
 /** the provider package's PackageInfo */
 const webViewPackage = driven(function* webViewPackage$(): Gen<JObj> {
@@ -146,9 +150,10 @@ export function setWebLayer(el: HTMLElement) {
 /** the providers with a frame */
 const live = new Set<WebViewChromium>();
 /** what a WebView's page holds on the host side; it never references the provider itself */
-interface FrameHold { el: HTMLIFrameElement | null; remote: WebBridge | null; port: MessagePort | null; functor: number }
+interface FrameHold { el: HTMLIFrameElement | null; remote: WebBridge | null; port: MessagePort | null; functor: number; unwatch: (() => void) | null }
 function unbridge(h: FrameHold) {
   if (h.remote) { bridges.delete(h.remote.id); h.remote.close(); h.remote = null; }
+  h.unwatch?.(); h.unwatch = null;
   h.port?.close(); h.port = null;
 }
 function release(h: FrameHold) { unbridge(h); h.el?.remove(); h.el = null; releaseFunctor(h.functor); }
@@ -206,8 +211,8 @@ function bridge(o: JObj, thread: JThread): WebInterfaces[string] {
       const name = dex.method(m.methodIdx).name;
       if ((m.flags & 9) !== 1 || name in out || !annos.get(m.methodIdx)?.some((a) => a.type === "android/webkit/JavascriptInterface")) continue;
       const desc = dex.methodDesc(m.methodIdx), { params, ret } = parseMethodDesc(desc);
-      out[name] = async (...args: unknown[]) =>
-        fromJava(ret, await callOn(thread, () => vcall(o, name, desc, ...params.map((d, i) => toJava(d, args[i])))));
+      out[name] = Object.assign(async (...args: unknown[]) =>
+        fromJava(ret, await callOn(thread, () => vcall(o, name, desc, ...params.map((d, i) => toJava(d, args[i]))))), { returns: ret !== "V" });
     }
   }
   return out;
@@ -287,7 +292,7 @@ export class WebViewChromium extends JObj {
   bridgeThread = Object.assign(new JThread(), { jname: "JavaBridge" });
   private requestThread = Object.assign(new JThread(), { jname: "Chrome_IOThread" });
   private readonly ref = new WeakRef(this);
-  readonly hold: FrameHold = { el: null, remote: null, port: null, functor: 0 };
+  readonly hold: FrameHold = { el: null, remote: null, port: null, functor: 0, unwatch: null };
   /** the view's size, which its draw functor covers */
   readonly size = { w: 0, h: 0, place: (rect: Rect | null) => this.ref.deref()?.place(rect) };
   background: string | null = null;
@@ -300,6 +305,8 @@ export class WebViewChromium extends JObj {
   private snapshots = new Map<number, { resolve: (data: string) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   private pendingScripts = new Map<number, string>();
   private scriptReady = false;
+  private cookieAck = 0;
+  private cookiesSent = "";
   /** where the content shows, in display pixels, or null when hidden */
   rect: Rect | null = null;
   /** bumped by every load and by stopLoading: a frame event from an older load is ignored */
@@ -328,11 +335,18 @@ export class WebViewChromium extends JObj {
         ports[0].postMessage(jar.network(data.url, v.url ?? "", values, thirdPartyCookies.has(v.view))); ports[0].close();
       };
       const entry = this.hist[this.idx];
-      // the interfaces travel with the load: a synchronous call back would deadlock a renderer that
-      // shares this realm's thread, as one does without site isolation
-      const interfaces = Object.fromEntries(Object.entries(this.pageIfaces ?? {}).map(([name, methods]) => [name, Object.keys(methods)]));
-      this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body,
-        contentType: entry?.contentType, userAgent: this.settings.v.userAgentString, interfaces, clientHints: clientHints() }, [channel.port2]);
+      // the interfaces, and which methods return a value, travel with the load: a synchronous call back
+      // would deadlock a renderer that shares this realm's thread, as one does without site isolation
+      const interfaces = Object.fromEntries(Object.entries(this.pageIfaces ?? {}).map(([name, methods]) =>
+        [name, Object.fromEntries(Object.entries(methods).map(([method, fn]) => [method, fn.returns !== false]))]));
+      const g = this.gen;
+      void cookies.then((jar) => {
+        if (this.gen !== g) return;
+        const list = jar.document(this.url ?? "");
+        this.cookiesSent = JSON.stringify(list);
+        this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body, contentType: entry?.contentType,
+          userAgent: this.settings.v.userAgentString, interfaces, cookies: list, clientHints: clientHints(), sharedThread: sharedRenderer }, [channel.port2]);
+      });
     }
     else if (data.kind === "script-ready") {
       this.scriptReady = true;
@@ -349,6 +363,16 @@ export class WebViewChromium extends JObj {
       this.go({ url: data.url, src: srcFor(data.url, this), method: data.method, body: data.body,
         contentType: typeof data.contentType === "string" ? data.contentType : undefined });
     else if (data.kind === "console") this.consoleMessage(data);
+    else if (data.kind === "cookie" && typeof data.value === "string" && typeof data.seq === "number") {
+      const g = this.gen;
+      void webCookies(appHost?.pkg ?? "").then((jar) => {
+        if (this.gen !== g) return;
+        this.cookieAck = data.seq;
+        jar.set(this.url ?? "", data.value, false);
+        this.sendCookies(jar, true);
+      });
+    } else if (data.kind === "invoke") this.hold.remote?.post(data);
+    else if (data.kind === "thread" && typeof data.shared === "boolean") sharedRenderer = data.shared;
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
     else if (data.kind === "snapshot" && typeof data.seq === "number") {
       const pending = this.snapshots.get(data.seq);
@@ -358,6 +382,14 @@ export class WebViewChromium extends JObj {
         else pending.resolve(data.data);
       }
     }
+  }
+  /** the page's document.cookie, once the jar changed or answered its write `cookieAck` */
+  private sendCookies(jar: WebCookies, answer = false) {
+    if (!this.remoteOrigin) return;
+    const list = jar.document(this.url ?? ""), sent = JSON.stringify(list);
+    if (sent === this.cookiesSent && !answer) return;
+    this.cookiesSent = sent;
+    this.send({ kind: "cookies", list, ack: this.cookieAck });
   }
   private send(data: object, transfer: Transferable[] = []) { this.hold.el?.contentWindow?.postMessage({ ...data, bridge: this.hold.remote?.id }, this.remoteOrigin, transfer); }
   async bitmapSnapshot(): Promise<ImageBitmap> {
@@ -378,7 +410,7 @@ export class WebViewChromium extends JObj {
     return createImageBitmap(await (await fetch(data)).blob());
   }
   private closeBridge() {
-    this.scriptReady = false;
+    this.scriptReady = false; this.cookieAck = 0; this.cookiesSent = "";
     unbridge(this.hold); this.remoteOrigin = "";
     for (const done of this.evaluations.values()) done("null");
     for (const pending of this.snapshots.values()) {
@@ -439,8 +471,11 @@ export class WebViewChromium extends JObj {
       // the bridge also carries what the app's own loopback server answers
       if (intercept || Object.keys(ifaces).length || e.method === "POST" || guestEndpoint(e.url)) {
         const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
-          webCookies(appHost?.pkg ?? ""), () => ref.deref()?.url ?? null, intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined);
+          intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined);
         bridges.set(remote.id, ref);
+        void webCookies(appHost?.pkg ?? "").then((jar) => {
+          if (this.hold.remote === remote) this.hold.unwatch = jar.watch(() => ref.deref()?.sendCookies(jar));
+        });
         void remote.ready.then((origin) => {
           if (this.gen !== g) return;
           this.remoteOrigin = origin;

@@ -1,7 +1,7 @@
-import type { WebCookies } from "./webcookies";
 import { loopbackFetch } from "../native/loopback-http";
 
-export type WebInterfaces = Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>;
+/** each interface's methods; `returns`: the Java method returns a value */
+export type WebInterfaces = Record<string, Record<string, ((...args: unknown[]) => Promise<unknown>) & { returns?: boolean }>>;
 export type WebRequest = { url: string; method: string; main: boolean; headers: Record<string, string> };
 export type WebResponse = { body: string; status: number; reason: string; headers: Record<string, string> };
 
@@ -12,7 +12,7 @@ export class WebBridge {
   private socket: WebSocket;
   private queue = Promise.resolve();
 
-  constructor(ifaces: WebInterfaces, cookies: Promise<WebCookies>, documentURL: () => string | null, intercept?: (request: WebRequest) => Promise<WebResponse | null>) {
+  constructor(private ifaces: WebInterfaces, intercept?: (request: WebRequest) => Promise<WebResponse | null>) {
     const url = new URL("/webview-socket", location.href);
     url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("id", this.id);
@@ -54,23 +54,31 @@ export class WebBridge {
               body: "body" in call && typeof call.body === "string" ? Uint8Array.fromBase64(call.body) : undefined });
             reply = { value: response && { status: response.status, reason: response.statusText, headers: Object.fromEntries(response.headers),
               body: new Uint8Array(await response.arrayBuffer()).toBase64() } };
-          } else if (call.kind === "cookie") {
-            const jar = await cookies, url = documentURL() ?? "";
-            reply = { value: "value" in call && typeof call.value === "string" ? jar.set(url, call.value, false) : jar.get(url, false) };
           } else {
-            if (call.kind !== "invoke" || !("object" in call) || typeof call.object !== "string" || !("method" in call) || typeof call.method !== "string" || !("args" in call) || !Array.isArray(call.args)) throw new Error("Invalid bridge invocation");
-            const methods = Object.hasOwn(ifaces, call.object) ? ifaces[call.object] : undefined;
-            if (!methods || !Object.hasOwn(methods, call.method)) throw new Error("Unknown JavaScript interface method");
-            const value = await methods[call.method](...call.args);
+            const value = await this.call(call);
             reply = value === undefined ? { void: true } : { value };
           }
         } catch (error) { console.warn("[webview bridge]", error); reply = { error: "JavaScript interface invocation failed" }; }
         if (socket.readyState === WebSocket.OPEN) socket.send(seq + "\n" + JSON.stringify(reply));
       };
-      // the app's own server answers in its own time: the page's other calls do not wait behind it
-      if ((parsed as { kind?: unknown } | null)?.kind === "loopback") void answer();
+      // the page's thread is blocked, so the probe answers apart from the calls under way; the app's
+      // own server answers in its own time, so the page's other calls do not wait behind it
+      const kind = (parsed as { kind?: unknown } | null)?.kind;
+      if (kind === "probe") socket.send(seq + "\n" + JSON.stringify({ void: true }));
+      else if (kind === "loopback") void answer();
       else this.queue = this.queue.then(answer);
     };
+  }
+  /** a page's call of a JavaScript interface method, in order with its other calls */
+  private call(call: object): Promise<unknown> {
+    if (!("kind" in call) || call.kind !== "invoke" || !("object" in call) || typeof call.object !== "string" || !("method" in call) || typeof call.method !== "string" || !("args" in call) || !Array.isArray(call.args)) throw new Error("Invalid bridge invocation");
+    const methods = Object.hasOwn(this.ifaces, call.object) ? this.ifaces[call.object] : undefined;
+    if (!methods || !Object.hasOwn(methods, call.method)) throw new Error("Unknown JavaScript interface method");
+    return methods[call.method](...call.args);
+  }
+  /** a call the page could not wait for (its renderer shares this thread): its result is not wanted */
+  post(call: object) {
+    this.queue = this.queue.then(() => this.call(call)).then(() => {}, (error) => console.warn("[webview bridge]", error));
   }
   close() { this.socket.close(); }
 }

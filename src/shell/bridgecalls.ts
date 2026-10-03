@@ -9,6 +9,8 @@ export class BridgeCalls<Peer extends BridgePeer> {
     const body = await request.text();
     if (body.length > 1024 * 1024) return new Response("bridge request too large", { status: 413 });
     if (request.signal.aborted || !active()) return new Response("bridge closed", { status: 410 });
+    // a caller may wait less: the page's probe of whether this side can answer while it waits
+    const wait = Math.min(30_000, Number(new URL(request.url).searchParams.get("timeout")) || 30_000);
     return new Promise<Response>((resolve) => {
       const seq = ++this.next;
       const finish = (response: Response) => {
@@ -18,7 +20,7 @@ export class BridgeCalls<Peer extends BridgePeer> {
         resolve(response);
       };
       const abort = () => finish(new Response("bridge request cancelled", { status: 408 }));
-      const timer = setTimeout(() => finish(new Response("bridge timed out", { status: 504 })), 30_000);
+      const timer = setTimeout(() => finish(new Response("bridge timed out", { status: 504 })), wait);
       this.pending.set(seq, { peer, finish });
       request.signal.addEventListener("abort", abort, { once: true });
       try {
