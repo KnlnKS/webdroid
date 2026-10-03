@@ -2674,3 +2674,11 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   of 72/38/142 ms cold and 43/43/97 ms warm. Mihon
   retains limited cold margin against 150 ms. These are individual gate samples,
   not evidence of an overall speedup or FPS improvement.
+- Deslop follow-up (2026-10-02, baseline `18251cfa`): removed redundant VM prose,
+  casts and socket-to-descriptor forwarding; reused declared-field helpers and
+  V8's profile types without intended behavior changes. Typecheck and the normal
+  full suite passed (1,186 tests / 76,293 assertions); profile summaries matched
+  the original in full, time-cut and tap-window modes. No tests were added.
+  The combined Android content/device-services invocation failed `databaseList`
+  on both revisions after sharing package state; both suites passed separately.
+  Logs are in ignored `webdroid-shots/deslop/`.
