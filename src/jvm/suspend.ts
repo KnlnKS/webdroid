@@ -20,8 +20,11 @@ export function inStrand<T>(s: number, f: () => T): T {
   const was = enterStrand(s);
   try { return f(); } finally { strand = was; }
 }
+/** a chain apart from every other: an entry, or a call no frame of the running chain waits on,
+ *  which that chain may run on past while the call is suspended */
+export const newStrand = (): number => ++strands;
 /** the current chain, given an identity apart from other host turns' if it has none yet */
-export const ownStrand = (): number => strand || ++strands;
+export const ownStrand = (): number => strand || newStrand();
 
 /** Wait on `pending` with `k`: the returned Promise settles with the outermost frame's result. */
 export function suspendWith(pending: Promise<unknown>, k: Continuation): Promise<unknown> {

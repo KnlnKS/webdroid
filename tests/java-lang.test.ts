@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, callUncaught, mainThread, type JClassLoader, curThread, JThread, park } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { scall, loadLibcore, mountApexData } from "./java";
@@ -198,7 +198,7 @@ describe("class-init", () => {
     expect(second!.cause).toBe(first);
   });
 
-  test("a suspended <clinit>'s chain re-enters its class at once; another job on its thread waits", async () => {
+  test("a suspended <clinit>'s chain re-enters its class at once; other chains on its thread wait", async () => {
     const gate = Promise.withResolvers<void>();
     class Interleaved extends JObj { static ready = 0; }
     let reentry: unknown;
@@ -208,10 +208,13 @@ describe("class-init", () => {
       Interleaved.ready = 1;
     }()) });
     const info = rt.link("test/InterleavedInit");
-    const first = callOn(mainThread, () => rt.initClass(info));
+    // the chain that forks the <clinit> without waiting for it runs on, as does another job
+    let first: unknown;
+    const forker = callOn(mainThread, () => { callUncaught(() => (first = rt.initClass(info))); return rt.initClass(info); });
     const second = callOn(mainThread, () => rt.initClass(info));
+    expect(forker).toBeInstanceOf(Promise);
     expect(second).toBeInstanceOf(Promise);
-    const seen = second!.then(() => Interleaved.ready);
+    const seen = Promise.all([forker, second]).then(() => Interleaved.ready);
     gate.resolve();
     expect(await seen).toBe(1);
     expect(reentry).toBeNull();
