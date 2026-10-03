@@ -54,10 +54,8 @@ const activityManager: NativeSpec["methods"] = {
   // ActiveServices does not report its records as RunningServiceInfo
   "getServices(II)Ljava/util/List;": () => newArrayList(),
   // no exits or starts are recorded, and nothing restricts this app or drives it as a monkey
-  "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": () =>
-    parceledList(),
-  "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () =>
-    parceledList(),
+  "getHistoricalProcessExitReasons(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
+  "getHistoricalProcessStartReasons(Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
   "reportStartInfoViewTimestamps(JJ)V": () => {},
   "isBackgroundRestricted(Ljava/lang/String;)Z": () => 0,
   "checkPermission(Ljava/lang/String;II)I": (name: string, _pid: number, uid: number) => checkUidPermission(name, uid),
@@ -177,8 +175,7 @@ rt.register({ name: "webdroid/AccessibilityManagerService", ctor: class extends 
   "getFocusStrokeWidth()I": () => systemResource("dimen", "accessibility_focus_highlight_stroke_width", "getDimensionPixelSize", "(I)I"),
   "getFocusColor()I": () => systemResource("color", "accessibility_focus_highlight_color", "getColor", "(ILandroid/content/res/Resources$Theme;)I", null),
   "getEnabledAccessibilityServiceList(II)Ljava/util/List;": () => newArrayList(),
-  "getInstalledAccessibilityServiceList(I)Landroid/content/pm/ParceledListSlice;": () =>
-    parceledList(),
+  "getInstalledAccessibilityServiceList(I)Landroid/content/pm/ParceledListSlice;": () => parceledList(),
   ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;I)V", "interrupt(I)V"),
 } });
 hostStub("accessibility", "webdroid/AccessibilityManagerService");
