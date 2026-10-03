@@ -5,6 +5,7 @@ import { rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, dr
 import { parkTimeout, unparkTimeout } from "../yield";
 import { encodeString } from "../charset";
 import { coldStack, type ColdMethod } from "../cold";
+import { once } from "../suspend";
 import { mangleMethod, mangleField, mangleStaticField, demangle, frameOf, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { uptimeMillis, wallMillis, type GuestTimer } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
@@ -779,24 +780,21 @@ const LOCALE_CASED = /[IiJj\u00cc\u00cd\u0128\u012e\u0130\u0131\u0307]/, CASE_LO
 /** `s` cased as `lang` cases it; languages CaseMapper does not treat apart case as the root locale */
 const caseAs = (s: string, upper: boolean, lang: string): string => !CASE_LOCALES.has(lang)
   ? upper ? s.toUpperCase() : s.toLowerCase() : upper ? s.toLocaleUpperCase(lang) : s.toLocaleLowerCase(lang);
-const language = (locale: unknown): string | Promise<string> => vcall(locale, "getLanguage", "()Ljava/lang/String;");
-function caseIn(s: string, locale: unknown, upper: boolean): unknown {
-  if (locale === null) rt.npe();
+/** a Locale's language, which never changes */
+const languages = new WeakMap<object, string>();
+const language = (locale: object): string | Promise<string> => languages.get(locale) ??
+  after(vcall(locale, "getLanguage", "()Ljava/lang/String;"), (lang: string) => { languages.set(locale, lang); return lang; });
+function caseIn(s: string, locale: object | null, upper: boolean): unknown {
+  if (locale === null) return rt.npe();
   return LOCALE_CASED.test(s) ? after(language(locale), (lang) => caseAs(s, upper, lang)) : caseAs(s, upper, "");
 }
-/** the default locale's language, until Locale.setDefault may have changed it */
-let defaultLanguage: string | null = null;
+const GET_DEFAULT = mangleMethod("getDefault", "()Ljava/util/Locale;"), localeClass = once(() => linkInit("java/util/Locale"));
 const caseInDefault = (s: string, upper: boolean): unknown => !LOCALE_CASED.test(s) ? caseAs(s, upper, "")
-  : defaultLanguage !== null ? caseAs(s, upper, defaultLanguage)
-  : after(after(scall("java/util/Locale", "getDefault", "()Ljava/util/Locale;"), language), (lang) => caseAs(s, upper, defaultLanguage = lang));
-rt.intrinsic("java/util/Locale", {
-  "static setDefault(Ljava/util/Locale;)V": (base) => (locale: unknown) => { defaultLanguage = null; return base(locale); },
-  "static setDefault(Ljava/util/Locale$Category;Ljava/util/Locale;)V": (base) => (category: unknown, locale: unknown) => { defaultLanguage = null; return base(category, locale); },
-});
+  : after(localeClass(), (info) => after((info.ctor as Record<string, () => object>)[GET_DEFAULT](), (locale) => caseIn(s, locale, upper)));
 sm("toLowerCase()Ljava/lang/String;", function () { return caseInDefault(this, false); });
 sm("toUpperCase()Ljava/lang/String;", function () { return caseInDefault(this, true); });
-sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: unknown) { return caseIn(this, locale, false); });
-sm("toUpperCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: unknown) { return caseIn(this, locale, true); });
+sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: object | null) { return caseIn(this, locale, false); });
+sm("toUpperCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: object | null) { return caseIn(this, locale, true); });
 sm("toString()Ljava/lang/String;", function () { return this as string; });
 sm("toCharArray()[C", function () {
   const a = new Uint16Array(this.length);
