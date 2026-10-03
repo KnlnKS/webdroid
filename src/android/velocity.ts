@@ -38,7 +38,12 @@ abstract class Accumulating implements Strategy {
     if (ring.length > HISTORY_SIZE) ring.shift();
     if (this.maintainHorizon) while (t - ring[0].t > this.horizon) ring.shift();
   }
-  abstract velocity(id: number): number | null;
+  velocity(id: number): number | null {
+    const ring = this.movements.get(id);
+    return ring?.length ? this.fromRing(ring) : null;
+  }
+  /** the velocity over a pointer's non-empty ring */
+  abstract fromRing(ring: Movement[]): number | null;
 }
 
 const dot = (a: Float32Array, b: Float32Array, m: number) => { let r = 0; for (let i = 0; i < m; i++) r = f32(r + f32(a[i] * b[i])); return r; };
@@ -72,9 +77,7 @@ function solveLeastSquares(x: number[], y: number[], w: number[], n: number): nu
 
 class LeastSquares extends Accumulating {
   constructor(readonly degree: number, readonly weighting = W.NONE) { super(100_000_000n, true); }
-  velocity(id: number): number | null {
-    const ring = this.movements.get(id);
-    if (!ring?.length) return null;
+  fromRing(ring: Movement[]): number | null {
     const degree = Math.min(this.degree, ring.length - 1);
     if (degree <= 0) return null;
     const newest = ring[ring.length - 1].t;
@@ -126,9 +129,7 @@ class LeastSquares extends Accumulating {
 const kineticEnergyToVelocity = (work: number) => f32((work < 0 ? -1 : 1) * f32(Math.sqrt(Math.abs(work))) * f32(Math.SQRT2));
 class Impulse extends Accumulating {
   constructor(readonly deltaValues: boolean) { super(100_000_000n, false); }
-  velocity(id: number): number | null {
-    const ring = this.movements.get(id);
-    if (!ring?.length) return null;
+  fromRing(ring: Movement[]): number | null {
     const t: bigint[] = [], x: number[] = [], newest = ring[ring.length - 1].t;
     for (let i = ring.length - 1; i >= 0; i--) {
       if (newest - ring[i].t > this.horizon) break;
@@ -158,9 +159,7 @@ class Impulse extends Accumulating {
 
 class Legacy extends Accumulating {
   constructor() { super(200_000_000n, false); }
-  velocity(id: number): number | null {
-    const ring = this.movements.get(id);
-    if (!ring?.length) return null;
+  fromRing(ring: Movement[]): number | null {
     const newest = ring[ring.length - 1], min = newest.t - this.horizon;
     let oldestIndex = ring.length - 1;
     for (let i = ring.length - 1; i >= 0 && ring[i].t >= min; i--) oldestIndex = i;
