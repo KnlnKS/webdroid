@@ -1,13 +1,15 @@
 // System properties, one store for Java's SystemProperties and native libc: the reference build's
-// (device-properties.ts), what follows from the native tier, and the live device profile's
-// (config.ts). Any other property is ABSENT, so its reader gets its own default: what a device that
+// (platform-properties.ts) under the identity of the phone it reports being (device-properties.ts),
+// what follows from the native tier, and the live device profile's (config.ts). Any other property is ABSENT, so its reader gets its own default: what a device that
 // has not set one reports, rather than a made-up answer a library will branch on.
 import { device } from "./config";
 import { DEVICE_PROPERTIES } from "./device-properties";
+import { PLATFORM_PROPERTIES } from "./platform-properties";
 import { utf8 } from "../jvm/abi";
 
 /** The ABIs the device runs, most-preferred first, which are those the native tier executes
- *  (src/native/loader.ts): arm64 and 32-bit arm, as on a device whose ro.zygote is zygote64_32. */
+ *  (src/native/loader.ts): arm64 and 32-bit arm, as on a device whose ro.zygote is zygote64_32.
+ *  The phone is arm64 only; armeabi-v7a apps run here, so the lists are this device's. */
 export const ABIS_64: readonly string[] = ["arm64-v8a"], ABIS_32: readonly string[] = ["armeabi-v7a", "armeabi"];
 const abiLists = (prefix: string) => ({
   [`${prefix}abilist`]: [...ABIS_64, ...ABIS_32].join(","), [`${prefix}abilist32`]: ABIS_32.join(","), [`${prefix}abilist64`]: ABIS_64.join(","),
@@ -15,8 +17,9 @@ const abiLists = (prefix: string) => ({
 // Maps, so a key such as "constructor" is not a property
 const fixed = new Map(Object.entries({
   // ART's 32-bit target, unless the build names one, configured as the build configures arm64's
-  "dalvik.vm.isa.arm.variant": DEVICE_PROPERTIES["dalvik.vm.isa.arm64.variant"],
-  "dalvik.vm.isa.arm.features": DEVICE_PROPERTIES["dalvik.vm.isa.arm64.features"],
+  "dalvik.vm.isa.arm.variant": PLATFORM_PROPERTIES["dalvik.vm.isa.arm64.variant"],
+  "dalvik.vm.isa.arm.features": PLATFORM_PROPERTIES["dalvik.vm.isa.arm64.features"],
+  ...PLATFORM_PROPERTIES,
   ...DEVICE_PROPERTIES,
   "ro.zygote": "zygote64_32", "ro.product.cpu.abi": ABIS_64[0],
   ...abiLists("ro.product.cpu."), ...abiLists("ro.system.product.cpu."), ...abiLists("ro.vendor.product.cpu."),

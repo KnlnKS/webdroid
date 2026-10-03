@@ -5,8 +5,10 @@
 //   bun run gen-framework --charsets # record only the device's single-byte charsets
 //   bun run gen-framework --input    # record only the device's key character maps and key sets
 //   bun run gen-framework --settings # record only the device's settings tables
-//   bun run gen-framework --properties # record only the device's system properties and uname
+//   bun run gen-framework --properties # record only the device's platform properties
 //   bun run gen-framework --fonts    # record only the device's updated system fonts
+//   bun run gen-framework --identity [url] # record the identity properties and uname of a phone's
+//                                    factory image, by default the Pixel 9's (no device needed)
 //
 // framework.jar carries android.* and com.android.internal.* as bytecode; framework-res.apk
 // carries the resource table those classes' R ids were compiled against. Neither is usable
@@ -49,6 +51,10 @@ if (process.argv.includes("--fonts")) {
   const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
   const file = "src/jvm/bootclasspath.ts", src = await Bun.file(file).text();
   await Bun.write(file, src.replace(/(export const PLATFORM_DATA: Record<string, number> = ).*;/, (_, decl) => `${decl}${JSON.stringify(data)};`));
+  process.exit(0);
+}
+if (process.argv.includes("--identity")) {
+  await recordIdentity(process.argv[process.argv.indexOf("--identity") + 1] ?? "https://dl.google.com/dl/android/aosp/tokay-ap3a.241005.015-factory-88013873.zip");
   process.exit(0);
 }
 if (!process.argv.includes("--verify")) {
@@ -243,20 +249,37 @@ async function recordSettings() {
   console.log(`  src/android/device-settings.ts ${Object.entries(tables).map(([t, v]) => `${t} ${Object.keys(v).length}`).join(", ")}`);
 }
 
-/** The system properties an app process reads on the reference device, and its kernel's uname
- *  (src/shell/device-properties.ts). An app sees the property areas whose SELinux context the policy
- *  lets untrusted_app read (selinuxfs computes each decision, which needs root). Of those, only the
- *  read-only properties the build fixes stay; dropped are:
+/** Of the properties an app may read, those a build fixes and that describe neither hardware this
+ *  device replaces nor its runtime state. Dropped are:
  *  - mutable properties: daemons' and services' runtime state (init.svc.*, sys.*, gsm.*, dev.mnt.*),
  *    debug switches and server-pushed flags, none of which this device's services set;
- *  - ro.boot.*, ro.kernel.* and ro.adb.*: the emulator's launch command line, qemu flags and adbd's setup;
- *  - the emulator's HAL, GPU and display selection (ro.hardware.*, ro.surface_flinger.*, the GLES and
- *    Vulkan versions): this device draws through the browser;
+ *  - ro.boot.*, ro.kernel.* and ro.adb.*: the bootloader's command line, qemu flags and adbd's setup;
+ *  - the HAL, GPU and display selection (ro.hardware.*, ro.surface_flinger.*, ro.egl.*, the GLES and
+ *    Vulkan versions, the density) and the media performance class: this device draws through the
+ *    browser, at the live profile's density (config.ts), with the codecs and cameras it has;
  *  - ro.config.*'s media names, which name files this device does not have;
  *  - the ABI lists and ro.zygote, which src/shell/properties.ts derives from what the native tier runs;
  *  - empty values, which every reader takes as unset.
  *  ART's configuration (dalvik.vm.*) and the SDK extension levels are mutable in name only: init sets
  *  them from the build, so they stay. */
+function buildFixed(name: string, value: string) {
+  return value !== "" && /^(ro|dalvik\.vm|build\.version\.extensions)\./.test(name) &&
+    !/^ro\.(boot|kernel|hardware|surface_flinger|egl|config|adb)\.|^ro\.(opengles|cpuvulkan)\.version$|^ro\.hwui\.use_vulkan$|^ro\.zygote|^ro\.sf\.lcd_density$|^ro\.odm\.build\.media_performance_class$/.test(name) &&
+    !/^ro\.(\w+\.)?product\.cpu\.abi/.test(name);
+}
+/** Which product this is: its build, partitions' builds, product names, board, SoC, hardware and
+ *  bootloader. These come from the identity image (recordIdentity) and the rest from the reference
+ *  AVD (recordProperties), whose framework is the code that runs: its ART configuration, SDK
+ *  extension levels and platform settings stay, and so do its heap sizes: the heap is this device's,
+ *  not the phone's. recordIdentity checks that both name one API level. */
+function identity(name: string) {
+  return /^ro\.(build|product|soc|board|bootimage|(system|system_ext|system_dlkm|vendor|vendor_dlkm|odm|odm_dlkm|product)\.build)\./.test(name) ||
+    /^ro\.(hardware|bootloader|baseband|bootmode|revision|serialno|vendor\.api_level)$/.test(name);
+}
+
+/** The reference AVD's platform properties as an app process reads them (src/shell/platform-properties.ts):
+ *  of the property areas whose SELinux context the policy lets untrusted_app read (selinuxfs computes
+ *  each decision, which needs root), those buildFixed keeps that are not identity. */
 async function recordProperties() {
   sh("root");
   sh("wait-for-device");
@@ -267,18 +290,171 @@ async function recordProperties() {
   const readBit = 1 << (Number(sh("shell", "cat", "/sys/fs/selinux/class/file/perms/read")) - 1);
   const readable = new Set(sh("shell", [...new Set(contexts.values())].map(query).join("; ")).split("\n")
     .map((line) => line.trim().split(" ")).filter(([, allowed]) => parseInt(allowed, 16) & readBit).map(([ctx]) => ctx));
-  const kept = (name: string) => /^(ro|dalvik\.vm|build\.version\.extensions)\./.test(name) &&
-    !/^ro\.(boot|kernel|hardware|surface_flinger|config|adb)\.|^ro\.(opengles|cpuvulkan)\.version$|^ro\.hwui\.use_vulkan$|^ro\.zygote/.test(name) &&
-    !/^ro\.(\w+\.)?product\.cpu\.abi/.test(name);
-  const properties = parse(sh("shell", "getprop")).filter(([name, value]) => value && readable.has(contexts.get(name)!) && kept(name));
-  const uname = Object.fromEntries(([["sysname", "s"], ["nodename", "n"], ["release", "r"], ["version", "v"]] as const)
-    .map(([field, flag]) => [field, sh("shell", "uname", `-${flag}`)]));
-  uname.domainname = sh("shell", "cat", "/proc/sys/kernel/domainname");
-  await Bun.write("src/shell/device-properties.ts", `// Generated by bun run gen-framework: the reference device's system properties as an app reads\n` +
-    `// them, those its build fixes (see recordProperties), and its kernel's uname but for the machine.\n` +
-    `export const DEVICE_PROPERTIES: Record<string, string> = {\n${properties.map(([n, v]) => `  ${JSON.stringify(n)}: ${JSON.stringify(v)},`).join("\n")}\n};\n` +
+  const properties = parse(sh("shell", "getprop")).filter(([name, value]) => readable.has(contexts.get(name)!) && buildFixed(name, value) && !identity(name));
+  await writeProperties("src/shell/platform-properties.ts", "PLATFORM_PROPERTIES", properties,
+    `// Generated by bun run gen-framework: the reference device's platform properties as an app reads\n// them (see recordProperties).\n`);
+}
+
+async function writeProperties(file: string, name: string, properties: (readonly [string, string])[], header: string, tail = "") {
+  await Bun.write(file, `${header}export const ${name}: Record<string, string> = {\n${properties.map(([n, v]) => `  ${JSON.stringify(n)}: ${JSON.stringify(v)},`).join("\n")}\n};\n${tail}`);
+  console.log(`  ${file} ${properties.length} properties`);
+}
+
+/** The identity of a production phone as an app reads it, and its kernel's uname but for the machine
+ *  (src/shell/device-properties.ts), from the phone's factory image: the build.prop files of its
+ *  partitions, merged and derived as init does (property_service.cpp PropertyLoadBootDefaults), what
+ *  init takes from the bootloader where the image says what that is, and the kernel's banner. An app
+ *  reads what the image's SELinux policy (its CIL, as init compiles it) lets untrusted_app read. */
+async function recordIdentity(url: string) {
+  const name = url.slice(url.lastIndexOf("/") + 1), cache = `${process.env.HOME}/.cache/webdroid/${name.replace(/\.zip$/, "")}`, zip = `${cache}/${name}`;
+  await Bun.$`mkdir -p ${cache}`.quiet();
+  if (!existsSync(zip)) await Bun.$`curl -fL -o ${zip}.part ${url} && mv ${zip}.part ${zip}`;
+  const sha256 = (await Bun.$`shasum -a 256 ${zip}`.text()).split(" ")[0];
+  // a factory image's name carries its digest's first 8 digits
+  if (!sha256.startsWith(/-([0-9a-f]{8})\.zip$/.exec(name)![1])) throw new Error(`${name} has sha256 ${sha256}`);
+  const images = `${cache}/image.zip`;
+  if (!existsSync(images)) await Bun.$`unzip -p ${zip} '*/image-*.zip' > ${images}`;
+  const entries = new Set((await Bun.$`unzip -Z1 ${images}`.text()).split("\n"));
+  for (const entry of ["android-info.txt", "boot.img", ...["system", "system_ext", "product", "vendor", "system_dlkm", "vendor_dlkm", "odm", "odm_dlkm"].map((p) => `${p}.img`)]) {
+    if (entries.has(entry) && !existsSync(`${cache}/${entry}`)) await Bun.$`unzip -o -d ${cache} ${images} ${entry}`.quiet();
+  }
+  const debugfs = Bun.which("debugfs", { PATH: `${process.env.PATH}:/opt/homebrew/opt/e2fsprogs/sbin:/usr/local/opt/e2fsprogs/sbin:/sbin` });
+  if (!debugfs) throw new Error("debugfs reads the image's ext4 partitions: brew install e2fsprogs");
+  const debug = (command: string, image: string) => Bun.spawnSync([debugfs, "-R", command, `${cache}/${image}.img`], { stdout: "pipe", stderr: "pipe" });
+  /** a file of the device's tree, from the partition mounted there; null when there is none */
+  const read = (path: string): string | null => {
+    const [, part, rest] = /^\/(\w+)(\/.*)$/.exec(path)!;
+    // odm and odm_dlkm are vendor's directories on a device without those partitions
+    const [image, inner] = existsSync(`${cache}/${part}.img`) ? [part, part === "system" ? path : rest] : part.startsWith("odm") ? ["vendor", path] : [];
+    if (!image) return null;
+    const r = debug(`cat ${inner}`, image);
+    return r.stderr.toString().includes("not found") ? null : r.stdout.toString();
+  };
+
+  // the policy init compiles: the platform's, system_ext's and product's with their mappings to
+  // the vendor's version, the vendor's and the odm's
+  const vers = read("/vendor/etc/selinux/plat_sepolicy_vers.txt")!.trim();
+  const policy = ["/system/etc/selinux/plat_sepolicy.cil", `/system/etc/selinux/mapping/${vers}.cil`, `/system/etc/selinux/mapping/${vers}.compat.cil`,
+    "/system_ext/etc/selinux/system_ext_sepolicy.cil", `/system_ext/etc/selinux/mapping/${vers}.cil`,
+    "/product/etc/selinux/product_sepolicy.cil", `/product/etc/selinux/mapping/${vers}.cil`,
+    "/vendor/etc/selinux/plat_pub_versioned.cil", "/vendor/etc/selinux/vendor_sepolicy.cil", "/odm/etc/selinux/odm_sepolicy.cil"];
+  type Cil = string | Cil[];
+  const attributes = new Map<string, Cil[]>(), allows: [string, string, string, string[]][] = [];
+  for (const text of policy.map(read)) {
+    const stack: Cil[][] = [[]];
+    for (const [token] of text?.matchAll(/;[^\n]*|"[^"]*"|[()]|[^\s()";]+/g) ?? []) {
+      if (token[0] === ";") continue;
+      if (token === "(") {
+        const list: Cil[] = [];
+        stack.at(-1)!.push(list);
+        stack.push(list);
+      } else if (token !== ")") stack.at(-1)!.push(token);
+      else if (stack.length === 2) {
+        const [verb, a, b, perms] = stack.pop()! as [string, string, string, string[]];
+        if (verb === "typeattributeset") attributes.set(a, [...attributes.get(a) ?? [], b]);
+        else if (verb === "allow") allows.push([a, b, perms[0], perms[1] as unknown as string[]]);
+      } else stack.pop();
+    }
+  }
+  const memo = new Map<string, boolean>();
+  const isA = (type: string, name: string): boolean => {
+    if (name === type || !attributes.has(name)) return name === type;
+    const key = `${name} ${type}`;
+    if (!memo.has(key)) {
+      memo.set(key, false);
+      memo.set(key, attributes.get(name)!.some((e) => matches(type, e)));
+    }
+    return memo.get(key)!;
+  };
+  const matches = (type: string, e: Cil): boolean => typeof e === "string" ? isA(type, e) : e[0] === "and" ? e.slice(1).every((x) => matches(type, x)) :
+    e[0] === "or" ? e.slice(1).some((x) => matches(type, x)) : e[0] === "not" ? !matches(type, e[1]) : e[0] === "all" || e.some((x) => matches(type, x));
+  const allowed = (source: string, target: string, cls: string, perm: string) =>
+    allows.some(([s, t, c, p]) => c === cls && p.includes(perm) && isA(source, s) && (t === "self" ? target === source : isA(target, t)));
+  // property_info_parser: an exact name, else the longest prefix; [type, value type, enum values]
+  const exact = new Map<string, string[]>(), prefixes: [string, string[]][] = [];
+  for (const part of ["system/etc/selinux/plat", "system_ext/etc/selinux/system_ext", "product/etc/selinux/product", "vendor/etc/selinux/vendor", "odm/etc/selinux/odm"]) {
+    for (const line of read(`/${part}_property_contexts`)?.split("\n") ?? []) {
+      const [key, context, match, ...type] = line.trim().split(/\s+/);
+      if (!key || key.startsWith("#")) continue;
+      const info = [context.split(":")[2], ...(match === "exact" || match === "prefix" ? type : [match, ...type]).filter(Boolean)];
+      if (match === "exact") exact.set(key, info);
+      else prefixes.push([key, info]);
+    }
+  }
+  prefixes.sort(([a], [b]) => b.length - a.length);
+  const infoOf = (key: string) => exact.get(key) ?? prefixes.find(([p]) => key.startsWith(p) || p === "*")?.[1] ?? ["default_prop"];
+  // property_service.cpp CheckType
+  const typed = ([, type = "string", ...values]: string[], value: string) => type === "string" || type === "bool" && /^(true|false|1|0)$/.test(value) ||
+    type === "int" && /^-?\d+$/.test(value) || type === "uint" && /^\d+$/.test(value) || type === "double" && value !== "" && !isNaN(Number(value)) ||
+    type === "size" && /^\d+[gkm]$/.test(value) || type === "enum" && values.includes(value);
+
+  // LoadProperties: a later file overrides an earlier one; a vendor file sets only what vendor_init may
+  const props = new Map<string, string>(), property = (key: string) => props.get(key) ?? "";
+  const load = (path: string) => {
+    for (const line of read(path)?.split("\n") ?? []) {
+      const eq = line.indexOf("="), key = line.slice(0, eq).trim(), value = line.slice(eq + 1).trim();
+      if (eq < 0 || key.startsWith("#")) continue;
+      const info = infoOf(key);
+      if (allowed(/^\/(vendor|odm)/.test(path) ? "vendor_init" : "init", info[0], "property_service", "set") && typed(info, value)) props.set(key, value);
+      else console.log(`  init refuses ${key}=${value} from ${path}`);
+    }
+  };
+  // the boot ramdisk's build.prop, loaded first, names the boot image's build, which no app may read
+  for (const path of ["/system/build.prop", "/system_ext/etc/build.prop", "/system_dlkm/etc/build.prop", "/vendor/default.prop", "/vendor/build.prop",
+    "/vendor_dlkm/etc/build.prop", "/odm_dlkm/etc/build.prop", "/odm/etc/build.prop", "/product/etc/build.prop"]) load(path);
+  // property_initialize_ro_product_props
+  const order = property("ro.product.property_source_order") || "product,odm,vendor,system_ext,system";
+  if (order.split(",").some((s) => !["odm", "product", "system_ext", "system", "vendor"].includes(s))) throw new Error(`ro.product.property_source_order ${order}`);
+  for (const field of ["brand", "device", "manufacturer", "model", "name"]) {
+    const source = order.split(",").map((s) => property(`ro.product.${s}.${field}`)).find(Boolean);
+    if (!property(`ro.product.${field}`) && source) props.set(`ro.product.${field}`, source);
+  }
+  // property_initialize_build_id would derive a missing id from the vbmeta digest the bootloader passes
+  if (!property("ro.build.id") || property("ro.build.legacy.id") || property("ro.product.build.16k_page.enabled") === "true") throw new Error("the build id or fingerprint needs boot state");
+  // property_derive_build_fingerprint
+  if (!property("ro.build.fingerprint")) props.set("ro.build.fingerprint", `${property("ro.product.brand")}/${property("ro.product.name")}/${property("ro.product.device")}:` +
+    `${property("ro.build.version.release_or_codename")}/${property("ro.build.id")}/${property("ro.build.version.incremental")}:${property("ro.build.type")}/${property("ro.build.tags")}`);
+  // property_initialize_ro_vendor_api_level: the lower of the board's level and the vendor API level
+  // of the product's first SDK (an SDK before 35 is its own, 35 is 202404)
+  if (!property("ro.vendor.api_level")) {
+    const board = property("ro.board.first_api_level") ? Number(property("ro.board.api_level") || property("ro.board.first_api_level")) : Infinity;
+    const first = Number(property("ro.product.first_api_level") || property("ro.build.version.sdk"));
+    if (first > 35) throw new Error(`no vendor API level for SDK ${first}`);
+    props.set("ro.vendor.api_level", String(Math.min(first < 35 ? first : 202404, board)));
+  }
+  // export_kernel_boot_props: the bootloader names its own version, which android-info.txt requires
+  // of the bootloader the image flashes; init.rc imports /vendor/etc/init/hw/init.${ro.hardware}.rc,
+  // which the vendor provides for one hardware name. The baseband, boot mode, revision and serial
+  // the bootloader passes are its own, so a reader gets its default.
+  props.set("ro.bootloader", /^require version-bootloader=(.+)$/m.exec(await Bun.file(`${cache}/android-info.txt`).text())![1].trim());
+  const initRc = read("/system/etc/init/hw/init.rc")!;
+  if (!initRc.includes("import /vendor/etc/init/hw/init.${ro.hardware}.rc")) throw new Error("init.rc no longer names ro.hardware's rc");
+  const hardware = debug("ls -p /etc/init/hw", "vendor").stdout.toString().split("\n").flatMap((line) => /^\/\d+\/\d+\/\d+\/\d+\/init\.([^./]+)\.rc\//.exec(line)?.[1] ?? []);
+  if (hardware.length !== 1) throw new Error(`vendor rc files name hardware ${hardware}`);
+  props.set("ro.hardware", hardware[0]);
+
+  const platform = /^sdk (\d+)$/m.exec(await Bun.file(`${OUT}/build.txt`).text())![1];
+  if (property("ro.build.version.sdk") !== platform) throw new Error(`the image is API ${property("ro.build.version.sdk")}, the platform API ${platform}`);
+  const readable = new Map<string, boolean>();
+  const appReads = (key: string) => {
+    const type = infoOf(key)[0];
+    if (!readable.has(type)) readable.set(type, allowed("untrusted_app", type, "file", "read"));
+    return readable.get(type)!;
+  };
+  const properties = [...props].filter(([key, value]) => identity(key) && buildFixed(key, value) && appReads(key)).sort(([a], [b]) => a < b ? -1 : 1);
+
+  // the kernel's banner, "Linux version <release> (<builder>) (<toolchain>) <version>", and the
+  // names init.rc sets
+  const boot = new Uint8Array(await Bun.file(`${cache}/boot.img`).arrayBuffer()), view = new DataView(boot.buffer);
+  if (view.getUint32(40, true) < 3) throw new Error("boot image header before v3");
+  let kernel = boot.subarray(4096, 4096 + view.getUint32(8, true));
+  if (view.getUint32(4096, true) === 0x184c2102) kernel = new Uint8Array(await Bun.$`lz4 -dc < ${new Response(kernel)}`.arrayBuffer());
+  const banner = /Linux version (\S+) \(.*\) (#\d+ [^\n\0]*)/.exec(new TextDecoder("latin1").decode(kernel))!;
+  const uname = { sysname: "Linux", nodename: /^\s*hostname (\S+)/m.exec(initRc)![1], release: banner[1], version: banner[2], domainname: /^\s*domainname (\S+)/m.exec(initRc)![1] };
+  await writeProperties("src/shell/device-properties.ts", "DEVICE_PROPERTIES", properties,
+    `// Generated by bun run gen-framework --identity: the identity of the phone whose factory image is\n// ${url}\n` +
+    `// (sha256 ${sha256}),\n// as an app reads it (see recordIdentity), and its kernel's uname but for the machine.\n`,
     `export const UNAME = ${JSON.stringify(uname, null, 2).replace(/"(\w+)":/g, "$1:")};\n`);
-  console.log(`  src/shell/device-properties.ts ${properties.length} properties`);
 }
 
 /** The key character maps of the device's virtual keyboard and touchscreen, and the key codes each
