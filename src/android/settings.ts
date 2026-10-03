@@ -251,8 +251,7 @@ const call = driven(function* call$(method: string, name: string | null, args: J
     if (verb === "LIST")
       return yield* bundle([["StringArrayList", "result_settings_list", newArrayList((yield* readableRows(c, table)).map(([, n, v]) => `${n}=${v}`))]]);
     if (verb === "PUT") { yield* writeSetting(c, table, key, args ? yield string(args, "value") : null, SYSTEM_INSERT); return null; }
-    const deleted = table === "system" ? yield* writeSetting(c, table, key, null, SYSTEM_DELETE) : (enforceSecureWrite(c), store.put(table, key, null));
-    return yield* bundle([["Int", "result_rows_deleted", deleted ? 1 : 0]]);
+    return yield* bundle([["Int", "result_rows_deleted", (yield* writeSetting(c, table, key, null, SYSTEM_DELETE)) ? 1 : 0]]);
   }
   switch (method) {
     case "REGISTER_MONITOR_CALLBACK_config":
@@ -336,10 +335,7 @@ const update = driven(function* update$(uri: string, values: Map<string, unknown
 const remove = driven(function* remove$(uri: string, where: string | null, whereArgs: string[] | null): Gen<number> {
   const { table, name } = yield* argumentsOf(uri, where, whereArgs, false);
   if (LEGACY_TABLES.has(table) || !validKey(name)) return 0;
-  const c = caller();
-  if (table === "system") return (yield* writeSetting(c, "system", name, null, SYSTEM_DELETE)) ? 1 : 0;
-  enforceSecureWrite(c);
-  return store.put(table as Table, name, null) ? 1 : 0;
+  return (yield* writeSetting(caller(), table as Table, name, null, SYSTEM_DELETE)) ? 1 : 0;
 });
 /** openFile serves only the default sounds' cache files, which this device has none of */
 function openFile(uri: string): never {
