@@ -15,6 +15,11 @@ let strand = 0, strands = 0;
 export const currentStrand = (): number => strand;
 /** continue as chain `s`; returns the chain to restore */
 export function enterStrand(s: number): number { const was = strand; strand = s; return was; }
+/** `f` as chain `s`: host code continuing a chain from a later turn */
+export function inStrand<T>(s: number, f: () => T): T {
+  const was = enterStrand(s);
+  try { return f(); } finally { strand = was; }
+}
 /** the current chain, given an identity apart from other host turns' if it has none yet */
 export const ownStrand = (): number => strand || ++strands;
 

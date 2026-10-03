@@ -6,7 +6,7 @@
 // when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
-import { currentStrand, enterStrand, ownStrand, suspendWith } from "./suspend";
+import { currentStrand, enterStrand, inStrand, ownStrand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
@@ -510,7 +510,7 @@ export class Runtime {
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary
    *  consults it before giving up). `thread` is the Java thread that asked: its Cpu runs the
    *  initialisers, whichever thread is current by then. */
-  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime, thread?: unknown) => Promise<void>) | null = null;
+  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime) => Promise<void>) | null = null;
   /** the ABIs the native tier can actually execute, most-preferred first. Empty until
    *  src/native/loader.ts is imported, which is the only thing that can answer it. */
   nativeAbis: readonly string[] = [];
@@ -913,7 +913,7 @@ export class Runtime {
         try {
           await pending;
           // the <clinit> run here is its chain's, and releases its thread
-          const more = (() => { const was = enterStrand(info.initStrand); try { return after?.(); } finally { this.su(null); enterStrand(was); } })();
+          const more = inStrand(info.initStrand, () => { try { return after?.(); } finally { this.su(null); } });
           if (more) await more;
         } catch (e) { throw failed(e); }
         settle();

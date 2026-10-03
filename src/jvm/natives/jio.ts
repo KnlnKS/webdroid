@@ -2,7 +2,7 @@
 
 import { awaited, rt, JObj, type ClassInfo, driven, declaredField, type Gen } from "../runtime";
 import { concat } from "../abi";
-import { vcall, vcallOn, curThread, after, newObj } from "./jlang";
+import { vcall, after, newObj } from "./jlang";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
@@ -44,12 +44,7 @@ export function setFdInt(d: JObj, fd: number): void { (d as unknown as Record<st
 /** jniCreateFileDescriptor: a `new FileDescriptor()` given `fd` through setInt$, which also
  *  records whether it appends */
 export function mkFd(fd: number): JObj | Promise<JObj> {
-  const thread = curThread, info = rt.link(FILE_DESCRIPTOR), init = rt.initClass(info);
-  const make = () => {
-    const d = new info.ctor() as JObj;
-    return after(vcallOn(thread, d, "<init>", "()V"), () => after(vcallOn(thread, d, "setInt$", "(I)V", fd), () => d));
-  };
-  return init ? init.then(make) : make();
+  return after(newObj(FILE_DESCRIPTOR), (d: JObj) => after(vcall(d, "setInt$", "(I)V", fd), () => d));
 }
 rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
 // OpenJDK tests the bits of F_GETFL's result as is, so a failure reads as appending

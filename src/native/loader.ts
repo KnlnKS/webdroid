@@ -1,5 +1,6 @@
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread, appNativeAbi, mainThread, type JThread } from "../jvm/natives/jlang";
+import { curThread, appNativeAbi, mainThread } from "../jvm/natives/jlang";
+import { currentStrand, inStrand } from "../jvm/suspend";
 import { setNativeMemorySizer } from "../jvm/natives/jnio";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
@@ -74,7 +75,7 @@ export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): 
   return loadModule(name, bytes, true);
 }
 
-export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt, thread: JThread = curThread): Promise<void> {
+export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt): Promise<void> {
   if (!NATIVE_ABIS.includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
@@ -84,17 +85,18 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   // the caller's Cpu, chosen before anything awaits: init arrays and JNI_OnLoad run on the thread
   // that called dlopen. After an await the current thread may be another one (the main Cpu,
   // parked mid-static-initialiser, where libc++'s guard reports a recursive initialisation).
-  const cpu = cpuFor(thread);
+  // They also run as the caller's call chain, a <clinit>'s when it loads its library.
+  const cpu = cpuFor(curThread), chain = currentStrand();
   await libcReady(cpu);
-  const mod = await loadModule(name, bytes, false, owner, cpu);
+  const mod = await inStrand(chain, () => loadModule(name, bytes, false, owner, cpu));
   const onload = mod.exports.get("JNI_OnLoad");
   if (onload) {
     const previous = cpu.nativeRuntime;
     cpu.nativeRuntime = owner;
     pushFrame(cpu);
-    try { await cpu.call(onload, [javaVM.addr, 0]); }
+    try { await inStrand(chain, () => cpu.call(onload, [javaVM.addr, 0])); }
     finally { popFrame(cpu); cpu.nativeRuntime = previous; }
   }
 }
 
-rt.loadNativeLib = (name, bytes, abi, owner, thread) => loadNativeLib(name, bytes, abi, owner, thread as JThread | undefined);
+rt.loadNativeLib = loadNativeLib;

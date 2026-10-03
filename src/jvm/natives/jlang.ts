@@ -72,12 +72,19 @@ export function callOn<T>(thread: JThread, call: () => T, chain = currentStrand(
   setCurThread(thread);
   try { return call(); } finally { setCurThread(previous); owned = was; enterStrand(outer); }
 }
+/** runs calls on `thread` as the call chain running now: host code continuing that chain from a
+ *  later turn */
+export function caller(thread = curThread): <T>(call: () => T) => T {
+  const chain = currentStrand();
+  return (call) => callOn(thread, call, chain);
+}
 /** `f` of `r`, now or once it settles; settled later, `f` runs on the thread and chain that asked
  *  (if a thread owned the turn that asked) */
 export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
   if (!(r instanceof Promise)) return f(r);
-  const thread = curThread, chain = currentStrand();
-  return owned ? r.then((v) => callOn(thread, () => f(v), chain)) : r.then(f);
+  if (!owned) return r.then(f);
+  const resume = caller();
+  return r.then((v) => resume(() => f(v)));
 }
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
@@ -1122,7 +1129,7 @@ function nativeLoad(file: string, loader: JClassLoader | null): string | null | 
   if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return null;
   const have = loadedLibs.get(lib);
   if (have) return have.owner !== owner ? `Library ${lib} already loaded by another ClassLoader` : have.thread === curThread ? null : have.pending;
-  const thread = curThread;
+  const thread = curThread, resume = caller(thread);
   const pending = (async (): Promise<string | null> => {
     let abi: string | null, bytes: Uint8Array | null;
     if (file.startsWith("/")) {
@@ -1133,7 +1140,7 @@ function nativeLoad(file: string, loader: JClassLoader | null): string | null | 
       bytes = abi ? await owner.readClasspath(`lib/${abi}/${lib}`) : null;
     }
     if (abi && bytes && owner.loadNativeLib) {
-      try { await owner.loadNativeLib(lib, bytes, abi, owner, thread); return null; }
+      try { await resume(() => owner.loadNativeLib!(lib, bytes, abi, owner)); return null; }
       catch (e) {
         rt.noteNativeRequired(lib, abi);
         if (e instanceof rt.link("java/lang/UnsatisfiedLinkError").ctor) return (e as JThrowable).msg;

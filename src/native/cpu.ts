@@ -4,6 +4,7 @@
 
 import type { Runtime } from "../jvm/runtime";
 import { JThread, curThread, mainThread, releaseThread, setCurThread } from "../jvm/natives/jlang";
+import { currentStrand, enterStrand } from "../jvm/suspend";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET, hostTrace } from "./host";
@@ -96,6 +97,8 @@ export const lastFault: { regs: { cpu: string; r: number[]; h: number[]; bt: str
 let backtraceHook: (cpu: Cpu) => string[] = () => [];
 export function setBacktraceHook(f: (cpu: Cpu) => string[]): void { backtraceHook = f; }
 export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }).__wdWatch ?? []).map((p) => p >>> 0));
+/** a run loop taking its thread for a turn it resumes in, and handing it back where it parks */
+interface LoopTurn { own(): void; release(): void }
 
 export class Cpu {
   nativeRuntime: Runtime | null = null;
@@ -446,6 +449,7 @@ export class Cpu {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
+    const chain = currentStrand();
     if (!isSignalFrame(label)) while (isSignalFrame(this.frames.at(-1))) await new Promise<void>((r) => this.idle.push(r));
     this.frames.push(label);
     this.ensureStack();
@@ -502,7 +506,7 @@ export class Cpu {
     this.depth++;
     let returned = false;
     try {
-      await this.run();
+      await this.run(chain);
       returned = true;
       this.ret1 = this.a64 ? w[1] : w[2];
       this.retFp0 = this.a64 ? this.si[0] : w[0];
@@ -529,22 +533,28 @@ export class Cpu {
   endThread(): Promise<void> { return this.libc === "host" && threadHooks ? threadHooks.end(this) : Promise.resolve(); }
 
   /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
-  async run(): Promise<void> {
+  async run(chain = currentStrand()): Promise<void> {
     if (this.libc === "none" && threadHooks) await threadHooks.start(this);
     this.loops++;
-    const sync = { on: true }, loop = this.loop(sync);
+    const sync = { on: true }, loop = this.loop(sync, chain);
     sync.on = false;
     try { await loop; } finally { this.loops--; }
   }
   /** `sync.on` while the caller is still on the stack: a frame that never parked leaves it its thread */
-  private async loop(sync: { on: boolean }): Promise<void> {
+  private async loop(sync: { on: boolean }, chain: number): Promise<void> {
     const caller = curThread, myDepth = this.depth;
+    // each turn the loop resumes in runs as its thread and as the Java call chain that entered it
+    let outer = chain;
+    const turn: LoopTurn = {
+      own: () => { setCurThread(this.jthread); if (currentStrand() !== chain) outer = enterStrand(chain); },
+      release: () => { releaseThread(); enterStrand(outer); },
+    };
     let budgetStreak = 0;
     try {
       for (;;) {
-        setCurThread(this.jthread);
-        if (processExited) { releaseThread(); await new Promise<never>(() => {}); }
-        for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(sig);
+        turn.own();
+        if (processExited) { turn.release(); await new Promise<never>(() => {}); }
+        for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(turn, sig);
         const t0 = performance.now(), ic0 = this.ic;
         let sliceMs = 0;
         let ex: SliceExit;
@@ -559,7 +569,7 @@ export class Cpu {
         if (ex === SliceExit.Exit) return;
         if (ex === SliceExit.IllegalInstruction) {
           // the handler runs with pc at the instruction, as the kernel delivers it
-          await this.deliverFromLoop(SIGILL, { code: ILL_ILLOPC, addr: this.pc });
+          await this.deliverFromLoop(turn, SIGILL, { code: ILL_ILLOPC, addr: this.pc });
           continue;
         }
         if (ex === SliceExit.Suspend) {
@@ -570,24 +580,24 @@ export class Cpu {
           this.parkedAt = myDepth;
           this.pump();
           this.state = "park";
-          releaseThread();
+          turn.release();
           const v = await p;
           // a handler delivered while we were parked may still be running on top of this frame,
           // parked in its own host call (sigsuspend): the flag is its until it finishes
           this.state = "idle";
           while (this.depth > myDepth) {
-            releaseThread();
+            turn.release();
             await new Promise<void>((r) => this.idle.push(r));
           }
           this.parkedAt = outerParked;
-          setCurThread(this.jthread);
+          turn.own();
           if (this.finished) return;
           hostReturn(this, v as HostRet);
           this.deferredSignalDepths.delete(myDepth);
           continue;
         }
         this.state = "yield";
-        releaseThread();
+        turn.release();
         budgetStreak++;
         // All guest pthreads share one JS thread, where a device would run them on other cores:
         // while input is being handled or frames are being presented, sustained background work
@@ -603,7 +613,7 @@ export class Cpu {
           });
         else await yieldToLoop();
       }
-    } finally { if (sync.on) setCurThread(caller); else releaseThread(); }
+    } finally { if (sync.on) { setCurThread(caller); enterStrand(outer); } else turn.release(); }
   }
 
   /** exempt from the background share: the UI thread, a running signal handler, a frame producer */
@@ -718,12 +728,12 @@ export class Cpu {
   private trapsIllegal(): boolean {
     return sigHandlers.has(SIGILL) && !(this.signalMask & 1n << BigInt(SIGILL - 1));
   }
-  private async deliverFromLoop(sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
+  private async deliverFromLoop(turn: LoopTurn, sig: number, info: { code: number; addr: number } | null = null): Promise<void> {
     this.state = "deliver";
     const delivery = this.deliver(sig, info);
-    releaseThread();
+    turn.release();
     await delivery;
-    setCurThread(this.jthread);
+    turn.own();
   }
   /** siglongjmp from a signal handler to a jmp_buf whose sp lies outside the handler's stack:
    *  the handler's frame is abandoned, as the kernel's would be, and the code it interrupted
