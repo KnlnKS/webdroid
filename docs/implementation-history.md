@@ -2524,6 +2524,44 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     a process started later does not take a stopped service's non-auto-create bindings; crash
     counts (BOUND_SERVICE_MAX_CRASH_RETRY) are not modelled; the page app's own sticky services
     restart in a process frame while the page shows it exited, as a device would.
+- **2026-10-02, crash semantics: uncaught exceptions, exit info, bad pointers** (branch `knlnks/open-crash`):
+  - An exception escaping every Java frame only logged. Thread now has libcore's
+    dispatchUncaughtException (the pre-handler, then the thread's handler or its ThreadGroup, which
+    reaches the default handler), and every escape dispatches on its thread: main-loop messages,
+    Java threads, host-entered callbacks (`callUncaught` dispatches on the entering thread),
+    native thread bodies and AAudio callbacks. zygoteInit runs RuntimeInit.commonInit, so
+    LoggingHandler logs "FATAL EXCEPTION" and KillApplicationHandler calls handleApplicationCrash,
+    then killProcess. Probed in FitNotes (a throwing Runnable on the main looper and on a Java
+    thread): FATAL EXCEPTION, am_crash, death by SIGKILL, "The app stopped", the record persisted;
+    a second crash within MIN_CRASH_INTERVAL after a reload showed "FitNotes keeps stopping", and
+    getHistoricalProcessExitReasons returned both as APP CRASH(EXCEPTION).
+  - Not every escape is a thread's on a device: a oneway call into a local stub and a death notice
+    follow Binder.execTransact (a RuntimeException is logged as a warning; an Error aborts, as
+    JavaBBinder's report_exception does), FileObserver events log, and system_server's own work
+    (`systemUncaught`: AMS/ATMS, broadcasts, jobs, settings, IMM, vibrator, toasts) logs, because
+    the page cannot restart system_server under its apps.
+  - AMS's handleApplicationCrash does AppErrors' part: am_crash, the death noted as REASON_CRASH,
+    and the dialog only for a crash within MIN_CRASH_INTERVAL of the process's last (the first-crash
+    settings are unset; nothing here can set them). debuggerd's path (a core-dumping signal's
+    default) reports REASON_CRASH_NATIVE with the tombstone as tombstone.proto (crashing thread,
+    registers, frame-pointer backtrace with module, offset and symbol), served through an
+    IParcelFileDescriptorRetriever. Each process's end is recorded per package in localStorage
+    (16, newest first): EXIT_SELF with its code, SIGNALED with its signal, CRASH (status 0),
+    CRASH_NATIVE (signal), importance, setProcessStateSummary. Not modelled: ANR (nothing detects
+    one), pss/rss, start reasons. The tombstone's field numbers were not checked against a device
+    tombstone (no AVD was up).
+  - Bad pointers: mem.ts throws BadAddress with the address. A system call (svc, syscall(2), or a
+    libc wrapper whose body is in the kernel's table) fails with EFAULT, synchronously or after it
+    parked; any other host libc body raises SIGSEGV at its entry with si_addr, which a handler that
+    returns runs again. Host-call cost 44-48 ns before and after (base 46-58, noisy host).
+  - ARM32 addresses past 2 GiB trapped in wasm. Load address tests are now signed compares (the
+    null page's test, no extra instruction), pages past the end of memory are write-protected for
+    stores, a dispatch past the end faults as a null target does, and a spare page past the end
+    takes an access that straddles it. The fault test covers both tiers and Thumb.
+  - Flows: the fast gate already fails on any `[uncaught]` console error (still logged before
+    dispatch), so no non-live flow passed despite one; fitnotes, mihon-onboarding, komikku,
+    doodlejump and reddit `--live` pass with no uncaught exception and no crash. Other live flows
+    were not run and may report uncaught exceptions as gaps; those now end the app.
 - **2026-10-02, GL errors, signal defaults, TLS unload, WebView's UA** (branch `knlnks/open-gl2`):
   - Lichess's getError time is Skia's allocation bracket (bind, glGetError, glBufferData or
     glTexStorage2D, glGetError): about 600 queries in 12 s. Most cost under 0.3 ms, but the first

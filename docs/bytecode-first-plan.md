@@ -795,9 +795,12 @@ grid) for measurement, TextRunShaper and drawing;
    realm's Typeface.<clinit>"). Apps get the Google Play emoji update.
 6. Done 2026-10-02 (history "process death and synchronous fault signals"): process death ends the
    whole realm and reaches the broker; guest faults reach SIGSEGV/SIGBUS/SIGILL/SIGTRAP handlers with
-   siginfo and ucontext, behind the linker's debuggerd handler. Open: uncaught Java exceptions
-   killing the process. Done (history "system_server's work outlives app processes"): AMS restarts
-   of sticky and bound services, and broker work after the page's app dies.
+   siginfo and ucontext, behind the linker's debuggerd handler. Done 2026-10-02 (history "crash
+   semantics"): uncaught Java exceptions reach Thread.dispatchUncaughtException and
+   KillApplicationHandler, AMS records crashes and exits as ApplicationExitInfo, bad syscall
+   pointers fail with EFAULT, and ARM32 addresses past 2 GiB fault as SIGSEGV. Done (history
+   "system_server's work outlives app processes"): AMS restarts of sticky and bound services, and
+   broker work after the page's app dies. Open: ANR detection.
 
 ### Latest handoff (2026-10-04): Stage D is the only mode; Stage F under way, start here
 
