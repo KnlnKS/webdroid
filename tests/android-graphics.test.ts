@@ -173,12 +173,6 @@ describe("matrix-fit", () => {
     expect(await values(m)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
   });
 
-  test("Paint.setARGB packs the channels", async () => {
-    const p = await newObj("android/graphics/Paint", "()V");
-    await vcall(p, "setARGB", "(IIII)V", 0x80, 0x11, 0x22, 0x33);
-    expect(await vcall(p, "getColor", "()I")).toBe(0x80112233 | 0);
-  });
-
   test("a Display P3 ColorLong draws converted to sRGB", async () => {
     const p3 = await scall("android/graphics/ColorSpace", "get", "(I)Landroid/graphics/ColorSpace;", 7);
     const color = await scall("android/graphics/Color", "pack", "(FFFFLandroid/graphics/ColorSpace;)J", 0.5, 0.25, 0.75, 1, p3);

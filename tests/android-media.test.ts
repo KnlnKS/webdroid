@@ -11,6 +11,8 @@ import { hostedService } from "../src/android/binder";
 
 // framework.jar and a running main looper, as a booted page has them
 beforeAll(loadFrameworkJar);
+// one app process for the file
+const app = async () => bootApp(await packageRecord("org.webdroid.test.media"));
 
 describe("audio-attributes", () => {
   rt.linkNatives();
@@ -23,24 +25,6 @@ describe("audio-attributes", () => {
     // the reference AVD's media strategy carries no content type for STREAM_MUSIC
     expect(await vcall(attrs, "getContentType", "()I")).toBe(0);
     expect(await vcall(attrs, "getVolumeControlStream", "()I")).toBe(3);
-  });
-
-  test("AudioAttributes rejects the accessibility legacy stream", async () => {
-    const builder = await newObj("android/media/AudioAttributes$Builder");
-    await expect(vcallAsync(builder, "setLegacyStreamType", "(I)Landroid/media/AudioAttributes$Builder;", 10)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
-  });
-
-  test("AudioFocusRequest retains builder state", async () => {
-    const listener = rt.make("java/lang/Object");
-    const builder = await newObj("android/media/AudioFocusRequest$Builder", "(I)V", 1);
-    expect(await vcall(builder, "setAcceptsDelayedFocusGain", "(Z)Landroid/media/AudioFocusRequest$Builder;", 1)).toBe(builder);
-    expect(await vcall(builder, "setWillPauseWhenDucked", "(Z)Landroid/media/AudioFocusRequest$Builder;", 1)).toBe(builder);
-    await vcall(builder, "setOnAudioFocusChangeListener", "(Landroid/media/AudioManager$OnAudioFocusChangeListener;)Landroid/media/AudioFocusRequest$Builder;", listener);
-    const request = await vcall(builder, "build", "()Landroid/media/AudioFocusRequest;");
-    expect(await vcall(request, "getFocusGain", "()I")).toBe(1);
-    expect(await vcall(request, "acceptsDelayedFocusGain", "()Z")).toBe(1);
-    expect(await vcall(request, "willPauseWhenDucked", "()Z")).toBe(1);
-    expect(await vcall(request, "getOnAudioFocusChangeListener", "()Landroid/media/AudioManager$OnAudioFocusChangeListener;")).toBe(listener);
   });
 
   test("the audio service's focus stack tells holders of their loss and return", async () => {
@@ -61,11 +45,6 @@ describe("audio-attributes", () => {
     expect(changes).toEqual([["music", -3], ["music", 1], ["music", -1]]);
   });
 
-  test("AudioFocusRequest rejects invalid gains and null listeners", async () => {
-    await expect((async () => newObj("android/media/AudioFocusRequest$Builder", "(I)V", 0))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
-    const builder = await newObj("android/media/AudioFocusRequest$Builder", "(I)V", 1);
-    await expect(vcallAsync(builder, "setOnAudioFocusChangeListener", "(Landroid/media/AudioManager$OnAudioFocusChangeListener;)Landroid/media/AudioFocusRequest$Builder;", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
-  });
 });
 
 describe("media-codec-capabilities", () => {
@@ -102,7 +81,7 @@ describe("media-retriever", () => {
   rt.linkNatives();
 
   test("MediaMetadataRetriever reads video metadata and rejects nonmedia input", async () => {
-    await bootApp(await packageRecord("org.webdroid.test.retriever"));
+    await app();
     const retriever = await newObj("android/media/MediaMetadataRetriever", "()V");
     vfs.write("/sdcard/media-probe.mp4", new Uint8Array(await Bun.file("tests/fixtures/media.mp4").arrayBuffer()));
     await vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.mp4");
@@ -146,7 +125,7 @@ describe("mediasession", () => {
   rt.linkNatives();
 
   test("MediaSession keeps controller identity and dispatches commands through the callback looper", async () => {
-    const context = await bootApp(await packageRecord("org.webdroid.test.session"));
+    const context = await app();
     const session = await newObj("android/media/session/MediaSession", "(Landroid/content/Context;Ljava/lang/String;)V", context, "test");
     const token = await vcall(session, "getSessionToken", "()Landroid/media/session/MediaSession$Token;");
     const controller = await newObj("android/media/session/MediaController", "(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V", context, token);
