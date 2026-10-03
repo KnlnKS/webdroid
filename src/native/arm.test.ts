@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
 import { core, jitStats, JIT_HEAT } from "./core";
-import { pattern, sweep } from "./a64.testkit";
+import { finish, pattern, sweep } from "./a64.testkit";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
 
@@ -15,7 +15,7 @@ function execute(at: number, setup: (c: Cpu) => void): Cpu {
   setup(c);
   c.w[28] = RET_SENTINEL;
   c.setPc(at);
-  while (c.runSlice(1000) !== 2) { /* spin */ }
+  finish(c, 1000);
   return c;
 }
 function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
@@ -952,7 +952,7 @@ describe("thumb decoder", () => {
     const before = jitStats.regions;
     for (let i = 0; i <= JIT_HEAT; i++) execute(at | 1, cpu => { cpu.w[6] = data; });
     expect(jitStats.regions).toBeGreaterThan(before);
-    expect(() => execute(at | 1, cpu => { cpu.w[6] = 0; })).toThrow(/bad address 0x0/);
+    expect(() => execute(at | 1, cpu => { cpu.w[6] = 0; })).toThrow("signal 11 code 1 addr 0x0");
   });
 
   test("compiled VFP compares, conversions and transfers match the interpreter", () => {
@@ -989,7 +989,7 @@ describe("thumb decoder", () => {
     const thumb = runThumb([0xf962, 0x0a0d, 0xf946, 0x0281, 0xf923, 0x07df, 0xf904, 0x164f, 0x4770], setup);
     const arm = run([0xf4620a0d, 0xf4460281, 0xf42307df, 0xf404164f, BXLR], setup);
     for (const c of [thumb, arm]) expect([c.w[4], c.w[12], mem.ld32(data + 64)]).toEqual([data + 16, data + 72, 0x150e0700]);
-    expect(() => run([0xf42307df, BXLR], (cpu) => { cpu.w[6] = data + 4; })).toThrow(/bad address/);
+    expect(() => run([0xf42307df, BXLR], (cpu) => { cpu.w[6] = data + 4; })).toThrow(`signal 7 code 1 addr 0x${(data + 4).toString(16)}`);
     // vld1.32 {d0[1]}, [r2]; vst1.16 {d1[2]}, [r3]!; vld1.8 {d2[]}, [r4]
     const lanes = (cpu: Cpu) => { setup(cpu); cpu.w[8] = data + 5; cpu.vu[3] = 0xabcd1234; };
     for (const execute of [() => run([0xf4a2088f, 0xf483148d, 0xf4a42c0f, BXLR], lanes), () => runThumb([0xf9a2, 0x088f, 0xf983, 0x148d, 0xf9a4, 0x2c0f, 0x4770], lanes)]) {

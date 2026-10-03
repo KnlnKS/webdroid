@@ -414,7 +414,7 @@ pub inline fn addr(c: *Cpu, va: u64) ?u32 {
     if (hi != 0) {
         const p = mem.tx(hi, lo);
         if (p == 0) {
-            c.fault_addr = lo;
+            c.fault_addr = va & TBI_MASK;
             return null;
         }
         return p;

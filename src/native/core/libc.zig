@@ -119,7 +119,7 @@ inline fn ptr(c: *Cpu, i: u32) ?u32 {
 /// whether argument i points at n backed bytes, committing a plane's writable pages under them
 fn committed(c: *Cpu, i: u32, n: u32) bool {
     if (mem.commit_range(arg(c, i), n) != 0) return true;
-    c.fault_addr = @truncate(arg(c, i));
+    c.fault_addr = arg(c, i) & a64.TBI_MASK;
     return false;
 }
 inline fn ret(c: *Cpu, v: u64) void {

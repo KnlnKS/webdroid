@@ -12,7 +12,7 @@ import { LIBC_SYSCALLS, fail, fillRandom, fillSysinfo, readTs } from "./libc";
 import { FS_SYSCALLS, fsInit, faccessatPath, fdFallocate, getdents64 } from "./fs";
 import { PTHREAD_SYSCALLS, futex, cloneThread } from "./pthread";
 import { NET_SYSCALLS, nativePoll, nativeSelect } from "./net";
-import { PROC_SYSCALLS, signalThread } from "./proc";
+import { PROC_SYSCALLS, installDebuggerdHandlers, signalThread } from "./proc";
 import { device } from "../shell/config";
 
 /** the structs the kernel fills, as each ABI lays them out (stat64 and statfs64 on ILP32) */
@@ -179,6 +179,7 @@ export function kernelInit(): void {
   }
   for (const [nr, fn] of Object.entries(wide ? A64 : A32)) table[+nr] = fn;
   setRawSyscall(rawSyscall);
+  installDebuggerdHandlers();
   fsInit();
 }
 

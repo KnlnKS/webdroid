@@ -4,7 +4,7 @@
 // would on a device at its process limit or under its sandbox.
 
 import { wrote, mem } from "./mem";
-import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
+import { defineHost, hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers, ignoredSignals, abortMessageSource, dieOfSignal } from "./cpu";
 import { tidOf } from "./pthread";
@@ -86,6 +86,22 @@ export function abortThread(cpu: Cpu): Promise<never> {
   cpu.signalMask &= ~(1n << BigInt(SIGABRT - 1));
   // a microtask on: the call has parked, so a handler runs on top of it
   return Promise.resolve().then(() => cpu.deliver(SIGABRT)).then(() => dieOfSignal(cpu, SIGABRT));
+}
+/** debuggerd_init's handler, which the linker installs in every process for the signals that dump
+ *  core: a runtime chaining to the handler it replaced (libunity's, sigchain's, a crash reporter's)
+ *  reaches it. It logs the tombstone and the process dies of the signal, as crash_dump and the
+ *  re-raise after it end it. */
+const DEBUGGERD_SIGNALS = [4, 5, 6, 7, 8, 11, 16, 31];   // SIGILL SIGTRAP SIGABRT SIGBUS SIGFPE SIGSEGV SIGSTKFLT SIGSYS
+let debuggerdHandler = 0;
+export function installDebuggerdHandlers(): void {
+  debuggerdHandler ||= defineHost("debuggerd_signal_handler", (cpu, a) => {
+    const sig = a.i(), info = a.p(), context = a.p();
+    // the tombstone describes the interrupted state, which this thread never returns to
+    if (context) cpu.loadContext(context);
+    return dieOfSignal(cpu, sig, info ? { code: mem.ld32(info + 8), addr: PTR === 8 ? mem.ld64(info + 16) : BigInt(mem.ld32(info + 12) >>> 0) } : null);
+  });
+  // SA_SIGINFO | SA_ONSTACK | SA_RESTART, every signal blocked while it runs
+  for (const sig of DEBUGGERD_SIGNALS) if (!sigHandlers.has(sig) && !ignoredSignals.has(sig)) sigHandlers.set(sig, { fn: debuggerdHandler, flags: 0x18000004, mask: ~0n });
 }
 /** sigaction's disposition change: SIGKILL and SIGSTOP keep their default */
 function setDisposition(sig: number, fn: number, flags: number, mask: bigint): void {

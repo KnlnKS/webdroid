@@ -88,6 +88,8 @@ export const mem = {
 
   /** the process memory has its final size, so views over it stay attached */
   sized: (): boolean => MEM_SIZE !== MEM_SIZE_INITIAL,
+  /** a plane-0 page a guest store faults on: a stack's guard gap, the core's own data */
+  writeProtected: (a: number): boolean => !!(codePages[a >>> PAGE_SHIFT] & 2),
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,
   free(p: number): void { if (p && !core.free(p >>> 0)) badAddr(p); },
   calloc: (n: number, m: number): number => core.calloc(n >>> 0, m >>> 0) >>> 0,

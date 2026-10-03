@@ -58,6 +58,10 @@ inline fn fault(c: *Cpu, code: Fault, w: u32, pc: u32) Status {
 inline fn badAddr(c: *Cpu, w: u32, pc: u32) Status {
     return fault(c, .bad_address, w, pc);
 }
+inline fn misaligned(c: *Cpu, a: u32, w: u32, pc: u32) Status {
+    c.fault_addr = a;
+    return badAddr(c, w, pc);
+}
 inline fn addr(c: *Cpu, a: u32) ?u32 {
     if (a < abi.LOW) {
         c.fault_addr = a;
@@ -146,7 +150,7 @@ fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     if (n == 15 or d + (structures - 1) * stride + regs > 32) return fault(c, .undefined, w, pc);
     const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
-    if (alignment != 0 and a & ((@as(u32, 4) << @intCast(alignment)) - 1) != 0) return badAddr(c, w, pc);
+    if (alignment != 0 and a & ((@as(u32, 4) << @intCast(alignment)) - 1) != 0) return misaligned(c, a, w, pc);
     if (structures == 1) {
         var i: u32 = 0;
         while (i < regs) : (i += 1) {
@@ -185,7 +189,7 @@ fn neonLane(c: *Cpu, w: u32, pc: u32) Status {
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     if (n == 15 or d + regs > 32) return fault(c, .undefined, w, pc);
     const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
-    if (a & (alignment - 1) != 0) return badAddr(c, w, pc);
+    if (a & (alignment - 1) != 0) return misaligned(c, a, w, pc);
     const first = if (replicate) 0 else index_align >> @intCast(size + 1);
     const end = if (replicate) regs * 8 / bytes else first + 1;
     const dst: [*]u8 = @ptrCast(vreg(u64, c, d));

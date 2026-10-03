@@ -11,6 +11,15 @@ import { mainThread } from "../jvm/natives/jlang";
 import { MEM_SIZE, RET_SENTINEL } from "./abi";
 
 export const RET = 0xd65f03c0;
+/** run c's slices to the return sentinel; a fault's synchronous signal throws with its siginfo */
+export function finish(c: Cpu, budget = 10000): void {
+  for (let ex; (ex = c.runSlice(budget)) !== 2;) {
+    if (ex !== 3) continue;
+    const { sig, info } = c.raised!;
+    c.raised = null;
+    throw new Error(`signal ${sig} code ${info.code} addr 0x${info.addr.toString(16)}`);
+  }
+}
 
 /** one Cpu for every run: a thread stack is address space that is never given back */
 let shared: Cpu | null = null;
@@ -23,7 +32,7 @@ function execute(at: number, setup: (c: Cpu) => void): Cpu {
   setup(c);
   c.w[60] = RET_SENTINEL;
   c.setPc(at);
-  while (c.runSlice(10000) !== 2) { /* spin */ }
+  finish(c);
   return c;
 }
 function place(words: number[]): number {

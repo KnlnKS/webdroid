@@ -25,7 +25,8 @@ pub const Cpu = extern struct {
     a64: u32,
     exit: u32,
     fault_word: u32,
-    fault_addr: u32,
+    /// the faulting data address (si_addr), the whole virtual address for a plane's
+    fault_addr: u64,
     errno_addr: u32,
     ic_limit: i64,
     tls_tab: u32,
@@ -389,6 +390,8 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 2 => return @intFromEnum(Exit.fault),
                 3 => return @intFromEnum(Exit.syscall),
                 else => {
+                    // the branch was taken: the pc is the target, as an instruction abort reports it
+                    if (c.a64 != 0) c.pc = r else setPc32(c, r);
                     c.fault_addr = r;
                     _ = raise(c, .null_page, r);
                     return @intFromEnum(Exit.fault);

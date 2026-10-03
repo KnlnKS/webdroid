@@ -524,7 +524,12 @@ pub fn Emit(comptime wide: bool) type {
         fn edge(e: *Self, t: i32) u4 {
             return if (t >= 0) e.lin[@intCast(t)] else 15;
         }
+        /// to the epilogue, which spills the flag locals: a pending compare's flags are written to
+        /// them first, without settling it for the code that goes on past this exit
         pub fn exit(e: *Self) void {
+            if (e.pdirty != 0) {
+                if (wide and e.pw) e.flagsOf(true, e.pk, e.pdirty) else e.flagsOf(false, e.pk, e.pdirty);
+            }
             e.b.br(e.chain_depth + 1 + e.nest);
         }
         pub fn exitRet(e: *Self) void {
@@ -618,7 +623,7 @@ pub fn Emit(comptime wide: bool) type {
             e.ifv();
             b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT),
                 get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD),
-                get(L_CPU), get(L_A), mo(O.i32_store, OFF_FAULT_ADDR) });
+                get(L_CPU), get(L_A), O.i64_extend_i32_u, mo(O.i64_store, OFF_FAULT_ADDR) });
             e.faultExit();
             e.endif();
         }
@@ -628,7 +633,7 @@ pub fn Emit(comptime wide: bool) type {
             b.emit(.{ c64(a64.TBI_MASK), O.i64_and, tee(L_T0), c64(32), O.i64_shr_u, O.i32_wrap_i64, tee(L_B), O.i32_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_ });
             b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_lt_u, get(L_B), c32(256), O.i32_lt_u, O.i32_and, O.if_, wasm.I32, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, get(L_B), get(L_T0), O.i32_wrap_i64, call(F_TX), O.end, O.end, tee(L_A), c32(abi.LOW), O.i32_lt_u });
             e.ifv();
-            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
+            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), mo(O.i64_store, OFF_FAULT_ADDR) });
             e.faultExit();
             e.endif();
         }

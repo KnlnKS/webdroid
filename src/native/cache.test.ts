@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { codeStats, invalidateRange, setA64 } from "./cpu";
 import { mem } from "./mem";
-import { RET, run } from "./a64.testkit";
+import { finish, RET, run } from "./a64.testkit";
 import { JIT_HEAT, jitEvict, jitStats } from "./core";
 import { LOW, RET_SENTINEL } from "./abi";
 
@@ -13,7 +13,7 @@ afterAll(() => setA64(false));
 describe("the decode cache", () => {
   test("reused allocations and mappings discard code from their previous lifetime", () => {
     const c = run([RET]);
-    const execute = (at: number) => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } return c.w[0]; };
+    const execute = (at: number) => { c.setPc(at); finish(c); return c.w[0]; };
     for (const hot of [false, true]) for (const kind of ["malloc", "calloc", "realloc", "mapping", "commit", "discard"] as const) {
       const mapped = kind === "mapping" || kind === "commit" || kind === "discard";
       const source = kind === "realloc" ? mem.malloc(64) : 0;
@@ -55,7 +55,7 @@ describe("the decode cache", () => {
     ];
     const sizes = [2, 4, 4, 8, 8, 8, 8];
     const c = run([RET]);
-    const execute = (at: number) => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } return c.w[0]; };
+    const execute = (at: number) => { c.setPc(at); finish(c); return c.w[0]; };
     for (const hot of [false, true]) for (const offset of [0, 4]) for (const [i, write] of writes.entries()) {
       const at = mem.reserve(0x3000, 0x1000) + 0x1000 + offset;
       mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
@@ -72,14 +72,14 @@ describe("the decode cache", () => {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
     let c = run([RET]);
-    c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ }
+    c.setPc(at); finish(c);
     expect(c.w[0]).toBe(1);
     for (let value = 2; value <= 6; value++) {
       const before = codeStats.invalidated;
       mem.st32(at, movW0(value));
       expect(codeStats.invalidated).toBe(before + 1);
       c = run([RET]);
-      c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ }
+      c.setPc(at); finish(c);
       expect(c.w[0]).toBe(value);
     }
   });
@@ -88,7 +88,7 @@ describe("the decode cache", () => {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = movW0(7); mem.u32[(at >>> 2) + 1] = RET;
     const c = run([RET]);
-    c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ }
+    c.setPc(at); finish(c);
     const before = codeStats.invalidated;
     mem.st32(at + 0x800, 0x12345678);
     expect(codeStats.invalidated).toBe(before);
@@ -99,7 +99,7 @@ describe("the decode cache", () => {
     const c = run([RET]), writer = mem.reserve(0x1000, 0x1000);
     mem.u32[writer >>> 2] = 0xf9000120; // str x0, [x9]
     mem.u32[(writer >>> 2) + 1] = RET;
-    const execute = (at: number) => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } };
+    const execute = (at: number) => { c.setPc(at); finish(c); };
     for (const hot of [false, true]) {
       const at = mem.reserve(0x3000, 0x1000) + 0x1000;
       mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
@@ -155,7 +155,7 @@ describe("the decode cache", () => {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = movW0(9); mem.u32[(at >>> 2) + 1] = RET;
     const c = run([RET]);
-    const heat = () => { for (let i = 0; i <= JIT_HEAT; i++) { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } } };
+    const heat = () => { for (let i = 0; i <= JIT_HEAT; i++) { c.setPc(at); finish(c); } };
     let before = jitStats.regions;
     heat();
     expect(jitStats.regions).toBe(before + 1);
@@ -169,8 +169,8 @@ describe("the decode cache", () => {
     const a = mem.reserve(0x2000, 0x1000);
     mem.u32[a >>> 2] = RET; mem.u32[(a + 0x1000) >>> 2] = RET;
     const c = run([RET]);
-    c.setPc(a); while (c.runSlice(10000) !== 2) { /* spin */ }
-    c.setPc(a + 0x1000); while (c.runSlice(10000) !== 2) { /* spin */ }
+    c.setPc(a); finish(c);
+    c.setPc(a + 0x1000); finish(c);
     const before = codeStats.invalidated;
     invalidateRange(a, 0x2000, "test");
     expect(codeStats.invalidated).toBe(before + 2);
@@ -205,7 +205,7 @@ test("compiled scalar and vector memory operations retain low-address faults", (
     const execute = (address: number) => {
       c.w[18] = address; c.w[19] = 0;
       c.setPc(at);
-      while (c.runSlice(10000) !== 2) { /* spin */ }
+      finish(c);
     };
     for (const hot of [false, true]) {
       if (hot) {
@@ -214,7 +214,7 @@ test("compiled scalar and vector memory operations retain low-address faults", (
         expect(jitStats.regions).toBeGreaterThan(before);
       }
       for (const address of [0, LOW - 1]) {
-        expect(() => execute(address)).toThrow(/bad address/);
+        expect(() => execute(address)).toThrow(`signal 11 code 1 addr 0x${address.toString(16)}`);
         expect(c.w[18]).toBe(address);
       }
     }
@@ -232,7 +232,8 @@ describe("a branch to a null pointer", () => {
     const c = run([RET]);
     c.w[0] = 0; c.w[1] = 0;
     c.setPc(at);
-    expect(() => { while (c.runSlice(10000) !== 2) { /* spin */ } }).toThrow(/null page/);
+    expect(() => { finish(c); }).toThrow("signal 11 code 1 addr 0x0");
+    expect(c.pc).toBe(0);
   });
   test("faults out of a compiled region", () => {
     // a fault never drains the JIT, so the region has to compile against a real target first
@@ -244,12 +245,13 @@ describe("a branch to a null pointer", () => {
     for (let i = 0; i < JIT_HEAT + 2; i++) {
       c.w[0] = land; c.w[1] = 0;
       c.setPc(at);
-      while (c.runSlice(10000) !== 2) { /* spin */ }
+      finish(c);
     }
     expect(jitStats.regions).toBeGreaterThan(before);
     c.w[0] = 0; c.w[1] = 0;
     c.setPc(at);
-    expect(() => { while (c.runSlice(10000) !== 2) { /* spin */ } }).toThrow(/null page/);
+    expect(() => { finish(c); }).toThrow("signal 11 code 1 addr 0x0");
+    expect(c.pc).toBe(0);
   });
 });
 
@@ -257,7 +259,7 @@ describe("a branch to a null pointer", () => {
 test("compiled memory faults retain the failing instruction address", () => {
   const at = mem.reserve(4096, 4096), data = mem.malloc(16), c = run([RET]);
   mem.u32.set([0xd503201f, 0xb9000120, RET], at >>> 2); // nop; str w0, [x9]; ret
-  const execute = () => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } };
+  const execute = () => { c.setPc(at); finish(c); };
   try {
     c.w[18] = data; c.w[19] = 0;
     const before = jitStats.regions;
@@ -265,7 +267,7 @@ test("compiled memory faults retain the failing instruction address", () => {
     expect(jitStats.regions).toBeGreaterThan(before);
     for (const high of [0, 256]) {
       c.w[18] = 0; c.w[19] = high;
-      expect(execute).toThrow(/bad address/);
+      expect(execute).toThrow(`signal 11 code 1 addr 0x${(high * 2 ** 32).toString(16)}`);
       expect(c.pc).toBe(at + 4);
     }
   } finally { mem.free(data); }

@@ -5,6 +5,7 @@ import { defineHost } from "./host";
 import { mem } from "./mem";
 import { futex } from "./pthread";
 import { E, RET_SENTINEL } from "./abi";
+import { jitStats, JIT_HEAT } from "./core";
 import { kernelInit, rawSyscall } from "./syscall";
 
 for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 thread identity", () => {
@@ -224,6 +225,45 @@ test("an ARM64 signal context is restored before the interrupted frame runs on",
     expect(seconds).toBe(1);
   } finally {
     if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    cpu.dispose(); setA64(false);
+  }
+});
+
+// cmp; a load through a null pointer; an add only when the compare's flags say equal; return
+const FAULTING = {
+  a64: { words: [0xeb03005f, 0xf9400020, 0x9a801400, 0xd65f03c0], step: 4, thumb: 0 },
+  arm: { words: [0xe1520003, 0xe5910000, 0x02800001, 0xe12fff1e], step: 4, thumb: 0 },
+  thumb: { words: [0x6808429a, 0x3001bf08, 0x4770], step: 2, thumb: 1 },
+};
+for (const [isa, program] of Object.entries(FAULTING)) test(`a ${isa} memory fault reaches its SIGSEGV handler, which resumes past it, in both tiers`, async () => {
+  const a64 = isa === "a64";
+  setA64(a64);
+  const cpu = new Cpu(new JThread(), "segv-" + isa), at = mem.reserve(4096, 4096), seen: number[][] = [];
+  mem.u32.set(program.words, at >>> 2);
+  const ctxPc = a64 ? 0x1b8 : 92, ctxR0 = a64 ? 0xb8 : 32;
+  const handler = defineHost("test.segv." + isa, (_c, a) => {
+    const sig = a.i(), info = a.p(), ctx = a.p(), pc = mem.ld32(ctx + ctxPc) >>> 0;
+    seen.push([sig, mem.ld32(info), mem.ld32(info + 8), mem.ld32(info + (a64 ? 16 : 12)), pc - at, mem.ld32(ctx + ctxR0 + (a64 ? 8 : 4))]);
+    mem.st32(ctx + ctxR0, 40);
+    mem.st32(ctx + ctxPc, pc + program.step);
+    return 0;
+  });
+  const previous = sigHandlers.get(11);
+  sigHandlers.set(11, { fn: handler, flags: 4, mask: 0n });
+  const runs = async (n: number) => { const out = []; for (let i = 0; i < n; i++) out.push(await cpu.call(at | program.thumb, [0, 8, 5, 5 + (i & 1)])); return out; };
+  try {
+    jitStats.on = false;
+    expect(await runs(2)).toEqual([41, 40]);
+    expect(seen[0]).toEqual([11, 11, 1, 8, program.step, 8]);
+    jitStats.on = true;
+    const before = jitStats.regions;
+    await runs(JIT_HEAT + 2);
+    expect(jitStats.regions).toBeGreaterThan(before);
+    seen.length = 0;
+    expect(await runs(2)).toEqual([41, 40]);
+    expect(seen[0]).toEqual([11, 11, 1, 8, program.step, 8]);
+  } finally {
+    if (previous) sigHandlers.set(11, previous); else sigHandlers.delete(11);
     cpu.dispose(); setA64(false);
   }
 });
