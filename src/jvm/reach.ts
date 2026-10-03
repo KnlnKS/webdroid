@@ -268,7 +268,9 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
  *  as its site declares it (a virtual call's declared class, without dispatch to subclasses) and
  *  the static initializers of the classes they touch. A compile worker emits them in this order
  *  after an APK's profile (docs/bytecode-first-plan.md §4.4). */
-export function callClosure(p: Program, roots: MemberKey[], limit: number): { cls: string; dex: DexFile; methodIdx: number }[] {
+/** a method a closure starts from: its class and name+descriptor */
+export type MethodRoot = { cls: string; sig: string };
+export function callClosure(p: Program, roots: MethodRoot[], limit: number): { cls: string; dex: DexFile; methodIdx: number }[] {
   const seen = new Set<string>(), touched = new Set<string>(), out: { cls: string; dex: DexFile; methodIdx: number }[] = [];
   let next: { cls: string; m: EncodedMethod }[] = [];
   const add = (cls: string, sig: string, root = false) => {
@@ -281,7 +283,7 @@ export function callClosure(p: Program, roots: MemberKey[], limit: number): { cl
   const touch = (cls: string) => {
     if (cls && !touched.has(cls)) { touched.add(cls); add(cls, "<clinit>()V"); }
   };
-  for (const k of roots) add(...splitKey(k), true);
+  for (const { cls, sig } of roots) add(cls, sig, true);
   while (next.length && out.length < limit) {
     const level = next;
     next = [];

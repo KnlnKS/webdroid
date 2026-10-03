@@ -3,7 +3,6 @@
 // startup chunks load before launch, later chunks after the first frame. Platform bodies share
 // a store across apps.
 
-import { inputSettled } from "./yield";
 import { BYTECODE } from "./provenance";
 import { once } from "./suspend";
 
@@ -26,7 +25,7 @@ type Starts = [key: string, line: number][];
 /** each imported chunk's bodies, by the URL a stack names it with, and the line each body starts on */
 const chunks = new Map<string, { bodies: Record<string, Factory>; starts?: Starts }>();
 /** a chunk's bodies, noted under the URL it was imported from */
-function noteChunk(url: string, bodies: Record<string, Factory>, starts?: Starts): Record<string, Factory> {
+export function noteChunk(url: string, bodies: Record<string, Factory>, starts?: Starts): Record<string, Factory> {
   chunks.set(new URL(url, location.href).href, { bodies, starts });
   return bodies;
 }
@@ -69,38 +68,15 @@ export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) 
 export type Form = "e" | "r";
 export const codeKey = (dexId: string, methodIdx: number, form: Form) => `${dexId}:${methodIdx}:${form}`;
 
-/** bodies a compile worker emitted this launch and no method has used yet, with the chunk holding each */
-const offered = new Map<string, Record<string, Factory>>();
-/** Offered bodies cost the page about 4 KB each until they are dropped (Mihon offers 27k). Once
- *  no method has claimed one for this long, launch and its first interactions are over and the
- *  rest are dropped; a later first call compiles its own. */
-const UNCLAIMED_MS = 30_000;
-let lastClaim = 0, sweeping = false;
-function sweepOffered(): void {
-  if (sweeping) return;
-  sweeping = true;
-  const check = () => {
-    if (performance.now() - lastClaim < UNCLAIMED_MS) { setTimeout(check, UNCLAIMED_MS); return; }
-    // the chunks keep their line maps for stacks through the bodies still in them
-    for (const [key, bodies] of offered) { delete loaded[key]; delete bodies[key]; }
-    offered.clear();
-    sweeping = false;
-  };
-  setTimeout(check, UNCLAIMED_MS);
-}
-
-/** the persisted body for `key`, if an earlier launch or this launch's compile worker made one */
-export function persistedBody(key: string): Factory | undefined {
-  claim(key);
-  return loaded[key];
-}
-
-/** an offered body a method has reached persists, whether it installs it or compiles its own */
-function claim(key: string): boolean {
-  if (!offered.delete(key)) return false;
-  lastClaim = performance.now();
-  record(key, loaded[key].toString(), "e");
-  return true;
+/** the persisted body for `key`, if an earlier launch made one */
+export const persistedBody = (key: string): Factory | undefined => loaded[key];
+/** whether `key` has a body loaded or recorded this launch */
+export const hasBody = (key: string): boolean => !!loaded[key] || pending.has(key);
+/** an entry body made apart from the page this launch (a compile worker's) that a method has
+ *  reached: it persists, and installs from now as a loaded one */
+export function adoptBody(key: string, factory: Factory): void {
+  loaded[key] = factory;
+  record(key, factory.toString(), "e");
 }
 
 /** the factory source of a body: `body` is its statements (an entry) or expression (resumable) */
@@ -110,7 +86,7 @@ export function factorySource(body: string, form: Form): string {
 
 /** a body compiled in this launch */
 export function recordBody(key: string, body: string, form: Form): void {
-  if (claim(key) || loaded[key] || pending.has(key)) return;
+  if (hasBody(key)) return;
   record(key, factorySource(body, form), form);
 }
 
@@ -123,51 +99,6 @@ function record(key: string, source: string, form: Form): void {
 
 /** The first call determines the persisted phase, even if compilation happens after startup. */
 export function recordUse(key: string): void { if (!firstUse.has(key)) firstUse.set(key, phase); }
-
-/** A compile worker's bodies (factory sources). Those the page has not compiled meanwhile load as
- *  a classic script, which V8 compiles off the main thread and finalizes there, and install like
- *  persisted bodies; one persists once a method uses it. Idle time would be too late: a launching
- *  page is not idle until after its first taps. Not a module: a module's record keeps every
- *  function it compiled for the realm's life, so unclaimed bodies could not be dropped. */
-export function offerCode(bodies: [key: string, source: string][]): void {
-  offers.push(bodies);
-  if (importing < MAX_IMPORTS) void importOffers();
-}
-/** Finalizing a chunk takes the main thread, so imports wait while input is being answered, and a
- *  few at a time keep the worker's pace without finalizing a burst at once. */
-const MAX_IMPORTS = 3, offers: [key: string, source: string][][] = [];
-let importing = 0, scripts = 0;
-/** the global an offered chunk's script hands its bodies to, by chunk */
-const OFFER = "__wdOffer", ran = new Map<number, Record<string, Factory>>();
-if (typeof document !== "undefined") Object.defineProperty(globalThis, OFFER, { value: (id: number, bodies: Record<string, Factory>) => ran.set(id, bodies) });
-function runScript(url: string, id: number): Promise<Record<string, Factory>> {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = url;
-    script.onload = () => { script.remove(); const bodies = ran.get(id); ran.delete(id); if (bodies) resolve(bodies); else reject(new Error("chunk ran no bodies")); };
-    script.onerror = () => { script.remove(); reject(new Error("chunk failed to load")); };
-    document.head.append(script);
-  });
-}
-async function importOffers(): Promise<void> {
-  importing++;
-  for (let bodies; (bodies = offers.shift());) {
-    await inputSettled();
-    const needed = bodies.filter(([key]) => !loaded[key] && !pending.has(key));
-    if (!needed.length) continue;
-    const id = ++scripts;
-    const { text, starts } = codeText(needed);
-    const url = URL.createObjectURL(new Blob([`${OFFER}(${id},${text});\n`], { type: "text/javascript" }));
-    try {
-      const factories = noteChunk(url, await runScript(url, id), starts);
-      for (const key in factories) if (!loaded[key] && !pending.has(key)) { loaded[key] = factories[key]; offered.set(key, factories); }
-      lastClaim = performance.now();
-      sweepOffered();
-    } catch (e) { console.warn("[webdroid] compiled code unavailable", e); }
-    finally { URL.revokeObjectURL(url); }
-  }
-  importing--;
-}
 
 /** install persisted bodies: what loadCode imports from codeText's modules */
 export function useCode(bodies: Record<string, Factory>): void { loaded = bodies; }
@@ -290,7 +221,7 @@ function saveCode(): Promise<void> {
       if (!chunk) chunks.set(name, chunk = []);
       chunk.push([key, source]);
     };
-    if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!offered.has(key) && !pending.has(key)) add(key, startupKeys.has(key) ? "s" : "l", factory.toString());
+    if (rewrite) for (const [key, factory] of Object.entries(loaded)) if (!pending.has(key)) add(key, startupKeys.has(key) ? "s" : "l", factory.toString());
     const batch = [...pending];
     for (const [key, { source, phase }] of batch) add(key, phase, source);
     lastSave = performance.now();

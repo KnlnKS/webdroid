@@ -3,10 +3,6 @@
 // emits their fast bodies first, so their first calls skip the cold tier and no tap waits on their
 // compile.
 import { unzlibSync } from "fflate";
-import { codeStats, offerCode } from "./codecache";
-import type { CompileRequest } from "./compileworker";
-import { jvmCoverage } from "./coverage";
-import { jvmProfiler } from "./profile";
 
 /** the profile's hot and startup methods, as method indices per dex name; null when unreadable */
 export function parseBaselineProfile(bytes: Uint8Array): Map<string, number[]> | null {
@@ -40,19 +36,4 @@ export function parseBaselineProfile(bytes: Uint8Array): Map<string, number[]> |
     out.set(line.key.slice(line.key.lastIndexOf("!") + 1), [...methods]);
   }
   return out;
-}
-
-/** On a launch without persisted code, a compile worker (compileworker.ts) emits the methods the
- *  app is likely to run; each chunk installs as it arrives. Once a launch has persisted what it
- *  ran, that is the app's own profile. */
-export function compileAhead(request: CompileRequest): void {
-  if (typeof Worker === "undefined" || typeof document === "undefined" || jvmProfiler.enabled || jvmCoverage.enabled ||
-    jvmProfiler.tier === "cold" || codeStats().loaded) return;
-  const worker = new Worker(`/compile-worker.js${location.search}`, { type: "module" });
-  worker.onmessage = ({ data }: MessageEvent<[string, string][]>) => offerCode(data);
-  // copies, transferred: an entry of a stored archive is a view of the whole archive's buffer
-  const dexes = request.dexes.map(([name, bytes]) => [name, bytes.slice()] as [string, Uint8Array]);
-  const profile = request.profile?.slice(), manifest = request.manifest.slice();
-  worker.postMessage({ dexes, profile, manifest, launch: request.launch } satisfies CompileRequest,
-    [...dexes.map(([, bytes]) => bytes.buffer), manifest.buffer, ...profile ? [profile.buffer] : []]);
 }

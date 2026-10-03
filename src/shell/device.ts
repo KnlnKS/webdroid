@@ -12,7 +12,7 @@ import { loadFramework, loadPlatformDex } from "../android/framework";
 import { zygoteInit } from "../android/delegates";
 import { deviceNightMode } from "../android/settings";
 import { loadCode, loadPlatformCode, fetchLinkTable, useLinkTable, startupDone } from "../jvm/codecache";
-import { compileAhead } from "../jvm/baselineprof";
+import { compileAhead } from "../jvm/aot";
 import { qualify as componentClass } from "../jvm/roots";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, nativeRes } from "../android/res";

@@ -5,6 +5,7 @@ import type { LazyMethod } from "./compiler";
 import type { PreparedMethod } from "./prepared";
 import { runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { bodyScript, codeKey, persistedBody, recordBody, recordUse, type Factory } from "./codecache";
+import { claimOffered } from "./aot";
 import { jvmProfiler } from "./profile";
 import { jvmCoverage } from "./coverage";
 import { perf } from "../perf";
@@ -84,6 +85,8 @@ function promoteWithinBudget(promote: () => JvmFunction | undefined, job: IdleJo
   return compiled;
 }
 
+/** the body for `key` an earlier launch persisted or this launch's compile worker offered */
+const stored = (key: string): Factory | undefined => persistedBody(key) ?? claimOffered(key);
 /** a body's parameters: what compileTieredMethod binds a factory with (see Factory) */
 const PARAMS = ["C", "D", "R", "S", "P"], ENTRY_PARAMS = [...PARAMS, "$R"];
 export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod, emit: MethodEmitter): JvmFunction {
@@ -100,7 +103,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   function resume(make: () => string, limit: number): ResumeBody | undefined;
   function resume(make = resumeSource, limit = Infinity): ResumeBody | undefined {
     if (resumable) return resumable;
-    const persisted = persist ? persistedBody(resumeKey) : undefined;
+    const persisted = persist ? stored(resumeKey) : undefined;
     if (persisted) return resumable = bind(persisted) as ResumeBody;
     const body = make();
     if (persist) recordBody(resumeKey, body, "r");
@@ -124,7 +127,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   };
   const install = (fn: JvmFunction): JvmFunction => { retarget(rec.stub, fn); return fn; };
   if (persist) recordUse(entryKey);
-  const persisted = persist && jvmProfiler.tier !== "cold" ? persistedBody(entryKey) : undefined;
+  const persisted = persist && jvmProfiler.tier !== "cold" ? stored(entryKey) : undefined;
   if (persisted) {
     bind(persisted, resume);
     perf.hotMethods++;
@@ -144,7 +147,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   };
   const promote = (make = entrySource, limit = HOT_SOURCE_LIMIT): JvmFunction | undefined => {
     if (hot) return hot;
-    const offered = persist ? persistedBody(entryKey) : undefined;
+    const offered = persist ? stored(entryKey) : undefined;
     if (offered) { bind(offered, resume); return settle(installed()); }
     const start = performance.now(), src = make();
     if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);

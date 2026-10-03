@@ -11,7 +11,7 @@ import { descToName } from "./abi";
 import { entryBody } from "./compiler";
 import { factorySource } from "./codecache";
 import { parseBaselineProfile } from "./baselineprof";
-import { Program, callClosure } from "./reach";
+import { Program, callClosure, type MethodRoot } from "./reach";
 import { rootsOf } from "./roots";
 import { fetchPlatformJars, loadPlatformJar } from "../android/framework";
 
@@ -45,11 +45,11 @@ onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
     if (performance.now() - since > CHUNK_MS) post();
   };
   const nameOf = (dex: DexFile, methodIdx: number) => descToName(dex.type(dex.method(methodIdx).cls));
-  const keyOf = (dex: DexFile, methodIdx: number) => `${nameOf(dex, methodIdx)}.${dex.method(methodIdx).name}${dex.methodDesc(methodIdx)}`;
-  let roots: string[] = [];
+  const rootOf = (dex: DexFile, methodIdx: number): MethodRoot => ({ cls: nameOf(dex, methodIdx), sig: dex.method(methodIdx).name + dex.methodDesc(methodIdx) });
+  let roots: MethodRoot[] = [];
   for (const [name, methods] of (data.profile && parseBaselineProfile(data.profile)) || []) {
     const dex = appDexes.find((d) => d.name === name);
-    if (dex) for (const m of methods) if (m < dex.methodCount) { emit(nameOf(dex, m), dex, m); roots.push(keyOf(dex, m)); }
+    if (dex) for (const m of methods) if (m < dex.methodCount) { emit(nameOf(dex, m), dex, m); roots.push(rootOf(dex, m)); }
   }
   // the launch's components, then the manifest's others, each followed by what it calls
   const others = rootsOf(data.manifest, program).classes.filter((c) => !data.launch.includes(c));
@@ -59,7 +59,7 @@ onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
       const def = program.def(cls), dex = program.dexOf(cls);
       if (def && dex) for (const m of [...def.directMethods, ...def.virtualMethods]) {
         if (m.codeOff) emit(cls, dex, m.methodIdx);
-        roots.push(keyOf(dex, m.methodIdx));
+        roots.push(rootOf(dex, m.methodIdx));
       }
     }
     const called = callClosure(program, roots, budget);
