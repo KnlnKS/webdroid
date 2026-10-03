@@ -5,6 +5,7 @@
 import { rt, type JObj } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { handle, deref, release, FINALIZER } from "./handles";
+import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel";
 import { mangleField } from "../jvm/abi";
 import type { NativeLooper } from "./mainloop";
 
@@ -61,6 +62,15 @@ rt.registerJnis("android/view/InputChannel", {
   "nativeDup(J)J": (h: bigint) => ref(channel(h)),
   "nativeGetName(J)Ljava/lang/String;": (h: bigint) => channel(h).name,
   "nativeGetToken(J)Landroid/os/IBinder;": (h: bigint) => channel(h).token,
+  "nativeWriteToParcel(Landroid/os/Parcel;J)V": (parcel: JObj, h: bigint) => {
+    const p = nativeParcel(parcel);
+    writeInt(p, h ? 1 : 0);
+    if (h) writeLocalObject(p, channel(h));
+  },
+  "nativeReadFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) => {
+    const p = nativeParcel(parcel), end = readInt(p) ? readLocalObject<Channel>(p) : null;
+    return end ? ref(end) : 0n;
+  },
 });
 
 const receiverOf = (h: bigint) => deref<{ channel: Channel }>(h);

@@ -7,6 +7,7 @@ import { mangleField, jarray } from "../jvm/abi";
 import { after, newObj, scall, vcall, staticField } from "../jvm/natives/jlang";
 import { binderUncaught, hostStub } from "./binder";
 import { handle, deref, FINALIZER } from "./handles";
+import { nativeParcel, readInt, writeInt } from "./parcel";
 import { device } from "../shell/config";
 
 const INFO = "android/view/DisplayInfo";
@@ -57,6 +58,16 @@ rt.registerJnis("android/hardware/OverlayProperties", {
   "nGetDestructor()J": () => FINALIZER,
   "nSupportMixedColorSpaces(J)Z": (h: bigint) => +deref<Overlay>(h).mixed,
   "nIsCombinationSupported(JII)Z": () => 0,
+  // gui::OverlayProperties: its combinations (none), then whether color spaces may mix
+  "nWriteOverlayPropertiesToParcel(JLandroid/os/Parcel;)V": (h: bigint, parcel: JObj) => {
+    const p = nativeParcel(parcel);
+    writeInt(p, 0); writeInt(p, +deref<Overlay>(h).mixed);
+  },
+  "nReadOverlayPropertiesFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) => {
+    const p = nativeParcel(parcel);
+    readInt(p);
+    return handle({ mixed: !!readInt(p) } satisfies Overlay);
+  },
 });
 
 const EVENT_DISPLAY_CHANGED = 2;

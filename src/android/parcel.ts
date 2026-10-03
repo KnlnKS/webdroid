@@ -18,9 +18,25 @@ export class NativeParcel {
   allowFds = true;
   /** where writeInterfaceToken put the caller's work source, -1 for none */
   workSourceAt = -1;
+  /** blobs a device would send in ashmem rather than in the transaction buffer, by position and length */
+  ashmem = new Map<number, number>();
 }
 /** a binder or descriptor slot: libbinder's flat_binder_object */
 const FLAT_OBJECT = 24;
+/** Parcel::writeBlob's limit for an in-place blob; a larger one goes in ashmem where descriptors are allowed */
+const BLOB_INPLACE_LIMIT = 16 * 1024;
+/** bytes from `at` that a device writes out of line: a blob (or a CursorWindow) past the in-place limit */
+export function outOfLine(p: NativeParcel, at: number): void {
+  const len = p.pos - at;
+  if (p.allowFds && len > BLOB_INPLACE_LIMIT) p.ashmem.set(at, len);
+}
+/** what the transaction takes of the binder buffer: its data, with out-of-line blobs as their
+ *  descriptors, and an offset per object */
+export function transactionSize(p: NativeParcel): number {
+  let size = p.size, objects = p.objects.size;
+  for (const [at, len] of p.ashmem) if (at < p.size) { size -= len - FLAT_OBJECT; objects++; }
+  return ((size + 7) & ~7) + objects * 8;
+}
 /** a descriptor this parcel owns, as writeDupFileDescriptor leaves one */
 export class OwnedFd { constructor(readonly fd: number) {} }
 
@@ -150,6 +166,10 @@ function readObject(p: NativeParcel): unknown {
   if (inplace(p, FLAT_OBJECT) === null) return null;
   return p.objects.get(at) ?? null;
 }
+/** a native object with no wire form here (a layer, an input channel): this process's own
+ *  reference rides in the side table, so it reads back only in this process */
+export const writeLocalObject = (p: NativeParcel, o: object): void => writeObject(p, o);
+export const readLocalObject = <T>(p: NativeParcel): T | null => readObject(p) as T | null;
 const isBinder = (o: unknown) => o instanceof JObj && !!(rt.iof(o, "android/os/Binder") || rt.iof(o, "android/os/BinderProxy"));
 const isFd = (o: unknown) => o instanceof OwnedFd;
 /** a side-table entry's removal, closing the descriptor it owned */
@@ -161,6 +181,7 @@ function dropObject(p: NativeParcel, at: number) {
 /** closing what a parcel owns: the descriptors written into it */
 export function freeData(p: NativeParcel) {
   for (const at of p.objects.keys()) dropObject(p, at);
+  p.ashmem.clear();
   p.pos = p.size = 0;
   p.workSourceAt = -1;
 }
@@ -204,7 +225,10 @@ rt.registerJnis("android/os/Parcel", {
     if (n < 0) throw status(BAD_VALUE);
     const p = parcelAt(ptr), pos = p.pos;
     p.pos = 0; reserve(p, n); p.pos = Math.min(pos, n);
-    if (n < p.size) for (const at of p.objects.keys()) if (at >= n) dropObject(p, at);
+    if (n < p.size) {
+      for (const at of p.objects.keys()) if (at >= n) dropObject(p, at);
+      for (const at of p.ashmem.keys()) if (at >= n) p.ashmem.delete(at);
+    }
     p.size = n;
   },
   "nativeSetDataPosition(JI)V": (ptr: bigint, pos: number) => { parcelAt(ptr).pos = pos; },
@@ -223,6 +247,7 @@ rt.registerJnis("android/os/Parcel", {
     writeInt(p, len); writeInt(p, 0);
     const to = writeInplace(p, len);
     p.buf.set(u8(b, off, len), to);
+    outOfLine(p, to);
   },
   "nativeReadBlob(J)[B": (ptr: bigint) => {
     const p = parcelAt(ptr), len = readInt(p);
@@ -301,6 +326,7 @@ rt.registerJnis("android/os/Parcel", {
     const to = advance(p, len);
     p.buf.set(o.buf.subarray(off, off + len), to);
     for (const [k, v] of o.objects) if (k >= off && k < off + len) p.objects.set(to + k - off, v instanceof OwnedFd ? new OwnedFd(javaDupFd(v.fd)) : v);
+    for (const [k, n] of o.ashmem) if (k >= off && k + n <= off + len) p.ashmem.set(to + k - off, n);
   },
   "nativeHasBinders(J)Z": (ptr: bigint) => +inRange(parcelAt(ptr), isBinder),
   "nativeHasBindersInRange(JII)Z": (ptr: bigint, off: number, len: number) => +inRange(parcelAt(ptr), isBinder, off, len),

@@ -18,7 +18,7 @@ import { writeThrough } from "../jvm/natives/jio";
 import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
-import { nativeParcel, createByteArray, readInt, writeByteArray, writeInt } from "./parcel";
+import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel";
 import { extractBitmapAlpha } from "./maskfilter";
 
 export const ALPHA_8 = 1, RGB_565 = 3, ARGB_4444 = 4, ARGB_8888 = 5, RGBA_F16 = 6, HARDWARE = 7, RGBA_1010102 = 8;
@@ -442,8 +442,9 @@ rt.registerJnis(BITMAP, {
   "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, parcel: JObj) => {
     const b = bitmapAt(h), p = nativeParcel(parcel);
     for (const v of [b.immutable ? 0 : 1, b.config, b.alphaType, b.w, b.h, b.rowBytes, density]) writeInt(p, v);
-    const memory = memoryOf(b);
+    const memory = memoryOf(b), at = p.pos;
     writeByteArray(p, new Int8Array(memory.buffer, memory.byteOffset, memory.length));
+    outOfLine(p, at);
     return 1;
   },
   "nativeCreateFromParcel(Landroid/os/Parcel;)Landroid/graphics/Bitmap;": (parcel: JObj) => {

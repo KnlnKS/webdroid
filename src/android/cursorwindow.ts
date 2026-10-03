@@ -6,7 +6,7 @@
 import { rt, declaredField, type JObj } from "../jvm/runtime";
 import { utf8, utf8Length } from "../jvm/abi";
 import { ownedHandle, deref, release } from "./handles";
-import { readInt, readLong, readDouble, readString, writeInt, writeLong, writeDouble, writeString, writeByteArray, createByteArray, nativeParcel,
+import { readInt, readLong, readDouble, readString, writeInt, writeLong, writeDouble, writeString, writeByteArray, createByteArray, nativeParcel, outOfLine,
   type NativeParcel } from "./parcel";
 
 // ── errors, as throw_sqlite3_exception raises them
@@ -81,6 +81,7 @@ export class NativeWindow {
     return row * this.cols + col;
   }
   writeTo(p: NativeParcel) {
+    const at = p.pos;
     writeString(p, this.name);
     for (const n of [this.size, this.used, this.rows, this.cols]) writeInt(p, n);
     for (let i = 0; i < this.types.length; i++) {
@@ -91,6 +92,7 @@ export class NativeWindow {
       else if (type === FIELD_STRING) writeString(p, v as string);
       else if (type === FIELD_BLOB) writeByteArray(p, v as Int8Array);
     }
+    outOfLine(p, at);
   }
   static fromParcel(p: NativeParcel): NativeWindow {
     const w = new NativeWindow(readString(p) ?? "", readInt(p), true);

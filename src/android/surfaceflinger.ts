@@ -8,6 +8,7 @@ import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { after, callUncaught, newObj, vcall } from "../jvm/natives/jlang";
 import { asSystem } from "./binder";
 import { handle, deref, release, FINALIZER } from "./handles";
+import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel";
 import { canvasOf } from "./canvas";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
@@ -204,6 +205,16 @@ rt.registerJnis("android/view/SurfaceControl", {
   "nativeDisconnect(J)V": () => {},
   "nativeCopyFromSurfaceControl(J)J": (h: bigint) => handle({ layer: layerOf(h) } satisfies Control),
   "nativeGetHandle(J)J": (h: bigint) => BigInt(layerOf(h).id),
+  // a released control (mNativeObject 0) writes nothing: its reader sees the 0 SurfaceControl wrote before it
+  "nativeWriteToParcel(JLandroid/os/Parcel;)V": (h: bigint, parcel: JObj) => { if (h) writeLocalObject(nativeParcel(parcel), layerOf(h)); },
+  "nativeReadFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) => {
+    const layer = readLocalObject<Layer>(nativeParcel(parcel));
+    return layer ? handle({ layer } satisfies Control) : 0n;
+  },
+  // the transaction's state is copied out, and the copy read back is a transaction of its own
+  "nativeWriteTransactionToParcel(JLandroid/os/Parcel;)V": (t: bigint, parcel: JObj) => writeLocalObject(nativeParcel(parcel), tx(t).ops.slice()),
+  "nativeReadTransactionFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) =>
+    handle({ ops: readLocalObject<Transaction["ops"]>(nativeParcel(parcel))?.slice() ?? [] } satisfies Transaction),
   "nativeGetLayerId(J)I": (h: bigint) => layerOf(h).id,
   "nativeGetTransformHint(J)I": () => 0,
   "nativeSetTransformHint(JI)V": () => {},
