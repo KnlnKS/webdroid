@@ -1,6 +1,6 @@
 import "./natives";
 import { processBroker, connectProcess, processPresentation } from "./shell/processes";
-import { bootApk, startZygote, setScreenCanvas, testFrame, SCREEN_W, SCREEN_H, pressBack, dispatchPointer } from "./shell/device";
+import { bootApk, startZygote, setScreenCanvas, SCREEN_W, SCREEN_H, pressBack } from "./shell/device";
 import { loadSkia } from "./android/skia";
 import { setProcessIdentity } from "./android/os";
 import { recordVsync } from "./android/vsync";
@@ -18,16 +18,11 @@ import type { FileSource } from "./shell/lazyfile";
 import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
-import { dumpWindows } from "./shell/uiautomator";
 import { mountPlatformData } from "./shell/apex";
 import { hexBytes, u8 } from "./jvm/abi";
-import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
-import { perf } from "./perf";
-import { mainDbg, onMain } from "./android/mainloop";
+import { configureJvmCoverage } from "./jvm/coverage";
 import { guestClockControl } from "./guest-clock";
-import { nativeRequirements } from "./shell/diagnostics";
-import { native } from "./native/debug";
-import { appHost } from "./android/apphost";
+import { realmWd } from "./shell/realmwd";
 import { NOT_CRASHED } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
@@ -65,9 +60,7 @@ processPresentation.changed = (visible) => {
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
 // the realm's share of the main page's `wd`: enough to see its app and drive it from a probe
-(globalThis as { wd?: unknown }).wd = { rt, app: () => appHost, jvmCoverage, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements, native,
-  get ticks() { return ticks; }, back: pressBack, uiTree: () => onMain(dumpWindows), testFrame: () => processPresentation.visible ? testFrame() : Promise.resolve(),
-  tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
+(globalThis as { wd?: unknown }).wd = { ...realmWd(), logs, get ticks() { return ticks; }, back: pressBack };
 window.addEventListener("pagehide", () => {
   guestClockControl.dispose();
   broker.fail(pid, "Process frame unloaded", NOT_CRASHED);

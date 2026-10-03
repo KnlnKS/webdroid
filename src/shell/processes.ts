@@ -141,6 +141,8 @@ class ProcessBroker {
   private nextPid = 1001;
   private foregroundPid = 0;
   private shownPids = new Set<number>();
+  /** the shown processes as show() last layered their frames, bottom to top */
+  private layers: number[] = [];
   private clipboard: ParcelData | null = null;
   private clipboardWatchers = new Set<number>();
   private nextActivity = 1;
@@ -174,9 +176,14 @@ class ProcessBroker {
     await this.broadcast(null, data, targets, ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
 
-  foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
-  /** the foreground process's window when it runs in a frame of its own */
-  foregroundWindow(): Window | null { return this.entries.get(this.foregroundPid)?.frame?.contentWindow ?? null; }
+  foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }
+  /** the windows of the processes on screen, bottom to top: their frames, or the page for its own process */
+  shownWindows(): Window[] {
+    return this.layers.flatMap((pid) => {
+      const entry = this.entries.get(pid);
+      return entry && !entry.dead ? [entry.frame?.contentWindow ?? window.parent] : [];
+    });
+  }
   private copyClipboard(data: ParcelData): ParcelData {
     return { bytes: data.bytes.slice(), objects: data.objects.map(([at, handle]) => [at, handle && { ...handle }]) };
   }
@@ -294,7 +301,7 @@ class ProcessBroker {
       if (!this.shownPids.has(shown)) await this.visibility(this.entry(shown), "visible", STOP_TIMEOUT_MS);
     }
     this.shownPids = visible;
-    const layers = [...visible].reverse();
+    const layers = this.layers = [...visible].reverse();
     for (const entry of this.entries.values()) {
       if (!entry.frame) continue;
       entry.frame.hidden = !visible.has(entry.pid);

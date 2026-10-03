@@ -6,30 +6,28 @@ import "./natives";
 import { PROCESS_PID } from "./android/os";
 import { recordVsync, vsyncScheduled } from "./android/vsync";
 import { pendingTransitions } from "./android/server/atm";
-import { dumpWindows } from "./shell/uiautomator";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
 
-import { rt } from "./jvm/runtime";
 import { newObj, vcall, scall, strictThreadOwnership } from "./jvm/natives/jentry";
 import { threadStates } from "./jvm/natives/jthread";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
-import { bootApk, firstPresented, startZygote, testFrame, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, firstPresented, startZygote, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
 import { perf, perfReset } from "./perf";
 import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "./jvm/profile";
-import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
-import { onMain, mainDbg } from "./android/mainloop";
+import { configureJvmCoverage } from "./jvm/coverage";
+import { onMain } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { packagesWithData, removePackageData } from "./shell/packagedata";
 import { clearUserData, deletePackage } from "./android/appdata";
-import { native } from "./native/debug";
 import { jitStats } from "./native/core";
-import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics";
+import { mountDiagnostics } from "./shell/diagnostics";
+import { realmWd, type RealmWd } from "./shell/realmwd";
 import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
 import { fixProcessBitness } from "./jvm/natives/jvmruntime";
@@ -38,10 +36,10 @@ import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
-import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
+import { guestNow, guestSleep } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
-import { onProcessExit, processExited } from "./process-exit";
+import { onProcessExit } from "./process-exit";
 import { deathOf, lastExit, type Death } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
@@ -152,16 +150,16 @@ async function boot(file: string, local?: File) {
   }
 }
 
-const tap = async (x: number, y: number): Promise<void> => {
-  // the process on screen takes the tap, as it takes the browser's own pointer events
-  const remote = (processBroker().foregroundWindow() as { wd?: { tap(x: number, y: number): Promise<void> } } | null)?.wd;
-  if (remote) return remote.tap(x, y);
-  // a 60 ms press on the guest's clock, which a controlled clock would otherwise skip past. The
-  // finger lifts on time however long the app takes to handle the press, as on a touchscreen:
-  // a late UP would read as a long press.
-  const down = dispatchPointer(0, x, y);
-  await guestSleep(60);
-  await Promise.all([down, dispatchPointer(1, x, y)]);
+const local = realmWd();
+/** the realms of the processes the broker shows in frames above this one, bottom to top */
+const framed = (): RealmWd[] => processBroker().shownWindows().flatMap((w) => {
+  const child = w === window ? undefined : (w as unknown as { wd?: RealmWd }).wd;
+  return child ? [child] : [];
+});
+// the process on top takes the tap, as it takes the browser's own pointer events
+const tap = (x: number, y: number): Promise<void> => {
+  const top = processBroker().shownWindows().at(-1);
+  return (top && top !== window ? (top as unknown as { wd: RealmWd }).wd : local).tap(x, y);
 };
 
 // `?jit=0` runs the interpreter alone, to tell the tiers apart
@@ -169,30 +167,22 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, vfs, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
-  nativeRequirements,
+  ...local,
+  vfs, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), yields: yieldStats, timedParks, vsyncScheduled, pendingTransitions, logs: logBuf, ticks: 0,
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj: (cls: string, desc?: string, ...args: unknown[]) => onMain(() => newObj(cls, desc, ...args)),
   vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
   code: () => ({ ...codeStats(), offered: offeredCount(), deferred: pendingCompilations() }),
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
-  boot, app: () => appHost, back,
+  boot, back,
   background: (ms = 1000) => processBroker().background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
-  // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
-  // absolute device px with the status bar included, which is the space a tap is expressed in.
-  uiTree: async (): Promise<Awaited<ReturnType<typeof dumpWindows>>> => {
-    // a process that has ended shows no window; its own main loop answers nothing
-    const nodes = processExited() ? [] : await onMain(dumpWindows);
-    // the processes the broker shows stack above this one in their frames, as their windows do on a display
-    const shown = [...document.querySelectorAll("iframe")].filter((f) => !f.hidden && new URL(f.src, location.href).origin === location.origin)
-      .sort((a, b) => Number(a.style.zIndex) - Number(b.style.zIndex));
-    for (const frame of shown) {
-      const child = frame.contentWindow as unknown as { wd?: typeof wd } | null;
-      if (child?.wd) nodes.push(...await child.wd.uiTree());
-    }
+  // the processes the broker shows stack above this one in their frames, as their windows do on a display
+  uiTree: async (): Promise<Awaited<ReturnType<RealmWd["uiTree"]>>> => {
+    const nodes = await local.uiTree();
+    for (const child of framed()) nodes.push(...await child.uiTree());
     return nodes;
   },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
@@ -259,12 +249,8 @@ const wd = {
   threads: threadStates,
   redraw,
   testFrame: async () => {
-    if (processPresentation.visible) await testFrame();
-    for (const frame of document.querySelectorAll("iframe")) {
-      if (new URL(frame.src, location.href).origin !== location.origin) continue;
-      const child = frame.contentWindow as unknown as { wd?: { testFrame?: () => Promise<void> } };
-      if (child.wd?.testFrame) await child.wd.testFrame();
-    }
+    await local.testFrame();
+    for (const child of framed()) await child.testFrame();
   },
 };
 (globalThis as any).wd = wd;
