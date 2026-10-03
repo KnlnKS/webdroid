@@ -7,7 +7,7 @@ import { awaited, rt, JObj, noops, stubs, setDeclared, getDeclared, driven, type
 import { after, callUncaught, newObj, vcall, scall, reportUncaught, staticField } from "../../jvm/natives/jlang";
 import { once, shareable } from "../../jvm/suspend";
 import { newArrayList } from "../../jvm/natives/jcoll";
-import { configurations, resizeWindows } from "./wm";
+import { configurations, resizeWindows, setClientVisible } from "./wm";
 import { notifyDisplayChanged } from "../display";
 import { asSystem, systemToken } from "../binder";
 import { appHost } from "../apphost";
@@ -89,6 +89,7 @@ const resumeItem = (r: ActivityRecord) => item("ResumeActivityItem", "Landroid/o
 function* resume(r: ActivityRecord): Gen<void> {
   const results = r.results.splice(0);
   r.state = "resumed";
+  yield* setClientVisible(r.token, true);
   if (displayHooks.requestOrientation?.(r.orientation)) yield configurationChanged();
   const top = yield topResumedItem(r, true);
   if (yield* ensureConfiguration(r, results, yield resumeItem(r), top)) return;
@@ -134,6 +135,7 @@ export const topOrientation = (): number => stack.at(-1)?.orientation ?? -1;
 function* stop(r: ActivityRecord): Gen<void> {
   if (r.state !== "paused") return;
   r.state = "stopping";
+  yield* setClientVisible(r.token, false);
   yield* schedule(r.app, null, yield item("StopActivityItem", "Landroid/os/IBinder;", r.token));
 }
 /** take it off the stack, once, telling the broker what a remote caller is owed */
@@ -342,6 +344,7 @@ export const taskVisibility = driven(function* (phase: "pause" | "stop" | "resum
   else if (phase === "resume" && top.state !== "resumed") yield* resume(top);
   else if (phase === "visible" && top.state === "stopped") {
     top.state = "paused";
+    yield* setClientVisible(top.token, true);
     yield* schedule(top.app, null, yield item("StartActivityItem", "Landroid/os/IBinder;Landroid/app/ActivityOptions$SceneTransitionInfo;", top.token, null));
   }
 });

@@ -122,6 +122,18 @@ function* mergedConfiguration(out: JObj): Gen<void> {
   yield vcall(out, "setConfiguration", "(Landroid/content/res/Configuration;Landroid/content/res/Configuration;)V", global, override);
 }
 
+/** ActivityRecord.mClientVisible: the activity tokens whose windows the server has hidden */
+const hiddenTokens = new WeakSet<JObj>();
+/** the activity token a window belongs to: its own, or for a sub-window its parent's */
+const appToken = (ws: WindowState): JObj | null => lp<JObj | null>((ws.parent ?? ws).attrs, "token");
+/** ActivityRecord.setClientVisible: every window of the activity, its dialogs and their sub-windows
+ *  among them, hears that the app is shown or hidden, and lays itself out visible or gone */
+export function* setClientVisible(token: JObj, visible: boolean): Gen<void> {
+  if (hiddenTokens.has(token) !== visible) return;
+  if (visible) hiddenTokens.delete(token); else hiddenTokens.add(token);
+  for (const ws of [...windows.values()]) if (appToken(ws) === token) yield vcall(ws.client, "dispatchAppVisibility", "(Z)V", +visible);
+}
+
 function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: JObj | null, outState: JObj | null, outFrame: JObj | null, outScale: Float32Array | null): Gen<number> {
   const copy = yield newObj(LP, "()V");
   yield vcall(copy, "copyFrom", `(L${LP};)I`, attrs);
@@ -142,7 +154,8 @@ function* addWindow(window: JObj, attrs: JObj, visibility: number, outChannel: J
   if (outState) yield vcall(outState, "set", "(Landroid/view/InsetsState;)V", yield* insetsState());
   if (outFrame) yield vcall(outFrame, "set", "(IIII)V", 0, 0, -1, -1);
   if (outScale) outScale[0] = 1;
-  return ADD_OKAY | ADD_FLAG_IN_TOUCH_MODE | ADD_FLAG_APP_VISIBLE;
+  const app = appToken(ws);
+  return ADD_OKAY | ADD_FLAG_IN_TOUCH_MODE | (app && hiddenTokens.has(app) ? 0 : ADD_FLAG_APP_VISIBLE);
 }
 
 function* relayout(window: JObj, attrs: JObj | null, width: number, height: number, visibility: number, result: JObj): Gen<number> {
@@ -245,11 +258,12 @@ function touchedWindow(x: number, y: number): WindowState | null {
   return null;
 }
 const ACTION_DOWN = 0, ACTION_UP = 1, ACTION_CANCEL = 3, SOURCE_TOUCHSCREEN = 0x1002, SOURCE_KEYBOARD = 0x101;
-/** the display Z of a ViewRootImpl's window (its IWindow), or -Infinity when not added */
+/** the display Z of a ViewRootImpl's window (its IWindow), or -Infinity when not shown */
 export function windowZOf(client: JObj): number {
   const ws = windows.get(client);
+  if (ws?.visibility !== VISIBLE) return -Infinity;
   // a sub-window's Z is relative to its parent's, and within the steps between its parent's siblings
-  return !ws ? -Infinity : ws.parent ? ws.parent.layer.z + ws.layer.z / 10 : ws.layer.z;
+  return ws.parent ? ws.parent.layer.z + ws.layer.z / 10 : ws.layer.z;
 }
 /** InputDispatcher's thread, on which host input becomes events */
 const inputDispatcher = Object.assign(new JThread(), { jname: "InputDispatcher" });
