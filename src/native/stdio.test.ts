@@ -71,6 +71,29 @@ test("shared file mappings see each other's synced stores and every writer's, wi
   }
 });
 
+test("mremap carries a shared file mapping's range, and its new pages hold the file's bytes", async () => {
+  setA64(true); kernelInit();
+  const path = "/remapped-mapping-test", bytes = new Uint8Array(8192);
+  bytes[4096] = 9;
+  vfs.write(path, bytes);
+  const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "remapped-mapping-test");
+  const mmap = kernel("mmap"), mremap = kernel("mremap"), munmap = kernel("munmap"), msync = kernel("msync");
+  let address = 0;
+  try {
+    address = await cpu.call(mmap, [0, 4096, 3, 1, fd, 0]);
+    mem.st8(address, 7);
+    address = await cpu.call(mremap, [address, 4096, 8192, 1 /* MREMAP_MAYMOVE */]);
+    expect([mem.ld8u(address), mem.ld8u(address + 4096)]).toEqual([7, 9]);
+    mem.st8(address + 4097, 8);
+    await cpu.call(msync, [address, 8192, 4]);
+    expect([...vfs.read(path)!.subarray(4096, 4098)]).toEqual([9, 8]);
+    expect(vfs.read(path)?.[0]).toBe(7);
+  } finally {
+    if (address) await cpu.call(munmap, [address, 8192]);
+    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+  }
+});
+
 test("record-lock queries report no conflicting process lock through the guest pointer", async () => {
   setA64(true); kernelInit();
   const cpu = new Cpu(mainThread, "fcntl-test");

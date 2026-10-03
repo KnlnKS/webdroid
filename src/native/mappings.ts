@@ -78,6 +78,14 @@ export function syncShared(va: bigint, n: number, drop: boolean): void {
   }
 }
 
+/** the file range the shared mapping at va holds from there, which mremap carries along */
+export function sharedAt(va: bigint): { file: VfsFile; off: number; writable: boolean } | null {
+  for (const shared of mapped) for (const m of shared.maps) {
+    if (overlaps(m, va, va + 1n)) return { file: shared.file, off: m.off + Number(va - m.va), writable: !!m.base };
+  }
+  return null;
+}
+
 /** whether any byte of [va, va+n) is a shared file mapping */
 export function isShared(va: bigint, n: number): boolean {
   const end = va + BigInt(n);

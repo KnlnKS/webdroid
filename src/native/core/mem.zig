@@ -559,6 +559,32 @@ export fn unmap_va(va_in: u64, n_in: u64) u32 {
     }
     return 1;
 }
+/// mremap's growth in place: [v, v + old_n) becomes [v, v + new_n) when the address space after it
+/// is free, its new pages as accessible as its last one; 0 when they are taken
+export fn extend_va(v: u64, old_n: u64, new_n: u64) u32 {
+    const h = hi(v);
+    const l = lo(v);
+    if (v & (PAGE_SIZE - 1) != 0 or new_n <= old_n) return 0;
+    if (h == 0) {
+        const top: u64 = if (pool_base != 0) pool_base else module_bot;
+        if (l < abi.ARENA_BASE or @as(u64, l) + new_n > top) return 0;
+        const a = pageOf(@intCast((@as(u64, l) + old_n + PAGE_SIZE - 1) & ~@as(u64, PAGE_SIZE - 1)));
+        const b: u32 = @intCast((@as(u64, l) + new_n + PAGE_SIZE - 1) >> PAGE_SHIFT);
+        for (a..b) |i| if (pages[i] != FREE) return 0;
+        const state = pages[a - 1];
+        cpu.invalidate_range(a * PAGE_SIZE, (b - a) * PAGE_SIZE);
+        @memset(pages[a..b], state);
+        if (state != RESERVED) fill(a * PAGE_SIZE, 0, (b - a) * PAGE_SIZE);
+        return 1;
+    }
+    // a plane holds one mapping, which grows into the free space after its reservation
+    if (h >= PLANES or R[h] == 0 or l < L[h]) return 0;
+    const off: u64 = l - L[h];
+    if (off + old_n != R[h] or L[h] + off + new_n > 0x1_0000_0000) return 0;
+    if (W[h] >= R[h]) W[h] = off + new_n;
+    R[h] = off + new_n;
+    return 1;
+}
 export fn check_reserve(h: u32, l: u32, size: u32) u32 {
     if (h == 0) {
         if (l < abi.ARENA_BASE or @as(u64, l) + size > (if (pool_base != 0) pool_base else module_bot)) return 0;

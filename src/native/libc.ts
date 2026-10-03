@@ -9,7 +9,7 @@ import { E, strerror, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
-import { FS_SYSCALLS, readInto, fdFile } from "./fs";
+import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs";
 import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread";
 import { KLAYOUT, rawSyscall } from "./syscall";
 import { zlibInit } from "./zlib";
@@ -22,7 +22,7 @@ import { procIdentity, sysconf, uname } from "../shell/procfs";
 import { guestNow, wallMillis } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
-import { isShared, syncShared, trackSharedMap } from "./mappings";
+import { isShared, syncShared, trackSharedMap, sharedAt } from "./mappings";
 /** the C locale's month and weekday names (strftime, asctime) */
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -247,24 +247,43 @@ export const LIBC_SYSCALLS: Record<string, HostFn> = {
     syncShared(va, n, true);
     return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL);
   },
-  // a private mapping shrinks in place or, with MREMAP_MAYMOVE, grows by moving; growing in place,
-  // MREMAP_FIXED and moving a shared file mapping are not supported
+  // A mapping shrinks in place, grows in place when the address space after it is free, and with
+  // MREMAP_MAYMOVE moves (to new_address with MREMAP_FIXED). A shared file mapping keeps its file
+  // range wherever it lands, and its new pages hold the file's bytes.
   mremap: (cpu, a) => {
-    const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i();
-    const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
-    if (old & BigInt(PAGE_SIZE - 1) || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return mapFailed(cpu, E.INVAL);
-    if (flags & 2) return mapFailed(cpu, E.NOSYS);
-    if (page(size) <= page(oldSize)) {
-      if (page(size) < page(oldSize)) mem.unmapVa(old + BigInt(page(size)), page(oldSize) - page(size));
-      return PTR === 8 ? old : Number(old);
+    const old = a.va(), oldSize = Number(a.va()), size = Number(a.va()), flags = a.i(), fixed = flags & 2 ? a.va() : 0n;
+    const page = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE, mask = BigInt(PAGE_SIZE - 1), result = (va: bigint) => PTR === 8 ? va : Number(va);
+    if (old & mask || fixed & mask || !size || flags & ~3 || (flags & 2 && !(flags & 1))) return mapFailed(cpu, E.INVAL);
+    if (flags & 2 && fixed < old + BigInt(page(oldSize)) && old < fixed + BigInt(page(size))) return mapFailed(cpu, E.INVAL);
+    if (!(flags & 2) && page(size) <= page(oldSize)) {
+      const tail = page(oldSize) - page(size);
+      if (tail) { syncShared(old + BigInt(page(size)), tail, true); mem.unmapVa(old + BigInt(page(size)), tail); }
+      return result(old);
     }
-    if (!(flags & 1)) return mapFailed(cpu, E.NOMEM);
-    if (isShared(old, oldSize)) return mapFailed(cpu, E.NOSYS);
-    const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
-    if (!moved) return mapFailed(cpu, E.NOMEM);
-    mem.write(guestAt(moved), mem.bytes(mem.txVa(old), oldSize));
-    mem.unmapVa(old, page(oldSize));
-    return moved;
+    const shared = sharedAt(old);
+    let to = old;
+    if (flags & 2 || !mem.extendVa(old, oldSize, size)) {
+      if (!(flags & 1)) return mapFailed(cpu, E.NOMEM);
+      if (flags & 2) {
+        syncShared(fixed, size, true);
+        if (!mem.commitVa(fixed, size)) return mapFailed(cpu, E.NOMEM);
+        invalidateRange(mem.txVa(fixed), size); mem.dropVa(fixed, size);
+        to = fixed;
+      } else {
+        const moved = mem.mapVa(size, false, old < 0x1_0000_0000n);
+        if (!moved) return mapFailed(cpu, E.NOMEM);
+        to = BigInt(moved);
+      }
+      syncShared(old, oldSize, true);
+      mem.write(mem.txVa(to), mem.bytes(mem.txVa(old), Math.min(oldSize, size)));
+      mem.unmapVa(old, page(oldSize));
+    } else syncShared(old, oldSize, true);
+    if (!shared) return result(to);
+    const track = () => { trackSharedMap(to, size, shared.off, shared.file, shared.writable); return result(to); };
+    if (size <= oldSize) return track();
+    const tail = contentAt(shared.file, shared.off + oldSize, size - oldSize);
+    const fill = (bytes: Uint8Array) => { mem.write(mem.txVa(to + BigInt(oldSize)), bytes); return track(); };
+    return tail instanceof Promise ? tail.then(fill, () => mapFailed(cpu, E.IO)) : fill(tail);
   },
   // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
   // cache, which already holds its stores, so its contents stay

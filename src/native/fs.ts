@@ -552,7 +552,7 @@ function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): nu
   return value.then((bytes) => { mem.write(dst(), bytes); return bytes.length; }, () => fail(cpu, E.IO));
 }
 /** up to `n` bytes of a file at `off`: a view of its data, or what its lazy source reads */
-function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
+export function contentAt(content: VfsFile, off: number, n: number): Uint8Array | Promise<Uint8Array> {
   vfs.sync(content);
   const k = Math.max(0, Math.min(n, content.len - off));
   if (!k) return EMPTY;

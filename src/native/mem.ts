@@ -115,6 +115,8 @@ export const mem = {
   /** mmap: plane 0 while it has room, else a plane of its own; 0 when neither has room */
   mapVa: (n: number, reserve: boolean, low = false): number | bigint => (!Number.isSafeInteger(n) || n <= 0 ? 0 : num(core.map_va(BigInt(n), reserve ? 1 : 0, low ? 1 : 0))),
   unmapVa: (va: bigint, n: number): boolean => Number.isSafeInteger(n) && n > 0 && core.unmap_va(va, BigInt(n)) !== 0,
+  /** grow the mapping [va, va + n) to `size` in place: false when the address space after it is taken */
+  extendVa: (va: bigint, n: number, size: number): boolean => core.extend_va(va, BigInt(n), BigInt(size)) !== 0,
   reserveVa(va: bigint, n: number): boolean {
     const ranges: [bigint, number][] = [];
     while (n > 0) {

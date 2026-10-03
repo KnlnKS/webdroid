@@ -87,6 +87,24 @@ test("A64 transient mappings stay out of the malloc arena", () => {
   expect(mem.stats().planes).toBe(before.planes);
 });
 
+test("mremap grows a mapping in place only into free address space", () => {
+  const va = mem.mapVa(0x0020_0000, false);
+  if (typeof va !== "bigint") throw new Error("large A64 mapping did not receive a virtual plane");
+  mem.st8(mem.txVa(va), 5);
+  expect(mem.extendVa(va, 0x0020_0000, 0x0080_0000)).toBe(true);
+  expect(mem.u8[mem.txVa(va)]).toBe(5);
+  expect(mem.u8[mem.txVa(va + 0x7f_ffffn)]).toBe(0);
+  expect(mem.extendVa(va, 0x0010_0000, 0x0090_0000)).toBe(false);          // not the plane's end
+  expect(mem.unmapVa(va, 0x0080_0000)).toBe(true);
+
+  const low = mem.mapPages(0x4000);
+  mem.unmapPages(low + 0x3000, 0x1000);
+  expect(mem.extendVa(BigInt(low), 0x1000, 0x2000)).toBe(false);
+  expect(mem.extendVa(BigInt(low), 0x3000, 0x4000)).toBe(true);
+  expect(mem.residentVa(BigInt(low + 0x3000))).toBe(1);
+  mem.unmapPages(low, 0x4000);
+});
+
 test("writable mappings beyond the pool commit on first touch, as Linux overcommits", () => {
   const size = 0x1_0080_0000;
   const va = mem.mapVa(size, false);
