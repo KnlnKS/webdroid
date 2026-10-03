@@ -19,7 +19,7 @@ import { after } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { guestSleep, uptimeMillis } from "../guest-clock";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
-import { BIND_AUTO_CREATE, ServiceRecords, type Death, type ServiceBinding, type ServiceRestart, type ServiceState } from "./servicerecords";
+import { ServiceRecords, type Death, type ServiceRequest, type ServiceStarts } from "./servicerecords";
 import { lastExit, REASON_CRASH, REASON_CRASH_NATIVE } from "../android/server/appexitinfo";
 import { apkPath, vfs } from "./vfs";
 import type { FileSource } from "./lazyfile";
@@ -64,10 +64,6 @@ const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastD
 const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<BroadcastResult> =>
   after(data.extras && unparcelled("android/os/Bundle", data.extras), (extras) => ({ ...data, extras }));
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
-type ServiceRequest = { kind: "bind"; cls: string; intent: ParcelData; key: string; flags: number } | { kind: "unbind"; key: string }
-  | { kind: "stop"; cls: string; intent: ParcelData } | { kind: "peek"; intent: ParcelData } | ({ kind: "restart" } & ServiceRestart)
-  | { kind: "start"; intent: ParcelData; foreground: boolean }
-  | { kind: "pending"; operation: PendingOperation; fill: ParcelData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData | null; aborted: boolean };
 type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
@@ -153,13 +149,21 @@ class ProcessBroker {
   private activities: { id: number; pid: number; caller: number; previous: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
   private booted = false;
-  private services = new ServiceRecords((pkg, process, restart) => {
-    const entry = this.connect(pkg, process);
-    unawaited(this.request(entry, (endpoint) => endpoint.service({ kind: "restart", ...restart })));
-  }, (binding) => this.connection(binding, null, true), (pkg, process, cls, binding) => {
-    const entry = this.byName.get(pkg + "/" + process);
-    if (entry) unawaited(this.request(entry, (endpoint) => endpoint.service({ kind: "bind", cls, intent: binding.intent, key: binding.key, flags: binding.flags })));
-  }, (pkg) => { const owner = packages.get(pkg); return !!owner?.system && owner.flag(owner.application, "persistent", false); });
+  private services = new ServiceRecords({
+    send: (client, pkg, process, request, start) => {
+      const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
+      if (!entry) return null;
+      const caller = client === null ? null : this.entries.get(client) ?? null;
+      return this.inherit(caller, entry, () => this.request(entry, (endpoint) => endpoint.service(request))).then((result) => {
+        if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
+        return result;
+      });
+    },
+    connected: (client, key, binder, dead) => {
+      if (this.alive(client)) unawaited(this.request(this.entry(client), (endpoint) => endpoint.serviceConnected(key, binder, dead)));
+    },
+    persistent: (pkg) => { const owner = packages.get(pkg); return !!owner?.system && owner.flag(owner.application, "persistent", false); },
+  });
 
   /** sent from the page's realm, which is up at boot */
   async boot(): Promise<void> {
@@ -358,12 +362,8 @@ class ProcessBroker {
     entry.dead = true; entry.death = death ?? null; entry.reject(error);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
-    for (const binding of this.services.bindingsOf(pid)) {
-      this.services.unbind(binding.key);
-      const host = this.byName.get(binding.pkg + "/" + binding.process);
-      if (host && !host.dead) unawaited(this.request(host, (endpoint) => endpoint.service({ kind: "unbind", key: binding.key })));
-    }
-    this.services.processDied(entry.pkg, entry.process, death);
+    this.services.clientDied(pid);
+    this.services.processDied(entry.pkg, entry.process, death ?? { crashed: false, repeated: false });
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
     entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
@@ -435,44 +435,16 @@ class ProcessBroker {
     const target = this.entry(request.handle.pid);
     return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid })));
   }
-  /** a binding's key is the client's, made unique across clients */
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
-    const caller = pid === null ? null : this.entry(pid);
-    if (request.kind === "bind" || request.kind === "unbind") request = { ...request, key: pid + "/" + request.key };
-    if (request.kind === "unbind") this.services.unbind(request.key);
-    if (request.kind === "stop") this.services.stop(pkg, request.cls);
-    // only a start, an auto-create bind or a pending operation brings up the service's process; a
-    // binding without BIND_AUTO_CREATE waits for it (bindServiceLocked, attachApplicationLocked)
-    const waits = request.kind === "unbind" || request.kind === "stop" || request.kind === "peek" || request.kind === "bind" && !(request.flags & BIND_AUTO_CREATE);
-    const live = this.byName.get(pkg + "/" + process), entry = waits ? live && !live.dead ? live : null : this.connect(pkg, process);
-    if (request.kind === "bind") this.services.bind(pkg, process, request.cls, { client: pid ?? 0, key: request.key, intent: request.intent, flags: request.flags });
-    if (!entry) return null;
-    const sent = request;
-    try {
-      const result = await this.inherit(caller, entry, () => this.request(entry, endpoint => endpoint.service(sent)));
-      if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
-      return result;
-    } catch (error) {
-      if (sent.kind === "bind") this.services.unbind(sent.key);
-      throw error;
-    }
+    if (pid !== null) this.entry(pid);
+    return this.services.request(pid, pkg, process, request);
   }
-  /** a hosting process's report of its service's start state, which the broker keeps */
-  serviceRecord(pid: number, cls: string, state: ServiceState | null): void {
-    const host = this.entry(pid);
-    this.services.report(host.pkg, host.process, cls, state && structuredClone(state));
-  }
+  /** the start state of the services a process runs, which its ActiveServices changes */
+  serviceStarts(pid: number): ServiceStarts { const host = this.entry(pid); return this.services.starts(host.pkg, host.process); }
   /** a service published its binder for another process's binding, or went away */
   serviceConnected(pid: number, key: string, binder: BinderHandle | null, dead: boolean): void {
-    const host = this.entry(pid), binding = this.services.binding(key);
-    if (!binding || binding.pkg !== host.pkg || binding.process !== host.process) return;
-    if (dead) this.services.unbind(key);
-    this.connection(binding, binder, dead);
-  }
-  private connection(binding: ServiceBinding, binder: BinderHandle | null, dead: boolean): void {
-    if (!this.alive(binding.client)) return;
-    const key = binding.key.slice(binding.key.indexOf("/") + 1);
-    unawaited(this.request(this.entry(binding.client), (endpoint) => endpoint.serviceConnected(key, binder, dead)));
+    const host = this.entry(pid);
+    this.services.connected(host.pkg, host.process, key, binder, dead);
   }
   /** getContentProviderImpl for a provider in another process: checkContentProviderPermission,
    *  then the binder its process publishes, starting it. The provider enforces each call's
@@ -626,7 +598,9 @@ export function connectProcess(): ProcessEndpoint {
   serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
   serviceTransport.start = driven(function* (owner, process, intent, foreground) { yield service(owner.pkg, process, { kind: "start", intent: yield* awaited(encodeIntent(intent)), foreground }); });
   serviceTransport.stop = driven(function* (owner, process, cls, intent) { yield service(owner.pkg, process, { kind: "stop", cls, intent: yield* awaited(encodeIntent(intent)) }); });
-  serviceTransport.record = (cls, state) => broker.serviceRecord(PROCESS_PID, cls, state);
+  // a process's services run once it is registered, which the page's is only after its boot starts
+  let starts: ServiceStarts | undefined;
+  serviceTransport.starts = () => starts ??= broker.serviceStarts(PROCESS_PID);
   serviceTransport.connected = (key, binder, dead) => broker.serviceConnected(PROCESS_PID, key, exportBinder(binder), dead);
   serviceTransport.peek = driven(function* (owner, process, intent) {
     return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
@@ -659,7 +633,7 @@ export function connectProcess(): ProcessEndpoint {
     service: (request) => asBroker(function* (): Gen<BinderHandle | null> {
       if (request.kind === "pending") { yield executePendingIntent(request.operation, request.fill, request.alarmCount); return null; }
       if (request.kind === "unbind") { yield hostedServices.unbind(request.key); return null; }
-      if (request.kind === "restart") { yield hostedServices.restart(request.intent, request.state, request.binds); return null; }
+      if (request.kind === "restart") { yield hostedServices.restart(request.intent, request.binds); return null; }
       const intent = yield* awaited(decodeIntent(request.intent));
       if (request.kind === "bind") { yield hostedServices.bind(intent, request.key, request.flags); return null; }
       if (request.kind === "peek") return exportBinder(yield* awaited(hostedServices.peek(intent)));
