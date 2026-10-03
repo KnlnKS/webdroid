@@ -6,6 +6,7 @@
 //   bun run gen-framework --input    # record only the device's key character maps and key sets
 //   bun run gen-framework --settings # record only the device's settings tables
 //   bun run gen-framework --properties # record only the device's system properties and uname
+//   bun run gen-framework --fonts    # record only the device's updated system fonts
 //
 // framework.jar carries android.* and com.android.internal.* as bytecode; framework-res.apk
 // carries the resource table those classes' R ids were compiled against. Neither is usable
@@ -23,14 +24,17 @@ import { loadJarDexes, mountLocalPlatformData, openDexes } from "./lib";
 import "../src/natives";
 import { mangleStaticField } from "../src/jvm/abi";
 import { insnLen } from "../src/jvm/opcodes";
-import { PLATFORM_JARS } from "../src/jvm/bootclasspath";
+import { PLATFORM_JARS, PLATFORM_DATA } from "../src/jvm/bootclasspath";
 import { loadPlatformJar } from "../src/android/framework";
 import { SYSTEM_PACKAGES } from "../src/shell/system-packages";
 import { Arsc } from "../src/android/arsc";
+import { postScriptName } from "../src/android/sfnt";
 import { androidPlatform, androidTool } from "./android-sdk";
 
 const OUT = "vendor/aosp";
 const JAR = `${OUT}/framework.jar`, RES = `${OUT}/framework-res.apk`;
+/** where the device's FontManagerService keeps the font files it installs */
+const UPDATED_FONTS = "/data/fonts/files/";
 const sh = (...args: string[]) => {
   const r = Bun.spawnSync([androidTool("adb"), ...args], { stderr: "pipe", stdout: "pipe" });
   if (r.exitCode !== 0) throw new Error(`adb ${args.join(" ")} failed:\n${r.stderr.toString().trim()}`);
@@ -41,6 +45,12 @@ if (process.argv.includes("--charsets")) { await recordCharsets(); process.exit(
 if (process.argv.includes("--input")) { await recordInputDevices(); process.exit(0); }
 if (process.argv.includes("--settings")) { await recordSettings(); process.exit(0); }
 if (process.argv.includes("--properties")) { await recordProperties(); process.exit(0); }
+if (process.argv.includes("--fonts")) {
+  const data = { ...Object.fromEntries(Object.entries(PLATFORM_DATA).filter(([path]) => !path.startsWith(UPDATED_FONTS))), ...await recordFontUpdates() };
+  const file = "src/jvm/bootclasspath.ts", src = await Bun.file(file).text();
+  await Bun.write(file, src.replace(/(export const PLATFORM_DATA: Record<string, number> = ).*;/, (_, decl) => `${decl}${JSON.stringify(data)};`));
+  process.exit(0);
+}
 if (!process.argv.includes("--verify")) {
   sh("wait-for-device");
   for (let i = 0; sh("shell", "getprop", "sys.boot_completed") !== "1"; i++) {
@@ -82,6 +92,7 @@ if (!process.argv.includes("--verify")) {
     pull(src, src.slice(1));
     data[src] = Bun.file(`${OUT}${src}`).size;
   }
+  Object.assign(data, await recordFontUpdates());
   await Bun.write(`${OUT}/build.txt`, `${fingerprint}\nsdk ${sh("shell", "getprop", "ro.build.version.sdk")}\n`);
   await recordDeviceColors();
   await recordOsConstants();
@@ -93,13 +104,41 @@ if (!process.argv.includes("--verify")) {
     `export const PLATFORM_JARS = ${JSON.stringify(jars, null, 1).replace(/\n\s*/g, " ")};\n` +
     `/** where each of those jars lives on the device */\n` +
     `export const BOOT_JAR_PATHS = ${JSON.stringify(bootJars, null, 1).replace(/\n\s*/g, " ")};\n` +
-    `/** the ICU and time zone files, fonts, hyphenation patterns and bionic's libraries, by device path (mirrored under vendor/aosp), with their sizes */\n` +
+    `/** the ICU and time zone files, fonts and their updates, hyphenation patterns and bionic's libraries, by device path (mirrored under vendor/aosp), with their sizes */\n` +
     `export const PLATFORM_DATA: Record<string, number> = ${JSON.stringify(data)};\n`);
   // its own process: it boots the class path just written, which the verification below loads apart
   if (Bun.spawnSync(["bun", "scripts/gen-framework.ts", "--settings"], { stdout: "inherit", stderr: "inherit" }).exitCode) throw new Error("recording settings failed");
 }
 
 for (const f of [JAR, RES]) if (!existsSync(f)) throw new Error(`missing ${f} — run \`bun run gen-framework\` with the reference AVD booted`);
+
+/** The fonts the reference device's FontManagerService serves in place of the image's, which GMS's
+ *  font updater installed (src/android/font-updates.ts): the files its UpdatableFontDir holds, by
+ *  the PostScript name OtfFontFileParser reads, and its configuration's date and version. Pulls the
+ *  files and returns their sizes for PLATFORM_DATA. */
+async function recordFontUpdates(): Promise<Record<string, number>> {
+  sh("root");
+  sh("wait-for-device");
+  const files = sh("shell", `find ${UPDATED_FONTS} -type f -name '*.[ot]tf' 2>/dev/null; true`).split(/\s+/).filter(Boolean);
+  const data: Record<string, number> = {}, postScriptMap: Record<string, string> = {};
+  for (const src of files) {
+    await Bun.$`mkdir -p ${`${OUT}${src.slice(0, src.lastIndexOf("/"))}`}`.quiet();
+    sh("pull", src, `${OUT}${src}`);
+    data[src] = Bun.file(`${OUT}${src}`).size;
+    postScriptMap[postScriptName(new Uint8Array(await Bun.file(`${OUT}${src}`).arrayBuffer()), 0)!] = src;
+  }
+  const config = files.length ? sh("shell", "abx2xml", "/data/fonts/config/config.xml", "-") : "";
+  // a named family an update adds (FontManager.updateFontFamily) joins the configuration's own
+  if (/<family\b/.test(config)) throw new Error("the device's font update adds families, which are not recorded");
+  const lastModifiedDate = Number(/<lastModifiedDate value="(\d+)"/.exec(config)?.[1] ?? 0);
+  const configVersion = Number(/Current Version: (\d+)/.exec(sh("shell", "cmd", "font", "status"))![1]);
+  await Bun.write("src/android/font-updates.ts", `// Generated by bun run gen-framework: the reference device's updated system fonts, as its\n` +
+    `// FontManagerService serves them: each file by PostScript name, and the configuration's date and version.\n` +
+    `export const FONT_UPDATES = {\n  postScriptMap: ${JSON.stringify(postScriptMap)} as Record<string, string>,\n` +
+    `  lastModifiedDate: ${lastModifiedDate},\n  configVersion: ${configVersion},\n};\n`);
+  console.log(`  src/android/font-updates.ts ${files.length} updated fonts`);
+  return data;
+}
 
 /** The reference device's system_* colors as its overlays resolve them: SystemUI's Monet palette
  *  for the default wallpaper replaces most framework-res defaults, and apps read these colors. */
