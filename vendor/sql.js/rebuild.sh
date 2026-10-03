@@ -4,6 +4,15 @@
 set -eu
 exec >&2
 version=4.0.9
+output=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+partial="$output/dist.$$"
+# builds are shared between checkouts, keyed by what produced them
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/webdroid/sqljs-$(cat "$0" "$output/sqljs.patch" | shasum | cut -c1-16)
+if [ -f "$cache/sqljs.patch" ]; then
+  rm -rf "$partial" "$output/dist"
+  cp -R "$cache" "$partial" && mv "$partial" "$output/dist"
+  exit 0
+fi
 if ! emcc --version 2>/dev/null | head -1 | grep -q "$version"; then
   # emsdk tags match the Emscripten release they install
   emsdk=${WEBDROID_EMSDK:-${XDG_CACHE_HOME:-$HOME/.cache}/webdroid/emsdk-$version}
@@ -12,8 +21,6 @@ if ! emcc --version 2>/dev/null | head -1 | grep -q "$version"; then
   "$emsdk/emsdk" activate "$version" >/dev/null
   eval "$("$emsdk/emsdk" construct_env 2>/dev/null)"
 fi
-output=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-partial="$output/dist.$$"
 work=$(mktemp -d)
 trap 'rm -rf "$work" "$partial"' EXIT
 git clone --quiet --depth 1 --branch v1.14.2 https://github.com/sql-js/sql.js.git "$work/sql.js"
@@ -39,5 +46,7 @@ make -o sqlite-src/sqlite-amalgamation-3490100 EMFLAGS_OPTIMIZED='-Oz -flto' dis
 mkdir "$partial"
 cp dist/sql-wasm.js dist/sql-wasm.wasm dist/sql-wasm-browser.js dist/sql-wasm-browser.wasm "$output/sqljs.patch" "$partial/"
 chmod 644 "$partial"/*.wasm
-rm -rf "$output/dist"
+rm -rf "$output/dist" "$cache"
+mkdir -p "$(dirname "$cache")"
+cp -R "$partial" "$cache"
 mv "$partial" "$output/dist"
