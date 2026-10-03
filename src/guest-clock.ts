@@ -137,6 +137,10 @@ export const clearGuestTimeout = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearTimeout(timer as ReturnType<typeof setTimeout>); };
 export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
+/** a timer of the broker's, which plays system_server: no app process's death stops it */
+export const setSystemTimeout = clock
+  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(callback, delayMs, -1)
+  : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY));
 /** the page's start: every realm's CLOCK_MONOTONIC (SystemClock.uptimeMillis, System.nanoTime) counts from it */
 export const bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;
 /** CLOCK_MONOTONIC in milliseconds, one clock for every realm of the page */

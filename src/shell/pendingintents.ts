@@ -17,26 +17,26 @@ export class PendingIntents {
   private records = new Map<number, Record>();
   private nextId = 1;
   constructor(private codec: IntentCodec, private dispatch: (operation: PendingOperation, fill: ParcelData | null, alarmCount: number) => void | Promise<void>) {}
-  private async find(key: string, intent: ParcelData): Promise<number | undefined> {
-    for (const [id, record] of this.records) if (record.key === key && await this.codec.filterEquals(record.operation.intent, intent)) return id;
+  private async find(key: string, intent: ParcelData, codec: IntentCodec): Promise<number | undefined> {
+    for (const [id, record] of this.records) if (record.key === key && await codec.filterEquals(record.operation.intent, intent)) return id;
     return undefined;
   }
   private creating: Promise<unknown> = Promise.resolve();
-  /** one at a time, so two equal requests find one record */
-  create(operation: PendingOperation): Promise<number | null> {
-    const created = this.creating.then(() => this.create0(operation));
+  /** one at a time, so two equal requests find one record; `codec` runs where the creator's JVM can */
+  create(operation: PendingOperation, codec = this.codec): Promise<number | null> {
+    const created = this.creating.then(() => this.create0(operation, codec));
     this.creating = created.catch(() => {});
     return created;
   }
-  private async create0(operation: PendingOperation): Promise<number | null> {
+  private async create0(operation: PendingOperation, codec: IntentCodec): Promise<number | null> {
     const { pkg, uid, kind, code, intent } = operation, flags = operation.flags & ~0x38000000;
     const key = JSON.stringify([pkg, uid, kind, code, flags]);
-    let id = await this.find(key, intent);
+    let id = await this.find(key, intent, codec);
     if (id !== undefined && operation.flags & 0x10000000) { this.cancel(id); id = undefined; }
     if (id !== undefined) {
       const current = this.records.get(id)?.operation;
       if (current && operation.flags & 0x8000000) {
-        current.intent = await this.codec.replaceExtras(current.intent, intent);
+        current.intent = await codec.replaceExtras(current.intent, intent);
         current.intents = operation.intents && structuredClone(operation.intents);
       }
       return id;
