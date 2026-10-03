@@ -3,7 +3,7 @@
 
 import { rt, JObj, type ClassInfo } from "../runtime";
 import { mangleMethod, mangleStaticField, lateMethod, idHash } from "../abi";
-import { currentStrand, enterStrand, newStrand } from "../suspend";
+import { enterStrand, newStrand, suspendWith } from "../suspend";
 import { never, processExited } from "../../process-exit";
 
 /** Does a Java thread own this event-loop turn? A resumed activation takes its thread (rt.st) and
@@ -35,27 +35,25 @@ export function vcallAsync(obj: unknown, name: string, desc: string, ...args: un
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));
 }
-/** `call` on `thread`, which owns the turn while it runs, as chain `chain` or else a new one: the
- *  running chain need not wait for an entry, and must not run on as it while the entry suspends */
-export function callOn<T>(thread: JThread, call: () => T, chain = 0): T {
+/** `call` on `thread`, which owns the turn while it runs, as a chain of its own: the running chain
+ *  need not wait for an entry, and must not run on as it while the entry suspends */
+export function callOn<T>(thread: JThread, call: () => T): T {
   if (processExited()) return never() as T;
-  const previous = curThread, was = owned, outer = enterStrand(chain || newStrand());
+  const previous = curThread, was = owned, outer = enterStrand(newStrand());
   setCurThread(thread);
   try { return call(); } finally { setCurThread(previous); owned = was; enterStrand(outer); }
 }
-/** runs calls on `thread` as the call chain running now: host code continuing that chain from a
- *  later turn */
-export function caller(thread = curThread): <T>(call: () => T) => T {
-  const chain = currentStrand();
-  return (call) => callOn(thread, call, chain);
-}
-/** `f` of `r`, now or once it settles; settled later, `f` runs on the thread and chain that asked
- *  (if a thread owned the turn that asked) */
+/** `f` of `r`, now or once it settles; settled later, `f` continues the thread and chain that
+ *  asked as a suspended frame does (if a thread owned the turn that asked) */
 export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
   if (!(r instanceof Promise)) return f(r);
   if (!owned) return r.then(f);
-  const resume = caller();
-  return r.then((v) => resume(() => f(v)));
+  const thread = curThread;
+  return suspendWith(r, (v, threw) => {
+    if (threw) throw v;
+    setCurThread(thread);
+    try { return f(v as R); } finally { releaseThread(); }
+  }) as Promise<T>;
 }
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));

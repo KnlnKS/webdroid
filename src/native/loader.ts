@@ -1,6 +1,5 @@
-import { rt, type Runtime } from "../jvm/runtime";
+import { rt, type Runtime, type Gen } from "../jvm/runtime";
 import { curThread, mainThread } from "../jvm/natives/jentry";
-import { currentStrand, inStrand } from "../jvm/suspend";
 import { libcInit } from "./libc";
 import { kernelInit } from "./syscall";
 import { dlInit, loadModule, modulePath, modules, resolveGlobalOrNull } from "./dl";
@@ -75,21 +74,22 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   // the ABI decides the pointer width the JNI tables are laid out at, so it has to be known
   // before nativeInit builds them
   nativeInit(abi);
-  // the caller's Cpu, chosen before anything awaits: init arrays and JNI_OnLoad run on the thread
-  // that called dlopen. After an await the current thread may be another one (the main Cpu,
-  // parked mid-static-initialiser, where libc++'s guard reports a recursive initialisation).
-  // They also run as the caller's call chain, a <clinit>'s when it loads its library.
-  const cpu = cpuFor(curThread), chain = currentStrand();
-  await libcReady(cpu);
-  const mod = await inStrand(chain, () => loadModule(name, bytes, false, owner, cpu));
-  const onload = mod.exports.get("JNI_OnLoad");
-  if (onload) {
+  // the caller's Cpu, chosen before anything suspends: init arrays and JNI_OnLoad run on the thread
+  // that called dlopen (the main Cpu may be parked mid-static-initialiser meanwhile, where libc++'s
+  // guard would report a recursive initialisation), and driven, as its call chain: a <clinit>'s
+  // when it loads its library
+  const cpu = cpuFor(curThread);
+  return rt.drive(function* (): Gen<void> {
+    yield libcReady(cpu);
+    const mod: Module = yield loadModule(name, bytes, false, owner, cpu);
+    const onload = mod.exports.get("JNI_OnLoad");
+    if (!onload) return;
     const previous = cpu.nativeRuntime;
     cpu.nativeRuntime = owner;
     pushFrame(cpu);
-    try { await inStrand(chain, () => cpu.call(onload, [javaVM.addr, 0])); }
+    try { yield cpu.call(onload, [javaVM.addr, 0]); }
     finally { popFrame(cpu); cpu.nativeRuntime = previous; }
-  }
+  }());
 }
 
 rt.loadNativeLib = loadNativeLib;

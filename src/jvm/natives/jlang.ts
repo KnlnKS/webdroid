@@ -7,7 +7,8 @@ import { mangleMethod, mangleField, mangleStaticField, descToName, jarray, PRIM_
 import { uptimeMillis, wallMillis } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
-import { after, caller, curThread, newObj, scall, vcall, type JThread } from "./jentry";
+import { after, curThread, newObj, scall, vcall, type JThread } from "./jentry";
+import { shareable } from "../suspend";
 import { JThrowable } from "./jthrowable";
 import { park } from "./jthread";
 // String and its builders, java.lang's natives with these
@@ -398,18 +399,19 @@ function nativeLoad(file: string, loader: JClassLoader | null): string | null | 
   if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return null;
   const have = loadedLibs.get(lib);
   if (have) return have.owner !== owner ? `Library ${lib} already loaded by another ClassLoader` : have.thread === curThread ? null : have.pending;
-  const thread = curThread, resume = caller(thread);
-  const pending = (async (): Promise<string | null> => {
+  const thread = curThread;
+  // driven: each step continues on the asking thread and chain (a <clinit>'s, when it loads its library)
+  const pending = shareable(rt.drive(function* (): Gen<string | null> {
     let abi: string | null, bytes: Uint8Array | null;
     if (file.startsWith("/")) {
-      bytes = await vfs.readFile(file);
+      bytes = yield vfs.readFile(file);
       abi = bytes && (E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown");
     } else {
       abi = pickAbi((a) => owner.hasClasspath(`lib/${a}/${lib}`));
-      bytes = abi ? await owner.readClasspath(`lib/${abi}/${lib}`) : null;
+      bytes = abi ? yield owner.readClasspath(`lib/${abi}/${lib}`) : null;
     }
     if (abi && bytes && owner.loadNativeLib) {
-      try { await resume(() => owner.loadNativeLib!(lib, bytes, abi, owner)); return null; }
+      try { yield owner.loadNativeLib(lib, bytes, abi, owner); return null; }
       catch (e) {
         rt.noteNativeRequired(lib, abi);
         if (e instanceof rt.link("java/lang/UnsatisfiedLinkError").ctor) return (e as JThrowable).msg;
@@ -418,7 +420,7 @@ function nativeLoad(file: string, loader: JClassLoader | null): string | null | 
     }
     if (abi) rt.noteNativeRequired(lib, abi);
     return `dlopen failed: library "${lib}" ${abi ? "is " + abi + " machine code" : "not found"}`;
-  })();
+  }()));
   loadedLibs.set(lib, { owner, thread, pending });
   const forget = () => { loadedLibs.delete(lib); };
   pending.then((error) => { if (error !== null) forget(); }, forget);

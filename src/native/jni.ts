@@ -4,12 +4,11 @@
 import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
-import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
+import { rt, JObj, type ClassInfo, type Runtime, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8 } from "../jvm/abi";
-import { curThread, caller } from "../jvm/natives/jentry";
+import { after, curThread } from "../jvm/natives/jentry";
 import { stackTraceText } from "../jvm/natives/jthrowable";
 import { JClass } from "../jvm/natives/jlang";
-import { currentStrand, inStrand } from "../jvm/suspend";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { addressOf, capacity, directAddress, isBuffer, newDirectBuffer } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
@@ -182,7 +181,7 @@ function syncPinned(args: unknown[], toJava: boolean): void {
     if (at) for (const p of at) (toJava ? copyIn : copyOut)(pinned.get(p)!.type, arr, p, 0, (arr as { length: number }).length);
   }
 }
-function invokeBody(java: <T>(call: () => T) => T, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): unknown {
+function invokeBody(m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): unknown {
   let fn: unknown;
   if (m.isStatic) {
     self = m.info.ctor;
@@ -192,17 +191,16 @@ function invokeBody(java: <T>(call: () => T) => T, m: MethodRec, self: unknown, 
     fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as Record<string, unknown>)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc);
   }
   if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
-  return java(() => fn.apply(self, args));
+  return fn.apply(self, args);
 }
 
 function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtual: boolean): HostRet | Promise<HostRet> {
-  const java = caller(cpu.jthread);
   const synced = pinned.size > 0;
   if (synced) syncPinned(args, true);
   let pending = false;
   try {
     const p = m.isStatic ? (m.info.owner ?? rt).initClass(m.info) : null;
-    const r = p ? p.then(() => invokeBody(java, m, self, args, nonvirtual)) : invokeBody(java, m, self, args, nonvirtual);
+    const r = after(p, () => invokeBody(m, self, args, nonvirtual));
     if (r instanceof Promise) {
       pending = true;
       return r.then(value => retWord(m.ret, value, cpu)).catch(e => {
@@ -219,10 +217,11 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
   }
 }
 
-/** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the result */
-async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Promise<unknown> {
-  const { params, ret } = r, chain = currentStrand();
-  await cpu.awaitIdleBase();
+/** a Java native method whose body is guest code: marshal, run on the caller's Cpu, convert the
+ *  result; driven, so it continues as the calling thread and chain */
+function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Gen<unknown> {
+  const { params, ret } = r;
+  yield cpu.awaitIdleBase();
   const prevCur = cur, previousRuntime = cpu.nativeRuntime;
   cpu.nativeRuntime = r.info.owner ?? rt;
   cur = cpu;
@@ -242,7 +241,7 @@ async function callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unk
     if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
     let r0: number, r1: number;
     try {
-      r0 = await inStrand(chain, () => cpu.call(r.fn, list, r.label));
+      r0 = yield cpu.call(r.fn, list, r.label);
       r1 = cpu.ret1;
     } finally { cur = cpu; }
     let out: unknown;
@@ -373,26 +372,27 @@ export function jniInit(): void {
   def(24, "IsSameObject", (_c, a) => { a.p(); return deref(a.p()) === deref(a.p()) ? 1 : 0; });
   def(25, "NewLocalRef", (_c, a) => { a.p(); return toRef(deref(a.p())); });
   def(26, "EnsureLocalCapacity", () => 0);
-  def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const java = caller(cpu.jthread), p = (i.owner ?? rt).initClass(i); if (p) await p; return toRef(java(() => new i.ctor()), cpu); });
+  def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); return i ? after((i.owner ?? rt).initClass(i), () => toRef(new i.ctor(), cpu)) : 0; });
   const newObject = (read: (m: MethodRec, a: ArgReader) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
-    a.p(); const i = infoOf(a.p()); const m = methodOf(a.p()), java = caller(cpu.jthread);
+    a.p(); const i = infoOf(a.p()); const m = methodOf(a.p());
     if (!i || !m) return 0;
     const args = read(m, a);
-    try {
-      const p = (i.owner ?? rt).initClass(i); if (p) await p;
-      // a Java string is a JS string, built by the runtime's own constructor table
-      if (i.name === "java/lang/String") {
-        const make = (rt.newStr as Record<string, (...a: unknown[]) => string>)[m.desc];
-        if (!make) throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
-        return toRef(make(...args), cpu);
-      }
-      const o = java(() => new i.ctor());
-      const fn = o[m.mangled];
-      if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
-      const r = java(() => fn.apply(o, args));
-      if (r instanceof Promise) await r;
-      return toRef(o, cpu);
-    } catch (e) { pend(cpu, rt.jx(e)); return 0; }
+    return rt.drive(function* (): Gen<number> {
+      try {
+        yield (i.owner ?? rt).initClass(i);
+        // a Java string is a JS string, built by the runtime's own constructor table
+        if (i.name === "java/lang/String") {
+          const make = (rt.newStr as Record<string, (...a: unknown[]) => string>)[m.desc];
+          if (!make) throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
+          return toRef(make(...args), cpu);
+        }
+        const o = new i.ctor();
+        const fn = o[m.mangled];
+        if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
+        yield fn.apply(o, args);
+        return toRef(o, cpu);
+      } catch (e) { pend(cpu, rt.jx(e)); return 0; }
+    }());
   };
   def(28, "NewObject", newObject((m, a) => readArgs(m.params, a)));
   def(29, "NewObjectV", newObject((m, a) => readArgs(m.params, vaList(a.p()))));
@@ -594,7 +594,7 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
   const critical = isStatic && methodAnnotations(info, name, sig).some(a => a.type === "dalvik/annotation/optimization/CriticalNative");
   const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic, critical, params, ret, label: info.name.split("/").pop() + "." + name };
   registered.push(rec);
-  const entry = function (this: unknown, ...args: unknown[]) { return callGuestNative(cpuFor(curThread), rec, this, args); };
+  const entry = function (this: unknown, ...args: unknown[]) { return rt.drive(callGuestNative(cpuFor(curThread), rec, this, args)); };
   (info.owner ?? rt).registerJni(info.name, name + sig, entry as (...a: never[]) => unknown);
   // the compiled stub memoised a miss before JNI_OnLoad ran: re-point it (see compiler emitNativeStub)
   const mangled = mangleMethod(name, sig);
