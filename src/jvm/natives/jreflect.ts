@@ -647,7 +647,8 @@ interface UField {
 const unsafeFields: UField[] = [];
 const unsafeIndex = new Map<string, number>();
 function fieldOffset(f: JField): bigint {
-  let i = unsafeIndex.get(f.prop);
+  const key = f.desc + ":" + f.prop;
+  let i = unsafeIndex.get(key);
   if (i === undefined) {
     const at = `o[${JSON.stringify(f.prop)}]`, fl = f.desc === "F", db = f.desc === "D";
     i = unsafeFields.length;
@@ -656,7 +657,7 @@ get(o){return ${at}},put(o,v){${at}=v},
 getInt(o){return ${fl ? `F2I(${at}??0)` : `${at}??0`}},putInt(o,v){${at}=${fl ? "I2F(v)" : "v"}},
 getLong(o){return ${db ? `D2L(${at}??0)` : `${at}??0n`}},putLong(o,v){${at}=${db ? "L2D(v)" : "v"}}}`)(
       floatToIntBits, intBitsToFloat, doubleToLongBits, longBitsToDouble));
-    unsafeIndex.set(f.prop, i);
+    unsafeIndex.set(key, i);
   }
   return BigInt(i * 8);
 }

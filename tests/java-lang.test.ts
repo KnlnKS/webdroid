@@ -399,6 +399,22 @@ describe("reflection-field", () => {
     expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", eOfList)).toBe("list");
   });
 
+  test("Unsafe offsets retain the field type when native properties share a name", async () => {
+    const unsafe = await vcall(rt.link("sun/misc/Unsafe").ctor, "getUnsafe", "()Lsun/misc/Unsafe;");
+    const offsets = new Map<string, bigint>();
+    for (const desc of ["I", "F", "J", "D"]) {
+      const field = Object.assign(new JField(), { prop: "sharedUnsafeValue", desc });
+      offsets.set(desc, await vcall(unsafe, "objectFieldOffset", "(Ljava/lang/reflect/Field;)J", field));
+    }
+    for (const [desc, access, bits] of [["I", "Int", 7], ["F", "Int", 0x3fc00000], ["J", "Long", 7n], ["D", "Long", 0x3ff8000000000000n]] as const) {
+      const field = { sharedUnsafeValue: desc === "J" ? 7n : desc === "I" ? 7 : 1.5 };
+      const type = access === "Int" ? "I" : "J", offset = offsets.get(desc)!;
+      expect(await vcall(unsafe, "get" + access, "(Ljava/lang/Object;J)" + type, field, offset)).toBe(bits);
+      await vcall(unsafe, "put" + access, "(Ljava/lang/Object;J" + type + ")V", field, offset, bits);
+      expect(field.sharedUnsafeValue).toBe(desc === "J" ? 7n : desc === "I" ? 7 : 1.5);
+    }
+  });
+
   test("Unsafe reference-array offsets preserve adjacent elements and compare-and-swap", async () => {
     const unsafe = await vcall(rt.link("sun/misc/Unsafe").ctor, "getUnsafe", "()Lsun/misc/Unsafe;");
     const cls = rt.classFor("[Ljava/lang/Object;");
