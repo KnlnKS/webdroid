@@ -2950,6 +2950,64 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     thread idle; no class-init wait was involved, one run had a monitor wait on applog's DbStore
     past 5 s, and the cause is not yet identified.
 
+- 2026-10-02, TikTok's swipe wedge and idle stalls (branch `knlnks/open-tiktok`):
+  - The idle stalls were the process dying at launch. libmetasec_ov raises SIGRTMAX at itself
+    (its own syscall stub: tgkill(getpid(), gettid(), 64)) and its handler restores the
+    pre-raise registers by hand rather than returning. The handler frame then reached its return
+    sentinel with the interrupted JNI call's sp; call() restored the frame below, which resumed
+    at the raise's stale svc 15 M instructions later, returned into .bss (an "unimplemented
+    0xffffffff" host fault) and took metasec's anti-tamper exit: zero the stack, sp = 0x7b, branch
+    to 0x4000. Since process death (2a679101) that SIGSEGV ends the process and the JS thread goes
+    idle, which every step then reports as a wedge; before it, only that thread died. A handler
+    frame whose return finds another sp now returns from the interrupted call too, in that state
+    and signal mask (Linux keeps the handler's mask without sigreturn); a unit test covers it.
+    No process died in the 34 TikTok runs after it (their error logs carry no fatal signal).
+  - Native CPU on the swipe: TikTok decodes in software (libByteVC1_dec and libbyteVC2dec NEON,
+    plus libttcrypto, libbdzstd and libaudioeffect). 99.7% of the swipe's guest instructions run
+    JIT-compiled (15 M of 5.7 G interpreted); fallbacks are 0.07% of instructions (fmaxv, fcvtzs
+    with fraction bits, sri/sli, shll, cmlt #0, about 0.3 s per step), so implementing them
+    is not the lever. The JIT runs this NEON-heavy code at 0.15-0.7 G instr/s against Doodle Jump's
+    ~1 G/s. TikTok's AJMediaCodec takes a hardware decoder only when its name starts with "OMX." or
+    "c2." and not "OMX.google"/"c2.android" ("non hardware codecname matched" for webcodecs.*).
+    Tried, not kept: Codec2 names (c2.webcodecs.<type>.decoder) with MediaCodecInfo flags from
+    `isConfigSupported({hardwareAcceleration: "prefer-hardware"})` (HEVC hardware-only, VP8
+    software-only in headless Chromium 153). TikTok then chose MediaCodec for some HEVC videos
+    but configured no csd and queued hvcC length-prefixed NAL units with in-band VPS/SPS/PPS,
+    which WebCodecs rejects ("a key frame is required"); after "decoded first frame timeout" it
+    fell back to software. Device decoders need Annex B too, so the missing extradata upstream is
+    the open question, not the decoder.
+  - The JS thread while video plays: a CPU profile spent 30-55% in WebGL getError. TikTok uploads
+    three LUMINANCE planes into textures glTexImage2D made and checks glGetError each frame, and
+    an upload into a mutable texture always asked WebGL, whose answer waits for the GPU process to
+    drain the uploads: 112 queries took 5.06 s of a 10 s step. gles3 now records the levels
+    glTexImage2D specified and answers uploads inside them in the same format and type.
+  - The swipe wedge: the probe now records a wedged step's looper, threads (with the thread a
+    FutureTask or lock waits for) and running guest threads, then how long the loop took to answer.
+    Wedged swipes stalled 4.1-17 s. The main thread was either running the first swipe's cold code
+    (8-10 k classes compiled in the step) or parked in KevaFuture.getKeva for about 1 s at a time,
+    while guest threads took 75-85% of the step's wall time. LockSupport wakes rode the yield
+    channel's batch, which resumed every yielded thread in one task, so a woken thread waited a
+    round of every native thread's slice: in launch, main's 44-45 FutureTask waits took 3.19 s,
+    1.4-1.7 s of it between unpark and resuming, and other threads waited 24-28 s. Woken threads
+    now go first and a turn resumes one yielded thread: 0.67-0.76 s and 5.7-8.0 s. Batching yields
+    behind woken threads alone changed nothing; 4 ms turns halved the waits only. Doodle Jump's
+    perf-browser window presented 748 frames per 15 s against 766 (650-808 across 7 alternated
+    pairs on a loaded host).
+  - Rejected: a background share divided among all throttled native threads and extended to while
+    the main thread runs a message. Wedged steps kept 75-84% native time (the main thread was
+    mostly parked on Keva or ran cold code).
+  - Limit: after about 40 fresh installs from this host in a few hours TikTok stopped offering a
+    guest session (launch shows "Sign up for TikTok", then "Log in to TikTok", with no skip); the
+    SSAID is random per browser profile, so this is TikTok's server-side limit per network or
+    fingerprint. Those runs fail at launch ("completion timed out") on live content.
+  - Result: before, every step wedged after the launch death. With the handler fix, 9 of the 24
+    runs that got a guest feed passed, across the experiments above (the rest wedged one to three
+    swipe/video steps); the last such run, with all three fixes, passed launch and both swipes and
+    wedged in the video step with the main
+    looper idle-polling (stalled 5.6 s, guest threads 79% of the step). Open: the first swipe's
+    cold code and the software decode's share of the one JS thread; TikTok's player choosing
+    MediaCodec (its extradata); a priority for the main thread's wakeups from its looper poll.
+
 - **McDonald's 26.72.3 (XAPK, ARM64 Realm and Akamai BMP):** reaches its
   startup blocker after the shared-mapping and SIGILL fixes. The US build
   gates startup on Play Age Signals (`R.bool.is_age_gate_enabled`); the

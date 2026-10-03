@@ -650,8 +650,12 @@ Each item's mechanism is in the implementation history's 2026-10-02 entries; the
   past V8's global heap ceiling; early non-movable arrays live in the JS heap and StatsEvent runs
   from bytecode. Monitors and class-init waits go by call chain (no timed escape; cycles only),
   and fire-and-forget entries get their own chain. Done (knlnks/realm-memory): guest memory is a
-  shared WebAssembly.Memory committed as used (TikTok GC 52% → 2.8%; history). Open: TikTok's
-  idle main-loop stalls of 8-60 s in some runs.
+  shared WebAssembly.Memory committed as used (TikTok GC 52% → 2.8%; history). Done
+  (knlnks/open-tiktok): TikTok's idle stalls were its process dying of libmetasec's own crash
+  path after a signal handler left without sigreturn; such a handler now returns from the
+  interrupted call. Open: TikTok's swipe and video steps still miss the 3 s liveness probe in
+  some runs (main thread on cold code or Keva waits while software video decode takes 75-85%
+  of the JS thread; history), and TikTok stops offering guest sessions after many installs.
 
 ### §4 performance follow-up (2026-10-02): reuse idle work and retained state
 
@@ -845,8 +849,8 @@ smoke and the fast e2e (7/7) when it landed; the history's 2026-10-04 entries re
 4. **Performance (§4).** D-mode launches compile about 45% more classes than TS mode did; next
    are build-time AOT for the platform prefixes (§4.1) and the boot image (§4.3).
 
-**Known limits:** TikTok's swipe wedges its main loop on native CPU (its video path), and some
-runs stall idle; Clash of Clans and Clash
+**Known limits:** TikTok's swipe and video steps can wedge its main loop behind its software
+video decode (it passes over MediaCodec for non-vendor codec names); Clash of Clans and Clash
 Royale fail their anti-tamper checks; activities run as one task per process.
 
 **How to work here** is unchanged from the previous handoff below, with one change: `scratch-d.ts`
