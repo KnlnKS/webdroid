@@ -68,6 +68,9 @@ bun run e2e --full --shots            # also save every distinct frame per step
 rescores an existing full capture without launching a browser. `--test` selects a flow in
 each mode.
 
+`WEBDROID_CPU_THROTTLE=2` slows the page's CPU by that factor (CDP), to reproduce races that host
+load exposes.
+
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. Leave it unset when measuring stock-browser behavior.
 
