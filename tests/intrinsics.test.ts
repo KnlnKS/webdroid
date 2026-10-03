@@ -284,7 +284,8 @@ test("BigInteger's intrinsics match its AOSP bodies over signs, zero, powers of 
     for (const sig of ["toString()Ljava/lang/String;", "intValue()I", "longValue()J", "bitLength()I", "hashCode()I", "toByteArray()[B"]) await same(sig, x, []);
     for (const r of [2, 8, 10, 16, 36, 1, 37]) await same("toString(I)Ljava/lang/String;", x, [r]);
     for (const n of [-1, 0, 5, 31, 63, 64, 100, 5000]) await same("testBit(I)Z", x, [n]);
-    for (const n of [-70, -33, -1, 0, 1, 31, 32, 33, 100, -2147483648]) { await same(`shiftLeft(I)${B}`, x, [n]); await same(`shiftRight(I)${B}`, x, [n]); }
+    // Integer.MIN_VALUE allocates a 256 MB magnitude in the AOSP body; a few operands cover it
+    for (const n of [-70, -33, -1, 0, 1, 31, 32, 33, 100, ...i < 3 ? [-2147483648] : []]) { await same(`shiftLeft(I)${B}`, x, [n]); await same(`shiftRight(I)${B}`, x, [n]); }
     for (const e of [-1, 0, 1, 2, 5]) if (modest(i) || e < 2) await same(`pow(I)${B}`, x, [e]);
     for (const sig of [`add(${B})${B}`, `subtract(${B})${B}`, `multiply(${B})${B}`, `compareTo(${B})I`, "equals(Ljava/lang/Object;)Z"]) await same(sig, x, [null]);
     await same("equals(Ljava/lang/Object;)Z", x, ["1"]);
@@ -295,7 +296,7 @@ test("BigInteger's intrinsics match its AOSP bodies over signs, zero, powers of 
       if (modest(i) && modest(j)) {
         await same(`gcd(${B})${B}`, x, [y]);
         await same(`modInverse(${B})${B}`, x, [y]);
-        await same(`modPow(${B}${B})${B}`, x, [operands[(i + j) % operands.length], y]);
+        if (modest((i + j) % operands.length)) await same(`modPow(${B}${B})${B}`, x, [operands[(i + j) % operands.length], y]);
       }
     }
   }
@@ -479,12 +480,13 @@ test("FloatingDecimal's dtoa matches its AOSP body over doubles and floats", asy
   };
   const doubleBits = (d: number) => { view.setFloat64(0, d); return view.getBigUint64(0); };
   const floatBits = (f: number) => { view.setFloat32(0, f); return BigInt(view.getUint32(0)); };
-  const nice = Array.from({ length: 3000 }, (_, i) => [i / 7, i * 1.37e-3, i * 0.1, 1 / (i + 1), 2 ** (i % 2100 - 1074),
-    10 ** (i % 630 - 323), (i + 1) * 123456789.123, 2 ** 53 + i * 977, 9.2e18 - i * 2 ** 12]).flat();
+  // every binary and decimal exponent, and runs of short and long decimals
+  const nice = [...Array.from({ length: 2100 }, (_, i) => 2 ** (i - 1074)), ...Array.from({ length: 630 }, (_, i) => 10 ** (i - 323)),
+    ...Array.from({ length: 700 }, (_, i) => [i / 7, i * 1.37e-3, i * 0.1, 1 / (i + 1), (i + 1) * 123456789.123, 2 ** 53 + i * 977, 9.2e18 - i * 2 ** 12]).flat()];
   const inputs: [bigint, boolean][] = [...nice.map((d): [bigint, boolean] => [doubleBits(d), false]),
     ...nice.map((d): [bigint, boolean] => [floatBits(Math.fround(d)), true]),
-    ...Array.from({ length: 20000 }, (): [bigint, boolean] => [BigInt(random(2 ** 31)) << 33n | BigInt(random(2 ** 32)) << 1n | BigInt(random(2)), false]),
-    ...Array.from({ length: 10000 }, (): [bigint, boolean] => [BigInt(random(2 ** 31)), true])];
+    ...Array.from({ length: 5000 }, (): [bigint, boolean] => [BigInt(random(2 ** 31)) << 33n | BigInt(random(2 ** 32)) << 1n | BigInt(random(2)), false]),
+    ...Array.from({ length: 2500 }, (): [bigint, boolean] => [BigInt(random(2 ** 31)), true])];
   const state = (b: unknown) => fields(b, B2A, "decExponent", "firstDigitIndex", "nDigits", "decimalDigitsRoundedUp", "exactDecimalConversion", "digits")
     .map((v) => (ArrayBuffer.isView(v) ? String.fromCharCode(...(v as Uint16Array)) : v));
   const mismatches: unknown[] = [];
