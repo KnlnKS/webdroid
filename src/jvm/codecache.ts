@@ -133,10 +133,17 @@ export function codeText(bodies: Iterable<[string, string]> = [...pending].map((
   return text + "};\n";
 }
 
+/** the source the page was built from, which decides every emitted body (scripts/build-id.ts) */
+async function fetchBuildId(): Promise<string | null> {
+  try {
+    const res = await fetch("/build-id");
+    return res.ok ? await res.text() : null;
+  } catch (e) { console.warn("[webdroid] build id unavailable", e); return null; }
+}
 /** the build's store root, once the platform's persisted bodies are loaded; null when the page
  *  cannot persist or has no link table naming its build */
 const storeRoot = once(async (): Promise<string | null> => {
-  const build = typeof caches === "undefined" ? undefined : (await fetchLinkTable())?.build;
+  const build = typeof caches === "undefined" ? null : await fetchBuildId();
   if (!build) return null;
   const cache = await caches.open(CACHE);
   // through the service worker when it controls the page, so V8 can reuse its code cache
@@ -244,18 +251,16 @@ function saveCode(): Promise<void> {
 /** a gap: its method list (0 direct, 1 virtual), index there, mangled name and how it is filled
  *  (0 the platform body, 1 its JNI binding, 2 the superclass's implementation) */
 export type Gap = [list: number, index: number, mangled: string, kind: number];
-/** `build` identifies the source the page was built from, which decides every emitted body */
-type LinkTable = { fingerprint: string; build: string; gaps: Record<string, Gap[]> };
+type LinkTable = { fingerprint: string; gaps: Record<string, Gap[]> };
 let gaps: Record<string, Gap[]> | null = null, foundGaps: Record<string, Gap[]> | null = null;
-let table: Promise<LinkTable | null> | null = null;
 /** the served table for this bytecode switch, if the page has one to ask */
-export const fetchLinkTable = (): Promise<LinkTable | null> => table ??= (async () => {
+export async function fetchLinkTable(): Promise<LinkTable | null> {
   if (typeof location === "undefined") return null;
   try {
     const res = await fetch(`/link-table.json${BYTECODE.length ? "?bytecode=" + encodeURIComponent(BYTECODE.join(",")) : ""}`);
     return res.ok ? await res.json() : null;
   } catch (e) { console.warn("[webdroid] link table unavailable", e); return null; }
-})();
+}
 /** replay `table` if it was made for these specs and this platform; otherwise each boot finds its own */
 export function useLinkTable(table: LinkTable | null, fingerprint: string): void {
   gaps = table?.fingerprint === fingerprint ? table.gaps : null;

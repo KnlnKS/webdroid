@@ -6,6 +6,7 @@ import { forwardDnsMessage, proxyRequest } from "./src/shell/proxy";
 import { openInstall } from "./src/shell/install";
 import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
+import { buildId } from "./scripts/build-id";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
 import { parseIpv4 } from "./src/shell/relay";
@@ -76,11 +77,24 @@ function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   return pending;
 }
 
+/** the newest modification among the files `globs` match */
+function stampOf(...globs: string[]): number {
+  let stamp = 0;
+  for (const glob of globs) for (const f of new Bun.Glob(glob).scanSync()) stamp = Math.max(stamp, Bun.file(f).lastModified);
+  return stamp;
+}
+/** scripts/build-id.ts, recomputed when a source file has changed since */
+let build: { stamp: number; id: Promise<string> } | null = null;
+async function buildIdResponse(): Promise<Response> {
+  const stamp = stampOf("src/**/*.ts");
+  if (build?.stamp !== stamp) build = { stamp, id: buildId() };
+  return new Response(await build.id, { headers: { "content-type": "text/plain", "cache-control": "no-cache" } });
+}
+
 /** src/jvm/compileworker.ts bundled for the page, rebuilt when a source file has changed since */
 let workerBuild: { stamp: number; code: Promise<string> } | null = null;
 async function compileWorker(): Promise<Response> {
-  let stamp = 0;
-  for (const f of new Bun.Glob("src/**/*.ts").scanSync()) stamp = Math.max(stamp, Bun.file(f).lastModified);
+  const stamp = stampOf("src/**/*.ts");
   if (workerBuild?.stamp !== stamp) workerBuild = { stamp, code: Bun.build({ entrypoints: ["src/jvm/compileworker.ts"], target: "browser" }).then((r) => r.outputs[0].text()) };
   return new Response(await workerBuild.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
 }
@@ -89,8 +103,7 @@ async function compileWorker(): Promise<Response> {
 const linkTables = new Map<string, { stamp: number; json: Promise<string> }>();
 async function linkTable(req: Request): Promise<Response> {
   const bytecode = new URL(req.url).searchParams.get("bytecode") ?? "";
-  let stamp = 0;
-  for (const f of [...new Bun.Glob("src/**/*.ts").scanSync(), ...new Bun.Glob("vendor/aosp/*.jar").scanSync()]) stamp = Math.max(stamp, Bun.file(f).lastModified);
+  const stamp = stampOf("src/**/*.ts", "vendor/aosp/*.jar");
   let entry = linkTables.get(bytecode);
   if (entry?.stamp !== stamp) {
     const run = Bun.spawn(["bun", "scripts/link-table.ts", bytecode], { stdout: "pipe", stderr: "inherit" });
@@ -116,6 +129,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/compile-worker.js": () => compileWorker(),
     "/link-table.json": linkTable,
+    "/build-id": buildIdResponse,
     "/font-index.json": async () => new Response(await (fontIndex ??= new Response(Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" }).stdout).text()),
       { headers: { "content-type": "application/json" } }),
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),

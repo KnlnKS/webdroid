@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { prepareSystemPackages } from "./system-packages";
 import { PLATFORM_JARS } from "../src/jvm/provenance";
 import { PLATFORM_DATA } from "../src/jvm/bootclasspath";
+import { buildId } from "./build-id";
 
 const out = "dist";
 const partSize = 24 * 1024 * 1024;
@@ -23,6 +24,7 @@ await Bun.write(join(out, "compile-worker.js"), worker.outputs[0]);
 const linkTable = Bun.spawn(["bun", "scripts/link-table.ts"], { stdout: "pipe", stderr: "inherit" });
 await Bun.write(join(out, "link-table.json"), await new Response(linkTable.stdout).text());
 if (await linkTable.exited !== 0) throw new Error("Link table failed");
+await Bun.write(join(out, "build-id"), await buildId());
 const fontIndex = Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" });
 await Bun.write(join(out, "font-index.json"), await new Response(fontIndex.stdout).text());
 if (await fontIndex.exited !== 0) throw new Error("Font index failed");
