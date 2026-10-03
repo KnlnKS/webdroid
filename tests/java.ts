@@ -100,40 +100,76 @@ export async function appResources(res: import("../src/android/res").Resources, 
   return loadResources(`/data/app/${name}.apk`, await javaConfiguration(deviceConfiguration()));
 }
 
-let booted: Promise<JObj> | null = null;
+type BootedApp = { app: JObj; info: JObj; loaded: JObj };
+const booted = new Map<string, Promise<BootedApp>>();
+let started: Promise<unknown> | null = null;
 /** `record`'s process as a page boots it: the package installed and naming this process, AOSP's
  *  ActivityThread attached to the activity manager, which binds its Application. Resolves to that
- *  Application once its onCreate ran; one app per test file. */
-export function bootApp(record: import("../src/android/packages").PackageRecord, pid = 4321): Promise<JObj> {
-  return booted ??= (async () => {
-    const { packages } = await import("../src/android/packages");
-    const { registerApk } = await import("../src/android/assetmanager");
-    const { setProcessIdentity, setProcessName } = await import("../src/android/os");
-    const { setAppHost } = await import("../src/android/apphost");
-    const { onMain } = await import("../src/android/mainloop");
-    const { vfs } = await import("../src/shell/vfs");
-    const { startActivityThread } = await import("../src/android/server/am");
-    const { hostWindowManager } = await import("../src/android/server/wm");
-    await loadPlatform();
-    await loadSystemFonts();
+ *  Application once its onCreate ran. A serial `bun test` runs every file in one process, so a file
+ *  asking for another package takes the process over: its identity, name and Application, made by
+ *  its own LoadedApk, are the current ones until a file asks for another. */
+export async function bootApp(record: import("../src/android/packages").PackageRecord, pid = 4321): Promise<JObj> {
+  const { packages } = await import("../src/android/packages");
+  const { registerApk } = await import("../src/android/assetmanager");
+  const { setProcessIdentity, setProcessName } = await import("../src/android/os");
+  const { setAppHost } = await import("../src/android/apphost");
+  const { onMain } = await import("../src/android/mainloop");
+  const { vfs } = await import("../src/shell/vfs");
+  const { vcall, staticField } = await import("../src/jvm/natives/jlang");
+  const { getDeclared, setDeclared } = await import("../src/jvm/runtime");
+  const AT = "android/app/ActivityThread", BIND = "android/app/ActivityThread$AppBindData";
+  let entry = booted.get(record.pkg);
+  if (!entry) {
     packages.set(record.pkg, record);
     registerApk(record.path, record.res);
     // installd's createAppData, as a page's boot does it
     for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`/data/data/${record.pkg}${dir}`);
-    setProcessIdentity(pid, record.uid);
-    setProcessName(record.pkg);
-    setAppHost(testAppHost(record));
-    hostWindowManager();
-    await onMain(() => startActivityThread(false));
-    // bindApplication is a message to the main looper; the Application exists once it ran
-    const app = await onMain(() => scall("android/app/ActivityThread", "currentApplication", "()Landroid/app/Application;"));
-    // bindApplication enables StrictMode's death on network for the main thread, which test bodies
-    // call Java from; a later file in the same process (a serial `bun test`) does network I/O there
-    const { staticField } = await import("../src/jvm/natives/jlang");
-    await onMain(async () => scall("android/os/StrictMode", "setThreadPolicy", "(Landroid/os/StrictMode$ThreadPolicy;)V",
-      await staticField("android/os/StrictMode$ThreadPolicy", "LAX")));
-    return app;
-  })();
+  }
+  setProcessIdentity(pid, record.uid);
+  setProcessName(record.pkg);
+  setAppHost(testAppHost(record));
+  const thread = () => scall(AT, "currentActivityThread", `()L${AT};`);
+  if (!started) {
+    started = entry = (async () => {
+      const { startActivityThread } = await import("../src/android/server/am");
+      const { hostWindowManager } = await import("../src/android/server/wm");
+      await loadPlatform();
+      await loadSystemFonts();
+      hostWindowManager();
+      await onMain(() => startActivityThread(false));
+      // bindApplication is a message to the main looper; the Application exists once it ran
+      return onMain(async () => {
+        const at = await thread(), bound = getDeclared<JObj>(at, AT, "mBoundApplication");
+        // bindApplication enables StrictMode's death on network for the main thread, which test
+        // bodies call Java from; a later file in the same process does network I/O there
+        await scall("android/os/StrictMode", "setThreadPolicy", "(Landroid/os/StrictMode$ThreadPolicy;)V",
+          await staticField("android/os/StrictMode$ThreadPolicy", "LAX"));
+        return { app: getDeclared<JObj>(at, AT, "mInitialApplication"), info: getDeclared<JObj>(bound, BIND, "appInfo"), loaded: getDeclared<JObj>(bound, BIND, "info") };
+      });
+    })();
+    booted.set(record.pkg, entry);
+  } else if (!entry) {
+    await started;
+    // handleBindApplication's share for the package: its LoadedApk and Application, onCreate called
+    booted.set(record.pkg, entry = onMain(async () => {
+      const at = await thread();
+      const info = await vcall(await scall(AT, "getPackageManager", "()Landroid/content/pm/IPackageManager;"), "getApplicationInfo",
+        "(Ljava/lang/String;JI)Landroid/content/pm/ApplicationInfo;", record.pkg, 0x400n, 0);
+      const loaded = await vcall(at, "getPackageInfoNoCheck", "(Landroid/content/pm/ApplicationInfo;Landroid/content/res/CompatibilityInfo;)Landroid/app/LoadedApk;",
+        info, await staticField("android/content/res/CompatibilityInfo", "DEFAULT_COMPATIBILITY_INFO"));
+      const app = await vcall(loaded, "makeApplication", "(ZLandroid/app/Instrumentation;)Landroid/app/Application;", 0, null);
+      await vcall(app, "onCreate", "()V");
+      return { app, info, loaded };
+    }));
+  }
+  const { app, info, loaded } = await entry;
+  // ActivityThread's view of which package this process runs (currentApplication, currentPackageName)
+  await onMain(async () => {
+    const at = await thread();
+    setDeclared(at, AT, { mInitialApplication: app });
+    setDeclared(getDeclared<JObj>(at, AT, "mBoundApplication"), BIND, { appInfo: info, info: loaded, processName: record.pkg });
+  });
+  return app;
 }
 
 /** a package `pkg` targeting `target` that requests `permissions`, as the package manager records an

@@ -1,7 +1,7 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync, stringHash } from "../src/jvm/natives/jlang";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
 import { bootApp, packageRecord } from "./java";
@@ -58,9 +58,11 @@ describe("notification-manager", () => {
     await vcall(manager, "notify", `(Ljava/lang/String;I${N})V`, "t", 1, await build("p", "tagged"));
     await vcall(manager, "notify", `(I${N})V`, 2, await build("ghost", "dropped"));
     const uid = packageUid(pkg);
-    // two ungrouped notifications are bundled under the system's autogroup summary
-    expect(await keys()).toEqual([`0|${pkg}|1|t|${uid}`, `0|${pkg}|1|null|${uid}`, `0|${pkg}|2147483647|ranker_group|${uid}|ranker_group`]);
-    const [tagged] = await active();
+    // two ungrouped notifications are bundled under the system's autogroup summary, listed in their
+    // keys' Java hash order (ArrayMap's), which the package's uid decides
+    const tag = `0|${pkg}|1|t|${uid}`;
+    expect(await keys()).toEqual([tag, `0|${pkg}|1|null|${uid}`, `0|${pkg}|2147483647|ranker_group|${uid}|ranker_group`].sort((a, b) => stringHash(a) - stringHash(b)));
+    const tagged = (await active())[(await keys()).indexOf(tag)];
     expect(await vcall(tagged, "getNotification", `()${N}`)).not.toBe(n);
     expect(await vcall(tagged, "getGroupKey", "()Ljava/lang/String;")).toBe(`0|${pkg}|g:ranker_group`);
     // a custom view travels with the notification as AOSP's RemoteViews
