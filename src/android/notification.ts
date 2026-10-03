@@ -10,11 +10,12 @@ import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from ".
 import { newObj, vcall, scall, callUncaught, stringHash } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
+import { jarray } from "../jvm/abi";
 import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { onMain } from "./mainloop";
 import { preferenceStore } from "./sharedprefs";
-import { packages, usesSdk } from "./packages";
+import { packages } from "./packages";
 import { appHost } from "./apphost";
 import { coverTop, foreground } from "./server/atm";
 import { permissionGranted, grantPrompted } from "./permissions";
@@ -94,7 +95,7 @@ function enforceSystemOrSystemUI(message: string): void {
 }
 /** Do Not Disturb policy access: granted only in Settings, which no app here can reach */
 function denyPolicyAccess(): never { return fail("java/lang/SecurityException", "Notification policy access denied"); }
-const targetSdk = (pkg: string) => { const record = packages.get(pkg); return record ? usesSdk(record.root).target : 10000; };
+const targetSdk = (pkg: string) => packages.get(pkg)?.sdk.target ?? 10000;
 const packageOf = (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null;
 /** PermissionHelper.hasPermission: the uid holds POST_NOTIFICATIONS */
 function hasPermission(uid: number): boolean {
@@ -455,7 +456,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
   const actions = get(n, "actions") as (JObj | null)[] | null;
   if (actions?.includes(null)) {
     const kept = actions.filter((a) => a !== null);
-    set(n, { actions: kept.length ? Object.assign(kept, { $t: `L${N}$Action;` }) : null });
+    set(n, { actions: kept.length ? jarray(kept, `L${N}$Action;`) : null });
   }
   if ((yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$MediaStyle`))) || (yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$DecoratedMediaCustomViewStyle`)))) {
     for (const key of ["android.mediaRemoteDevice", "android.mediaRemoteIcon", "android.mediaRemoteIntent"]) yield vcall(extras, "remove", "(Ljava/lang/String;)V", key);
