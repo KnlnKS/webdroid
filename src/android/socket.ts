@@ -20,15 +20,8 @@ const ISA = "java/net/InetSocketAddress", UNIX_ADDRESS = "android/system/UnixSoc
 const INET = "Ljava/net/InetAddress;", SOCKADDR = "Ljava/net/SocketAddress;";
 const SO_RCVTIMEO = 20, SO_SNDTIMEO = 21, IP_MULTICAST_IF = 32, SO_BINDTODEVICE = 25;
 
-/** a bytecode throwable, initialized before it is made (a native's exception needs its class ready) */
-function thrown(cls: string, desc: string, ...args: unknown[]): never | Promise<never> {
-  const info = rt.link(cls), init = rt.initClass(info);
-  const make = (): never | Promise<never> => {
-    const e = new info.ctor();
-    return after(vcall(e, "<init>", desc, ...args), () => { throw e; }) as never | Promise<never>;
-  };
-  return init ? init.then(make) : make();
-}
+/** a bytecode throwable, thrown once made */
+const thrown = (cls: string, desc: string, ...args: unknown[]): Promise<never> => after(newObj(cls, desc, ...args), (e) => { throw e; });
 const socketClosed = () => rt.mkThrowable("java/net/SocketException", "Socket closed");
 /** the descriptor a call waited on closed under it: libcore's AsynchronousCloseMonitor answer */
 const closedUnder = (fn: string, r: number) => { if (r === -E.BADF) throw socketClosed(); sys(fn, r); return r; };
@@ -51,13 +44,13 @@ function socketAddressEndpoint(fn: string, address: JObj | null): Endpoint | Pro
   if (inet === null) throw errno(fn, E.INVAL);
   return endpoint(inet, getDeclared(holder, ISA_HOLDER, "port") as number);
 }
-/** sockaddrToInetAddress: InetAddress.getByAddress(null, bytes, scope) */
 /** an AF_UNIX socket's bind or connect takes a UnixSocketAddress's sun_path */
 function unixPath(fn: string, address: JObj | null): string {
   if (address === null) return rt.npe();
   if (!rt.iof(address, UNIX_ADDRESS)) throw errno(fn, E.INVAL);
   return sunPath(u8(getDeclared<Int8Array>(address, UNIX_ADDRESS, "sun_path")));
 }
+/** sockaddrToInetAddress: InetAddress.getByAddress(null, bytes, scope) */
 const inetAddress = (ep: { address: number[]; scope?: number }): JObj | Promise<JObj> =>
   scall("java/net/InetAddress", "getByAddress", "(Ljava/lang/String;[BI)Ljava/net/InetAddress;", null, Int8Array.from(ep.address), ep.scope ?? 0);
 const inetSocketAddress = (ep: Endpoint): JObj | Promise<JObj> => after(inetAddress(ep), (a) => newObj(ISA, `(${INET}I)V`, a, ep.port));
@@ -69,7 +62,6 @@ function fillSocketAddress(target: JObj | null, ep: Endpoint | null): void | Pro
     setDeclared(holder, ISA_HOLDER, { addr: a, port: ep.port });
   });
 }
-const withEndpoint = <T>(ep: Endpoint | Promise<Endpoint>, f: (ep: Endpoint) => T) => after(ep, f);
 
 function connect(d: JObj | null, ep: Endpoint) { return waited("connect", socketConnect(fdInt(d), ep), () => {}); }
 function bind(d: JObj | null, ep: Endpoint) { sys("bind", socketBind(fdInt(d), ep)); }
@@ -115,17 +107,17 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     sys("dup2", fd);
     return mkFd(fd);
   },
-  [`connect(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => withEndpoint(endpoint(address, port), (ep) => connect(d, ep)),
+  [`connect(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => after(endpoint(address, port), (ep) => connect(d, ep)),
   [`connect(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => {
     const fd = fdInt(d);
     if (isUnixSocket(fd)) sys("connect", unixConnectPath(fd, unixPath("connect", address)));
-    else return withEndpoint(socketAddressEndpoint("connect", address), (ep) => connect(d, ep));
+    else return after(socketAddressEndpoint("connect", address), (ep) => connect(d, ep));
   },
-  [`bind(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => withEndpoint(endpoint(address, port), (ep) => bind(d, ep)),
+  [`bind(${FD}${INET}I)V`]: (d: JObj | null, address: JObj | null, port: number) => after(endpoint(address, port), (ep) => bind(d, ep)),
   [`bind(${FD}${SOCKADDR})V`]: (d: JObj | null, address: JObj | null) => {
     const fd = fdInt(d);
     if (isUnixSocket(fd)) sys("bind", unixBind(fd, unixPath("bind", address)));
-    else return withEndpoint(socketAddressEndpoint("bind", address), (ep) => bind(d, ep));
+    else return after(socketAddressEndpoint("bind", address), (ep) => bind(d, ep));
   },
   [`listen(${FD}I)V`]: (d: JObj | null) => { const fd = fdInt(d); sys("listen", isUnixSocket(fd) ? unixListen(fd) : socketListen(fd)); },
   [`accept(${FD}${SOCKADDR})${FD}`]: (d: JObj | null, peer: JObj | null) => {
@@ -193,9 +185,9 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     if (ifname && !iface(ifname)) throw errno("setsockopt", E.NODEV);
   },
   [`sendtoBytes(${FD}Ljava/lang/Object;III${INET}I)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null, port: number) =>
-    address === null ? sendto(d, buffer, offset, count, flags, null) : withEndpoint(endpoint(address, port), (ep) => sendto(d, buffer, offset, count, flags, ep)),
+    address === null ? sendto(d, buffer, offset, count, flags, null) : after(endpoint(address, port), (ep) => sendto(d, buffer, offset, count, flags, ep)),
   [`sendtoBytes(${FD}Ljava/lang/Object;III${SOCKADDR})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, address: JObj | null) =>
-    address === null ? sendto(d, buffer, offset, count, flags, null) : withEndpoint(socketAddressEndpoint("sendto", address), (ep) => sendto(d, buffer, offset, count, flags, ep)),
+    address === null ? sendto(d, buffer, offset, count, flags, null) : after(socketAddressEndpoint("sendto", address), (ep) => sendto(d, buffer, offset, count, flags, ep)),
   [`recvfromBytes(${FD}Ljava/lang/Object;III${"Ljava/net/InetSocketAddress;"})I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, flags: number, source: JObj | null) => {
     const from = { source: null as Endpoint | null }, fd = fdInt(d);
     const n = readBytes("recvfrom", buffer, offset, count, (target) => {
