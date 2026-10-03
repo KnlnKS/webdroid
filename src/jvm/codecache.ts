@@ -30,20 +30,22 @@ function noteChunk(url: string, bodies: Record<string, Factory>): Record<string,
   return bodies;
 }
 const chunkStarts = new WeakMap<Record<string, Factory>, [key: string, line: number][]>();
+/** the line each body of `bodies` starts on, as codeText writes them */
+function linesOf(bodies: [key: string, source: string][]): [key: string, line: number][] {
+  let at = 2;
+  return bodies.map(([key, source]) => {
+    const start = at;
+    at += source.split("\n").length;
+    return [key, start];
+  });
+}
 /** the persisted body a chunk's `line` falls in, and the line within its body: codeText writes
  *  each factory on the line after the last one's, under its key */
 export function chunkBody(url: string, line: number): { key: string; line: number } | null {
   const bodies = chunks.get(url);
   if (!bodies) return null;
   let starts = chunkStarts.get(bodies);
-  if (!starts) {
-    let at = 2;
-    chunkStarts.set(bodies, starts = Object.entries(bodies).map(([key, factory]) => {
-      const start = at;
-      at += factory.toString().split("\n").length;
-      return [key, start];
-    }));
-  }
+  if (!starts) chunkStarts.set(bodies, starts = linesOf(Object.entries(bodies).map(([key, factory]) => [key, factory.toString()])));
   for (let i = starts.length - 1; i >= 0; i--) if (starts[i][1] <= line) return { key: starts[i][0], line: line - starts[i][1] };
   return null;
 }
@@ -63,8 +65,25 @@ export const codeStats = () => ({ dir, loaded: Object.keys(loaded).filter((key) 
 
 export const codeKey = (dexId: string, methodIdx: number, form: "e" | "r") => `${dexId}:${methodIdx}:${form}`;
 
-/** bodies a compile worker emitted this launch and no method has used yet */
-const offered = new Set<string>();
+/** bodies a compile worker emitted this launch and no method has used yet, with the chunk holding each */
+const offered = new Map<string, Record<string, Factory>>();
+/** Offered bodies cost the page about 4 KB each until they are dropped (Mihon offers 27k). Once
+ *  no method has claimed one for this long, launch and its first interactions are over and the
+ *  rest are dropped; a later first call compiles its own. */
+const UNCLAIMED_MS = 30_000;
+let lastClaim = 0, sweeping = false;
+function sweepOffered(): void {
+  if (sweeping) return;
+  sweeping = true;
+  const check = () => {
+    if (performance.now() - lastClaim < UNCLAIMED_MS) { setTimeout(check, UNCLAIMED_MS); return; }
+    // the chunks keep their line maps for stacks through the bodies still in them
+    for (const [key, bodies] of offered) { delete loaded[key]; delete bodies[key]; }
+    offered.clear();
+    sweeping = false;
+  };
+  setTimeout(check, UNCLAIMED_MS);
+}
 
 /** the persisted body for `key`, if an earlier launch or this launch's compile worker made one */
 export function persistedBody(key: string): Factory | undefined {
@@ -75,6 +94,7 @@ export function persistedBody(key: string): Factory | undefined {
 /** an offered body a method has reached persists, whether it installs it or compiles its own */
 function claim(key: string): boolean {
   if (!offered.delete(key)) return false;
+  lastClaim = performance.now();
   record(key, loaded[key].toString(), "e");
   return true;
 }
@@ -103,10 +123,11 @@ function record(key: string, source: string, form: "e" | "r"): void {
 /** The first call determines the persisted phase, even if compilation happens after startup. */
 export function recordUse(key: string): void { if (!firstUse.has(key)) firstUse.set(key, phase); }
 
-/** A compile worker's bodies (factory sources). Those the page has not compiled meanwhile import
- *  as a module, which V8 compiles off the main thread and finalizes there, and install like
+/** A compile worker's bodies (factory sources). Those the page has not compiled meanwhile load as
+ *  a classic script, which V8 compiles off the main thread and finalizes there, and install like
  *  persisted bodies; one persists once a method uses it. Idle time would be too late: a launching
- *  page is not idle until after its first taps. */
+ *  page is not idle until after its first taps. Not a module: a module's record keeps every
+ *  function it compiled for the realm's life, so unclaimed bodies could not be dropped. */
 export function offerCode(bodies: [key: string, source: string][]): void {
   offers.push(bodies);
   if (importing < MAX_IMPORTS) void importOffers();
@@ -114,17 +135,33 @@ export function offerCode(bodies: [key: string, source: string][]): void {
 /** Finalizing a chunk takes the main thread, so imports wait while input is being answered, and a
  *  few at a time keep the worker's pace without finalizing a burst at once. */
 const MAX_IMPORTS = 3, offers: [key: string, source: string][][] = [];
-let importing = 0;
+let importing = 0, scripts = 0;
+/** the global an offered chunk's script hands its bodies to, by chunk */
+const OFFER = "__wdOffer", ran = new Map<number, Record<string, Factory>>();
+if (typeof document !== "undefined") Object.defineProperty(globalThis, OFFER, { value: (id: number, bodies: Record<string, Factory>) => ran.set(id, bodies) });
+function runScript(url: string, id: number): Promise<Record<string, Factory>> {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = url;
+    script.onload = () => { script.remove(); const bodies = ran.get(id); ran.delete(id); if (bodies) resolve(bodies); else reject(new Error("chunk ran no bodies")); };
+    script.onerror = () => { script.remove(); reject(new Error("chunk failed to load")); };
+    document.head.append(script);
+  });
+}
 async function importOffers(): Promise<void> {
   importing++;
   for (let bodies; (bodies = offers.shift());) {
     await inputSettled();
     const needed = bodies.filter(([key]) => !loaded[key] && !pending.has(key));
     if (!needed.length) continue;
-    const url = URL.createObjectURL(new Blob([codeText(needed)], { type: "text/javascript" }));
+    const id = ++scripts;
+    const url = URL.createObjectURL(new Blob([codeText(needed, `${OFFER}(${id},{`, "});")], { type: "text/javascript" }));
     try {
-      const factories = noteChunk(url, (await import(/* @vite-ignore */ url)).default);
-      for (const key in factories) if (!loaded[key] && !pending.has(key)) { loaded[key] = factories[key]; offered.add(key); }
+      const factories = noteChunk(url, await runScript(url, id));
+      chunkStarts.set(factories, linesOf(needed));
+      for (const key in factories) if (!loaded[key] && !pending.has(key)) { loaded[key] = factories[key]; offered.set(key, factories); }
+      lastClaim = performance.now();
+      sweepOffered();
     } catch (e) { console.warn("[webdroid] compiled code unavailable", e); }
     finally { URL.revokeObjectURL(url); }
   }
@@ -134,13 +171,15 @@ async function importOffers(): Promise<void> {
 /** install persisted bodies: what loadCode imports from codeText's modules */
 export function useCode(bodies: Record<string, Factory>): void { loaded = bodies; }
 
-/** a module whose default export is `bodies` (the pending ones by default); each factory is
- *  parenthesized so V8 compiles it with the module, off the launch's critical calls, rather than
- *  preparsing it there and compiling it again when the method is first called */
-export function codeText(bodies: Iterable<[string, string]> = [...pending].map(([key, { source }]) => [key, source])): string {
-  let text = "export default {\n";
+/** a module whose default export is `bodies` (the pending ones by default), or a script passing
+ *  them between `open` and `close`; each factory is parenthesized so V8 compiles it with the
+ *  script, off the launch's critical calls, rather than preparsing it there and compiling it again
+ *  when the method is first called */
+export function codeText(bodies: Iterable<[string, string]> = [...pending].map(([key, { source }]) => [key, source]),
+  open = "export default {", close = "};"): string {
+  let text = open + "\n";
   for (const [key, source] of bodies) text += `${JSON.stringify(key)}:(${source}),\n`;
-  return text + "};\n";
+  return text + close + "\n";
 }
 
 /** the source the page was built from, which decides every emitted body (scripts/build-id.ts) */
