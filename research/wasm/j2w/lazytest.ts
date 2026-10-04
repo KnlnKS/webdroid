@@ -35,7 +35,10 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
 // ---- tiers: a method that uses up its budget is recompiled (here inside a loop, so the next call is the second tier) and answers the same
 {
   const w = world([join(out, "classes.dex"), ...jars]), call = w.entry("Lz", "sum", "(I)I");
-  const first = call(40000), up = w.stats.upgrades;
+  let first = call(40000);
+  // the second tier waits until the program has been hot for a few ms
+  for (let i = 0; i < 1e4 && !w.stats.upgrades; i++) first = call(40000);
+  const up = w.stats.upgrades;
   check("hot loop upgraded", up >= 1, true);
   check("second tier answers the same", call(40000), first);
   check("an upgraded method is not upgraded again", (call(40000), w.stats.upgrades), up);
