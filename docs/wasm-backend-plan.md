@@ -197,11 +197,12 @@ alternative with explicit triggers for switching.
 
 ### 3.4 Strings
 
-Default: `java.lang.String` as a JS string (externref, held in a ref slot through `any.convert_extern`), through
-`wasm:js-string`. Zero-copy to Canvas, resources, VFS and the proxy. Costs: no field-based hashing (cache the hash in
-a side structure or intrinsify), virtual dispatch on `Object` receivers needs an `is string` branch, identity is by
-value (already true today). Alternative: String as a struct over an `i16` array with a cached JS string. G5 decides;
-the dispatch uniformity argument favors the struct, the boundary cost argument favors the JS string.
+`java.lang.String` is a struct over an `i16` array (G5, decided in 4.8): the Object header, the chars, the cached hash code and, once a
+native has asked for it, the JS string. A String is then an Object like any other (a virtual call needs no test for it, `hashCode` is a
+field), and character access is an array access instead of a call of a `wasm:js-string` builtin, which Chrome does not inline. A native sees
+the JS string (made and cached on first use); a JS string a native answers is copied into an array once. Constants are Strings put in the
+shared table by the host and interned with `String.intern`; identity is Java's (ART interns member names, which `Method.equals` compares by
+identity, so the host makes those through `intern`). The JS-string representation measured worse on every string workload and was removed.
 
 ### 3.5 Natives and host boundary
 
@@ -669,6 +670,55 @@ field (any class, `Object`), `getAndAdd` on byte, short and char variables narro
 
 **Limits.** A transformer handle, a lambda call site, a name resolved by the relay and a native that needs a scheduler stay gaps. The CHA window for running frames (above) remains.
 `invoke` and `invokeExact` box every argument and result. The ART message formats are unverified against a device.
+
+### 4.8 S1-G: the host boundary, strings and the G1 steady state (2026-10-04, `knlnks/wasm-g`)
+
+**G1 steady state, js/wasm geometric mean** (3 runs x 100 reps, load average 1.5 to 5 on 14 cores, so +-10% per workload; same harness, base `b77c6e02`
+against this branch): jbench 42 workloads node 1.28x -> 1.76x, Chrome 1.38x -> 1.97x; G1 extras node 1.82x -> 2.38x, Chrome 1.66x -> 2.24x. The
+geometric-mean half of the gate holds. The half "no workload more than 10% slower" does not: node `sha256` 0.11x, `fbBulk` 0.16x, `strConcat` 0.47x,
+`strSubstr` 0.47x, `bbInts` 0.77x, `switchSparse` 0.83x, `fbLoop` 0.93x; Chrome `sha256` 0.12x, `fbBulk` 0.16x, `strConcat` 0.64x, `strSubstr` 0.46x,
+`strBuild` 0.88x. Before (node/Chrome): `zipOpen` 0.01x/0.01x -> 1.21x/1.76x, `parseInts` 0.16x/0.18x -> 1.31x/1.20x, `strIndex` 0.63x/0.24x -> 2.09x/1.10x,
+`strChars` 0.90x/0.53x -> 1.92x/1.61x, `jsonWrite` 0.95x/0.47x -> 1.90x/1.81x, `format` 1.43x/0.71x -> 2.03x/2.17x, `hashSet` 1.62x/4.12x -> 3.07x/8.0x.
+
+**Why the rest fails.** `sha256`: the harness's digest of a 1 MB array is the JS form (3.4 ms of the 3.7), because a native cannot await `crypto.subtle`
+(the JS tier does, 0.4 ms); it needs the suspension of S3, not a faster bridge. `fbBulk`: a `FloatBuffer.put` into a direct buffer is 16 K `array.set` into
+a GC `byte[]`; there is no bulk operation between a GC array and anything else (`array.copy` is array to array, `array.init_data` reads a passive
+segment), so about 0.25 ns per byte is the floor. `strSubstr` and `strConcat` allocate a struct and an array per String (a JS rope or slice is one
+object): 7.5 ns per `substring`; the micro-measurement of the same two allocations is 2.2 ns, and removing the allocation accounting, an inlined
+`sub` and a loop in place of `array.copy` each changed nothing, so the rest is the engine's inlining of the callers. `bbInts`, `switchSparse`, `fbLoop` are
+code generation (4.7).
+
+**Natives boundary** (`natives.ts`, `bridge.ts`). `$copy` copied a whole array element by element for each call (`zipOpen`: `initCEN` decodes each of 1000
+entry names out of a 60 KB array, 66%, 60 ms). Natives whose contract is (array, offset, length) now copy that range (`RANGES`, 40 entries by class, name
+and descriptor; text and pixel natives read a context around their range, so a descriptor-shape rule was wrong: `newStringFromUtf16Bytes` counts chars,
+`CursorWindow.nativePutBlob` takes a row and a column), an `Object` argument reaches the native as just the range at offset 0 (`Bridge.offsetIn`), the loops
+move two 32-bit words per iteration, and a call that reaches no array no longer reads the scratch top (`WebAssembly.Global.value` was 5% of `zipOpen`).
+`zipOpen` 60.3 -> 0.65 ms. The Bridge also copied a primitive array three times; it now allocates the host array for the range only.
+
+**OutOfMemoryError in `scanTokens`/`scanLines`.** Every `java.util.regex.Matcher` opens a native matcher through `NativeAllocationRegistry`, whose `sun.misc.Cleaner` never
+ran: the `PhantomReference` held its referent strongly and the Cleaner list held the Cleaner, so 2,022 handles and 7 MB of matcher state stayed per call (heap 468 -> 525 MB
+over 8 calls, measured with a handle count and a sampling heap profile that named `hitEndImpl`). `Cleaner.create` is now an intrinsic that makes the Cleaner without
+its referent and registers the referent with a host `FinalizationRegistry` that runs `Cleaner.clean`; the harness yields to the event loop every 8 calls so
+finalizers run. The limit also compared the whole JS heap (420 MB of it the engine's own program model) with ART's 512 MB; the World now takes the heap at construction as its
+base. Either alone is not enough (the leak alone stops at 14 calls, the base alone at 100). `VMRuntime.addressOf` still pins every array it is asked about in
+`pinned` and the `nm` table forever; direct buffers that are created and dropped leak through it, which no workload here shows.
+
+**G5: strings as structs, adopted.** `StringRepr` has one implementation, `strings.ts`: `struct { vt, hash, chars: i16[], javaHash, jsString }`. Measured with the
+same byte decoders (`strfactory.ts`) in both representations, 3 runs, steady js/wasm geometric mean over all 69 workloads: node JS-string 1.67x, struct 1.93x;
+Chrome 1.74x, 2.06x. Per workload (node/Chrome, JS-string -> struct): `strIndex` 0.64/0.25 -> 1.98/1.06, `strChars` 0.92/0.57 -> 1.84/1.62, `strCompare` 0.85/0.75 -> 1.68/1.5,
+`strEquals` 0.92/2.77 -> 1.92/6.1, `jsonWrite` 1.04/1.05 -> 1.86/1.85, `format` 1.60/1.83 -> 1.93/2.19, `jsonParse` 1.47/1.31 -> 2.29/1.88, `hashSet` 1.55/4.31 -> 2.71/8.0;
+`strSubstr` 0.65/0.43 -> 0.52/0.44 and `scanLines`/`scanTokens` 1.12/1.08 -> 0.99/0.99 (node) are the losses. The micro-costs (`micro/strings.mjs`, ns, 60-char String,
+node/Chrome): charAt 1.25/1.75 against 0.35/0.33 over an array, hash 0.74/1.5 against 0.57/0.58, 4-char substring 4.3/8.1 against 2.3/2.2, concat 9/5 against 19/20, equals of equal
+Strings 4.3/5 against 31/35, and 25 ns to cross to the host and back. Hash codes are cached in the String, `String.intern` is a host table that also holds the constants,
+ART's interned member names come from `intern` (`Method.equals` compares them by identity), and the String is a JS string only for natives
+(`toHost` makes it once). `Integer.toString`/`Long.toString` write the chars directly and `parseInt(String)`/`parseLong(String)` take the plain decimal case and leave
+the rest (radix, sign, overflow, exceptions) to the library method (`parseInts` 0.16x -> 1.31x node); `AbstractStringBuilder.putStringAt` is one pass instead of `coder()` and `getBytes`.
+`String.indexOf` has no bulk operation to call over an array and loops over `array.get`.
+
+**Rejected or neutral** (each measured, reverted). Allocation accounting dropped from `newCharsKnown`, `substring` written as one inlined function, and a char loop below 16
+chars in place of `array.copy`: `strSubstr` 0.51 -> 0.50 to 0.52 each. The JS-string representation with its own Wasm byte decoders: lost to the struct everywhere (above).
+Not built: a snapshot-and-compare copy-back to skip writing unchanged elements of a large array (`memory.copy` makes the snapshot cheap; useful for a native that only reads a large array, of which
+`sha256` is the only measured case, and that one is bounded by the digest).
 
 ### 4.4 Do not trust
 
