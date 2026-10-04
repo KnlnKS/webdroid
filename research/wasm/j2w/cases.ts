@@ -16,13 +16,13 @@ const nonNull = strings.filter((s) => s !== null);
 const narrow: Record<string, (v: bigint) => bigint> = { Z: (v) => v & 1n, B: (v) => BigInt.asIntN(8, v), S: (v) => BigInt.asIntN(16, v), C: (v) => BigInt.asUintN(16, v) };
 const kindOfParam = (p: string) => (p === "F" || p === "D" ? p : p === STR ? "S" : kindOf(p));
 const retKind = (m: MethodInfo) => (m.ret === "F" || m.ret === "D" ? m.ret : "I");
-const result = (m: MethodInfo, v: unknown, toBits: (v: unknown) => bigint) => (m.ret === STR ? show(v) : fmt(retKind(m), toBits(v)));
 
 /** the parameters of the exported function: a String method takes its receiver first */
 export const paramsOf = (m: MethodInfo) => (m.isStatic ? m.params : [STR, ...m.params]);
 export type Case = { m: MethodInfo; args: (bigint | string | null)[] };
 /** a String result as one comparable token: null apart from the text "null" */
 const show = (v: unknown) => (v === null ? "null" : JSON.stringify(v));
+const result = (m: MethodInfo, v: unknown, toBits: (v: unknown) => bigint) => (m.ret === STR ? show(v) : fmt(retKind(m), toBits(v)));
 /** `small` lists the arguments of single-int-parameter methods whose cost grows with the argument */
 export function genCases(methods: MethodInfo[], small: Record<string, number[]> = {}, perMethod = 40): Case[] {
   return methods.flatMap((m) => {
@@ -33,11 +33,10 @@ export function genCases(methods: MethodInfo[], small: Record<string, number[]> 
   });
 }
 
-type Exports = Record<string, (...a: any[]) => unknown>;
-/** Runs every case on the Wasm module and the JS tier (and `jdk`'s lines, when given); prints each disagreement. A case that reaches
- *  a compiler gap (`gapHits` grew) is blocked, not compared. */
-export async function compare(cases: Case[], exportOf: (m: MethodInfo) => string, exports: Exports,
-  js: (cls: string, name: string, desc: string, args: unknown[], instance?: boolean) => Promise<unknown>, jdk?: string[], gapHits: string[] = []) {
+/** Runs every case on the Wasm tier (`wasm` returns the callable of a method) and the JS tier (and `jdk`'s lines, when given); prints each disagreement.
+ *  A case that reaches a compiler gap (`gapHits` grew) is blocked, not compared. */
+export async function compare(cases: Case[], run: (m: MethodInfo) => (...a: any[]) => unknown,
+  js: (cls: string, name: string, desc: string, args: unknown[], instance?: boolean) => Promise<unknown>, jdk?: string[], gapHits: unknown[] = []) {
   let bad = 0, explained = 0, threw = 0, blocked = 0;
   const fail = (what: string, c: Case, want: string, got: string) => { bad++; console.log(`MISMATCH ${what} ${c.m.cls}.${c.m.name}${c.m.desc}(${c.args.join(", ")}): ${want} vs ${got}`); };
   for (const [i, c] of cases.entries()) {
@@ -45,7 +44,7 @@ export async function compare(cases: Case[], exportOf: (m: MethodInfo) => string
     const ref = jdk ? (jdk[i] === "throw" ? "throw" : fmt(rk, BigInt(jdk[i]))) : undefined;
     let wasm: string, tier: string;
     const seen = gapHits.length;
-    try { wasm = result(m, exports[exportOf(m)](...args.map((a, j) => (paramsOf(m)[j] === "J" || paramsOf(m)[j] === "D" || typeof a !== "bigint" ? a : Number(a)))), (v) => BigInt(v as bigint)); } catch { wasm = "throw"; }
+    try { wasm = result(m, run(m)(...args.map((a, j) => (paramsOf(m)[j] === "J" || paramsOf(m)[j] === "D" || typeof a !== "bigint" ? a : Number(a)))), (v) => BigInt(v as bigint)); } catch { wasm = "throw"; }
     try { tier = result(m, await js(m.cls, m.name, m.desc, args.map((a, j) => typeof a === "bigint" ? unbits(paramsOf(m)[j], a) : a), !m.isStatic), (v) => bitsOf(m.ret, v)); } catch (e) {
       // Bun's JSC words a negative typed-array length differently from V8, which runtime.ts maps to NegativeArraySizeException
       tier = /InternalError: length cannot be negative/.test(String(e)) && wasm !== "throw" ? (explained++, wasm) : "throw";

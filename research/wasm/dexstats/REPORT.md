@@ -18,13 +18,13 @@ bun run.ts                       # all 9 corpora -> out/<corpus>.json (about 16 
 bun run.ts --only fitnotes,core-libart      # subset;  --limit N caps methods per corpus
 bun tables.ts > out/tables.md    # the tables below
 bun crosscheck.ts apks/FitNotes.apk         # const typing vs the repo's own annotateConstants
-bun dbg.ts apks/FitNotes.apk 'LA/c;.p'      # disassembly + inference result of one method (DBG=1 / DBG2=1 add web / liveness dumps)
+bun dbg.ts apks/FitNotes.apk 'LA/c;.p'      # disassembly + inference result of one method
 bun undet.ts apks/FitNotes.apk 5            # methods that keep an unconstrained web
 ```
 
-Files: `load.ts` (open jars/apks), `opinfo.ts` (opcode families, ART "can throw" table), `cfg.ts` (blocks, exception
-edges, Hecht-Ullman reducibility), `infer.ts` (type inference), `cha.ts` (class hierarchy), `run.ts` (driver),
-`tables.ts` (renderer). Raw numbers: `out/*.json`; this file's tables are `out/tables.md` verbatim.
+Files: `load.ts` (open jars/apks), `infer.ts` (statistics over the type inference), `cha.ts` (class hierarchy), `run.ts` (driver),
+`tables.ts` (renderer). The analyses they build on are in `../j2w/`: `opinfo.ts` (opcode families, ART "can throw" table), `cfg.ts` (blocks, exception
+edges, Hecht-Ullman reducibility), `infer.ts` (the live-range type inference the compiler uses). Raw numbers: `out/*.json`; this file's tables are `out/tables.md` verbatim.
 
 ## Summary of decision-relevant numbers
 

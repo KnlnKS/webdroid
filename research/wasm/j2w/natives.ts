@@ -7,7 +7,7 @@ import { Code, OP } from "./code";
 import { T, type VT } from "./wasmbin";
 import type { Compiler, Intrinsic } from "./j2w";
 import { kindOf, type MethodInfo } from "./program";
-import { H, elemKindOf, type ElemKind } from "./consts";
+import { elemKindOf, type ElemKind } from "./consts";
 import { mid } from "./reach";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName } from "../../../src/jvm/abi";
@@ -20,22 +20,16 @@ export interface NativeSource {
   /** a Java throwable raised by a native, by class and message */
   thrown(e: unknown): { cls: string; msg: string | null } | undefined;
 }
-/** classes natives raise: each gets a (String) constructor in every module so the host can build the throwable */
-export const HOST_THROWABLES = ["java/lang/StringIndexOutOfBoundsException", "java/lang/IndexOutOfBoundsException", "java/lang/IllegalArgumentException",
-  "java/lang/IllegalStateException", "java/lang/UnsupportedOperationException", "java/lang/NumberFormatException", "java/lang/NegativeArraySizeException",
-  "java/lang/ArrayIndexOutOfBoundsException", "java/lang/NullPointerException", "java/lang/ArithmeticException", "java/lang/ClassCastException",
-  "java/lang/ArrayStoreException", "java/lang/UnsatisfiedLinkError"];
-/** the primitive array classes every module has, which marshalled natives and string intrinsics allocate */
-export const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
-
-/** String methods whose Java body needs charset or regex machinery (class objects, ICU natives) and whose production override is a
- *  self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
-const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(/;
-/** must `m`, a String method with a body, be replaced by its production override */
-function overridden(m: MethodInfo): boolean {
-  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && descToName(m.dex.type(m.dex.field(i.c).cls)) === STRING_CLASS);
+/** what the host side needs from the World */
+export interface HostContext {
+  mem: WebAssembly.Memory; sp: WebAssembly.Global;
+  /** a Java throwable of a class with a message, and the exception that throws it through Wasm */
+  throwable(cls: string, msg: string | null): object;
+  raise(throwable: object): unknown;
 }
 
+/** the primitive array classes natives take and return */
+const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
 const STRING = "Ljava/lang/String;", STRING_CLASS = "java/lang/String";
 const abi = (d: string): VT | undefined => d === STRING ? T.externref
   : ({ Z: T.i32, B: T.i32, S: T.i32, C: T.i32, I: T.i32, F: T.f32, D: T.f64, J: T.i64 } as Record<string, VT>)[d];
@@ -46,32 +40,34 @@ type View = ArrayBufferView & { length: number };
 /** the typed array the production natives take for a primitive array class */
 const VIEWS: Record<string, new (b: ArrayBuffer, o: number, n: number) => View> = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
 
+/** String methods whose Java body needs charset or regex machinery (class objects, ICU natives) and whose production override is a
+ *  self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
+const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(/;
+/** must `m`, a String method with a body, be replaced by its production override */
+function overridden(m: MethodInfo): boolean {
+  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && descToName(m.dex.type(m.dex.field(i.c).cls)) === STRING_CLASS);
+}
+
 interface Plan {
-  id: string; fn: HostFn; recv: boolean; m: MethodInfo; idx: number;
+  id: string; fn: HostFn; recv: boolean;
   /** the import's parameters, with an array as two (pointer, length) */
   params: VT[]; ret: VT | null;
   /** the Java-level parameters in order, receiver first, as descriptors */
   args: string[];
   /** the array class a result is, if any */
   retArray: string | null;
-}
-/** what the host side needs after instantiation */
-export interface HostContext {
-  tag?: WebAssembly.Tag; mkthrow?: (id: number, msg: string | null) => unknown;
-  mem?: WebAssembly.Memory; sp?: WebAssembly.Global;
+  wrapped?: HostFn;
 }
 
 export class Natives {
   private plans = new Map<string, Plan | string>();
-  /** class id of each throwable `mkthrow` can build */
-  throwIds = new Map<string, number>();
   constructor(private src?: NativeSource) {}
 
   /** `m` as a host import; `override` asks for the production method even where the bytecode would run (an intrinsic's error path) */
   private plan(m: MethodInfo, override = false): Plan | string {
     const id = mid(m);
     let p = this.plans.get(id);
-    if (typeof p === "string" && p === "bytecode" && override) p = undefined;
+    if (p === "bytecode" && override) p = undefined;
     if (p !== undefined) return p;
     // a String constructor is a call site making the String: its host side is a static answering it
     const ctor = m.isCtor && m.cls === STRING_CLASS, recv = !m.isStatic && !ctor;
@@ -86,34 +82,30 @@ export class Natives {
     }
     const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
     if (!p && rd !== "V" && ret === null && !retArray) p = `${rd} result`;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, params, ret: retArray ? T.i32 : ret, args, retArray, m, idx: -1 });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, params, ret: retArray ? T.i32 : ret, args, retArray });
     return p;
   }
   binds(m: MethodInfo): boolean { return typeof this.plan(m) !== "string"; }
   /** why `m` has no host binding */
   reason(m: MethodInfo): string { const p = this.plan(m); return typeof p === "string" ? `native: ${p}` : "native/abstract"; }
 
-  /** the scratch memory arrays are copied through, and its allocator */
-  private sp = -1;
-  private reserve = -1;
-  private copies = new Map<string, number>();
-  /** helper imports the intrinsics call to raise what Java raises; each throws */
-  helper = {} as Record<"charsBounds" | "copyBounds" | "arrayStore", number>;
-  /** imports and state every module has; before any function of the module is defined */
-  prepare(cx: Compiler): void {
-    const { mb } = cx;
-    const raise = (name: keyof Natives["helper"], n: number) => this.helper[name] = mb.importFunc("h", name, mb.addFuncType(Array(n).fill(T.i32), []));
-    raise("charsBounds", 3); raise("copyBounds", 5); raise("arrayStore", 0);
-    mb.export("mem", "memory", mb.addMemory(1));
-    this.sp = mb.addGlobal(T.i32, true, [0x41, 8]);
-    mb.export("sp", "global", this.sp);
-  }
-
-  /** adds the imports of the natives the program calls */
+  /** adds the imports of the natives `methods` call (and of the methods themselves); before any function of the module is defined */
   declare(cx: Compiler, methods: Iterable<MethodInfo>): void {
+    const add = (m: MethodInfo, override: boolean) => {
+      const p = this.plan(m, override);
+      if (typeof p !== "string" && !cx.nativeImports.has(p.id)) cx.nativeImports.set(p.id, cx.mb.importFunc("n", p.id, cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])));
+    };
+    const string = cx.prog.get(STRING_CLASS);
     for (const m of methods) {
-      const p = this.plan(m, !!cx.opts.intrinsics.get(mid(m)));
-      if (typeof p !== "string" && p.idx < 0) p.idx = cx.mb.importFunc("n", p.id, cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret]));
+      add(m, !!cx.w.opts.intrinsics.get(mid(m)));
+      // the String constructors a method calls are factories over their host implementation
+      if (m.codeOff) for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
+        if (!ins.name.startsWith("invoke-direct")) continue;
+        const mr = m.dex.method(ins.b);
+        if (mr.name !== "<init>" || descToName(m.dex.type(mr.cls)) !== STRING_CLASS) continue;
+        const ctor = string?.byKey.get("<init>" + m.dex.methodDesc(ins.b));
+        if (ctor) add(ctor, false);
+      }
     }
   }
   /** m's body is a call of its host import */
@@ -121,131 +113,108 @@ export class Natives {
   /** the function making a String the way constructor `m` does, over the production implementation */
   factory(cx: Compiler, m: MethodInfo): number | undefined {
     const p = this.plan(m);
-    if (typeof p === "string" || p.idx < 0) return undefined;
-    const c = new Code(p.args.length);
-    this.call(cx, c, m);
-    return cx.mb.addFunc(cx.sig(m.params.map(kindOf), "L"), c.finish(), p.id);
+    if (typeof p === "string" || !cx.nativeImports.has(p.id)) return undefined;
+    return cx.memo("factory:" + p.id, () => {
+      const c = new Code(p.args.length);
+      this.call(cx, c, m);
+      return cx.mb.addFunc(cx.sig(m.params.map(kindOf), "L"), c.finish(), p.id);
+    });
   }
 
   /** emits `m` over its own parameter locals: converts them to the import's types, calls it, converts the result */
   call(cx: Compiler, c: Code, m: MethodInfo): void {
-    const p = this.plan(m, true);
-    if (typeof p === "string" || p.idx < 0) { cx.gap(c, `${mid(m)}: ${typeof p === "string" ? "native: " + p : "no host import"}`); return; }
-    const sp0 = c.newLocal(T.i32), arrays: ReturnType<Natives["copyIn"]>[] = [];
-    c.gget(this.sp).lset(sp0);
+    const p = this.plan(m, true), imp = typeof p === "string" ? undefined : cx.nativeImports.get(p.id);
+    if (typeof p === "string" || imp === undefined) { cx.gap(c, `${mid(m)}: ${typeof p === "string" ? "native: " + p : "no host import"}`); return; }
+    const arrays: ReturnType<Natives["copyIn"]>[] = [];
+    const scratch = p.args.some(isPrimArray) || p.retArray ? cx.scratch() : -1, sp0 = scratch >= 0 ? c.newLocal(T.i32) : -1;
+    if (scratch >= 0) c.gget(scratch).lset(sp0);
     p.args.forEach((d, i) => {
       const t = abi(d);
-      if (t === undefined) { const a = this.copyIn(cx, c, i, d); arrays.push(a); c.lget(a.ptr).lget(a.len); return; }
+      if (t === undefined) { const a = this.copyIn(cx, c, i, d, scratch); arrays.push(a); c.lget(a.ptr).lget(a.len); return; }
       c.lget(i);
-      if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (t === T.externref) c.externOfAny();
+      if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (t === T.externref) c.externConvertAny();
     });
-    c.call(p.idx);
-    if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) c.anyOfExtern();
+    c.call(imp);
+    if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) c.anyConvertExtern();
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
     const rlen = p.retArray ? c.newLocal(T.i32) : -1;
     if (p.retArray) c.lset(rlen);
     for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.len).call(this.copy(cx, a.ek, false)).end();
-    if (p.retArray) this.copyOut(cx, c, p.retArray, rlen);
-    c.lget(sp0).gset(this.sp);
+    if (p.retArray) this.copyOut(cx, c, p.retArray, rlen, scratch);
+    if (scratch >= 0) c.lget(sp0).gset(scratch);
   }
   /** copies array parameter `i` of class `d` into a fresh scratch region, leaving its (pointer, length), or (0, -1) for null */
-  private copyIn(cx: Compiler, c: Code, i: number, d: string) {
+  private copyIn(cx: Compiler, c: Code, i: number, d: string, sp: number) {
     const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true }), ptr = c.newLocal(T.i32), len = c.newLocal(T.i32);
     c.lget(i).refIsNull().if_().i32(-1).lset(len).else_()
       .lget(i).refCast(cx.tArr[ek]).structGet(cx.tArr[ek], 2).lset(data).lget(data).refAsNonNull().arrayLen().lset(len)
-      .lget(len).i32(SIZE[ek]).raw(OP.i32_mul).call(this.reserveFn(cx)).lset(ptr)
+      .lget(len).i32(SIZE[ek]).raw(OP.i32_mul).call(this.reserveFn(cx, sp)).lset(ptr)
       .lget(data).refAsNonNull().lget(ptr).lget(len).call(this.copy(cx, ek, true)).end();
     return { data, ptr, len, ek };
   }
   /** the array result of the host call: `rlen` elements at the scratch top, or null */
-  private copyOut(cx: Compiler, c: Code, d: string, rlen: number): void {
+  private copyOut(cx: Compiler, c: Code, d: string, rlen: number, sp: number): void {
     const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true });
     c.lget(rlen).i32(0).raw(OP.i32_lt_s).if_(T.anyref).anyNull().else_()
       .lget(rlen).arrayNewDefault(cx.tData[ek]).lset(data)
-      .lget(data).refAsNonNull().gget(this.sp).lget(rlen).call(this.copy(cx, ek, false))
-      .gget(cx.vtGlobal.get(d)!).refAsNonNull().i32(0).lget(data).refAsNonNull().structNew(cx.tArr[ek]).end();
+      .lget(data).refAsNonNull().gget(sp).lget(rlen).call(this.copy(cx, ek, false))
+      .gget(cx.vtGlobal(d)).refAsNonNull().i32(0).lget(data).refAsNonNull().structNew(cx.tArr[ek]).end();
   }
   /** reserve(bytes) -> pointer: 8-aligned scratch past the current top, the memory grown to hold it */
-  private reserveFn(cx: Compiler): number {
-    if (this.reserve >= 0) return this.reserve;
-    const c = new Code(1), ptr = c.newLocal(T.i32), end = c.newLocal(T.i32);
-    c.gget(this.sp).i32(7).raw(OP.i32_add).i32(-8).raw(OP.i32_and).lset(ptr).lget(ptr).lget(0).raw(OP.i32_add).lset(end);
-    c.lget(end).memorySize().i32(16).raw(OP.i32_shl).raw(OP.i32_gt_u).if_()
-      .lget(end).memorySize().i32(16).raw(OP.i32_shl).raw(OP.i32_sub).i32(0xffff).raw(OP.i32_add).i32(16).raw(OP.i32_shr_u).memoryGrow().i32(-1).raw(OP.i32_eq).if_().unreachable().end().end();
-    c.lget(end).gset(this.sp).lget(ptr);
-    return this.reserve = cx.mb.addFunc(cx.mb.addFuncType([T.i32], [T.i32]), c.finish(), "$reserve");
+  private reserveFn(cx: Compiler, sp: number): number {
+    return cx.memo("reserve", () => {
+      const c = new Code(1), ptr = c.newLocal(T.i32), end = c.newLocal(T.i32);
+      c.gget(sp).i32(7).raw(OP.i32_add).i32(-8).raw(OP.i32_and).lset(ptr).lget(ptr).lget(0).raw(OP.i32_add).lset(end);
+      c.lget(end).memorySize().i32(16).raw(OP.i32_shl).raw(OP.i32_gt_u).if_()
+        .lget(end).memorySize().i32(16).raw(OP.i32_shl).raw(OP.i32_sub).i32(0xffff).raw(OP.i32_add).i32(16).raw(OP.i32_shr_u).memoryGrow().i32(-1).raw(OP.i32_eq).if_().unreachable().end().end();
+      c.lget(end).gset(sp).lget(ptr);
+      return cx.mb.addFunc(cx.mb.addFuncType([T.i32], [T.i32]), c.finish(), "$reserve");
+    });
   }
   /** copy(data, pointer, length): the array into memory (`toMem`) or memory into the array */
   private copy(cx: Compiler, ek: ElemKind, toMem: boolean): number {
-    const key = ek + toMem;
-    let f = this.copies.get(key);
-    if (f !== undefined) return f;
-    const c = new Code(3), i = c.newLocal(T.i32), arr = cx.tData[ek], shift = Math.log2(SIZE[ek]);
-    const addr = () => c.lget(1).lget(i).i32(shift).raw(OP.i32_shl).raw(OP.i32_add);
-    c.block().loop().lget(i).lget(2).raw(OP.i32_ge_s).brIf(1);
-    if (toMem) {
-      addr(); c.lget(0).lget(i);
-      if (ek === "i16") c.arrayGetU(arr).mem(OP.i32_store16, 1); else if (ek === "i8") c.arrayGetU(arr).mem(OP.i32_store8, 0);
-      else c.arrayGet(arr).mem(ek === "i64" ? OP.i64_store : OP.i32_store, ek === "i64" ? 3 : 2);
-    } else {
-      c.lget(0).lget(i); addr();
-      if (ek === "i16") c.mem(OP.i32_load16_u, 1); else if (ek === "i8") c.mem(OP.i32_load8_u, 0); else c.mem(ek === "i64" ? OP.i64_load : OP.i32_load, ek === "i64" ? 3 : 2);
-      c.arraySet(arr);
-    }
-    c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-    this.copies.set(key, f = cx.mb.addFunc(cx.mb.addFuncType([{ ht: arr, nullable: false }, T.i32, T.i32], []), c.finish(), `$copy:${key}`));
-    return f;
+    return cx.memo(`copy:${ek}:${toMem}`, () => {
+      const c = new Code(3), i = c.newLocal(T.i32), arr = cx.tData[ek], shift = Math.log2(SIZE[ek]);
+      const addr = () => c.lget(1).lget(i).i32(shift).raw(OP.i32_shl).raw(OP.i32_add);
+      c.block().loop().lget(i).lget(2).raw(OP.i32_ge_s).brIf(1);
+      if (toMem) {
+        addr(); c.lget(0).lget(i);
+        if (ek === "i16") c.arrayGetU(arr).mem(OP.i32_store16, 1); else if (ek === "i8") c.arrayGetU(arr).mem(OP.i32_store8, 0);
+        else c.arrayGet(arr).mem(ek === "i64" ? OP.i64_store : OP.i32_store, ek === "i64" ? 3 : 2);
+      } else {
+        c.lget(0).lget(i); addr();
+        if (ek === "i16") c.mem(OP.i32_load16_u, 1); else if (ek === "i8") c.mem(OP.i32_load8_u, 0); else c.mem(ek === "i64" ? OP.i64_load : OP.i32_load, ek === "i64" ? 3 : 2);
+        c.arraySet(arr);
+      }
+      c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
+      return cx.mb.addFunc(cx.mb.addFuncType([{ ht: arr, nullable: false }, T.i32, T.i32], []), c.finish(), `$copy:${ek}:${toMem}`);
+    });
   }
 
-  /** `mkthrow(classId, message)`, exported for the host, and the ids of the throwables it builds */
-  emitThrower(cx: Compiler): void {
-    const { mb } = cx, c = new Code(2), t = c.newLocal(T.anyref);
-    for (const cls of HOST_THROWABLES) {
-      const id = cx.classId.get(cls), ctor = cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;)V");
-      if (id === undefined || !ctor || !cx.fn.has(mid(ctor)) || !cx.vtGlobal.has(cls)) continue;
-      this.throwIds.set(cls, id);
-      c.lget(0).i32(id).raw(OP.i32_eq).if_();
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(t).lget(t).lget(1).anyOfExtern().call(cx.fnOf(ctor)).lget(t).ret().end();
-    }
-    c.unreachable();
-    // the class id of a caught throwable, for the host to name it
-    const k = new Code(1);
-    k.lget(0).call(cx.helpers.vtab).i32(H.ID).arrayGet(cx.tVT);
-    mb.export("classof", "func", mb.addFunc(mb.addFuncType([T.anyref], [T.i32]), k.finish(), "$classof"));
-    mb.export("mkthrow", "func", mb.addFunc(mb.addFuncType([T.i32, T.externref], [T.anyref]), c.finish(), "$mkthrow"));
-  }
-
-  /** the "n" and "h" import modules: each native with its exception and suspension handling, and its arrays viewed in memory */
-  imports(ctx: HostContext): { n: Record<string, HostFn>; h: Record<string, HostFn> } {
+  /** the "n" import module for `ids`: each native with its exception and suspension handling, and its arrays viewed in memory */
+  imports(ctx: HostContext, ids: Iterable<string>): Record<string, HostFn> {
     const out: Record<string, HostFn> = {};
-    const throwJava = (t: { cls: string; msg: string | null }, e?: unknown): never => {
-      const cls = this.throwIds.get(t.cls);
-      if (cls === undefined || !ctx.mkthrow) throw e ?? new Error(`${t.cls}: ${t.msg}`);
-      throw new WebAssembly.Exception(ctx.tag!, [ctx.mkthrow(cls, t.msg)]);
+    const throwJava = (t: { cls: string; msg: string | null }): never => { throw ctx.raise(ctx.throwable(t.cls, t.msg)); };
+    const raise = (e: unknown): never => {
+      const t = this.src?.thrown(e);
+      if (!t) throw e;
+      return throwJava(t);
     };
-    const raise = (e: unknown): never => throwJava(this.src?.thrown(e) ?? { cls: "", msg: null }, e);
-    const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new VIEWS[kind](ctx.mem!.buffer, ptr, len);
+    const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new VIEWS[kind](ctx.mem.buffer, ptr, len);
     // a result array is left at the scratch top, which the stub copies out
     const put = (r: View | null) => {
       if (r === null) return -1;
-      const at = ctx.sp!.value as number, need = at + r.byteLength, have = ctx.mem!.buffer.byteLength;
-      if (need > have) ctx.mem!.grow(Math.ceil((need - have) / 65536));
-      new (r.constructor as typeof Uint8Array)(ctx.mem!.buffer, at, r.length).set(r as never);
+      const at = ctx.sp.value as number, need = at + r.byteLength, have = ctx.mem.buffer.byteLength;
+      if (need > have) ctx.mem.grow(Math.ceil((need - have) / 65536));
+      new (r.constructor as typeof Uint8Array)(ctx.mem.buffer, at, r.length).set(r as never);
       return r.length;
     };
-    for (const p of this.plans.values()) {
-      if (typeof p === "string" || p.idx < 0) continue;
-      out[p.id] = wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${p.id}: native suspended` }), view, put);
+    for (const id of ids) {
+      const p = this.plans.get(id);
+      if (typeof p === "string" || !p) continue;
+      out[id] = p.wrapped ??= wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }), view, put);
     }
-    // String(char[], int, int) with a bad range has the message runtime.ts strChars gives
-    const h = {
-      charsBounds: (off: number, n: number, len: number) => throwJava({ cls: "java/lang/StringIndexOutOfBoundsException", msg: `offset ${off}, count ${n}, length ${len}` }),
-      // jlang.ts arraycopy's message
-      copyBounds: (srcLen: number, sp: number, dstLen: number, dp: number, n: number) =>
-        throwJava({ cls: "java/lang/ArrayIndexOutOfBoundsException", msg: `src.length=${srcLen} srcPos=${sp} dst.length=${dstLen} dstPos=${dp} length=${n}` }),
-      arrayStore: () => throwJava({ cls: "java/lang/ArrayStoreException", msg: null }),
-    };
-    return { n: out, h };
+    return out;
   }
 }
 
