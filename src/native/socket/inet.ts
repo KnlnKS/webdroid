@@ -3,9 +3,10 @@
 
 import { DatagramRelay, Relay, syntheticHost, ipv4Key, ipv4Text, parseIpv4 } from "../../shell/relay";
 import { E } from "../abi";
+import { sameBytes } from "../../jvm/abi";
 import { installSocket, socketOf, naming, POLLIN, POLLOUT, POLLERR, POLLHUP, POLLRDHUP } from "../fs";
 import {
-  AF_UNIX, AF_INET, AF_INET6, V4_ANY, V4_LOOPBACK, V6_LOOPBACK, isAny, isLoopback, isMulticast, sameAddress, addressKey,
+  AF_UNIX, AF_INET, AF_INET6, V4_ANY, V4_LOOPBACK, V6_LOOPBACK, isAny, isLoopback, isMulticast, addressKey,
   endpointOf, parseIpv6, addressText, INTERFACES, type Endpoint,
 } from "../net-address";
 import { SOL_SOCKET, SOCK_STREAM, SOCK_DGRAM, MSG_PEEK, MSG_DONTWAIT, SHUT_RD, SHUT_WR, type SocketAddress, type Cmsg } from "./abi";
@@ -48,7 +49,7 @@ abstract class InetSocket extends Socket {
     for (const other of this.bound) {
       const local = other.local!;
       if (other === this || local.port !== ep.port) continue;
-      const overlap = isAny(local.address) || isAny(ep.address) || sameAddress(local.address, ep.address);
+      const overlap = isAny(local.address) || isAny(ep.address) || sameBytes(local.address, ep.address);
       const shared = this.option(SOL_SOCKET, SO_REUSEADDR) && other.option(SOL_SOCKET, SO_REUSEADDR) && !this.exclusive(other);
       if (overlap && !shared) return true;
     }
@@ -295,7 +296,7 @@ function listenerFor(ep: Endpoint): TcpSocket | null {
     const local = s.local!.address;
     if (s.family === AF_INET && ep.address.length === 16) continue;
     if (s.family === AF_INET6 && ep.address.length === 4 && s.option(IPPROTO_IPV6, IPV6_V6ONLY)) continue;
-    if (sameAddress(local, ep.address) || isAny(local)) return s;
+    if (sameBytes(local, ep.address) || isAny(local)) return s;
   }
   return null;
 }
@@ -344,8 +345,8 @@ class UdpSocket extends InetSocket {
       if (candidate.family === AF_INET && destination.address.length === 16) continue;
       const addressMatches = multicast
         ? candidate.groups.has(addressKey(destination.address)) && (candidate !== this || !!this.option(IPPROTO_IP, IP_MULTICAST_LOOP, 1))
-        : sameAddress(local.address, destination.address) || loopback && isAny(local.address);
-      const peerMatches = !candidate.peer || !!source && candidate.peer.port === source.port && sameAddress(candidate.peer.address, source.address);
+        : sameBytes(local.address, destination.address) || loopback && isAny(local.address);
+      const peerMatches = !candidate.peer || !!source && candidate.peer.port === source.port && sameBytes(candidate.peer.address, source.address);
       if (addressMatches && peerMatches) recipients.push(candidate);
     }
     return recipients;
@@ -353,7 +354,7 @@ class UdpSocket extends InetSocket {
   private enqueue(bytes: Uint8Array, source: Endpoint): void {
     if (this.closed || this.queue.length >= UDP_QUEUE_PACKETS || this.queuedBytes + bytes.length > UDP_QUEUE_BYTES) return;
     const peer = this.peer;
-    if (peer && (peer.port !== source.port || !sameAddress(peer.address, source.address))) return;
+    if (peer && (peer.port !== source.port || !sameBytes(peer.address, source.address))) return;
     this.queue.push({ bytes, source });
     this.queuedBytes += bytes.length;
     this.wake();

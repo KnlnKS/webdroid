@@ -1,5 +1,6 @@
 // Address parsing, host resolution and interfaces shared by sockets, libcore and netd.
 import { syntheticAddress, syntheticHost, nameExists, ipv4Text, parseIpv4 } from "../shell/relay";
+import { sameBytes } from "../jvm/abi";
 
 export const AF_UNSPEC = 0, AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
 export const AI_NUMERICHOST = 4;
@@ -21,13 +22,8 @@ export function endpointOf(bytes: ArrayLike<number>, port: number, scope = 0): E
   return { address: Array.from(bytes), port, ...(scope ? { scope } : {}) };
 }
 export const isAny = (a: ArrayLike<number>): boolean => { for (let i = 0; i < a.length; i++) if (a[i]) return false; return true; };
-export const isLoopback = (a: ArrayLike<number>): boolean => a.length === 4 ? a[0] === 127 : sameAddress(a, V6_LOOPBACK);
+export const isLoopback = (a: ArrayLike<number>): boolean => a.length === 4 ? a[0] === 127 : sameBytes(a, V6_LOOPBACK);
 export const isMulticast = (a: ArrayLike<number>): boolean => a.length === 4 ? a[0] >= 224 && a[0] < 240 : a[0] === 0xff;
-export function sameAddress(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
 export const addressKey = (a: ArrayLike<number>) => Array.from(a).join(".");
 
 /** RFC 5952 text: lower-case hex, the longest run of two or more zero groups as "::" */
@@ -82,7 +78,7 @@ export function resolveHost(node: string, family: number, flags: number): number
 /** a name for `address` as getnameinfo finds one (the hosts file or a resolved name), else null */
 export function hostOf(address: ArrayLike<number>): string | null {
   if (address.length === 4 && address[0] === 127 && address[1] === 0 && address[2] === 0 && address[3] === 1) return "localhost";
-  if (sameAddress(address, V6_LOOPBACK)) return "ip6-localhost";
+  if (sameBytes(address, V6_LOOPBACK)) return "ip6-localhost";
   return address.length === 4 ? syntheticHost(address) : null;
 }
 // bionic's gai_strerror
