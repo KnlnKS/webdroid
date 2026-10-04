@@ -8,7 +8,7 @@ import { useEntry } from "../../jvm/natives/jentry";
 import type { TierBackend } from "../../jvm/tier";
 import type { DexFile } from "../../jvm/dex";
 import { Program } from "../compiler/program";
-import { World } from "../link/world";
+import { World, type WorldOptions } from "../link/world";
 import { externs, intrinsics } from "../link/intrinsics";
 import { hostNet } from "./inet";
 import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
@@ -18,11 +18,11 @@ import { count, heapUsed } from "./stats";
 
 declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
 
-/** a World over `dexes`, with the registered natives and the host's resolver */
-export function createWorld(dexes: DexFile[]): World {
+/** a World over `dexes`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
+export function createWorld(dexes: DexFile[], extra: Partial<WorldOptions> = {}): World {
   const prog = new Program(dexes);
   prog.addExterns(externs);
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet });
+  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, ...extra });
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   return w;
 }

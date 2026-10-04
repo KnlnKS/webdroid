@@ -8,6 +8,7 @@
 //   loaders      two DexClassLoaders defining one class name: distinct classes, statics and Class objects, found each through its own loader
 //   lazytest     CHA undone by a later dex, implicit exceptions, heap limits, the tiers
 //   aottest      precompiled platform code stays sound as classes arrive (builds a platform AOT first unless WEBDROID_AOT names one)
+//   persist      the compile worker (second-tier units made elsewhere, adopted while the numbering holds), the app build attached to the platform build and the bounded store for it
 //   entry        host code calls Java through jentry on the JS tier, over a World and (entrytier) through ?tier=wasm: the same answers and exceptions
 //   fuzz         random verifiable methods as Wasm, on the JS tier and on the JDK (seeds 1 to 6 unless arguments are given)
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
@@ -27,7 +28,7 @@ interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  sweep: { node: false, all: true }, aottest: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
@@ -67,7 +68,7 @@ async function runSuite(name: string, args: string[]): Promise<number> {
     const dir = mkdtempSync(join(tmpdir(), "wasm-entry-out-")), env = { ...process.env, WASM_ENTRY_OUT: join(dir, "tier.json") };
     try { return (await exec(name, args, env)) || await exec("entrytier", [], { ...env, WEBDROID_TIER: "wasm" }); } finally { rmSync(dir, { recursive: true, force: true }); }
   }
-  if (name !== "aottest" || process.env.WEBDROID_AOT) return exec(name, args, process.env);
+  if ((name !== "aottest" && name !== "persist") || process.env.WEBDROID_AOT) return exec(name, args, process.env);
   const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));
   try {
     return (await exec("aot-build", ["--out", dir, "--jars", "4"], process.env)) || await exec(name, args, { ...process.env, WEBDROID_AOT: dir });
