@@ -282,6 +282,12 @@ export class Cpu {
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
    *  entry from Java waits for it, since two unrelated call() frames cannot share one register file */
   baseBusy: Promise<void> | null = null;
+  /** awaitIdleBase when there is anything to wait for or deliver: a Java→native call that finds
+   *  the base free keeps its Java caller's frames rather than suspending them */
+  idleBase(): Promise<void> | undefined {
+    if (this.baseBusy || this.loops > 0 && this.frames[0]?.handler) return this.awaitIdleBase();
+    if (this.baseAvailable && this.signals.some((sig) => !blocked(this.signalMask, sig))) return this.awaitIdleBase();
+  }
   /** an entry from Java must not stack on a handler that owns the register file from the bottom */
   async awaitIdleBase(): Promise<void> {
     for (;;) {

@@ -221,7 +221,7 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
  *  result; driven, so it continues as the calling thread and chain */
 function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Gen<unknown> {
   const { params, ret } = r;
-  yield cpu.awaitIdleBase();
+  yield cpu.idleBase();
   const prevCur = cur, previousRuntime = cpu.nativeRuntime;
   cpu.nativeRuntime = r.info.owner ?? rt;
   cur = cpu;
