@@ -349,9 +349,76 @@ locals (`FLOAT_LOCALS` in `method.ts`, one flag), fields, arrays, parameters and
 against `min(320,7000)`), which halves `fib(32)` (9.7 vs 5.4 ms); unit modules carry an empty start function. (2) Cross-module calls cannot
 inline, so small callees are grouped (without grouping `swsum` is 3x slower than the closed-world build; with it equal at 0.07 ms).
 
+### 4.6 S1-F: generated-code performance and the G1 timing (2026-10-04, `knlnks/wasm-f`)
+
+**Harness.** `bun g1.ts [workload ...] [--runs 5] [--reps 100] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "..."]`
+(`g1run.ts`, `g1platform.ts`, `g1fs.ts`). A workload is a `case` line of `scripts/jbench/Bench.java` or `research/wasm/j2w/java/G1.java`
+(strings, arithmetic loops, field/array/virtual/interface/switch kernels, the G4 loop pair, same format); it joins the table as soon as its
+Wasm result equals the JS tier's, so unblocking a workload is a change to the compiler or natives and nothing here. Every measurement is a fresh
+engine: a node process or a new headless Chrome context (cross-origin isolated, so `performance.now()` has 5 us resolution instead of 100 us);
+runs interleave JS and Wasm; `first` is the first call (linking, compiling, class initialisation; the JS tier's first call has no compile step of
+its own), `steady` the median of the last half of 100 calls, `warm` calls 2 to 11. `--ref` takes the JS numbers from an earlier `--json` so a
+compiler A/B measures Wasm only. `watdump.ts <workload> <method>` prints generated code. **The host was shared (load average 4 to 8 on 14
+cores) for everything below; every table says so, spreads are 2 to 10%, and the authoritative run must be redone on an idle machine.**
+
+@@TABLES@@
+
+**What changed, in the order of measured effect** (steady geometric mean js/wasm over the 11 jbench workloads that match, V8 13.6, 3 to 5 runs
+each, so +-5%; the starting point is `3702b732` plus the harness):
+
+| Step | js/wasm |
+|---|---|
+| start | 0.84x |
+| array stores check the element class in Wasm (`astore` asked the host, `host.info`, a Map lookup by class name, on every store into a typed array: 28% of `mapInt`); the element class and test kind sit in the array vtable (`ELEM`, `ELEM_KIND`) | 1.15x |
+| constructors join their caller's unit (they were never grouped), 16 members | 1.28x |
+| a thrower call is followed by `unreachable`, so V8 narrows the reference after `if (x == null) throw` (`mapWalk` 0.28 to 0.22 ms, `bbInts` 1.09 to 0.94, `random` 0.21 to 0.18) | 1.38x |
+| class-initialisation guards skipped for classes already initialised when the unit is compiled and for the compiled method's own class chain (`World.entry` now initialises a static entry's class itself) | 1.44x |
+| already-compiled small callees are copied into the caller's unit (unexported copy, `buildUnit(methods, copies)`), so a call is direct and inlinable wherever it is | 1.56x |
+| null checks and guards dominated by an earlier one on every path are dropped (`facts.ts`, forward must-analysis, edges of `if-eqz`/`if-nez` refine it); field accesses that share a cast keep it in a local | 1.57x (TurboFan already narrowed; Liftoff-only `treeMap` -10%, `fieldLoop` -32%) |
+| a virtual call tests the vtable slot against the one or two small implementations among the classes some compiled code allocates and calls them directly (`bbInts` 0.65 to 0.31 ms, `random` 0.17 to 0.11) | 1.83x |
+| the Wasm-written intrinsics (String methods, `Math`) are copied in like other small callees; the classes a unit allocates count before its calls are planned (`virtualMono` 0.18 to 0.03 ms, `strChars` 0.53 to 0.29) | 1.90x |
+| dense `switch` is a `br_table` (`switchDense` 0.136 to 0.075 ms); groups up to 24 | 2.0x |
+| two tiers: a method is first compiled alone and counts calls and loop iterations (budget 5000); a hot one is recompiled with the callees that ran copied in, busiest first. Steady state is unchanged, first call 17% faster overall and 2x on the collection workloads (cold code no longer compiles its callees) | 2.0 to 2.1x |
+| throwers, allocations, casts and instance tests are calls to small functions of the module: V8's inlining budget is a multiple of the root function's size and the callee limit is 500 bytes, so shorter sequences mean more inlining (`bbInts` 0.32 to 0.24, `mapStr`/`hashSet`/`mapWalk` -12%) | 2.1 to 2.2x |
+| `astore` fast path in the caller for a value of exactly the component class (`refArray` 0.29 to 0.21 ms, parity with the JS tier) | |
+
+**V8 findings.** (1) After `if (is_null x) { call thrower }` V8 does not narrow `x`; with `unreachable` after the call it does. (2) Inlining is the
+whole game: `--no-wasm-inlining` is 3.6x slower on `bbInts` and 2x on `mapInt`; the default budget (`min(5 x root size, 7000)` nodes, callees up to 500
+wire bytes, counts from Liftoff) is what limits `bbInts`: with `--wasm-inlining-budget=50000 --wasm-inlining-factor=10 --wasm-inlining-max-size=3000` it
+runs in 0.16 ms (0.19 for the JS tier) against 0.24, which Chrome does not let us set. (3) `--wasm-inlining-call-indirect` changes nothing in
+Chrome 153 on five workloads. (4) Repeated `ref.cast` of one value is free under TurboFan (46 vs 47 ms for 30 M iterations of six field reads) and 2x slower
+per access in Liftoff, hence the shadow locals. (5) Default tiering beats `--no-liftoff` (`bbInts` 0.65 vs 0.75 ms): optimized code uses the call counts
+collected in Liftoff. (6) **Chrome 153 and Chromium 151 do not inline the `wasm:js-string` builtins** (node's V8 13.6 does): a `charCodeAt` loop over a
+58-character string costs 2.1 ms in Chrome from Wasm against 0.56 ms in node and 0.70 ms for the same loop in Chrome's JS; the same loop over an `i16`
+array copied once with `intoCharCodeArray` costs 0.39 ms in both. In Chrome `charAt` (a `length` and a `charCodeAt` call) is the slow part of every string
+workload there (`strChars` 0.45 vs 0.24 ms, `strIndex` 0.77 vs 0.19). Gate G5 (strings as structs over `i16` arrays) should weigh this.
+
+**Rejected or neutral** (each measured, reverted unless noted). Larger groups (32 members, callees up to 200 code units): within 5% on steady
+state, first call +10%. Dropping the allocation accounting (`alloc` word per allocation): 2% (noise). A fast path in `acmp` (reference compare): 1%.
+Static types of reference webs (`types.ts`: one cast for `array-length` instead of testing five kinds, casts to a supertype dropped): `mapWalk` +9%
+slower, the rest unchanged; the shorter code gave V8 a smaller inlining budget. An out-of-line `ensure` call in the class-init guard: nothing, `bbInts`
+worse. Budget of 20, 200 or 1000 calls for the second tier: same steady state, first call 2x worse (the first call of a jbench workload already runs
+thousands of iterations); 5000 and 20000 are equal, 5000 kept. Compile hints: ignored by Chrome (G4 hint result). Kept although neutral under TurboFan: the
+dominated-check facts and the shadow cast locals (Liftoff gains above).
+
+**G4 (tier-up without OSR).** A loop kernel in one long call stays in Liftoff for the whole activation. `loopOnce` (8 M iterations of an int mix, one call):
+first call 47.7 ms node / 42.4 ms Chrome including about 25 ms of compile, against 8.2 ms for the same call once tiered up, i.e. about 3x per iteration in
+baseline code; the JS tier needs 45 ms for it, so even baseline Wasm is faster than the JS tier's optimized code here. Re-entering the loop in chunks of
+16384 iterations (`loopChunk`, the same work as outlined body calls) reaches optimized speed after about 12 ms: first call 38.2 ms node / 34.2 ms Chrome.
+Ten times the work (`loopOnceBig`, 80 M): 214 ms in one activation (the next call 188 ms, still baseline in the new function), 112 ms chunked (83 ms
+optimized), 441 ms in the JS tier. So the gate (optimized speed within 100 ms) holds for any loop that is re-entered (called from a loop or recursion), fails
+only for one activation longer than about 100 ms, and there Wasm baseline is still about 2x ahead of the JS tier. The call counter that drives the second tier also
+counts loop iterations, so the method is recompiled for its next call. Not built, since the gain is bounded to about 2x on a rare shape: an automatic
+outlining of loops that run long in tier 1 (live-in/live-out webs through multi-value results plus an exit code for the loop's branch targets and handlers), or a
+back-edge exit to a driver that re-enters the loop in the optimized function.
+
+**For the owners of the natives and strings.** `Integer.toString`/`parseInt` (`parseInts`) go through the host `String.<init>([B)` factory (`decodeString`, a
+linear-memory copy per call): 0.36 ms against 0.12 for the JS tier. `String.indexOf` loops over `charCodeAt`; the JS tier calls `String.prototype.indexOf` beyond 32 characters
+(`strIndex` 0.36 vs 0.25 ms in node). `String.hashCode` is recomputed on every call (HashMap, 17% of `hashSet`).
+
 ### 4.4 Do not trust
 
-Any speed claim for the prototype. The only timing evidence in this document is the microbenchmark table in 1.1 to 1.4.
+Any speed claim for the prototype except those in 4.6, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
 
 ## 5. Unverified facts the executor must check first
 
