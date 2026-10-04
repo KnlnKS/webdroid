@@ -38,7 +38,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; mhInvoke: number; text: number; net: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -80,7 +80,8 @@ export class Compiler implements Base {
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.i32, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]) };
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.i32, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
+      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }
@@ -153,12 +154,13 @@ export class Compiler implements Base {
     const f = this.fn.get(mid(m));
     if (f !== undefined) c.call(f); else c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m));
   }
-  /** the only implementation of decl.name+desc among all loaded classes, "none" without one (a call then finds an abstract method), "many" otherwise */
-  devirt(decl: string, name: string, desc: string): MethodInfo | "none" | "many" {
+  /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
+   *  class, a dex) may implement it, even for a frame that is already running */
+  devirt(decl: string, name: string, desc: string): MethodInfo | "many" {
     const t = this.w.cha.targets(decl, name, desc);
-    if (t.length > 1) return "many";
+    if (t.length !== 1) return "many";
     this.assumptions.push([decl, name, desc, t[0], this.assumer]);
-    return t[0] ?? "none";
+    return t[0];
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {

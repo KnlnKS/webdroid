@@ -567,7 +567,6 @@ export class MC {
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
       const only = cx.devirt(decl, mr.name, desc), declC = prog.get(decl);
-      if (only === "none") { this.nonNull(ins.regs[0]); c.drop(); cx.callThrower(c, "ame"); this.finishResult(ins, retK); return; }
       if (only !== "many") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
       else {
         // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it

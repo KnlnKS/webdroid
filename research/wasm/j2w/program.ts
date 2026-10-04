@@ -86,6 +86,11 @@ export class Program {
     return { cls, name: mr.name, desc, flags: m.flags, dex, methodIdx: m.methodIdx, codeOff: m.codeOff, key: mkey(mr.name, desc),
       isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret };
   }
+  /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
+  addClass(jc: JClass): void {
+    this.classes.set(jc.name, jc);
+    this.subclassMemo.clear(); this.implMemo.clear();
+  }
   get(name: string): JClass | undefined { return this.classes.get(name); }
   require(name: string): JClass { const c = this.classes.get(name); if (!c) throw new Error("class not found: " + name); return c; }
   private subclassMemo = new Map<string, Map<string, boolean>>();

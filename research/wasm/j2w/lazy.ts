@@ -20,6 +20,7 @@ import { hostInfo, typeName } from "./classes";
 import { mhInvoke } from "./handles";
 import { hostText } from "./members";
 import { hostNet } from "./inet";
+import { generateProxy } from "./proxy";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
@@ -101,18 +102,11 @@ export class World {
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       text: (kind: number, a: number) => hostText(this, kind, a),
+      proxy: (name: string, interfaces: object, methods: object, exceptions: object) => generateProxy(this, name, interfaces, methods, exceptions),
       net: (op: number, node: string, a: number, b: number) => hostNet(this, op, node, a, b),
       mhInvoke: (mh: object, args: object, site: number, exact: number) => mhInvoke(this, mh, args, site, exact),
       // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
-      pin: (array: object) => {
-        let i = this.pinned.get(array);
-        if (i === undefined) {
-          i = this.pinned.size; this.pinned.set(array, i);
-          if (i >= this.nm.length) this.nm.grow(this.nm.length);
-          this.nm.set(i, array as never);
-        }
-        return i;
-      },
+      pin: (object: object) => this.pin(object),
       classByName: (name: string) => {
         const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
         return n === "" || (n[0] === "[" ? !/^([ZBCSIJFD]|L.+;)$/.test(e) || (e[0] === "L" && !this.prog.get(e.slice(1, -1))?.def && !this.prog.get(e.slice(1, -1))) : !this.prog.get(n)) ? 0 : this.idOf(n);
@@ -166,7 +160,9 @@ export class World {
     return i;
   }
   /** how `m` is implemented without its bytecode, if it is */
-  intrinsic(m: MethodInfo): Intrinsic | undefined { return intrinsicFor(this.opts.intrinsics, this.natives, m); }
+  intrinsic(m: MethodInfo): Intrinsic | undefined { return this.madeUp.get(mid(m)) ?? intrinsicFor(this.opts.intrinsics, this.natives, m); }
+  /** the bodies of the methods of classes made at run time (addClass), by method id */
+  private madeUp = new Map<string, Intrinsic>();
   needsInit(n: string): boolean {
     const c = this.prog.get(n); if (!c) return false;
     if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
@@ -588,6 +584,26 @@ export class World {
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
   addDexes(dexes: DexFile[]): string[] {
     const added = this.prog.add(dexes);
+    this.loaded(added);
+    return added;
+  }
+  /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
+  pin(object: object): number {
+    let i = this.pinned.get(object);
+    if (i === undefined) {
+      i = this.pinned.size; this.pinned.set(object, i);
+      if (i >= this.nm.length) this.nm.grow(this.nm.length);
+      this.nm.set(i, object as never);
+    }
+    return i;
+  }
+  /** adds a class that no dex defines, with the body of each of its methods */
+  addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>): void {
+    for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
+    this.prog.addClass(jc);
+    this.loaded([jc.name]);
+  }
+  private loaded(added: string[]): void {
     this.cha.index(added);
     for (const [key, a] of this.assumptions) {
       const t = this.cha.targets(a.decl, a.name, a.desc);
@@ -597,7 +613,6 @@ export class World {
     }
     for (const name of added) for (const slot of this.absent.get(name) ?? []) this.invalidate(slot);
     for (const name of added) this.absent.delete(name);
-    return added;
   }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   private invalidate(slot: number): void {
