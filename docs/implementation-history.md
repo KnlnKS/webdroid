@@ -4042,3 +4042,15 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   The combined Android content/device-services invocation failed `databaseList`
   on both revisions after sharing package state; both suites passed separately.
   Logs are in ignored `webdroid-shots/deslop/`.
+- Performance survey (2026-10-03, `knlnks/bytecode-claude-performance`, base `30915b39`;
+  [performance plan](performance-plan.md)). Mihon's warm theme taps (92–158 ms) are cold-tier
+  execution and compilation (50–60 ms of a 158 ms tap with 2.4–3.3k cold calls), whole-Scaffold
+  recomposition and background coroutine threads taking `MessageChannel` turns; steady scrolling
+  presents at p50 9.4 ms even at 4x throttle, with p99 75–200 ms from single 100 ms tasks.
+  The first RuntimeShader draw resized the shared WebGL surface from 1x1, a 150–300 ms stall per
+  launch; V8 profiles attributed it to `atLeast`'s width checks, and only in-page timing found the
+  resize. Persisted-code saves concatenated and encoded the whole store in one task (~245 ms at
+  4x throttle mid-scroll); they now encode Blob parts in idle slices. Rejected: ending the main
+  looper's turn while a composite is pending left the composite lag unchanged (p90 ~11 ms on Mihon
+  taps), so that lag comes from inside the drawing message. Arrays hashed to 1 and `a.equals(a)` was
+  false on array-typed receivers.
