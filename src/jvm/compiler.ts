@@ -23,6 +23,7 @@ import {
   type PreparationPhase,
   type PreparedInstruction as Ins,
   type PreparedMethod,
+  writesRegister,
 } from "./prepared";
 
 const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
@@ -269,6 +270,9 @@ class MethodEmitter {
   /** Four slots in the method's type-check cache: two receiver classes (and their results). */
   private icSlot(): number { const k = this.ics; this.ics += 4; return k; }
   private constants: unknown[] = [];
+  /** int constants the current block has loaded and not yet overwritten, by register: a long
+   *  shift by one compiles to a BigInt literal shift V8 lowers to int64 */
+  private known = new Map<number, number>();
 
   private get cold(): boolean { return this.backend === "cold"; }
   /** the hot body being compiled is a leaf: it has no suspension points */
@@ -346,6 +350,7 @@ class MethodEmitter {
     };
     for (const ins of prepared.instructions) {
       if (prepared.leaders[ins.pc]) {
+        this.known.clear();
         end();
         if (flow) this.block = flow.blockAt[ins.pc];
         const at = this.hasTries ? `pc=${ins.pc};` : "";
@@ -354,6 +359,11 @@ class MethodEmitter {
       if (!cur) throw new Error(`instruction ${ins.pc} has no emitted block`);
       const at = cur.length;
       this.emitIns(ins, cur);
+      if (writesRegister(ins.op)) {
+        // a wide write takes a+1 too; any write but a 32-bit int constant forgets both
+        this.known.delete(ins.a); this.known.delete(ins.a + 1);
+        if (ins.op >= 0x12 && ins.op <= 0x14 && ins.constKind === undefined) this.known.set(ins.a, ins.b);
+      }
       if (this.marked && cur.length > at) cur[at] = `/*@${ins.pc}*/` + cur[at];
       last = ins;
     }
@@ -829,9 +839,13 @@ ${profileEnd}
       case "and-long": expr = `${x}&${y}`; break;
       case "or-long": expr = `${x}|${y}`; break;
       case "xor-long": expr = `${x}^${y}`; break;
-      case "shl-long": expr = `(${x}===1n?R.bits[${y}&63]:BigInt.asIntN(64,${x}<<R.shifts[${y}&63]))`; break;
-      case "shr-long": expr = `${x}>>R.shifts[${y}&63]`; break;
-      case "ushr-long": expr = `BigInt.asIntN(64,BigInt.asUintN(64,${x})>>R.shifts[${y}&63])`; break;
+      case "shl-long": case "shr-long": case "ushr-long": {
+        const k = this.cold ? undefined : this.known.get(two ? i.b : i.c), n = k === undefined ? `R.shifts[${y}&63]` : `${k & 63}n`;
+        expr = base === "shr-long" ? `${x}>>${n}`
+          : base === "ushr-long" ? `BigInt.asIntN(64,BigInt.asUintN(64,${x})>>${n})`
+          : k === undefined ? `(${x}===1n?R.bits[${y}&63]:BigInt.asIntN(64,${x}<<${n}))` : `BigInt.asIntN(64,${x}<<${n})`;
+        break;
+      }
       case "add-float": expr = `Math.fround(${x}+${y})`; break;
       case "sub-float": expr = `Math.fround(${x}-${y})`; break;
       case "mul-float": expr = `Math.fround(${x}*${y})`; break;
