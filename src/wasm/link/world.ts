@@ -1042,19 +1042,19 @@ export class World {
   callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void): (s: Strand, ...a: any[]) => unknown {
     let f = this.callFns.get(name);
     if (f) return f;
-    const cx = new Compiler(this), vt = ret === "V" ? T.i32 : kindVT(cx.tObj, ret);
-    const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "anyref", mutable: true } as never, null);
-    const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "anyref" : "i32", mutable: true } as never, ret === "J" ? 0n : ret === "L" ? null : 0);
+    const cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
+    const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "externref", mutable: true }, null);
+    const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
     const { bytes } = cx.buildSynthetic(name, ["I", ...params], (c) => {
-      const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.anyref, true);
-      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(vt);
+      const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.externref, true);
+      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(cx.tObj, ret));
       c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
       body(cx, c, (i) => { c.lget(i + 1); });
-      if (res >= 0) c.lset(res).lget(res).gset(value);
+      if (res >= 0) { c.lset(res).lget(res); if (ret === "L") c.externConvertAny(); c.gset(value); }
       c.lget(0).gset(done);
       if (res >= 0) c.lget(res);
       c.ret().end().unreachable().end();
-      c.lset(e).lget(e).gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
+      c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
     }, ret);
     const fn = (this.instantiate(bytes, { ...this.unitImports(cx), call: { d, v, x: thr } }).exports as Record<string, any>).m as Function;
     let token = 0;
