@@ -38,6 +38,8 @@ export interface AotIndex {
   tail: (string | [string, number])[];
   selectors: string[];
   gaps: string[];
+  /** the link errors compiled code throws, by index */
+  linkMessages: string[];
   /** the methods the build replaced by intrinsics, "class.name+descriptor" */
   intrinsics: string[];
   /** the D module of the classes the build reserved slots for after the platform's (array classes, ...), which are all in one */
@@ -57,6 +59,8 @@ export interface CHeader {
   /** class-hierarchy decisions: declaring class, name, descriptor, the one target's class and key ("" without one), and the slot of the method that relies on it */
   assumptions: [string, string, string, string, string, number][];
   allocs: string[];
+  /** classes missing at the build that sites of the module fail on, with the slot of the method they are in */
+  missing: [string, number][];
   /** the gaps its code runs into, by id */
   gaps: number[];
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
@@ -169,6 +173,7 @@ export class AotRuntime {
     }
     index.selectors.forEach((k) => w.selectorId(k));
     index.gaps.forEach((g, i) => w.gaps.set(g, i));
+    w.linkMessages.push(...index.linkMessages);
     a.dOf = unrle(index.dOf); a.cOf = unrle(index.cOf);
     a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.cState.length = a.cHeader.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
@@ -258,6 +263,12 @@ export class AotRuntime {
       if (by && !w.holds(e, by)) { w.invalidate(owner); w.stats.aot.dead++; }
     }
     for (const cls of head.allocs) w.allocated.add(cls);
+    // a site that fails because a class was not there is undone if it is now
+    for (const [name, owner] of head.missing) {
+      if (w.prog.get(name)) { w.invalidate(owner); continue; }
+      const slots = w.absent.get(name) ?? w.absent.set(name, new Set()).get(name)!;
+      slots.add(owner);
+    }
     for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
     for (const slot of this.overridden) if (this.cOf[w.blockOf(slot)] === c && !this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
     w.stats.aot.ms += performance.now() - t2;
@@ -301,6 +312,6 @@ export class AotRuntime {
     const w = this.w;
     const withCode = [...w.prog.classes.values()].filter((c) => c.dex);
     return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
-      extraNames: w.names.slice(this.nSeeded + 1), tail: this.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()] };
+      extraNames: w.names.slice(this.nSeeded + 1), tail: this.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, linkMessages: w.linkMessages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()] };
   }
 }

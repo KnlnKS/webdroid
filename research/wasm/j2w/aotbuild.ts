@@ -85,7 +85,7 @@ cGroups.forEach((blocks, k) => {
     if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
   }
   const header: CHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch), natives: [...cx.nativeImports.keys()], mods: [...cx.deps.keys()],
-    assumptions, allocs: [...cx.allocs], gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)),
+    assumptions, allocs: [...cx.allocs], gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)), missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]),
     absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m) || skip.has(mid(m))).map((m) => w.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
   writeFileSync(join(out, `c${k}.wasm`), file);

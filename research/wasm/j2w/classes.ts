@@ -17,6 +17,7 @@ import type { Compiler, Intrinsic } from "./j2w";
 import type { World } from "./lazy";
 import { hostUnsafe, UInfo } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
+import { hostMembers, MInfo } from "./members";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -32,7 +33,7 @@ const descOf = (name: string) => isPrim(name) ? name.slice(1) : name[0] === "[" 
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : n.replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
-  const a = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "Ldalvik/annotation/InnerClass;")?.elements.accessFlags;
+  const a = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/InnerClass")?.elements.accessFlags;
   return typeof a === "number" ? a : -1;
 };
 
@@ -59,6 +60,7 @@ function canAccess(caller: string, decl: JClass, flags: number, w: World): boole
   return samePackage || !!(flags & ACC.PROTECTED) && w.prog.isSubclass(caller, decl.name);
 }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
+  if (kind >= MInfo.ExecCount) return hostMembers(w, kind, a, b);
   if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
   if (kind >= UInfo.FieldGet) return hostUnsafe(w, kind, a, b);
   const name = w.nameOf(a), jc = w.prog.get(name), arr = name[0] === "[", fields = jc?.def ? jc.fields : [];

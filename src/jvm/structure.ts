@@ -12,6 +12,11 @@ export const enum Go { Next, Break, Continue, Dispatch }
 /** labelled scopes nest this deep at most in JavaScript, bounding the parser's recursion; a Wasm body has no such bound (see `maxDepth`) */
 const MAX_DEPTH = 256;
 
+/** The flow has a cycle with more than one entry; `heads` are the start pcs of the targets of its retreating edges. */
+export class Irreducible extends Error {
+  constructor(readonly heads: number[]) { super("irreducible"); }
+}
+
 interface Scope { open: number; close: number; label: string; loop: boolean }
 export interface Region { entry: number; order: number[]; scopes: Scope[] }
 
@@ -27,7 +32,8 @@ export class Flow {
   private readonly rpo: Int32Array;
   private readonly loopCloses: Set<number>[] = [];
 
-  constructor(prepared: PreparedMethod, code: CodeItem, maxDepth = MAX_DEPTH) {
+  /** `extraEntries` are blocks (by start pc) that also begin a region: an irreducible cycle is cut by making its extra heads (`Irreducible.heads`) entries, so every edge into them takes the dispatch. */
+  constructor(prepared: PreparedMethod, code: CodeItem, maxDepth = MAX_DEPTH, extraEntries: readonly number[] = []) {
     const { instructions, leaders } = prepared, last: PreparedMethod["instructions"][number][] = [];
     this.blockAt = new Int32Array(code.insns.length + 1).fill(-1);
     for (const ins of instructions) {
@@ -43,7 +49,7 @@ export class Flow {
       succs.push(out);
       for (const s of out) preds[s].push(b);
     }
-    const entries = [0];
+    const entries = [0, ...extraEntries.map((pc) => this.blockAt[pc])];
     for (const t of code.tries) for (const pc of [...t.handlers.map(([, h]) => h), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []]) entries.push(this.blockAt[pc]);
     succs.push(entries);
     for (const e of entries) preds[e].push(root);
@@ -80,12 +86,13 @@ export class Flow {
     const dominates = (a: number, b: number) => { for (; b !== root; b = idom[b]) if (b === a) return true; return false; };
 
     // natural loops: a retreating edge must reach a dominator, or the flow is irreducible
-    const backs = new Map<number, number[]>();
+    const backs = new Map<number, number[]>(), heads = new Set<number>();
     for (const u of order) if (u !== root) for (const v of succs[u]) {
       if (region[v] !== region[u] || rpo[v] > rpo[u]) continue;
-      if (!dominates(v, u)) throw new Error("irreducible");
+      if (!dominates(v, u)) { heads.add(this.starts[v]); continue; }
       backs.get(v)?.push(u) ?? backs.set(v, [u]);
     }
+    if (heads.size) throw new Irreducible([...heads]);
     const loops = [...backs].map(([head, sources]) => {
       const body = new Set([head]), work = sources.filter((s) => !body.has(s));
       for (const s of work) body.add(s);
@@ -225,4 +232,17 @@ export class Flow {
 /** The structure of a hot entry body, or null when its flow must keep the dispatch loop. */
 export function structure(prepared: PreparedMethod, code: CodeItem): Flow | null {
   try { return new Flow(prepared, code); } catch { return null; }
+}
+
+/** The structure of any body: an irreducible cycle gets its heads as extra region entries until the flow reduces, so only the edges that close it take the dispatch. */
+export function structureAny(prepared: PreparedMethod, code: CodeItem, maxDepth: number): Flow {
+  const extra = new Set<number>();
+  for (;;) {
+    try { return new Flow(prepared, code, maxDepth, [...extra]); } catch (e) {
+      if (!(e instanceof Irreducible)) throw e;
+      const before = extra.size;
+      for (const h of e.heads) extra.add(h);
+      if (extra.size === before) throw e;
+    }
+  }
 }

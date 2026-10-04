@@ -292,8 +292,7 @@ under several rows; `bun jbench.ts -v` lists them all):
 
 `casts` is the smallest case: 26 methods, blocked only by `Integer.<clinit>` (string plus the `getPrimitiveClass`
 native and `const-class`), so it is the first jbench workload to turn green once strings and class objects exist.
-Still untested: `invoke-custom` (no site reached), DEX-level fuzzing of instruction sequences, `framework.jar`
-and app code through `diff`, `fwtest` and the conformance suites. There is no speed comparison against the JS tier on
+Still untested: `framework.jar` and app code through `diff`, `fwtest` and the conformance suites (`invoke-custom` and control flow no javac emits are covered in 4.8). There is no speed comparison against the JS tier on
 real DEX (cold-start numbers can now be taken, see 4.5, but every jbench workload still stops at its first string or class-object gap).
 
 ### 4.4b Differential coverage (S1-E, 2026-10-04, `knlnks/wasm-e`)
@@ -304,7 +303,7 @@ All three run from the repository root and re-execute themselves bundled under n
 - `bun research/wasm/j2w/fuzz.ts [--seed N --methods N --depth N --debug --file F.java]`: random Java (int/long/float/double/narrow casts, arrays, 2-D arrays, fields, virtual/interface calls, instanceof/casts, labelled loops, switches, try/catch/finally, custom exceptions, synchronized, calls) compiled with javac and d8, run on Wasm, the JS tier and the JDK. 70 seeds x 3,600 cases: Wasm and the JDK never differ. It found two bugs, below.
 - `bun research/wasm/j2w/sweep.ts [jar|apk ...]`: compiles every method alone and groups failures by cause. framework.jar: 219,874 methods, 18 fail (15 `invoke-custom`, 3 `MethodHandle.invoke`). FitNotes 7 (calls into optional or newer platform APIs). Mihon 190 (171 irreducible flow, Kotlin coroutine state machines; 19 absent platform APIs). Zero unexplained.
 
-Bugs found: (1) the class module exported static fields by name only, so a dex that declares one name with two types (R8 output) produced a duplicate export or an ill-typed global; they are now keyed by name and type. (2) Production JS tier, `src/jvm/prepared.ts`: a handler's reaching definitions came from the state at the end of every block in the try range, so an int constant assigned after the last throwing instruction (d8 shares the register with a float the handler reads) was typed float (`const 32` became 4.5e-44). Handler edges now carry the state before each instruction that can throw (`tests/float-handler.test.ts`; 20 of the fuzzer's failing methods, one cause). Also: `Flow` limits scope nesting to 256 for the JS parser; Wasm bodies are no longer limited (8 AIDL `onTransact`/`getDefaultTransactionName` methods compile). Open: d8 emits irreducible loops (tail-merged invokes) even for plain Java, and Compose/coroutine state machines are irreducible, so Flow rejects ~0.2% of app methods; they need a dispatch-loop fallback. An unresolved class or member compiles to a gap (UnsatisfiedLinkError) where ART throws NoClassDefFoundError/NoSuchMethodError.
+Bugs found: (1) the class module exported static fields by name only, so a dex that declares one name with two types (R8 output) produced a duplicate export or an ill-typed global; they are now keyed by name and type. (2) Production JS tier, `src/jvm/prepared.ts`: a handler's reaching definitions came from the state at the end of every block in the try range, so an int constant assigned after the last throwing instruction (d8 shares the register with a float the handler reads) was typed float (`const 32` became 4.5e-44). Handler edges now carry the state before each instruction that can throw (`tests/float-handler.test.ts`; 20 of the fuzzer's failing methods, one cause). Also: `Flow` limits scope nesting to 256 for the JS parser; Wasm bodies are no longer limited (8 AIDL `onTransact`/`getDefaultTransactionName` methods compile). Both open items (irreducible flow, unresolved references) are closed in 4.8.
 
 ### 4.5 S1 compiler architecture (2026-10-04, `knlnks/wasm-c`)
 
@@ -391,7 +390,7 @@ loop for a class with two constructors), and `node` exited while an unref'd yiel
 **Production findings.** The JS tier's `Field` lacks the receiver, type and final checks (`getBoolean` of an int field answers a number) and
 does not convert on widening reads and writes (`getLong` of an int field answers a number, `setByte` on a long field stores a number): `diff.ts`
 compares those cases with the JDK alone. Natives that need a lock-step thread (`wait`, `sleep`, `park`, `holdsLock`, `nativeCreate`) stay gaps
-for the scheduler; so do `Class.getSimpleNameNative`, the annotation natives and `getDeclaredConstructorsInternal`.
+for the scheduler; `Class.getSimpleNameNative`, the annotation natives, `getDeclaredConstructorsInternal` and `android_getaddrinfo` are done in 4.8.
 
 ### 4.7 S1-F: generated-code performance and the G1 timing (2026-10-04, `knlnks/wasm-f`)
 
@@ -616,6 +615,60 @@ back-edge exit to a driver that re-enters the loop in the optimized function.
 **For the owners of the natives and strings.** `Integer.toString`/`parseInt` (`parseInts`) go through the host `String.<init>([B)` factory (`decodeString`, a
 linear-memory copy per call): 0.36 ms against 0.12 for the JS tier. `String.indexOf` loops over `charCodeAt`; the JS tier calls `String.prototype.indexOf` beyond 32 characters
 (`strIndex` 0.36 vs 0.25 ms in node). `String.hashCode` is recomputed on every call (HashMap, 17% of `hashSet`).
+
+### 4.8 S1-I: the remaining correctness gaps (2026-10-04, `knlnks/wasm-i`)
+
+Every method of framework.jar (219,874), FitNotes (22,259), Mihon (95,799), Komikku (131,785) and NewPipe (61,589) now compiles and validates: `sweep.ts` reports no failure of any
+kind. A gap is a recorded unsupported capability, so what the sweep and the harnesses below count as gaps is the whole list of what Wasm cannot do yet: natives with no host
+binding, String constructors `strings.ts` lacks, a lambda call site (below), a transformer method handle, a relay lookup. The harnesses run the same Java on Wasm, the production
+JS tier and the JDK; a case the JS tier cannot answer (its method handle and VarHandle model is its own) is decided by the JDK alone.
+
+**Irreducible flow.** `Flow` threw on a retreating edge whose target does not dominate its source (171 methods of Mihon, 8 of framework.jar: Kotlin `invokeSuspend` state
+machines, d8 tail-merged invokes). It now reports the heads of such edges (`Irreducible`), and `structureAny` (`src/jvm/structure.ts`) retries with each head as an extra region
+entry: every edge into a head is a dispatch of the existing `$disp` loop and `br_table`, so only the edges that close the cycle pay for it and the rest of the method keeps its
+structured loops and blocks. The production JS tier keeps its own fallback. `fuzz.ts --irreducible` (`irfuzz.ts`) writes methods as random block graphs (conditional branches, `tableswitch`, handler
+blocks over runs of the layout, a fuel local to end every cycle) in a version 50 class file, which d8 converts: about 30% of the generated methods are irreducible after d8
+(91 of 328 for seed 1), 6 seeds x 3,600 cases against the JS tier and the JDK show no difference.
+
+**Unresolved references.** `linkage.ts` resolves a use site as ClassLinker does and fails it the way ART does, when the site runs and with the prefix of the method still executed:
+`NoClassDefFoundError: Failed resolution of: LFoo;` for `const-class`, `new-instance`, `check-cast`, `instance-of`, `new-array`, `filled-new-array`, a field or an invoke of an absent
+class; `NoSuchMethodError: No virtual method gv()V in class LLkP; or its super classes (declaration of 'LkP' appears in <dex>)` and the static, direct, super and interface forms;
+`NoSuchFieldError: No static field gsf of type I in class LLkP; or its superclasses (...)`; `IncompatibleClassChangeError` for a static call of an instance method and the reverse
+("The method 'void LkP.sm2()' was expected to be of type static but instead was found to be of type virtual"), an invoke-interface of a class and an invoke-virtual of an
+interface ("Found class LkI, but interface was expected"), and a field of the wrong staticness. The message formats are those of `class_linker.cc` and `common_throws.cc` as I know them; they are
+not checked against a device, and the `NoClassDefFoundError` has no `ClassNotFoundException` cause. A site that failed because a class is absent is undone when a dex that defines the class is added
+(`World.absent`, like the CHA assumptions); a missing member stays missing because a class's supertypes cannot change. A handler whose exception class is absent is skipped, as ART does. `linkdiff.ts`
+checks 19 cases (error class against the JDK, message against ART's wording, the code before the site, the dex loaded later). In the sweeps, 3 methods of framework.jar, 19 of FitNotes (the
+removed `org.apache.http`), 89 of Mihon, 94 of Komikku and 94 of NewPipe contain such a site: all name a newer platform API or a library the boot jars lack. Also: a call through an
+interface no loaded class implements was compiled to `AbstractMethodError`; it is now a dispatch like any other, since a class made later (a proxy) may implement it, even in a frame that is already running. A CHA
+decision that one class implements a method still binds the frames already running.
+
+**invoke-custom and method handles.** d8 desugars lambdas, string concatenation and records unless run with `--no-desugaring`, and libcore cannot link what it leaves: `LambdaMetafactory.metafactory` is
+`return null`, and `StringConcatFactory` and `SwitchBootstraps` are not in the boot jars. The framework's 15 invoke-custom sites are all `ObjectMethods.bootstrap` (records). `custom.ts` links
+those at compile time from the call site item: the record class, the component names and the getter handles (field gets, and virtual, direct and interface getters, the virtual ones
+through the reflection thunk so an override is called) become `toString` (a `StringBuilder`), `equals` and `hashCode` (31 * hash + hash, `Float.compare` for floats, `Objects.equals`).
+AOSP's own `ObjectMethods` is a chain of combinators that needs transformers. A bootstrap class or method libcore lacks is the `NoClassDefFoundError` at the site (checked: string
+concatenation); `LambdaMetafactory` is a recorded gap. `handles.ts` implements `MethodHandle.invoke` and `invokeExact` (framework: `RemoteViews`): the site boxes its arguments, the host checks the site's
+type against the handle's (`invokeExact`: equal, else `WrongMethodTypeException`; `invoke`: asType's boxing, unboxing, widening and casts) and calls the method (static, virtual, direct,
+super, interface) or field (get/set, instance/static) the handle names through the reflection thunks, without wrapping what it throws. A handle that is a transformer (`bindTo`,
+`asType` of another shape, every combinator) runs Java over `EmulatedStackFrame`, which is not modelled: a recorded gap (`customdiff.ts` checks it). `customdiff.ts`: 375 cases, JDK-checked
+(records of every component type, about two dozen handle shapes including errors, the hand-written class file whose getters are virtual and interface methods checked against the semantics of ObjectMethods). The JS tier
+agrees on records and differs on handles (its model throws on field handles).
+
+**Natives.** `Class.getSimpleNameNative`, `isRecord0`, `getDeclaringClass`, `getEnclosingClass`, `getEnclosingMethodNative`/`getEnclosingConstructorNative`, `isAnonymousClass`, `getDeclaredMethodsUnchecked`,
+`getDeclaredConstructorsInternal`, `Method/Constructor.getExceptionTypes`, `compareMethodParametersInternal` and the annotation presence natives (`isDeclaredAnnotationPresent`,
+`isAnnotationPresentNative`) come from the dex (`members.ts`); `getDeclaredAnnotation(s)`, `getAnnotationNative`, `getParameterAnnotationsNative`, `Method.getDefaultValue` and the `Signature` annotation
+(generic types) build the annotation objects as ART does, through libcore's `AnnotationFactory` with members typed by the annotation method's return type (`annotations.ts`), which needs
+`Proxy.generateProxy` (`proxy.ts`): a class made at run time (`World.addClass`) extending Proxy whose methods box their arguments into `Proxy.invoke(proxy, method, args)`, unbox as ART does and wrap
+undeclared checked exceptions in `UndeclaredThrowableException`. `Linux.android_getaddrinfo` runs the production resolution (hosts file, numeric forms) and builds the `InetAddress[]` in Wasm with
+`InetAddress.getByAddress`; a name the relay must look up is a recorded gap (it answers a Promise), and the error path throws `GaiException` (`UnknownHostException` on top). `Unsafe` get/put of any width on
+any array are composed from the elements' bytes (`ArraysSupport.vectorizedMismatch` over `int[]` reads longs). VarHandles: static-field handles, receivers whose static type has no candidate
+field (any class, `Object`), `getAndAdd` on byte, short and char variables narrows, byte/short/char/boolean element handles, and an array of another class than the handle's is a `ClassCastException`
+(`Vh.java`: 323 cases against the JDK; `classdiff.ts` now builds its handles with `Lookup.findVarHandle` and `arrayElementVarHandle` instead of intrinsics). Two older bugs surfaced and are fixed: `reflect.ts` and
+`classes.ts` compared annotation types as descriptors (`getDeclaredClasses` was always empty, `getModifiers` of a member class ignored `InnerClass`). `jbench.ts`: 42 of 42 MATCH (`inetCached` was the blocked one).
+
+**Limits.** A transformer handle, a lambda call site, a name resolved by the relay and a native that needs a scheduler stay gaps. The CHA window for running frames (above) remains.
+`invoke` and `invokeExact` box every argument and result. The ART message formats are unverified against a device.
 
 ### 4.4 Do not trust
 
