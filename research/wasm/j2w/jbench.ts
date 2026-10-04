@@ -2,7 +2,7 @@
 // production JS tier: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
 // --survey also compiles everything the workloads can reach (the old whole-program build) and lists what blocks it.
 // VMStack.getStackClass (Reflection.getCallerClass, so MethodHandles.lookup and anything caller-sensitive) reads V8's wasm frames, which JavaScriptCore
-// does not give: run under node with `bun build jbench.ts --target=node`, `import.meta.dir` replaced by this directory and `node --import ./nodeshim.mjs`.
+// does not give: run under node with `bun build jbench.ts --target=node`, `import.meta.dir` replaced by this directory and `node nodeshim.mjs bundle.mjs`, which keeps node alive across the unref'd yield port.
 // Needs the Android SDK (android.jar, d8) and javac. Run: bun jbench.ts [workload ...] [-v] [--survey]
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
