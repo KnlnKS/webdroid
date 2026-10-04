@@ -21,8 +21,8 @@ const PRIM: Record<string, [number, number, string]> = { Z: [1, 0, "boolean"], B
 /** per-id record in gDesc: access flags, primitive type, super id, component id, interface list offset and count, name offset and length,
  *  id of the array class of this class, the InnerClass annotation's access flags (-1: none), offset and count of its field records */
 const REC = 12, ACC_FLAGS = 0, PRIMITIVE = 1, SUPER = 2, COMPONENT = 3, IFACES = 4, NIFACES = 5, NAME = 6, NAMELEN = 7, ARRAY_OF = 8, INNER = 9, FIELDS = 10, NFIELDS = 11;
-/** a field record: name offset and length (into the name characters), type id, access flags; the field's id is class id << 12 | its index in the class */
-const FREC = 4, F_NAME = 0, F_NAMELEN = 1, F_TYPE = 2, F_FLAGS = 3;
+/** a 4-word field record: name offset and length (into the name characters), type id, access flags; the field's id is class id << 12 | its index in the class */
+const F_NAME = 0, F_NAMELEN = 1, F_TYPE = 2, F_FLAGS = 3;
 const FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const isPrim = (n: string) => n in PRIM;
@@ -80,6 +80,7 @@ export class ClassModel {
     this.fieldByName = r.methods.has(GET_DECLARED_FIELD);
     if (this.fieldTables = FIELD_NATIVES.some((m) => r.methods.has(m))) {
       arrays.add(FIELD_ARRAY); r.referenced.add(FIELD);
+      // one level only: a Field of a class that this adds has no type class unless something else referenced it (mkField then records a gap)
       for (const cn of [...r.referenced]) for (const f of prog.get(cn)?.fields ?? []) if (f.desc[0] === "[") arrays.add(f.desc); else r.referenced.add(typeName(f.desc));
     }
     if (this.dynamicArrays = r.methods.has(NEW_OBJECT_ARRAY)) {

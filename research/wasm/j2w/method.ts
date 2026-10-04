@@ -161,7 +161,7 @@ export class MC {
     if (name === "java/lang/Object") { obj(); c.refIsNull().raw(OP.i32_eqz); return; }
     if (name[0] === "[") {
       const ek = elemKindOf(name);
-      if (ek === "ref") { obj(); c.i32(id!).call(cx.cm.fn.instArr); }
+      if (ek === "ref") { obj(); cx.cm.on ? c.i32(id!).call(cx.cm.fn.instArr) : c.refTest(cx.tArr.ref); }
       else { obj(); c.i32(id!).i32(1).call(cx.helpers.iof); }
       return;
     }

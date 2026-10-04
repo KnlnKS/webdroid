@@ -208,4 +208,5 @@ public class C {
     Object[] c = (Object[]) java.lang.reflect.Array.newInstance(A.class, 3);
     return (c.getClass() == A[].class ? 1000 : 0) + c.length * 10000;
   }
+  public static int classLoader(int n) { return (A.class.getClassLoader() != null ? 1 : 0) + (A[].class.getClassLoader() != null ? 4 : 0); }
 }

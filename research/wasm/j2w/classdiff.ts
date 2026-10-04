@@ -10,7 +10,7 @@ import { exportName } from "./j2w";
 import { intrinsics } from "./intrinsics";
 import { OP } from "./code";
 import { jsTier } from "./oracle";
-import { compare, genCases } from "./cases";
+import { genCases } from "./cases";
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = (cmd: string[], input?: string) => {
