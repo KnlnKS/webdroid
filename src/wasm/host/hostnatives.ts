@@ -38,6 +38,6 @@ export const hostNatives = new Map<string, HostFn>([
   ["android/os/MessageQueue.nativePollOnce(JI)V", async (ptr: bigint, timeout: number) => { await deref<NativeLooper>(ptr).pollOnce(timeout); }],
   // the archives of the boot class path, which BootClassLoader looks resources up in
   ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS], "Ljava/lang/String;")],
-  [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, async (d: object | null, buffer: IoBuffer, offset: number, count: number) =>
+  [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, (d: object | null, buffer: IoBuffer, offset: number, count: number) =>
     readBytes("read", buffer, offset, count, (target) => readResident(fdInt(d as never), target))],
 ]);

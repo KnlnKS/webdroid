@@ -706,6 +706,7 @@ export class World {
   }
   /** whether native method `id` ("class.name+descriptor") has a host binding here, making its import available */
   nativeBound(id: string): boolean {
+    if (id.startsWith("settle:")) return true;
     const m = methodOf(this.prog, id);
     return !!m && this.natives.prepare(m);
   }
@@ -1043,8 +1044,11 @@ export class World {
       const state = d.value as number;
       if (state !== mine && state !== -mine) return p;
       p.catch(() => {});
-      if (state < 0) throw this.exception(thr.value as object);
-      return ret === "V" ? undefined : v.value;
+      // the globals are not to keep the last result alive
+      if (state < 0) { const t = thr.value as object; thr.value = null; throw this.exception(t); }
+      const result = ret === "V" ? undefined : v.value;
+      if (ret === "L") v.value = null;
+      return result;
     });
     return f;
   }

@@ -27,7 +27,7 @@ export function newArrayList(items: unknown[] = []): Obj {
   // the Wasm tier's objects are not JS objects with these fields: the list is built through its Java API, which answers at once as nothing here waits
   if (tier === "wasm") {
     const list = newObj(AL, "(I)V", items.length) as Obj;
-    for (const item of items) vcall(list, "add", "(Ljava/lang/Object;)Z", item);
+    for (const item of items) if (vcall(list, "add", "(Ljava/lang/Object;)Z", item) instanceof Promise) throw new Error("ArrayList.add waited");
     return list;
   }
   const l = new (arrayList())();

@@ -39,21 +39,26 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
   return w;
 }
 
-/** The realm's World, over the platform build the tab opened and the platform Program its processes share; the app's dex files join it as they arrive. */
+/** The realm's World, over the platform build the tab opened and the platform Program its processes share; the app's dex files join it as they arrive. Outside a page (the
+ *  harnesses under node) there is no build to fetch: the World is made when the first dex arrives and takes the platform's dex files as they are loaded. */
 export async function bootWasmTier(): Promise<TierBackend> {
+  let world: World | undefined;
+  const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined>();
+  const dexes = (path: string) => openDexes(path, appDexes, opened);
+  const start = (made: World) => {
+    world = made;
+    useEntry(wasmEntry(made));
+    fieldNames.find = fieldNamesOf(made);
+    rt.mkThrowable = hostThrowable;
+    rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
+  };
+  if (typeof location === "undefined") {
+    return { loadDex(dex) { if (world) world.addDexes([dex]); else { const p = new Program([dex]); p.addExterns(externs); start(createWorld(p, { dexes })); } } };
+  }
   const [store, jars] = await Promise.all([openAot(), fetchPlatformJars()]);
   const platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
-  const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined>();
-  const world = createWorld(new Program([], platform), { aot: store, dexes: (path) => openDexes(path, appDexes, opened) });
-  useEntry(wasmEntry(world));
-  fieldNames.find = fieldNamesOf(world);
-  rt.mkThrowable = hostThrowable;
-  rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world, cls); };
-  return {
-    loadDex(dex, isPlatform) {
-      if (!isPlatform) { appDexes.push(dex); world.addDexes([dex]); }
-    },
-  };
+  start(createWorld(new Program([], platform), { aot: store, dexes }));
+  return { loadDex(dex, isPlatform) { if (!isPlatform) { appDexes.push(dex); world!.addDexes([dex]); } } };
 }
 
 /** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
