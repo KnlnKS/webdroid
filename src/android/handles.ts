@@ -63,16 +63,6 @@ export function deref<T>(h: bigint): T {
   return (o === WEAK ? refs[n]!.deref() : o) as T;
 }
 
-/** put a different object behind an existing handle — reset/set-from-source, where the
- *  framework keeps its long and we swap what it points at */
-export function replace(h: bigint, o: object): void {
-  const n = Number(h);
-  const old = deref<object | undefined>(h);
-  if (old) byObj.delete(old);
-  objs[n] = o; refs[n] = undefined;
-  byObj.set(o, h);
-}
-
 export function release(h: bigint): void {
   const n = Number(h);
   if (!objs[n]) return;

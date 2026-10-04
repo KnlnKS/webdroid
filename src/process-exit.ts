@@ -8,7 +8,6 @@ export type ExitStatus = { code: number; signal?: undefined } | { signal: number
 let status: ExitStatus | null = null;
 const listeners: ((status: ExitStatus) => void)[] = [];
 export const processExited = (): boolean => status !== null;
-export const exitStatus = (): ExitStatus | null => status;
 /** what anything that would run on in a dead process waits for */
 export const never = (): Promise<never> => new Promise<never>(() => {});
 /** run `f` once when the process ends (the broker's death notice, the shell's display) */
