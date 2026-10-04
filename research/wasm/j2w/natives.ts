@@ -199,7 +199,7 @@ export class Natives {
     };
     const raise = (e: unknown): never => {
       const t = this.src?.thrown(e);
-      if (!t) throw e;
+      if (!t) { if (process.env.DBG) console.error((e as Error).stack); throw e; }
       return throwJava(t);
     };
     const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new VIEWS[kind](ctx.mem.buffer, ptr, len);

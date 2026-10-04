@@ -17,7 +17,7 @@ import { Natives, type HostContext } from "./natives";
 import { Bridge } from "./bridge";
 import { rtfns, type Synth } from "./rtfns";
 import { hostInfo } from "./classes";
-import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
 import { mid } from "./reach";
@@ -64,13 +64,16 @@ export class World {
   /** the strings of String constants, by index, and the table they are read from */
   private strings = new Map<string, number>();
   strs = new WebAssembly.Table({ element: "externref", initial: 64 });
+  /** the byte[]s whose addresses VMRuntime.addressOf has given out (memory.ts), by the index the address holds */
+  private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
+  private pinned = new Map<object, number>();
   /** scratch linear memory natives copy arrays through, and its allocation top */
   mem = new WebAssembly.Memory({ initial: 1 });
   sp = new WebAssembly.Global({ value: "i32", mutable: true }, 8);
   natives: Natives;
   bridge: Bridge;
   private host: Record<string, Function>;
-  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
@@ -90,6 +93,15 @@ export class World {
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
+      pin: (array: object) => {
+        let i = this.pinned.get(array);
+        if (i === undefined) {
+          i = this.pinned.size; this.pinned.set(array, i);
+          if (i >= this.nm.length) this.nm.grow(this.nm.length);
+          this.nm.set(i, array as never);
+        }
+        return i;
+      },
       classByName: (name: string) => {
         const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
         return n === "" || (n[0] === "[" ? !/^([ZBCSIJFD]|L.+;)$/.test(e) || (e[0] === "L" && !this.prog.get(e.slice(1, -1))?.def && !this.prog.get(e.slice(1, -1))) : !this.prog.get(n)) ? 0 : this.idOf(n);
@@ -98,7 +110,7 @@ export class World {
       stackClass: (n: number) => {
         const frames = javaFrames(new Error().stack ?? "", this.traces), f = frames[n + 1];
         // JavaScriptCore's stack has no Wasm frame names: that is a missing capability, not a stack that is not n frames deep
-        if (!frames.length) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
+        if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => { if (process.env.TRACE) console.error("EXC", kind, excMessage(kind, a, b, c, d, e, names), new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:")).slice(0, 6).map((l) => l.replace(/ \(wasm.*/, "").trim()).join(" < ")); return (this.lastMessage = excMessage(kind, a, b, c, d, e, names)); },
@@ -264,6 +276,7 @@ export class World {
     mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
     mb.export("tid", "global", mb.addGlobal(T.i32, true, i32Init(1)));
     mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
+    mb.export("intr", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
@@ -273,10 +286,10 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, thr: x.thr, classId: x.classId };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, thr: x.thr, intr: x.intr, classId: x.classId };
   }
 
-  private rtImports() { const { tag, alloc, hash, ctab, tid, thr } = this.rt; return { table: this.table, strs: this.strs, tag, alloc, hash, ctab, tid, thr, mem: this.mem, sp: this.sp }; }
+  private rtImports() { const { tag, alloc, hash, ctab, tid, thr, intr } = this.rt; return { table: this.table, strs: this.strs, nm: this.nm, tag, alloc, hash, ctab, tid, thr, intr, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {

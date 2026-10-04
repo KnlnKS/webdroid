@@ -1,6 +1,6 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
-import type { Code } from "./code";
-import { T } from "./wasmbin";
+import { ModuleBuilder, T } from "./wasmbin";
+import { Code } from "./code";
 import type { Kind } from "./program";
 import type { Compiler, FnTrace } from "./j2w";
 
@@ -90,6 +90,18 @@ export function javaFrames(stack: string, traces: Map<string, FnTrace>): JavaFra
     out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: t.m.codeOff ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
   }
   return out;
+}
+
+let named: boolean | undefined;
+/** whether the engine's `Error.stack` has a line for each Wasm frame (V8's does; JavaScriptCore's frames carry no name or offset) */
+export function namesWasmFrames(): boolean {
+  if (named === undefined) {
+    const mb = new ModuleBuilder(), f = mb.importFunc("h", "f", mb.addFuncType([], [])), g = mb.addFunc(mb.addFuncType([], []), new Code(0).call(f).finish(), "probe");
+    mb.export("g", "func", g);
+    named = false;
+    (new WebAssembly.Instance(new WebAssembly.Module(mb.build() as BufferSource), { h: { f: () => { named = /wasm-function\[\d+\]/.test(new Error().stack ?? ""); } } }).exports.g as () => void)();
+  }
+  return named;
 }
 
 export const isStackOverflow = (e: unknown): boolean => e instanceof RangeError && /call stack/i.test(e.message);

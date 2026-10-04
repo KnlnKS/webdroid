@@ -4,10 +4,14 @@
 import type { Code } from "./code";
 import type { Compiler, Intrinsic } from "./j2w";
 import { rt } from "./rtfns";
+import { OP } from "./code";
 import { T } from "./wasmbin";
 
 const THREAD = "java/lang/Thread", GROUP = "java/lang/ThreadGroup", NORM_PRIORITY = 5;
 export const currentThread = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
+/** the interrupt flag of the running thread (the other Thread objects can only be unstarted) */
+const isCurrent = (cx: Compiler, c: Code) => c.lget(0).gget(currentThread(cx)).call(cx.helper("acmp"));
+const interruptFlag = (cx: Compiler) => cx.global("rt", "intr", T.i32, true);
 
 // curThread(): the running thread, made on first use as ART's Thread::CreatePeer does for the main thread
 rt("curThread", [], "L", (cx, c) => {
@@ -23,5 +27,13 @@ rt("curThread", [], "L", (cx, c) => {
 export const threadIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => threadIntrinsics.set(key, (cx, m, c) => f(cx, c));
 def("java/lang/Thread.currentThread()Ljava/lang/Thread;", (cx, c) => { cx.callRt(c, "curThread"); });
+// Thread.nativeGetStatus(hasBeenStarted): the ordinal of the Thread.State of the running thread (RUNNABLE), else NEW or TERMINATED as for a thread with no native peer
+def("java/lang/Thread.nativeGetStatus(Z)I", (cx, c) => {
+  isCurrent(cx, c).if_(T.i32).i32(1).else_().lget(1).if_(T.i32).i32(5).else_().i32(0).end().end();
+});
+def("java/lang/Thread.isInterrupted()Z", (cx, c) => { isCurrent(cx, c).gget(interruptFlag(cx)).raw(OP.i32_and); });
+def("java/lang/Thread.interrupted()Z", (cx, c) => { c.gget(interruptFlag(cx)).i32(0).gset(interruptFlag(cx)); });
+def("java/lang/Thread.interrupt0()V", (cx, c) => { isCurrent(cx, c).if_().i32(1).gset(interruptFlag(cx)).end(); });
+for (const key of ["yield()V", "setPriority0(I)V", "setNativeName(Ljava/lang/String;)V"]) def(`java/lang/Thread.${key}`, () => {});
 // a monitor here is a null check (one Java thread), so nothing waits on it and a notification wakes nobody
 for (const n of ["notify", "notifyAll"]) def(`java/lang/Object.${n}()V`, () => {});

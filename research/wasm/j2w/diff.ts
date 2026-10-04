@@ -1,4 +1,4 @@
-// Differential test: every static method of W.java and S.java runs as Wasm (this compiler, S over the AOSP boot dex), on the JDK and on the
+// Differential test: every static method of W.java and S.java (S needs V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex), on the JDK and on the
 // production JS tier; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun diff.ts [method-name-filter]
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +7,7 @@ import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { loadDexes, world } from "./build";
 import { jsTier, natives } from "./oracle";
 import { ACC } from "./program";
+import { namesWasmFrames } from "./exc";
 import { compare, genCases } from "./cases";
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-"));
@@ -21,7 +22,8 @@ sh(["d8", "--release", "--output", out, join(out, "W.class"), join(out, "S.class
 const dex = join(out, "classes.dex");
 const w = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(here, "../../../vendor/aosp", j))], { natives }), hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
-const methods = ["W", "S"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
+// S runs String and StringBuilder over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
+const methods = ["W", ...(namesWasmFrames() ? ["S"] : [])].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
 const js = await jsTier(loadDexes(dex));
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const small: Record<string, number[]> = {
