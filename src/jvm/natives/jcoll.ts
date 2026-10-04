@@ -108,6 +108,18 @@ rt.intrinsic("java/util/Arrays", {
     while (copy.length < n) copy.push(null);
     return jarray(copy, (original as { $t?: string }).$t);
   },
+  // Compose's ScatterMap/ScatterSet clear their metadata and key arrays through fill on every
+  // init and clear: a typed array's own fill is 8-28x the bytecode loop. Bad ranges, a null array
+  // and a store an Object[]'s component type must check go to libcore's body.
+  ...Object.fromEntries(["Z", "B", "C", "S", "I", "J", "F", "D", "Ljava/lang/Object;"].flatMap((t) => {
+    const fills = (a: { $t?: string } & { fill(v: unknown, from?: number, to?: number): unknown } | null, v: unknown) =>
+      a !== null && (t !== "Ljava/lang/Object;" || v === null || !a.$t || a.$t === t);
+    return [
+      [`static fill([${t}${t})V`, (base: Function) => (a: Parameters<typeof fills>[0], v: unknown) => fills(a, v) ? void a!.fill(v) : base(a, v)],
+      [`static fill([${t}II${t})V`, (base: Function) => (a: Parameters<typeof fills>[0], from: number, to: number, v: unknown) =>
+        fills(a, v) && from >= 0 && from <= to && to <= (a as unknown as ArrayLike<unknown>).length ? void a!.fill(v, from, to) : base(a, from, to, v)],
+    ];
+  })),
 });
 
 /** a class's constructor, looked up on first use */

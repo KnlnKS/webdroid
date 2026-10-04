@@ -82,6 +82,28 @@ test("Arrays.copyOf keeps the original's array class, pads with null and fails a
   }
 });
 
+test("Arrays.fill matches its AOSP body for primitive and Object arrays, ranges and stores", async () => {
+  const strings = () => jarray(["a", "b", "c", "d"], "Ljava/lang/String;");
+  const cases: [string, () => unknown, unknown[]][] = [
+    ["J", () => new BigInt64Array(5), [-1n, 0x8080808080808080n]], ["I", () => new Int32Array(5), [7, -1]],
+    ["Ljava/lang/Object;", strings, [null, "e", boxInt(3)]], ["Ljava/lang/Object;", () => jarray([1, 2, 3].map(boxInt), "Ljava/lang/Object;"), ["e"]],
+  ];
+  for (const [t, make, values] of cases) {
+    const [fill, base] = await pair("java/util/Arrays", `static fill([${t}${t})V`), [range, rangeBase] = await pair("java/util/Arrays", `static fill([${t}II${t})V`);
+    for (const v of values) {
+      const [a, b] = [make(), make()];
+      expect(await outcome(fill, null, [a, v])).toEqual(await outcome(base, null, [b, v]));
+      expect(a).toEqual(b);
+      for (const [from, to] of [[1, 3], [0, 0], [3, 1], [-1, 2], [2, 9]]) {
+        const [c, d] = [make(), make()];
+        expect(await outcome(range, null, [c, from, to, v])).toEqual(await outcome(rangeBase, null, [d, from, to, v]));
+        expect(c).toEqual(d);
+      }
+    }
+    expect(await outcome(fill, null, [null, values[0]])).toEqual(await outcome(base, null, [null, values[0]]));
+  }
+});
+
 test("Random's step matches its AOSP body for every width and many seeds", async () => {
   const [next, base] = await pair("java/util/Random", "next(I)I");
   for (const seed of [0n, 1n, -1n, 42n, 0x5deece66dn, -9223372036854775808n, 9223372036854775807n, 123456789012345n]) {
