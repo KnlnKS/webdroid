@@ -3,7 +3,7 @@
 
 import { getDeclared, rt, type ClassInfo, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleField, mangleStaticField, idHash } from "../abi";
-import { parkTimeout, unparkTimeout } from "../yield";
+import { parkTimeout, unparkTimeout, yieldToLoop } from "../yield";
 import type { GuestTimer } from "../../guest-clock";
 import { intrinsicCompiler } from "./jbox";
 import { procIdentity, procTasks, processTid } from "../../shell/procfs";
@@ -182,7 +182,7 @@ rt.register({
       if (ms < 0n || nanos < 0 || nanos > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout value is negative or nanos out of range");
       return park(curThread, () => () => {}, Number(ms) + nanos / 1e6);
     },
-    "static yield()V": () => new Promise((r) => setTimeout(r, 0)),
+    "static yield()V": yieldToLoop,
     "static interrupted()Z": () => { const v = curThread.interrupted; curThread.interrupted = 0; return v; },
     "static holdsLock(Ljava/lang/Object;)Z": (o: unknown) => rt.monitors.holds(o as object, rt.cur) ? 1 : 0,
   },
