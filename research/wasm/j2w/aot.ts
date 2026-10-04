@@ -218,9 +218,12 @@ export class AotRuntime {
     for (const s of head.synth) w.ensureSynth(s);
     return ex;
   }
+  /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (aotstartup.ts) */
+  loaded: string[] = [];
   /** a file of the build as a compiled module */
   private module(file: string): WebAssembly.Module {
     const w = this.w, t0 = performance.now(), f = this.store!.get(file);
+    this.loaded.push(file);
     if (f instanceof WebAssembly.Module) { w.stats.aot.readMs += performance.now() - t0; return f; }
     w.stats.aot.readMs += performance.now() - t0; w.stats.aot.bytes += f.length;
     return w.compile(f);

@@ -56,12 +56,14 @@ const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
 async function chromeRun() {
   const { chromium } = await import("playwright");
   const bundlePath = await bundle(true);
-  const aotDir = process.env.WEBDROID_AOT, preload = [dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j)), ...(aotDir ? readdirSync(aotDir).map((f) => join(aotDir, f)) : [])];
+  const aotDir = process.env.WEBDROID_AOT, startup: string[] = aotDir && process.env.G1_PREFETCH ? (JSON.parse(readFileSync(join(aotDir, "startup.json"), "utf8")) as string[]).filter((f) => f[0] === process.env.G1_PREFETCH || process.env.G1_PREFETCH === "1") : [];
+  const preload = [dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j)), ...(aotDir ? readdirSync(aotDir).filter((f) => !startup.includes(f)).map((f) => join(aotDir, f)) : [])];
   // cross-origin isolation gives performance.now() microsecond resolution instead of 0.1 ms
   const iso = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
   const server = Bun.serve({ port: 0, fetch(req) {
     const u = new URL(req.url), p = u.pathname;
-    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(root)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(root)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const t0=performance.now();globalThis.G1_MODULES={};await Promise.all(${JSON.stringify(startup.map((f) => join(aotDir!, f)))}.map(async(p)=>G1_MODULES[p]=await WebAssembly.compile(await (await fetch("/m?p="+encodeURIComponent(p))).arrayBuffer(),{builtins:["js-string"],importedStringConstants:"#"})));globalThis.G1_AHEAD=performance.now()-t0;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    if (p === "/m") return new Response(Bun.file(u.searchParams.get("p")!), { headers: { "content-type": "application/wasm", ...iso } });
     if (p === "/g1.js") return new Response(Bun.file(bundlePath), { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(root, p) : null;
     return file && existsSync(file) ? new Response(Bun.file(file), { headers: iso }) : new Response("", { status: 404 });
@@ -81,9 +83,9 @@ async function chromeRun() {
 // ---- measure
 const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
-interface Sample { first: number; warm: number; steady: number; result: string; error?: string; compileMs?: number; bootMs?: number; boot?: Stats; stats?: Stats }
+interface Sample { first: number; warm: number; steady: number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; boot?: Stats; stats?: Stats }
 type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
-const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, boot: r.boot as Stats, stats: r.stats as Stats });
+const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, boot: r.boot as Stats, stats: r.stats as Stats });
 const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
@@ -121,7 +123,7 @@ for (const engine of engines) {
     ratios.first.push(xf); ratios.steady.push(xs);
     const bc = byClass.get(classOf.get(w)!) ?? (byClass.set(classOf.get(w)!, { first: [], steady: [] }), byClass.get(classOf.get(w)!)!);
     bc.first.push(xf); bc.steady.push(xs);
-    rows.push({ w, result: e.js[0].result, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), wasmBoot: e.wasm.map((x) => x.bootMs ?? 0), wasmCalls: e.wasm.map((x) => (x.stats?.methods ?? 0) - (x.boot?.methods ?? 0)), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
+    rows.push({ w, result: e.js[0].result, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), wasmBoot: e.wasm.map((x) => x.bootMs ?? 0), wasmAhead: e.wasm.map((x) => x.ahead ?? 0), wasmCalls: e.wasm.map((x) => (x.stats?.methods ?? 0) - (x.boot?.methods ?? 0)), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
     const cut = e.wasm.find((x) => x.error);
     if (cut) console.log(`  note: ${w} stopped early (${cut.error}); its steady state is over the calls that completed`);
     console.log(w.padEnd(11), rng(f(e.js, "first")).padStart(9), rng(f(e.wasm, "first")).padStart(11), xf.toFixed(2).padStart(6), rng(f(e.js, "steady")).padStart(11), rng(f(e.wasm, "steady")).padStart(12), xs.toFixed(2).padStart(6), "  ", med(f(e.wasm, "warm")).toFixed(3), " ", med(e.wasm.map((x) => x.compileMs ?? 0)).toFixed(0));
