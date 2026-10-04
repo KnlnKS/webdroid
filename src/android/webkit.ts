@@ -22,6 +22,7 @@ import type { WebCookies } from "../shell/webcookies";
 import { webRenderer } from "./webstorage";
 import { webPrintAdapter } from "./printing";
 import { canvasOf, type JavaCanvas } from "./canvas";
+import { cssColor } from "./graphics";
 import { drawFunctor, type Rect } from "./webfunctor";
 import { factory } from "./webfactory";
 import type { WebSettingsAdapter } from "./websettings";
@@ -506,7 +507,7 @@ rt.register({
     "onSizeChanged(IIII)V": function (this: P, w: number, h: number) { this.size.w = w; this.size.h = h; },
     "onMeasure(II)V": function (this: P, ws: number, hs: number) { return this.measure(ws, hs); },
     "setBackgroundColor(I)V": function (this: P, color: number) {
-      this.background = `rgba(${color >> 16 & 255},${color >> 8 & 255},${color & 255},${(color >>> 24) / 255})`;
+      this.background = cssColor(color);
       if (this.hold.el) this.hold.el.style.background = this.background;
     },
     "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": function (this: P, event: JObj) { return this.keyEvent(event); },

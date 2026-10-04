@@ -10,6 +10,7 @@ import { asSystem } from "./binder";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readLocalObject, writeLocalObject } from "./parcel";
 import { canvasOf } from "./canvas";
+import { cssColor } from "./graphics";
 import { perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import { frameDrawn } from "./vsync";
@@ -128,7 +129,7 @@ function drawContent(ctx: OffscreenCanvasRenderingContext2D, layer: Layer): void
   placeWebContent(ctx.getTransform(), layer, screen);
   if (layer.color) {
     const [r, g, b] = layer.color;
-    ctx.fillStyle = `rgb(${r * 255},${g * 255},${b * 255})`;
+    ctx.fillStyle = cssColor(0xff000000 | Math.round(r * 255) << 16 | Math.round(g * 255) << 8 | Math.round(b * 255));
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   } else {
