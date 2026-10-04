@@ -13,9 +13,9 @@ export const HOT_BUDGET = 5000;
 export const ALLOC_WINDOW = 8 << 20;
 
 /** Table slots that hold the throwers, bound once the runtime starts; each is a lazy-link stub until first used. */
-export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, sioobe: 9, copy: 10, ase: 11, ame: 12, asx: 13, inste: 14, nsfe: 15, ncdfe: 16, recv: 17, iacc: 18, ftm: 19, fin: 20 } as const;
+export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, sioobe: 9, copy: 10, ase: 11, ame: 12, asx: 13, inste: 14, nsfe: 15, ncdfe: 16, recv: 17, iacc: 18, ftm: 19, fin: 20, ncdfr: 21, nsme: 22, nsfer: 23, icce: 24 } as const;
 export type Thrower = keyof typeof SLOT;
-export const FIRST_FREE_SLOT = 21;
+export const FIRST_FREE_SLOT = 25;
 /** a class's init word: 0 not started, (thread << 2 | 1) running on that thread, then done or failed (JLS 12.4.2) */
 export const INIT_DONE = 2, INIT_FAILED = 3;
 const L = "java/lang/";
@@ -40,6 +40,10 @@ export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
   iacc: { cls: L + "IllegalAccessException", params: ["I", "I"] },               // Field: class id of the caller, class id of the field's class
   ftm: { cls: L + "IllegalArgumentException", params: ["I", "I"] },              // Field: class id of the field's type, class id of the value
   fin: { cls: L + "IllegalAccessException", params: ["I"] },                     // Field: class id of the final field's class
+  ncdfr: { cls: L + "NoClassDefFoundError", params: ["I"] },                     // a class the program names and the loaded dexes lack (linkage.ts): index of the message
+  nsme: { cls: L + "NoSuchMethodError", params: ["I"] },
+  nsfer: { cls: L + "NoSuchFieldError", params: ["I"] },
+  icce: { cls: L + "IncompatibleClassChangeError", params: ["I"] },
 };
 
 const dotted = (n: string) => n.replace(/\//g, ".");
@@ -47,7 +51,7 @@ const PRETTY: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: 
 /** a class name as java.lang.Class.getTypeName prints it */
 const pretty = (n: string): string => n[0] === "#" ? PRETTY[n[1]] : n[0] !== "[" ? dotted(n) : pretty(n[1] === "[" ? n.slice(1) : n[1] === "L" ? n.slice(2, -1) : PRETTY[n[1]]) + "[]";
 /** The message ART and the JS tier give the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */
-export function excMessage(kind: number, a: number, b: number, c: number, d: number, e: number, className: (id: number) => string): string | null {
+export function excMessage(kind: number, a: number, b: number, c: number, d: number, e: number, className: (id: number) => string, linkMessage: (id: number) => string): string | null {
   switch (kind) {
     case SLOT.aioobe: return `length=${b}; index=${a}`;
     case SLOT.arith: return "divide by zero";
@@ -58,6 +62,7 @@ export function excMessage(kind: number, a: number, b: number, c: number, d: num
     case SLOT.ftm: return `Can not set ${pretty(className(a))} field to ${pretty(className(b))}`;
     case SLOT.fin: return `Cannot set a final field of class ${dotted(className(a))}`;
     case SLOT.ncdfe: return `Could not initialize class ${dotted(className(a))}`;
+    case SLOT.ncdfr: case SLOT.nsme: case SLOT.nsfer: case SLOT.icce: return linkMessage(a);
     case SLOT.sioobe: return `offset ${a}, count ${b}, length ${c}`;
     case SLOT.copy: return `src.length=${a} srcPos=${b} dst.length=${c} dstPos=${d} length=${e}`;
     case SLOT.asx: return `${pretty(className(a))} cannot be stored in an array of type ${pretty(className(b))}`;

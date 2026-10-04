@@ -9,6 +9,7 @@ import { Flow, Go, structureAny } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 import { constClass, emitStoreCheck } from "./classes";
 import { emitPolymorphic } from "./poly";
+import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
@@ -221,6 +222,13 @@ export class MC {
       this.pop(); c.end();
     }
   }
+  /** whether the class of type `desc` is not loaded: the site then throws what ART throws, and nothing after it runs */
+  unresolved(desc: string): boolean {
+    const f = typeFailure(this.cx.prog, desc);
+    if (f) this.linkFail(f);
+    return !!f;
+  }
+  linkFail(f: LinkFailure) { this.cx.linkError(this.code, f); }
   /** pushes i32: obj (pushed by `obj`) is an instance of class/interface/array `name` (null -> 0) */
   emitInstanceOfTest(name: string, obj: () => void) { obj(); this.code.call(this.cx.instanceOfFn(name)); }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
@@ -235,7 +243,7 @@ export class MC {
   ensureTarget(ins: Ins): string | undefined {
     const n = ins.name;
     if (n === "new-instance") { const name = descToName(this.dex.type(ins.b)); return this.cx.str.isString(name) ? undefined : name; }
-    if (n.startsWith("sget") || n.startsWith("sput")) return this.fieldOf(ins.b).f.owner;
+    if (n.startsWith("sget") || n.startsWith("sput")) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     if (n === "invoke-static" || n === "invoke-static/range") {
       const mr = this.dex.method(ins.b), decl = descToName(this.dex.type(mr.cls));
       return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
@@ -259,7 +267,9 @@ export class MC {
     if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
     const w = this.typing.use(ins.pc, ins.b);
     if (w < 0) return undefined;
-    const key = `${w}:${this.cx.structFor(this.fieldOf(ins.c).decl)}`;
+    const r = this.fieldOf(ins.c, false);
+    if (failed(r)) return undefined;
+    const key = `${w}:${this.cx.structFor(r.decl)}`;
     return this.shadowKeys.has(key) ? key : undefined;
   }
   private findShadows() {
@@ -268,7 +278,9 @@ export class MC {
       if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) continue;
       const w = this.typing.use(ins.pc, ins.b);
       if (w < 0) continue;
-      const key = `${w}:${this.cx.structFor(this.fieldOf(ins.c).decl)}`;
+      const r = this.fieldOf(ins.c, false);
+      if (failed(r)) continue;
+      const key = `${w}:${this.cx.structFor(r.decl)}`;
       if (seen.has(key)) this.shadowKeys.add(key); else seen.add(key);
     }
   }
@@ -305,33 +317,37 @@ export class MC {
       case "const-wide/16": case "const-wide/32": this.constWide(BigInt(b)); return;
       case "const-wide": this.constWide(ins.wideLit); return;
       case "const-wide/high16": this.constWide(BigInt(b) << 48n); return;
-      case "const-class": constClass(cx, c, descToName(dex.type(b))); this.set("L"); return;
+      case "const-class": if (this.unresolved(dex.type(b))) return; constClass(cx, c, descToName(dex.type(b))); this.set("L"); return;
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
       case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
+        if (this.unresolved(dex.type(b))) return;
         const name = descToName(dex.type(b));
         // the cast value is a definition of its own: a web other than the operand's needs the reference copied in
         if (name === "java/lang/Object") { if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); } return; }
         this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
       }
-      case "instance-of": this.get("L", ins.b); c.call(cx.instanceOfFn(descToName(dex.type(ins.c)))); this.set("I"); return;
+      case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); c.call(cx.instanceOfFn(descToName(dex.type(ins.c)))); this.set("I"); return;
       case "array-length": {
         // any array wrapper has the data array in field 2; use the ref wrapper type check-free via per-kind unknown -> test kinds
         this.arrayLength(b); this.set("I"); return;
       }
       case "new-instance": {
+        if (this.unresolved(dex.type(b))) return;
         const name = descToName(dex.type(b));
         // a String is made by the constructor call, which assigns its register
         if (cx.str.isString(name)) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case "new-array": {
+        if (this.unresolved(dex.type(ins.c))) return;
         cx.emitNewArray(c, dex.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
       }
       case "filled-new-array": case "filled-new-array/range": {
         const desc = dex.type(b), ek = elemKindOf(desc);
+        if (this.unresolved(desc)) { this.consumeResult(ins); return; }
         c.gget(cx.vtGlobal(desc)).refAsNonNull().i32(0);
         for (const r of ins.regs) { ek === "ref" ? this.get("L", r) : this.get("I", r); }
         c.arrayNewFixed(cx.tData[ek], ins.regs.length).structNew(cx.tArr[ek]);
@@ -431,24 +447,25 @@ export class MC {
     this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
     c.arraySet(cx.tData[k]);
   }
-  fieldOf(idx: number) {
-    const fr = this.dex.field(idx), decl = descToName(this.dex.type(fr.cls)), desc = this.dex.type(fr.type);
-    const f = this.cx.prog.resolveField(decl, fr.name, desc);
-    if (!f) throw new Error(`field not found ${decl}.${fr.name}`);
-    return { decl, f };
-  }
+  fieldOf(idx: number, isStatic: boolean) { return resolveFieldRef(this.cx.prog, this.dex, idx, isStatic, this.m.cls); }
   emitIget(ins: Ins) {
-    const cx = this.cx, c = this.code, { decl, f } = this.fieldOf(ins.c), st = cx.structFor(decl);
+    const cx = this.cx, c = this.code, r = this.fieldOf(ins.c, false);
+    if (failed(r)) return this.linkFail(r);
+    const { decl, f } = r, st = cx.structFor(decl);
     cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); c.structGet(st, cx.fieldIndex(decl, f)); this.set(f.kind);
   }
   emitIput(ins: Ins) {
-    const cx = this.cx, c = this.code, { decl, f } = this.fieldOf(ins.c), st = cx.structFor(decl);
+    const cx = this.cx, c = this.code, r = this.fieldOf(ins.c, false);
+    if (failed(r)) return this.linkFail(r);
+    const { decl, f } = r, st = cx.structFor(decl);
     cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
   }
   emitStatic(ins: Ins) {
-    const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { f } = this.fieldOf(ins.b);
+    const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), r = this.fieldOf(ins.b, true);
+    if (failed(r)) return this.linkFail(r);
+    const { f } = r;
     this.ensure(f.owner);
     const g = cx.staticGlobal(f.owner, f.name, f.desc);
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind); }
@@ -511,9 +528,12 @@ export class MC {
   }
   /** an invoke the compiler cannot translate: the code after it is dead, so a move-result stays unwritten */
   invokeGap(ins: Ins, why: string) {
+    this.consumeResult(ins);
+    this.cx.gap(this.code, `${mid(this.m)}: ${why}`);
+  }
+  consumeResult(ins: Ins) {
     const insts = this.prepared.instructions, nx = insts[insts.indexOf(ins) + 1];
     if (nx?.name.startsWith("move-result") && !this.prepared.leaders[nx.pc]) this.consumed.add(nx.pc);
-    this.cx.gap(this.code, `${mid(this.m)}: ${why}`);
   }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;
@@ -531,16 +551,17 @@ export class MC {
     };
     const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
+    const target = resolveInvoke(prog, kind, declared, mr.name, desc, this.m.cls);
+    if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
     if (isStatic) {
-      const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
+      const t = target;
       this.ensure(t.cls); pushArgs(); cx.callMethod(c, t);
     } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
       pushArgsFrom(this, ins, p.params); c.call(make); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
-      const t = kind === "invoke-super" ? prog.superTarget(this.m.cls, decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
-      if (!t) throw new Error("unresolved direct " + decl + "." + key);
+      const t = target;
       this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, t);
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation

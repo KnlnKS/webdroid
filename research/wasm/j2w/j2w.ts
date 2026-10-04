@@ -7,6 +7,7 @@ import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
+import type { LinkFailure } from "./linkage";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
 import { JsStrings, stringCtor, stringHelper, type StringRepr } from "./strings";
 import type { Natives } from "./natives";
@@ -46,6 +47,8 @@ export class Compiler implements Base {
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
+  /** classes whose absence this module's code fails a site on (linkage.ts), with the method that relies on it */
+  absent: [string, MethodInfo | undefined][] = [];
   /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
   counting = true;
   /** the slots whose budget globals this module imports */
@@ -186,6 +189,12 @@ export class Compiler implements Base {
     this.gaps.push(what);
     c.i32(this.w.gapId(what)).call(this.imp.gap);
     this.callThrower(c, "ule");
+  }
+  /** the error ART raises where this site's class or member does not resolve, thrown when the site runs */
+  linkError(c: Code, f: LinkFailure): void {
+    if (f.absent) this.absent.push([f.absent, this.assumer]);
+    c.i32(this.w.linkId(f.message));
+    this.callThrower(c, f.thrower);
   }
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {

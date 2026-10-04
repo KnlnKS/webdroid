@@ -46,7 +46,8 @@ export class Program {
     const E = "java/lang/", chain: [string, string | null][] = [["Object", null], ["String", "Object"], ["Throwable", "Object"], ["Exception", "Throwable"], ["RuntimeException", "Exception"],
       ["NullPointerException", "RuntimeException"], ["ArithmeticException", "RuntimeException"], ["ClassCastException", "RuntimeException"],
       ["NegativeArraySizeException", "RuntimeException"], ["IndexOutOfBoundsException", "RuntimeException"], ["ArrayIndexOutOfBoundsException", "IndexOutOfBoundsException"],
-      ["Error", "Throwable"], ["LinkageError", "Error"], ["UnsatisfiedLinkError", "LinkageError"],
+      ["Error", "Throwable"], ["LinkageError", "Error"], ["UnsatisfiedLinkError", "LinkageError"], ["NoClassDefFoundError", "LinkageError"],
+      ["IncompatibleClassChangeError", "LinkageError"], ["NoSuchMethodError", "IncompatibleClassChangeError"], ["NoSuchFieldError", "IncompatibleClassChangeError"],
       ["VirtualMachineError", "Error"], ["OutOfMemoryError", "VirtualMachineError"], ["StackOverflowError", "VirtualMachineError"]];
     for (const [n, sup] of chain) if (!this.classes.has(E + n)) this.stub(E + n, sup && E + sup);
   }

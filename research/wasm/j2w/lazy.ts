@@ -61,6 +61,10 @@ export class World {
   private stacks = new WeakMap<object, Error>();
   private frames: JavaFrame[] = [];
   private assumptions = new Map<string, Assumption>();
+  /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
+  private absent = new Map<string, Set<number>>();
+  /** the messages of the link errors (linkage.ts) compiled code throws, by index */
+  private linkMessages: string[] = [];
   /** the strings of String constants, by index, and the table they are read from */
   private strings = new Map<string, number>();
   strs = new WebAssembly.Table({ element: "externref", initial: 64 });
@@ -114,7 +118,7 @@ export class World {
         if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => this.linkMessages[id])),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
@@ -135,6 +139,10 @@ export class World {
     let s = this.selectors.get(key);
     if (!s) { this.selectors.set(key, s = this.selKeys.length); this.selKeys.push(key); }
     return s;
+  }
+  linkId(message: string): number {
+    const id = this.linkMessages.indexOf(message);
+    return id >= 0 ? id : this.linkMessages.push(message) - 1;
   }
   gapId(what: string): number {
     let id = this.gaps.get(what);
@@ -431,6 +439,10 @@ export class World {
       if (!a) this.assumptions.set(key, a = { decl, name, desc, target, slots: new Set() });
       a.slots.add(owner ? this.slotOf(owner) : slot);
     }
+    for (const [name, owner] of cx.absent) {
+      const slots = this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!;
+      slots.add(owner ? this.slotOf(owner) : slot);
+    }
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
@@ -577,6 +589,8 @@ export class World {
       for (const slot of a.slots) this.invalidate(slot);
       this.assumptions.delete(key);
     }
+    for (const name of added) for (const slot of this.absent.get(name) ?? []) this.invalidate(slot);
+    for (const name of added) this.absent.delete(name);
     return added;
   }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
