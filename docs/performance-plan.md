@@ -47,6 +47,8 @@ Idle apps use about 2% of the thread (260–350 ms per 15 s), so idle polling is
 | `032c41c5` | Main-thread back-edge yields resume ahead of other threads; the 8 ms gap counts from the turn's start | Mihon warm theme taps, 4 alternating pairs: dark 112 → 100 ms, light 97 → 89 ms |
 | `24509694` | Class-init and resolution caches test for a Promise only on a miss | jbench: smallAlloc −12%, mix −4%, treeMap −4% |
 | `cfc4458a` | A long shift by a constant count compiles to a BigInt literal shift | V8 can lower it to int64. The JVM agent measured −65% on a long-math kernel and −22% on pack/unpack; java.time conformance unchanged |
+| `0abb33aa` | A JNI native's first slice runs before any await; a native that returns there completes on its caller's stack | A trivial native: 0.60 → 0.37 µs, no Promise; Doodle Jump GL 33.2 → 34.4 frames/s (noise); Lichess and Organic Maps unchanged |
+| `2a0198e1` | Compiled callers no longer test each call: a suspending callee throws, and the frame's catch saves it (two calling conventions, `src/jvm/suspend.ts`) | jbench: smallAlloc −46%, deque −23%, treeMap −19%, sort −14%, jsonParse −11%; interface calls into intrinsics +4–6%; launches and taps within noise (4 alternating `lat` rounds) |
 | `8b12db19` | `jbench` passes `--js-base-64` to Node 24 | The tool failed on every workload |
 | `0c3e17b5`…`80548932` | Dead code and duplicate helpers removed (orphaned bidi tables, 16 counters nothing wrote, handle/socket leftovers, hex/base64/UTF-8/modified-UTF-8/`be32` duplicates) | −342/+108 lines |
 
@@ -118,43 +120,21 @@ Each item lists its mechanism, its evidence, the expected gain and how to verify
 - **Verify:** the longest-task histogram from a CPU profile (the scratch tool `longtasks.ts`
   belongs in `scripts/lat/`), and p99 present interval.
 
-**1.4 Make JNI calls synchronous end to end.**
-- **Mechanism (fact):** `Cpu.call` → `enter` → `run` → `loop` are all `async`, so even after
-  `1a500de2` every Java→native call returns a Promise. Every compiled Java frame above it
-  saves itself and later resumes through its resumable body.
-- **Plan:**
-  - Run the first `runSlice` synchronously inside `enter`.
-  - When it returns `SliceExit.Exit`, finish the frame without awaiting: the same `finally` work,
-    and `resumeAs(caller)`.
-  - Fall into the async loop only on Suspend, Signal or Budget.
-- **Gain:** large for Flutter (`FlutterJNI` per vsync and per pointer), React Native, Unity and
-  any app whose libraries are called per frame. It also cuts resumable-body compilation driven
-  by these suspensions.
-- **Risk:** thread ownership, signal pumping and nested-frame teardown ordering; `cpu.test.ts`
-  and `jni.test.ts` cover these.
-- **Verify:** `perf.asyncMethods` per frame on Lichess and a Unity title; `lat`.
+**1.4 Make JNI calls synchronous end to end.** Done (`1a500de2`, `0abb33aa`). A guest
+function that parks, takes a signal or spends its slice budget still suspends its Java caller.
 
-**1.5 Make the emitted code smaller and cheaper per operation.**
-- **Mechanism (fact):** in Compose's emitted source, post-call suspension checks are 19.4% of the
-  text, function names 8.1% and the check-cast inline cache 7.3%. Those checks and the try/catch
-  every frame keeps push hot methods past V8's 920-byte cumulative inlining budget.
-- **Upper bounds (fact, jbench, unsafe variants):**
-  - Removing every post-call check: chain −43%, mix −14%, ssbEdit −10%, treeMap −8%.
-  - Removing try/catch from entry bodies without DEX tries: −4% to −7%, and exceptions
-    propagate 52 ns cheaper per frame.
-- **A textual swap does not work:** a `typeof`/`constructor` check helped one workload and
-  regressed others by up to 24%.
-- **Plan:**
-  - A suspension protocol with no per-site test. Either unwind by exception or flag and save
-    frames in the catch the frame already has, or use a shared "suspending" flag.
-  - Classify natives first. Every native that can return a Promise must be known, so add a debug
-    mode that runs both protocols and reports disagreements.
-  - Drop entry-body try/catch once `jx` builds a NullPointerException's trace from the original
-    `TypeError.stack`.
-  - Smaller source also stretches the 24 MiB idle-install budget. Mihon exhausts it (25.2 MB)
-    after its second tap and then compiles on the tap path (`bodyScript` 8–13 ms plus resumable
-    bodies 5–12 ms). Budget by retained heap rather than source length.
-- **Risk:** high. This is the JVM's core protocol. Gate on `conform`, the tier tests and `lat`.
+**1.5 Make the emitted code smaller and cheaper per operation.** Post-call checks are gone
+(`2a0198e1`). What remains:
+- **Entry-body try/catch.** Dropping it from bodies without DEX tries measured −4% to −7% (jbench,
+  upper bound), and exceptions would propagate 52 ns cheaper per frame. It now also carries the
+  suspension, so only methods that make no calls could drop it; `jx` would first have to build a
+  NullPointerException's trace from the original `TypeError.stack`.
+- **Calls into intrinsics through interfaces** (`Iterator.next` on an ArrayList) pay the Java-ABI
+  adapter: +4–6% on listIter-like loops. A per-intrinsic adapter with its own feedback, or
+  intrinsics written to the Java ABI (tail-calling their base), would remove it.
+- **The idle-install budget.** Mihon exhausts it (25.2 MB) after its second tap and then compiles
+  on the tap path (`bodyScript` 8–13 ms plus resumable bodies 5–12 ms). Budget by retained heap
+  rather than source length.
 
 **1.6 Constant-time type checks.**
 - **Mechanism (fact):** instance-of and check-cast use a 2-entry site cache, then

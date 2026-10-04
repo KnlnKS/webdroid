@@ -4054,3 +4054,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   looper's turn while a composite is pending left the composite lag unchanged (p90 ~11 ms on Mihon
   taps), so that lag comes from inside the drawing message. Arrays hashed to 1 and `a.equals(a)` was
   false on array-typed receivers.
+- Suspension by throwing (2026-10-03, `2a0198e1`). Compiled code calls a method's Java-ABI name
+  (`x` + mangled), whose function throws `SUSPENDED` instead of returning a Promise; the public
+  mangled name keeps the Promise protocol for host code through an adapter. Pitfalls found on the
+  way: adapters made by `new Function` must be strict, or a string receiver is boxed and
+  `"a".equals("a")` is false; JavaScriptCore elides frames for calls in tail position, and Bun keeps
+  about ten frames of a stack, so an extra non-tail frame per cold call pushed
+  `VMStack.getStackClass1`'s caller out of the trace (the cold entry now throws from `step`, keeping
+  its calls in tail position); a suspension thrown inside the cold runner's instruction `try` was
+  taken for a callee's and registered the frame twice; a second property per method on a fresh
+  prototype doubled link-time stores (~60 ms of a 1.8 s Calculator launch) until prototypes take
+  their methods in dictionary mode. Host overrides assigned under the mangled name alone (test
+  listeners, Proxy handlers) are skipped by compiled callers; `implement()` installs both names.
+  Measured with jbench and alternating `lat` rounds against the previous tip while another checkout
+  ran conformance suites on the host (load average 8–15), so frame-rate runs on both trees showed
+  occasional 20–50 frames/s windows; those are host contention, not either tree.

@@ -84,6 +84,8 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
   Preserve lifecycle/callback ordering. Class initialization waits for concurrent initialization
   while allowing same-class re-entry and handling cycles.
 - Java overrides, overloads, reflection and boxing must reach the correct Java entry point.
+  A method lives under two names, the public mangled one and compiled code's Java-ABI one
+  (`src/jvm/suspend.ts`); install host methods with `setPublic`/`implement`, never one name alone.
   Re-entrant callbacks can suspend; do not infer synchrony from one observed fast path.
   Collection views stay live. Resolve CharSequence with `csText`, not `String(javaObject)`.
 - Resources drive widget defaults, themes and geometry (`src/shell/config.ts`). AOSP bytecode

@@ -20,11 +20,22 @@ truth for both tiers. Longs are BigInts, strings are JS strings, primitive
 arrays are typed arrays and object arrays carry `$t`.
 
 - **Fast body.** A plain function over a `for(;;) switch(pc)` of basic blocks.
-  After each call it tests `$t instanceof Promise`; if so it breaks to a single
-  save point that captures its registers and calls `R.dfr` with the resumable
-  body. It has no resume prologue or resume cases, which keeps it small enough
-  for V8 to inline through deep Kotlin/Compose call chains. Leaf methods (no
-  calls, statics or allocation) compile to one sync form.
+  Calls go through a method's Java-ABI name (`x` + its mangled name): a callee
+  that suspends throws `SUSPENDED` (`src/jvm/suspend.ts`) with the Promise of
+  its result, so a site only records itself (`$q=K`) and tests nothing; the
+  frame's catch takes the suspension to a single save point that captures its
+  registers, calls `R.dfr` with the resumable body and throws its own
+  suspension. Runtime helpers (class initialization, resolution, monitors) and
+  calls that most likely reach a host function still test for a returned
+  Promise and break to the same save point. It has no resume prologue or resume
+  cases, which keeps it small enough for V8 to inline through deep
+  Kotlin/Compose call chains. Leaf methods (no calls, statics or allocation)
+  compile to one sync form.
+- **Two calling conventions.** The mangled name is the public face host code
+  calls: it returns the Promise instead of throwing. Whatever installs one name
+  installs the other (`setJava`, `setPublic`, `definePublic`, `implement`);
+  a host override set under the mangled name alone would be skipped by compiled
+  callers, and a test holds every linked class to both.
 - **Resumable body.** `function($F)`: the same blocks plus a prologue that
   restores the saved frame and a `case -K` resume point after each call. It
   is only ever a continuation, never an entry, and is compiled on the
