@@ -1,6 +1,7 @@
 // BoringSSL's symmetric primitives, synchronous: AES (FIPS 197, T-tables), DES and 3DES (FIPS 46-3),
 // RC4, and the AEADs AES-GCM (SP 800-38D) and ChaCha20-Poly1305 (RFC 8439). conscrypt.ts drives them
 // through the EVP_CIPHER and EVP_AEAD natives.
+import { be32, le32 } from "./digest";
 
 export interface BlockCipher {
   readonly blockSize: number;
@@ -36,7 +37,6 @@ const TD = [new Int32Array(256), new Int32Array(256), new Int32Array(256), new I
 }
 
 const [TE0, TE1, TE2, TE3] = TE, [TD0, TD1, TD2, TD3] = TD;
-const be32 = (b: Uint8Array, i: number) => (b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]) | 0;
 /** four words into 16 bytes at `off`, big-endian */
 function putWords(b: Uint8Array, off: number, w: Int32Array) {
   for (let i = 0; i < 4; i++, off += 4) { const v = w[i]; b[off] = v >>> 24; b[off + 1] = v >> 16; b[off + 2] = v >> 8; b[off + 3] = v; }
@@ -386,7 +386,6 @@ function chachaBlock(k: Int32Array, counter: number, n: Int32Array, out: Int32Ar
   out[0] = x0 + j0; out[1] = x1 + j1; out[2] = x2 + j2; out[3] = x3 + j3; out[4] = x4 + j4; out[5] = x5 + j5; out[6] = x6 + j6; out[7] = x7 + j7;
   out[8] = x8 + j8; out[9] = x9 + j9; out[10] = x10 + j10; out[11] = x11 + j11; out[12] = x12 + j12; out[13] = x13 + j13; out[14] = x14 + j14; out[15] = x15 + j15;
 }
-const le32 = (b: Uint8Array, i: number) => (b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24) | 0;
 const words = (b: Uint8Array) => Int32Array.from({ length: b.length >> 2 }, (_, i) => le32(b, 4 * i));
 /** ChaCha20 with a 12-byte nonce, XORed over `data` in place from block `counter` */
 export function chacha20(key: Uint8Array, nonce: Uint8Array, counter: number, data: Uint8Array) {
