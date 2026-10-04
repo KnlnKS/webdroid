@@ -246,11 +246,13 @@ cross-origin isolation required for threads; strings must be copied at every hos
 ### 4.1 What exists (`research/wasm/j2w/`)
 
 `wasmbin.ts` (binary module builder with GC rec/sub types, imports, tags, tables, passive data), `code.ts`
-(instruction emitter), `program.ts` (class model, CHA helpers), `reach.ts` (RTA reachability), `consts.ts`,
-`j2w.ts` (types, helpers, vtables, class init, module assembly), `method.ts` (per-method compile using `Flow`,
-kind analysis, all opcode families except strings/MethodHandles/monitors), `intrinsics.ts`, `build.ts`, `dis.ts`,
-`java/W.java`, `run.mjs`, and the differential harnesses `oracle.ts` (the production JS tier as oracle), `cases.ts`, `diff.ts`,
-`libdiff.ts` and `jbench.ts`.
+(instruction emitter), `program.ts` (class model, open-world `add`), `cha.ts` (class-hierarchy analysis over all loaded classes),
+`reach.ts` (RTA reachability, now only a measuring tool), `consts.ts`, `lazy.ts` (the linker: class modules, lazy-link stubs, slots,
+CHA invalidation, entry points), `j2w.ts` (per-module compile context: types, imports, local helpers, allocation), `method.ts`
+(per-method compile using `Flow`, all opcode families except strings/MethodHandles/monitors), `infer.ts` (live-range web typing),
+`exc.ts` (implicit exceptions, stack frames, heap limit), `cfg.ts`, `opinfo.ts`, `intrinsics.ts`, `build.ts`, `dis.ts`,
+`java/W.java`, and the harnesses `oracle.ts` (the production JS tier as oracle), `cases.ts`, `diff.ts`, `libdiff.ts`, `jbench.ts`,
+`lazytest.ts` + `trace.ts` (linker, exceptions, V8-only checks), `lazybench.ts` and `floatbench.ts` (measurements).
 
 ### 4.2 What it showed
 
@@ -265,7 +267,7 @@ Status after the S0 differential work (`research/wasm/j2w/`; the first two need 
 |---|---|---|---|
 | `diff.ts` | 30 static methods of `W.java`, 775 cases | JDK and the production JS tier | 775/775 agree. The earlier `mandel`/`collatz` mismatches are gone. 2 JS-tier results are explained: Bun's JSC words a negative typed-array length differently from V8, so `rt` maps `new int[-1]` to `InternalError` instead of `NegativeArraySizeException` (production runs V8; `runtime.ts` matches only V8's wording) |
 | `libdiff.ts` | primitive-only statics of `java.lang.{Integer,Long,Short,Byte,Character,Boolean,Float,Double,Math,StrictMath}`, `Objects`, `Arrays`, FP16, compiled from the unchanged core-oj/core-libart dex | JS tier running the same bytecode | 322 candidates, 87 compile without a gap in their closure; 3,480 cases, 0 diffs. The rest are blocked by const-string (139), natives (74) or a closure over 1,000 methods (22) |
-| `jbench.ts` | the 42 `scripts/jbench/Bench.java` workloads, each cut out as `static int w_<name>()` (generated, not copied) and compiled over all boot jars | JS tier | all 42 compile into one valid 6.9 MB module (17,859 methods, 23 s) with every unsupported construct recorded as a gap; none runs to a result, every one traps at its first gap |
+| `jbench.ts` | the 42 `scripts/jbench/Bench.java` workloads, each cut out as `static int w_<name>()` (generated, not copied) over all boot jars | JS tier | before lazy linking: one valid 6.9 MB module of 17,859 methods built in 23 s, every unsupported construct recorded as a gap. Now each workload runs on a fresh lazy `World` (cold): none runs to a result, every one stops at its first gap, after 22 to 50 methods compiled; 1,397 methods and 0.5 s over all 42 (`--survey` compiles the whole reach: 15,170 methods in 1.6 s) |
 
 Bugs found and fixed by this work: ART's `java.lang.Object` declares `shadow$_klass_`/`shadow$_monitor_` fields, which
 broke struct layout and invalidated every module built with real core-oj (they are now the object header);
@@ -286,13 +288,66 @@ under several rows; `bun jbench.ts -v` lists them all):
 | `invoke-polymorphic` (VarHandle/MethodHandle) | 51 (+3 range): `ForkJoinPool` and `WorkQueue`, `AtomicInteger`, `AtomicLong`, `CountedCompleter` | | `AtomicInteger`/`AtomicLong` (`random`, `ConcurrentHashMap` users), executors |
 | `invoke-super` to interface default methods (`unresolved direct`) | 31, all `java.time.chrono`/`temporal` | | `java.time` (format, zip entries) |
 | Monitors | not a gap: `monitor-enter/exit` are null checks, valid only while a process has one Java thread | | `monitors`; revisit with S1 threads |
-| Whole-program reach | not a gap, a size problem: `Locale.getDefault()`, `Object.toString()` or `Objects.checkIndex` alone reach 7,854 methods and 716 classes from core-oj+core-libart, so any workload that can throw or concatenate compiles about 15,000 methods | | S1 needs lazy per-method or per-class modules (G3), not closed-world reach |
+| Whole-program reach | a size problem, solved by lazy linking (4.5): `Locale.getDefault()`, `Object.toString()` or `Objects.checkIndex` alone reach 7,854 methods and 716 classes from core-oj+core-libart | | |
 
 `casts` is the smallest case: 26 methods, blocked only by `Integer.<clinit>` (string plus the `getPrimitiveClass`
 native and `const-class`), so it is the first jbench workload to turn green once strings and class objects exist.
 Still untested: `invoke-custom` (no site reached), DEX-level fuzzing of instruction sequences, `framework.jar`
 and app code through `diff`, `fwtest` and the conformance suites. There is no speed comparison against the JS tier on
-real DEX (the compile of 17.9k methods takes 23 s, so cold-start numbers must wait for lazy compilation).
+real DEX (cold-start numbers can now be taken, see 4.5, but every jbench workload still stops at its first string or class-object gap).
+
+### 4.5 S1 compiler architecture (2026-10-04, `knlnks/wasm-c`)
+
+Measured in Bun (JavaScriptCore) and Node 24 (V8 13.6), M4 Pro, single runs, other agents running: indicative.
+
+**Lazy linking** (`lazy.ts`). A `World` holds one funcref table. A class module is built the first time any code names the class: it defines
+the vtable, init flag and static fields as exported globals and one lazy-link stub per method in a contiguous block of table slots.
+A stub calls `host.link(slot)`, which compiles that method plus the small methods it calls (up to 8, 100 code units each: V8 inlines inside a
+module, not through the table) into a unit module, instantiates it against the class modules it names, and replaces the slot. Every call across
+modules is `call_indirect slot`; vtables and IMTs hold slots; unseen interface selectors are learned through `host.imtMiss`. Stubs are per
+method (a per-signature stub cannot know which method it stands for without a store before every call). Each module is `Compiler.buildUnit(group)`
+bytes; `World.classModule` returns the class module bytes, so a build-time mode can store both instead of instantiating on demand.
+
+| Cold start, same entries | Closed-world build (before) | Lazy (after) |
+|---|---|---|
+| 322 primitive statics of the number classes, `lazybench.ts` | 8,127 methods, 2.8 MB, 4,139 ms | 494 methods (6.1%) in 357 modules plus 125 class modules, 0.5 MB, 61 ms compiler + 19 ms Module/Instance + 30 ms class links (V8) |
+| jbench closed-world compile | 17,859 methods, 23-25 s | 15,170 methods, 1.6 s (`--survey`) |
+
+The compiler itself is about 13x faster per method (0.5 to 1.4 ms to 0.07 to 0.12 ms) because the read-set fixpoint (two passes) is gone and the
+analysis is one pass. `new WebAssembly.Module` + `Instance` of a unit cost about 35 us each in V8 (80 us in JavaScriptCore). Compiling every
+method of core-oj + core-libart (37,340) takes 2.5 s, the 219,874 of framework.jar 15 s, with no inference failure; the only compile failures are
+the 8 (framework) to 196 (Komikku) irreducible-CFG methods `Flow` already rejected.
+
+**CHA under open-world loading.** `Cha` considers every concrete subtype the Program knows (not only instantiated ones, which is unsound once
+classes load later). A virtual call with one target becomes `call_indirect` of that target's slot, and the unit records the decision per slot.
+`World.addDexes` re-checks the recorded decisions against the new classes, puts the lazy-link stubs back for every method that relied on a
+falsified one (and its compile group), and the next call recompiles against the new hierarchy (`lazytest.ts`: a subclass in a second dex flips
+`Lz.call` from 11 to 12). Frames already executing keep their old code: closing that window needs the deopt target of S4.
+
+**Exceptions** (`exc.ts`). The implicit exceptions are throwers in reserved table slots, compiled on first use: they allocate the ART class,
+run its constructor and throw the one tag. Messages follow the JS tier and ART (`divide by zero`, `length=4; index=7`, `Ex$P cannot be cast to
+Ex$Q`, `-5`, `Failed to allocate a N byte allocation with 536870912 free bytes`); the host computes them (`World.lastMessage`) but they are not
+yet stored in `Throwable.detailMessage`: that needs the String representation. Stack traces: `Throwable.nativeFillInStackTrace` returns an
+Object that keys a captured V8 `Error`; `World.stackTrace` maps each wasm frame back to a Java method by the name section and to a DEX pc by a
+per-function table of call offsets (`Code.marks`, `Module.bodyOffsets`), then to a line by `DexFile.lineAt`. V8 reports the offset of the call
+instruction, so the greatest mark at or before it is the frame's pc (verified under node: `Ex.c`, `Ex.b`, `Ex.a` at the pcs of their calls with
+the source lines of the three methods). `nativeGetStackTrace` (building `StackTraceElement[]`) waits for strings. Allocation counts against an 8 MB window
+(`rt.alloc` counts up to zero); the end of a window asks the host whether the real heap passed the 512 MB limit, and an array over the limit is an
+OutOfMemoryError before it is allocated. **V8 does not let Wasm catch its stack-overflow RangeError** (`catch_all` catches a host-thrown
+TypeError but not the overflow, Node 24): a Java handler for StackOverflowError cannot see it, so it becomes a `StackOverflowError` at the
+edge of the Java world (`World.entry`). The JS tier converts at every catch site; closing this needs an explicit depth counter or another engine
+mechanism, and apps that catch SOE mid-stack are rare.
+
+**Typing and floats** (`infer.ts`). The kind analysis of `method.ts` is replaced by the web analysis of `dexstats/infer.ts`, now shared: every
+used web gets its own local of its kind, a dead definition drops its value, an unreachable instruction compiles to `unreachable`. Results on
+verified bytecode: 0 conflicts in 500,000+ methods compiled; `dexstats` output is unchanged apart from timings. **G1 sub-question, floats:**
+f32/f64 locals are 30% faster than i32/i64 bits with a reinterpret around every operation under TurboFan (41 vs 58 ms for 30 M iterations of
+a multiply-add chain) and equal under Liftoff (`floatbench.ts`); Wasm of mandel is 17% faster end to end. Decision: floats live in float
+locals (`FLOAT_LOCALS` in `method.ts`, one flag), fields, arrays, parameters and results keep the bits ABI.
+
+**V8 findings.** (1) A module without a start function gets a quarter of the inlining budget (`--trace-wasm-inlining`: `budget=min(128,700)`
+against `min(320,7000)`), which halves `fib(32)` (9.7 vs 5.4 ms); unit modules carry an empty start function. (2) Cross-module calls cannot
+inline, so small callees are grouped (without grouping `swsum` is 3x slower than the closed-world build; with it equal at 0.07 ms).
 
 ### 4.4 Do not trust
 
@@ -368,8 +423,8 @@ Follow AGENTS.md verification at each stage (`typecheck`, `test`, `smoke` with z
 - Class init protocol with concurrent-init and cycle rules; `<clinit>` guards on static access and `new`.
 - Exceptions: stack trace capture via the name section plus a code-offset to DEX-pc table; `StackOverflowError`
   from `RangeError`; OOM via a byte budget counter.
-- Type inference from `dexstats/infer.ts` productized, with per-web locals.
-- Run G1.
+- Type inference from `dexstats/infer.ts` productized, with per-web locals. *Done (4.5).*
+- Run G1 (the float sub-question is answered in 4.5; the Wasm GC speed gate needs the string and class-object work first).
 - **Accept:** jbench workloads on AOSP library bytecode run in Wasm with the same results as the JS tier; `smoke` on
   FitNotes reports zero method failures in Wasm mode.
 

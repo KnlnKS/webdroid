@@ -23,9 +23,8 @@ export function genCases(methods: MethodInfo[], small: Record<string, number[]> 
   });
 }
 
-type Exports = Record<string, (...a: any[]) => unknown>;
-/** Runs every case on the Wasm module and the JS tier (and `jdk`'s lines, when given); prints each disagreement. */
-export async function compare(cases: Case[], exportOf: (m: MethodInfo) => string, exports: Exports,
+/** Runs every case on the Wasm tier (`wasm` returns the callable of a method) and the JS tier (and `jdk`'s lines, when given); prints each disagreement. */
+export async function compare(cases: Case[], run: (m: MethodInfo) => (...a: any[]) => unknown,
   js: (cls: string, name: string, desc: string, args: unknown[]) => Promise<unknown>, jdk?: string[]) {
   let bad = 0, explained = 0, threw = 0;
   const fail = (what: string, c: Case, want: string, got: string) => { bad++; console.log(`MISMATCH ${what} ${c.m.cls}.${c.m.name}${c.m.desc}(${c.args.join(", ")}): ${want} vs ${got}`); };
@@ -33,7 +32,7 @@ export async function compare(cases: Case[], exportOf: (m: MethodInfo) => string
     const { m, args } = c, rk = retKind(m);
     const ref = jdk ? (jdk[i] === "throw" ? "throw" : fmt(rk, BigInt(jdk[i]))) : undefined;
     let wasm: string, tier: string;
-    try { wasm = fmt(rk, BigInt(exports[exportOf(m)](...args.map((a, j) => (m.params[j] === "J" || m.params[j] === "D" ? a : Number(a)))) as bigint)); } catch { wasm = "throw"; }
+    try { wasm = fmt(rk, BigInt(run(m)(...args.map((a, j) => (m.params[j] === "J" || m.params[j] === "D" ? a : Number(a)))) as bigint)); } catch { wasm = "throw"; }
     try { tier = fmt(rk, bitsOf(m.ret, await js(m.cls, m.name, m.desc, args.map((a, j) => unbits(m.params[j], a))))); } catch (e) {
       // Bun's JSC words a negative typed-array length differently from V8, which runtime.ts maps to NegativeArraySizeException
       tier = /InternalError: length cannot be negative/.test(String(e)) && wasm !== "throw" ? (explained++, wasm) : "throw";

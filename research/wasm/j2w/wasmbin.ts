@@ -40,6 +40,8 @@ export class ModuleBuilder {
   funcTypes: number[] = [];       // type idx per defined function
   bodies: number[][] = [];        // encoded bodies
   funcNames: string[] = [];
+  /** after build(): module offset of each defined function's first body byte (its local declarations) */
+  bodyOffsets: number[] = [];
   nImportedFuncs = 0; nImportedGlobals = 0; nImportedTags = 0; nImportedTables = 0;
   tables: number[][] = []; memories: number[][] = []; globals: number[][] = []; tags: number[] [] = [];
   exports: { name: string; kind: number; idx: number }[] = [];
@@ -134,7 +136,15 @@ export class ModuleBuilder {
     if (this.elems.length) this.section(9, vec(this.elems), out);
     if (this.datas.length) { const c: number[] = []; uleb(this.datas.length, c); /* datacount section id 12 must precede code */ const dc: number[] = []; uleb(this.datas.length, dc); this.section(12, dc, out); }
     for (const cu of this.customs) { const c: number[] = []; name(cu.name, c); c.push(...cu.bytes); this.section(0, c, out); }
-    this.section(10, vec(this.bodies.map((b) => { const e: number[] = []; uleb(b.length, e); for (let i = 0; i < b.length; i++) e.push(b[i]); return e; })), out);
+    {
+      const content: number[] = []; uleb(this.bodies.length, content);
+      const rel: number[] = [];
+      for (const b of this.bodies) { uleb(b.length, content); rel.push(content.length); for (let i = 0; i < b.length; i++) content.push(b[i]); }
+      const hdr: number[] = []; uleb(content.length, hdr);
+      const base = out.length + 1 + hdr.length;
+      this.bodyOffsets = rel.map((r) => base + r);
+      this.section(10, content, out);
+    }
     if (this.datas.length) this.section(11, vec(this.datas), out);
     // name section for function names (helps stack traces)
     const named = this.funcNames.map((n, i) => [i + this.nImportedFuncs, n] as const).filter(([, n]) => n);

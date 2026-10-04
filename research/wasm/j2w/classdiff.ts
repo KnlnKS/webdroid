@@ -1,16 +1,14 @@
-// Class-model differential test: the static int(int) methods of java/C.java, compiled to Wasm over the AOSP boot dex, against
-// the production JS tier and the JDK. Each method runs once (class initialization state persists in every tier).
+// Class-model differential test: the static int(int) methods of java/C.java, compiled lazily over the AOSP boot dex, against the
+// production JS tier and the JDK. Each method runs once (class initialization state persists in every tier).
 // Needs javac, d8 and java on PATH. Run: bun classdiff.ts [method-name-filter]
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { compile, hostImports, loadDexes, program } from "./build";
-import { exportName } from "./j2w";
-import { intrinsics } from "./intrinsics";
 import { OP } from "./code";
+import { loadDexes, program, world } from "./build";
+import { intrinsics } from "./intrinsics";
 import { jsTier } from "./oracle";
-import { genCases } from "./cases";
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = (cmd: string[], input?: string) => {
@@ -25,36 +23,46 @@ sh(["d8", "--release", "--min-api", "34", "--output", out, ...new Bun.Glob("C*.c
 // C$S's fields, chosen by ordinal in the order of C.fh's name list, and an ArrayElementVarHandle
 intrinsics.set("C.fh(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => {
   const FV = "java/lang/invoke/FieldVarHandle", st = cx.structFor(FV), o = c.newLocal(cx.vtOf("L"));
-  const S = cx.prog.get("C$S")!, ids = ["i", "l", "o", "j"].map((n) => cx.classId.get("C$S")! << 12 | S.fields.findIndex((f) => f.name === n));
+  const S = cx.prog.get("C$S")!, ids = ["i", "l", "o", "j"].map((n) => cx.idOf("C$S") << 12 | S.fields.findIndex((f) => f.name === n));
   cx.emitNew(c, FV); c.lset(o);
   c.lget(o).refCast(st).i32(ids[0]);
   ids.forEach((id, k) => { if (k) c.i32(id).lget(0).i32(k).raw(OP.i32_ne).select(); });
   c.raw(OP.i64_extend_i32_u).structSet(st, cx.fieldIndex(FV, { owner: FV, name: "artField", desc: "J" })).lget(o);
 });
+intrinsics.set("C.av(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => { cx.emitNew(c, "java/lang/invoke/ArrayElementVarHandle"); });
 // System.<clinit> needs strings and the whole properties machinery, which System.arraycopy does not
 intrinsics.set("java/lang/System.<clinit>()V", () => {});
-intrinsics.set("C.av(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => { cx.emitNew(c, "java/lang/invoke/ArrayElementVarHandle"); });
+
+// AbstractMethodError: Sub inherits m() from a Base that was recompiled abstract
+sh(["mkdir", "-p", "am"]);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(here, "java/am1/Am.java"), join(here, "java/am1/AmBase.java")]);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(here, "java/am2/AmBase.java")]);
+sh(["d8", "--release", "--output", join(out, "am"), ...new Bun.Glob("Am*.class").scanSync(join(out, "am")).toArray().map((f) => join(out, "am", f))]);
+const amExpected = sh(["java", "-cp", join(out, "am"), "Am"]).trim();
 const dex = join(out, "classes.dex"), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(here, "../../../vendor/aosp", j));
-const prog = program([dex, ...jars]);
-const only = process.argv[2];
+const prog = program([dex, ...jars]), only = process.argv[2];
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
-const { bytes, cx } = compile(prog, methods.map((m) => ["C", m.name, m.desc]));
 const js = await jsTier(loadDexes(dex));
-const hit: number[] = [], gapAt = [...cx.gaps.keys()];
-const { instance } = await WebAssembly.instantiate(bytes, hostImports((id) => hit.push(id)));
-console.log(`${methods.length} methods, ${cx.r.methods.size} reached, ${(bytes.length / 1024).toFixed(0)} KB; ${cx.gaps.size} gaps, ${cx.r.unresolved.size} unresolved`);
-const cases = genCases(methods, Object.fromEntries(methods.map((m) => [m.name, [0]])));
-const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `C.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
+const cases = methods.map((m) => ({ m, args: [0n] }));
+const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `C.${c.m.name} 0`).join("\n") + "\n").trim().split("\n");
 // Methods named jsWrong_* pin behaviour the JS tier gets wrong: Wasm must match the JDK there, and the JS tier is expected to differ.
 let bad = 0, pinned = 0;
+const hit: number[] = [];
 for (const [i, c] of cases.entries()) {
+  const w = world(prog); w.onGap = (id) => hit.push(id);
   const exp = jdk[i], name = `C.${c.m.name}`, wrong = c.m.name.startsWith("jsWrong_");
   const got = async (f: () => unknown) => { try { return String(await f()); } catch (e) { if (process.env.J2W_V) console.log(name, e); return "throw"; } };
-  const wasm = await got(() => (instance.exports as any)[exportName(c.m.cls, c.m.name, c.m.desc)](0)), tier = await got(() => js(c.m.cls, c.m.name, c.m.desc, [0]));
+  const wasm = await got(() => w.entry(c.m.cls, c.m.name, c.m.desc)(0)), tier = await got(() => js(c.m.cls, c.m.name, c.m.desc, [0]));
   if (wasm !== exp) { bad++; console.log(`MISMATCH wasm/jdk ${name}: jdk=${exp} wasm=${wasm}`); }
   if (wrong) { pinned++; if (tier === exp) console.log(`${name}: the JS tier now agrees; drop the jsWrong_ prefix`); }
   else if (tier !== wasm) { bad++; console.log(`MISMATCH wasm/js ${name}: js=${tier} wasm=${wasm}`); }
+  if (hit.length) { console.log(`${name}: gaps hit: ${[...new Set(hit)].map((g) => w.gapList[g]).join("; ")}`); hit.length = 0; }
 }
-if (hit.length) console.log("gaps hit at run time: " + [...new Set(hit)].map((i) => gapAt[i] ?? i).join("; "));
+{
+  const w = world([join(out, "am/classes.dex"), ...jars]);
+  let r: string;
+  try { r = String(w.entry("Am", "run", "(I)I")(0)); } catch (e) { const t = w.throwable(e); r = t ? "java " + w.classNameOf(t) : String(e); }
+  if (r !== amExpected) { bad++; console.log(`MISMATCH Am.run: jvm=${amExpected} wasm=${r}`); }
+}
 console.log(`${cases.length - bad}/${cases.length} cases ok (wasm = jdk everywhere, wasm = js tier except ${pinned} pinned js-tier divergences)`);
 process.exit(bad ? 1 : 0);

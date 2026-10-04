@@ -2,16 +2,17 @@
 //
 // The call site's proto fixes the coordinate and value types; the VarHandle object decides which field they reach. A field
 // handle carries its field id (class id << 12 | index among the class's declared fields) in FieldVarHandle.artField, so a
-// site is compiled to a test of that id against the fields it can reach (declared fields of referenced classes that relate to
-// the receiver type and have the value type's family) and, per field, the access mode as plain struct operations. An array
+// site is compiled to a test of that id against the fields it can reach (declared fields of classes that relate to the
+// receiver type and have the value type's family) and, per field, the access mode as plain struct operations. An array
 // handle's coordinates are the array and the index, so it needs no dispatch. Java threads yield only at suspension points, so
 // read-modify-write modes need no atomics. A MethodHandle call site, a static-field handle and a value type that would need
-// boxing are recorded as gaps.
+// boxing are recorded as gaps. The candidate fields are those of the classes loaded when the site is compiled.
 import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind } from "./program";
 import { elemKindOf } from "./consts";
 import { descToName, isWide, varHandleValues } from "../../../src/jvm/abi";
+import { emitStoreCheck } from "./classes";
 import type { PreparedInstruction as Ins } from "../../../src/jvm/prepared";
 import type { MC } from "./method";
 
@@ -42,6 +43,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
   const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
   const produces: Kind | null = op === "cas" ? "I" : op === "set" ? null : K;
   const bt: VT | null = produces && cx.vtOf(produces);
+  const classCast = () => { c.i32(0).i32(0); cx.callThrower(c, "cce"); };
 
   /** the access mode on `p`; leaves the mode's result (if any) on the stack */
   const access = (p: Place, vals: number[]) => {
@@ -67,28 +69,29 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
     const t = cx.tArr[ek], d = cx.tData[ek], wrapper = c.newLocal(cx.vtOf("L")), data = c.newLocal(refNull(d)), idx = c.newLocal(T.i32);
     mc.nonNull(ins.regs[0]); c.drop();
     mc.nonNull(regs[0]); c.lset(wrapper).lget(wrapper).refCast(t).structGet(t, 2).lset(data);
-    mc.get("I", regs[1]); c.lset(idx).lget(idx).lget(data).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_().call(cx.helpers.aioobe).end();
+    mc.get("I", regs[1]); c.lset(idx).lget(idx).lget(data).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_();
+    c.lget(idx).lget(data).refAsNonNull().arrayLen(); cx.callThrower(c, "aioobe"); c.end();
     const vals = readValues();
     access({ load: () => c.lget(data).refAsNonNull().lget(idx).arrayGet(d), store: (v) => {
-      if (ek === "ref") cx.cm.emitStoreCheck(c, wrapper, () => c.lget(v));
+      if (ek === "ref") emitStoreCheck(cx, c, wrapper, () => c.lget(v));
       c.lget(data).refAsNonNull().lget(idx).lget(v).arraySet(d);
     } }, vals);
   } else {
     if (!cx.prog.get(FVH)?.dex) return gap("FieldVarHandle is not in the program");
     const R = descToName(coords[0]), fvh = cx.structFor(FVH);
     const cands: { cn: string; fid: number; fi: number }[] = [];
-    for (const [cn, id] of cx.classId) {
+    for (const cn of new Set([...cx.prog.chain(R), ...cx.w.cha.subtypes(R)])) {
       const jc = cx.prog.get(cn);
-      if (!jc?.def || jc.isInterface || !(cx.prog.isSubclass(cn, R) || cx.prog.isSubclass(R, cn))) continue;
-      jc.fields.forEach((f, i) => { if (!f.isStatic && family(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: id << 12 | i, fi: cx.fieldIndex(cn, f) }); });
+      if (!jc?.def || jc.isInterface) continue;
+      jc.fields.forEach((f, i) => { if (!f.isStatic && family(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, fi: cx.fieldIndex(cn, f) }); });
     }
-    if (R === "java/lang/Void") c.call(cx.helpers.npe).unreachable();          // the receiver is the literal null
+    if (R === "java/lang/Void") cx.callThrower(c, "npe"), c.unreachable();        // the receiver is the literal null
     else {
       if (!cands.length || cands.length > MAX_CANDIDATES) return gap(`${cands.length} candidate fields`);
       const vh = c.newLocal(cx.vtOf("L")), recv = c.newLocal(cx.vtOf("L")), fid = c.newLocal(T.i32);
       mc.nonNull(ins.regs[0]); c.lset(vh); mc.nonNull(regs[0]); c.lset(recv);
       const vals = readValues();
-      c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_().call(cx.helpers.cce).end();
+      c.lget(vh).refTest(fvh).raw(OP.i32_eqz).if_(); classCast(); c.end();
       c.lget(vh).refCast(fvh).structGet(fvh, cx.fieldIndex(FVH, { owner: FVH, name: "artField", desc: "J" })).raw(OP.i32_wrap_i64).lset(fid);
       c.block(bt);
       for (const cand of cands) {
@@ -97,7 +100,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
         access({ load: () => c.lget(r).structGet(st, cand.fi), store: (v) => c.lget(r).lget(v).structSet(st, cand.fi) }, vals);
         c.br(1).end();
       }
-      c.call(cx.helpers.cce).unreachable().end();
+      classCast(); c.unreachable().end();
     }
   }
   if (produces && ret === "V") c.drop();

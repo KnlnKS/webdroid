@@ -4,6 +4,11 @@ export class Code {
   b: number[] = [];
   /** locals declared beyond params: type per local index offset */
   localTypes: VT[] = [];
+  /** DEX pc of the instruction being emitted; calls and throws record (byte offset, pc) so a Wasm frame offset maps back to a pc */
+  pc = -1;
+  marks: number[] = [];
+  /** length of the local declarations finish() prepends */
+  prefixLen = 0;
   constructor(public nparams: number) {}
   newLocal(t: VT): number { this.localTypes.push(t); return this.nparams + this.localTypes.length - 1; }
   raw(...x: number[]): this { for (const v of x) this.b.push(v); return this; }
@@ -11,13 +16,16 @@ export class Code {
   s(n: number | bigint): this { sleb(n, this.b); return this; }
   i32(n: number): this { this.b.push(0x41); sleb(n | 0, this.b); return this; }
   i64(n: bigint): this { this.b.push(0x42); sleb(BigInt.asIntN(64, n), this.b); return this; }
+  f32const(bits: number): this { this.b.push(0x43); for (let i = 0; i < 4; i++) this.b.push((bits >>> (8 * i)) & 255); return this; }
+  f64const(bits: bigint): this { this.b.push(0x44); for (let i = 0n; i < 8n; i++) this.b.push(Number((bits >> (8n * i)) & 255n)); return this; }
   lget(i: number): this { this.b.push(0x20); uleb(i, this.b); return this; }
   lset(i: number): this { this.b.push(0x21); uleb(i, this.b); return this; }
   ltee(i: number): this { this.b.push(0x22); uleb(i, this.b); return this; }
   gget(i: number): this { this.b.push(0x23); uleb(i, this.b); return this; }
   gset(i: number): this { this.b.push(0x24); uleb(i, this.b); return this; }
-  call(f: number): this { this.b.push(0x10); uleb(f, this.b); return this; }
-  callIndirect(type: number, table = 0): this { this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
+  private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
+  call(f: number): this { this.mark(); this.b.push(0x10); uleb(f, this.b); return this; }
+  callIndirect(type: number, table = 0): this { this.mark(); this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
   callRef(type: number): this { this.b.push(0x14); uleb(type, this.b); return this; }
   block(bt: number | VT | null = null): this { this.b.push(0x02); this.bt(bt); return this; }
   loop(bt: number | VT | null = null): this { this.b.push(0x03); this.bt(bt); return this; }
@@ -31,7 +39,7 @@ export class Code {
   unreachable(): this { this.b.push(0x00); return this; }
   drop(): this { this.b.push(0x1a); return this; }
   select(): this { this.b.push(0x1b); return this; }
-  throw_(tag: number): this { this.b.push(0x08); uleb(tag, this.b); return this; }
+  throw_(tag: number): this { this.mark(); this.b.push(0x08); uleb(tag, this.b); return this; }
   throwRef(): this { this.b.push(0x0a); return this; }
   /** try_table with catch clauses [kind, tag, label] ; kind 0 catch,1 catch_ref,2 catch_all,3 catch_all_ref */
   tryTable(bt: number | VT | null, catches: [number, number, number][]): this {
@@ -70,6 +78,7 @@ export class Code {
   arrayCopy(dst: number, src: number): this { return this.gc(17, dst, src); }
   refTest(ht: number, nullable = false): this { this.b.push(0xfb); uleb(nullable ? 21 : 20, this.b); sleb(ht, this.b); return this; }
   refCast(ht: number, nullable = false): this { this.b.push(0xfb); uleb(nullable ? 23 : 22, this.b); sleb(ht, this.b); return this; }
+  externConvertAny(): this { return this.gc(27); }
   satTrunc(k: number): this { this.b.push(0xfc); uleb(k, this.b); return this; }
   finish(): number[] {
     // locals: run-length encode consecutive identical types
@@ -81,6 +90,7 @@ export class Code {
     }
     uleb(groups.length, out);
     for (const [n, t] of groups) { uleb(n, out); vt(t, out); }
+    this.prefixLen = out.length;
     for (const x of this.b) out.push(x);
     out.push(0x0b);
     return out;
@@ -88,7 +98,7 @@ export class Code {
 }
 export const OP = {
   i32_eqz: 0x45, i32_eq: 0x46, i32_ne: 0x47, i32_lt_s: 0x48, i32_lt_u: 0x49, i32_gt_s: 0x4a, i32_gt_u: 0x4b, i32_le_s: 0x4c, i32_le_u: 0x4d, i32_ge_s: 0x4e, i32_ge_u: 0x4f,
-  i64_eqz: 0x50, i64_eq: 0x51, i64_ne: 0x52, i64_lt_s: 0x53, i64_gt_s: 0x55, i64_le_s: 0x57, i64_ge_s: 0x59,
+  i64_eqz: 0x50, i64_eq: 0x51, i64_ne: 0x52, i64_lt_s: 0x53, i64_lt_u: 0x54, i64_gt_s: 0x55, i64_gt_u: 0x56, i64_le_s: 0x57, i64_ge_s: 0x59,
   f32_eq: 0x5b, f32_ne: 0x5c, f32_lt: 0x5d, f32_gt: 0x5e, f32_le: 0x5f, f32_ge: 0x60, f64_eq: 0x61, f64_ne: 0x62, f64_lt: 0x63, f64_gt: 0x64, f64_le: 0x65, f64_ge: 0x66,
   i32_add: 0x6a, i32_sub: 0x6b, i32_mul: 0x6c, i32_div_s: 0x6d, i32_rem_s: 0x6f, i32_and: 0x71, i32_or: 0x72, i32_xor: 0x73, i32_shl: 0x74, i32_shr_s: 0x75, i32_shr_u: 0x76,
   i64_add: 0x7c, i64_sub: 0x7d, i64_mul: 0x7e, i64_div_s: 0x7f, i64_rem_s: 0x81, i64_and: 0x83, i64_or: 0x84, i64_xor: 0x85, i64_shl: 0x86, i64_shr_s: 0x87, i64_shr_u: 0x88,
