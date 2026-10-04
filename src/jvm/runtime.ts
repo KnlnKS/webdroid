@@ -175,7 +175,8 @@ export class Runtime {
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   onUncaught: (throwable: unknown) => void = () => {};
   /** the running strand, a thread as one call chain: every compiled frame that can suspend reads it
-   *  on entry, where a field load costs less than a call, and resumes as it */
+   *  on entry, where a field load costs less than a call, and resumes as it. One slot, the root
+   *  runtime's: a forked loader's runtime reads it through its prototype and never writes its own. */
   cur = new Strand(null, true);
   /** the running thread */
   th(): unknown { return this.cur.thread; }
@@ -188,6 +189,7 @@ export class Runtime {
   /** `f` as strand `s` of the running thread; then as the strand that ran before, unless `f` left
    *  the turn to another (a native that parked released it) */
   within<T>(s: Strand, f: () => T): T {
+    if (this.parent) return this.parent.within(s, f);
     const was = this.cur;
     this.cur = s;
     try { return f(); } finally { if (this.cur === s) this.cur = was; }

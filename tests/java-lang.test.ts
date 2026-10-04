@@ -575,6 +575,13 @@ describe("thread-state", () => {
     await expect(vcallAsync(thread, "start", "()V")).rejects.toBeDefined();
   });
 
+  test("a forked loader's runtime runs a strand in the root's one slot", () => {
+    const fork = rt.fork(), s = new Strand(curThread), was = rt.cur;
+    fork.within(s, () => { expect(rt.cur).toBe(s); expect(fork.cur).toBe(s); });
+    expect(Object.hasOwn(fork, "cur")).toBe(false);
+    expect(rt.cur).toBe(was);
+  });
+
   test("a monitor excludes another call chain on its thread and admits its own", async () => {
     const lock = {}, a = new Strand(curThread), b = new Strand(curThread);
     const within = <T>(s: Strand, f: () => T) => rt.within(s, f);

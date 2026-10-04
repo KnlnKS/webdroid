@@ -2273,6 +2273,14 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     pthread's start, chain 0 before). jbench `monitors` median 0.42-0.47 -> 0.33-0.37 ms;
     initClass and linkInit fast paths unchanged (5M/1M calls, equal medians). Fast e2e 7/7 with no
     wedged or timed-out step; lat --warm passed (Mihon dark-warm 92-102 ms, load 5-16).
+  - Regression found after merge: YouTube never drew a first frame (the live flow hung 70 min),
+    its pool threads spinning in a synchronized method's handler. Mechanism: `Runtime.within`
+    stored the strand on the runtime it ran on, and a class initialized by a DexClassLoader's
+    forked runtime gave that fork its own `cur`, shadowing the root's slot its compiled code reads
+    through the prototype. Frames then captured a stale strand, so a monitor entered as one thread
+    was exited as another: IllegalMonitorStateException in the catch-all whose own monitor-exit
+    the same try covers, an endless loop on the page's thread. `within` now writes the root's slot
+    (a fork never has its own); YouTube presents again (live flow 3/3), fast e2e 7/7.
 - 2026-10-03, the WebView stack's structural review (branch `knlnks/refactor-webview`, behaviour kept):
   - One frame protocol: every renderer document, main frame or routed subframe, is a
     `RendererFrame` whose page talks to the app over the port its load hands it. The window carries
