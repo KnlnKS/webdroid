@@ -5,7 +5,7 @@ import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { descToName, parseMethodDesc, isWide } from "../../../src/jvm/abi";
 import { prepareMethod, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../../src/jvm/prepared";
-import { Flow, Go } from "../../../src/jvm/structure";
+import { Flow, Go, structureAny } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 import { constClass, emitStoreCheck } from "./classes";
 import { emitPolymorphic } from "./poly";
@@ -107,7 +107,7 @@ export class MC {
     const { m, item, cx } = this;
     const prepared = this.prepared = prepareMethod(this.dex, item, m.desc, m.isStatic);
     let flow: Flow;
-    try { flow = new Flow(prepared, item, Infinity); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
+    try { flow = structureAny(prepared, item, Infinity); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     this.typing = inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
     // blocks

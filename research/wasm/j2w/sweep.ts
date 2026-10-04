@@ -12,8 +12,8 @@ import { natives } from "./oracle";
 import { mid } from "./reach";
 
 /** what is understood and not yet translated: natives with no host implementation, references to platform APIs the boot jars lack, String constructors strings.ts lacks, MethodHandle call sites
- *  and invoke-custom (poly.ts handles VarHandle only), and a body whose flow Flow proves irreducible */
-const KNOWN = [/^native: /, /^unresolved reference to a /, /^String\.<init>\(/, /^invoke-custom$/, /^java\/lang\/invoke\/MethodHandle\.invoke/, /^unstructured: irreducible$/];
+ *  and invoke-custom (poly.ts handles VarHandle only) */
+const KNOWN = [/^native: /, /^unresolved reference to a /, /^String\.<init>\(/, /^invoke-custom$/, /^java\/lang\/invoke\/MethodHandle\.invoke/];
 
 const root = join(import.meta.dir, "../../..");
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
