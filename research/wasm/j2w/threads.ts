@@ -21,6 +21,9 @@ rt("curThread", [], "L", (cx, c) => {
   cx.emitEnsure(c, THREAD); cx.emitNew(c, THREAD); c.gset(g);
   c.gget(g); cx.emitEnsure(c, GROUP); c.gget(cx.staticGlobal(GROUP, "mainThreadGroup")); cx.str.literal(c, "main"); c.i32(NORM_PRIORITY).i32(0);
   cx.callMethod(c, ctor);
+  // ART records the native thread in the peer, which is what Thread.isAlive reads
+  const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
+  c.gget(g).refCast(st).i64(1n).structSet(st, peer);
   c.end().gget(g);
 });
 

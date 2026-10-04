@@ -37,7 +37,7 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot }
+export const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot, FieldDesc, CanAccess }
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
@@ -48,6 +48,15 @@ function interfaces(w: World, name: string): string[] {
     m.set(name, l = [...out]);
   }
   return l;
+}
+/** Reflection's access rule for a member of `decl` with `flags` used by class `caller`: the class must be public or in the caller's package, then the member public,
+ *  the caller's own, in the caller's package, or protected and inherited */
+function canAccess(caller: string, decl: JClass, flags: number, w: World): boolean {
+  const pkg = (n: string) => n.slice(0, n.lastIndexOf("/") + 1), samePackage = pkg(caller) === pkg(decl.name);
+  if (!(decl.flags & ACC.PUBLIC) && !samePackage) return false;
+  if (flags & ACC.PUBLIC || caller === decl.name) return true;
+  if (flags & ACC.PRIVATE) return false;
+  return samePackage || !!(flags & ACC.PROTECTED) && w.prog.isSubclass(caller, decl.name);
 }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
   if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
@@ -68,6 +77,8 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.FieldNameChar: return fields[b >> 16].name.charCodeAt(b & 0xffff);
     case Info.FieldType: return w.idOf(typeName(fields[b].desc));
     case Info.FieldFlags: return fields[b].flags;
+    case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
+    case Info.CanAccess: return +canAccess(w.nameOf(a), w.prog.get(w.nameOf(b >>> 12))!, w.prog.get(w.nameOf(b >>> 12))!.fields[b & 0xfff].flags, w);
     case Info.AllocSlot: {
       const ctor = jc?.byKey.get("<init>()V");
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !ctor) return 0;
@@ -85,7 +96,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
         c.lget(o);
       } });
     }
-    case Info.EnsureSlot: return w.ensureSlot(name);
+    case Info.EnsureSlot: return jc ? w.ensureSlot(name) : 0;           // an array class has nothing to initialize
     case Info.ArrayOf: return b ? w.idOf("[".repeat(b) + descOf(name)) : a;      // the class of the b-fold array of a
     case Info.ArraySlot: {           // a = the component class: the array allocator for it
       const arrName = "[" + descOf(name);
@@ -110,7 +121,7 @@ export function emitRefCopy(cx: Compiler, c: Code): void {
 const isAssignableFrom = (cx: Compiler, c: Code) => cx.callMethod(c, cx.prog.resolve(CLASS, "isAssignableFrom", "(Ljava/lang/Class;)Z")!);
 export const classMethod = (cx: Compiler, c: Code, cls: string, name: string, desc: string) => cx.callMethod(c, cx.prog.resolve(cls, name, desc)!);
 /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
-const vtId = (cx: Compiler, c: Code) => c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT);
+export const vtId = (cx: Compiler, c: Code) => c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT);
 const field = (cx: Compiler, name: string, d: string) => cx.fieldIndex(CLASS, { owner: CLASS, name, desc: d });
 
 // classOf(id): the cached Class object; the table grows to hold the id
@@ -273,7 +284,8 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
   c.lget(0).externConvertAny().call(cx.imp.classByName).lset(id);
   c.lget(id).raw(OP.i32_eqz).if_().lget(0); cx.callRt(c, "cnfe"); c.end();
-  c.lget(1).if_(); cx.info(c, Info.EnsureSlot, () => c.lget(id)); c.callIndirect(cx.sig([], "V")).end();
+  const init = c.newLocal(T.i32);
+  c.lget(1).if_(); cx.info(c, Info.EnsureSlot, () => c.lget(id)); c.ltee(init).if_().lget(init).callIndirect(cx.sig([], "V")).end().end();
   c.lget(id); cx.callRt(c, "classOf");
 });
 
@@ -357,7 +369,7 @@ def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Fiel
 });
 def("java/lang/Class.getDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0); cx.callRt(c, "declFields"); });
 def("java/lang/Class.getDeclaredFieldsUnchecked(Z)[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.lget(1); cx.callRt(c, "declFields"); });
-const fieldId = (cx: Compiler, c: Code) => { const fs = cx.structFor(FIELD); c.refCast(fs).structGet(fs, cx.fieldIndex(FIELD, { owner: FIELD, name: "artFieldIndex", desc: "I" })); };
+export const fieldId = (cx: Compiler, c: Code) => { const fs = cx.structFor(FIELD); c.refCast(fs).structGet(fs, cx.fieldIndex(FIELD, { owner: FIELD, name: "artFieldIndex", desc: "I" })); };
 def("java/lang/reflect/Field.getArtField()J", (cx, c) => { c.lget(0); fieldId(cx, c); c.raw(OP.i64_extend_i32_u); });
 def("java/lang/reflect/Field.getNameInternal()Ljava/lang/String;", (cx, c) => {
   const cid = c.newLocal(T.i32), k = c.newLocal(T.i32);

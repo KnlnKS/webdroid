@@ -8,6 +8,7 @@ import type { DexFile } from "../../../src/jvm/dex";
 import { JThrowable } from "../../../src/jvm/natives/jthrowable";
 import { mangleMethod, splitSig } from "../../../src/jvm/abi";
 import { Natives, type HostFn } from "./natives";
+import type { World } from "./lazy";
 import { hostNatives } from "./hostnatives";
 import { PLATFORM_DATA } from "../../../src/jvm/bootclasspath";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../../src/jvm/natives/jmemory";
@@ -53,6 +54,12 @@ export const fmt = (k: string, v: bigint) => {
   if (k === "D") { u64[0] = BigInt.asUintN(64, v); return isNaN(f64[0]) ? "NaN" : String(v); }
   return String(v);
 };
+
+/** the process state ActivityThread.main leaves, on the Wasm tier's World as jsTier leaves it on the production runtime */
+export function processState(w: World): void {
+  w.entry("dalvik/system/CloseGuard", "setEnabled", "(Z)V")(0);
+  w.entry("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")("java.io.tmpdir", "/data/local/tmp");
+}
 
 export async function jsTier(dexes: DexFile[]) {
   for (const d of dexes) rt.loadDex(d);
