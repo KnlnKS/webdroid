@@ -153,7 +153,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // the Application, then the launcher Activity a launch instantiates first
   const launch = [appNode && attrStr(appNode, "name"), !processName && launcher && (attrStr(launcher, "targetActivity") ?? attrStr(launcher, "name"))]
     .flatMap((name) => name ? [componentClass(pkg, name)] : []);
-  compileAhead({ dexes: Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]),
+  // the JS tier's compile worker emits JS; the Wasm tier's compiles Wasm (host/appcode.ts)
+  if (tier === "js") compileAhead({ dexes: Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]),
     profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());

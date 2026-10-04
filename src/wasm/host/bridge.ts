@@ -44,6 +44,8 @@ export class Bridge implements HostBridge {
   private bases = new WeakMap<object, number>();
   private undo: (() => void)[] = [];
   private saved: number[] = [];
+  /** where each scope's scratch ends: a scope that waited gives its scratch back only if no other strand has reserved more above it meanwhile */
+  private tops: number[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
@@ -73,27 +75,27 @@ export class Bridge implements HostBridge {
   }
 
   // ---------- the scope of a native call
-  begin(): number { this.saved.push(-1); return this.undo.length; }
+  begin(): number { this.saved.push(-1); this.tops.push(0); return this.undo.length; }
   /** stores back what the call wrote to the arrays it reached, and releases the scratch it used */
   end(mark: number): void {
     try { for (const u of this.undo.splice(mark).reverse()) u(); } finally {
-      const sp = this.saved.pop()!;
-      if (sp >= 0) this.w.sp.value = sp;
+      const sp = this.saved.pop()!, top = this.tops.pop()!;
+      if (sp >= 0 && (this.w.sp.value as number) <= top) this.w.sp.value = sp;
       if (!this.saved.length) this.live.clear();
     }
   }
   /** the scope of the call in progress is the strand's while it waits: it is set aside, and the returned function takes it up again */
   hold(): () => void {
-    const held = { undo: this.undo, saved: this.saved, live: this.live };
-    this.undo = []; this.saved = []; this.live = new Map();
-    return () => { this.undo = held.undo; this.saved = held.saved; this.live = held.live; };
+    const held = { undo: this.undo, saved: this.saved, tops: this.tops, live: this.live };
+    this.undo = []; this.saved = []; this.tops = []; this.live = new Map();
+    return () => { this.undo = held.undo; this.saved = held.saved; this.tops = held.tops; this.live = held.live; };
   }
   private region(bytes: number): number {
     const top = this.saved.length - 1, sp = this.w.sp.value as number;
     if (this.saved[top] < 0) this.saved[top] = sp;
     const at = ((sp + 7) & -8), need = at + bytes, have = this.w.mem.buffer.byteLength;
     if (need > have) this.w.mem.grow(Math.ceil((need - have) / 65536));
-    this.w.sp.value = need;
+    this.w.sp.value = this.tops[top] = need;
     return at;
   }
 
