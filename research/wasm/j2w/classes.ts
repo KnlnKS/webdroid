@@ -317,3 +317,9 @@ def("java/lang/reflect/Field.getNameInternal()Ljava/lang/String;", (cx, c) => {
   emitString(cx, c, () => cx.info(c, Info.FieldNameLen, () => c.lget(cid), () => c.lget(k)),
     (j) => cx.info(c, Info.FieldNameChar, () => c.lget(cid), () => c.lget(k).i32(16).raw(OP.i32_shl).lget(j).raw(OP.i32_or)));
 });
+
+// VMStack.getStackClassN: the class n frames out from the native's caller (the frames come from the host's view of the Wasm stack)
+for (const n of [1, 2]) def(`dalvik/system/VMStack.getStackClass${n}()Ljava/lang/Class;`, (cx, c) => {
+  const id = c.newLocal(T.i32);
+  c.i32(n).call(cx.imp.stackClass).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
+});

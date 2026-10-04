@@ -86,7 +86,10 @@ export class World {
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
+      // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
+      stackClass: (n: number) => { const f = javaFrames(new Error().stack ?? "", this.traces)[n + 1]; return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0; },
+      excMessage: (kind: number, ...r: number[]) => { if (process.env.J2W_V2) console.log("EXC", kind, new Error().stack?.split("\n").slice(1, 8).join("\n")); return (this.host.excMessage2 as Function)(kind, ...r); },
+      excMessage2: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
@@ -490,6 +493,7 @@ export class World {
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
    *  becomes the StackOverflowError a handler above this call would have received */
   private boundary(e: unknown): unknown {
+    if (process.env.J2W_V) { const t = this.throwable(e); console.log("java exception", t ? this.classNameOf(t) + " " + this.lastMessage : e); let k = t; for (let i = 0; k && i < 4; i++) { k = this.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(k) as object; if (k) console.log("  cause", this.classNameOf(k), this.lastMessage, this.stackTrace(k).slice(0, 6).map((f) => f.cls + "." + f.method + ":" + f.pc).join(" < ")); } }
     if (!isStackOverflow(e)) return e;
     try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; }
     return e;
