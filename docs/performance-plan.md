@@ -160,6 +160,9 @@ function that parks, takes a signal or spends its slice budget still suspends it
   `iof` for primitives, arrays and forked class loaders.
 - **Expected:** 2–4 ms per Mihon tap.
 - **Done:** compiled sites test the mark first; jbench `casts` 3.45 to 2.55 ms. Root runtime only; `iof` keeps the full check.
+  An app A/B (3 alternating `lat` rounds, Mihon and FitNotes, mark against none) showed no difference
+  beyond noise in launch or taps, so the micro-benchmark gain is the only measured one. The 2–4 ms
+  per Mihon tap was not observed.
 
 ### Tier 2: frame pacing and per-frame cost
 
