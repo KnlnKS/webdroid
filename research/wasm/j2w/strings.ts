@@ -76,6 +76,12 @@ export class JsStrings implements StringRepr {
           .if_().lget(1).lget(2).lget(len); cx.callThrower(c, "sioobe"); c.end();
         fromChars(d, () => c.lget(1), () => c.lget(1).lget(2).raw(OP.i32_add)); break;
       }
+      // the hidden constructor libcore's case mapping uses: a range of a char[] it filled itself, so the range needs no check
+      case "(II[C)V": {
+        const d = c.newLocal(refNull(cx.tData.i16));
+        c.lget(2).refCast(cx.tArr.i16).structGet(cx.tArr.i16, 2).lset(d);
+        fromChars(d, () => c.lget(0), () => c.lget(0).lget(1).raw(OP.i32_add)); break;
+      }
       case "([BB)V": {
         // the compact form StringLatin1 and StringUTF16 build: coder 0 holds a char per byte, coder 1 two, low byte first
         npe(c);

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { isIntrinsic, loadDexes, program, world } from "./build";
-import { jsTier, natives } from "./oracle";
+import { jsTier, natives, processState } from "./oracle";
 import { reach } from "./reach";
 import { underNode } from "./undernode";
 
@@ -53,6 +53,7 @@ for (const name of todo) {
   let want: string, got: string, hit: number[] = [];
   const w = world(prog, { natives });
   w.onGap = (id) => hit.push(id);
+  try { processState(w); } catch { /* the workload reports what blocks even this */ }
   try { want = String(await js("Bench", `w_${name}`, "()I", [])); } catch (e) { want = "throw"; }
   const t0 = performance.now();
   try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch (e) {

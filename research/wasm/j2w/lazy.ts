@@ -14,9 +14,10 @@ import { Cha } from "./cha";
 import { H, f32bits, f64bits } from "./consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
 import { Natives, type HostContext } from "./natives";
+import { Bridge } from "./bridge";
 import { rtfns, type Synth } from "./rtfns";
 import { hostInfo } from "./classes";
-import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
 import { mid } from "./reach";
@@ -63,12 +64,16 @@ export class World {
   /** the strings of String constants, by index, and the table they are read from */
   private strings = new Map<string, number>();
   strs = new WebAssembly.Table({ element: "externref", initial: 64 });
+  /** the byte[]s whose addresses VMRuntime.addressOf has given out (memory.ts), by the index the address holds */
+  private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
+  private pinned = new Map<object, number>();
   /** scratch linear memory natives copy arrays through, and its allocation top */
   mem = new WebAssembly.Memory({ initial: 1 });
   sp = new WebAssembly.Global({ value: "i32", mutable: true }, 8);
   natives: Natives;
+  bridge: Bridge;
   private host: Record<string, Function>;
-  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
@@ -76,6 +81,7 @@ export class World {
   constructor(prog: Program, public opts: WorldOptions) {
     this.prog = prog;
     this.natives = opts.natives ?? new Natives();
+    this.bridge = new Bridge(this, this.natives.source);
     this.cha = new Cha(prog);
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => this.names[id];
@@ -86,8 +92,27 @@ export class World {
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
+      // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
+      pin: (array: object) => {
+        let i = this.pinned.get(array);
+        if (i === undefined) {
+          i = this.pinned.size; this.pinned.set(array, i);
+          if (i >= this.nm.length) this.nm.grow(this.nm.length);
+          this.nm.set(i, array as never);
+        }
+        return i;
+      },
+      classByName: (name: string) => {
+        const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
+        return n === "" || (n[0] === "[" ? !/^([ZBCSIJFD]|L.+;)$/.test(e) || (e[0] === "L" && !this.prog.get(e.slice(1, -1))?.def && !this.prog.get(e.slice(1, -1))) : !this.prog.get(n)) ? 0 : this.idOf(n);
+      },
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
-      stackClass: (n: number) => { const f = javaFrames(new Error().stack ?? "", this.traces)[n + 1]; return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0; },
+      stackClass: (n: number) => {
+        const frames = javaFrames(new Error().stack ?? "", this.traces), f = frames[n + 1];
+        // JavaScriptCore's stack has no Wasm frame names: that is a missing capability, not a stack that is not n frames deep
+        if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
+        return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
+      },
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
@@ -250,6 +275,8 @@ export class World {
     // the Class objects by class id (grown by classOf) and the id of the running Java thread, which init words record
     mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
     mb.export("tid", "global", mb.addGlobal(T.i32, true, i32Init(1)));
+    mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
+    mb.export("intr", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
@@ -259,10 +286,10 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, classId: x.classId };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, thr: x.thr, intr: x.intr, classId: x.classId };
   }
 
-  private rtImports() { const { tag, alloc, hash, ctab, tid } = this.rt; return { table: this.table, strs: this.strs, tag, alloc, hash, ctab, tid, mem: this.mem, sp: this.sp }; }
+  private rtImports() { const { tag, alloc, hash, ctab, tid, thr, intr } = this.rt; return { table: this.table, strs: this.strs, nm: this.nm, tag, alloc, hash, ctab, tid, thr, intr, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -390,7 +417,7 @@ export class World {
   }
   private hostCtx?: HostContext;
   private hostContext(): HostContext {
-    return this.hostCtx ??= { mem: this.mem, sp: this.sp, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
   /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */
@@ -504,6 +531,16 @@ export class World {
     let skip = 0;
     while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace)$|^<init>$/.test(frames[skip].method) && (frames[skip].method !== "<init>" || this.prog.isSubclass(frames[skip].cls.replace(/\./g, "/"), "java/lang/Throwable"))) skip++;
     return frames.slice(skip);
+  }
+  private hostFns = new Map<string, Function>();
+  /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
+  hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void): (...a: any[]) => any {
+    let f = this.hostFns.get(name);
+    if (!f) {
+      const cx = new Compiler(this), { bytes } = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
+      this.hostFns.set(name, f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m);
+    }
+    return f as never;
   }
   /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
   fieldReader(cls: string, name: string, desc: string): (obj: object) => unknown {

@@ -23,6 +23,6 @@ export async function underNode(entry: string) {
     } }],
   });
   if (!built.success) throw new Error(built.logs.join("\n"));
-  const r = Bun.spawnSync(["node", "--import", join(here, "nodeshim.mjs"), built.outputs[0].path, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"], env: process.env });
+  const r = Bun.spawnSync(["node", join(here, "nodeshim.mjs"), built.outputs[0].path, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"], env: process.env });
   process.exit(r.exitCode ?? 1);
 }
