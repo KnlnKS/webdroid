@@ -45,7 +45,7 @@ const bundle = async (browser: boolean) => {
 };
 const base64 = Bun.spawnSync(["node", "-p", "typeof Uint8Array.fromBase64"]).stdout.toString().trim() === "function" ? [] : ["--js-base-64"];
 const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
-  const r = Bun.spawnSync(["node", "--expose-gc", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: ROOT } });
+  const r = Bun.spawnSync(["node", "--expose-gc", "--experimental-wasm-jspi", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: ROOT } });
   const line = r.stdout.toString().split("\n").find((l) => l.startsWith("G1"));
   if (!line) throw new Error(`${cfg.workload}/${cfg.mode}: ${r.stderr.toString().slice(0, 400)}`);
   return JSON.parse(line.slice(2));

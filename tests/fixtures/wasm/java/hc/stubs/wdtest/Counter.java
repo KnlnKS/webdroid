@@ -10,6 +10,8 @@ public class Counter implements Runnable, java.util.function.IntSupplier {
   public native boolean same(Counter other);
   public native void setTag(String tag);
   public native String getTag();
+  public native int pause(int by);
+  public native int reenter();
   public native void fail();
   public native void run();
   public native int getAsInt();

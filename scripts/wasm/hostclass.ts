@@ -12,7 +12,7 @@ import { loadDexes, world } from "./lib";
 import { jsTier, natives } from "./oracle";
 import { AOSP } from "./paths";
 import { deref, ownedHandle } from "../../src/android/handles";
-import { hostCases, hostDex, JCounter } from "./hostcases";
+import { enter, hostCases, hostDex, JCounter } from "./hostcases";
 
 const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
 await jsTier(loadDexes(dex));
@@ -25,7 +25,8 @@ for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
 useEntry(wasmEntry(w));
 fieldNames.find = fieldNamesOf(w);
 rt.mkThrowable = hostThrowable;
-const wasm = await hostCases();
+enter.call = async (cls, name, desc) => w.entryAsync(cls, name, desc)();
+const wasm = await hostCases(async (cls, name, desc) => w.entryAsync(cls, name, desc)());
 
 let failed = 0;
 const fail = (what: string) => { failed++; console.log("FAIL " + what); };

@@ -80,6 +80,12 @@ export class Bridge implements HostBridge {
       if (!this.saved.length) this.live.clear();
     }
   }
+  /** the scope of the call in progress is the strand's while it waits: it is set aside, and the returned function takes it up again */
+  hold(): () => void {
+    const held = { undo: this.undo, saved: this.saved, live: this.live };
+    this.undo = []; this.saved = []; this.live = new Map();
+    return () => { this.undo = held.undo; this.saved = held.saved; this.live = held.live; };
+  }
   private region(bytes: number): number {
     const top = this.saved.length - 1, sp = this.w.sp.value as number;
     if (this.saved[top] < 0) this.saved[top] = sp;

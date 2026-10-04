@@ -8,6 +8,8 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { AotStore } from "../../src/wasm/link/aot";
 import { loadDexes, world } from "./lib";
 import { natives } from "./oracle";
+import { nativeSource } from "../../src/wasm/host/nativesource";
+import { Natives } from "../../src/wasm/host/natives";
 import { AOSP, JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
 
@@ -43,6 +45,15 @@ const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
   check("the subclass takes effect", w.entry("Aot2", "sub", "()I")(), 1);
   check("code that relied on the one indexOf is not installed", w.stats.aot.dead >= 1, true);
   check("the plain list is as before", w.entry("Aot", "plain", "()I")(), 0);
+}
+
+// A class the host implements takes the place of the build's code for the methods it names, however the module that holds them is loaded.
+{
+  const host = new Natives({ ...nativeSource, find: (cls, k, isStatic, hasBody) => (cls === "java/util/ArrayList" && k === key.slice(key.indexOf(".") + 1) ? () => 42 : nativeSource.find(cls, k, isStatic, hasBody)) });
+  const w = world([join(out, "classes.dex"), ...jars], { natives: host });
+  w.addHostClass({ name: "java/util/ArrayList", sup: null, ifaces: [], methods: [key.slice(key.indexOf(".") + 1)], fields: [], ctor: class {} });
+  check("the host's indexOf answers where the build's code would", w.entry("Aot", "plain", "()I")(), 1);
+  check("the build's code ran for the rest", w.stats.aot.c > 0, true);
 }
 
 // A page has fetched only some of the modules (FetchStore): the code of the others is compiled on demand and runs as before, whatever the order the files arrive in.

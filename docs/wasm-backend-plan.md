@@ -820,7 +820,7 @@ given one, the app's own PathClassLoader object as the default namespace's `getC
 `bun run wasm loaders`: two DexClassLoaders over dex files defining `Shared` (and `Boom`): distinct Class objects, statics, instances, array classes, signatures naming the loader's own class, exceptions thrown and caught inside
 a loader and seen from outside, `Class.forName`, `loadClass`, `getClassLoader`, `instanceof`/casts across loaders and through the app's `Tag`.
 
-### 4.13 B2: classes the host implements (2026-10-04, `knlnks/wasm-tb2`)
+### 4.14 B2: classes the host implements (2026-10-04, `knlnks/wasm-tb2`)
 
 The registered specs (`rt.register`) outside the VM's own classes (`TS_SPECS` "vm:", and the "intrinsic:" ones, which stand in for bytecode for speed) are the **host classes**: 147 of the 194 specs, `webdroid/*` services and helpers, the WebView
 provider, the TLS and HTTP boundary (`java/net/HttpURLConnection`, `javax/net/ssl/*`, `com/android/okhttp/Http{,s}Handler`) and the GL/EGL implementations; over the 40 boot jars all 147 are defined (124 classes of natives, 23 over dex classes). `World.addHostClass(spec)` (`link/hostclass.ts`; `nativeSource.hostSpecs()` lists them) makes each a Java class
@@ -840,9 +840,41 @@ host property (HttpURLConnection's `method`, `responseCode`, ...). What the host
 field of a class with a `finalize()` calls `host.claim(owner, handle)` (`rt.claimHandle`), whose `FinalizationRegistry` frees the handle with the owner.
 **Deviation from the breakdown (2.3):** no `$host` field. A field added to a platform class changes the struct type of its subclasses and so the layout the AOT build was compiled against, and a class made at run time needs the same table for the classes of the boundary, so one pair of weak tables serves both; the cost is a `WeakMap` get where `this` is bound.
 **Not done:** `statics:`, `clinit` and `platformClinit` of a spec (no host class uses them: the boundary's constants come from the dex), `callerSensitive`, JS-prototype checks inside a spec (HttpURLConnection's `getResponseCode` asks whether `getInputStream` is overridden by comparing prototype properties, which a host object has none of),
-natives that answer a Promise (Track C), methods of a spec that no supertype declares (Java cannot call them), an overlay of a class in a sealed shared base Program (the abstractness a spec changes is in `MethodInfo`s the Programs of several processes share), and the CHA of a wide hierarchy for the methods in `name$$host` (the walk of a small one finds them).
-`bun run wasm hostclass`: 24 cases on the JS tier and on a World (a `Counter` spec with interfaces, an alias, `self()`, a host-made object passed to Java and kept there, a Java-made subclass whose `twice()` virtual call from the host reaches the override, an `AbstractList` spec with a bytecode subclass calling `super.get`, an HttpURLConnection subclass whose Java and host sides read and write
-each other's fields, and the exceptions each way), the lifetime checks and the handle claims.
+methods of a spec that no supertype declares (Java cannot call them), an overlay of a class in a sealed shared base Program (the abstractness a spec changes is in `MethodInfo`s the Programs of several processes share), and the CHA of a wide hierarchy for the methods in `name$$host` (the walk of a small one finds them).
+`bun run wasm hostclass`: 26 cases on the JS tier and on a World (a `Counter` spec with interfaces, an alias, `self()`, a host-made object passed to Java and kept there, a Java-made subclass whose `twice()` virtual call from the host reaches the override, an `AbstractList` spec with a bytecode subclass calling `super.get`, an HttpURLConnection subclass whose Java and host sides read and write
+each other's fields, and the exceptions each way), a host method that waits called from a bytecode subclass, and one that enters Java that blocks on a monitor (both Suspending natives: the host object is `this` through the wait), the lifetime checks and the handle claims. `aottest` checks that a host class's method replaces the build's code.
+### 4.12 S3: strands, monitors and the waits (C1 and C2, 2026-10-04, `knlnks/wasm-tc`)
+
+**Substrate** (`link/sched.ts`, `link/monitor.ts`, `host/suspend.ts`). A Java thread is a strand, a JSPI stack: `Strand.call(f)` runs a table function through `WebAssembly.promising`, `World.entryAsync` is the entry
+that may block (a new strand of the main thread). Compiled code reaches the scheduler through two imports: `host.sync(op, obj, a)` answers at once, `host.block(op, obj, a, b)` is Suspending and answers a status the Wasm
+side turns into the exception (`blockStatus`: InterruptedException, IllegalMonitorStateException, IllegalArgumentException for a timeout, and an IllegalStateException when the stack cannot suspend). There is no
+scheduler loop: the strand that resumes is the one whose promise a waker resolved. `sid` (strand id), `thr` (the Thread) and `depth` are globals the running strand owns; a blocking call keeps them in locals and sets them
+again after it (`emitSave`), and every Suspending wrapper puts them back to the host's top level when its function returns, so host code at the top level always sees strand 1 (the root, which cannot suspend).
+Measured (platform-status.md): a Suspending import answering a plain value still suspends and costs 52 ns against 4 for a plain import, so only natives that can wait get one; `entryAsync` costs 1.4 us against 0.9 for `entry`.
+Natives: async functions are Suspending only; generator natives (`$g`) and `MAY_SUSPEND` ones (conscrypt's `EVP_DigestFinal_ex`, which answers a Promise only for a message of 64 KB or more) have a plain import and a
+Suspending one (`id#s`), and the stub calls the Suspending one on a strand's stack and the plain one at the top level. A plain import that answers a Promise is reported (`wasmNativeSuspended`, `suspendedNatives`),
+a call the engine refuses to suspend (a JS frame between the strand's entry and the import) is counted (`wasmSuspendErrors`). The Bridge scope of a Suspending native is set aside while it waits (`hold`), and its arrays are
+private copies written to the scratch region on resume (H2). The harness workaround for the digest is gone: `sha256` steady 3.8 ms -> 0.9 ms (JS tier 0.44), through `entryAsync`.
+**Monitors.** The header word of every object is an i64: identity hash in the low half, the lock in the high half (0 free; strand id << 8 | count for a thin lock, count up to 255; INFLATED | index for a host
+monitor). `monitor-enter/exit` are the module-local helpers `menter`/`mexit` (thin fast path), `menterSlow`/`mexitSlow` otherwise. Inflation happens on contention, a count past 255 and the first `wait`; an idle
+monitor deflates. Ownership is by strand, a thread's root strand shares with its other strands (as the JS tier's `owns`), a lock whose owner strand has ended is free. `wait/notify/notifyAll`, `Thread.sleep(lock, ms, ns)`
+(a timed wait on `Thread.lock`), `Thread.nativeCreate` (the body is a strand: `run`, `dispatchUncaughtException`, `exit`, peer cleared, joiners notified), `interrupt0`/`interrupted`, `holdsLock`, `Unsafe.park/unpark`
+(both Unsafe classes), `Thread.getState` are intrinsics over those imports; the real libcore `Thread`, `LockSupport` and `java.util.concurrent` run unchanged.
+**Class initialization.** The init word holds `strand << 2 | 1`; the same strand proceeds, another waits in `initWait` (Suspending; woken by `initWake` when the initializer finishes or fails), a request the initializer
+waits on through classes or locks (`waitsOn`) proceeds with the statics as they are, as clinit.ts does.
+**Fuel and depth.** A loop whose body calls, locks or reads a field counts its iterations in a local of its activation and every 4,096 yields (`yieldNow`: a macrotask once the turn has held the thread 8 ms, else a
+microtask hop, so strands whose promises resolved run); the check is skipped for loops of arithmetic and array elements, where it cost 40 to 150% (the `call` in the loop is the cost, not the counter). Methods that
+call something count their frame weight (4 + Wasm locals) in `depth` against `MAX_DEPTH` 56,000 (about half what node's stack holds: 8,700 frames of weight 11 or 2,030 of weight 53) and throw StackOverflowError themselves,
+so a Java `catch (StackOverflowError)` works mid-stack on the host's stack and on strands'; an overflow that still reaches the engine is converted at the boundary as before. The depth is restored on return and at handlers.
+**Results.** `bun run wasm threads`: 38 Java cases (monitors, wait/notify ping-pong, contention, sleep order, interrupts, join, uncaught handlers, thread states, park/unpark, ExecutorService, ConcurrentHashMap under
+contention, CountDownLatch, ReentrantLock/Condition, BlockingQueue, Semaphore, FutureTask, ScheduledExecutor, CompletableFuture, 100 threads, class-init race, cycle, failure, a deadlock the JVM has) agree with the JDK;
+the JS tier differs on the two stack-overflow cases (its handler throws an InternalError). Direct checks: async, generator and nested promising natives, 1,000 stacks suspended in a native (5 ms), a plain native answering
+a Promise, a native waiting under a JS frame (SuspendError, counted), overflow on both kinds of stack. G1 node, steady ms base -> branch (JS tier): monitors 0.096 -> 0.162 (0.24), sha256 3.8 -> 0.9 (0.44), kernels
+(intLoop, longLoop, doubleLoop, sieve, matrix, arraySum, fieldLoop) unchanged within noise, virtualMono 0.033 -> 0.074, allocLoop 0.012 -> 0.026, mapInt 0.087 -> 0.11, listAddGet 0.032 -> 0.045, random 0.069 -> 0.09
+(loops with a call pay the fuel check; the i64 header costs allocation-heavy rows part of it). Load average 4 to 5, so +-10%.
+**Open.** A native that calls Java through a plain call and expects it to block gets SuspendError (entry.ts must call through strands); the depth limit is conservative and Chrome's JSPI stack size is unmeasured;
+`Thread.getState` of a thread blocked in `initWait`/`monitor enter` reports BLOCKED, `synchronized` on a `Class` or String works but `Thread.holdsLock(null)` is not checked; `Thread.priority`, `stop` and daemon exit
+are not modelled; the AOT build key changes (header layout, imports).
 
 ### 4.4 Do not trust
 

@@ -35,6 +35,17 @@ public class Hc {
   static class Plain { long h; }
   public static Object own(long h) { Own o = new Own(); o.h = h; return o; }
   public static Object plain(long h) { Plain o = new Plain(); o.h = h; return o; }
+  /** a bytecode subclass calls a host method that waits */
+  public static int blockSub() { Sub s = new Sub(); return s.pause(5) * 100 + s.get(); }
+  /** Java that blocks on a monitor until another thread has run */
+  public static int locked() throws InterruptedException {
+    final Object o = new Object(); final int[] r = {0};
+    Thread t = new Thread(() -> { synchronized (o) { r[0] = 7; o.notifyAll(); } });
+    synchronized (o) { t.start(); while (r[0] == 0) o.wait(); }
+    return r[0];
+  }
+  /** a host method that calls back into Java that blocks */
+  public static int reentered() { return new Counter().reenter() + 1; }
   public static Object newSub() { return new Sub(); }
   public static Object newConn(URL url) { return new Conn(url); }
   public static Object keep(Object o) { KEPT.add(o); return o; }

@@ -13,10 +13,11 @@ import { mid } from "../compiler/ids";
 import { decodeInstructions } from "../../jvm/prepared";
 import { descToName } from "../../jvm/abi";
 import { Bridge } from "./bridge";
-import { adaptImport } from "./suspend";
+import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, waitsAlways } from "./suspend";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi";
 import type { World } from "../link/world";
 import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
+import { emitSave, ROOT } from "../link/sched";
 
 /** the primitive array classes natives take and return */
 const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
@@ -62,6 +63,10 @@ const rangesOf = (m: MethodInfo): Map<number, [number, number]> => {
 
 interface Plan {
   id: string; fn: HostFn; recv: boolean;
+  /** whether it may answer a Promise: it then has a Suspending import beside its plain one (`id#s`), which a strand's stack calls, since the plain one cannot wait */
+  suspends: boolean;
+  /** whether it always does, which leaves the Suspending import alone */
+  always: boolean;
   /** the class whose statics a `static ()V` native fills in, which the Bridge copies into the Wasm class */
   initializes: string | null;
   /** the import's parameters, with an array as two (pointer, length) */
@@ -78,10 +83,13 @@ interface Plan {
   retRef: string | null;
   /** the import of each World (they differ in memory and exceptions) */
   wrapped?: WeakMap<HostContext, HostFn>;
+  waiting?: WeakMap<HostContext, HostFn>;
 }
 
 export class Natives implements NativeBinder {
+  /** the plans of the natives by id, for the imports; and of every method, since what a method binds to depends on the Program it is in (a host class changes it) */
   private plans = new Map<string, Plan | string>();
+  private byMethod = new WeakMap<MethodInfo, Plan | string>();
   constructor(private src?: NativeSource) {}
   get source(): NativeSource | undefined { return this.src; }
   bridge(w: World): HostBridge { return new Bridge(w, this.src); }
@@ -89,14 +97,14 @@ export class Natives implements NativeBinder {
   /** `m` as a host import; `override` asks for the production method even where the bytecode would run (an intrinsic's error path) */
   private plan(m: MethodInfo, override = false): Plan | string {
     const id = mid(m);
-    let p = this.plans.get(id);
+    let p = this.byMethod.get(m);
     if (p === "bytecode" && override) p = undefined;
     if (p !== undefined) return p;
     // a String constructor is a call site making the String: its host side is a static answering it
     const ctor = m.isCtor && m.cls === STRING_CLASS, recv = !m.isStatic && !ctor;
     // a String is not an object: bytecode that reads its representation (count, hash) is replaced by the production methods
-    if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); return p; }
-    const fn = this.src?.find(specClass(m.cls), m.key, m.isStatic, m.codeOff !== 0);
+    if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); this.byMethod.set(m, p); return p; }
+    const found = this.src?.find(specClass(m.cls), m.key, m.isStatic, m.codeOff !== 0), fn = found;
     const args = recv ? [m.cls === STRING_CLASS ? STRING : `L${m.cls};`, ...m.params] : m.params, params: VT[] = [];
     p = !fn ? "unregistered" : "";
     for (const d of p ? [] : args) {
@@ -104,7 +112,8 @@ export class Natives implements NativeBinder {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn), always: !!fn && waitsAlways(fn), initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.byMethod.set(m, p);
     return p;
   }
   /** makes the host import of native `m` available, as compiling a method that calls it does (a precompiled module imports it by id); whether it has one */
@@ -117,7 +126,10 @@ export class Natives implements NativeBinder {
   declare(cx: Compiler, methods: Iterable<MethodInfo>): void {
     const add = (m: MethodInfo, override: boolean) => {
       const p = this.plan(m, override);
-      if (typeof p !== "string" && !cx.nativeImports.has(p.id)) cx.nativeImports.set(p.id, cx.mb.importFunc("n", p.id, cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])));
+      if (typeof p === "string") return;
+      for (const key of p.suspends && !p.always ? [p.id, p.id + "#s"] : [p.id]) {
+        if (!cx.nativeImports.has(key)) cx.nativeImports.set(key, cx.mb.importFunc("n", key, cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])));
+      }
     };
     const string = cx.prog.get(STRING_CLASS);
     for (const m of methods) {
@@ -149,6 +161,8 @@ export class Natives implements NativeBinder {
   call(cx: Compiler, c: Code, m: MethodInfo): void {
     const p = this.plan(m, true), imp = typeof p === "string" ? undefined : cx.nativeImports.get(p.id);
     if (typeof p === "string" || imp === undefined) { cx.gap(c, `${mid(m)}: ${typeof p === "string" ? "native: " + p : "no host import"}`); return; }
+    // other strands run while this one waits: it keeps who it is in locals and sets the globals again after the call
+    const restore = p.suspends ? emitSave(cx, c) : null;
     const arrays: ReturnType<Natives["copyIn"]>[] = [];
     const scratch = p.args.some(isPrimArray) || p.retArray ? cx.scratch() : -1, sp0 = scratch >= 0 ? c.newLocal(T.i32) : -1;
     if (scratch >= 0) c.gget(scratch).lset(sp0);
@@ -158,7 +172,14 @@ export class Natives implements NativeBinder {
       c.lget(i);
       if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (d === STRING) cx.str.toHost(c); else if (t === T.externref) c.externConvertAny();
     });
-    c.call(imp);
+    if (!restore) c.call(imp);
+    else if (p.always) { c.call(imp); restore(); }
+    else {
+      // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
+      c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).ifType(cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])).call(imp).else_().call(cx.nativeImports.get(p.id + "#s")!);
+      restore();
+      c.end();
+    }
     if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) { if (p.retString) cx.str.fromHost(c); else c.anyConvertExtern(); }
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
     const rlen = p.retArray ? c.newLocal(T.i32) : -1;
@@ -188,7 +209,7 @@ export class Natives implements NativeBinder {
     c.lget(rlen).i32(0).raw(OP.i32_lt_s).if_(T.anyref).anyNull().else_()
       .lget(rlen).arrayNewDefault(cx.tData[ek]).lset(data)
       .lget(data).refAsNonNull().gget(sp).i32(0).lget(rlen).call(this.copy(cx, ek, false))
-      .gget(cx.vtGlobal(d)).refAsNonNull().i32(0).lget(data).refAsNonNull().structNew(cx.tArr[ek]).end();
+      .gget(cx.vtGlobal(d)).refAsNonNull().i64(0n).lget(data).refAsNonNull().structNew(cx.tArr[ek]).end();
   }
   /** reserve(bytes) -> pointer: 8-aligned scratch past the current top, the memory grown to hold it */
   private reserveFn(cx: Compiler, sp: number): number {
@@ -226,31 +247,52 @@ export class Natives implements NativeBinder {
       new (r.constructor as typeof Uint8Array)(ctx.mem.buffer, at, r.length).set(r as never);
       return r.length;
     };
-    for (const id of ids) {
-      const p = this.plans.get(id);
+    // a suspending native keeps private copies of the arrays it is given and writes them to the scratch region when it resumes: the region is
+    // other strands' while this one waits
+    const aux: Aux = {
+      sp: () => ctx.sp.value as number, setSp: (v) => { ctx.sp.value = v; },
+      own: (list, kind, ptr, len) => { const v = view(kind, ptr, len) as Uint8Array | null; if (v === null) return null; const copy = v.slice(); list.push([ptr, copy]); return copy; },
+      give: (list) => { for (const [ptr, copy] of list) new Uint8Array(ctx.mem.buffer, ptr, copy.byteLength).set(new Uint8Array(copy.buffer, copy.byteOffset, copy.byteLength)); },
+    };
+    for (const key of ids) {
+      const waits = key.endsWith("#s"), id = waits ? key.slice(0, -2) : key, p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
-      out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, adaptImport(p, wrapper(p, p.fn, raise, () => { ctx.gap(`${id}: native suspended (answers a Promise)`); return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }); }, view, put, ctx.bridge))), p.wrapped.get(ctx)!);
+      const suspending = waits || p.always, cache = waits ? (p.waiting ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
+      if (cached) { out[key] = cached; continue; }
+      const planned = (suspending: boolean) => wrapper(p, suspending ? hostForm(p.fn) : p.fn, raise, () => {
+        reportSuspended(id);
+        ctx.gap(`${id}: native suspended (answers a Promise)`);
+        return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` });
+      }, view, put, ctx.bridge, aux, suspending);
+      cache.set(ctx, out[key] = adaptImport(planned, ctx, suspending));
     }
     return out;
   }
 }
 
+interface Aux {
+  sp(): number; setSp(v: number): void;
+  own(list: [number, View][], kind: string, ptr: number, len: number): View | null;
+  give(list: [number, View][]): void;
+}
 type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: View | null) => number,
-  B: HostBridge, D: string[], RD: string | null, CLS: string | null) => HostFn;
+  B: HostBridge, D: string[], RD: string | null, CLS: string | null, X: Aux, S: (e: unknown) => void) => HostFn;
 const makers = new Map<string, Maker>();
 /** one function per shape: a native runs under try/catch so a Java throwable it raises becomes a Wasm exception, and a native that
  *  suspends (answers a Promise) is reported, not mistaken for a value; array parameters become views, an array result is stored, and
- *  other references are turned into host values for the call and back into Java values after it (bridge.ts) */
-function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge): HostFn {
+ *  other references are turned into host values for the call and back into Java values after it (bridge.ts).
+ *  A Suspending native is the same in an async function: it works on private copies of its arrays, and the Bridge scope it opened is set
+ *  aside while it waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
+function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
   const objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]);
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp;
   let make = makers.get(key);
   if (!make) {
     const at: number[] = [];
     p.args.reduce((n, d, i) => (at[i] = n, n + (isPrimArray(d) ? 2 : 1)), 0);
     const names = at.flatMap((n, i) => isPrimArray(p.args[i]) ? ["a" + n, "a" + (n + 1)] : ["a" + n]);
     // an Object argument with a range reaches the native as just that range, at offset 0
-    const pre: string[] = [], args = p.args.map((d, i) => isPrimArray(d) ? `view(${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})` : objects[i] ? `h${i}` : "a" + at[i]);
+    const pre: string[] = [], args = p.args.map((d, i) => isPrimArray(d) ? (susp ? `X.own(own,${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})` : `view(${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})`) : objects[i] ? `h${i}` : "a" + at[i]);
     p.args.forEach((_, i) => {
       if (!objects[i]) return;
       const r = p.ranges.get(i);
@@ -259,10 +301,13 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     });
     const call = p.initializes !== null ? "B.initialize(CLS,f)" : p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", `"use strict";return function(${names.join(",")}){${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){${scope[1]};return raise(e)}
-try{if(r instanceof Promise)return suspended();${p.retRef !== null ? "r=B.toJava(r,RD);" : ""}}catch(e){return raise(e)}finally{${scope[1]}}
-return ${p.retArray ? "put(r)" : "r"}}`) as Maker;
+    const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
+    // the arrays and the scratch top as they were when the call began, set again after the wait
+    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp);X.give(own)}` : "if(r instanceof Promise)return suspended();";
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
+try{${wait}${toJava}}catch(e){return raise(e)}finally{${scope[1]}}
+${result}}`) as Maker;
     makers.set(key, make);
   }
-  return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes);
+  return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes, X, reportSuspendError);
 }

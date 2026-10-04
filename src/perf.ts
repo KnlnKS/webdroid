@@ -33,8 +33,9 @@ export const perf = {
   // the JIT: regions linked into the core, and the wall time spent emitting, compiling and linking them
   jitRegions: 0, jitMs: 0,
   // the Wasm tier: Java calls made from the host, host reads of a Java object's property no field backs (each also a missing entry), and
-  // constructs the compiler has no translation for, which compiled code reached
-  wasmEntries: 0, wasmFacadeMisses: 0, wasmGaps: 0,
+  // constructs the compiler has no translation for, which compiled code reached, natives that answered a Promise from a plain import (nativeSuspended: each
+  // is a native to classify as suspending, suspend.ts), calls the engine refused to suspend
+  wasmEntries: 0, wasmFacadeMisses: 0, wasmGaps: 0, wasmNativeSuspended: 0, wasmSuspendErrors: 0,
   bootMs: 0,
 };
 export function perfReset() {

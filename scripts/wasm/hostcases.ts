@@ -10,6 +10,10 @@ import { androidPlatform, androidTool } from "../android-sdk";
 import { JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
 
+/** how a host method that waits enters Java again: the JS tier's, unless the harness gives the World's */
+export const enter: { call: (cls: string, name: string, desc: string) => Promise<unknown> } = { call: async (cls, name, desc) => scall(cls, name, desc) };
+const sleep = () => new Promise<void>((r) => setTimeout(r, 1));
+
 export class JCounter extends JObj {
   n = 0; tag: string | null = null;
   asInt(): number { return this.n; }
@@ -27,6 +31,8 @@ rt.register({
     "getTag()Ljava/lang/String;": function (this: JCounter) { return this.tag; },
     // the host calls Java on its own receiver: a subclass's override answers
     "twice()I": function (this: JCounter) { return 2 * (vcall(this, "get", "()I") as number); },
+    "pause(I)I": async function (this: JCounter, by: number) { await sleep(); this.n += by; return this.n; },
+    "reenter()I": async function () { return (await enter.call("Hc", "locked", "()I")) as number; },
     "fail()V": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "from the host"); },
     "static make(I)Lwdtest/Counter;": (n: number) => { const c = new JCounter(); c.n = n; return c; },
   },
@@ -67,9 +73,13 @@ async function run(f: () => unknown): Promise<string> {
   }
 }
 
-export async function hostCases(): Promise<string[]> {
+/** `blocking` runs the Java that waits: the JS tier's scall, or the World's entryAsync */
+export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown> = async (c, n, d) => scall(c, n, d)): Promise<string[]> {
   const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
   for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" ? "I" : STR}`));
+
+  await line("a host method that waits, from a subclass", () => blocking("Hc", "blockSub", "()I"));
+  await line("a host method that enters Java that blocks", () => blocking("Hc", "reentered", "()I"));
 
   const c = await newObj("wdtest/Counter");
   await line("new", () => c);

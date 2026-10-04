@@ -18,6 +18,9 @@ export class Code {
   u(n: number): this { uleb(n, this.b); return this; }
   s(n: number | bigint): this { sleb(n, this.b); return this; }
   i32(n: number): this { this.b.push(0x41); sleb(n | 0, this.b); return this; }
+  /** an i32.const of a value patched in later (patch): its LEB128 takes five bytes whatever the value */
+  i32Patched(): number { this.b.push(0x41); const at = this.b.length; this.b.push(0x80, 0x80, 0x80, 0x80, 0x00); return at; }
+  patch(at: number, n: number): void { for (let i = 0; i < 4; i++) this.b[at + i] = ((n >>> (7 * i)) & 0x7f) | 0x80; this.b[at + 4] = (n >>> 28) & 0x7f; }
   i64(n: bigint): this { this.b.push(0x42); sleb(BigInt.asIntN(64, n), this.b); return this; }
   f32const(bits: number): this { this.b.push(0x43); for (let i = 0; i < 4; i++) this.b.push((bits >>> (8 * i)) & 255); return this; }
   f64const(bits: bigint): this { this.b.push(0x44); for (let i = 0n; i < 8n; i++) this.b.push(Number((bits >> (8n * i)) & 255n)); return this; }
