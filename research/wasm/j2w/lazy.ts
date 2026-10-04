@@ -35,7 +35,7 @@ export interface ClassRt { name: string; id: number; mod: string; slotBase: numb
 type Slot = { k: "method"; m: MethodInfo; done: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
 /** methods compiled into one module: a method and its small callees, in code units of the callee, up to MAX_GROUP together */
-const MAX_GROUP = 8, SMALL_CALLEE = 100;
+const MAX_GROUP = 16, SMALL_CALLEE = 100;
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
 export class World {
@@ -428,7 +428,7 @@ export class World {
   }
   private groupOf = new Map<number, number[]>();
   private callees = new Map<MethodInfo, MethodInfo[]>();
-  /** methods `m` calls directly (static, non-constructor direct, or a virtual call CHA resolves to one target) that are worth compiling beside it */
+  /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
   private smallCallees(m: MethodInfo): MethodInfo[] {
     let out = this.callees.get(m);
     if (out) return out;
@@ -438,7 +438,7 @@ export class World {
       const op = ins.op;
       if (!(op >= 0x6e && op <= 0x72) && !(op >= 0x74 && op <= 0x78)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
-      if (decl[0] === "[" || kind === "invoke-super" || mr.name === "<init>") continue;
+      if (decl[0] === "[" || kind === "invoke-super") continue;
       const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
         : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
       if (t && t !== m && t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE && !out.includes(t)) out.push(t);
