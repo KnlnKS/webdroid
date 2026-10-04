@@ -39,6 +39,8 @@ export interface WorldOptions {
   natives: NativeBinder;
   /** bytes in use on the heap; what it has grown by since the World was made is compared with the heap limit each time a window of allocation is used up */
   heapUsed: () => number;
+  /** how much the heap may grow before an allocation fails, where the heap is shared with other realms (a tab's processes): ART's limit, a process's own, by default */
+  heapLimit?: number;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;
   /** the native core's memory, which direct buffers are allocated in; a World that only builds code needs none */
@@ -158,7 +160,7 @@ export class World {
       }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
-      heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
+      heapCheck: () => (heap() - heapBase > (opts.heapLimit ?? HEAP_LIMIT) ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
       obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),

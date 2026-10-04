@@ -25,6 +25,9 @@ import { count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
 
 
+/** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
+const TAB_HEAP = 2048 * 1024 * 1024;
+
 declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
@@ -36,7 +39,7 @@ const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
   return w;
