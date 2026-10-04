@@ -29,5 +29,5 @@ const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `W.${c.m.name} ${c.
 const { bad, explained } = await compare(cases, (m) => entries.get(m)!, js, jdk);
 if (w.gaps.size) { console.log("compile gaps: " + w.gapList.join("; ")); process.exit(1); }
 console.log(`${cases.length - bad}/${cases.length} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
-console.log(`compiled ${w.stats.units} methods in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
+console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 process.exit(bad ? 1 : 0);

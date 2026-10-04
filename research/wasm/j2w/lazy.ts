@@ -14,6 +14,9 @@ import { Cha } from "./cha";
 import { H, f32bits, f64bits } from "./consts";
 import { Compiler, declareBase, kindVT, type FnTrace, type Intrinsic } from "./j2w";
 import { SLOT, FIRST_FREE_SLOT, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
+import { decodeInstructions } from "../../../src/jvm/prepared";
+import { descToName } from "../../../src/jvm/abi";
+import { mid } from "./reach";
 import type { DexFile } from "../../../src/jvm/dex";
 
 export interface WorldOptions {
@@ -25,6 +28,8 @@ export interface WorldOptions {
 }
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; methodSlots: Map<string, number>; nMethods: number; exports: WebAssembly.Exports }
 type Slot = { k: "method"; m: MethodInfo; done: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function } | { k: "ensure" };
+/** methods compiled into one module: a method and its small callees, in code units of the callee, up to MAX_GROUP together */
+const MAX_GROUP = 8, SMALL_CALLEE = 100;
 interface Assumption { decl: string; name: string; desc: string; target: MethodInfo; slots: Set<number> }
 
 export class World {
@@ -37,7 +42,7 @@ export class World {
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { classes: 0, units: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
+  stats = { classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
   private slots: (Slot | undefined)[] = [];
   private classes = new Map<string, ClassRt>();
   private ids = new Map<string, number>();
@@ -228,7 +233,7 @@ export class World {
       const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
       return mb.addFunc(sig, this.stubBody(slotBase + methods.indexOf(m), sig, params, link), "stub:" + name + "." + m.name);
     });
-    if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b.tObj, jc, initG, statics, rt), "ensure:" + name));
+    if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, jc, initG, statics, rt), "ensure:" + name));
     else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "ensure:" + name));
     if (vtG >= 0) {
       const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
@@ -240,7 +245,7 @@ export class World {
     return rt;
   }
   /** ensure(): run once, superclass first, then the dex's static values and <clinit>; marked started before running so re-entry returns */
-  private ensureBody(mb: ModuleBuilder, tObj: number, jc: JClass, initG: number, statics: Map<string, number>, rt: ClassRt): number[] {
+  private ensureBody(mb: ModuleBuilder, jc: JClass, initG: number, statics: Map<string, number>, rt: ClassRt): number[] {
     const c = new Code(0), voidSig = mb.addFuncType([], []);
     c.gget(initG).if_().ret().end().i32(1).gset(initG);
     if (jc.sup && this.needsInit(jc.sup)) c.i32(this.ensureSlot(jc.sup)).callIndirect(voidSig);
@@ -259,32 +264,69 @@ export class World {
     }
     const ci = jc.byKey.get("<clinit>()V");
     if (ci) c.i32(rt.methodSlots.get(ci.key)!).callIndirect(voidSig);
-    void tObj;
     return c.finish();
   }
 
   // ---------- compiling methods on demand
-  /** host.link: compile what `slot` stands for and put it in the table */
+  /** host.link: compile what `slot` stands for, with the small methods it calls, and put them in the table */
   private linkSlot(slot: number): void {
     const s = this.slots[slot];
     if (!s || s.k === "ensure" || s.done) return;
     const t0 = performance.now(), cx = new Compiler(this);
-    const built = s.k === "method" ? cx.buildUnit([s.m]) : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
-    this.stats.compileMs += performance.now() - t0; this.stats.units++;
+    const group = s.k === "method" ? this.group(s.m) : [];
+    const built = s.k === "method" ? cx.buildUnit(group) : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
+    this.stats.compileMs += performance.now() - t0; this.stats.units++; this.stats.methods += group.length || 1;
     const imports: Record<string, any> = { rt: { table: this.table, tag: this.rt.tag, alloc: this.rt.alloc, hash: this.rt.hash }, host: this.host };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
-    let inst: WebAssembly.Instance;
-    try { inst = this.instantiate(built.bytes, imports); } catch (e) { (globalThis as any).BAD = built.bytes; throw new Error(`unit ${built.traces[0].name}: ${(e as Error).message}`); }
-    s.stub = this.table.get(slot) as Function;
-    this.table.set(slot, (inst.exports as Record<string, any>)[s.k === "method" ? "m" + slot : "m"]);
-    s.done = true;
+    const exports = this.instantiate(built.bytes, imports).exports as Record<string, any>;
+    const install = (at: number, name: string) => {
+      const sl = this.slots[at] as Exclude<Slot, { k: "ensure" }>;
+      sl.stub = this.table.get(at) as Function; sl.done = true;
+      this.table.set(at, exports[name]);
+    };
+    if (s.k === "method") {
+      const at = group.map((m) => this.slotOf(m));
+      for (const x of at) { install(x, "m" + x); this.groupOf.set(x, at); }
+    } else install(slot, "m");
     for (const t of built.traces) this.traces.set(t.name, t);
-    for (const [decl, name, desc, target] of cx.assumptions) {
+    for (const [decl, name, desc, target, owner] of cx.assumptions) {
       const key = `${decl}.${name}${desc}`;
       let a = this.assumptions.get(key);
       if (!a) this.assumptions.set(key, a = { decl, name, desc, target, slots: new Set() });
-      a.slots.add(slot);
+      a.slots.add(owner ? this.slotOf(owner) : slot);
     }
+  }
+  /** `m` and the small methods it calls directly that are not compiled yet: V8 can inline calls inside a module but not through the table */
+  private group(m: MethodInfo): MethodInfo[] {
+    const out = [m];
+    if (!m.codeOff || this.opts.intrinsics.has(mid(m))) return out;
+    for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
+      for (const t of this.smallCallees(out[i])) {
+        const sl = this.slots[this.slotOf(t)];
+        if (out.length < MAX_GROUP && !out.includes(t) && sl?.k === "method" && !sl.done) out.push(t);
+      }
+    }
+    return out;
+  }
+  private groupOf = new Map<number, number[]>();
+  private callees = new Map<MethodInfo, MethodInfo[]>();
+  /** methods `m` calls directly (static, non-constructor direct, or a virtual call CHA resolves to one target) that are worth compiling beside it */
+  private smallCallees(m: MethodInfo): MethodInfo[] {
+    let out = this.callees.get(m);
+    if (out) return out;
+    out = [];
+    const dex = m.dex;
+    for (const ins of decodeInstructions(dex.code(m.codeOff).insns)) {
+      const op = ins.op;
+      if (!(op >= 0x6e && op <= 0x72) && !(op >= 0x74 && op <= 0x78)) continue;
+      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
+      if (decl[0] === "[" || kind === "invoke-super" || mr.name === "<init>") continue;
+      const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
+        : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
+      if (t && t !== m && t.codeOff && !(t.flags & ACC.NATIVE) && !this.opts.intrinsics.has(mid(t)) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE && !out.includes(t)) out.push(t);
+    }
+    this.callees.set(m, out);
+    return out;
   }
   /** the gaps compiling `m` runs into, without installing it (a static check, and the unit a build-time mode would emit) */
   gapsOf(m: MethodInfo): string[] {
@@ -307,10 +349,14 @@ export class World {
     }
     return added;
   }
+  /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   private invalidate(slot: number): void {
-    const s = this.slots[slot];
-    if (s?.k === "ensure" || !s?.done || !s.stub) return;
-    this.table.set(slot, s.stub); s.done = false; this.stats.invalidated++;
+    for (const x of this.groupOf.get(slot) ?? [slot]) {
+      const s = this.slots[x];
+      if (s?.k === "ensure" || !s?.done || !s.stub) continue;
+      this.table.set(x, s.stub); s.done = false; this.stats.invalidated++;
+      this.groupOf.delete(x);
+    }
   }
 
   // ---------- calling in from JS, and exceptions

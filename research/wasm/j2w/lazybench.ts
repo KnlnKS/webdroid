@@ -26,8 +26,8 @@ function run(label: string, entries: typeof cand, reachSize: number) {
   for (const c of cases) try { w.entry(c.m.cls, c.m.name, c.m.desc)(...c.args.map((a, j) => (c.m.params[j] === "J" || c.m.params[j] === "D" ? a : Number(a)))); } catch { /* Java exceptions, and gaps, are part of the cases */ }
   const total = performance.now() - t0, s = w.stats;
   console.log(`${process.versions.bun ? "JavaScriptCore" : "V8"} ${label}: ${entries.length} entries, ${cases.length} calls cold in ${total.toFixed(0)} ms (${gaps} stopped at a gap); closed-world reach is ${reachSize} methods`);
-  console.log(`  lazy: ${s.units} methods compiled (${(100 * s.units / reachSize).toFixed(1)}% of reach), ${s.classes} class modules, ${(s.bytes / 1024).toFixed(0)} KB of Wasm`);
-  console.log(`  our compiler ${s.compileMs.toFixed(0)} ms (${(s.compileMs / s.units).toFixed(2)} ms/method), Module ${s.moduleMs.toFixed(0)} ms, Instance ${s.instantiateMs.toFixed(0)} ms (${((s.moduleMs + s.instantiateMs) / (s.units + s.classes + 1) * 1000).toFixed(0)} us per module), class link ${s.classMs.toFixed(0)} ms`);
+  console.log(`  lazy: ${s.methods} methods compiled in ${s.units} modules (${(100 * s.methods / reachSize).toFixed(1)}% of reach), ${s.classes} class modules, ${(s.bytes / 1024).toFixed(0)} KB of Wasm`);
+  console.log(`  our compiler ${s.compileMs.toFixed(0)} ms (${(s.compileMs / s.methods).toFixed(2)} ms/method), Module ${s.moduleMs.toFixed(0)} ms, Instance ${s.instantiateMs.toFixed(0)} ms (${((s.moduleMs + s.instantiateMs) / (s.units + s.classes + 1) * 1000).toFixed(0)} us per module), class link ${s.classMs.toFixed(0)} ms`);
 }
 run("clean entries", clean, closure.size);
 const everyClosure = new Set(cand.flatMap((m) => [...reach(prog, [m], { instantiate: [], methods: [] }, isIntr).methods.keys()]));

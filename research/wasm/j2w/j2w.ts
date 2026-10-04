@@ -36,8 +36,10 @@ export class Compiler implements Base {
   fn = new Map<string, number>();
   /** class modules this module imports from */
   deps = new Map<string, ClassRt>();
-  /** CHA decisions this module's code relies on: decl, name, desc, the only target */
-  assumptions: [string, string, string, MethodInfo][] = [];
+  /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
+  assumptions: [string, string, string, MethodInfo, MethodInfo | undefined][] = [];
+  /** the method being compiled */
+  private owner?: MethodInfo;
   private classStruct = new Map<string, number>();
   private sigType = new Map<string, number>();
   private globalImports = new Map<string, number>();
@@ -113,7 +115,7 @@ export class Compiler implements Base {
   devirt(decl: string, name: string, desc: string): MethodInfo | "none" | "many" {
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length !== 1) return t.length ? "many" : "none";
-    this.assumptions.push([decl, name, desc, t[0]]);
+    this.assumptions.push([decl, name, desc, t[0], this.owner]);
     return t[0];
   }
   /** emit "ensure class initialized" at a use site */
@@ -264,7 +266,7 @@ export class Compiler implements Base {
   buildUnit(methods: MethodInfo[]): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this;
     for (const m of methods) this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), mid(m)));
-    const codes = methods.map((m) => compileMethod(this, m));
+    const codes = methods.map((m) => { this.owner = m; return compileMethod(this, m); });
     methods.forEach((m, i) => { const f = this.fn.get(mid(m))!; const code = codes[i]; mb.setBody(f, code.finish()); mb.export("m" + w.slotOf(m), "func", f); });
     return this.finishModule(methods.map((m, i) => ({ name: mid(m), f: this.fn.get(mid(m))!, code: codes[i], m })));
   }
@@ -277,6 +279,9 @@ export class Compiler implements Base {
     return this.finishModule([{ name: "$" + name, f, code: c }]);
   }
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
+    // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
+    // against 5.4 ms); an empty start function restores it
+    this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), [0, 0x0b], "$start");
     const bytes = this.mb.build();
     return { bytes, traces: fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;

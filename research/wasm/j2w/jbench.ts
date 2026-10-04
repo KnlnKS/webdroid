@@ -42,7 +42,7 @@ if (survey) {
 }
 
 // a fresh World per workload: its state (class initialisers cut short by a gap) must not leak into the next, and the numbers are cold-start costs
-const total = { units: 0, compileMs: 0, instantiateMs: 0, classes: 0, classMs: 0 };
+const total = { methods: 0, units: 0, compileMs: 0, instantiateMs: 0, classes: 0, classMs: 0 };
 for (const name of todo) {
   let want: string, got: string, hit: number[] = [];
   const w = world(prog);
@@ -52,7 +52,7 @@ for (const name of todo) {
   try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch { got = "trap"; }
   const ms = performance.now() - t0;
   for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += w.stats[k];
-  console.log(`${name.padEnd(15)} reach=${String(reaches.get(name)?.methods.size ?? "-").padStart(5)} compiled=${String(w.stats.units).padStart(4)} classes=${String(w.stats.classes).padStart(3)} ${ms.toFixed(0).padStart(5)} ms  js=${want} wasm=${got}${got === want ? " MATCH" : hit.length ? ` BLOCKED at ${w.gapList[hit[0]]}` : " DIFF"}`);
+  console.log(`${name.padEnd(15)} reach=${String(reaches.get(name)?.methods.size ?? "-").padStart(5)} compiled=${String(w.stats.methods).padStart(4)} classes=${String(w.stats.classes).padStart(3)} ${ms.toFixed(0).padStart(5)} ms  js=${want} wasm=${got}${got === want ? " MATCH" : hit.length ? ` BLOCKED at ${w.gapList[hit[0]]}` : " DIFF"}`);
   if (got !== want && !hit.length) process.exitCode = 1;
 }
-console.log(`total: ${total.units} methods compiled in ${total.compileMs.toFixed(0)} ms (instantiate ${total.instantiateMs.toFixed(0)} ms), ${total.classes} class modules (${total.classMs.toFixed(0)} ms)`);
+console.log(`total: ${total.methods} methods compiled in ${total.compileMs.toFixed(0)} ms (instantiate ${total.instantiateMs.toFixed(0)} ms), ${total.classes} class modules (${total.classMs.toFixed(0)} ms)`);
