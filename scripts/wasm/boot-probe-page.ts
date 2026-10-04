@@ -2,10 +2,10 @@
 import { fetchPlatformJars, jarDexes } from "../../src/android/framework";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { tier } from "../../src/jvm/tier";
-import { openAot } from "../../src/wasm/host/boot";
+import { openAot, platformProgram } from "../../src/wasm/host/boot";
 import { Program } from "../../src/wasm/compiler/program";
 import { World } from "../../src/wasm/link/world";
-import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
+import { intrinsics } from "../../src/wasm/link/intrinsics";
 import { hostNet } from "../../src/wasm/host/inet";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { jsTier, natives, processState } from "./oracle";
@@ -24,6 +24,8 @@ export interface ProbeResult {
   loaded: string[]; missed: string[]; failed: string[];
   /** methods compiled on demand */
   methods: number;
+  /** whether the Program under the World extends the tab's platform Program */
+  sharedPlatform: boolean;
 }
 
 let syncRequests = 0;
@@ -37,14 +39,14 @@ async function probe(): Promise<ProbeResult> {
   const t0 = performance.now(), store = await openAot(), aheadMs = performance.now() - t0;
   await jsTier([]);
   const jars = await fetchPlatformJars();
-  const prog = new Program(jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i]))); prog.addExterns(externs);
-  const b0 = performance.now(), w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, aot: store });
+  const platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
+  const b0 = performance.now(), w = new World(new Program([], platform), { intrinsics, natives, heapUsed, net: hostNet, aot: store });
   processState(w);
   const bootMs = performance.now() - b0, s = w.stats;
   return { tier, attached: !!w.aot, syncRequests, aheadMs, bootMs, compileMs: s.compileMs, moduleMs: s.moduleMs, instantiateMs: s.instantiateMs, aotMs: s.aot.ms,
-    loaded: w.aot?.loaded ?? [], missed: [...w.aot?.missed ?? []], failed: store?.failed ?? [], methods: s.methods };
+    loaded: w.aot?.loaded ?? [], missed: [...w.aot?.missed ?? []], failed: store?.failed ?? [], methods: s.methods, sharedPlatform: w.prog.base === (window.top ?? window).__wdPlatformProgram };
 }
 
-const result = probe().catch((e): ProbeResult => ({ tier, error: String(e?.stack ?? e), attached: false, syncRequests, aheadMs: 0, bootMs: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, aotMs: 0, loaded: [], missed: [], failed: [], methods: 0 }));
+const result = probe().catch((e): ProbeResult => ({ tier, error: String(e?.stack ?? e), attached: false, syncRequests, aheadMs: 0, bootMs: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, aotMs: 0, loaded: [], missed: [], failed: [], methods: 0, sharedPlatform: false }));
 if (new URLSearchParams(location.search).has("frame")) (window.parent as unknown as { probeFrame: Promise<ProbeResult> }).probeFrame = result;
 else (window as unknown as { probe: Promise<ProbeResult> }).probe = result;

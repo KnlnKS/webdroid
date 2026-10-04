@@ -1,8 +1,11 @@
 // The Wasm tier's entry (src/jvm/tier.ts loads it under ?tier=wasm). Bytecode cannot run here yet: the framework's blocking natives need S3.
 import { pageShared } from "../../shell/pageshared";
 import { FetchStore } from "../link/aotstore";
+import { Program } from "../compiler/program";
+import { externs } from "../link/intrinsics";
+import type { DexFile } from "../../jvm/dex";
 
-declare global { interface Window { __wdAot?: Promise<FetchStore | undefined> } }
+declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
 
 export function bootWasmTier(): never {
   throw new Error("?tier=wasm: the Wasm tier cannot run the framework yet");
@@ -20,4 +23,10 @@ export function openAot(): Promise<FetchStore | undefined> {
     await store.prefetch(JSON.parse(new TextDecoder().decode(startup)) as string[]);
     return store;
   });
+}
+
+/** The platform's Program, made by the first process of the tab from the boot class path's dexes and shared by the others: it is immutable, and each process extends it with
+ *  its own dexes (`new Program(appDexes, platform)`), so the class model and class-hierarchy index of the 40,000 platform classes exist once per tab. */
+export function platformProgram(dexes: () => DexFile[]): Program {
+  return pageShared("__wdPlatformProgram", () => { const p = new Program(dexes()); p.addExterns(externs); return p; });
 }

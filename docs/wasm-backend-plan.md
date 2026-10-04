@@ -790,6 +790,36 @@ All 69 workloads, last three rows against base: node first 1.20 -> 1.45 -> 2.49 
 
 **Harness.** The page script of `g1.ts` had an extra brace since the streaming switch (4.9): every Chrome run timed out waiting for the page; fixed. Tests (`diff`, `libdiff`, `classdiff`, `customdiff`, `linkdiff`, `lazytest`, `aottest`, `fuzz` seeds 1 to 6, `jbench` 42 MATCH) pass plain and over a 4-jar build.
 
+### 4.12 Track A: delivery of the platform build and the Program model (2026-10-04, `knlnks/wasm-ta`)
+
+**A1, build and delivery.** `bun run aot` builds the libcore jars and `framework.jar` (41,247 classes, 287,769 methods, 1,085 C and 1,078 D modules, 204 MB, 55 s and no memory trouble under node) into `vendor/wasm-aot/<key>`,
+where the key is a digest of the platform jars, `src/wasm/{compiler,link}`, the shared front end (`dex prepared structure opcodes abi`), the registered native keys, the build format and the options; the same key
+names the build when it is made again (skipped). A group of classes (a package) is split into modules of an estimated 3 MiB (`--max-module`; the estimate is 14 bytes per dex code unit and 150 per method for code
+modules, 52 per method for data modules, measured over the 7-jar build as within 0.5x to 1.5x), the largest module of the framework build is 3.4 MB, and a module over 7 MiB fails the build. `startup.json` lists the 188 files (28 MB) a
+start of the process loads; `current.json` names the build and carries the digest of the sources it was made from, which the dev server compares with the sources now (a stale build is not offered) and `build-prod` refuses.
+Cloudflare (docs read 2026-10-04: static assets 25 MiB per file, 20,000 files per version on the free plan, 100,000 paid; Workers Builds 8 GB of memory, 20 minutes) takes this build as it is: 2,163 files, `_headers` makes
+`/aot/<key>/*` immutable and `current.json` revalidates; `bun run worker:check` reads 6,001 files. The build is made where `vendor/aosp` is, not by `build-prod`, and shipped when present.
+**D1, the miss policy.** A page never fetches synchronously. `FetchStore` compiles the start's modules with `compileStreaming` (the fetch of the whole build failed in a page; 28 MB does not), and a module the store lacks is a
+miss: the code is compiled on demand against the build's numbering (a seeded class that misses its D module is compiled with its reserved slots; a C module is used only with the D modules it was built against), and the
+answer is kept, so a module that arrives later cannot define a class twice. `aottest` runs stores that lack every other module, every module, and modules that arrive late. A module compiled by the tab is a
+`WebAssembly.Module` of the tab's realm, so `instanceof WebAssembly.Module` is false in a process frame (it failed in the probe), and `ArrayBuffer.isView` tells bytes from a module.
+`bun run wasm boot-probe` (headless Chrome, `?tier=wasm`): the tab opens the build, starts the process (`processState`: 188 modules loaded, 0 missed, 0 synchronous requests, 200 ms to fetch and compile them off the main thread,
+boot 250 to 330 ms of which our compiler 4 ms for 16 methods) and an iframe does it again with no request, a shared platform Program and its modules.
+**A2, the Program.** `Program` keeps a `DexClass` per class that reads its header when asked and builds `FieldInfo`/`MethodInfo`/`byKey` when the first of them is used; the class-hierarchy index (`cha.ts`) works from headers and
+method declarations (`DexFile.classHeader`, `declaredMethodCount`, `methodKey`), with the "classes that declare a concrete method of this key" index built on the first wide-hierarchy query. `new Program(dexes, base)` extends an
+immutable base Program (the platform's), whose memos and class-hierarchy index are kept in the base (`Program.shared`) and so exist once per tab (`host/boot.ts` `platformProgram`). Node 24, `--expose-gc`, all 40 boot jars
+(54,727 classes) and Mihon (21,905 classes): `new Program` 330 MB and 425 MB before; platform Program and index 24 MB (once per tab), the index of declared method keys 63 MB more on first use (once per tab), Mihon over it 12 MB per
+process; touching five classes (2,222 methods) 1 MB.
+Loaders: a loader is a namespace (`Loader`: parent, `defined`, its Java object); the default one holds the platform and the app (first definition wins, as before) and any other holds what its dex files define that its parent
+does not (parent first, as BaseDexClassLoader), keyed `name@id`. A class has one key whatever loader defines it, so ids, class modules, statics and vtables are per defining loader without any other change, and the
+platform keeps its build numbering. The dex files of a loader see the classes through it: `DexFile.resolveType` maps each descriptor it reads to the key its loader resolves, so the compiler, the linker and reflection read keys
+from the dex and nothing else changes; `javaName` strips the suffix wherever Java sees a name (`Class.getName`, messages, stack traces). The DexFile natives of libcore's `BaseDexClassLoader` (`openDexFileNative`,
+`defineClassNative`, `closeDexFile`, `isBackedByOatFile`, `verifyInBackgroundNative`) are Wasm over `World.opts.dexes(path)`; `Class.forName(name, init, loader)` and `VMClassLoader.findLoadedClass` resolve in the loader's scope,
+`Class.classLoader` is the loader's object, and a loader that opens dex files the Program already holds stays in that namespace. Not done: `getClassNameList` (a gap), `DexFile.loadClass` defining in the cookie's loader instead of the
+given one, the app's own PathClassLoader object as the default namespace's `getClassLoader` (classes of the default namespace still answer the boot loader), custom `ClassLoader` subclasses that define classes themselves.
+`bun run wasm loaders`: two DexClassLoaders over dex files defining `Shared` (and `Boom`): distinct Class objects, statics, instances, array classes, signatures naming the loader's own class, exceptions thrown and caught inside
+a loader and seen from outside, `Class.forName`, `loadClass`, `getClassLoader`, `instanceof`/casts across loaders and through the app's `Tag`.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.

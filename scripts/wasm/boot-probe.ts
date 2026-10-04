@@ -47,6 +47,7 @@ for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
   check(`${name}: runs under tier=wasm`, r.tier === "wasm");
   check(`${name}: the build is attached`, r.attached);
   check(`${name}: no synchronous request`, r.syncRequests === 0);
+  check(`${name}: the platform Program is the tab's`, r.sharedPlatform);
   check(`${name}: nothing missed or failed (${[...r.missed, ...r.failed].slice(0, 5)})`, !r.missed.length && !r.failed.length);
 }
 const dup = [...fetched].filter(([f, n]) => n > 1);
