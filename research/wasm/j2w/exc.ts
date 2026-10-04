@@ -92,7 +92,8 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
 }
 
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }
-const FRAME = /at (?:(.+?) \()?wasm:\/\/wasm\/[0-9a-f]+:wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
+/** a Wasm frame: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
+const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
 /** The Java frames of a V8 `Error.stack`, innermost first: wasm frames are named by method id and carry a module offset */
 export function javaFrames(stack: string, traces: Map<string, FnTrace>): JavaFrame[] {
   const out: JavaFrame[] = [];

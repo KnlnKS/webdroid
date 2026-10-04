@@ -10,8 +10,7 @@ export class FetchStore implements AotStore {
   /** starts fetching and compiling `files`; resolves when all are ready */
   prefetch(files: string[]): Promise<void> {
     return Promise.all(files.filter((f) => !this.modules.has(f)).map(async (f) => {
-      // WebAssembly.compileStreaming gives modules in Chrome 153 that misbehave (a NullPointerException in the platform's start): compile the bytes instead
-      this.modules.set(f, await WebAssembly.compile(await (await fetch(this.base + f)).arrayBuffer(), COMPILE_OPTIONS as never));
+      this.modules.set(f, await WebAssembly.compileStreaming(fetch(this.base + f), COMPILE_OPTIONS as never));
     })).then(() => undefined);
   }
   /** fetches a file that is data (the index) */
