@@ -8,6 +8,7 @@ import type { DexFile } from "../../../src/jvm/dex";
 import { JThrowable } from "../../../src/jvm/natives/jthrowable";
 import { mangleMethod, splitSig } from "../../../src/jvm/abi";
 import { Natives, type HostFn } from "./natives";
+import { hostNatives } from "./hostnatives";
 import { PLATFORM_DATA } from "../../../src/jvm/bootclasspath";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../../src/jvm/natives/jmemory";
 import { vfs } from "../../../src/shell/vfs";
@@ -16,7 +17,7 @@ import { vfs } from "../../../src/shell/vfs";
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
 const lookup = (cls: string, key: string, isStatic: boolean) => {
   const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
-  return (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined;
+  return hostNatives.get(cls + "." + key) ?? (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined;
 };
 /** natives that read the ICU data asynchronously and take no arguments: a native cannot suspend in the Wasm tier, so their value is
  *  resolved once, from the same production implementation, before it runs */

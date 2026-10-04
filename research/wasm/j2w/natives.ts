@@ -33,6 +33,8 @@ export interface HostContext {
   throwable(cls: string, msg: string | null): object;
   raise(throwable: object): unknown;
   bridge: Bridge;
+  /** records that compiled code ran into something it cannot do (World.onGap) */
+  gap(what: string): void;
 }
 
 /** the primitive array classes natives take and return */
@@ -48,9 +50,9 @@ type View = ArrayBufferView & { length: number };
 /** the typed array the production natives take for a primitive array class */
 export const VIEWS: Record<string, new (b: ArrayBuffer, o: number, n: number) => View> = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
 
-/** String methods whose Java body needs charset or regex machinery (class objects, ICU natives) and whose production override is a
- *  self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
-const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(/;
+/** String methods whose Java body needs charset or regex machinery (class objects, ICU natives), or ART's native doReplace, and whose
+ *  production override is a self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
+const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(|^replace\(CC\)/;
 /** must `m`, a String method with a body, be replaced by its production override */
 function overridden(m: MethodInfo): boolean {
   return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && descToName(m.dex.type(m.dex.field(i.c).cls)) === STRING_CLASS);
@@ -213,7 +215,7 @@ export class Natives {
       const p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
       if (process.env.TRACE) { const g = p.fn; p.fn = function (this: unknown, ...a: unknown[]) { let r: unknown; try { r = g.apply(this, a); return r; } finally { if (process.env.TRACE === "stack") console.error(new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:")).slice(0, 12).map((l) => l.replace(/ \(wasm.*/, "")).join("\n")); console.error("N", id, a.map((x) => typeof x === "string" || typeof x === "number" ? JSON.stringify(x) : typeof x === "bigint" ? x + "n" : x && (x as {length?: number}).length !== undefined ? `[${(x as {length: number}).length}]` : typeof x), "=>", typeof r === "string" ? JSON.stringify(r) : typeof r); } }; }
-      out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }), view, put, ctx.bridge)), p.wrapped.get(ctx)!);
+      out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, wrapper(p, p.fn, raise, () => { ctx.gap(`${id}: native suspended (answers a Promise)`); return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }); }, view, put, ctx.bridge)), p.wrapped.get(ctx)!);
     }
     return out;
   }

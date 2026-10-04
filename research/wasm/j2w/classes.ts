@@ -37,7 +37,7 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf }
+const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot }
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
@@ -85,6 +85,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
         c.lget(o);
       } });
     }
+    case Info.EnsureSlot: return w.ensureSlot(name);
     case Info.ArrayOf: return b ? w.idOf("[".repeat(b) + descOf(name)) : a;      // the class of the b-fold array of a
     case Info.ArraySlot: {           // a = the component class: the array allocator for it
       const arrName = "[" + descOf(name);
@@ -186,6 +187,13 @@ rt("aclone", ["L"], "L", (cx, c) => {
   c.anyNull();
 });
 
+// cnfe(name): ClassNotFoundException with the requested name as its message
+rt("cnfe", ["L"], "V", (cx, c) => {
+  const cls = "java/lang/ClassNotFoundException", ctor = cx.prog.resolve(cls, "<init>", "(Ljava/lang/String;)V"), exn = c.newLocal(T.anyref);
+  if (!ctor) { cx.gap(c, "ClassNotFoundException.<init>(String)"); return; }
+  cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(exn).lget(exn).lget(0); cx.callMethod(c, ctor); c.lget(exn).throw_(cx.tag);
+});
+
 // ---------- class initialization (the state machine is World.ensureBody)
 rt("initErroneous", ["I"], "V", (cx, c) => { c.lget(0); cx.callThrower(c, "ncdfe"); });
 rt("initWait", ["I"], "V", (cx, c) => cx.gap(c, "class initialization owned by another thread: needs the thread scheduler"));
@@ -257,6 +265,23 @@ def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0); idOfClass(cx, c); c.lset(id);
   emitString(cx, c, () => cx.info(c, Info.NameLen, () => c.lget(id)), (j) => cx.info(c, Info.NameChar, () => c.lget(id), () => c.lget(j)));
+});
+
+// Class.classForName(name, initialize, loader): one namespace of loaded dexes, so the loader does not matter
+def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", (cx, c) => {
+  const id = c.newLocal(T.i32);
+  c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(0).externConvertAny().call(cx.imp.classByName).lset(id);
+  c.lget(id).raw(OP.i32_eqz).if_().lget(0); cx.callRt(c, "cnfe"); c.end();
+  c.lget(1).if_(); cx.info(c, Info.EnsureSlot, () => c.lget(id)); c.callIndirect(cx.sig([], "V")).end();
+  c.lget(id); cx.callRt(c, "classOf");
+});
+
+// VMClassLoader.findLoadedClass(loader, name): every class of the loaded dexes is the boot loader's, so it is found if defined at all
+def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
+  const id = c.newLocal(T.i32);
+  c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(1).externConvertAny().call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
 });
 
 // Class.getInnerClassFlags(default): the InnerClass annotation's flags, else `default`

@@ -84,11 +84,16 @@ export class World {
     const names = (id: number) => this.names[id];
     this.host = {
       fmod: (a: number, b: number) => a % b,
-      gap: (id: number) => this.onGap(id),
+      gap: (id: number) => { if (process.env.TRACE) console.error("GAP", this.gapList[id], new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:") && !l.includes("ensure:")).slice(0, 14).map((l) => l.replace(/ \(wasm.*/, "").trim()).join("\n  < ")); this.onGap(id); },
       link: (slot: number) => this.linkSlot(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
+      // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
+      classByName: (name: string) => {
+        const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
+        return n === "" || (n[0] === "[" ? !/^([ZBCSIJFD]|L.+;)$/.test(e) || (e[0] === "L" && !this.prog.get(e.slice(1, -1))?.def && !this.prog.get(e.slice(1, -1))) : !this.prog.get(n)) ? 0 : this.idOf(n);
+      },
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
       stackClass: (n: number) => {
         const frames = javaFrames(new Error().stack ?? "", this.traces), f = frames[n + 1];
@@ -399,7 +404,7 @@ export class World {
   }
   private hostCtx?: HostContext;
   private hostContext(): HostContext {
-    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
   /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */

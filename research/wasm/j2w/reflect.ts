@@ -5,7 +5,8 @@
 // instruction would, boxes the result and wraps what the method throws in InvocationTargetException.
 import { OP } from "./code";
 import { T, refNull } from "./wasmbin";
-import { ACC, kindOf, type MethodInfo } from "./program";
+import { ACC, kindOf, type JClass, type MethodInfo } from "./program";
+import { descToName } from "../../../src/jvm/abi";
 import { H } from "./consts";
 import { emitString, idOfClass, classMethod, typeName } from "./classes";
 import { rt } from "./rtfns";
@@ -17,7 +18,7 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, IfaceCount, Iface }
+export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, IfaceCount, Iface, MemberCount, Member }
 /** a member's (class id, index) packed into the cookie */
 const BOX: Record<string, [string, string, string]> = {
   Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
@@ -25,11 +26,19 @@ const BOX: Record<string, [string, string, string]> = {
   F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],
 };
 
+/** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
+function members(jc: JClass | undefined): string[] {
+  const v = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "Ldalvik/annotation/MemberClasses;")?.elements.value;
+  return Array.isArray(v) ? v.flatMap((e) => e && typeof e === "object" && "idx" in e ? [descToName(jc!.dex!.type(e.idx))] : []) : [];
+}
+
 export function hostReflect(w: World, kind: RInfo, a: number, b: number): number {
   const jc = w.prog.get(w.nameOf(a));
   if (kind === RInfo.MethodCount) return jc?.def ? jc.methods.length : 0;
   if (kind === RInfo.IfaceCount) return jc?.ifaces.length ?? 0;
   if (kind === RInfo.Iface) return w.idOf(jc!.ifaces[b]);
+  if (kind === RInfo.MemberCount) return members(jc).length;
+  if (kind === RInfo.Member) return w.idOf(members(jc)[b]);
   const idx = kind === RInfo.MethodParamType ? b >> 8 : b, m = jc!.methods[kind === RInfo.MethodNameChar ? b >>> 16 : idx];
   switch (kind) {
     case RInfo.MethodNameLen: return m.name.length;
@@ -135,14 +144,18 @@ rt("findMethod", ["I", "L", "L", "I"], "I", (cx, c) => {
   c.lget(k).ret().end();                                       // end of `next`
   c.lget(k).i32(1).raw(OP.i32_add).lset(k).br(0).end().end().i32(-1);
 });
-// classArray(cid, k, what): the Class[] of the parameter classes (what 0) of method k, or of the direct interfaces (what 1)
+// classArray(cid, k, what): the Class[] of the parameter classes (what 0) of method k, of the direct interfaces (what 1), or of the member classes (what 2)
 rt("classArray", ["I", "I", "I"], "L", (cx, c) => {
   const n = c.newLocal(T.i32), i = c.newLocal(T.i32), w = c.newLocal(refNull(cx.tArr.ref)), data = c.newLocal(refNull(cx.tData.ref));
-  c.lget(2).if_(T.i32); info(cx, c, RInfo.IfaceCount, 0); c.else_(); info(cx, c, RInfo.MethodParams, 0, () => c.lget(1)); c.end().lset(n);
+  const pick = (members: () => void, ifaces: () => void, params: () => void) => {
+    c.lget(2).i32(2).raw(OP.i32_eq).if_(T.i32); members(); c.else_().lget(2).if_(T.i32); ifaces(); c.else_(); params(); c.end().end();
+  };
+  pick(() => info(cx, c, RInfo.MemberCount, 0), () => info(cx, c, RInfo.IfaceCount, 0), () => info(cx, c, RInfo.MethodParams, 0, () => c.lget(1))); c.lset(n);
   cx.emitNewArray(c, CLASS_ARRAY, () => c.lget(n)); c.refCast(cx.tArr.ref).lset(w).lget(w).structGet(cx.tArr.ref, 2).lset(data);
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
   c.lget(data).refAsNonNull().lget(i);
-  c.lget(2).if_(T.i32); info(cx, c, RInfo.Iface, 0, () => c.lget(i)); c.else_(); info(cx, c, RInfo.MethodParamType, 0, () => c.lget(1).i32(8).raw(OP.i32_shl).lget(i).raw(OP.i32_or)); c.end();
+  pick(() => info(cx, c, RInfo.Member, 0, () => c.lget(i)), () => info(cx, c, RInfo.Iface, 0, () => c.lget(i)),
+    () => info(cx, c, RInfo.MethodParamType, 0, () => c.lget(1).i32(8).raw(OP.i32_shl).lget(i).raw(OP.i32_or)));
   cx.callRt(c, "classOf"); c.arraySet(cx.tData.ref).lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
   c.lget(w);
 });
@@ -165,6 +178,7 @@ const exec = (cx: Compiler, c: Code, nameLocal: number | null, paramsLocal: numb
 };
 def("java/lang/Class.getDeclaredMethodInternal(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", (cx, c) => exec(cx, c, 1, 2, 0));
 def("java/lang/Class.getDeclaredConstructorInternal([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;", (cx, c) => exec(cx, c, null, 1, 1));
+def("java/lang/Class.getDeclaredClasses()[Ljava/lang/Class;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0).i32(2); cx.callRt(c, "classArray"); });
 def("java/lang/Class.getInterfacesInternal()[Ljava/lang/Class;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0).i32(1); cx.callRt(c, "classArray"); });
 def("java/lang/reflect/Executable.getMethodNameInternal()Ljava/lang/String;", (cx, c) => {
   const [cid, idx] = cookie(cx, c);
