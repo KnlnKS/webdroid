@@ -406,7 +406,7 @@ export class MC {
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { f } = this.fieldOf(ins.b);
     cx.emitEnsure(c, f.owner);
-    const g = cx.staticGlobal(f.owner, f.name);
+    const g = cx.staticGlobal(f.owner, f.name, f.desc);
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind); }
   }
   emitIf(ins: Ins) {

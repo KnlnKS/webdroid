@@ -297,7 +297,7 @@ export class World {
     mb.export("init", "global", initG);
     const statics = new Map<string, number>();
     for (const f of jc?.fields ?? []) if (f.isStatic) {
-      const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name, g); mb.export("s:" + f.name, "global", g);
+      const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name + ":" + f.desc, g); mb.export("s:" + f.name + ":" + f.desc, "global", g);
     }
     const stubs = methods.map((m, i) => {
       const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
@@ -335,7 +335,7 @@ export class World {
     if (jc.def?.staticValuesOff) {
       const sfields = jc.fields.filter((f) => f.isStatic);
       jc.dex!.encodedArray(jc.def.staticValuesOff).forEach((v, i) => {
-        const fi = sfields[i], g = fi && statics.get(fi.name);
+        const fi = sfields[i], g = fi && statics.get(fi.name + ":" + fi.desc);
         if (!fi || g === undefined || v === null || v === 0 || v === 0n || v === false) return;
         if (typeof v === "number" || typeof v === "boolean") {
           if (fi.desc === "F") c.i32(f32bits(v as number)); else if (fi.desc === "D") c.i64(f64bits(v as number));
