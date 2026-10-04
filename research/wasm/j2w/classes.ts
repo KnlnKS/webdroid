@@ -97,7 +97,12 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
 export const constClass = (cx: Compiler, c: Code, name: string): void => { c.i32(cx.idOf(name)); cx.callRt(c, "classOf"); };
 /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
 export function emitStoreCheck(cx: Compiler, c: Code, arr: number, value: () => void): void {
-  c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 0).i32(ELEM).arrayGet(cx.tVT).i32(cx.idOf("java/lang/Object")).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
+  // Object[] takes anything; a value of exactly the component class (nearly every store into a typed array) needs no call
+  const comp = c.scratch();
+  c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 0).i32(ELEM).arrayGet(cx.tVT).ltee(comp).i32(cx.idOf("java/lang/Object")).raw(OP.i32_ne).if_();
+  value(); c.refIsNull().raw(OP.i32_eqz).if_();
+  value(); c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).lget(comp).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
+  c.end().end();
 }
 /** in System.arraycopy's reference-array case (src, sp, dst, dp, n are locals 0..4, bounds checked): a copy with store checks unless dst takes src's elements anyway */
 export function emitRefCopy(cx: Compiler, c: Code): void {
