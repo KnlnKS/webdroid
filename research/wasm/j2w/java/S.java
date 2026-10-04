@@ -55,4 +55,9 @@ public class S {
   public static int statics(int n) {
     return K.length() + K.hashCode() + E.length() + lazy.hashCode() + NAMES.length + NAMES[1].hashCode() + (NAMES[3] == null ? 1 : 0) + (K == NAMES[1] ? 2 : 0) + n;
   }
+  public static int enc(int n) throws Exception {
+    String s = mk(n, 11) + mk(n, 3); byte[] b = s.getBytes(), c = s.getBytes("UTF-8"); int r = b.length * 31 + c.length;
+    for (int i = 0; i < b.length; i++) r = r * 17 + b[i] + c[b.length - 1 - i];
+    return r + new String(b, "UTF-8").hashCode() + new String(c, 0, c.length / 2).length();
+  }
 }

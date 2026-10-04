@@ -44,7 +44,8 @@ if (verbose) console.log("    " + blockers(union).join("\n    "));
 for (const w of todo) {
   let want: string, got: string, hit: number[] = [];
   try { want = String(await js("Bench", `w_${w}`, "()I", [])); } catch (e) { want = "throw"; }
-  try { got = String(((await instantiate(module, cx, (id) => hit.push(id))).exports as any)[exportName("Bench", `w_${w}`, "()I")]()); } catch { got = "trap"; }
+  const instance = await instantiate(module, cx, (id) => hit.push(id));
+  try { got = String((instance.exports as any)[exportName("Bench", `w_${w}`, "()I")]()); } catch (e) { got = "trap"; if (verbose && !hit.length) console.log("   ", e instanceof WebAssembly.Exception ? "uncaught " + [...cx.classId].find(([, id]) => id === (instance.exports as any).classof((e as any).getArg(instance.exports.jex, 0)))?.[0] : String(e).slice(0, 200)); }
   console.log(`${w.padEnd(15)} reach=${String(reaches.get(w)!.size).padStart(5)} blockers=${String(blockers(reaches.get(w)!.keys()).length).padStart(4)}  js=${want} wasm=${got}${got === want ? " MATCH" : hit.length ? ` BLOCKED at ${gapAt[hit[0]]}` : " DIFF"}`);
   if (got !== want && !hit.length) process.exitCode = 1;
 }

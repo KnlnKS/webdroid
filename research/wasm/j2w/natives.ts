@@ -7,7 +7,7 @@ import { Code, OP } from "./code";
 import { T, type VT } from "./wasmbin";
 import type { Compiler, Intrinsic } from "./j2w";
 import { kindOf, type MethodInfo } from "./program";
-import { elemKindOf, type ElemKind } from "./consts";
+import { H, elemKindOf, type ElemKind } from "./consts";
 import { mid } from "./reach";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName } from "../../../src/jvm/abi";
@@ -28,9 +28,12 @@ export const HOST_THROWABLES = ["java/lang/StringIndexOutOfBoundsException", "ja
 /** the primitive array classes every module has, which marshalled natives and string intrinsics allocate */
 export const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
 
-/** does the bytecode of a String method touch an instance field of String */
-function readsFields(m: MethodInfo): boolean {
-  return decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && descToName(m.dex.type(m.dex.field(i.c).cls)) === STRING_CLASS);
+/** String methods whose Java body needs charset or regex machinery (class objects, ICU natives) and whose production override is a
+ *  self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
+const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(/;
+/** must `m`, a String method with a body, be replaced by its production override */
+function overridden(m: MethodInfo): boolean {
+  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && descToName(m.dex.type(m.dex.field(i.c).cls)) === STRING_CLASS);
 }
 
 const STRING = "Ljava/lang/String;", STRING_CLASS = "java/lang/String";
@@ -72,8 +75,8 @@ export class Natives {
     if (p !== undefined) return p;
     // a String constructor is a call site making the String: its host side is a static answering it
     const ctor = m.isCtor && m.cls === STRING_CLASS, recv = !m.isStatic && !ctor;
-    // only String's bytecode that reads its representation (count, hash) is replaced by production methods: a String is not an object
-    if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !readsFields(m))) { this.plans.set(id, p = "bytecode"); return p; }
+    // a String is not an object: bytecode that reads its representation (count, hash) is replaced by the production methods
+    if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); return p; }
     const fn = this.src?.find(m.cls, m.key, m.isStatic, m.codeOff !== 0);
     const args = recv ? [STRING, ...m.params] : m.params, params: VT[] = [];
     p = !fn ? "unregistered" : recv && m.cls !== STRING_CLASS ? "object receiver" : "";
@@ -205,6 +208,10 @@ export class Natives {
       cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(t).lget(t).lget(1).anyOfExtern().call(cx.fnOf(ctor)).lget(t).ret().end();
     }
     c.unreachable();
+    // the class id of a caught throwable, for the host to name it
+    const k = new Code(1);
+    k.lget(0).call(cx.helpers.vtab).i32(H.ID).arrayGet(cx.tVT);
+    mb.export("classof", "func", mb.addFunc(mb.addFuncType([T.anyref], [T.i32]), k.finish(), "$classof"));
     mb.export("mkthrow", "func", mb.addFunc(mb.addFuncType([T.i32, T.externref], [T.anyref]), c.finish(), "$mkthrow"));
   }
 
