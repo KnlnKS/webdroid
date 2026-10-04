@@ -20,6 +20,9 @@ for (const f of frames.slice(0, 3)) {
   check(`line of ${f.method}`, f.line > 0, true);
 }
 check("lines follow the source", frames[0].line < frames[1].line && frames[1].line < frames[2].line, true);
+let top: unknown;
+try { top = w.entry("Ex", "top", "([Ljava/lang/StackTraceElement;)I")(w.entry("java/lang/Throwable", "nativeGetStackTrace", "(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;")(state)); } catch (e) { top = "threw " + (w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e) + " gaps " + w.gapList.join("; "); }
+check("getStackTrace builds StackTraceElements", top, 15);
 let overflow: unknown;
 try { w.entry("Ex", "deep", "(I)I")(0); } catch (e) { overflow = e; }
 const thrown = w.throwable(overflow);

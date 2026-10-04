@@ -90,11 +90,11 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
 export const constClass = (cx: Compiler, c: Code, name: string): void => { c.i32(cx.idOf(name)); cx.callRt(c, "classOf"); };
 /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
 export function emitStoreCheck(cx: Compiler, c: Code, arr: number, value: () => void): void {
-  c.lget(arr).structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
+  c.lget(arr); vtId(cx, c); c.i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
 }
 /** in System.arraycopy's reference-array case (src, sp, dst, dp, n are locals 0..4, bounds checked): a copy with store checks unless dst takes src's elements anyway */
 export function emitRefCopy(cx: Compiler, c: Code): void {
-  const id = (l: number) => c.lget(l).structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT);
+  const id = (l: number) => { c.lget(l); return vtId(cx, c); };
   id(0); id(2); c.raw(OP.i32_ne); id(2).i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_ne).raw(OP.i32_and);
   c.if_().lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, "acopy"); c.ret().end();
 }
@@ -102,7 +102,8 @@ export function emitRefCopy(cx: Compiler, c: Code): void {
 const rt = (name: string, params: ("I" | "L")[], ret: "I" | "L" | "V", body: (cx: Compiler, c: Code) => void) => rtfns.set(name, { params, ret, body });
 const isAssignableFrom = (cx: Compiler, c: Code) => cx.callMethod(c, cx.prog.resolve(CLASS, "isAssignableFrom", "(Ljava/lang/Class;)Z")!);
 const classMethod = (cx: Compiler, c: Code, cls: string, name: string, desc: string) => cx.callMethod(c, cx.prog.resolve(cls, name, desc)!);
-const vtId = (cx: Compiler, c: Code) => c.structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT);
+/** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
+const vtId = (cx: Compiler, c: Code) => c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT);
 const field = (cx: Compiler, name: string, d: string) => cx.fieldIndex(CLASS, { owner: CLASS, name, desc: d });
 
 // classOf(id): the cached Class object; the table grows to hold the id
@@ -154,7 +155,7 @@ rt("astore", ["L", "L"], "V", (cx, c) => {
   c.lget(1).refAsNonNull(); vtId(cx, c); c.lset(v);
   c.lget(v).lget(e).raw(OP.i32_eq).if_().ret().end();
   c.lget(e); cx.callRt(c, "classOf"); c.lget(v); cx.callRt(c, "classOf"); isAssignableFrom(cx, c);
-  c.raw(OP.i32_eqz).if_().lget(v).lget(w); cx.callThrower(c, "ase"); c.end();
+  c.raw(OP.i32_eqz).if_().lget(v).lget(w); cx.callThrower(c, "asx"); c.end();
 });
 // acopy(src, sp, dst, dp, n): element-wise copy between reference arrays of different classes; an element dst cannot hold throws
 // ArrayStoreException after the elements before it have been copied (System.arraycopy)
@@ -176,11 +177,11 @@ rt("aclone", ["L"], "L", (cx, c) => {
     c.lget(dst).refAsNonNull().i32(0).lget(src).refAsNonNull().i32(0).lget(n).arrayCopy(d, d);
     c.lget(a).structGet(t, 0).i32(0).lget(dst).refAsNonNull().structNew(t).ret().end();
   }
-  c.refNull(cx.tObj);
+  c.anyNull();
 });
 
 // ---------- class initialization (the state machine is World.ensureBody)
-rt("initErroneous", [], "V", (cx, c) => cx.callThrower(c, "ncdfe"));
+rt("initErroneous", ["I"], "V", (cx, c) => { c.lget(0); cx.callThrower(c, "ncdfe"); });
 rt("initWait", ["I"], "V", (cx, c) => cx.gap(c, "class initialization owned by another thread: needs the thread scheduler"));
 // initFail(e): <clinit> threw e. An Error propagates as it is; anything else is wrapped in ExceptionInInitializerError, which here only
 // stores the cause (ART's constructor also fills in the stack trace)
@@ -244,7 +245,7 @@ function emitString(cx: Compiler, c: Code, len: () => void, char: (j: number) =>
   c.lget(w); classMethod(cx, c, "java/lang/StringFactory", "newStringFromChars", "([C)Ljava/lang/String;");
 }
 
-def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0).structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT); cx.callRt(c, "classOf"); });
+def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); vtId(cx, c); cx.callRt(c, "classOf"); });
 
 def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
   const id = c.newLocal(T.i32);
@@ -268,7 +269,7 @@ def("java/lang/Class.getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;", (c
   for (const [desc, [, , name]] of Object.entries(PRIM)) {
     c.lget(len).i32(name.length).raw(OP.i32_eq).lget(ch).i32(name.charCodeAt(0)).raw(OP.i32_eq).raw(OP.i32_and).if_().i32(cx.idOf(desc)); cx.callRt(c, "classOf"); c.ret().end();
   }
-  c.refNull(cx.tObj);
+  c.anyNull();
 });
 
 // Class.newInstance(): the no-argument constructor of the class, after initializing it
@@ -290,7 +291,7 @@ def("java/lang/reflect/Array.createObjectArray(Ljava/lang/Class;I)Ljava/lang/Obj
 def("java/lang/Object.internalClone()Ljava/lang/Object;", (cx, c) => {
   const s = c.newLocal(T.i32), copy = c.newLocal(cx.vtOf("L"));
   c.lget(0); cx.callRt(c, "aclone"); c.ltee(copy).refIsNull().raw(OP.i32_eqz).if_().lget(copy).ret().end();
-  cx.info(c, Info.CloneSlot, () => c.lget(0).structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT)); c.ltee(s).raw(OP.i32_eqz).if_(); cx.gap(c, "Object.internalClone: abstract class"); c.end();
+  cx.info(c, Info.CloneSlot, () => { c.lget(0); vtId(cx, c); }); c.ltee(s).raw(OP.i32_eqz).if_(); cx.gap(c, "Object.internalClone: abstract class"); c.end();
   c.lget(0).lget(s).callIndirect(cx.sig(["L"], "L"));
 });
 

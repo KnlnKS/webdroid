@@ -39,6 +39,7 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   check("div by zero", call("div", "(II)I", 5, 0), -1001); check("message", w.lastMessage, "divide by zero");
   check("div ok", call("div", "(II)I", 7, 2), 3);
   check("array index", call("idx", "(I)I", 7), -1002); check("message", w.lastMessage, "length=4; index=7");
+  check("message stored in the Throwable", call("msgLen", "(I)I", 7), "length=4; index=7".length);
   check("negative index", call("idx", "(I)I", -1), -1002); check("message", w.lastMessage, "length=4; index=-1");
   check("class cast", call("cast", "(I)I", 0), -1003); check("message", w.lastMessage, "Ex$P cannot be cast to Ex$Q");
   check("class cast ok", call("cast", "(I)I", 1), 1);

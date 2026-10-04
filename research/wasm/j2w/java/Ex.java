@@ -18,6 +18,8 @@ public class Ex {
   static class P { int f() { return 1; } }
   static class Q extends P { }
   public static int div(int a, int b) { try { return a / b; } catch (ArithmeticException e) { return -1001; } }
+  /** the length of the message the exception carries, once the thrower has stored it in detailMessage */
+  public static int msgLen(int i) { int[] a = new int[4]; try { return a[i]; } catch (ArrayIndexOutOfBoundsException e) { return e.getMessage().length(); } }
   public static int idx(int i) { int[] a = new int[4]; try { return a[i]; } catch (ArrayIndexOutOfBoundsException e) { return -1002; } }
   public static int cast(int k) { P p = k == 0 ? new P() : new Q(); try { Q q = (Q) p; return 1; } catch (ClassCastException e) { return -1003; } }
   public static int neg(int n) { try { int[] a = new int[n]; return a.length; } catch (NegativeArraySizeException e) { return -1004; } }
@@ -29,5 +31,6 @@ public class Ex {
   public static int deep(int n) { return deep(n + 1) + 1; }
   static void c(int k) { if (k > 0) throw new RuntimeException(); }
   static void b(int k) { c(k); }
+  public static int top(StackTraceElement[] st) { return (st[0].getMethodName().equals("c") ? 1 : 0) + (st[1].getMethodName().equals("b") ? 2 : 0) + (st[2].getMethodName().equals("a") ? 4 : 0) + (st[0].getClassName().equals("Ex") ? 8 : 0); }
   public static Throwable a(int k) { try { b(k); return null; } catch (RuntimeException e) { return e; } }
 }

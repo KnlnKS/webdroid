@@ -4,6 +4,9 @@ import { zipTree } from "../../../src/jvm/natives/jzip";
 import { Program } from "./program";
 import { World, type WorldOptions } from "./lazy";
 import { intrinsics, externs } from "./intrinsics";
+import { intrinsicFor } from "./j2w";
+import type { Natives } from "./natives";
+import type { MethodInfo } from "./program";
 
 export function loadDexes(path: string) {
   const bytes = new Uint8Array(readFileSync(path));
@@ -15,6 +18,8 @@ export function program(paths: string[]) {
   const prog = new Program(paths.flatMap(loadDexes)); prog.addExterns(externs);
   return prog;
 }
+/** what reach treats as a leaf: a method implemented without its bytecode */
+export const isIntrinsic = (natives: Natives) => (m: MethodInfo) => !!intrinsicFor(intrinsics, natives, m);
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
   return new World(Array.isArray(src) ? program(src) : src, { intrinsics, ...opts });
 }

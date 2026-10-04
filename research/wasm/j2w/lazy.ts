@@ -12,7 +12,8 @@ import { Code, OP } from "./code";
 import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
 import { Cha } from "./cha";
 import { H, f32bits, f64bits } from "./consts";
-import { Compiler, declareBase, kindVT, type FnTrace, type Intrinsic } from "./j2w";
+import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
+import { Natives, type HostContext } from "./natives";
 import { rtfns, type Synth } from "./rtfns";
 import { hostInfo } from "./classes";
 import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
@@ -23,6 +24,8 @@ import type { DexFile } from "../../../src/jvm/dex";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
+  /** the production natives, bound to host imports by descriptor (natives.ts) */
+  natives?: Natives;
   /** bytes in use on the heap, compared with the heap limit each time a window of allocation is used up */
   heapUsed?: () => number;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
@@ -55,7 +58,15 @@ export class World {
   private vslotCache = new Map<string, string[]>();
   private traces = new Map<string, FnTrace>();
   private stacks = new WeakMap<object, Error>();
+  private frames: JavaFrame[] = [];
   private assumptions = new Map<string, Assumption>();
+  /** the strings of String constants, by index, and the table they are read from */
+  private strings = new Map<string, number>();
+  strs = new WebAssembly.Table({ element: "externref", initial: 64 });
+  /** scratch linear memory natives copy arrays through, and its allocation top */
+  mem = new WebAssembly.Memory({ initial: 1 });
+  sp = new WebAssembly.Global({ value: "i32", mutable: true }, 8);
+  natives: Natives;
   private host: Record<string, Function>;
   private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
@@ -64,6 +75,7 @@ export class World {
 
   constructor(prog: Program, public opts: WorldOptions) {
     this.prog = prog;
+    this.natives = opts.natives ?? new Natives();
     this.cha = new Cha(prog);
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => this.names[id];
@@ -74,8 +86,11 @@ export class World {
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
-      excMessage: (kind: number, a: number, b: number) => (this.lastMessage = excMessage(kind, a, b, names)),
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
+      stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
+      stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
+      stLine: (i: number) => this.frames[i].line,
     };
     this.slots.length = FIRST_FREE_SLOT;
     this.startRuntime();
@@ -98,6 +113,18 @@ export class World {
     if (id === undefined) { this.gaps.set(what, id = this.gaps.size); this.gapList.push(what); }
     return id;
   }
+  /** the index of String constant `s` in the shared table */
+  stringId(s: string): number {
+    let i = this.strings.get(s);
+    if (i === undefined) {
+      i = this.strings.size; this.strings.set(s, i);
+      if (i >= this.strs.length) this.strs.grow(this.strs.length);
+      this.strs.set(i, s as never);
+    }
+    return i;
+  }
+  /** how `m` is implemented without its bytecode, if it is */
+  intrinsic(m: MethodInfo): Intrinsic | undefined { return intrinsicFor(this.opts.intrinsics, this.natives, m); }
   needsInit(n: string): boolean {
     const c = this.prog.get(n); if (!c) return false;
     if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
@@ -197,7 +224,7 @@ export class World {
 
   // ---------- runtime and class modules
   private instantiate(bytes: Uint8Array, imports: WebAssembly.Imports): WebAssembly.Instance {
-    const t0 = performance.now(), mod = new WebAssembly.Module(bytes as BufferSource), t1 = performance.now();
+    const t0 = performance.now(), mod = new WebAssembly.Module(bytes as BufferSource, { builtins: ["js-string"] } as never), t1 = performance.now();
     const inst = new WebAssembly.Instance(mod, imports);
     this.stats.moduleMs += t1 - t0; this.stats.instantiateMs += performance.now() - t1;
     this.stats.bytes += bytes.length;
@@ -233,7 +260,7 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, classId: x.classId };
   }
 
-  private rtImports() { const { tag, alloc, hash, ctab, tid } = this.rt; return { table: this.table, tag, alloc, hash, ctab, tid }; }
+  private rtImports() { const { tag, alloc, hash, ctab, tid } = this.rt; return { table: this.table, strs: this.strs, tag, alloc, hash, ctab, tid, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -256,10 +283,11 @@ export class World {
     const { name, id, slotBase } = rt, methods = jc?.methods ?? [];
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
+    mb.importTable("rt", "strs", T.externref, 0);
     const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
     const tid = mb.importGlobal("rt", "tid", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
     const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
-    const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : nullInit(b.tObj));
+    const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
     const isArray = name[0] === "[";
     const vtG = isArray || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
     if (vtG >= 0) mb.export("vt", "global", vtG);
@@ -288,18 +316,18 @@ export class World {
    *  default-method superinterfaces first, then the dex's static values and <clinit>. A throw marks the class failed and goes to initFail
    *  (an Error propagates, anything else becomes ExceptionInInitializerError); later requests throw NoClassDefFoundError. */
   private ensureBody(mb: ModuleBuilder, b: ReturnType<typeof declareBase>, jc: JClass, initG: number, statics: Map<string, number>, rt: ClassRt, tid: number, tag: number): number[] {
-    const c = new Code(0), voidSig = mb.addFuncType([], []), e = c.newLocal(refNull(b.tObj));
+    const c = new Code(0), voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
     const call = (slot: number, sig = voidSig) => c.i32(slot).callIndirect(sig);
     const rtfn = (name: string) => this.synthSlot(name, rtfns.get(name)!);
     c.block().block().loop();                                   // exit, claim, retry
     c.gget(initG).i32(INIT_DONE).raw(OP.i32_eq).brIf(2);
-    c.gget(initG).i32(INIT_FAILED).raw(OP.i32_eq).if_(); call(rtfn("initErroneous")); c.end();
+    c.gget(initG).i32(INIT_FAILED).raw(OP.i32_eq).if_(); c.i32(rt.id); call(rtfn("initErroneous"), mb.addFuncType([T.i32], [])); c.end();
     c.gget(initG).raw(OP.i32_eqz).brIf(1);
     c.gget(initG).i32(2).raw(OP.i32_shr_u).gget(tid).raw(OP.i32_eq).brIf(2);
     c.i32(rt.id); call(rtfn("initWait"), mb.addFuncType([T.i32], [])); c.br(0);
     c.end().end();
     c.gget(tid).i32(2).raw(OP.i32_shl).i32(1).raw(OP.i32_or).gset(initG);
-    c.block(refNull(b.tObj)).tryTable(null, [[0, tag, 0]]);
+    c.block(T.anyref).tryTable(null, [[0, tag, 0]]);
     if (jc.sup && this.needsInit(jc.sup)) call(this.ensureSlot(jc.sup));
     for (const i of this.prog.defaultIfaces(jc.name)) if (this.needsInit(i)) call(this.ensureSlot(i));
     if (jc.def?.staticValuesOff) {
@@ -312,7 +340,7 @@ export class World {
           else if (fi.desc === "J") c.i64(BigInt(v as number)); else c.i32(Number(v));
           c.gset(g);
         } else if (typeof v === "bigint") { c.i64(fi.desc === "D" ? f64bits(Number(v)) : v); c.gset(g); }
-        else if (typeof v === "string") this.gapId(`${jc.name}.${fi.name}: static string value`);
+        else if (typeof v === "string") { c.i32(this.stringId(v)).tableGet(1).anyConvertExtern().gset(g); }
       });
     }
     const ci = jc.byKey.get("<clinit>()V");
@@ -333,9 +361,8 @@ export class World {
     const built = s.k === "method" ? cx.buildUnit(group) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.compileMs += performance.now() - t0; this.stats.units++; this.stats.methods += group.length || 1;
-    const imports: Record<string, any> = { rt: this.rtImports(), host: this.host };
-    for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
-    const exports = this.instantiate(built.bytes, imports).exports as Record<string, any>;
+    let exports: Record<string, any>;
+    try { exports = this.instantiate(built.bytes, this.unitImports(cx)).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.name}: ${(e as Error).message}`); }
     const install = (at: number, name: string) => {
       const sl = this.slots[at] as Exclude<Slot, { k: "ensure" }>;
       sl.stub = this.table.get(at) as Function; sl.done = true;
@@ -353,10 +380,37 @@ export class World {
       a.slots.add(owner ? this.slotOf(owner) : slot);
     }
   }
+  private unitImports(cx: Compiler): Record<string, any> {
+    const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
+      n: this.natives.imports(this.hostContext(), cx.nativeImports.keys()) };
+    for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
+    return imports;
+  }
+  private hostCtx?: HostContext;
+  private hostContext(): HostContext {
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
+  }
+  private throwMakers = new Map<string, (msg: string | null) => object>();
+  /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */
+  makeThrowable(cls: string, msg: string | null): object {
+    let make = this.throwMakers.get(cls);
+    if (!make) {
+      const cx = new Compiler(this), ctor = this.prog.resolve(cls, "<init>", "()V"), detail = this.prog.resolveField("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")!, st = cx.structFor("java/lang/Throwable");
+      const { bytes } = cx.buildSynthetic("mk:" + cls, ["L"], (c) => {
+        const exn = c.newLocal(T.anyref);
+        cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(exn);
+        if (ctor?.codeOff) { c.lget(exn); cx.callMethod(c, ctor); }
+        c.lget(exn).refCast(st).lget(0).structSet(st, cx.fieldIndex("java/lang/Throwable", detail)).lget(exn);
+      }, "L");
+      const f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m;
+      this.throwMakers.set(cls, make = (m) => f(m));
+    }
+    return make(msg);
+  }
   /** `m` and the small methods it calls directly that are not compiled yet: V8 can inline calls inside a module but not through the table */
   private group(m: MethodInfo): MethodInfo[] {
     const out = [m];
-    if (!m.codeOff || this.opts.intrinsics.has(mid(m))) return out;
+    if (!m.codeOff || this.intrinsic(m)) return out;
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
       for (const t of this.smallCallees(out[i])) {
         const sl = this.slots[this.slotOf(t)];
@@ -380,7 +434,7 @@ export class World {
       if (decl[0] === "[" || kind === "invoke-super" || mr.name === "<init>") continue;
       const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
         : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
-      if (t && t !== m && t.codeOff && !(t.flags & ACC.NATIVE) && !this.opts.intrinsics.has(mid(t)) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE && !out.includes(t)) out.push(t);
+      if (t && t !== m && t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE && !out.includes(t)) out.push(t);
     }
     this.callees.set(m, out);
     return out;
@@ -455,8 +509,6 @@ export class World {
     if (!f) throw new Error(`field ${cls}.${name} not found`);
     const cx = new Compiler(this), st = cx.structFor(cls);
     const { bytes } = cx.buildSynthetic("get:" + name, ["L"], (c) => { c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f)); }, f.kind);
-    const imports: Record<string, any> = { rt: this.rtImports(), host: this.host };
-    for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
-    return (this.instantiate(bytes, imports).exports as Record<string, any>).m;
+    return (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m;
   }
 }

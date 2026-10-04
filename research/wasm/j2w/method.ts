@@ -17,9 +17,9 @@ const FLOAT_LOCALS = true;
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
-  const intr = cx.w.opts.intrinsics.get(mid(m));
+  const intr = cx.intrinsic(m);
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return c; }
-  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: native/abstract`); return c; }
+  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return c; }
   try {
     return new MC(cx, m).run();
   } catch (e) {
@@ -47,7 +47,7 @@ export class MC {
   }
 
   // ---------- registers: each live range (web) has a local of its own kind
-  storage(k: number): VT { return k === KR ? refNull(this.cx.tObj) : k === KJ || (k === KD && !FLOAT_LOCALS) ? T.i64 : k === KD ? T.f64 : k === KF && FLOAT_LOCALS ? T.f32 : T.i32; }
+  storage(k: number): VT { return k === KR ? T.anyref : k === KJ || (k === KD && !FLOAT_LOCALS) ? T.i64 : k === KD ? T.f64 : k === KF && FLOAT_LOCALS ? T.f32 : T.i32; }
   local(web: number): number {
     let l = this.webLocal[web];
     if (l === undefined) this.webLocal[web] = l = this.code.newLocal(this.storage(this.typing.kind[web]));
@@ -119,8 +119,8 @@ export class MC {
     };
     if (!m.isStatic) param(false);
     for (const p of m.params) param(isWide(p));
-    if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(refNull(cx.tObj)); }
-    this.tmpL = c.newLocal(refNull(cx.tObj));
+    if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
+    this.tmpL = c.newLocal(T.anyref);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
     if (regions.length === 1 && !this.tries) {
@@ -129,10 +129,10 @@ export class MC {
       return c;
     }
     this.regionLocal = c.newLocal(T.i32);
-    if (!this.tries) this.excLocal = c.newLocal(refNull(cx.tObj));
+    if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     this.push("$disp"); c.loop();
     if (this.tries) {
-      this.push("$caught"); c.block(refNull(cx.tObj));
+      this.push("$caught"); c.block(T.anyref);
       c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
     }
     const n = regions.length;
@@ -226,7 +226,7 @@ export class MC {
     const c = this.code, cx = this.cx;
     this.get("L", reg); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); this.get("L", reg);
   }
-  refTo(reg: number, struct: number) { this.nonNull(reg); if (struct !== this.cx.tObj) this.code.refCast(struct); }
+  refTo(reg: number, struct: number) { this.nonNull(reg); this.code.refCast(struct); }
 
   // ---------- instruction emission
   emit(ins: Ins) {
@@ -254,7 +254,8 @@ export class MC {
       case "const-wide": this.constWide(ins.wideLit); return;
       case "const-wide/high16": this.constWide(BigInt(b) << 48n); return;
       case "const-class": constClass(cx, c, descToName(dex.type(b))); this.set("L"); return;
-      case "const-string": case "const-string/jumbo": case "const-method-handle": case "const-method-type":
+      case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
+      case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
@@ -262,7 +263,7 @@ export class MC {
         if (name !== "java/lang/Object") {
           this.get("L", a); c.refIsNull().raw(OP.i32_eqz).if_();
           this.emitInstanceOfTest(name, () => this.get("L", a)); c.raw(OP.i32_eqz).if_();
-          this.get("L", a); c.refAsNonNull().structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(name)); cx.callThrower(c, "cce"); c.end().end();
+          this.get("L", a); c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(name)); cx.callThrower(c, "cce"); c.end().end();
         }
         // the cast value is a definition of its own: a web other than the operand's needs the reference copied in
         if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); }
@@ -277,7 +278,10 @@ export class MC {
         this.arrayLength(b); this.set("I"); return;
       }
       case "new-instance": {
-        const name = descToName(dex.type(b)); cx.emitEnsure(c, name); cx.emitNew(c, name); this.set("L"); return;
+        const name = descToName(dex.type(b));
+        // a String is made by the constructor call, which assigns its register
+        if (cx.str.isString(name)) c.anyNull(); else { cx.emitEnsure(c, name); cx.emitNew(c, name); }
+        this.set("L"); return;
       }
       case "new-array": {
         cx.emitNewArray(c, dex.type(ins.c), () => this.get("I", ins.b)); this.set("L"); return;
@@ -322,7 +326,7 @@ export class MC {
     const w = this.typing.def(this.cur.pc), c = this.code;
     if (w < 0) return;
     const k = this.typing.kind[w];
-    if (k === KR) { if (v) throw new Error(`reference constant ${v} at ${this.cur.pc}`); c.refNull(this.cx.tObj); }
+    if (k === KR) { if (v) throw new Error(`reference constant ${v} at ${this.cur.pc}`); c.anyNull(); }
     else if (k === KF && FLOAT_LOCALS) c.f32const(v);
     else c.i32(v);
     this.store(this.cur);
@@ -391,10 +395,12 @@ export class MC {
   }
   emitIget(ins: Ins) {
     const cx = this.cx, c = this.code, { decl, f } = this.fieldOf(ins.c), st = cx.structFor(decl);
+    cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); c.structGet(st, cx.fieldIndex(decl, f)); this.set(f.kind);
   }
   emitIput(ins: Ins) {
     const cx = this.cx, c = this.code, { decl, f } = this.fieldOf(ins.c), st = cx.structFor(decl);
+    cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
   }
   emitStatic(ins: Ins) {
@@ -409,7 +415,7 @@ export class MC {
     const cond = () => {
       switch (n) {
         case "if-eq": case "if-ne":
-          if (refA) { this.get("L", ins.a); this.get("L", ins.b); c.refEq(); } else { this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_eq); }
+          if (refA) { this.get("L", ins.a); this.get("L", ins.b); c.call(this.cx.helper("acmp")); } else { this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_eq); }
           if (n === "if-ne") c.raw(OP.i32_eqz); return;
         case "if-eqz": case "if-nez":
           if (refA) { this.get("L", ins.a); c.refIsNull(); } else { this.get("I", ins.a); c.raw(OP.i32_eqz); }
@@ -471,6 +477,10 @@ export class MC {
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
       cx.emitEnsure(c, t.cls); pushArgs(); cx.callMethod(c, t);
+    } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
+      const make = cx.str.factory(desc);
+      if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
+      pushArgsFrom(this, ins, p.params); c.call(make); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
       const t = kind === "invoke-super" ? prog.superTarget(this.m.cls, decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
       if (!t) throw new Error("unresolved direct " + decl + "." + key);
@@ -483,7 +493,7 @@ export class MC {
       else {
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
         c.lget(this.tmpL); pushArgsFrom(this, ins, p.params);
-        c.lget(this.tmpL).structGet(cx.tObj, 0);
+        c.lget(this.tmpL); cx.str.vtab(c, decl);
         if (declC && !declC.isInterface) {
           c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
         } else if (prog.get("java/lang/Object")!.byKey.has(key)) {

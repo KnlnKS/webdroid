@@ -3,8 +3,24 @@ import "../../../tests/platform";
 import { inspect } from "node:util";
 import { rt } from "../../../src/jvm/runtime";
 import "../../../src/natives";
-import { scall } from "../../../src/jvm/natives/jentry";
+import { scall, vcall } from "../../../src/jvm/natives/jentry";
 import type { DexFile } from "../../../src/jvm/dex";
+import { JThrowable } from "../../../src/jvm/natives/jthrowable";
+import { mangleMethod, splitSig } from "../../../src/jvm/abi";
+import { Natives, type HostFn } from "./natives";
+
+/** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
+const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
+/** the natives the production runtime registered, which the Wasm tier imports */
+export const natives = new Natives({
+  find: (cls, key, isStatic, hasBody) => {
+    if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
+    if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
+    const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
+    return (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined;
+  },
+  thrown: (e) => e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg } : undefined,
+});
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */
@@ -25,5 +41,7 @@ export async function jsTier(dexes: DexFile[]) {
   await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
   await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "java.io.tmpdir", "/data/local/tmp");
   /** a Java throwable surfaces as an Error whose message is its class and message */
-  return async (cls: string, name: string, desc: string, args: unknown[]) => { try { return await scall(cls, name, desc, ...args); } catch (e) { throw new Error(inspect(e)); } };
+  return async (cls: string, name: string, desc: string, args: unknown[], instance = false) => {
+    try { return await (instance ? vcall(args[0], name, desc, ...args.slice(1)) : scall(cls, name, desc, ...args)); } catch (e) { throw new Error(inspect(e)); }
+  };
 }

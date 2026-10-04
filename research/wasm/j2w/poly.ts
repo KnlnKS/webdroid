@@ -47,7 +47,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
 
   /** the access mode on `p`; leaves the mode's result (if any) on the stack */
   const access = (p: Place, vals: number[]) => {
-    const eq = () => K === "L" ? c.refEq() : c.raw(K === "I" ? OP.i32_eq : OP.i64_eq);
+    const eq = () => K === "L" ? c.call(cx.helper("acmp")) : c.raw(K === "I" ? OP.i32_eq : OP.i64_eq);
     const old = op === "get" || op === "set" || op === "cas" ? -1 : c.newLocal(cx.vtOf(K));
     switch (op) {
       case "get": p.load(); return;

@@ -1,6 +1,6 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
 import type { Code } from "./code";
-import { refNull } from "./wasmbin";
+import { T } from "./wasmbin";
 import type { Kind } from "./program";
 import type { Compiler, FnTrace } from "./j2w";
 
@@ -11,9 +11,9 @@ export const MAX_ARRAY_BYTES = HEAP_LIMIT;
 export const ALLOC_WINDOW = 8 << 20;
 
 /** Table slots that hold the throwers, bound once the runtime starts; each is a lazy-link stub until first used. */
-export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, ame: 9, ase: 10, inste: 11, nsfe: 12, ncdfe: 13 } as const;
+export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, sioobe: 9, copy: 10, ase: 11, ame: 12, asx: 13, inste: 14, nsfe: 15, ncdfe: 16 } as const;
 export type Thrower = keyof typeof SLOT;
-export const FIRST_FREE_SLOT = 14;
+export const FIRST_FREE_SLOT = 17;
 /** a class's init word: 0 not started, (thread << 2 | 1) running on that thread, then done or failed (JLS 12.4.2) */
 export const INIT_DONE = 2, INIT_FAILED = 3;
 const L = "java/lang/";
@@ -26,11 +26,14 @@ export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
   oom: { cls: L + "OutOfMemoryError", params: ["J"] },                           // bytes requested
   ule: { cls: L + "UnsatisfiedLinkError", params: [] },                          // a construct the compiler has a gap for
   soe: { cls: L + "StackOverflowError", params: [] },
+  sioobe: { cls: L + "StringIndexOutOfBoundsException", params: ["I", "I", "I"] }, // offset, count, length of a char range
+  copy: { cls: L + "ArrayIndexOutOfBoundsException", params: ["I", "I", "I", "I", "I"] }, // System.arraycopy: src length, srcPos, dst length, dstPos, length
+  ase: { cls: L + "ArrayStoreException", params: [] },
   ame: { cls: L + "AbstractMethodError", params: [] },                           // a call of a method the class does not implement
-  ase: { cls: L + "ArrayStoreException", params: ["I", "I"] },                   // class id of the value, class id of the array
+  asx: { cls: L + "ArrayStoreException", params: ["I", "I"] },                   // class id of the value, class id of the array
   inste: { cls: L + "InstantiationException", params: [] },
   nsfe: { cls: L + "NoSuchFieldException", params: [] },
-  ncdfe: { cls: L + "NoClassDefFoundError", params: [] },                        // a class whose initialization failed earlier
+  ncdfe: { cls: L + "NoClassDefFoundError", params: ["I"] },                        // a class whose initialization failed earlier
 };
 
 const dotted = (n: string) => n.replace(/\//g, ".");
@@ -38,31 +41,37 @@ const PRETTY: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: 
 /** a class name as java.lang.Class.getTypeName prints it */
 const pretty = (n: string): string => n[0] !== "[" ? dotted(n) : pretty(n[1] === "[" ? n.slice(1) : n[1] === "L" ? n.slice(2, -1) : PRETTY[n[1]]) + "[]";
 /** The message ART and the JS tier give the exception (null: none). `a` and `b` are the thrower's arguments, a wide one split into halves. */
-export function excMessage(kind: number, a: number, b: number, className: (id: number) => string): string | null {
+export function excMessage(kind: number, a: number, b: number, c: number, d: number, e: number, className: (id: number) => string): string | null {
   switch (kind) {
     case SLOT.aioobe: return `length=${b}; index=${a}`;
     case SLOT.arith: return "divide by zero";
     case SLOT.cce: return `${dotted(className(a))} cannot be cast to ${dotted(className(b))}`;
     case SLOT.nase: return String(a);
-    case SLOT.ase: return `${pretty(className(a))} cannot be stored in an array of type ${pretty(className(b))}`;
+    case SLOT.ncdfe: return `Could not initialize class ${dotted(className(a))}`;
+    case SLOT.sioobe: return `offset ${a}, count ${b}, length ${c}`;
+    case SLOT.copy: return `src.length=${a} srcPos=${b} dst.length=${c} dstPos=${d} length=${e}`;
+    case SLOT.asx: return `${pretty(className(a))} cannot be stored in an array of type ${pretty(className(b))}`;
     case SLOT.oom: return `Failed to allocate a ${(BigInt(b) << 32n) | BigInt(a >>> 0)} byte allocation with ${HEAP_LIMIT} free bytes`;
     default: return null;
   }
 }
 
-/** The body of thrower `name`: allocate its exception, run the no-argument constructor, throw. The message is computed by the host
- *  (`excMessage`) but not stored: that needs the String representation, which this compiler does not have yet. */
+/** The body of thrower `name`: allocate its exception, run the no-argument constructor, store the message the host computes
+ *  (`excMessage`) in Throwable.detailMessage, throw. */
 export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
   const { cls, params } = THROWERS[name], n = params.length;
   cx.emitEnsure(c, cls);
-  const exn = c.newLocal(refNull(cx.tObj));
+  const exn = c.newLocal(T.anyref), msg = c.newLocal(T.externref);
   cx.emitNew(c, cls); c.lset(exn);
   const ctor = cx.prog.resolve(cls, "<init>", "()V");
   if (ctor?.codeOff) { c.lget(exn); cx.callMethod(c, ctor); }
   c.i32(SLOT[name]);
-  if (params[0] === "J") c.lget(0).raw(0xa7).lget(0).i64(32n).raw(0x88, 0xa7);       // wrap(l), wrap(l >>> 32)
-  else for (let i = 0; i < 2; i++) i < n ? c.lget(i) : c.i32(0);
-  c.call(cx.imp.excMessage).drop().lget(exn).throw_(cx.tag);
+  if (params[0] === "J") c.lget(0).raw(0xa7).lget(0).i64(32n).raw(0x88, 0xa7).i32(0).i32(0).i32(0);       // wrap(l), wrap(l >>> 32)
+  else for (let i = 0; i < 5; i++) i < n ? c.lget(i) : c.i32(0);
+  c.call(cx.imp.excMessage).lset(msg);
+  const detail = cx.prog.resolveField("java/lang/Throwable", "detailMessage", "Ljava/lang/String;"), st = cx.structFor("java/lang/Throwable");
+  if (detail && !detail.isStatic) c.lget(exn).refCast(st).lget(msg).anyConvertExtern().structSet(st, cx.fieldIndex("java/lang/Throwable", detail));
+  c.lget(exn).throw_(cx.tag);
 }
 
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }

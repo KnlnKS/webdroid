@@ -7,9 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, program, world } from "./build";
-import { intrinsics } from "./intrinsics";
-import { jsTier } from "./oracle";
+import { isIntrinsic, loadDexes, program, world } from "./build";
+import { jsTier, natives } from "./oracle";
 import { reach } from "./reach";
 
 const root = join(import.meta.dir, "../../..");
@@ -29,13 +28,13 @@ sh([androidTool("d8"), "--min-api", "26", "--output", out, ...readdirSync(out).f
 
 const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j))]), js = await jsTier(loadDexes(dex));
 const todo = names.filter((n) => !only.length || only.includes(n));
-const isIntr = (m: { cls: string; key: string }) => intrinsics.has(m.cls + "." + m.key);
+const isIntr = isIntrinsic(natives);
 const reaches = new Map<string, ReturnType<typeof reach>>();
 if (survey) {
   for (const w of todo) reaches.set(w, reach(prog, [prog.resolve("Bench", `w_${w}`, "()I")!], { instantiate: [], methods: [] }, isIntr));
   const union = new Map([...reaches.values()].flatMap((r) => [...r.methods]));
   console.log(`${todo.length} workloads reach ${union.size} methods in the closed world`);
-  const w = world(prog), t0 = performance.now();
+  const w = world(prog, { natives }), t0 = performance.now();
   const gaps = new Set([...union.values()].flatMap((m) => w.gapsOf(m)).concat([...reaches.values()].flatMap((r) => [...r.unresolved])));
   console.log(`closed-world compile of all ${union.size}: ${((performance.now() - t0) / 1000).toFixed(1)} s, ${gaps.size} blockers`);
   if (verbose) console.log("    " + [...gaps].join("\n    "));
@@ -45,11 +44,15 @@ if (survey) {
 const total = { methods: 0, units: 0, compileMs: 0, instantiateMs: 0, classes: 0, classMs: 0 };
 for (const name of todo) {
   let want: string, got: string, hit: number[] = [];
-  const w = world(prog);
+  const w = world(prog, { natives });
   w.onGap = (id) => hit.push(id);
   try { want = String(await js("Bench", `w_${name}`, "()I", [])); } catch (e) { want = "throw"; }
   const t0 = performance.now();
-  try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch { got = "trap"; }
+  try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch (e) {
+    got = "trap";
+    const t = w.throwable(e);
+    if (verbose && !hit.length) console.log("   ", t ? "uncaught " + w.classNameOf(t) : String(e).slice(0, 200));
+  }
   const ms = performance.now() - t0;
   for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += w.stats[k];
   console.log(`${name.padEnd(15)} reach=${String(reaches.get(name)?.methods.size ?? "-").padStart(5)} compiled=${String(w.stats.methods).padStart(4)} classes=${String(w.stats.classes).padStart(3)} ${ms.toFixed(0).padStart(5)} ms  js=${want} wasm=${got}${got === want ? " MATCH" : hit.length ? ` BLOCKED at ${w.gapList[hit[0]]}` : " DIFF"}`);

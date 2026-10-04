@@ -42,7 +42,7 @@ export class Program {
   }
   /** Classes the compiler's own helpers instantiate; stubbed when the loaded dexes (no framework) lack them. */
   private addRuntimeClasses() {
-    const E = "java/lang/", chain: [string, string | null][] = [["Object", null], ["Throwable", "Object"], ["Exception", "Throwable"], ["RuntimeException", "Exception"],
+    const E = "java/lang/", chain: [string, string | null][] = [["Object", null], ["String", "Object"], ["Throwable", "Object"], ["Exception", "Throwable"], ["RuntimeException", "Exception"],
       ["NullPointerException", "RuntimeException"], ["ArithmeticException", "RuntimeException"], ["ClassCastException", "RuntimeException"],
       ["NegativeArraySizeException", "RuntimeException"], ["IndexOutOfBoundsException", "RuntimeException"], ["ArrayIndexOutOfBoundsException", "IndexOutOfBoundsException"],
       ["Error", "Throwable"], ["LinkageError", "Error"], ["UnsatisfiedLinkError", "LinkageError"],
