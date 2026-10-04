@@ -187,12 +187,15 @@ export class Program {
   }
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
   addClass(jc: JClass): void {
+    if (this.base?.has(jc.name)) this.shadowing = true;
     jc.methods.forEach((m, i) => { m.index = i; });
     this.classes.set(jc.name, jc);
     this.subclassMemo.clear(); this.implMemo.clear();
   }
   get(name: string): JClass | undefined { return this.classes.get(name) ?? this.base?.get(name); }
   require(name: string): JClass { const c = this.get(name); if (!c) throw new Error("class not found: " + name); return c; }
+  /** a class of this Program stands in for one of the base's (a host class over a platform class): the base's answers about implementations are no longer this Program's */
+  private shadowing = false;
   private subclassMemo = new Map<string, Map<string, boolean>>();
   private implMemo = new Map<string, Map<string, MethodInfo | undefined>>();
   isSubclass(a: string, b: string): boolean {
@@ -229,7 +232,7 @@ export class Program {
   }
   /** a concrete (non-abstract) implementation of name+desc for runtime class `cls` */
   implFor(cls: string, name: string, desc: string): MethodInfo | undefined {
-    if (this.base?.has(cls)) return this.base.implFor(cls, name, desc);
+    if (!this.shadowing && this.base?.has(cls)) return this.base.implFor(cls, name, desc);
     const key = mkey(name, desc);
     let memo = this.implMemo.get(cls);
     if (!memo) this.implMemo.set(cls, memo = new Map());

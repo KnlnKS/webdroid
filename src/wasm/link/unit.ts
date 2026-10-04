@@ -1,0 +1,58 @@
+// The second tier compiled for another World: a compile worker holds a World over the same Program and the same numbering, built from a copy of the dex files, and compiles what
+// the World it works for asks (World.upgradeJob). The code it makes names classes, selectors, slots and gaps by number, so it is the other World's only while that World has
+// numbered the same things in the same order: the worker follows the numbering of the World it compiles for (`sync`), numbers what its unit needs beyond that as that World
+// would (`numbering`), and the World takes the unit only if it has not numbered anything meanwhile (World.adoptUnit); otherwise the worker forgets what it numbered.
+import { Compiler } from "../compiler/j2w";
+import { methodOf, mid } from "../compiler/ids";
+import { compileModule } from "./module";
+import { unitHeader, type Marks, type Numbering, type UnitHeader } from "./aot";
+import type { World } from "./world";
+
+/** the second-tier compile of a method, as World.upgradeJob describes it */
+export interface UpgradeJob {
+  /** the number its unit's function names carry */
+  unit: number;
+  /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
+  installed: string[]; copies: string[];
+  /** per virtual call (declaring class, name, descriptor), the implementations worth a guarded direct call (method ids) */
+  plan: [string, string[]][];
+  /** the classes whose initialization has finished since the previous job */
+  initialized: string[];
+}
+export interface UnitResult {
+  header: UnitHeader;
+  /** what the unit numbered beyond the World it was asked by: that World takes it, or does not take the unit */
+  numbering: Numbering;
+  /** the unit's module, which the worker has validated and compiled (a WebAssembly.Module crosses to the page whole) */
+  module: WebAssembly.Module;
+  /** the stack traces of its functions: name, method id, Wasm offsets and the dex pcs they belong to */
+  traces: { name: string; m: string; offsets: Int32Array; pcs: Int32Array }[];
+}
+
+export class UnitCompiler {
+  /** the numbering the World compiled for had when the last job arrived */
+  private known: Marks;
+  constructor(private w: World) { this.known = w.numbering(); }
+  /** follows the World compiled for: `keep` says it took the numbering of the previous unit (otherwise that is forgotten first), and `sync` is what it numbered since; false if the two do not line up */
+  sync(sync: Numbering, keep: boolean): boolean {
+    if (!keep) this.w.rollback(this.known);
+    if (!this.w.adopt(sync)) return false;
+    this.known = this.w.numbering();
+    return true;
+  }
+  /** the unit for `job`: an error message if the compiler's code does not validate */
+  upgrade(job: UpgradeJob): UnitResult | string {
+    const w = this.w, method = (id: string) => methodOf(w.prog, id)!;
+    job.initialized.forEach((c) => w.preInitialized.add(c));
+    w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
+    w.stats.units = job.unit;
+    const cx = new Compiler(w);
+    w.beginTouch();
+    const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), true);
+    const touch = w.endTouch();
+    let module: WebAssembly.Module;
+    try { module = compileModule(bytes); } catch (e) { return `${job.installed[0]}: ${(e as Error).message}`; }
+    return { header: unitHeader(w, cx, touch), numbering: w.since(this.known), module,
+      traces: traces.map((t) => ({ name: t.name, m: t.m ? mid(t.m) : "", offsets: t.offsets, pcs: t.pcs })) };
+  }
+}

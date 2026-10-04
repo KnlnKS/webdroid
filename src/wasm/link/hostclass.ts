@@ -80,18 +80,24 @@ export class HostClasses {
     this.w.addClass(jc, bodies);
   }
 
-  /** the natives of `spec` take the place of the methods of the dex class `jc` they name */
+  /** the natives of `spec` take the place of the methods of the dex class `jc` they name, in a class of this World's Program that stands for it: the platform's own classes, which
+   *  Worlds share, are not changed. Methods keep their positions, so ids, slots and the AOT build's numbering are the platform's. */
   private overlay(jc: JClass, spec: HostSpec): void {
     const prog = this.w.prog, hosted = classOf(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
+    const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: false, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
+    for (const m of over.methods) over.byKey.set(m.key, m);
+    const taken: MethodInfo[] = [];
     for (const key of spec.methods) {
-      const m = native(spec.name, key, 0), own = jc.byKey.get(m.key);
-      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; this.w.aot?.override(own); continue; }
+      const m = native(spec.name, key, 0), own = over.byKey.get(m.key);
+      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); continue; }
       // a method a superclass declares: the class resolves it in `hosted`, where the spec's native is
       const up = !m.isCtor && prog.resolve(spec.name, m.name, m.desc);
       if (!up || up.isStatic !== m.isStatic) continue;
       m.cls = hosted.name; m.index = hosted.methods.length;
-      hosted.methods.push(m); jc.byKey.set(m.key, m);
+      hosted.methods.push(m); over.byKey.set(m.key, m);
     }
+    this.w.addClass(over, new Map());
+    for (const m of taken) this.w.aot?.override(m);
     if (hosted.methods.length) this.w.addClass(hosted, new Map());
   }
 

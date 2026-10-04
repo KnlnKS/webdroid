@@ -10,6 +10,7 @@ import { defineHost, retPair, PTR, ldp, cstr, type ArgReader } from "./host";
 import { javaVM, jniInit, pinnedCount, resolveByExport } from "./jni";
 import { mkMethod } from "../jvm/natives/jreflect";
 import { mem } from "./mem";
+import { handle, deref } from "../android/handles";
 
 rt.linkNatives();
 // The members and natives under test are the same Java on both tiers (tests/fixtures/JniProbe.java); the tests that need a class whose initialization or callbacks
@@ -484,4 +485,10 @@ for (const a64 of abis) test.skipIf(tier === "wasm")(`${abi(a64)} JNI callbacks 
       cpu.exc = null;
     }
   } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
+});
+
+test("an address that stands for a Java array gives a native the array, and what it writes is the array's", async () => {
+  rt.registerJni("JniProbe", "handleOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true }) as never);
+  rt.registerJni("JniProbe", "poke(J)V", ((h: bigint) => { deref<Int32Array>(h)[1] = 99; }) as never);
+  expect(await scall("JniProbe", "viaHandle", "()I")).toBe(99);
 });

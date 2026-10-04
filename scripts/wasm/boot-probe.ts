@@ -1,12 +1,17 @@
-// The platform build in a page: a headless Chrome tab under ?tier=wasm opens the build (host/boot.ts), starts the process the way ActivityThread.main leaves it
+// The platform build in a page: a headless Chrome tab opens the build (host/boot.ts), starts the process the way ActivityThread.main leaves it
 // (processState) and reports which modules were loaded and which missed, how many synchronous requests the page made (none are allowed) and where the time went;
 // then an iframe of the same page does it again, which must find the modules the tab compiled and fetch nothing.
+// The page also runs an app (the Pst fixture) in the World: the first load has no saved build, so a Worker compiles the app's likely methods and the page keeps them in OPFS, and runs a
+// hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
+// The page is not under ?tier=wasm: the natives it binds are the oracle's, which read the JS runtime's classes, and that tier refuses to link them (until the tab's own boot runs there).
 //   bun run wasm boot-probe          (after bun run aot)
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { aotFile, aotManifest } from "./aot-serve";
 import type { ProbeResult } from "./boot-probe-page";
-import { ROOT } from "./paths";
+import { JAVA, ROOT } from "./paths";
+import { filesIn, shellIn } from "./tools";
 
 const here = import.meta.dir;
 const built = await Bun.build({ entrypoints: [join(here, "boot-probe-page.ts")], target: "browser", define: { "import.meta.main": "false" }, plugins: [{ name: "probe", setup(b) {
@@ -14,12 +19,19 @@ const built = await Bun.build({ entrypoints: [join(here, "boot-probe-page.ts")],
 } }] });
 if (!built.success) throw new Error(built.logs.join("\n"));
 const bundle = built.outputs[0];
+const worker = await Bun.build({ entrypoints: [join(here, "../../src/wasm/host/compile-worker.ts")], target: "browser" });
+if (!worker.success) throw new Error(worker.logs.join("\n"));
+const appDir = mkdtempSync(join(tmpdir(), "wasm-probe-app-")), sh = shellIn(appDir);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", appDir, join(JAVA, "Pst.java")]);
+sh(["d8", "--release", "--output", appDir, ...filesIn(appDir, /\.class$/)]);
 
 const fetched = new Map<string, number>();
 const server = Bun.serve({ port: 0, async fetch(req) {
   const p = new URL(req.url).pathname;
   if (p === "/") return new Response('<!doctype html><script type="module" src="/probe.js"></script>', { headers: { "content-type": "text/html" } });
   if (p === "/probe.js") return new Response(bundle, { headers: { "content-type": "text/javascript" } });
+  if (p === "/wasm-compile-worker.js") return new Response(worker.outputs[0], { headers: { "content-type": "text/javascript" } });
+  if (p === "/app.dex") return new Response(Bun.file(join(appDir, "classes.dex")));
   if (p === "/aot/current.json") return aotManifest();
   const aot = /^\/aot\/(\w+)\/([\w.]+)$/.exec(p);
   if (aot) { fetched.set(aot[2], (fetched.get(aot[2]) ?? 0) + 1); return aotFile(aot[1], aot[2]); }
@@ -31,10 +43,10 @@ const { chromium } = await import("playwright");
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("page error:", String(e).slice(0, 500)));
-await page.goto(`http://localhost:${server.port}/?tier=wasm`);
+await page.goto(`http://localhost:${server.port}/`);
 const run = async (name: string) => { await page.waitForFunction(`window.${name} !== undefined`, null, { timeout: 120000 }); return page.evaluate(`window.${name}`) as Promise<ProbeResult>; };
 const tab = await run("probe"), fetchedByTab = new Map(fetched);
-await page.evaluate(() => { const f = document.createElement("iframe"); f.src = "/?tier=wasm&frame"; document.body.append(f); });
+await page.evaluate(() => { const f = document.createElement("iframe"); f.src = "/?frame"; document.body.append(f); });
 const frame = await run("probeFrame");
 await browser.close(); server.stop();
 
@@ -44,12 +56,21 @@ for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
   console.log(`${name}: ${r.error ? "ERROR " + r.error.slice(0, 600) : `attached ${r.attached}; ${r.loaded.length} modules loaded, ${r.missed.length} missed, ${r.failed.length} failed to fetch; ${r.syncRequests} synchronous requests`}`);
   if (!r.error) console.log(`  ahead (fetch + compile, off the main thread) ${r.aheadMs.toFixed(0)} ms; boot ${r.bootMs.toFixed(0)} ms = our compiler ${r.compileMs.toFixed(0)} (${r.methods} methods), Module ${r.moduleMs.toFixed(0)}, Instance ${r.instantiateMs.toFixed(0)}, build ${r.aotMs.toFixed(0)}`);
   check(`${name}: ${r.error}`, !r.error);
-  check(`${name}: runs under tier=wasm`, r.tier === "wasm");
   check(`${name}: the build is attached`, r.attached);
   check(`${name}: no synchronous request`, r.syncRequests === 0);
   check(`${name}: the platform Program is the tab's`, r.sharedPlatform);
   check(`${name}: nothing missed or failed (${[...r.missed, ...r.failed].slice(0, 5)})`, !r.missed.length && !r.failed.length);
 }
+for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
+  const a = r.app;
+  if (r.error) continue;
+  console.log(`${name} app (${a.store}): ${a.hit ? `saved build found (${a.prepareMs.toFixed(0)} ms to read and compile it)` : `no saved build; a worker made one: ${a.made?.methods} methods in ${a.made?.modules} module(s), ${a.made?.ms.toFixed(0)} ms, kept ${a.made?.kept}`}; attached ${a.attached}, ${a.modules} app module(s) loaded, ${a.compiledOnDemand} methods compiled on demand; second tier: ${a.jobs} jobs to the worker, ${a.adopted} adopted, ${a.stale} stale, ${a.inlineUpgrades} inline, worker ${a.workerMs.toFixed(1)} ms`);
+  check(`${name}: the app answers as the JDK does (${a.answers})`, a.answers === "6,610,65529,125374");
+  check(`${name}: a hot method's second tier came from the worker`, a.adopted > 0 && a.inlineUpgrades === 0);
+}
+check("the first load has no saved build and makes one", !tab.error && !tab.app.hit && !tab.app.attached && tab.app.made?.kept === true);
+check("the second load finds it, attaches it and uses its modules", !frame.error && frame.app.hit && frame.app.attached && frame.app.modules > 0);
+check("and compiles fewer methods on demand", !frame.error && !tab.error && frame.app.compiledOnDemand < tab.app.compiledOnDemand);
 const dup = [...fetched].filter(([f, n]) => n > 1);
 console.log(`${fetched.size} files fetched by the tab and its frame, ${dup.length} more than once`);
 check("the frame fetched nothing the tab had not", [...fetched].every(([f, n]) => n === fetchedByTab.get(f)));

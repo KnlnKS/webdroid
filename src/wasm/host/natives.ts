@@ -288,8 +288,9 @@ const makers = new Map<string, Maker>();
  *  A Suspending native is the same in an async function: it works on private copies of its arrays, and the Bridge scope it opened is set
  *  aside while it waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
-  const objects = p.args.map((d) => !p.raw && isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + p.raw;
+  const objects = p.args.map((d) => !p.raw && isRef(d) && d !== STRING && !isPrimArray(d)), // a native that takes a long may be handed the address of a Java array: it reaches the array by `deref` (a copy of its own), which is stored back when the native returns
+  bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null || (!p.raw && p.args.includes("J"));
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + p.raw + p.args.includes("J");
   let make = makers.get(key);
   if (!make) {
     const at: number[] = [];

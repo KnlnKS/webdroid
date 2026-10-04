@@ -13,6 +13,7 @@ import type { Compiler } from "../compiler/j2w";
 import type { World } from "../link/world";
 import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
+import { handleViews } from "../../android/handles";
 import { count } from "./stats";
 
 type Fn = (...a: any[]) => any;
@@ -45,7 +46,7 @@ export class Bridge implements HostBridge {
   private fields = new Map<string, Map<string, FieldInfo>>();
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
-  constructor(private w: World, private src?: NativeSource) {}
+  constructor(private w: World, private src?: NativeSource) { handleViews.of = (o) => this.toHost(o); }
   /** the array accessors, generated on first use (the World is still being constructed when its Bridge is) */
   private get op() {
     if (this.ops) return this.ops;

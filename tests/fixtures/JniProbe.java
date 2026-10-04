@@ -58,5 +58,9 @@ public class JniProbe {
     public native int inst(int a);
     public native int calls(int a);
     public static native Object echo(Object o);
+    /** natives the tests register in TS: an address that stands for an array, and a native that writes through it */
+    public static native long handleOf(Object array);
+    public static native void poke(long handle);
+    public static int viaHandle() { int[] a = { 1, 2, 3 }; poke(handleOf(a)); return a[1]; }
     public static native int measure(String s, byte[] b, Object[] o);
 }

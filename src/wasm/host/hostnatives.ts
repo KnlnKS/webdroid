@@ -5,6 +5,7 @@ import { BOOT_JAR_PATHS } from "../../jvm/bootclasspath";
 import { readBytes, FD, type IoBuffer } from "../../android/os";
 import { fdInt } from "../../jvm/natives/jio";
 import { fdFile, javaPreadFd, javaReadFd, javaSeekFd } from "../../native/fs";
+import { handle } from "../../android/handles";
 import { BytesFile } from "../../shell/lazyfile";
 import type { HostFn } from "../link/hostapi";
 
@@ -18,6 +19,8 @@ function readResident(fd: number, target: Uint8Array): number | Promise<number> 
 }
 
 export const hostNatives = new Map<string, HostFn>([
+  // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (bridge.ts)
+  ["dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", Object.assign((_runtime: unknown, array: object) => handle(array), { javaValues: true })],
   // the archives of the boot class path, which BootClassLoader looks resources up in
   ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS], "Ljava/lang/String;")],
   [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, (d: object | null, buffer: IoBuffer, offset: number, count: number) =>

@@ -4,6 +4,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
+import type { DexFile } from "../../jvm/dex";
 import type { Sched } from "./sched";
 
 /** a native; one marked `javaValues` is given and answers Java values as the tier holds them (references as they are: no String is converted, no array copied, no object wrapped) */
@@ -98,3 +99,11 @@ export interface NativeBinder {
 
 /** answers `host.net` for libcore's getaddrinfo (inet.ts): an address count or minus an EAI code for a lookup, a byte of a found address */
 export type HostNet = (w: World, op: number, node: string, a: number, b: number) => number;
+
+/** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `World.adoptUnit`; it may decline, and then the World compiles inline. */
+export interface CompileService {
+  /** takes the second-tier compile of the method in `slot` (`World.upgradeJob` describes it); false if it cannot */
+  submit(w: World, slot: number): boolean;
+  /** dex files were added to the Program's default namespace, or (null) something the service cannot follow was: it stops serving */
+  added(dexes: DexFile[] | null): void;
+}
