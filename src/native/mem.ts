@@ -4,6 +4,7 @@
 
 import { core, memory, shared, NativeFault, BadAddress, onMemoryGrown } from "./core";
 import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
+import { utf8 } from "../jvm/abi";
 export { NativeFault, BadAddress };
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
@@ -13,7 +14,6 @@ let SPAN = 0;
 let planes = false;
 /** every buffer the memory has had: views made before a grow keep the one they were made over */
 const buffers = new WeakSet<ArrayBufferLike>();
-const enc = new TextEncoder(), dec = new TextDecoder();
 
 /** a host access of n bytes: in range, and backed where it lands in a plane (which may commit
  *  the plane's writable pages under it) */
@@ -180,11 +180,11 @@ export const mem = {
     if (!a) return "";
     checkAddr(a, 1);
     const bytes = u8.subarray(a >>> 0, (a >>> 0) + max), end = bytes.indexOf(0);
-    return dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
+    return utf8.dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
   },
   /** writes s + NUL (truncating to max-1 bytes when max is given); returns bytes written excluding NUL */
   putCstr(a: number, s: string, max = 0x7fffffff): number {
-    const b = enc.encode(s);
+    const b = utf8.enc.encode(s);
     const n = Math.min(b.length, max - 1);
     if (n < 0) return 0;
     checkAddr(a, n + 1);
@@ -204,14 +204,14 @@ export const mem = {
   memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); wrote(d, n); },
   memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); wrote(d, n); },
   strdup(s: string): number {
-    const b = enc.encode(s);
+    const b = utf8.enc.encode(s);
     const p = mem.malloc(b.length + 1);
     u8.set(b, p); u8[p + b.length] = 0;
     return p;
   },
   /** a static string in host data (never freed) */
   hostStr(s: string): number {
-    const b = enc.encode(s);
+    const b = utf8.enc.encode(s);
     const p = mem.hostAlloc(b.length + 1, 1);
     u8.set(b, p); u8[p + b.length] = 0;
     return p;

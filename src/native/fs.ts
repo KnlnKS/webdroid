@@ -11,14 +11,13 @@ import { KLAYOUT } from "./syscall";
 import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
-import { concat } from "../jvm/abi";
+import { concat, utf8 as codec } from "../jvm/abi";
 import { allocateFd, releaseFd, reserveFd, fdsanOwnerTag, fdsanExchangeOwnerTag } from "./fd";
 import { armClockTimer, disarmClockTimer, timerState, validTime, type ClockTimer } from "./timers";
 import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi";
 import { SIGPIPE } from "./signals";
 import type { Socket, Received } from "./socket/core";
 import type { Epoll } from "./poll";
-const dec = new TextDecoder();
 
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
@@ -358,7 +357,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
   const n = bytes.length;
   if (!f) return fail(cpu, E.BADF);
   if (f.log) {
-    f.line = (f.line ?? "") + dec.decode(bytes);
+    f.line = (f.line ?? "") + codec.dec.decode(bytes);
     let i: number;
     while ((i = f.line.indexOf("\n")) >= 0) { logLine(f.log, f.log === 6 ? "stderr" : "stdout", f.line.slice(0, i)); f.line = f.line.slice(i + 1); }
     return n;
@@ -368,7 +367,7 @@ function writeBytes(cpu: Cpu | null, f: Fd | undefined, bytes: Uint8Array): numb
     if (f.wpipe.closed) return written(cpu, f, -E.PIPE);
     f.wpipe.q.push(bytes.slice()); wakeAll(f.wpipe); return n;
   }
-  if (f.proc) return procWrite(f.path, dec.decode(bytes)) ? n : fail(cpu, E.INVAL);
+  if (f.proc) return procWrite(f.path, codec.dec.decode(bytes)) ? n : fail(cpu, E.INVAL);
   if (f.timer) return fail(cpu, E.INVAL);
   if (f.event) {
     if (n < 8) return fail(cpu, E.INVAL);

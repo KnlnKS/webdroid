@@ -10,6 +10,7 @@ import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReade
 import { gl as current, tables as T, put, takeError, raise, unsure } from "../android/gl";
 import { yieldToLoop } from "./cpu";
 import { perf } from "../perf";
+import { utf8 } from "../jvm/abi";
 import { rewriteTextureSwizzles } from "./swizzle";
 import { activateEglCurrent } from "./egl-current";
 import {
@@ -23,7 +24,6 @@ import {
   keepsClean, keptClean, forgetImages, untrust, texParamAccepted, storageAccepted, imageAccepted, recordImage, subImageAccepted, pixelStoreAccepted,
   textureOf, TEXTURE_TARGETS, BUFFER_TARGETS, USAGES, RENDERBUFFER_FORMATS,
 } from "./gles3-validate";
-const dec = new TextDecoder();
 export let gles3Procs: Record<string, HostFn> = {};
 export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target
@@ -185,7 +185,7 @@ export function gles3Init(): void {
       let src = "";
       for (let i = 0; i < n; i++) {
         const p = ldp(pp + i * PTR), len = lp ? mem.ld32(lp + 4 * i) : -1;
-        src += len < 0 ? mem.cstr(p) : dec.decode(mem.bytes(p, len));
+        src += len < 0 ? mem.cstr(p) : utf8.dec.decode(mem.bytes(p, len));
       }
       if (s) {
         const rewrite = rewriteTextureSwizzles(externalSamplersAs2D(s, src), handle);

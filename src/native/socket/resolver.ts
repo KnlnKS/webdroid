@@ -4,6 +4,7 @@
 
 import { parseIpv4 } from "../../shell/relay";
 import { E } from "../abi";
+import { utf8 } from "../../jvm/abi";
 import type { Cpu } from "../cpu";
 import { stp, ptr, type HostFn } from "../host";
 import { mem, anchor } from "../mem";
@@ -16,7 +17,6 @@ import { SOCK_STREAM, SOCK_DGRAM, sockaddrOf, readEndpoint } from "./abi";
 import { record } from "./core";
 import { IPPROTO_TCP, IPPROTO_UDP } from "./inet";
 
-const enc = new TextEncoder();
 const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICSERV = 8, AI_ADDRCONFIG = 0x400;
 const EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
 
@@ -35,7 +35,7 @@ function getifaddrs(cpu: Cpu, result: number): number {
   stp(entry + IFADDRS.netmask, netmask);
   mem.st16(address, AF_INET); mem.u8.set(V4_LOOPBACK, address + 4);
   mem.st16(netmask, AF_INET); mem.u8.set([255, 0, 0, 0], netmask + 4);
-  mem.u8.set([...enc.encode(lo.name), 0], name);
+  mem.u8.set([...utf8.enc.encode(lo.name), 0], name);
   stp(result, entry);
   return 0;
 }
@@ -67,7 +67,7 @@ function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: numbe
     if (typeof found === "number") return found;
     const address = found[0], addressFamily = address.length === 4 ? AF_INET : AF_INET6;
     const sockaddr = sockaddrOf(addressFamily, { address, port });
-    const canonBytes = flags & AI_CANONNAME ? enc.encode(node) : null;
+    const canonBytes = flags & AI_CANONNAME ? utf8.enc.encode(node) : null;
     const size = ADDRINFO.size + sockaddr.length + (canonBytes ? canonBytes.length + 1 : 0);
     const allocation = mem.malloc(size);
     if (!allocation) { fail(cpu, E.NOMEM); return EAI_SYSTEM; }
@@ -93,7 +93,7 @@ function getaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints: numbe
 }
 
 function copyText(text: string, destination: number, capacity: number): boolean {
-  const bytes = enc.encode(text);
+  const bytes = utf8.enc.encode(text);
   if (!destination) return capacity === 0;
   if (bytes.length + 1 > capacity) return false;
   mem.write(destination, bytes);

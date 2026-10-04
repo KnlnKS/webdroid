@@ -1,5 +1,5 @@
 // Android binary XML (AXML) + shared string-pool / Res_value bits (also used by arsc.ts)
-import { u8 } from "../jvm/abi";
+import { u8, utf8 } from "../jvm/abi";
 import { perf } from "../perf";
 
 export const TV = { // typed value dataType
@@ -7,8 +7,6 @@ export const TV = { // typed value dataType
   DIMENSION: 0x05, FRACTION: 0x06, DYN_REF: 0x07, INT_DEC: 0x10, INT_HEX: 0x11,
   BOOLEAN: 0x12, COLOR_ARGB8: 0x1c, COLOR_RGB8: 0x1d, COLOR_ARGB4: 0x1e, COLOR_RGB4: 0x1f,
 } as const;
-
-const utf8Dec = new TextDecoder();
 
 /** A string pool chunk. Strings decode on first read: a resource table holds tens of thousands,
  *  and an app reads a small share of them. A split table's pool is appended past the base one. */
@@ -60,7 +58,7 @@ export class StringPool {
       if (view.getUint8(p++) & 0x80) p++;                    // the UTF-16 length, unused
       let bytelen = view.getUint8(p++);
       if (bytelen & 0x80) bytelen = ((bytelen & 0x7f) << 8) | view.getUint8(p++);
-      return utf8Dec.decode(u8(view, p, bytelen));
+      return utf8.dec.decode(u8(view, p, bytelen));
     }
     let len = view.getUint16(p, true); p += 2;
     if (len & 0x8000) { len = ((len & 0x7fff) << 16) | view.getUint16(p, true); p += 2; }

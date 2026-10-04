@@ -5,7 +5,7 @@
 import { mem, anchor } from "../mem";
 import { PTR, ldp, ldLong, stLong } from "../host";
 import { E } from "../abi";
-import { concat } from "../../jvm/abi";
+import { concat, utf8 } from "../../jvm/abi";
 import { AF_UNIX, AF_INET, AF_INET6, endpointOf, type Endpoint } from "../net-address";
 
 export const SOL_SOCKET = 1;
@@ -19,15 +19,14 @@ export const SHUT_RD = 0, SHUT_WR = 1, SHUT_RDWR = 2;
 export type SocketAddress = { family: typeof AF_UNIX; path: string } | { family: typeof AF_INET | typeof AF_INET6; ep: Endpoint };
 export const unixAddress = (path: string): SocketAddress => ({ family: AF_UNIX, path });
 
-const dec = new TextDecoder(), enc = new TextEncoder();
 /** sockaddr_un's sun_path bytes → the name: an abstract one is its bytes after the leading NUL */
 export function sunPath(bytes: Uint8Array): string {
-  if (bytes[0] === 0) return "\0" + dec.decode(bytes.subarray(1));
+  if (bytes[0] === 0) return "\0" + utf8.dec.decode(bytes.subarray(1));
   const end = bytes.indexOf(0);
-  return dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
+  return utf8.dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
 }
 /** a name's sun_path bytes, as getsockname(2) reports them: a pathname with its NUL */
-export const sunPathBytes = (path: string): Uint8Array => enc.encode(path === "" || path[0] === "\0" ? path : path + "\0");
+export const sunPathBytes = (path: string): Uint8Array => utf8.enc.encode(path === "" || path[0] === "\0" ? path : path + "\0");
 /** an endpoint as a sockaddr_in, or for an AF_INET6 socket a sockaddr_in6 (an IPv4 endpoint IPv4-mapped) */
 export function sockaddrOf(family: number, { port, address, scope = 0 }: Endpoint): Uint8Array {
   if (family !== AF_INET6) return Uint8Array.of(AF_INET, 0, port >>> 8, port & 255, ...(address.length === 4 ? address : [0, 0, 0, 0]), 0, 0, 0, 0, 0, 0, 0, 0);

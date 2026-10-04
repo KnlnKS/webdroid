@@ -31,7 +31,7 @@ rt.registerJnis("android/util/Log", {
 // EventLog: the binary events buffer, written to the one log here. Each write answers the bytes
 // liblog's android_log_event_list encodes: the tag, then each value as its type byte and payload
 // (a list adds its type byte and count).
-const eventSize = (value: unknown): number => typeof value === "string" ? 5 + new TextEncoder().encode(value).length
+const eventSize = (value: unknown): number => typeof value === "string" ? 5 + utf8Length(value)
   : typeof value === "bigint" ? 9 : Array.isArray(value) ? 2 + value.reduce((n: number, v) => n + eventSize(boxedValue(v) ?? v), 0) : 5;
 const writeEvent = (tag: number, value: unknown) => {
   const shown = Array.isArray(value) ? value.map((v) => String(boxedValue(v) ?? v)).join(",") : String(value);

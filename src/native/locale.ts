@@ -5,11 +5,11 @@
 import { wrote, mem } from "./mem";
 import { hostLib, type HostFn, retF, retD, stp, ldp, ARG0, ptr, vaList } from "./host";
 import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc";
+import { utf8 as codec } from "../jvm/abi";
 import { format } from "./printf";
 
 const wput = (p: number, s: string): number => { let i = 0; for (const ch of s) mem.st32(p + 4 * i++, ch.codePointAt(0)!); mem.st32(p + 4 * i, 0); return i; };
 const cps = (s: string) => [...s].map((c) => c.codePointAt(0)!);
-const enc = new TextEncoder(), dec = new TextDecoder();
 
 /** parse an integer prefix of a wide string; returns [value, chars consumed] */
 function wparse(s: string, base: number): [bigint, number] {
@@ -74,7 +74,7 @@ export function localeInit(): void {
       const b0 = mem.u8[s];
       const len = mbLen(b0);
       if (n < len) return -1;
-      if (pwc) mem.st32(pwc, dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0);
+      if (pwc) mem.st32(pwc, codec.dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0);
       return b0 === 0 ? 0 : len;
     },
     mbrlen: (_c, a) => { const s = a.p(), n = a.u(); if (!s) return 0; const b0 = mem.u8[s]; if (b0 === 0) return 0; const len = mbLen(b0); return n < len ? -2 : len; },
@@ -91,13 +91,13 @@ function wtest(c: number, re: RegExp): number { return c >= 0 && c <= 0x10ffff &
 function mbsToWcs(dst: number, srcp: number, nms: number, len: number): number {
   let src = ldp(srcp);
   const end = Math.min(src + nms, src + mem.strlen(src));
-  const s = dec.decode(mem.u8.subarray(src, end));
+  const s = codec.dec.decode(mem.u8.subarray(src, end));
   const chars = cps(s);
   if (!dst) return chars.length;
   const k = Math.min(chars.length, len);
   for (let i = 0; i < k; i++) mem.st32(dst + 4 * i, chars[i]);
   if (k < len) { mem.st32(dst + 4 * k, 0); stp(srcp, 0); }
-  else stp(srcp, src + enc.encode(String.fromCodePoint(...chars.slice(0, k))).length);
+  else stp(srcp, src + codec.enc.encode(String.fromCodePoint(...chars.slice(0, k))).length);
   return k;
 }
 function wcsToMbs(dst: number, srcp: number, nwc: number, len: number): number {
@@ -106,7 +106,7 @@ function wcsToMbs(dst: number, srcp: number, nwc: number, len: number): number {
   const b = utf8(s);
   if (!dst) return b.length;
   let k = 0, i = 0;
-  for (const ch of s) { const e = enc.encode(ch); if (k + e.length > len) break; mem.u8.set(e, dst + k); k += e.length; i++; }
+  for (const ch of s) { const e = codec.enc.encode(ch); if (k + e.length > len) break; mem.u8.set(e, dst + k); k += e.length; i++; }
   wrote(dst, k);
   if (k < len && i === [...s].length) { mem.st8(dst + k, 0); stp(srcp, 0); } else stp(srcp, src + 4 * i);
   return k;

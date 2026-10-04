@@ -8,6 +8,7 @@
 
 import { mem } from "./mem";
 import { PAGE_SIZE } from "./abi";
+import { utf8 } from "../jvm/abi";
 
 export interface Module {
   name: string;
@@ -80,7 +81,6 @@ const ELF64: Fmt = {
   shOff: 40, shEntOff: 58, shType: 4, shOffset: 24, shSize: 32, shLink: 40,
 };
 const STT_GNU_IFUNC = 10;
-const utf8 = new TextDecoder();
 
 type PackedRelocation = { off: number; info: bigint; addend: number };
 
@@ -367,7 +367,7 @@ function readSymtab(bytes: Uint8Array, dv: DataView, f: Fmt, base: number, mod: 
     for (let s = off; s < off + size; s += f.symEnt) {
       const type = bytes[s + f.symInfo] & 15, value = dv.getUint32(s + f.symValue, true);
       if ((type !== 1 && type !== 2) || !dv.getUint16(s + f.symShndx, true)) continue;
-      const at = strOff + dv.getUint32(s, true), nm = utf8.decode(bytes.subarray(at, bytes.indexOf(0, at)));
+      const at = strOff + dv.getUint32(s, true), nm = utf8.dec.decode(bytes.subarray(at, bytes.indexOf(0, at)));
       if (!nm || mod.exports.has(nm)) continue;
       mod.locals.set(nm, base + value);
       if (type === 2) { addrs.push(base + value); names.push(nm); }

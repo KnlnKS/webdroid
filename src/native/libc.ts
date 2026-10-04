@@ -6,6 +6,7 @@
 import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, NORET, ARG0, SERVED, ptr, vaList, type HostFn, retF, retD, PTR, stp, ldp, ldLong, stLong } from "./host";
 import { E, strerror, PAGE_SIZE } from "./abi";
+import { utf8 as codec } from "../jvm/abi";
 import { invalidateRange, type Cpu } from "./cpu";
 import { exitGroup } from "./crash";
 import { abortThread, SIGNAL_SYSCALLS } from "./signals";
@@ -56,7 +57,6 @@ export function fail(cpu: Cpu | null, e: number): number {
 const pages = (n: number) => Math.ceil(n / PAGE_SIZE) * PAGE_SIZE;
 function mapFailed(cpu: Cpu, e: number): number | bigint { fail(cpu, e); return PTR === 8 ? -1n : -1; }
 
-const enc = new TextEncoder(), dec = new TextDecoder();
 const randomWord = new Uint32Array(1);
 /** getRandomValues fills at most 64 KiB a call, and no shared view (guest memory): such a
  *  target is filled through a copy */
@@ -67,7 +67,7 @@ export function randomBytes(target: Uint8Array): void {
 }
 export function fillRandom(p: number, n: number): void { randomBytes(mem.bytes(p, n)); wrote(p, n); }
 function random32(): number { crypto.getRandomValues(randomWord); return randomWord[0] >>> 0; }
-export const utf8 = (s: string) => enc.encode(s);
+export const utf8 = (s: string) => codec.enc.encode(s);
 export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
 
 // ── ctype: BSD _ctype_ table (index c+1), the bit values bionic's <ctype.h> macros test
@@ -510,7 +510,7 @@ export function libcInit(): void {
       const b0 = mem.u8[s];
       const len = mbLen(b0);
       if (n < len) return -2;
-      const cp = dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0;
+      const cp = codec.dec.decode(mem.u8.subarray(s, s + len)).codePointAt(0) ?? 0;
       if (pwc) mem.st32(pwc, cp);
       return b0 === 0 ? 0 : len;
     },

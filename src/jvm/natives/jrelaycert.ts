@@ -4,7 +4,7 @@
 // relay's CA (installed in the system store, /system/etc/security/cacerts) and a session presents a
 // leaf for the host that CA issued. Hostname verification and the platform trust manager accept it;
 // a pinned key does not match it.
-import { jarray } from "../abi";
+import { jarray, utf8 } from "../abi";
 import { driven, type Gen } from "../runtime";
 import { newObj, vcall, scall } from "./jentry";
 import { vfs } from "../../shell/vfs";
@@ -14,11 +14,10 @@ import { seq, oid, tlv, integer, bits, octets, bytesToBig } from "./der";
 import { CURVES, G, mul, randomScalar, ecdsaSign, marshalPublicKey, EVP_PKEY_EC, type EcKey } from "./pkey";
 
 const P256 = CURVES.find((c) => c.name === "prime256v1")!;
-const utf8 = (s: string) => new TextEncoder().encode(s);
-const name = (cn: string) => seq(tlv(0x31, seq(oid("2.5.4.10"), tlv(0x0c, utf8("webdroid")))), tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, utf8(cn)))));
+const name = (cn: string) => seq(tlv(0x31, seq(oid("2.5.4.10"), tlv(0x0c, utf8.enc.encode("webdroid")))), tlv(0x31, seq(oid("2.5.4.3"), tlv(0x0c, utf8.enc.encode(cn)))));
 const time = (ms: number) => {
   const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
-  return tlv(0x17, utf8(`${p(d.getUTCFullYear() % 100)}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`));
+  return tlv(0x17, utf8.enc.encode(`${p(d.getUTCFullYear() % 100)}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`));
 };
 const ext = (id: string, critical: boolean, value: Uint8Array) => seq(oid(id), ...(critical ? [tlv(1, [0xff])] : []), octets(value));
 const DAY = 86_400_000, ECDSA_SHA256 = seq(oid("1.2.840.10045.4.3.2"));
@@ -44,7 +43,7 @@ function ca() {
   // TrustedCertificateStore names a file by X509_NAME_hash_old: the subject's MD5, first four bytes little-endian
   const h = md5(subject), hash = ((h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24) >>> 0).toString(16).padStart(8, "0");
   const pem = `-----BEGIN CERTIFICATE-----\n${der.toBase64().replace(/(.{64})/g, "$1\n")}\n-----END CERTIFICATE-----\n`;
-  vfs.mount(`/system/etc/security/cacerts/${hash}.0`, new BytesFile(utf8(pem)));
+  vfs.mount(`/system/etc/security/cacerts/${hash}.0`, new BytesFile(utf8.enc.encode(pem)));
   return relayCa = { ...key, name: subject, der };
 }
 const leaves = new Map<string, Uint8Array>();
@@ -54,7 +53,7 @@ function leafFor(host: string): Uint8Array {
   const issuer = ca(), key = newKey(), now = Date.now();
   const ip = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? Uint8Array.from(host.split("."), Number) : null;
   der = signed(seq(tlv(0xa0, integer(2n)), serial(), ECDSA_SHA256, issuer.name, seq(time(now - DAY), time(now + 365 * DAY)), name(host), key.spki,
-    tlv(0xa3, seq(ext("2.5.29.17", false, seq(ip ? tlv(0x87, ip) : tlv(0x82, utf8(host)))), ext("2.5.29.15", true, tlv(3, [7, 0x80])),
+    tlv(0xa3, seq(ext("2.5.29.17", false, seq(ip ? tlv(0x87, ip) : tlv(0x82, utf8.enc.encode(host)))), ext("2.5.29.15", true, tlv(3, [7, 0x80])),
       ext("2.5.29.37", false, seq(oid("1.3.6.1.5.5.7.3.1"))), ext("2.5.29.35", false, seq(tlv(0x80, issuer.keyId)))))), issuer.ec);
   leaves.set(host, der);
   return der;

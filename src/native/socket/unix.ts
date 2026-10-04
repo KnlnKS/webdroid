@@ -6,6 +6,7 @@
 // SCM_CREDENTIALS carry; SCM_RIGHTS passes open files along with the bytes.
 
 import { E } from "../abi";
+import { utf8 } from "../../jvm/abi";
 import { logLine } from "../libc";
 import { openFd, holdFile, dropFile, installSocket, naming, POLLIN, POLLERR, POLLHUP, POLLOUT, type OpenFile } from "../fs";
 import { procIdentity } from "../../shell/procfs";
@@ -238,7 +239,6 @@ export const rightsMessage = (fds: number[]): Cmsg[] | null =>
 
 // ── the daemons
 type Daemon = (bytes: Uint8Array, reply: (bytes: Uint8Array) => void) => void;
-const dec = new TextDecoder(), enc = new TextEncoder();
 
 /** logd_writer.cpp's datagram: android_log_header_t {u8 id, u16 tid, u32 sec, u32 nsec}, then a
  *  text buffer's priority, tag and message. The binary buffers (events, stats, security) are not text. */
@@ -248,7 +248,7 @@ const logd: Daemon = (bytes) => {
   const body = bytes.subarray(LOG_HEADER + 1), tagEnd = body.indexOf(0);
   if (tagEnd < 0) return;
   const msg = body.subarray(tagEnd + 1);
-  logLine(bytes[LOG_HEADER], dec.decode(body.subarray(0, tagEnd)), dec.decode(msg.subarray(0, msg.indexOf(0) < 0 ? msg.length : msg.indexOf(0))));
+  logLine(bytes[LOG_HEADER], utf8.dec.decode(body.subarray(0, tagEnd)), utf8.dec.decode(msg.subarray(0, msg.indexOf(0) < 0 ? msg.length : msg.indexOf(0))));
 };
 
 // DnsProxyListener's replies: a NUL-terminated result code, then big-endian fields
@@ -256,11 +256,11 @@ const QUERY_RESULT = "222", OPERATION_FAILED = "401";
 const SOCK_RAW = 3, IPPROTO_TCP = 6, IPPROTO_UDP = 17, EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_FAMILY = 5;
 class Reply {
   private parts: number[] = [];
-  code(c: string): this { this.parts.push(...enc.encode(c), 0); return this; }
+  code(c: string): this { this.parts.push(...utf8.enc.encode(c), 0); return this; }
   be32(v: number): this { this.parts.push((v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255); return this; }
   bytes(b: ArrayLike<number>): this { for (let i = 0; i < b.length; i++) this.parts.push(b[i]); return this; }
   /** a length-prefixed NUL-terminated string */
-  str(s: string): this { const b = enc.encode(s); return this.be32(b.length + 1).bytes(b).bytes([0]); }
+  str(s: string): this { const b = utf8.enc.encode(s); return this.be32(b.length + 1).bytes(b).bytes([0]); }
   done(): Uint8Array { return Uint8Array.from(this.parts); }
 }
 const failed = (error: number) => new Reply().code(OPERATION_FAILED).be32(error).done();
@@ -316,7 +316,7 @@ function query(line: string): Uint8Array | Promise<Uint8Array> {
 const dnsproxyd = (): Daemon => {
   let pending = "";
   return (bytes, reply) => {
-    pending += dec.decode(bytes);
+    pending += utf8.dec.decode(bytes);
     const end = pending.indexOf("\0");
     if (end < 0) return;
     const r = query(pending.slice(0, end));

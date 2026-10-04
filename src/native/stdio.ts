@@ -5,6 +5,7 @@
 import { mem, wrote } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
+import { utf8 as codec } from "../jvm/abi";
 import type { Cpu } from "./cpu";
 import { fail, utf8, logLine, scanSink } from "./libc";
 import { format, scan } from "./printf";
@@ -13,7 +14,6 @@ import { vfs } from "../shell/vfs";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdReadFully, fdWrite, fdClose, fdSeek, fdDup2, fdFallocate,
   statPath, accessPath, faccessatPath, renamePath, mkdirPath, makeFifo, makePipe, truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
-const dec = new TextDecoder();
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
@@ -415,7 +415,7 @@ export function stdioInit(): void {
         combined.set(data, pending.length);
         data = combined;
       }
-      const text = dec.decode(data);
+      const text = codec.dec.decode(data);
       let consumed = 0;
       const sink = scanSink(a);
       const r = scan(text, f + "%n", (kind, v) => (kind === "n" ? ((consumed = v as number), 0) : sink(kind, v)));

@@ -1,12 +1,11 @@
 // HTTP as the device fetches it. Host code fetches http(s) through the dev server's proxy (proxy.ts),
 // which would reach the host's own loopback; Android's clients outside the app (the media server,
 // WebView's network service) reach the app's loopback listener instead.
-import { concat } from "../jvm/abi";
+import { concat, utf8 } from "../jvm/abi";
 import { guestEndpoint } from "../native/net-address";
 import type { Stream } from "../native/socket/core";
 import { loopbackConnection } from "../native/socket/inet";
 
-const enc = new TextEncoder(), dec = new TextDecoder();
 type Init = { method?: string; headers?: Headers; body?: ArrayBuffer | Uint8Array; signal?: AbortSignal };
 
 /** what the stream has, or null at its end */
@@ -33,7 +32,7 @@ class HttpReader {
     for (;;) {
       const at = this.buf.indexOf(10);
       if (at >= 0) {
-        const line = dec.decode(this.buf.subarray(0, at)).replace(/\r$/, "");
+        const line = utf8.dec.decode(this.buf.subarray(0, at)).replace(/\r$/, "");
         this.buf = this.buf.subarray(at + 1);
         return line;
       }
@@ -84,7 +83,7 @@ export async function loopbackFetch(url: string, init: Init = {}): Promise<Respo
   init.headers?.forEach((value, name) => { if (!/^(host|connection|keep-alive|content-length|transfer-encoding)$/i.test(name)) lines.push(`${name}: ${value}`); });
   if (body || !/^(GET|HEAD)$/.test(method)) lines.push(`Content-Length: ${body?.length ?? 0}`);
   const { stream } = connection;
-  stream.write(enc.encode([...lines, "Connection: close", "", ""].join("\r\n")));
+  stream.write(utf8.enc.encode([...lines, "Connection: close", "", ""].join("\r\n")));
   if (body?.length) stream.write(body);
   init.signal?.addEventListener("abort", connection.close, { once: true });
   const reader = new HttpReader(stream);
