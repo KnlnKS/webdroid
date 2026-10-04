@@ -9,6 +9,7 @@ import { Flow, Go, structureAny } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 import { constClass, emitStoreCheck } from "./classes";
 import { emitPolymorphic } from "./poly";
+import { emitCustom } from "./custom";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
@@ -538,7 +539,7 @@ export class MC {
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;
     const kind = ins.name.replace("/range", "");
-    if (kind === "invoke-custom") { this.invokeGap(ins, kind); return; }
+    if (kind === "invoke-custom") return emitCustom(this, ins);
     if (kind === "invoke-polymorphic") return emitPolymorphic(this, ins);
     const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = descToName(dex.type(mr.cls)), key = mr.name + desc;
     // an array's methods are Object's, except clone, which copies the array

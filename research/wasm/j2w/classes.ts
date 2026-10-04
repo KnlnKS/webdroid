@@ -32,7 +32,7 @@ const descOf = (name: string) => isPrim(name) ? name.slice(1) : name[0] === "[" 
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : n.replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
-  const a = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "Ldalvik/annotation/InnerClass;")?.elements.accessFlags;
+  const a = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/InnerClass")?.elements.accessFlags;
   return typeof a === "number" ? a : -1;
 };
 

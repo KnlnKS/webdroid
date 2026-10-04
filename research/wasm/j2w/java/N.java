@@ -51,6 +51,12 @@ public class N {
   public static int errNullBox(int n) throws Exception { try { field("f").set(new N(), null); } catch (IllegalArgumentException e) { return 1; } return 0; }
   public static int errNarrow(int n) throws Exception { try { field("f").set(new N(), Long.valueOf(1)); } catch (IllegalArgumentException e) { return 1; } return 0; }
   public static int errFinal(int n) throws Exception { N o = new N(); try { field("fin").setInt(o, 1); return 0; } catch (IllegalAccessException e) { return 9 + o.fin; } }
+  private static class PrivInner {} protected static class ProtInner {} static final class FinInner {} public interface PubIface {} abstract static class AbsInner {}
+  public static int inner(int n) {
+    int r = N.class.getDeclaredClasses().length * 100000;
+    for (Class<?> c : N.class.getDeclaredClasses()) r += c.getModifiers();
+    return r + PrivInner.class.getModifiers() + ProtInner.class.getModifiers() + n * 0;
+  }
   public static int forName(int n) throws Exception {
     int r = 0;
     r += Class.forName("java.util.ArrayList").getName().length() + Class.forName("[I").getName().length() + Class.forName("[Ljava.lang.String;").getName().length();

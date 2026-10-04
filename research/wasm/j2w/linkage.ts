@@ -16,7 +16,7 @@ export interface LinkFailure {
 const dotted = (n: string) => n.replace(/\//g, ".");
 const PRIMS: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double", V: "void" };
 /** a descriptor as ART's PrettyDescriptor prints it */
-const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]);
+export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]);
 const descriptor = (cls: string) => (cls[0] === "[" ? cls : `L${cls};`);
 /** ART appends where the referring class was declared */
 const declared = (prog: Program, cls: string, extra?: DexFile) => ` (declaration of '${dotted(cls)}' appears in ${prog.get(cls)?.dex?.name ?? extra?.name ?? "?"})`;

@@ -15,6 +15,7 @@ import { descToName, isWide, varHandleValues } from "../../../src/jvm/abi";
 import { emitStoreCheck } from "./classes";
 import type { PreparedInstruction as Ins } from "../../../src/jvm/prepared";
 import type { MC } from "./method";
+import { emitHandleCall } from "./handles";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;
 type Family = "I" | "F" | "J" | "D" | "L";
@@ -30,6 +31,7 @@ interface Place { load(): void; store(v: number): void }
 export function emitPolymorphic(mc: MC, ins: Ins): void {
   const { cx, code: c, dex } = mc;
   const mr = dex.method(ins.b), cls = descToName(dex.type(mr.cls)), mode = mr.name, proto = dex.proto(ins.c);
+  if (cls === "java/lang/invoke/MethodHandle" && (mode === "invoke" || mode === "invokeExact")) return emitHandleCall(mc, ins, mode === "invokeExact");
   const params = proto.params.map((t) => dex.type(t)), ret = dex.type(proto.ret), nv = cls === VH ? varHandleValues(mode) : undefined;
   if (nv === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
   const coords = params.slice(0, params.length - nv), valueTypes = params.slice(params.length - nv), op = opOf(mode);

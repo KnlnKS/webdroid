@@ -1,6 +1,6 @@
 // Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex), on the JDK and on the
 // production JS tier; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun diff.ts [method-name-filter]
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
@@ -9,6 +9,9 @@ import { jsTier, natives } from "./oracle";
 import { ACC } from "./program";
 import { namesWasmFrames } from "./exc";
 import { compare, genCases } from "./cases";
+import { underNode } from "./undernode";
+
+await underNode(import.meta.path);
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-"));
 const sh = (cmd: string[], input?: string) => {
@@ -17,7 +20,7 @@ const sh = (cmd: string[], input?: string) => {
   return r.stdout.toString();
 };
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(here, "java/W.java"), join(here, "java/S.java"), join(here, "java/N.java"), join(here, "java/Ref.java")]);
-sh(["d8", "--release", "--output", out, join(out, "W.class"), join(out, "S.class"), join(out, "N.class")]);
+sh(["d8", "--release", "--output", out, ...readdirSync(out).filter((f) => /^[WSN](\$\w+)?\.class$/.test(f)).map((f) => join(out, f))]);
 
 const dex = join(out, "classes.dex");
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(here, "../../../vendor/aosp", j))], { natives }), hit: string[] = [];
@@ -35,7 +38,7 @@ const small: Record<string, number[]> = {
 const cases = genCases(methods.filter((m) => !process.argv[2] || m.name.includes(process.argv[2])), small);
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
 // the production reflection skips Field's type and receiver checks (getBoolean of an int field answers a number): its results for these are not an oracle
-const UNCHECKED = new Set(["errType", "errReceiver", "errRefType", "errNullBox", "errNarrow"]), isUnchecked = (i: number) => UNCHECKED.has(cases[i].m.name);
+const UNCHECKED = new Set(["inner", "errType", "errReceiver", "errRefType", "errNullBox", "errNarrow"]), isUnchecked = (i: number) => UNCHECKED.has(cases[i].m.name);
 const pick = <T,>(l: T[], unchecked: boolean) => l.filter((_, i) => isUnchecked(i) === unchecked);
 const r1 = await compare(pick(cases, false), (m) => entries.get(m)!, js, pick(jdk, false), hit);
 let at = 0;
