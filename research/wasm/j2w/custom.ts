@@ -4,6 +4,8 @@
 import { OP } from "./code";
 import { T } from "./wasmbin";
 import { descToName } from "../../../src/jvm/abi";
+import { ACC } from "./program";
+import { RInfo, BOX } from "./reflect";
 import { failed, resolveFieldRef, resolveInvoke } from "./linkage";
 import type { EncVal } from "../../../src/jvm/dex";
 import type { PreparedInstruction as Ins } from "../../../src/jvm/prepared";
@@ -24,7 +26,7 @@ export function emitCustom(mc: MC, ins: Ins): void {
   // ART resolves the bootstrap method first: a class or method it lacks is the error at the site (StringConcatFactory, SwitchBootstraps are not in libcore)
   const target = resolveInvoke(mc.cx.prog, "invoke-static", descToName(dex.type(bm.cls)), bm.name, dex.methodDesc(boot.idx), mc.m.cls);
   if (failed(target)) { mc.consumeResult(ins); return mc.linkFail(target); }
-  mc.invokeGap(ins, `invoke-custom ${name}: only ObjectMethods.bootstrap is linked (libcore's LambdaMetafactory.metafactory returns null)`);
+  mc.invokeGap(ins, `invoke-custom ${name}: only ObjectMethods.bootstrap is linked`);
 }
 
 function objectMethods(mc: MC, ins: Ins, cs: EncVal[]): void {
@@ -45,8 +47,15 @@ function objectMethods(mc: MC, ins: Ins, cs: EncVal[]): void {
       const kind = ref.type === INVOKE_INTERFACE ? "invoke-interface" : ref.type === INVOKE_DIRECT ? "invoke-direct" : "invoke-virtual";
       const m = resolveInvoke(prog, kind, descToName(dex.type(mr.cls)), mr.name, desc, mc.m.cls);
       if (failed(m)) return gap(m.message);
-      if (!desc.startsWith("()") || !(m.flags & 0x12 || prog.get(m.cls)!.flags & 0x10)) return gap(`getter ${mr.name}${desc} is not a no-argument method that needs no virtual dispatch`);
-      comps.push({ desc: m.ret, load: (code, rec) => { code.lget(rec); cx.callMethod(code, m); } });
+      if (!desc.startsWith("()") || m.isStatic) return gap(`getter ${mr.name}${desc} is not an instance method without arguments`);
+      const owner = prog.get(m.cls)!, direct = ref.type === INVOKE_DIRECT || m.flags & (ACC.PRIVATE | ACC.FINAL) || owner.flags & ACC.FINAL;
+      comps.push({ desc: m.ret, load: (code, rec) => {
+        code.lget(rec);
+        if (direct) { cx.callMethod(code, m); return; }
+        // dispatched on the receiver's class by the reflection thunk (reflect.ts), which boxes the result
+        code.anyNull(); cx.info(code, RInfo.MethodCall, () => code.i32(cx.idOf(m.cls)), () => code.i32(owner.methods.indexOf(m))); code.callIndirect(cx.sig(["L", "L"], "L"));
+        if (BOX[m.ret]) { const [cls, name, d] = BOX[m.ret]; cx.callMethod(code, prog.resolve(cls, name, d)!); }
+      } });
     } else return gap(`getter handle of kind ${ref.type}`);
   }
   const rec = c.newLocal(T.anyref), other = c.newLocal(T.anyref);

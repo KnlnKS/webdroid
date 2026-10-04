@@ -1,6 +1,8 @@
 // Generator of methods whose control flow javac never produces: random graphs of basic blocks (so cycles with several entries), written as a class file
 // of version 50 (the type-inferring verifier takes any flow) that d8 converts like any other class. A fuel local ends every cycle. Handler blocks cover
 // random runs of the layout, so exception edges meet the same graph. The signature is the one of fuzz.ts' methods.
+import { Pool, u2, u4 } from "./classfile";
+
 type T = "I" | "J" | "F" | "D";
 type Rnd = (n: number) => number;
 
@@ -12,14 +14,6 @@ const ARITH: Record<T, number[]> = { I: [0x60, 0x64, 0x68, 0x7e, 0x80, 0x82], J:
 const DIV: Record<T, number[]> = { I: [0x6c, 0x70], J: [0x6d, 0x71], F: [0x6e, 0x72], D: [0x6f, 0x73] };
 const CONV: Record<string, number> = { IJ: 0x85, IF: 0x86, ID: 0x87, JI: 0x88, JF: 0x89, JD: 0x8a, FI: 0x8b, FJ: 0x8c, FD: 0x8d, DI: 0x8e, DJ: 0x8f, DF: 0x90 };
 const CONSTS = [0, 1, -1, 2, 7, 31, 100, 255, 32767, -32768, 0x7fffffff, -0x80000000, 0x5bd1e995];
-
-class Pool {
-  bytes: number[] = []; count = 1; private map = new Map<string, number>();
-  private add(key: string, ...b: number[]) { let i = this.map.get(key); if (i === undefined) { i = this.count++; this.map.set(key, i); this.bytes.push(...b); } return i; }
-  utf8(s: string) { const e = new TextEncoder().encode(s); return this.add("u" + s, 1, e.length >> 8, e.length & 255, ...e); }
-  cls(name: string) { const n = this.utf8(name); return this.add("c" + name, 7, n >> 8, n & 255); }
-  int(v: number) { return this.add("i" + v, 3, v >>> 24, (v >> 16) & 255, (v >> 8) & 255, v & 255); }
-}
 
 class Asm {
   b: number[] = []; fix: { at: number; from: number; label: number }[] = []; at: number[] = [];
@@ -124,5 +118,3 @@ export function irreducibleClass(name: string, count: number, rnd: Rnd): Uint8Ar
   const thisC = pool.cls(name), superC = pool.cls("java/lang/Object");
   return Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 50, ...u2(pool.count), ...pool.bytes, 0, 0x21, ...u2(thisC), ...u2(superC), 0, 0, 0, 0, ...u2(methods.length), ...methods.flat(), 0, 0]);
 }
-const u2 = (v: number) => [(v >> 8) & 255, v & 255];
-const u4 = (v: number) => [v >>> 24, (v >> 16) & 255, (v >> 8) & 255, v & 255];

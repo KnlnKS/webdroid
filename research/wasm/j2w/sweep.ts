@@ -11,9 +11,9 @@ import { Compiler } from "./j2w";
 import { natives } from "./oracle";
 import { mid } from "./reach";
 
-/** what is understood and not yet translated: natives with no host implementation, String constructors strings.ts lacks, MethodHandle call sites
- *  and invoke-custom (poly.ts handles VarHandle only) */
-const KNOWN = [/^native: /, /^String\.<init>\(/, /^invoke-custom$/, /^java\/lang\/invoke\/MethodHandle\.invoke/];
+/** what is understood and not yet translated: natives with no host implementation, String constructors strings.ts lacks, and an invoke-custom whose bootstrap is
+ *  libcore's LambdaMetafactory (a stub that returns null: ART cannot link a lambda, d8 desugars them) */
+const KNOWN = [/^native: /, /^String\.<init>\(/, /^invoke-custom .*LambdaMetafactory/];
 
 const root = join(import.meta.dir, "../../..");
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
