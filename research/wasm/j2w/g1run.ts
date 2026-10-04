@@ -22,8 +22,10 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   const out: G1Result = { workload: cfg.workload, mode: cfg.mode, result: "", times: [] };
   const js = await jsTier(loadDexes(cfg.dex));
   console.warn = () => {};
+  const prog = cfg.mode === "wasm" ? program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]) : null;
+  // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
   heapBase = heapUsed();
-  const w = cfg.mode === "wasm" ? world(program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]), { natives, heapUsed: collectedHeap }) : null;
+  const w = prog ? world(prog, { natives, heapUsed: collectedHeap }) : null;
   let hit = 0;
   if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { processState(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
   const name = `w_${cfg.workload}`;

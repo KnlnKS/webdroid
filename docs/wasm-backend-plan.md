@@ -737,6 +737,24 @@ Not built: a snapshot-and-compare copy-back to skip writing unchanged elements o
 
 **Left.** The first-call floor in Chrome (tier-up while the compiler is cold; a worker for second-tier compiles); a profile-driven boot group (all classes the start touches in one D and one C module) instead of the package grouping; the ARM-side check of Chrome's `compileStreaming` failure; framework.jar chunking under the 8 MB main-thread limit by size instead of package; production persistence of the index and modules per build hash; G3 as defined (launch to first draw) needs the app-level harness.
 
+**With the AOT platform code (4.9) merged** (`80b8f12f`..). H's modules import String constants as `externref` globals (`importedStringConstants`); with struct Strings a constant is
+made on first use: a module-local function `$lit` takes the imported JS string, makes the String (`fromJs`), interns it through the host table (`String.intern` and the constants share it,
+so interned-name identity holds across modules) and keeps it in a table of the module (a table, because an added global would shift the indices of the imports declared after it); the class
+modules call the runtime function `strLit` for the static String values. The hash is a field of the String, so it is cached in AOT code as well. The `js-string` builtins stay: `fromCharCodeArray` and
+`intoCharCodeArray` are the conversion to and from the JS string a native takes. `aot.ts` VERSION is 2. Build `aotbuild.ts` (4 jars, 218 + 218 modules, C 23.8 MB, D 4.6 MB) and the set (diff,
+libdiff, classdiff, customdiff, linkdiff, lazytest, fuzz seeds, jbench, `aottest`) pass plain and over the build. Combined G1 (AOT build and `G1_PREFETCH=1`, 3 runs, load 2 to 6): jbench steady
+node 1.25x -> 1.66x, Chrome 1.34x -> 1.90x; first call node 0.80x -> 0.95x, Chrome 0.33x -> 0.37x (all 69 workloads: first 0.92x -> 1.09x node, 0.34x -> 0.37x Chrome; steady 1.44x -> 1.90x, 1.51x -> 2.04x).
+Still under 0.9 with AOT, node: `sha256`, `fbBulk`, `bbInts`, `strConcat` 0.46, `switchSparse`, `strBuild` 0.86, `strSubstr`; Chrome: `sha256`, `fbBulk`, `fbLoop`, `strConcat` 0.64, `strBuild` 0.88, `strSubstr`,
+and `ecdsaVerify` 0.63 (0.28 ms JS tier, 0.46 ms Wasm; 1.00 in Chrome without the AOT build, in node with it, and with the AOT build before the struct String). Not the Cleaner, the ranges or the
+harness's gc (each switched off alone); the JS profile of the two modes is the same BigInt code, the Wasm run has 100 ms more garbage collection in 1,500 calls. Unresolved.
+
+**Two bugs found on the way.** `FinalizerReference.makeCircularListIfUnenqueued` (`refs.ts`) compiled to invalid Wasm because its `if` produced a value and was written without a block type; the Wasm validator rejects the
+module, and `aotbuild.ts` leaves a method it cannot compile to the on-demand compiler, which then fails the same way at run time. The sweep now covers the jars the build compiles (the first six boot jars, 281,000
+methods, no invalid module) with the options the engine uses (`COMPILE_OPTIONS`). `WebAssembly.compileStreaming` of the AOT modules made `Reflection.getCallerClass` answer the wrong class: a module compiled from a
+streamed response names its frames by the response's URL (`at f (http://host/m?p=...:wasm-function[3]:0x176)`), not `wasm://wasm/<hash>`, and `javaFrames` only read the second form, so every frame of a streamed
+module was skipped (node's `compileStreaming` and tiny modules in Chrome look identical, hence "works with fetch + compile"). Options and import object were identical (`micro/streaming.mjs`: the builtins and the imported
+constants work through `compileStreaming` in Chrome 153). `FRAME` now accepts both and `aotstore.ts` streams again.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
