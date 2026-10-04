@@ -1,0 +1,1 @@
+public class T { public static void main(String[] a) { System.out.println(W.fib(27)+" "+W.sieve(2000000)+" "+W.xorshift(1000000)+" "+W.mandel(300)+" "+W.swsum(100000)+" "+W.floats(100000)+" "+W.collatz(30000)); } }
