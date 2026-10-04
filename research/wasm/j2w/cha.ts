@@ -15,13 +15,6 @@ export class Cha {
     this.memo.clear();
   }
 
-  /** `n` and every class and interface below it */
-  subtypes(n: string): string[] {
-    const out = new Set<string>(), stack = [n];
-    while (stack.length) { const x = stack.pop()!; if (!out.has(x)) { out.add(x); stack.push(...(this.subs.get(x) ?? [])); } }
-    return [...out];
-  }
-
   /** The distinct implementations a call of decl.name+desc can reach among the concrete subtypes of decl (decl included),
    *  cut off at two: callers only distinguish none, one and many. */
   targets(decl: string, name: string, desc: string): MethodInfo[] {

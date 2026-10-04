@@ -3,10 +3,10 @@
 // The call site's proto fixes the coordinate and value types; the VarHandle object decides which field they reach. A field
 // handle carries its field id (class id << 12 | index among the class's declared fields) in FieldVarHandle.artField, so a
 // site is compiled to a test of that id against the fields it can reach (declared fields of classes that relate to the
-// receiver type and have the value type's family) and, per field, the access mode as plain struct operations. An array
+// receiver type, i.e. its class and superclasses, and have the value type's family) and, per field, the access mode as plain struct operations. An array
 // handle's coordinates are the array and the index, so it needs no dispatch. Java threads yield only at suspension points, so
 // read-modify-write modes need no atomics. A MethodHandle call site, a static-field handle and a value type that would need
-// boxing are recorded as gaps. The candidate fields are those of the classes loaded when the site is compiled.
+// boxing are recorded as gaps.
 import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind } from "./program";
@@ -80,7 +80,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
     if (!cx.prog.get(FVH)?.dex) return gap("FieldVarHandle is not in the program");
     const R = descToName(coords[0]), fvh = cx.structFor(FVH);
     const cands: { cn: string; fid: number; fi: number }[] = [];
-    for (const cn of new Set([...cx.prog.chain(R), ...cx.w.cha.subtypes(R)])) {
+    for (const cn of cx.prog.chain(R)) {
       const jc = cx.prog.get(cn);
       if (!jc?.def || jc.isInterface) continue;
       jc.fields.forEach((f, i) => { if (!f.isStatic && family(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, fi: cx.fieldIndex(cn, f) }); });
