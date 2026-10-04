@@ -37,7 +37,7 @@ export class World {
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { classes: 0, units: 0, bytes: 0, compileMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
+  stats = { classes: 0, units: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
   private slots: (Slot | undefined)[] = [];
   private classes = new Map<string, ClassRt>();
   private ids = new Map<string, number>();
@@ -165,9 +165,9 @@ export class World {
 
   // ---------- runtime and class modules
   private instantiate(bytes: Uint8Array, imports: WebAssembly.Imports): WebAssembly.Instance {
-    const t0 = performance.now();
-    const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes as BufferSource), imports);
-    this.stats.instantiateMs += performance.now() - t0;
+    const t0 = performance.now(), mod = new WebAssembly.Module(bytes as BufferSource), t1 = performance.now();
+    const inst = new WebAssembly.Instance(mod, imports);
+    this.stats.moduleMs += t1 - t0; this.stats.instantiateMs += performance.now() - t1;
     this.stats.bytes += bytes.length;
     return inst;
   }
@@ -325,8 +325,8 @@ export class World {
   }
   /** the Java throwable a call from JS threw, if `e` is one */
   throwable(e: unknown): object | undefined {
-    const X = (WebAssembly as any).Exception;
-    return e instanceof X && e.is(this.rt.tag) ? e.getArg(this.rt.tag, 0) : undefined;
+    const X = (WebAssembly as any).Exception, x = e as any;
+    return e instanceof X && x.is(this.rt.tag) ? x.getArg(this.rt.tag, 0) : undefined;
   }
   /** the class of a Java object that crossed to JS */
   classNameOf(obj: object): string { return this.names[this.rt.classId(obj)]; }
