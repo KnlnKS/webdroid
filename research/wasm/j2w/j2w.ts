@@ -148,9 +148,10 @@ export class Compiler implements Base {
     this.assumptions.push([decl, name, desc, t[0], this.owner]);
     return t[0] ?? "none";
   }
-  /** emit "ensure class initialized" at a use site */
+  /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
+   *  never goes back), or is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun) */
   emitEnsure(c: Code, cls: string): void {
-    if (!this.w.needsInit(cls)) return;
+    if (!this.w.needsInit(cls) || this.w.initialized(cls) || (this.owner && this.prog.chain(this.owner.cls).includes(cls))) return;
     c.gget(this.classGlobal(cls, "init", T.i32)).i32(INIT_DONE).raw(OP.i32_ne).if_().i32(this.w.ensureSlot(cls)).callIndirect(this.sig([], "V")).end();
   }
   idOf(name: string): number { return this.w.idOf(name); }

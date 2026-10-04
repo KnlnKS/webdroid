@@ -132,6 +132,8 @@ export class World {
     if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
+  /** whether class initialization has finished, for a class whose module is already built */
+  initialized(n: string): boolean { return (this.classes.get(n)?.exports.init as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
   vslots(n: string): string[] {
     let s = this.vslotCache.get(n); if (s) return s;
@@ -484,7 +486,10 @@ export class World {
     if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
     const slot = this.slotOf(m);
     return (...args) => {
-      try { return (this.table.get(slot) as Function)(...args); } catch (e) { throw this.boundary(e); }
+      try {
+        if (m.isStatic && this.needsInit(m.cls)) (this.table.get(this.ensureSlot(m.cls)) as Function)();
+        return (this.table.get(slot) as Function)(...args);
+      } catch (e) { throw this.boundary(e); }
     };
   }
   /** the Java throwable a call from JS threw, if `e` is one */
