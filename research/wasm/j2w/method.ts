@@ -1,5 +1,5 @@
 import { Code, OP } from "./code";
-import { T, refNull, type VT } from "./wasmbin";
+import { T, ref, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind, type MethodInfo } from "./program";
 import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
@@ -429,17 +429,17 @@ export class MC {
   }
   /** leaves the data array of array register `reg` in tmp local ... returns local holding (ref $Data) */
   dataLocal = new Map<ElemKind, number>();
-  dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(refNull(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
+  dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(ref(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
   idxCheck(k: ElemKind, idxReg: number) {
     const c = this.code, d = this.dloc(k);
-    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_();
-    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
+    this.get("I", idxReg); c.lget(d).arrayLen().raw(OP.i32_ge_u).if_();
+    this.get("I", idxReg); c.lget(d).arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
   }
   emitAget(ins: Ins) {
     const c = this.code, cx = this.cx, { k, sign } = this.elemOf(ins.name), d = this.dloc(k);
     this.nonNull(ins.b); c.refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);
-    c.lget(d).refAsNonNull(); this.get("I", ins.c);
+    c.lget(d); this.get("I", ins.c);
     sign === "s" ? c.arrayGetS(cx.tData[k]) : sign === "u" ? c.arrayGetU(cx.tData[k]) : c.arrayGet(cx.tData[k]);
     this.set(k === "ref" ? "L" : k === "i64" ? "J" : "I");
   }
@@ -449,7 +449,7 @@ export class MC {
     c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);
     if (k === "ref") emitStoreCheck(cx, c, this.tmpL, () => this.get("L", ins.a));
-    c.lget(d).refAsNonNull(); this.get("I", ins.c);
+    c.lget(d); this.get("I", ins.c);
     this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
     c.arraySet(cx.tData[k]);
   }
@@ -584,9 +584,9 @@ export class MC {
           // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
           const vtl = this.vtLocal();
           c.lset(vtl);
-          c.lget(vtl).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-            .lget(vtl).refAsNonNull().i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
-            .lget(vtl).refAsNonNull().i32(sel).call(cx.helper("imtslow")).end();
+          c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
+            .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
+            .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
         }
         // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
         if (guards.length) {
@@ -603,7 +603,7 @@ export class MC {
   slotl = -1;
   slotLocal() { if (this.slotl < 0) this.slotl = this.code.newLocal(T.i32); return this.slotl; }
   vtl = -1;
-  vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(refNull(this.cx.tVT)); return this.vtl; }
+  vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(ref(this.cx.tVT)); return this.vtl; }
 
   emitArith(ins: Ins) {
     const c = this.code, n = ins.name, a = ins.a, b = ins.b, cx = this.cx;
