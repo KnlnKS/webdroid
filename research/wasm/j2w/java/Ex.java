@@ -1,5 +1,20 @@
 /** Implicit exceptions, heap limits, stack overflow and a stack trace, as the Wasm tier raises them. */
 public class Ex {
+  static class D0 {}
+  static class D1 extends D0 {}
+  static class D2 extends D1 {}
+  static class D3 extends D2 {}
+  static class D4 extends D3 {}
+  static class D5 extends D4 {}
+  static class D6 extends D5 {}
+  static class D7 extends D6 {}
+  static class D8 extends D7 {}
+  static class D9 extends D8 {}
+  static class D10 extends D9 {}
+  static class D11 extends D10 {}
+  static class D12 extends D11 {}
+  static class D13 extends D12 {}
+  public static int deepTypes(int k) { Object o = k == 0 ? new D13() : new D5(); return (o instanceof D13 ? 1 : 0) + (o instanceof D12 ? 2 : 0) + (o instanceof D5 ? 4 : 0) + (o instanceof D0 ? 8 : 0); }
   static class P { int f() { return 1; } }
   static class Q extends P { }
   public static int div(int a, int b) { try { return a / b; } catch (ArithmeticException e) { return -1001; } }

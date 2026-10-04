@@ -6,8 +6,8 @@ import { ROOT, openDexes } from "./load";
 import type { DexFile } from "../../../src/jvm/dex";
 import { decodeInstructions, prepareMethod, switchCases } from "../../../src/jvm/prepared";
 import { Flow } from "../../../src/jvm/structure";
-import { FAMILY, isInvoke, isInstanceInvoke } from "./opinfo";
-import { buildCfg, isReducible } from "./cfg";
+import { FAMILY, isInvoke, isInstanceInvoke } from "../j2w/opinfo";
+import { buildCfg, isReducible } from "../j2w/cfg";
 import { inferMethod, parseDesc, retOf, KIND_NAMES } from "./infer";
 import { Universe, ACC_FINAL, ACC_INTERFACE } from "./cha";
 

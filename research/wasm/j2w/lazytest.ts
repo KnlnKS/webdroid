@@ -49,6 +49,7 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   check("message", w.lastMessage, `Failed to allocate a ${1 << 30} byte allocation with ${HEAP_LIMIT} free bytes`);
   check("array under it", call("oom", "(I)I", 1 << 20), 1 << 20);
   check("allocation-budget loop without a heap check failing", call("churn", "(I)I", 40), 40);
+  check("instance-of past the fixed display depth", [call("deepTypes", "(I)I", 0), call("deepTypes", "(I)I", 1)].join(), "15,12");
   check("no stray gaps", w.gapList.filter((g) => !g.endsWith("static string value")).join("; "), "");
 }
 // ---- the heap check at the end of each allocation window decides an OutOfMemoryError

@@ -114,11 +114,12 @@ export class World {
     const prog = this.prog, arr = name[0] === "[", c = prog.get(name);
     const chain = arr ? ["java/lang/Object", name] : prog.chain(name).reverse();   // Object first
     const depth = chain.length - 1;
-    if (depth > H.MAXD - 1) throw new Error("class hierarchy too deep for fixed display: " + name);
     const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => { const j = key.indexOf("("); return prog.implFor(arr ? "java/lang/Object" : name, key.slice(0, j), key.slice(j)); };
     const body: number[] = new Array(H.VTAB + keys.length).fill(0);
     body[H.ID] = id; body[H.DEPTH] = depth;
-    chain.forEach((cn, i) => { body[H.DISPLAY + i] = cn === name ? id : this.idOf(cn); });
+    // ancestors beyond the fixed display are tested like interfaces, from the id list at the end
+    const ifs = new Set<number>();
+    chain.forEach((cn, i) => { const cid = cn === name ? id : this.idOf(cn); if (i < H.MAXD) body[H.DISPLAY + i] = cid; else ifs.add(cid); });
     keys.forEach((key, i) => { const m = impl(key); body[H.VTAB + i] = m ? this.slotOf(m) : SLOT.ule; });
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];
@@ -128,7 +129,6 @@ export class World {
       const s = sel % H.IMT_N, f = this.slotOf(m);
       if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
     }
-    const ifs = new Set<number>();
     const addI = (i: string) => { const ic = prog.get(i); if (ic) { ifs.add(this.idOf(i)); ic.ifaces.forEach(addI); } };
     if (!arr) for (let k: JClass | undefined = c; k; k = k.sup ? prog.get(k.sup) : undefined) k.ifaces.forEach(addI);
     // extra region: [capacity, count, (selector, slot) x capacity, interface count, interface ids]
