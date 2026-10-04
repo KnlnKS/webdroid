@@ -10,7 +10,7 @@ import { NativeShader, NativeGradient, NativeBitmapShader, NativeComposeShader }
 async function probe() {
   await bootWithFonts();
   const S = "Ljava/lang/String;", R = "Landroid/graphics/Rect;", P = "Landroid/graphics/Paint;";
-  const argb = await vcall((await linkInit("android/graphics/Bitmap$Config")).ctor, "valueOf", `(${S})Landroid/graphics/Bitmap$Config;`, "ARGB_8888");
+  const argb = await scall("android/graphics/Bitmap$Config", "valueOf", `(${S})Landroid/graphics/Bitmap$Config;`, "ARGB_8888");
   const bitmap = (w: number, h: number) => scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", w, h, argb);
   const px = async (b: unknown, x: number, y: number) => ((await vcall(b, "getPixel", "(II)I", x, y)) >>> 0).toString(16);
   const bounds = async (c: unknown) => String(await vcall(await vcall(c, "getClipBounds", `()${R}`), "toShortString", `()${S}`));
@@ -40,7 +40,7 @@ async function probe() {
   await vcall(c, "restore", "()V");
   await vcall(c, "save", "()I");
   const path = await newObj("android/graphics/Path", "()V");
-  const cw = await vcall((await linkInit("android/graphics/Path$Direction")).ctor, "valueOf", `(${S})Landroid/graphics/Path$Direction;`, "CW");
+  const cw = await scall("android/graphics/Path$Direction", "valueOf", `(${S})Landroid/graphics/Path$Direction;`, "CW");
   await vcall(path, "addCircle", "(FFFLandroid/graphics/Path$Direction;)V", 50, 40, 20, cw);
   out.clipPath = [await vcall(c, "clipPath", "(Landroid/graphics/Path;)Z", path), await bounds(c), await qr(c, 0, 0, 29, 19), await qr(c, 0, 0, 31, 21)];
   await vcall(c, "restore", "()V");
@@ -82,7 +82,7 @@ async function probe() {
 
   // drawColor's modes, a save-behind layer and a punched hole
   const cb = await bitmap(4, 4), cc = await newObj("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", cb);
-  const mode = async (name: string) => vcall((await linkInit("android/graphics/PorterDuff$Mode")).ctor, "valueOf", `(${S})Landroid/graphics/PorterDuff$Mode;`, name);
+  const mode = async (name: string) => scall("android/graphics/PorterDuff$Mode", "valueOf", `(${S})Landroid/graphics/PorterDuff$Mode;`, name);
   await vcall(cc, "drawColor", "(I)V", 0x80ff0000 | 0);
   const colors = [await px(cb, 0, 0)];
   await vcall(cc, "drawColor", "(ILandroid/graphics/PorterDuff$Mode;)V", 0x8000ff00 | 0, await mode("SRC"));
@@ -98,7 +98,7 @@ async function probe() {
   await vcall(green, "setColor", "(I)V", 0xff00ff00 | 0);
   await vcall(uc, "drawRect", `(FFFF${P})V`, 0, 0, 20, 20, green);
   const dstOut = await newObj("android/graphics/Paint", "()V");
-  await vcall(dstOut, "setBlendMode", "(Landroid/graphics/BlendMode;)V", await vcall((await linkInit("android/graphics/BlendMode")).ctor, "valueOf", `(${S})Landroid/graphics/BlendMode;`, "DST_OUT"));
+  await vcall(dstOut, "setBlendMode", "(Landroid/graphics/BlendMode;)V", await scall("android/graphics/BlendMode", "valueOf", `(${S})Landroid/graphics/BlendMode;`, "DST_OUT"));
   await vcall(dstOut, "setAlpha", "(I)V", 128);
   await vcall(uc, "restoreUnclippedLayer", `(I${P})V`, us, dstOut);
   out.unclipped = [...during, await vcall(uc, "getSaveCount", "()I"), await px(ub, 5, 5), await px(ub, 15, 5)];
@@ -153,8 +153,7 @@ async function probe() {
     await thrown(() => vcall(c, "drawRenderNode", "(Landroid/graphics/RenderNode;)V", node))];
 
   // a shader's native instance: setLocalMatrix replaces it, and a ComposeShader composes the current one
-  const statics = async (cls: string) => (await linkInit(cls)).ctor as Record<string, unknown>;
-  const clamp = (await statics("android/graphics/Shader$TileMode")).s$CLAMP, srcOver = (await statics("android/graphics/PorterDuff$Mode")).s$SRC_OVER;
+  const clamp = (await linkInit("android/graphics/Shader$TileMode")).static("CLAMP"), srcOver = (await linkInit("android/graphics/PorterDuff$Mode")).static("SRC_OVER");
   const native = async (shader: unknown) => deref<NativeShader>(await vcall(shader, "getNativeInstance", "()J"));
   const linear = await newObj("android/graphics/LinearGradient", "(FFFFIILandroid/graphics/Shader$TileMode;)V", 0, 0, 10, 0, -65536, -16776961, clamp);
   const first = await native(linear), local = await newObj("android/graphics/Matrix", "()V");

@@ -38,7 +38,7 @@ class JWebHistoryItem extends JObj {
 class JWebBackForwardList extends JObj {
   constructor(public entries: Entry[], public index: number) { super(); }
 }
-const item = (e: Entry | undefined) => e ? Object.setPrototypeOf(new JWebHistoryItem(e), rt.link("webdroid/WebHistoryItem").ctor.prototype) : null;
+const item = (e: Entry | undefined) => e ? Object.setPrototypeOf(new JWebHistoryItem(e), rt.link("webdroid/WebHistoryItem").ctor.prototype) : null; // js-tier
 rt.register({
   name: "webdroid/WebHistoryItem", ctor: JWebHistoryItem, sup: "android/webkit/WebHistoryItem",
   methods: {
@@ -61,7 +61,7 @@ rt.register({
   },
 });
 const backForward = (entries: Entry[], index: number) =>
-  Object.setPrototypeOf(new JWebBackForwardList(entries.map((e) => ({ ...e })), index), rt.link("webdroid/WebBackForwardList").ctor.prototype);
+  Object.setPrototypeOf(new JWebBackForwardList(entries.map((e) => ({ ...e })), index), rt.link("webdroid/WebBackForwardList").ctor.prototype); // js-tier
 
 /** a WebView's back/forward list: its entries and the current one */
 export class WebHistory {

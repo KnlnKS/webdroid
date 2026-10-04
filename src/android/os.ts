@@ -11,7 +11,7 @@ import { exitProcess, never } from "../process-exit";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, newObj, after } from "../jvm/natives/jentry";
+import { vcall, curThread, mainThread, JThread, newObj, after, initClass, linkClass } from "../jvm/natives/jentry";
 import { JThrowable, logUncaught } from "../jvm/natives/jthrowable";
 import { checkFromIndexSize } from "../jvm/natives/jlang";
 import { E, ERRSTR, strerror } from "../native/abi";
@@ -573,7 +573,7 @@ const passwdName = (id: number) => bytesOf(appUserName(id));
 const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   // SUPPORTS_OPENAT | SUPPORTS_FUTIMES: bionic has openat64, fstatat64, unlinkat, renameat, futimesat
   // and fdopendir. UnixException is initialized first, since the natives throw it synchronously.
-  "init()I": () => after(rt.initClass(rt.link("sun/nio/fs/UnixException")), () => 6),
+  "init()I": () => after(initClass("sun/nio/fs/UnixException"), () => 6),
   "getcwd()[B": () => bytesOf("/"),
   "strerror(I)[B": (e: number) => bytesOf(strerror(e)),
   "dup(I)I": (fd: number) => unixSys(javaDupFd(fd)),
@@ -671,9 +671,6 @@ rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (ds
 // libcore's OsConstants fills its fields from native initConstants(); these are the reference
 // device's values (bun run gen-framework)
 rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
-  const info = rt.link("android/system/OsConstants");
-  for (const [name, value] of Object.entries(OS_CONSTANTS)) {
-    const prop = info.staticFieldTable.get(name + ":I");
-    if (prop) info.ctor[prop] = value;
-  }
+  const constants = linkClass("android/system/OsConstants");
+  for (const [name, value] of Object.entries(OS_CONSTANTS)) constants.setStatic(name, value, "I");
 });

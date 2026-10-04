@@ -67,7 +67,7 @@ await exercise("Typeface (system font map, styles, weights, builders; device val
   await loadSystemFonts();
   const T = "Landroid/graphics/Typeface;", info = await linkInit("android/graphics/Typeface");
   const d = async (t: unknown) => `${await vcall(t, "getStyle", "()I")}/${await vcall(t, "getWeight", "()I")}`;
-  const statics = (name: string) => (info.ctor as Record<string, object>)[info.staticFieldTable.get(`${name}:${T}`)!];
+  const statics = (name: string) => info.static(name, T) as object;
   const named = (name: string, style: number) => scall("android/graphics/Typeface", "create", `(Ljava/lang/String;I)${T}`, name, style);
   const weighted = (base: unknown, weight: number, italic: boolean) => scall("android/graphics/Typeface", "create", `(${T}IZ)${T}`, base, weight, +italic);
   const DEFAULT = statics("DEFAULT"), BOLD = statics("DEFAULT_BOLD");

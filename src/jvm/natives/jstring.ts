@@ -144,9 +144,9 @@ function caseIn(s: string, locale: object | null, upper: boolean): unknown {
   if (locale === null) return rt.npe();
   return LOCALE_CASED.test(s) ? after(language(locale), (lang) => caseAs(s, upper, lang)) : caseAs(s, upper, "");
 }
-const GET_DEFAULT = mangleMethod("getDefault", "()Ljava/util/Locale;"), localeClass = once(() => linkInit("java/util/Locale"));
+const localeClass = once(() => linkInit("java/util/Locale"));
 const caseInDefault = (s: string, upper: boolean): unknown => !LOCALE_CASED.test(s) ? caseAs(s, upper, "")
-  : after(localeClass(), (info) => after((info.ctor as Record<string, () => object>)[GET_DEFAULT](), (locale) => caseIn(s, locale, upper)));
+  : after(localeClass(), (locales) => after(locales.call("getDefault", "()Ljava/util/Locale;")() as object, (locale) => caseIn(s, locale, upper)));
 sm("toLowerCase()Ljava/lang/String;", function () { return caseInDefault(this, false); });
 sm("toUpperCase()Ljava/lang/String;", function () { return caseInDefault(this, true); });
 sm("toLowerCase(Ljava/util/Locale;)Ljava/lang/String;", function (locale: object | null) { return caseIn(this, locale, false); });

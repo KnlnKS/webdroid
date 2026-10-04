@@ -7,7 +7,7 @@
 // posts, and a sync barrier (an app may post one) holds it no more than it holds the input and
 // vsync a device delivers as native callbacks.
 import { rt, JObj, declaredField, type Gen } from "../jvm/runtime";
-import { curThread, mainThread, scall, newObj, vcall, callOn, type JThread } from "../jvm/natives/jentry";
+import { curThread, mainThread, scall, newObj, vcall, callOn, classNameOf, initClass, linkClass, type JThread } from "../jvm/natives/jentry";
 import { dispatchUncaught, detached, toThread, type Escape } from "../jvm/natives/jthrowable";
 import { processExited } from "../process-exit";
 import { handle, deref, release } from "./handles";
@@ -86,7 +86,7 @@ export function startMainLooper(): Promise<void> {
   return starting ??= (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
     // as after the zygote: System is initialized before the loop's first SystemClock read
     // initializes it, which would otherwise suspend inside the loop sharing this thread
-    yield rt.initClass(rt.link("java/lang/System"));
+    yield initClass("java/lang/System");
     yield scall("android/os/Looper", "prepareMainLooper", "()V");
     mainLooper = mainThread.looper as NativeLooper;
     const looper = yield scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");
@@ -116,7 +116,7 @@ function mainHandler(): JObj {
 class JFnRunnable extends JObj { fn: () => unknown = () => {}; }
 rt.register({ name: "webdroid/FnRunnable", ctor: JFnRunnable, ifaces: ["java/lang/Runnable"], methods: { "run()V": function (this: JFnRunnable) { return this.fn(); } } });
 export function fnRunnable(fn: () => unknown): JFnRunnable {
-  rt.link("webdroid/FnRunnable");
+  linkClass("webdroid/FnRunnable");
   const r = new JFnRunnable(); r.fn = fn; return r;
 }
 
@@ -159,7 +159,7 @@ export const looperDump = (): unknown => callOn(mainThread, () => rt.drive(funct
   const M = "android/os/Message", messages: string[] = [];
   for (let m = f("android/os/MessageQueue", queue, "mMessages"); m && messages.length < 50; m = f(M, m, "next")) {
     const target = f(M, m, "target") as JObj | null, callback = f(M, m, "callback") as JObj | null;
-    const cls = (o: JObj | null) => o ? (o.constructor as { $i?: { name: string } }).$i?.name ?? "?" : "null";
+    const cls = (o: JObj | null) => o ? classNameOf(o) ?? "?" : "null";
     messages.push(`when=${f(M, m, "when")} what=${f(M, m, "what")} flags=${f(M, m, "flags")} target=${cls(target)} callback=${cls(callback)}`);
   }
   const native = mainLooper as unknown as Record<string, unknown>;

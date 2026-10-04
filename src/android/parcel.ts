@@ -4,7 +4,7 @@
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
 import { JObj, rt, declaredField } from "../jvm/runtime";
 import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi";
-import { scall } from "../jvm/natives/jentry";
+import { scall, iof } from "../jvm/natives/jentry";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { javaCloseFd, javaDupFd } from "../native/fs";
 import { ownedHandle, deref, release } from "./handles";
@@ -157,7 +157,7 @@ function readObject(p: NativeParcel): unknown {
  *  reference rides in the side table, so it reads back only in this process */
 export const writeLocalObject = (p: NativeParcel, o: object): void => writeObject(p, o);
 export const readLocalObject = <T>(p: NativeParcel): T | null => readObject(p) as T | null;
-const isBinder = (o: unknown) => o instanceof JObj && !!(rt.iof(o, "android/os/Binder") || rt.iof(o, "android/os/BinderProxy"));
+const isBinder = (o: unknown) => o instanceof JObj && !!(iof(o, "android/os/Binder") || iof(o, "android/os/BinderProxy"));
 const isFd = (o: unknown) => o instanceof OwnedFd;
 /** a side-table entry's removal, closing the descriptor it owned */
 function dropObject(p: NativeParcel, at: number) {

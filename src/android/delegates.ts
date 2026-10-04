@@ -23,7 +23,7 @@ import { initDeviceLocales } from "./resnative";
 import { NativeCanvas, drawingCanvas } from "./canvas";
 import { glyphBounds } from "./shaping";
 import { NativeBitmap, colorLongAt } from "./bitmap";
-import { vcall, scall, after, callOn, mainThread } from "../jvm/natives/jentry";
+import { vcall, scall, after, callOn, mainThread, initClass, linkClass } from "../jvm/natives/jentry";
 import { asZygote } from "./os";
 import { hasProperty, propertyValue as propValue } from "../shell/properties";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path";
@@ -189,8 +189,7 @@ delegate("android/graphics/Typeface", {
   "nativeSetDefault(J)V": (h: bigint) => { setDefaultTypeface(deref<NativeTypeface>(h)); },
   // DEFAULT and the other constants are static finals setSystemFontMap assigns
   "nativeForceSetStaticFinalField(Ljava/lang/String;Landroid/graphics/Typeface;)V": (name: string, t: object) => {
-    const info = rt.link("android/graphics/Typeface");
-    info.ctor[info.staticFieldTable.get(name + ":Landroid/graphics/Typeface;")!] = t;
+    linkClass("android/graphics/Typeface").setStatic(name, t, "Landroid/graphics/Typeface;");
   },
   // the system collections make up the available font set; minikin's registry of locale lists
   // serves its own lookups, which paint.ts keeps
@@ -673,7 +672,7 @@ delegate("android/os/SystemProperties", {
   },
   "native_add_change_callback()V": () => {},
   // reached only from SystemProperties itself, which is therefore initialized
-  "native_report_sysprop_change()V": () => vcall(rt.link("android/os/SystemProperties").ctor, "callChangeCallbacks", "()V"),
+  "native_report_sysprop_change()V": () => scall("android/os/SystemProperties", "callChangeCallbacks", "()V"),
 });
 
 /** What the zygote sets up in a forked process before app code runs: libcore's MIME table is
@@ -684,7 +683,7 @@ delegate("android/os/SystemProperties", {
  *  classes, whose constructors read them, initialized. The font map is bindApplication's. */
 export const zygoteInit = (): Promise<void> => (async () => callOn(mainThread, () => rt.drive(function* (): Gen<void> {
   // System.<clinit> reads user.name from the passwd entry of the zygote, which runs as root
-  yield asZygote(() => rt.initClass(rt.link("java/lang/System")));
+  yield asZygote(() => initClass("java/lang/System"));
   // ZygoteInit.main: DDMS handlers and libcore's MimeMap over framework.jar's mime.types
   yield scall("com/android/internal/os/RuntimeInit", "preForkInit", "()V");
   yield scall("com/android/internal/os/RuntimeInit", "redirectLogStreams", "()V");

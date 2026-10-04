@@ -8,7 +8,7 @@
 
 import { awaited, rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, ownedHandle, deref, release } from "./handles";
-import { vcall, scall, newObj, after } from "../jvm/natives/jentry";
+import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry";
 import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat, unshared } from "../jvm/abi";
@@ -434,7 +434,7 @@ const createDecoder = driven(function* createDecoder(read: () => Uint8Array | Pr
   let bytes: Uint8Array;
   try { bytes = yield* awaited(read()); }
   catch (e) {
-    if (!rt.iof(e, "java/lang/Throwable")) throw e;
+    if (!iof(e, "java/lang/Throwable")) throw e;
     throw yield decodeException(SOURCE_EXCEPTION, "", e, source);
   }
   const h = readHeader(bytes);

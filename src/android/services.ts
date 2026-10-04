@@ -5,7 +5,7 @@
 // missing by its AIDL name.
 import { once } from "../jvm/suspend";
 import { awaited, JObj, rt, noops, stubs, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { jarray, mangleMethod } from "../jvm/abi";
+import { jarray } from "../jvm/abi";
 import { newObj, vcall, scall, linkInit, staticField, after } from "../jvm/natives/jentry";
 import { postMain } from "./mainloop";
 import { uptimeMillis, wallMillis } from "../guest-clock";
@@ -247,7 +247,7 @@ function* sendCallback(r: Registration, name: string): Gen<void> {
 }
 /** a request's NetworkRequest, registered for callbacks; one the network satisfies hears of it */
 const register = driven(function* (caps: unknown, legacyType: number, messenger: JObj, type: number): Gen<JObj> {
-  const types = (yield* awaited(linkInit("android/net/NetworkRequest$Type"))).ctor[mangleMethod("values", "()[Landroid/net/NetworkRequest$Type;")]() as JObj[];
+  const types = (yield* awaited(linkInit("android/net/NetworkRequest$Type"))).call("values", "()[Landroid/net/NetworkRequest$Type;")() as JObj[];
   const request: JObj = yield newObj("android/net/NetworkRequest", "(Landroid/net/NetworkCapabilities;IILandroid/net/NetworkRequest$Type;)V",
     caps ?? (yield newObj(NC)), legacyType, nextRequestId++, types[type]);
   const r = { request, messenger };

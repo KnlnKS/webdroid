@@ -188,7 +188,7 @@ function invokeBody(m: MethodRec, self: unknown, args: unknown[], nonvirtual: bo
     fn = m.info.ctor[m.mangled];
   } else {
     if (self === null || self === undefined) throw throwable("java/lang/NullPointerException", "JNI call on null " + m.name);
-    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as Record<string, unknown>)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc);
+    fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as Record<string, unknown>)[m.mangled] ?? lateMethod.find?.(self, m.name, m.desc); // js-tier
   }
   if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
   return fn.apply(self, args);
@@ -331,7 +331,7 @@ export function jniInit(): void {
       const c = classCtors(m.info).find((ctor) => ctor.desc === m.desc);
       return c ? toRef(c) : 0;
     }
-    return toRef(mkMethod(m.info, m.name, m.desc, m.isStatic, m.isStatic ? m.info.ctor[m.mangled] : m.info.ctor.prototype[m.mangled]));
+    return toRef(mkMethod(m.info, m.name, m.desc, m.isStatic, m.isStatic ? m.info.ctor[m.mangled] : m.info.ctor.prototype[m.mangled])); // js-tier
   });
   def(6, "FindClass", (cpu, a) => {
     a.p(); const name = a.str();
@@ -391,7 +391,7 @@ export function jniInit(): void {
     // an interface the framework only marks (its methods live on the implementations) answers for
     // what the app's own bytecode calls on it; the receiver dispatches at call time as always
     // an array class has no ctor: its instances carry Object's methods on the JS array prototypes
-    const proto = i.ctor ? i.ctor.prototype : Array.prototype;
+    const proto = i.ctor ? i.ctor.prototype : Array.prototype; // js-tier
     const have = isStatic ? typeof i.ctor?.[mangled] === "function" : typeof proto?.[mangled] === "function" || (i.name === "java/lang/String" && typeof (String.prototype as any)[mangled] === "function")
       || hasAbstractMethod(i, name, sig)
       || (!i.dex && !isStatic && (rt.methodRefs(i.name).has(name + sig) || !Object.keys(rt.natives.get(i.name)?.methods ?? {}).length));
@@ -582,7 +582,7 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
   (info.owner ?? rt).registerJni(info.name, name + sig, entry as (...a: never[]) => unknown);
   // the compiled stub memoised a miss before JNI_OnLoad ran: re-point it (see compiler emitNativeStub)
   const mangled = mangleMethod(name, sig);
-  const target = isStatic ? info.ctor : info.ctor.prototype;
+  const target = isStatic ? info.ctor : info.ctor.prototype; // js-tier
   if (target && Object.prototype.hasOwnProperty.call(target, mangled)) setPublic(target, mangled, entry, params.length);
 }
 

@@ -3,22 +3,15 @@
 // same data. Each follows what AOSP's C++ computes; the charset and regex natives are separate.
 
 import { rt, driven, type Gen } from "../runtime";
-import { vcall, newObj, after, scall } from "./jentry";
+import { vcall, newObj, after, scall, staticField, linkInit } from "./jentry";
+import type { JavaClass } from "../tier";
 import { once } from "../suspend";
-import { jarray, mangleField, mangleMethod, mangleStaticField } from "../abi";
+import { jarray, mangleField } from "../abi";
 import { BytesTrie, ResBundle, cString, icuItem, icuRead } from "./icudata";
 import { pageShared } from "../../shell/pageshared";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
 
-/** an initialized ICU4J class's constructor */
-function icuClass(cls: string): unknown {
-  const info = rt.link(cls), pending = rt.initClass(info);
-  return pending ? pending.then(() => info.ctor) : info.ctor;
-}
-const icuStatic = (cls: string, name: string, desc: string, ...args: unknown[]) =>
-  after(icuClass(cls), (ctor) => vcall(ctor, name, desc, ...args));
-const icuStaticField = (cls: string, field: string) => after(icuClass(cls), (ctor) => (ctor as Record<string, unknown>)[mangleStaticField(field)]);
 /** ScopedIcuLocale: an ICU locale ID or language tag, as ICU canonicalizes either */
 const ulocale = (name: string) => newObj("android/icu/util/ULocale", `(${STRING})V`, name ?? rt.npe());
 
@@ -27,7 +20,7 @@ function versionString(parts: number[]): string {
   while (parts.length > 2 && parts[parts.length - 1] === 0) parts.pop();
   return parts.join(".");
 }
-const icuVersion = () => after(icuStaticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
+const icuVersion = () => after(staticField("android/icu/util/VersionInfo", "ICU_VERSION"), driven(function* (version: unknown): Gen<string> {
   const parts: number[] = [];
   for (const part of ["getMajor", "getMinor", "getMilli", "getMicro"]) parts.push(yield vcall(version, part, "()I"));
   return versionString(parts);
@@ -105,14 +98,14 @@ function* decodeLsr(d: Likely, encoded: number): Gen<[string, string, string]> {
   if (encoded === 1) return ["skip", "script", ""];
   const letter = (i: number, base: number) => String.fromCharCode(i - 1 + base), lsr = encoded & 0xffffff, l = lsr % 19683, r = (lsr / 19683 | 0) % 729, code = encoded >>> 24;
   let script = d.scripts.get(code);
-  if (script === undefined) d.scripts.set(code, script = yield icuStatic("android/icu/lang/UScript", "getShortName", `(I)${STRING}`, code));
+  if (script === undefined) d.scripts.set(code, script = yield scall("android/icu/lang/UScript", "getShortName", `(I)${STRING}`, code));
   return [letter(l % 27, 97) + letter((l / 27 | 0) % 27, 97) + (l / 729 | 0 ? letter(l / 729 | 0, 97) : ""), script!,
     r < 27 ? d.m49[r] : letter(r % 27, 65) + letter((r / 27 | 0) % 27, 65)];
 }
 /** LikelySubtags.isMacroregion */
 function* isMacroregion(region: string): Gen<boolean> {
-  const type = yield vcall(yield icuStatic("android/icu/util/Region", "getInstance", `(${STRING})Landroid/icu/util/Region;`, region), "getType", "()Landroid/icu/util/Region$RegionType;");
-  for (const macro of ["WORLD", "CONTINENT", "SUBCONTINENT"]) if (type === (yield icuStaticField("android/icu/util/Region$RegionType", macro))) return true;
+  const type = yield vcall(yield scall("android/icu/util/Region", "getInstance", `(${STRING})Landroid/icu/util/Region;`, region), "getType", "()Landroid/icu/util/Region$RegionType;");
+  for (const macro of ["WORLD", "CONTINENT", "SUBCONTINENT"]) if (type === (yield staticField("android/icu/util/Region$RegionType", macro))) return true;
   return false;
 }
 /** LikelySubtags.makeMaximizedLsr(language, script, region, "", true) as subtags, "" for each when
@@ -174,7 +167,7 @@ rt.intrinsic(U, {
     }));
   },
 });
-const names = (cls: string, name: string) => after(icuStatic(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING));
+const names = (cls: string, name: string) => after(scall(cls, name, `()[${STRING}`), (a: string[]) => jarray([...a], STRING));
 const ofLocale = (method: string) => (name: string) => after(ulocale(name), (l) => vcall(l, method, `()${STRING}`));
 const displayOf = (method: string) => driven(function* (target: string, display: string): Gen {
   return vcall(yield ulocale(target), method, `(${ULOCALE})${STRING}`, yield ulocale(display));
@@ -184,8 +177,8 @@ const displayOf = (method: string) => driven(function* (target: string, display:
  *  its class is initialized */
 export function uchar(name: string, desc: string): (...args: unknown[]) => unknown {
   let fn: ((...a: unknown[]) => unknown) | null = null;
-  return (...args: unknown[]) => fn ? fn(...args) : after(icuClass("android/icu/lang/UCharacter"),
-    (ctor) => (fn = (...a: unknown[]) => (ctor as Record<string, (...a: unknown[]) => unknown>)[mangleMethod(name, desc)](...a))(...args));
+  return (...args: unknown[]) => fn ? fn(...args) : after(linkInit("android/icu/lang/UCharacter"),
+    (ucharacter) => (fn = ucharacter.call(name, desc))(...args));
 }
 /** java_lang_Character.cpp: each native is one ICU4C property call, answered by UCharacter. ASCII,
  *  whose properties are fixed, is answered without it for the predicates text loops call. */
@@ -229,13 +222,13 @@ function characterNatives(): Record<string, (...args: never[]) => unknown> {
 const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "libcore/icu/ICU": {
     [`getAvailableLocalesNative()[${STRING}`]: driven(function* (): Gen {
-      const locales: unknown[] = yield icuStatic("android/icu/util/ULocale", "getAvailableLocales", `()[${ULOCALE}`);
+      const locales: unknown[] = yield scall("android/icu/util/ULocale", "getAvailableLocales", `()[${ULOCALE}`);
       const out: string[] = [];
       for (const l of locales) out.push(yield vcall(l, "getName", `()${STRING}`));
       return jarray(out, STRING);
     }),
     [`getCldrVersion()${STRING}`]: cldrVersion,
-    [`getDefaultLocale()${STRING}`]: () => after(icuStatic("android/icu/util/ULocale", "getDefault", `()${ULOCALE}`), (l) => vcall(l, "getName", `()${STRING}`)),
+    [`getDefaultLocale()${STRING}`]: () => after(scall("android/icu/util/ULocale", "getDefault", `()${ULOCALE}`), (l) => vcall(l, "getName", `()${STRING}`)),
     [`getISO3Country(${STRING})${STRING}`]: ofLocale("getISO3Country"),
     [`getISO3Language(${STRING})${STRING}`]: ofLocale("getISO3Language"),
     [`getISOCountriesNative()[${STRING}`]: () => names("android/icu/util/ULocale", "getISOCountries"),
@@ -247,7 +240,7 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   "com/android/icu/util/Icu4cMetadata": {
     [`getCldrVersion()${STRING}`]: cldrVersion,
     [`getIcuVersion()${STRING}`]: icuVersion,
-    [`getTzdbVersion()${STRING}`]: () => icuStatic("android/icu/util/TimeZone", "getTZDataVersion", `()${STRING}`),
+    [`getTzdbVersion()${STRING}`]: () => scall("android/icu/util/TimeZone", "getTZDataVersion", `()${STRING}`),
     [`getUnicodeVersion()${STRING}`]: unicodeVersion,
   },
   "com/android/icu/util/LocaleNative": {
@@ -260,16 +253,16 @@ const natives: Record<string, Record<string, (...args: never[]) => unknown>> = {
   },
   "com/android/icu/util/CaseMapperNative": {
     [`toLowerCase(${STRING}${STRING})${STRING}`]: (s: string, tag: string) =>
-      after(ulocale(tag), (l) => icuStatic("android/icu/lang/UCharacter", "toLowerCase", `(${ULOCALE}${STRING})${STRING}`, l, s)),
+      after(ulocale(tag), (l) => scall("android/icu/lang/UCharacter", "toLowerCase", `(${ULOCALE}${STRING})${STRING}`, l, s)),
     [`toUpperCase(${STRING}${STRING})${STRING}`]: (s: string, tag: string) =>
-      after(ulocale(tag), (l) => icuStatic("android/icu/lang/UCharacter", "toUpperCase", `(${ULOCALE}${STRING})${STRING}`, l, s)),
+      after(ulocale(tag), (l) => scall("android/icu/lang/UCharacter", "toUpperCase", `(${ULOCALE}${STRING})${STRING}`, l, s)),
   },
   "com/android/icu/text/TimeZoneNamesNative": {
     // each row is [id, long standard, short standard, long daylight, short daylight], named as of now
     [`fillZoneStringsNative(${STRING}[[${STRING})V`]: driven(function* (locale: string, rows: string[][]): Gen {
-      const zoneNames = yield icuStatic("android/icu/text/TimeZoneNames", "getInstance", `(${ULOCALE})Landroid/icu/text/TimeZoneNames;`, yield ulocale(locale));
-      const types = yield icuClass("android/icu/text/TimeZoneNames$NameType"), now = BigInt(Date.now());
-      const kinds = ["LONG_STANDARD", "SHORT_STANDARD", "LONG_DAYLIGHT", "SHORT_DAYLIGHT"].map((k) => (types as Record<string, unknown>)[mangleStaticField(k)]);
+      const zoneNames = yield scall("android/icu/text/TimeZoneNames", "getInstance", `(${ULOCALE})Landroid/icu/text/TimeZoneNames;`, yield ulocale(locale));
+      const types = yield linkInit("android/icu/text/TimeZoneNames$NameType"), now = BigInt(Date.now());
+      const kinds = ["LONG_STANDARD", "SHORT_STANDARD", "LONG_DAYLIGHT", "SHORT_DAYLIGHT"].map((k) => (types as JavaClass).static(k));
       for (const row of rows) for (let i = 0; i < kinds.length; i++)
         row[i + 1] = yield vcall(zoneNames, "getDisplayName", `(${STRING}Landroid/icu/text/TimeZoneNames$NameType;J)${STRING}`, row[0], kinds[i], now);
     }),

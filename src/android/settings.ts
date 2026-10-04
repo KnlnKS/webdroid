@@ -9,7 +9,7 @@
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { hexBytes } from "../jvm/abi";
-import { vcall, scall, staticField, newObj } from "../jvm/natives/jentry";
+import { vcall, scall, staticField, newObj, iof } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
@@ -173,7 +173,7 @@ function* readableRows(c: Caller, table: Table): Gen<[string, string, string][]>
   for (let i = 0; i < names.length; i++) {
     let value: string | null;
     try { value = yield* readSetting(c, table, names[i]); } catch (error) {
-      if (rt.iof(error, SECURITY)) continue;
+      if (iof(error, SECURITY)) continue;
       throw error;
     }
     if (value !== null) rows.push([String(i + 1), names[i], value]);

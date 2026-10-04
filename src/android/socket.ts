@@ -1,7 +1,7 @@
 // libcore's socket syscalls (libcore.io.Linux) and the socket streams' natives, over the socket
 // core native code shares (src/native/socket/): a descriptor from either side is the same socket.
 import { awaited, rt, JObj, getDeclared, setDeclared, driven } from "../jvm/runtime";
-import { vcall, scall, newObj, after } from "../jvm/natives/jentry";
+import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry";
 import { jarray, u8 } from "../jvm/abi";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { errno, sys, ioResult, readBytes, writeBytes, FD, type IoBuffer } from "./os";
@@ -46,8 +46,8 @@ const inet = (ep: Endpoint): SocketAddress => ({ family: ep.address.length === 4
 /** a SocketAddress's sockaddr: an InetSocketAddress's endpoint, or a UnixSocketAddress's sun_path */
 function socketAddress(fn: string, address: JObj | null): SocketAddress | Promise<SocketAddress> {
   if (address === null) return rt.npe();
-  if (rt.iof(address, UNIX_ADDRESS)) return unixAddress(sunPath(u8(getDeclared<Int8Array>(address, UNIX_ADDRESS, "sun_path"))));
-  if (!rt.iof(address, ISA)) throw errno(fn, E.AFNOSUPPORT);
+  if (iof(address, UNIX_ADDRESS)) return unixAddress(sunPath(u8(getDeclared<Int8Array>(address, UNIX_ADDRESS, "sun_path"))));
+  if (!iof(address, ISA)) throw errno(fn, E.AFNOSUPPORT);
   const holder = getDeclared(address, ISA, "holder") as JObj;
   const addr = getDeclared(holder, ISA_HOLDER, "addr") as JObj | null;
   if (addr === null) throw errno(fn, E.INVAL);
@@ -62,7 +62,7 @@ const javaSocketAddress = (addr: SocketAddress): JObj | Promise<JObj> => addr.fa
   : after(inetAddress(addr.ep), (a) => newObj(ISA, `(${INET}I)V`, a, addr.ep.port));
 /** fillInetSocketAddress: a caller's InetSocketAddress takes an internet sender's address and port */
 function fillSocketAddress(target: JObj | null, from: SocketAddress | null): void | Promise<void> {
-  if (target === null || from === null || from.family === AF_UNIX || !rt.iof(target, ISA)) return;
+  if (target === null || from === null || from.family === AF_UNIX || !iof(target, ISA)) return;
   return after(inetAddress(from.ep), (a) => {
     const holder = getDeclared(target, ISA, "holder") as JObj;
     setDeclared(holder, ISA_HOLDER, { addr: a, port: from.ep.port });

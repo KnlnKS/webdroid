@@ -1,6 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, declaredField } from "../jvm/runtime";
+import { classNameOf } from "../jvm/natives/jentry";
 import type { NativeBitmap } from "./bitmap";
 import { transformOf, type Ctx2D } from "./recording";
 import { localBounds, type Affine } from "./matrix";
@@ -21,7 +22,7 @@ const edgeProps = new Map<Function, string[]>();
 function edgesOf(r: object): string[] {
   let props = edgeProps.get(r.constructor);
   if (!props) {
-    const cls = (r.constructor as unknown as { $i: { name: string } }).$i.name;
+    const cls = classNameOf(r)!;
     edgeProps.set(r.constructor, props = ["left", "top", "right", "bottom"].map((e) => declaredField(cls, e)));
   }
   return props;

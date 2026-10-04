@@ -4,7 +4,6 @@
 // screen's launch would.
 import { awaited, rt, JObj, getDeclared, setDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall, scall, linkInit, after, staticField, callOn, curThread } from "../../jvm/natives/jentry";
-import { mangleStaticField } from "../../jvm/abi";
 import { newArrayList } from "../../jvm/natives/jcoll";
 import { hostedService } from "../binder";
 import { PROCESS_NAME, PROCESS_UID } from "../os";
@@ -221,8 +220,8 @@ export const startActivityThread = driven(function* (launched: boolean): Gen<voi
   yield scall("android/os/Process", "setArgV0", "(Ljava/lang/String;)V", "<pre-initialized>");
   const thread = yield newObj(AT, "()V");
   yield vcall(thread, "attach", "(ZJ)V", 0, 0n);
-  const statics = (yield* awaited(linkInit(AT))).ctor as Record<string, unknown>;
-  statics[mangleStaticField("sMainThreadHandler")] ??= yield vcall(thread, "getHandler", "()Landroid/os/Handler;");
+  const at = yield* awaited(linkInit(AT));
+  if (at.static("sMainThreadHandler") == null) at.setStatic("sMainThreadHandler", yield vcall(thread, "getHandler", "()Landroid/os/Handler;"));
 });
 
 // ActivityThread's natives: heapprofd never profiles this process, and the renderer holds no

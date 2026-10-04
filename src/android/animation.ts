@@ -11,7 +11,7 @@ import { deref, handle } from "./handles";
 const ids = new Map<string, bigint>();
 function methodId(cls: JClass, name: string, desc: string): bigint {
   const m = mangleMethod(name, desc);
-  if (typeof (cls.ci?.ctor.prototype as Record<string, unknown> | undefined)?.[m] !== "function")
+  if (typeof (cls.ci?.ctor.prototype as Record<string, unknown> | undefined)?.[m] !== "function") // js-tier
     throw rt.mkThrowable("java/lang/NoSuchMethodError", `no non-static method "L${cls.ci?.name};.${name}${desc}"`);
   let id = ids.get(m);
   if (id === undefined) ids.set(m, id = handle({ m }));

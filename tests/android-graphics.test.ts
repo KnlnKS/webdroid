@@ -37,22 +37,22 @@ describe("egl14-query-context", () => {
   });
 
   test("EGL14 queries the created context's client version", async () => {
-    const egl = (await linkInit("android/opengl/EGL14")).ctor;
-    const display = await vcall(egl, "eglGetDisplay", "(I)Landroid/opengl/EGLDisplay;", 0);
+    const egl = await linkInit("android/opengl/EGL14");
+    const display = await scall("android/opengl/EGL14", "eglGetDisplay", "(I)Landroid/opengl/EGLDisplay;", 0);
     const configs: unknown[] = [null];
     const count = new Int32Array(1);
-    expect(await vcall(egl, "eglChooseConfig", "(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z",
+    expect(await scall("android/opengl/EGL14", "eglChooseConfig", "(Landroid/opengl/EGLDisplay;[II[Landroid/opengl/EGLConfig;II[II)Z",
       display, new Int32Array([0x3038]), 0, configs, 0, 1, count, 0)).toBe(1);
-    const noContext = Object.getOwnPropertyDescriptor(egl, mangleStaticField("EGL_NO_CONTEXT"))?.value;
-    const context = await vcall(egl, "eglCreateContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Landroid/opengl/EGLContext;[II)Landroid/opengl/EGLContext;",
+    const noContext = egl.static("EGL_NO_CONTEXT");
+    const context = await scall("android/opengl/EGL14", "eglCreateContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLConfig;Landroid/opengl/EGLContext;[II)Landroid/opengl/EGLContext;",
       display, configs[0], noContext, new Int32Array([0x3098, 3, 0x3038]), 0);
     const result = new Int32Array(2);
-    expect(await vcall(egl, "eglQueryContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z",
+    expect(await scall("android/opengl/EGL14", "eglQueryContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z",
       display, context, 0x3098, result, 1)).toBe(1);
     expect(result[1]).toBe(3);
-    expect(await vcall(egl, "eglQueryContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z",
+    expect(await scall("android/opengl/EGL14", "eglQueryContext", "(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z",
       display, context, -1, result, 0)).toBe(0);
-    expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3004);
+    expect(await scall("android/opengl/EGL14", "eglGetError", "()I")).toBe(0x3004);
   });
 });
 
@@ -250,7 +250,7 @@ describe("matrix", () => {
 describe("matrix-fit", () => {
   rt.linkNatives();
   const values = async (m: unknown) => { const v = new Float32Array(9); await vcall(m, "getValues", "([F)V", v); return [...v]; };
-  const fit = async (name: string) => ((await linkInit("android/graphics/Matrix$ScaleToFit")).ctor as any)[mangleStaticField(name)];
+  const fit = async (name: string) => (await linkInit("android/graphics/Matrix$ScaleToFit")).static(name);
   const rect = (l: number, t: number, r: number, b: number) => newObj("android/graphics/RectF", "(FFFF)V", l, t, r, b);
 
   test("Matrix.setRectToRect maps the source onto the destination per ScaleToFit", async () => {
@@ -278,7 +278,7 @@ describe("matrix-fit", () => {
 
 describe("path-copy", () => {
   rt.linkNatives();
-  const fillType = async (name: string) => ((await linkInit("android/graphics/Path$FillType")).ctor as any)[mangleStaticField(name)];
+  const fillType = async (name: string) => (await linkInit("android/graphics/Path$FillType")).static(name);
 
   test("path copies retain contours and fill rules without sharing mutable geometry", async () => {
     const source = await newObj("android/graphics/Path", "()V");

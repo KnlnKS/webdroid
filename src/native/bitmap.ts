@@ -1,9 +1,9 @@
-import { rt } from "../jvm/runtime";
 import { NativeBitmap, bitmapOf, HARDWARE, ALPHA_8, RGB_565, ARGB_4444, RGBA_F16, RGBA_1010102, memoryOf, setMemory } from "../android/bitmap";
 import type { Cpu } from "./cpu";
 import { deref } from "./jni";
 import { hostLib, stp, type ArgReader } from "./host";
 import { mem } from "./mem";
+import { iof } from "../jvm/natives/jentry";
 
 // libjnigraphics' AndroidBitmap_*: the pixels as the bitmap's memory holds them, locked into guest memory
 const locks = new Map<NativeBitmap, { pointer: number; count: number }>();
@@ -13,7 +13,7 @@ const alphaOf = (b: NativeBitmap) => !b.hasAlpha ? 1 : b.premultiplied ? 0 : 2;
 const FORMATS: Record<number, number> = { [ALPHA_8]: 8, [RGB_565]: 4, [ARGB_4444]: 7, [RGBA_F16]: 9, [RGBA_1010102]: 10 };
 function bitmap(cpu: Cpu, a: ArgReader): NativeBitmap | null {
   const env = a.p(), o = deref(a.p(), cpu);
-  return env && env === cpu.env && rt.iof(o, "android/graphics/Bitmap") ? bitmapOf(o as object) : null;
+  return env && env === cpu.env && iof(o, "android/graphics/Bitmap") ? bitmapOf(o as object) : null;
 }
 
 export function bitmapInit(): void {

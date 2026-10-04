@@ -191,7 +191,7 @@ rt.register({
       if (p) yield p;
       // <init> mangles without a class component, so an inherited <init>()V would run the
       // SUPERclass ctor and leave every own field null — silently. Only accept our own.
-      if (info.def && !Object.hasOwn(info.ctor.prototype, mangleMethod("<init>", "()V")))
+      if (info.def && !Object.hasOwn(info.ctor.prototype, mangleMethod("<init>", "()V"))) // js-tier
         throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name));
       const o = new info.ctor();
       yield vcall(o, "<init>", "()V");

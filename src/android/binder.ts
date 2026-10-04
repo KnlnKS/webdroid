@@ -1,14 +1,14 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { callOn, curThread, JThread, scall, vcall, after, linkInit, newObj } from "../jvm/natives/jentry";
+import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry";
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable";
 import { exitProcess, processExited } from "../process-exit";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
 import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel";
-import { jarray, mangleMethod, mangleStaticField, i8, u8 } from "../jvm/abi";
+import { jarray, i8, u8 } from "../jvm/abi";
 import { handle, release, FINALIZER } from "./handles";
 
 const F_GETFL = 3, O_RDONLY = 0;
@@ -48,7 +48,7 @@ export function exportBinder(binder: unknown): BinderHandle | null {
   if (binder == null) return null;
   const proxy = proxyData.get(binder as JObj);
   if (proxy) return proxy.handle;
-  if (!rt.iof(binder, "android/os/Binder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel: " + ((binder as JObj).constructor as { $i?: { name: string } }).$i?.name);
+  if (!iof(binder, "android/os/Binder")) throw rt.mkThrowable("android/os/BadParcelableException", "Non-Binder object in IPC parcel: " + classNameOf(binder));
   let id = localIds.get(binder as JObj);
   if (!id) { id = nextId++; localIds.set(binder as JObj, id); local.set(id, binder as JObj); }
   return { pid: PROCESS_PID, id };
@@ -73,7 +73,7 @@ function isSystemBinder(o: unknown): o is JObj {
   if (!(o instanceof JObj)) return false;
   let system = systemClasses.get(o.constructor);
   if (system === undefined) {
-    system = !!(o.constructor as { $i?: { name: string } }).$i?.name.startsWith("webdroid/") && !!rt.iof(o, "android/os/Binder");
+    system = !!classNameOf(o)?.startsWith("webdroid/") && !!iof(o, "android/os/Binder");
     systemClasses.set(o.constructor, system);
   }
   return system;
@@ -104,7 +104,7 @@ function* exportObject(o: unknown): Gen<BinderHandle | FileHandle | null> {
   if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
   const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
   if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
-  rt.link("webdroid/FileWriter");
+  linkClass("webdroid/FileWriter");
   const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
   return { bytes, writer: exportBinder(writer), ...region };
 }
@@ -148,7 +148,7 @@ export const parcelled = driven(function* parcelled(o: JObj): Gen<ParcelData> {
 /** a Parcelable of class `cls` read back by its CREATOR; the parcel, and the descriptors it
  *  imported, are released once read */
 export const unparcelled = driven(function* unparcelled(cls: string, data: ParcelData): Gen<JObj> {
-  const creator = (yield* awaited(linkInit(cls))).ctor[mangleStaticField("CREATOR")], parcel = yield* awaited(importParcel(data));
+  const creator = (yield* awaited(linkInit(cls))).static("CREATOR"), parcel = yield* awaited(importParcel(data));
   try { return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel); }
   finally { yield vcall(parcel, "recycle", "()V"); }
 });
@@ -178,7 +178,7 @@ function reportException(e: unknown, message: string): void {
   const je = rt.jx(e);
   console.error(`[Binder] ${message}`);
   logUncaught(je);
-  if (!rt.iof(je, "java/lang/Error") || processExited()) return;
+  if (!iof(je, "java/lang/Error") || processExited()) return;
   console.error(`Fatal signal ${SIGABRT} (SIGABRT), pid ${PROCESS_PID}\nAbort message: '${message}'`);
   exitProcess({ signal: SIGABRT });
 }
@@ -186,7 +186,7 @@ const UNCAUGHT_REMOTE = "*** Uncaught remote exception!  (Exceptions are not yet
 /** the escape of a call into a local stub that no caller waits on (a oneway transaction, a death
  *  notice), as Binder.execTransact takes it: a RuntimeException is logged, and anything else is reported */
 export const binderEscape = (message = UNCAUGHT_REMOTE): Escape => (e) => {
-  if (rt.iof(rt.jx(e), "java/lang/RuntimeException")) console.warn("[Binder] Caught a RuntimeException from the binder stub implementation.", rt.jx(e));
+  if (iof(rt.jx(e), "java/lang/RuntimeException")) console.warn("[Binder] Caught a RuntimeException from the binder stub implementation.", rt.jx(e));
   else reportException(e, message);
 };
 /** a oneway call to a local binder: made on a fresh turn of the caller's thread, which neither
@@ -407,7 +407,6 @@ rt.registerJnis("android/os/BinderProxy", {
 // from the services hosted behind binder; a name nobody hosts gets the null servicemanager
 // returns for an absent service, and is reported as a boundary gap.
 const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
-const M_ENFORCED = mangleMethod("<init>", "(Landroid/os/PermissionEnforcer;)V");
 /** a ParceledListSlice over `items`, as a service returns a list too long for one transaction */
 export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
 /** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
@@ -419,7 +418,7 @@ export function hostStub(name: string, cls: string): void {
 /** a Stub subclass's instance, as hostStub makes one (also for binders a service hands out), on
  *  the asking thread: a class it initializes may be one that thread is already initializing */
 export const newStub = driven(function* newStub$(cls: string): Gen<JObj> {
-  return M_ENFORCED in rt.link(cls).ctor.prototype
+  return linkClass(cls).has("<init>", "(Landroid/os/PermissionEnforcer;)V")
     ? yield newObj(cls, "(Landroid/os/PermissionEnforcer;)V", yield newObj("android/os/PermissionEnforcer", "()V")) : yield newObj(cls, "()V");
 });
 /** services the platform registers only on hardware this device does not have */

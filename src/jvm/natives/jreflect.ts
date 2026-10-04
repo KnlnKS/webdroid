@@ -432,7 +432,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       if (name === "<init>" || seen.has(name + desc)) continue;
       seen.add(name + desc);
       const mangled = mangleMethod(name, desc);
-      const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled];
+      const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled]; // js-tier
       if (typeof fn === "function") out.push(mkMethod(ci, name, desc, isStatic, fn));
     }
     // methods installed outside the spec (Class's own reflection natives, generated members) are
@@ -441,8 +441,8 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       const name = k.slice(0, k.length - desc.length);
       if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
       const mangled = mangleMethod(name, desc);
-      const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled], x = xname(mangled);
-      if (runnable(ci, fn, ci.ctor.prototype[x])) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
+      const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled], x = xname(mangled); // js-tier
+      if (runnable(ci, fn, ci.ctor.prototype[x])) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); } // js-tier
       else if (runnable(ci, sfn, ci.ctor[x])) { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
     }
   };
@@ -457,7 +457,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       if (seen.has(key)) continue;
       seen.add(key);
       const mangled = mangleMethod(mr.name, desc);
-      const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled];
+      const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled]; // js-tier
       out.push(mkMethod(ci, mr.name, desc, isStatic, typeof fn === "function" ? fn : null, m.flags));
     }
   };
@@ -593,7 +593,7 @@ rt.register({
       const info = this.owner;
       // a serialization copy allocates its own class, which the allocation initializes
       for (const c of this.alloc ? [info, this.alloc] : [info]) { const p = rt.initClass(c); if (p) yield p; }
-      const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)];
+      const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)]; // js-tier
       if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
       const a = (args ?? []).map((v, i) => argFor(ps[i], v));
@@ -987,7 +987,7 @@ function proxyMethod(info: ClassInfo, owner: ClassInfo, n: string, desc: string,
     const r = await vcall(this.h, "invoke", D_INVOKE, this, method, jarray(args.map((a, i) => boxReturn(params[i], a)), "Ljava/lang/Object;"));
     return ret === "V" ? undefined : ret[0] === "L" || ret[0] === "[" ? r : unboxArg(r);
   };
-  setPublic(info.ctor.prototype, mangleMethod(n, desc), fn, params.length);
+  setPublic(info.ctor.prototype, mangleMethod(n, desc), fn, params.length); // js-tier
   return fn;
 }
 const proxyIfaces = new WeakMap<ClassInfo, ClassInfo[]>();
@@ -1027,7 +1027,7 @@ rt.register({
       return p;
     },
     "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": (_l: unknown, ifaces: JClass[]) => rt.classFor(proxyClass(ifaces.map((c) => c.ci!)).name),
-    "static isProxyClass(Ljava/lang/Class;)Z": (c: JClass) => (c.ci?.ctor.prototype instanceof JProxy ? 1 : 0),
+    "static isProxyClass(Ljava/lang/Class;)Z": (c: JClass) => (c.ci?.ctor.prototype instanceof JProxy ? 1 : 0), // js-tier
     "static getInvocationHandler(Ljava/lang/Object;)Ljava/lang/reflect/InvocationHandler;": (o: unknown) => (o instanceof JProxy ? o.h : null),
   },
 });

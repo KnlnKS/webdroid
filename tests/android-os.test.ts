@@ -37,8 +37,8 @@ describe("bitmap-parcel", () => {
   test("a Bitmap survives a Parcel round trip with its flags, geometry and pixels", async () => {
     await loadLibcore(); await loadFrameworkJar();
     rt.linkNatives();
-    const config = (await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>;
-    const b = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 3, 2, config.s$ARGB_8888);
+    const config = await linkInit("android/graphics/Bitmap$Config");
+    const b = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 3, 2, config.static("ARGB_8888"));
     await vcall(b, "setDensity", "(I)V", 320);
     await vcall(b, "setHasAlpha", "(Z)V", 0);
     await vcall(b, "setPixel", "(III)V", 2, 1, 0xff336699 | 0);

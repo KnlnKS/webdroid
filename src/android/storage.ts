@@ -3,7 +3,7 @@
 // UUID is UUID_DEFAULT), mounted and writable. Shared storage is /sdcard here, the vfs's, where the
 // AVD mounts /storage/emulated/0 over /data/media. Space answers follow the browser's estimate.
 import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runtime";
-import { jarray, mangleStaticField } from "../jvm/abi";
+import { jarray } from "../jvm/abi";
 import { newObj, scall, linkInit } from "../jvm/natives/jentry";
 import { systemResource } from "./resnative";
 import { newFile } from "../jvm/natives/jio";
@@ -22,7 +22,7 @@ const storageVolume = driven(function* storageVolume$(): Gen<JObj> {
     1, 0, 1, 0, 0, 0n, yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", USER), yield uuidDefault(), null, "mounted");
 });
 const volumeInfo = driven(function* volumeInfo$(): Gen<JObj> {
-  const statics = (yield* awaited(linkInit(VI))).ctor as Record<string, number>, flag = (name: string) => statics[mangleStaticField(name)];
+  const volume = yield* awaited(linkInit(VI)), flag = (name: string) => volume.static(name) as number;
   const info: Record<string, unknown> = yield newObj(VI, "(Ljava/lang/String;ILandroid/os/storage/DiskInfo;Ljava/lang/String;)V",
     "emulated;0", flag("TYPE_EMULATED"), null, "");
   for (const [name, value] of Object.entries({ mountFlags: flag("MOUNT_FLAG_PRIMARY") | flag("MOUNT_FLAG_VISIBLE_FOR_WRITE"),

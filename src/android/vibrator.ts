@@ -2,7 +2,7 @@
 // vibrator (id 1, as the reference AVD's) on navigator.vibrate, a bare on/off motor, so it reports
 // no capabilities (no amplitude or frequency control) and supports no effects or primitives.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, scall, vcall } from "../jvm/natives/jentry";
+import { newObj, scall, vcall, iof } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { systemResource } from "./resnative";
 import { toJsArray } from "../jvm/natives/jcoll";
@@ -44,12 +44,12 @@ function* timingsOf(effect: JObj): Gen<[number[], number]> {
   };
   for (const [i, segment] of segments.entries()) {
     if (i === repeatSegment) repeat = timings.length;
-    if (rt.iof(segment, "android/os/vibrator/StepSegment")) {
+    if (iof(segment, "android/os/vibrator/StepSegment")) {
       push((yield vcall(segment, "getAmplitude", "()F")) !== 0, Number(yield vcall(segment, "getDuration", "()J")));
-    } else if (rt.iof(segment, "android/os/vibrator/RampSegment")) {
+    } else if (iof(segment, "android/os/vibrator/RampSegment")) {
       push((yield vcall(segment, "getStartAmplitude", "()F")) !== 0 || (yield vcall(segment, "getEndAmplitude", "()F")) !== 0,
         Number(yield vcall(segment, "getDuration", "()J")));
-    } else if (rt.iof(segment, "android/os/vibrator/PrebakedSegment") && (yield vcall(segment, "shouldFallback", "()Z"))) {
+    } else if (iof(segment, "android/os/vibrator/PrebakedSegment") && (yield vcall(segment, "shouldFallback", "()Z"))) {
       (yield* fallbackTimings(yield vcall(segment, "getEffectId", "()I"))).forEach((ms, k) => push(k % 2 === 1, ms));
     }
   }
@@ -57,7 +57,7 @@ function* timingsOf(effect: JObj): Gen<[number[], number]> {
 }
 /** one vibrator: a stereo vibration plays the effect meant for it */
 function* playCombined(combined: JObj): Gen<void> {
-  const effect: JObj | null = rt.iof(combined, "android/os/CombinedVibration$Mono")
+  const effect: JObj | null = iof(combined, "android/os/CombinedVibration$Mono")
     ? yield vcall(combined, "getEffect", "()Landroid/os/VibrationEffect;")
     : yield vcall(yield vcall(combined, "getEffects", "()Landroid/util/SparseArray;"), "get", "(I)Ljava/lang/Object;", VIBRATOR_ID);
   if (effect) play(...(yield* timingsOf(effect)));

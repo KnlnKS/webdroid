@@ -49,7 +49,7 @@ function inheriting(init: (this: JThread, ...a: any[]) => void) {
   let proto: Record<string, unknown> | undefined;
   const compile = intrinsicCompiler({ hash: mangleField(TL, "threadLocalHashCode"), table: mangleField(MAP, "table"),
     value: mangleField(MAP + "$Entry", "value"), getMap: mangleMethod("getMap", "(Ljava/lang/Thread;)Ljava/lang/ThreadLocal$ThreadLocalMap;") },
-  { R: rt, proto: () => proto ??= rt.link(TL).ctor.prototype });
+  { R: rt, proto: () => proto ??= rt.link(TL).ctor.prototype }); // js-tier
   const entry = (params: string, hit: string) => compile(params, `
     const map = this.$getMap === proto().$getMap ? R.th().threadLocals : null;
     if (map !== null) {

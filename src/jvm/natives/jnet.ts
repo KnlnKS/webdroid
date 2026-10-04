@@ -9,7 +9,7 @@
 // than be told a comforting lie.
 import { awaited, rt, JObj, type NativeSpec, driven, declaredField, type Gen } from "../runtime";
 import { newArrayList, toJsArray } from "./jcoll";
-import { newObj, vcall, scall, after } from "./jentry";
+import { newObj, vcall, scall, after, linkClass } from "./jentry";
 import { checkFromIndexSize } from "./jlang";
 import { strArray, u8, mangleMethod } from "../abi";
 import { baosBytes, fdInt } from "./jio";
@@ -91,7 +91,7 @@ rt.register({
     "getProtocol()Ljava/lang/String;": function (this: JSSLContext) { return this.protocol; },
     "createSSLEngine()Ljavax/net/ssl/SSLEngine;": () => rt.make("javax/net/ssl/SSLEngine"),
     "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": () => {},
-    "getProvider()Ljava/security/Provider;": function (this: JSSLContext) { return this.provider ?? vcall(rt.link("java/security/Security").ctor, "getProvider", "(Ljava/lang/String;)Ljava/security/Provider;", "AndroidOpenSSL"); },
+    "getProvider()Ljava/security/Provider;": function (this: JSSLContext) { return this.provider ?? scall("java/security/Security", "getProvider", "(Ljava/lang/String;)Ljava/security/Provider;", "AndroidOpenSSL"); },
     "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => rt.make("javax/net/ssl/SSLSocketFactory"),
   },
 });
@@ -259,7 +259,7 @@ rt.register({
     "setHandshakeTimeout(I)V": () => {},
     "addHandshakeCompletedListener(Ljavax/net/ssl/HandshakeCompletedListener;)V": () => {},
     "getSSLParameters()Ljavax/net/ssl/SSLParameters;": function (this: JSSLSocket) {
-      rt.link("javax/net/ssl/SSLParameters"); return Object.assign(new JSSLParameters(), { protocols: [...this.alpn] });
+      linkClass("javax/net/ssl/SSLParameters"); return Object.assign(new JSSLParameters(), { protocols: [...this.alpn] });
     },
     "setSSLParameters(Ljavax/net/ssl/SSLParameters;)V": function (this: JSSLSocket, p: JSSLParameters | null) {
       if (!p) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parameters == null");
@@ -333,7 +333,7 @@ const urlText = (url: unknown) => vcall(url, "toExternalForm", "()Ljava/lang/Str
 class JHttpHandler extends JObj {}
 const openHttp = (cls: string) => function (url: unknown, proxy?: unknown) {
   if (url === null || proxy === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "url == null || proxy == null");
-  const c = new (rt.link(cls).ctor)() as JHttpURLConnection;
+  const c = linkClass(cls).new() as JHttpURLConnection;
   initConnection(c, url);
   if (c instanceof JHttpsURLConnection) { c.sslFactory = defaultHttpsFactory; c.hostnameVerifier = defaultHostnameVerifier; }
   return c;
@@ -432,7 +432,7 @@ const uc = () => ucFields ??= Object.fromEntries(["url", "doInput", "doOutput", 
   .map((n) => [n, declaredField(UC, n)])) as NonNullable<typeof ucFields>;
 /** URLConnection(URL), the constructor HttpURLConnection(URL) runs */
 function initConnection(c: JObj, url: unknown): void {
-  (rt.link(UC).ctor.prototype as Record<string, (u: unknown) => void>)[mangleMethod("<init>", "(Ljava/net/URL;)V")].call(c, url);
+  linkClass(UC).special("<init>", "(Ljava/net/URL;)V")(c, url);
 }
 type Fields = Record<string, unknown>;
 /** the exchange, redirects followed: a driven native, so the CookieHandler and every other Java

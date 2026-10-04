@@ -1,7 +1,7 @@
 // Content providers system packages publish (SettingsProvider, ExternalStorageProvider, MediaProvider),
 // which no app's manifest declares: ActivityManagerService hands their binders out of getContentProvider.
 import { awaited, rt, JObj, setDeclared, getDeclared, driven, type Gen, type NativeSpec } from "../jvm/runtime";
-import { newObj, scall, vcall, after } from "../jvm/natives/jentry";
+import { newObj, scall, vcall, after, iof } from "../jvm/natives/jentry";
 import { once } from "../jvm/suspend";
 import { arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox, boxLong, boxDouble } from "../jvm/natives/jbox";
@@ -21,7 +21,7 @@ const viaCallback = (name: string, desc: string, put: string, putDesc: string) =
     const result = yield newObj("android/os/Bundle", "()V");
     try { yield vcall(result, put, putDesc, "result", yield vcall(this, name, desc, source, uri)); }
     catch (e) {
-      if (!rt.iof(e, "java/lang/Throwable")) throw e;
+      if (!iof(e, "java/lang/Throwable")) throw e;
       yield vcall(result, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "error", yield newObj("android/os/ParcelableException", "(Ljava/lang/Throwable;)V", e));
     }
     yield vcall(callback, "sendResult", "(Landroid/os/Bundle;)V", result);

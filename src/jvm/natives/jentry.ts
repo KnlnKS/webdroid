@@ -3,7 +3,8 @@
 // scall, newObj, callOn, after).
 
 import { rt, JObj, type ClassInfo } from "../runtime";
-import { mangleMethod, mangleStaticField, lateMethod, idHash, parseMethodDesc } from "../abi";
+import { mangleMethod, lateMethod, idHash, parseMethodDesc } from "../abi";
+import { jsClass, type JavaClass } from "../tier";
 import { Strand, setPublic, suspendWith } from "../suspend";
 import { never, processExited } from "../../process-exit";
 
@@ -62,26 +63,39 @@ export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T |
   }) as Promise<T>;
 }
 function describe(o: unknown): string {
-  return typeof o === "string" ? "String" : ((o as any)?.constructor?.$i?.name ?? String(o));
+  return typeof o === "string" ? "String" : (classNameOf(o) ?? String(o));
 }
-/** link + run <clinit>: the class is ready to be instantiated or have its statics read */
-export function linkInit(cls: string): ClassInfo | Promise<ClassInfo> {
+/** the class named `cls`, linked only: its fields and methods exist, `<clinit>` has not run */
+export const linkClass = (cls: string): JavaClass => jsClass(rt.link(cls));
+/** run `cls`'s <clinit> if it has not, linking it first; null when it was ready */
+export const initClass = (cls: string): Promise<void> | null => rt.initClass(rt.link(cls));
+/** is `o` an instance of the class named `cls` */
+export const iof = (o: unknown, cls: string): boolean => !!rt.iof(o, cls);
+/** the name of the class of the Java object `o` */
+export function classNameOf(o: unknown): string | undefined {
+  return (o as { constructor?: { $i?: ClassInfo } } | null | undefined)?.constructor?.$i?.name;
+}
+function initialized(cls: string): ClassInfo | Promise<ClassInfo> {
   if (!owned) unowned(`initialize ${cls}`);
   const info = rt.link(cls);
   return after(rt.initClass(info), () => info);
 }
+/** link + run <clinit>: the class is ready to be instantiated or have its statics read */
+export function linkInit(cls: string): JavaClass | Promise<JavaClass> {
+  return after(initialized(cls), jsClass);
+}
 /** a static field's value, once the class has initialized */
 export const staticField = <T = unknown>(cls: string, field: string): T | Promise<T> =>
-  after(linkInit(cls), (info) => (info.ctor as Record<string, T>)[mangleStaticField(field)]);
+  after(initialized(cls), (info) => jsClass(info).static(field) as T);
 /** A static Java call from native code, once the class has initialized, on the calling thread */
 export function scall(cls: string, name: string, desc: string, ...args: unknown[]): any {
-  return after(linkInit(cls), (info) => vcall(info.ctor, name, desc, ...args));
+  return after(initialized(cls), (info) => vcall(info.ctor, name, desc, ...args));
 }
 /** `new cls(args)` from native code: initialize the class, then run the Java constructor `desc`;
  *  synchronous unless initialization or the constructor suspends */
 export function newObj(cls: string, desc = "()V", ...args: unknown[]): JObj | Promise<any> {
-  return after(linkInit(cls), (info) => {
-    const o = new info.ctor() as JObj;
+  return after(initialized(cls), (info) => {
+    const o = jsClass(info).new() as JObj;
     return after(vcall(o, "<init>", desc, ...args), () => o);
   });
 }

@@ -9,7 +9,7 @@
 
 import { awaited, rt, JObj, stubs, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { after, vcall, newObj, staticField, JThread } from "../jvm/natives/jentry";
+import { after, vcall, newObj, staticField, JThread, iof } from "../jvm/natives/jentry";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
@@ -251,7 +251,7 @@ export class WebViewChromium extends JObj {
       // Chromium injects the interfaces a page loads with; a later add or remove applies at the next load
       const ref = this.ref;
       this.pageIfaces = { ...this.ifaces };
-      const base = rt.link("android/webkit/WebViewClient").ctor.prototype;
+      const base = rt.link("android/webkit/WebViewClient").ctor.prototype; // js-tier
       const intercept = ["Landroid/webkit/WebResourceRequest;", "Ljava/lang/String;"].some(arg => {
         const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
         return jmethod(this.client, method) !== jmethod(base, method);
@@ -500,7 +500,7 @@ rt.register({
         // a software capture of the view: the page's pixels
         const image = yield* awaited(this.bitmapSnapshot());
         try { nc.ctx.drawImage(image, 0, 0, this.size.w, this.size.h); } finally { image.close(); }
-      } else if (rt.iof(canvas, "android/graphics/RecordingCanvas")) {
+      } else if (iof(canvas, "android/graphics/RecordingCanvas")) {
         yield vcall(factory().delegate, "drawWebViewFunctor", "(Landroid/graphics/Canvas;I)V", canvas, this.hold.functor);
       } else drawFunctor(nc.ctx, this.hold.functor, [nc.cl, nc.ct, nc.cr, nc.cb]);
     }),

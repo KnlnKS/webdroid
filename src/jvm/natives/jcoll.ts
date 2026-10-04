@@ -18,7 +18,7 @@ function arrayList(): new () => Obj {
   if (arrayListCtor) return arrayListCtor;
   const info = rt.link(AL);
   rt.initClass(info);
-  return arrayListCtor = info.ctor as new () => Obj;
+  return arrayListCtor = info.ctor as new () => Obj; // js-tier
 }
 
 /** A java.util.ArrayList over `items`, which it takes as its backing array. */
@@ -52,7 +52,7 @@ const newCollection = driven(function* newCollection(cls: string, items: Iterabl
   const info = rt.link(cls);
   const init = rt.initClass(info);
   if (init) yield init;
-  const c = new (info.ctor as new () => Obj)();
+  const c = new (info.ctor as new () => Obj)(); // js-tier
   yield vcall(c, "<init>", "()V");
   for (const item of items) yield vcall(c, "add", "(Ljava/lang/Object;)Z", item);
   return c;
@@ -123,7 +123,7 @@ rt.intrinsic("java/util/Arrays", {
 });
 
 /** a class's constructor, looked up on first use */
-const linked = (cls: string) => { let c: unknown; return () => c ??= rt.link(cls).ctor; };
+const linked = (cls: string) => { let c: unknown; return () => c ??= rt.link(cls).ctor; }; // js-tier
 /** the HashMap node holding `key`, null, or undefined when the AOSP body must answer */
 const findNode = compile("map, key", `
   let h;

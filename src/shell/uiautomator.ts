@@ -1,9 +1,9 @@
 // What `uiautomator dump` sees, for windows AOSP's ViewRootImpl manages: each window's views as
 // AccessibilityNodeInfos, a virtual hierarchy (Compose) through its view's AccessibilityNodeProvider,
 // in screen pixels. The e2e harness diffs this against the device's dump.
-import { awaited, rt, declaredField, driven, type Gen, type JObj } from "../jvm/runtime";
+import { awaited, declaredField, driven, type Gen, type JObj } from "../jvm/runtime";
 import { windowZOf } from "../android/server/wm";
-import { vcall, scall, newObj } from "../jvm/natives/jentry";
+import { vcall, scall, newObj, iof } from "../jvm/natives/jentry";
 import { csText } from "../jvm/natives/jchars";
 import { edges } from "../android/graphics";
 
@@ -51,7 +51,7 @@ function* walkView(view: JObj, rect: JObj, out: UiNode[]): Gen<void> {
   const node = yield vcall(view, "createAccessibilityNodeInfo", "()Landroid/view/accessibility/AccessibilityNodeInfo;");
   const ui = node && (yield* describe(node, rect));
   if (ui) out.push(ui);
-  if (!rt.iof(view, "android/view/ViewGroup")) return;
+  if (!iof(view, "android/view/ViewGroup")) return;
   const count: number = yield vcall(view, "getChildCount", "()I");
   for (let i = 0; i < count; i++) yield* walkView(yield vcall(view, "getChildAt", "(I)Landroid/view/View;", i), rect, out);
 }

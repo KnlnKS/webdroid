@@ -36,7 +36,7 @@ export function bigOf(b: JObj): bigint {
 export function mkBigInteger(v: bigint): JObj | Promise<JObj> {
   const info = rt.link(BIG_INTEGER), init = rt.initClass(info);
   const make = () => {
-    const b = new info.ctor() as JObj, f = b as unknown as BI;
+    const b = new info.ctor() as JObj, f = b as unknown as BI; // js-tier
     f[SIG] = v < 0n ? -1 : v > 0n ? 1 : 0;
     f[MAG] = bigToWords(v < 0n ? -v : v);
     return b;
@@ -112,8 +112,8 @@ rt.registerJni("libcore/math/NativeBN", "BN_mod_exp(JJJJ)V", (r: bigint, a: bigi
 // object as `$v`, and an intrinsic's result holds only that: its `mag` is an accessor on the
 // class, installed before any instance exists, that writes the words out when bytecode reads them.
 let klass: (new () => BI) | null = null, zero: BI | null = null, one: BI | null = null;
-const cls = () => klass ??= rt.link(BIG_INTEGER).ctor as never;
-const statik = (name: string) => (cls() as unknown as BI)[rt.link(BIG_INTEGER).staticFieldTable.get(name + ":Ljava/math/BigInteger;")!] as BI;
+const cls = () => klass ??= rt.link(BIG_INTEGER).ctor as never; // js-tier
+const statik = (name: string) => (cls() as unknown as BI)[rt.link(BIG_INTEGER).staticFieldTable.get(name + ":Ljava/math/BigInteger;")!] as BI; // js-tier
 const ZERO = () => zero ??= statik("ZERO"), ONE = () => one ??= statik("ONE");
 function lazyMagnitude(C: { prototype: object }) {
   if (Object.hasOwn(C.prototype, MAG)) return;

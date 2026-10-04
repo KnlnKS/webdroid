@@ -4,8 +4,8 @@
 // shaped or drawn. A collection is
 // families in fallback order, and a typeface draws from one with a weight and slant.
 
-import { rt, awaited, declaredField, type Gen, type JObj } from "../jvm/runtime";
-import { scall, vcall, after, newObj } from "../jvm/natives/jentry";
+import { awaited, declaredField, type Gen, type JObj } from "../jvm/runtime";
+import { scall, vcall, after, newObj, initClass } from "../jvm/natives/jentry";
 import { mkFd } from "../jvm/natives/jio";
 import { ashmemFd } from "./os";
 import { OS_CONSTANTS } from "./os-constants";
@@ -269,7 +269,7 @@ export const typefaceOf = (t: object | null): NativeTypeface =>
  *  bindApplication (systemFontMap). */
 export function* preloadFonts(): Gen<void> {
   [fontIndex] = yield* awaited(Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]));
-  yield rt.initClass(rt.link("android/graphics/Typeface"));
+  yield initClass("android/graphics/Typeface");
 }
 let fontMapMemory: JObj | undefined;
 /** the serialized system font map bindApplication receives, as FontManagerService shares it: the

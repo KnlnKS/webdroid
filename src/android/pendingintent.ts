@@ -1,5 +1,5 @@
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, after } from "../jvm/natives/jentry";
+import { newObj, vcall, scall, after, iof } from "../jvm/natives/jentry";
 import { type JIntent, newIntent, putExtra } from "./intent";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
 import { exportBinder, importBinder, type ParcelData } from "./binder";
@@ -44,7 +44,7 @@ function targetId(target: unknown): number {
   return handle.id;
 }
 function* senderId$(sender: JObj): Gen<number> {
-  const target = rt.iof(sender, "android/content/IIntentSender") ? sender : yield vcall(sender, "getTarget", "()Landroid/content/IIntentSender;");
+  const target = iof(sender, "android/content/IIntentSender") ? sender : yield vcall(sender, "getTarget", "()Landroid/content/IIntentSender;");
   return targetId(yield vcall(target, "asBinder", "()Landroid/os/IBinder;"));
 }
 /** a PendingIntent's (or IntentSender's) record, through its IIntentSender */

@@ -208,7 +208,7 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
   let ctor: new () => JThrowable = JThrowable;
   try {
     const info = rt.link(cls);
-    if (info.ctor.prototype instanceof JThrowable) { rt.ensureCompiled(info); ctor = info.ctor; }
+    if (info.ctor.prototype instanceof JThrowable) { rt.ensureCompiled(info); ctor = info.ctor; } // js-tier
   } catch { /* fall through */ }
   const e = new ctor();
   e.msg = msg;

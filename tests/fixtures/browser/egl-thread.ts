@@ -1,7 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { mangleStaticField } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit, implement } from "../../../src/jvm/natives/jentry";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit, scall, implement } from "../../../src/jvm/natives/jentry";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
 import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";
@@ -113,8 +112,7 @@ async function clientArrays() {
   let created = 0;
   const create = g.createBuffer.bind(g);
   g.createBuffer = () => { created++; return create(); };
-  const gles = (await linkInit("android/opengl/GLES20")).ctor;
-  const call = (name: string, desc: string, ...args: unknown[]) => vcall(gles, name, desc, ...args);
+  const call = (name: string, desc: string, ...args: unknown[]) => scall("android/opengl/GLES20", name, desc, ...args);
   const vertices = nativeOrder(allocateDirectNow(24)), indices = nativeOrder(allocateDirectNow(12));
   const f32 = (b: typeof vertices) => { const bytes = bufferBytes(b); return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length >> 2); };
   new Uint32Array(f32(indices).buffer, f32(indices).byteOffset, 3).set([0, 1, 2]);
@@ -221,8 +219,8 @@ async function probe() {
   await startMainLooper();
   await directReady();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
-  const c14 = (await linkInit("android/opengl/EGL14")).ctor;
-  const call14 = (name: string, desc: string, ...args: unknown[]) => vcall(c14, name, desc, ...args);
+  const c14 = await linkInit("android/opengl/EGL14");
+  const call14 = (name: string, desc: string, ...args: unknown[]) => scall("android/opengl/EGL14", name, desc, ...args);
   const E10 = "Ljavax/microedition/khronos/egl/", E14 = "Landroid/opengl/";
   const display10 = vcall(e10, "eglGetDisplay", "(Ljava/lang/Object;)" + E10 + "EGLDisplay;", null);
   const context10 = vcall(e10, "eglCreateContext", `(${E10}EGLDisplay;${E10}EGLConfig;${E10}EGLContext;[I)${E10}EGLContext;`, display10, null, null, Int32Array.of(0x3098, 2, 0x3038));
@@ -239,7 +237,7 @@ async function probe() {
   const display14 = call14("eglGetDisplay", "(I)" + E14 + "EGLDisplay;", 0);
   const configs: unknown[] = [null];
   call14("eglChooseConfig", `(${E14}EGLDisplay;[II[${E14}EGLConfig;II[II)Z`, display14, null, 0, configs, 0, 1, new Int32Array(1), 0);
-  const no14 = Reflect.get(c14, mangleStaticField("EGL_NO_CONTEXT"));
+  const no14 = c14.static("EGL_NO_CONTEXT");
   if (!no14) throw new Error("EGL14 has no EGL_NO_CONTEXT handle");
   const context14 = call14("eglCreateContext", `(${E14}EGLDisplay;${E14}EGLConfig;${E14}EGLContext;[II)${E14}EGLContext;`, display14, configs[0], no14, Int32Array.of(0x3098, 2, 0x3038), 0);
   const surface14 = call14("eglCreatePbufferSurface", `(${E14}EGLDisplay;${E14}EGLConfig;[II)${E14}EGLSurface;`, display14, configs[0], Int32Array.of(0x3057, 2, 0x3056, 2, 0x3038), 0);

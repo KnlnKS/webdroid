@@ -4,7 +4,7 @@
 // read-only mapping or an early non-movable array, jmemory.ts), else a heap buffer's array.
 
 import { rt, JObj, declaredField, type Intrinsic } from "../runtime";
-import { after, scall, newObj } from "./jentry";
+import { after, scall, newObj, iof, classNameOf, initClass } from "./jentry";
 import { intrinsicCompiler } from "./jbox";
 import { mem } from "../../native/mem";
 import { syncShared } from "../../native/mappings";
@@ -32,7 +32,7 @@ export function setPosition(b: JBuffer, p: number): void {
   if (o[f.mark] > p) o[f.mark] = -1;
 }
 export const setLimit = (b: JBuffer, l: number): void => { (b as Fields)[fields().limit] = l; };
-export const isBuffer = (o: unknown): o is JBuffer => !!o && typeof o === "object" && !!rt.iof(o, "java/nio/Buffer");
+export const isBuffer = (o: unknown): o is JBuffer => !!o && typeof o === "object" && !!iof(o, "java/nio/Buffer");
 /** Buffer.address: a direct buffer's memory, 0 for a heap buffer */
 export const addressOf = (b: JBuffer): bigint => (b as Fields)[fields().address];
 setBufferAddress(addressOf);
@@ -45,7 +45,7 @@ function layoutOf(b: JBuffer): Layout {
   let layout = layouts.get(b.constructor);
   if (layout) return layout;
   layout = {};
-  const typed = TYPED.find((t) => rt.iof(b, "java/nio/" + t)), own = (b.constructor as { $i?: { name: string } }).$i?.name ?? "";
+  const typed = TYPED.find((t) => iof(b, "java/nio/" + t)), own = classNameOf(b) ?? "";
   if (typed) layout = { hb: declaredField("java/nio/" + typed, "hb"), offset: declaredField("java/nio/" + typed, "offset") };
   if (own.startsWith("java/nio/ByteBufferAs")) Object.assign(layout, { bb: declaredField(own, "bb"), byteOffset: declaredField(own, "byteOffset") });
   layouts.set(b.constructor, layout);
@@ -93,7 +93,7 @@ export const directCopy = (bytes: Uint8Array): JBuffer | Promise<JBuffer> =>
   after(allocateDirect(bytes.length), (b) => { bufferBytes(b).set(bytes); return b; });
 /** initializes what allocateDirectNow needs */
 export function directReady(): Promise<void> | null {
-  const a = rt.initClass(rt.link("java/nio/ByteBuffer")), b = rt.initClass(rt.link("java/nio/DirectByteBuffer"));
+  const a = initClass("java/nio/ByteBuffer"), b = initClass("java/nio/DirectByteBuffer");
   return a || b ? Promise.all([a, b]).then(() => {}) : null;
 }
 /** allocateDirect for a caller that cannot wait, once `directReady` has settled */

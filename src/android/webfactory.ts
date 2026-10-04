@@ -1,8 +1,7 @@
 // WebViewFactory's provider: the WebView implementation package is this one (webkit.ts's provider),
 // and what AOSP's WebView statics reach through it.
 import { awaited, rt, JObj, stubs, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
-import { mangleStaticField } from "../jvm/abi";
-import { vcall, newObj } from "../jvm/natives/jentry";
+import { vcall, newObj, linkClass } from "../jvm/natives/jentry";
 import { boxBool } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
 import { onMain } from "./mainloop";
@@ -27,7 +26,7 @@ rt.register({
   methods: {
     // getWebViewContextAndSetProvider's package, then the provider class its context's loader finds
     "static getProviderClass()Ljava/lang/Class;": driven(function* (): Gen {
-      (rt.link("android/webkit/WebViewFactory").ctor as unknown as Record<string, unknown>)[mangleStaticField("sPackageInfo")] = yield* awaited(webViewPackage());
+      linkClass("android/webkit/WebViewFactory").setStatic("sPackageInfo", yield* awaited(webViewPackage()));
       return rt.classFor(FACTORY);
     }),
   },

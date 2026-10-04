@@ -2,8 +2,7 @@
 // contexts over WebGL2 that draw them, SurfaceTexture's native half, and the Java EGL10/EGL14
 // bindings. The native libEGL (native/egl.ts) binds to the same contexts and surfaces.
 import { awaited, rt, JObj, stubs, driven, declaredField, setDeclared, type Gen } from "../jvm/runtime";
-import { mangleStaticField } from "../jvm/abi";
-import { vcall, JThread, curThread, scall, after } from "../jvm/natives/jentry";
+import { vcall, JThread, curThread, scall, after, iof, linkClass } from "../jvm/natives/jentry";
 import { deref, handle, ownedHandle, release } from "./handles";
 import { uptimeMillis } from "../guest-clock";
 import { gl, tables, untracked } from "./gl";
@@ -102,7 +101,7 @@ export function eglConfigAttrib(attr: number): number {
 }
 /** the surface a Surface or SurfaceTexture draws to, while it exists */
 export function surfaceTarget(win: unknown): GlSurface | null {
-  const s = rt.iof(win, "android/view/Surface") ? nativeSurface(win as JObj) : null;
+  const s = iof(win, "android/view/Surface") ? nativeSurface(win as JObj) : null;
   return s ? glSurfaceOf(s) : liveSurface(surfaceTextureOf(win));
 }
 /** EGLImpl's native window: a Surface or SurfaceTexture, or the Surface of a SurfaceView's or a
@@ -110,8 +109,8 @@ export function surfaceTarget(win: unknown): GlSurface | null {
 export function windowSurface(win: unknown): GlSurface | null | Promise<GlSurface | null> {
   const s = surfaceTarget(win);
   if (s || !(win instanceof JObj)) return s;
-  const holder = rt.iof(win, "android/view/SurfaceView") ? vcall(win, "getHolder", "()Landroid/view/SurfaceHolder;") : win;
-  return after(holder, (h: JObj | null) => h && rt.iof(h, "android/view/SurfaceHolder")
+  const holder = iof(win, "android/view/SurfaceView") ? vcall(win, "getHolder", "()Landroid/view/SurfaceHolder;") : win;
+  return after(holder, (h: JObj | null) => h && iof(h, "android/view/SurfaceHolder")
     ? after(vcall(h, "getSurface", "()Landroid/view/Surface;"), surfaceTarget) : null);
 }
 // SurfaceTexture's native half (android_graphics_SurfaceTexture.cpp over libnativedisplay's
@@ -430,10 +429,10 @@ const windowSurface14 = (display: JObj, config: JObj, window: unknown) => {
 };
 rt.registerJnis("android/opengl/EGL14", {
   "_nativeClassInit()V": () => {
-    const statics = rt.link("android/opengl/EGL14").ctor as unknown as Record<string, unknown>;
-    statics[mangleStaticField("EGL_NO_CONTEXT")] = noContext();
-    statics[mangleStaticField("EGL_NO_DISPLAY")] = eglObject("EGLDisplay", 0n);
-    statics[mangleStaticField("EGL_NO_SURFACE")] = noSurface();
+    const egl = linkClass("android/opengl/EGL14");
+    egl.setStatic("EGL_NO_CONTEXT", noContext());
+    egl.setStatic("EGL_NO_DISPLAY", eglObject("EGLDisplay", 0n));
+    egl.setStatic("EGL_NO_SURFACE", noSurface());
   },
   "eglGetDisplay(I)Landroid/opengl/EGLDisplay;": (display: number) => display === 0 ? eglObject("EGLDisplay", DEFAULT) : eglFailure(0x3008, eglObject("EGLDisplay", 0n)),
   "eglInitialize(Landroid/opengl/EGLDisplay;[II[II)Z": (display: JObj, major: Int32Array | null, majorOffset: number, minor: Int32Array | null, minorOffset: number) => {

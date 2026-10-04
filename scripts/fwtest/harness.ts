@@ -35,7 +35,7 @@ export async function thrown(f: () => unknown): Promise<string> {
 }
 
 /** a class's statics, initialized: they live on the constructor, mangled */
-export const statics = async (cls: string) => (await linkInit(cls)).ctor as Record<string, any>;
+export const statics = async (cls: string) => { await linkInit(cls); return rt.link(cls).ctor as Record<string, any>; }; // js-tier
 /** a listener object answering `name` with `fn` */
 export const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => implement(rt.make("java/lang/Object") as JObj, name, desc, fn);
 /** a Java Paint.FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */

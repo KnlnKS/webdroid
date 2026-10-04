@@ -10,9 +10,9 @@ import { bootWithFonts } from "./boot";
 async function probe() {
   await bootWithFonts();
   const results = [];
-  const enums = (await linkInit("android/graphics/BlurMaskFilter$Blur")).ctor;
+  const blur = (style: string) => scall("android/graphics/BlurMaskFilter$Blur", "valueOf", "(Ljava/lang/String;)Landroid/graphics/BlurMaskFilter$Blur;", style);
   for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
-    const value = await vcall(enums, "valueOf", "(Ljava/lang/String;)Landroid/graphics/BlurMaskFilter$Blur;", style);
+    const value = await blur(style);
     const filter = await newObj("android/graphics/BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", 5, value);
     const paint = newPaint();
     await vcall(paint, "setColor", "(I)V", 0x80ff0000 | 0);
@@ -36,7 +36,7 @@ async function probe() {
       restored: m.a === 2 && m.d === 2 && m.e === 8 && m.f === 4 && ctx.filter === "none" && ctx.globalCompositeOperation === "source-over",
       repeated: first.every((v, i) => v === second[i]) });
   }
-  const argb = ((await linkInit("android/graphics/Bitmap$Config")).ctor as Record<string, unknown>).s$ARGB_8888;
+  const argb = (await linkInit("android/graphics/Bitmap$Config")).static("ARGB_8888");
   const source = await scall("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", 20, 20, argb);
   await vcall(source, "setDensity", "(I)V", 480);
   bitmapOf(source).ctx.fillStyle = "#ff000080"; bitmapOf(source).ctx.fillRect(5, 5, 10, 10);
@@ -44,7 +44,7 @@ async function probe() {
   await vcall(paint, "setColor", "(I)V", 0x4000ff00);
   const extracted = [];
   for (const radius of [0, 1, 2, 3, 5, 10]) for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
-    const value = await vcall(enums, "valueOf", "(Ljava/lang/String;)Landroid/graphics/BlurMaskFilter$Blur;", style);
+    const value = await blur(style);
     const filter = radius ? await newObj("android/graphics/BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", radius, value) : null;
     await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
     const offsets = new Int32Array([99, 99]);
@@ -59,10 +59,10 @@ async function probe() {
   const ctx = new OffscreenCanvas(40, 40).getContext("2d")!;
   await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", null);
   await vcall(paint, "setColor", "(I)V", 0x8000ff00 | 0);
-  await vcall(paint, "setStyle", "(Landroid/graphics/Paint$Style;)V", ((await linkInit("android/graphics/Paint$Style")).ctor as Record<string, unknown>).s$FILL_AND_STROKE);
+  await vcall(paint, "setStyle", "(Landroid/graphics/Paint$Style;)V", (await linkInit("android/graphics/Paint$Style")).static("FILL_AND_STROKE"));
   await vcall(canvasOver(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
   const shaded = Array.from(ctx.getImageData(14, 16, 1, 1).data);
-  const buffer = await vcall((await linkInit("java/nio/ByteBuffer")).ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 400);
+  const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 400);
   await vcall(alpha, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", buffer);
   const position = await vcall(buffer, "position", "()I");
   await vcall(buffer, "rewind", "()Ljava/nio/Buffer;");

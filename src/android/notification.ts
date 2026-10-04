@@ -7,7 +7,7 @@
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
 import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall } from "../jvm/natives/jentry";
+import { newObj, vcall, scall, iof } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
@@ -340,7 +340,7 @@ function* summaryLook(pkg: string, members: Ungrouped[]): Gen<{ icon: JObj; colo
 }
 function* monochromeAppIcon(pkg: string): Gen<JObj> {
   const drawable = yield vcall(yield* getPM(), "getApplicationIcon", "(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;", pkg);
-  if (rt.iof(drawable, "android/graphics/drawable/AdaptiveIconDrawable") && (yield vcall(drawable, "getMonochrome", "()Landroid/graphics/drawable/Drawable;"))) {
+  if (iof(drawable, "android/graphics/drawable/AdaptiveIconDrawable") && (yield vcall(drawable, "getMonochrome", "()Landroid/graphics/drawable/Drawable;"))) {
     const inset: number = yield scall("android/graphics/drawable/AdaptiveIconDrawable", "getExtraInsetFraction", "()F");
     return yield scall("android/graphics/drawable/Icon", "createWithResourceAdaptiveDrawable", "(Ljava/lang/String;IZF)Landroid/graphics/drawable/Icon;",
       pkg, yield vcall(drawable, "getSourceDrawableResId", "()I"), 1, inset * -2);
