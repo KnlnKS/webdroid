@@ -25,11 +25,15 @@ function locate(cx: Compiler, c: Code, a: number, n: () => void): { data: number
   return { data, off };
 }
 
-/** pushes the `w`-byte little-endian value at byte p of `data` + `off`, its bytes taken in reverse when local `swap` (or -1) is 1; w is 1, 2, 4 or 8 */
-function load(cx: Compiler, c: Code, data: number, off: number, at: () => void, w: number, swap = -1): void {
+/** where byte p of a `w`-byte value goes: reversed (a static `true`) or as it is, or reversed when local `swap` is 1 */
+function bytePos(c: Code, p: number, w: number, swap: number | boolean): void {
+  if (typeof swap === "number") c.i32(p).lget(swap).i32(w - 1).raw(OP.i32_mul).raw(OP.i32_xor); else c.i32(swap ? w - 1 - p : p);
+}
+/** pushes the `w`-byte little-endian value at byte p of `data` + `off`, its bytes taken in reverse when `swap` says so; w is 1, 2, 4 or 8 */
+function load(cx: Compiler, c: Code, data: number, off: number, at: () => void, w: number, swap: number | boolean = false): void {
   const byteAt = (p: number) => {
     c.lget(data).refAsNonNull().lget(off); at(); c.raw(OP.i32_add);
-    if (swap >= 0) c.i32(p).lget(swap).i32(w - 1).raw(OP.i32_mul).raw(OP.i32_xor); else c.i32(p);
+    bytePos(c, p, w, swap);
     c.raw(OP.i32_add).arrayGetU(cx.tData.i8);
   };
   if (w === 8) c.i64(0n); else c.i32(0);
@@ -39,11 +43,11 @@ function load(cx: Compiler, c: Code, data: number, off: number, at: () => void, 
     if (w === 8) c.raw(OP.i64_extend_i32_u, OP.i64_or); else c.raw(OP.i32_or);
   }
 }
-/** stores the `w`-byte value in local `v` little-endian at `data` + `off` + at, bytes reversed when local `swap` (or -1) is 1 */
-function store(cx: Compiler, c: Code, data: number, off: number, at: () => void, w: number, v: () => void, swap = -1): void {
+/** stores the `w`-byte value in local `v` little-endian at `data` + `off` + at, bytes reversed when `swap` says so */
+function store(cx: Compiler, c: Code, data: number, off: number, at: () => void, w: number, v: () => void, swap: number | boolean = false): void {
   for (let p = 0; p < w; p++) {
     c.lget(data).refAsNonNull().lget(off); at(); c.raw(OP.i32_add);
-    if (swap >= 0) c.i32(p).lget(swap).i32(w - 1).raw(OP.i32_mul).raw(OP.i32_xor); else c.i32(p);
+    bytePos(c, p, w, swap);
     c.raw(OP.i32_add);
     v();
     if (p) { w === 8 ? c.i64(BigInt(8 * p)).raw(OP.i64_shr_u) : c.i32(8 * p).raw(OP.i32_shr_u); }
@@ -84,18 +88,26 @@ for (const [kind, ek, w, swaps] of ARRAYS) for (const peek of [true, false]) {
     c.lget(INDEX).i32(0).raw(OP.i32_lt_s).lget(COUNT).i32(0).raw(OP.i32_lt_s).raw(OP.i32_or).lget(INDEX).lget(len).lget(COUNT).raw(OP.i32_sub).raw(OP.i32_gt_s).raw(OP.i32_or)
       .if_().lget(INDEX).lget(len); cx.callThrower(c, "aioobe"); c.end();
     const { data, off } = locate(cx, c, 0, () => c.lget(COUNT).i32(w).raw(OP.i32_mul));
-    c.block().loop().lget(i).lget(COUNT).raw(OP.i32_ge_s).brIf(1);
-    const at = () => c.lget(i).i32(w).raw(OP.i32_mul);
-    if (peek) {
-      c.lget(arr).refAsNonNull().lget(INDEX).lget(i).raw(OP.i32_add);
-      load(cx, c, data, off, at, w, SWAP);
-      c.arraySet(cx.tData[ek]);
-    } else {
-      const v = c.newLocal(w === 8 ? T.i64 : T.i32);
-      c.lget(arr).refAsNonNull().lget(INDEX).lget(i).raw(OP.i32_add); ek === "i8" || ek === "i16" ? c.arrayGetU(cx.tData[ek]) : c.arrayGet(cx.tData[ek]); c.lset(v);
-      store(cx, c, data, off, at, w, () => c.lget(v), SWAP);
-    }
-    c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
+    // the loop is emitted once for each byte order, the order tested once
+    const pos = c.newLocal(T.i32), v = c.newLocal(w === 8 ? T.i64 : T.i32);
+    const loop = (rev: boolean) => {
+      c.i32(0).lset(i).lget(off).lset(pos);
+      c.block().loop().lget(i).lget(COUNT).raw(OP.i32_ge_s).brIf(1);
+      if (peek) {
+        c.lget(arr).refAsNonNull().lget(INDEX).lget(i).raw(OP.i32_add);
+        load(cx, c, data, pos, () => c.i32(0), w, rev);
+        c.arraySet(cx.tData[ek]);
+      } else {
+        c.lget(arr).refAsNonNull().lget(INDEX).lget(i).raw(OP.i32_add); ek === "i8" || ek === "i16" ? c.arrayGetU(cx.tData[ek]) : c.arrayGet(cx.tData[ek]); c.lset(v);
+        store(cx, c, data, pos, () => c.i32(0), w, () => c.lget(v), rev);
+      }
+      c.lget(i).i32(1).raw(OP.i32_add).lset(i).lget(pos).i32(w).raw(OP.i32_add).lset(pos).br(0).end().end();
+    };
+    if (ek === "i8") {
+      // byte to byte is a copy of the range
+      if (peek) c.lget(arr).refAsNonNull().lget(INDEX).lget(data).refAsNonNull().lget(off).lget(COUNT).arrayCopy(cx.tData.i8, cx.tData.i8);
+      else c.lget(data).refAsNonNull().lget(off).lget(arr).refAsNonNull().lget(INDEX).lget(COUNT).arrayCopy(cx.tData.i8, cx.tData.i8);
+    } else { c.lget(SWAP).if_(); loop(true); c.else_(); loop(false); c.end(); }
     c.else_(); cx.natives.call(cx, c, m); c.end();
   });
 }
