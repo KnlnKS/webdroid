@@ -22,12 +22,16 @@ import type { NativePath } from "./path";
 import { emptyBox, type Box } from "./graphics";
 import { variedAdvances } from "./sfnt";
 
-const f32 = Math.fround;
+export const f32 = Math.fround;
+export const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+export const isSurrogate = (c: number) => c >= 0xd800 && c <= 0xdfff;
+export const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** the directional formatting characters, which have no advance of their own */
+export const isBidiControl = (c: number) => c === 0x200e || c === 0x200f || c >= 0x202a && c <= 0x202e || c >= 0x2066 && c <= 0x2069;
 /** `f` over the tab's HarfBuzz, again once any font it reached has loaded */
 const shaped = <T>(f: (hb: HarfBuzz) => T): T | Promise<T> => after(harfBuzz(), (hb) => withFonts(() => f(hb)));
 
-const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c === 0x3000
-  || c >= 0x2066 && c <= 0x2069 || c >= 0x202a && c <= 0x202e || c === 0x200e || c === 0x200f;
+const breakAfter = (c: number) => c === 0x20 || c >= 0x2000 && c <= 0x200a || c === 0x3000 || isBidiControl(c);
 const breakBefore = (c: number) => breakAfter(c) || c >= 0x3400 && c <= 0x9fff;
 /** LayoutUtils' getNextWordBreakForCache: where the layout piece starting at `at` ends */
 export function pieceEnd(text: string, at: number, end: number): number {
@@ -324,7 +328,6 @@ export function layoutBounds(text: string, rtl: boolean, p: NativePaint): [numbe
 }
 
 // ── Paint.hasGlyph and Paint.getTextPath
-const isSurrogate = (c: number) => c >= 0xd800 && c <= 0xdfff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
 /** android_graphics_Paint's hasGlyph: well-formed UTF-16 whose variation sequences a family supports,
  *  laid out without .notdef and, for more than one character, as one glyph (a ligature) */
 export function hasGlyph(text: string, rtl: boolean, p: NativePaint): boolean | Promise<boolean> {

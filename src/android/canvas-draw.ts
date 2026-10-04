@@ -11,7 +11,7 @@ import { deref } from "./handles";
 import { NativePath, PathMeasure, inversePath, pathAt } from "./path";
 import { type NativeRegion } from "./region";
 import { NativeBitmap, bitmapAt, ALPHA_8, ARGB_8888, PREMUL, OPAQUE, setPixels, colorLongAt } from "./bitmap";
-import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited } from "./shaping";
+import { drawGlyphs, cssFont, shapeTextRun, hyphenEdited, graphemes } from "./shaping";
 import { fontNatives } from "./fonts";
 import { paintAdvance } from "./minikin";
 import { NativePaint, copyPaint, defaultPaint, beginPaintShadow, underlinePosition, underlineThickness, strikeThruPosition, strikeThruThickness } from "./paint";
@@ -293,7 +293,7 @@ function drawText(nc: NativeCanvas, text: string, x: number, y: number, p: Nativ
     if (shaded) endAlpha(ctx);
   }
 }
-const onPath = new PathMeasure(), posTan = new Float32Array(4), graphemes = typeof Intl !== "undefined" ? new Intl.Segmenter() : null;
+const onPath = new PathMeasure(), posTan = new Float32Array(4);
 /** Canvas::drawTextOnPath (SkiaCanvas::drawLayoutOnPath): each cluster placed at the middle of its
  *  advance along the path's first contour and turned to its tangent, the alignment an offset of
  *  the whole run against the contour's length */
@@ -305,7 +305,7 @@ function drawTextOnPath(nc: NativeCanvas, s: string, path: NativePath, hOffset: 
   p.textAlignN = 0;
   try {
     let x = 0;
-    for (const { segment } of graphemes ? graphemes.segment(s) : Array.from(s, (segment) => ({ segment }))) {
+    for (const { segment } of graphemes.segment(s)) {
       const w = paintAdvance(p, segment), half = w / 2, at = hOffset + x + half;
       let px = at, py = vOffset, tx = 1, ty = 0;
       if (onPath.getPosTan(at, posTan, posTan.subarray(2))) { px = posTan[0]; py = posTan[1]; tx = posTan[2]; ty = posTan[3]; }

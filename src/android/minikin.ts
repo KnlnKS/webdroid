@@ -22,7 +22,7 @@ import {
   type Hyphenator, hyphenatorFor, hyphenate, intProperty, isLineBreakingHyphen, editForThisLine, editForNextLine, packHyphenEdit, startHyphenString,
   endHyphenString, DONT_BREAK, BREAK_AND_DONT_INSERT_HYPHEN, START_NO_EDIT, END_NO_EDIT,
 } from "./hyphenator";
-import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING } from "./shaping";
+import { type ShapeStyle, type Piece, measurePiece, shapeStyle, pieceEnd, JOINING, f32, isLead, isTrail, graphemes, isBidiControl } from "./shaping";
 import { setEdges } from "./graphics";
 
 // ── advances ─────────────────────────────────────────────────────────────────────────────
@@ -69,10 +69,10 @@ export function advances(style: TextStyle, text: string, start: number, end: num
     const ls = JOINING.test(piece) ? 0 : style.letterSpacing, controls = CONTROL.test(piece);
     for (let j = 0; j < w.length; j++) {
       const c = piece.charCodeAt(j);
-      let a = controls && CONTROL.test(piece[j]) ? 0 : c === TAB ? w[j] : w[j] && Math.fround(w[j] + ls);
-      if (style.wordSpacing && (c === 0x20 || c === 0xa0)) a = Math.fround(a + style.wordSpacing);
+      let a = controls && CONTROL.test(piece[j]) ? 0 : c === TAB ? w[j] : w[j] && f32(w[j] + ls);
+      if (style.wordSpacing && (c === 0x20 || c === 0xa0)) a = f32(a + style.wordSpacing);
       if (out) out[at + i - start + j] = a;
-      total = Math.fround(total + a);
+      total = f32(total + a);
     }
     i = e;
   }
@@ -87,8 +87,6 @@ export function paintAdvance(p: NativePaint, text: string): number {
 // ── grapheme breaks ───────────────────────────────────────────────────────────────────────
 // GraphemeBreak::isGraphemeBreak is UAX #29 with minikin's tailorings; the browser's segmenter
 // answers UAX #29, and the tailorings that matter here are applied around it.
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const isLead = (c: number) => c >= 0xd800 && c <= 0xdbff, isTrail = (c: number) => c >= 0xdc00 && c <= 0xdfff;
 /** controls minikin treats as Extend, so no break comes before them */
 const extendsCluster = (c: number) => c === 0xad || c === 0x61c || c === 0x180e || c === 0x200b || c === 0x200e || c === 0x200f
   || c >= 0x202a && c <= 0x202e || (c | 0xf) === 0x206f || c === 0xfeff;
@@ -306,7 +304,7 @@ function extent(extents: Float32Array, start: number, end: number): [number, num
 /** advances [start,end) summed in float, as minikin sums them */
 function sum(advances: Float32Array, start = 0, end = advances.length): number {
   let w = 0;
-  for (let i = start; i < end; i++) w = Math.fround(w + advances[i]);
+  for (let i = start; i < end; i++) w = f32(w + advances[i]);
   return w;
 }
 
@@ -353,8 +351,8 @@ const hyphenBreaks = driven(function* hyphenBreaks(m: Measured, fast: boolean): 
         if (type === DONT_BREAK) continue;
         const end = editForThisLine(type), start = editForNextLine(type);
         const [first, second] = yield* awaited(withFonts(() => fast ? [
-          Math.fround(sum(m.widths, prevWord, k) + (end ? measureAlone(style, endHyphenString(end)) : 0)),
-          Math.fround(sum(m.widths, k, nextWord) + (start ? measureAlone(style, startHyphenString(start)) : 0)),
+          f32(sum(m.widths, prevWord, k) + (end ? measureAlone(style, endHyphenString(end)) : 0)),
+          f32(sum(m.widths, k, nextWord) + (start ? measureAlone(style, startHyphenString(start)) : 0)),
         ] : [hyphenPiece(style, text, prevWord, k, START_NO_EDIT, end), hyphenPiece(style, text, k, nextWord, start, END_NO_EDIT)]));
         m.hyphenBreaks.push({ offset: k, type, first, second });
       }
@@ -545,7 +543,7 @@ interface Candidate { offset: number; preBreak: number; postBreak: number; penal
 
 /** OptimalLineBreaker (populateCandidates, then LineBreakOptimizer::computeBreaks), in float
  *  arithmetic as minikin's: near-equal scores tie-break as they do there */
-const F = Math.fround;
+const F = f32;
 function* breakOptimal(m: Measured, len: number, lineWidth: LineWidth, b: Breaker, forcePhrase: boolean): Breaking {
   const text = m.text, widths = m.widths, minLineWidth = lineWidth.getMin(), candidates: Candidate[] = [];
   const push = (offset: number, preBreak: number, postBreak: number, penalty: number, preSpaces: number, postSpaces: number, ls: number, type = DONT_BREAK) =>
@@ -703,17 +701,17 @@ rt.registerJnis("android/graphics/text/GraphemeBreak", {
 });
 
 // ── Paint's text measurement (hwui's Paint.cpp over MinikinUtils::measureText) ─────────────
-const isControl = (c: number) => c <= 0x1f || c === 0x61c || c === 0x200e || c === 0x200f || c >= 0x202a && c <= 0x202e || c >= 0x2066 && c <= 0x2069;
+const isControl = (c: number) => c <= 0x1f || c === 0x61c || isBidiControl(c);
 const LEFT_EDGE = 0x2000, RIGHT_EDGE = 0x4000;
 /** the advances of text[start, start+count), indexed from start. A run TextLine marks as a line's
  *  edge loses half its letter spacing there (Layout::measureText's adjustAdvanceLetterSpacingEdge). */
 function measure(h: bigint, text: string, start: number, count: number): Float32Array {
   const p = paintAt(h), style = styleOf(p), out = new Float32Array(count);
   advances(style, text, start, start + count, out, 0, null, p.startHyphenEdit, p.endHyphenEdit);
-  const half = Math.fround(style.letterSpacing * 0.5), edge = (i: number) => {
+  const half = f32(style.letterSpacing * 0.5), edge = (i: number) => {
     const cp = text.codePointAt(start + i)!;
     if (out[i] === 0 || cp < 0x20 || cp >= 0x7f && cp <= 0x9f) return false;
-    if (!JOINING.test(String.fromCodePoint(cp))) out[i] = Math.fround(out[i] - half);
+    if (!JOINING.test(String.fromCodePoint(cp))) out[i] = f32(out[i] - half);
     return true;
   };
   if (half && p.flags & LEFT_EDGE) for (let i = 0; i < count && !edge(i); i++);
