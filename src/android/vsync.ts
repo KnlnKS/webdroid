@@ -73,27 +73,27 @@ export function frameDrawn(): void {
 export function deliverVsync(): void {
   latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
-  let hooks: (() => void)[] | null = vsyncHooks;
+  const hooks = vsyncHooks;
   vsyncHooks = [];
+  const dispatch = (r: Receiver) => { fill(r.data as never); return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count); };
+  let mainFrame = false;
   for (const r of scheduled) {
-    if (r.looper !== mainLooper) { r.looper.post(() => { fill(r.data as never); return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count); }); continue; }
-    const behind = hooks;
-    hooks = null;
+    if (r.looper !== mainLooper) { r.looper.post(() => dispatch(r)); continue; }
+    mainFrame = true;
+    // the main thread's frame is the Choreographer.doFrame this vsync starts, as a message the
+    // receiver queues; it completes when the renderer draws it. Behind that message the frame
+    // closes even when it drew nothing, and the renderer's own draws yield to the one it made.
     r.looper.post(() => {
-      fill(r.data as never);
-      // the main thread's frame is the Choreographer.doFrame this vsync starts, as a message the
-      // receiver queues; it completes when the renderer draws it. Behind that message the frame
-      // closes even when it drew nothing, and the renderer's own draws yield to the one it made.
       perf.frames++;
       const opened = frameStart = performance.now();
-      return after(vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count), () => postMain(() => {
+      return after(dispatch(r), () => postMain(() => {
         if (frameStart === opened) frameStart = null;
-        for (const fn of behind ?? []) fn();
+        for (const fn of hooks.splice(0)) fn();
       }));
     });
   }
   scheduled.clear();
-  for (const fn of hooks ?? []) fn();
+  if (!mainFrame) for (const fn of hooks) fn();
   flushVsyncWaiters();
 }
 

@@ -17,7 +17,7 @@ export class Transform implements Mat2D {
   a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
   private readonly stack: number[] = [];
   private invertible(): boolean { const det = this.a * this.d - this.b * this.c; return Number.isFinite(det) && det !== 0; }
-  reset(): void { this.a = this.d = 1; this.b = this.c = this.e = this.f = 0; this.stack.length = 0; }
+  reset(): void { this.resetTransform(); this.stack.length = 0; }
   save(): void { this.stack.push(this.a, this.b, this.c, this.d, this.e, this.f); }
   restore(): void {
     const s = this.stack;
@@ -104,8 +104,10 @@ const READS = new Set(["getTransform", "measureText", "getLineDash", "isPointInP
 const DRAWS = new Set(["fillRect", "strokeRect", "clearRect", "fillText", "strokeText", "drawImage", "fill", "stroke",
   "putImageData", "clip", "drawFocusIfNeeded"]);
 
-/** Transform operations, which `Transform` carries instead of the mirror */
-const TRANSFORMS = new Set(["translate", "scale", "rotate", "transform", "setTransform", "resetTransform"]);
+/** Operations `Transform` carries instead of the mirror; the mirror keeps only the style state a
+ *  save, restore or reset brackets */
+const TRANSFORMS = new Set(["translate", "scale", "rotate", "transform", "setTransform", "resetTransform", "save", "restore", "reset"]);
+const STYLE_BRACKETS = new Set(["save", "restore", "reset"]);
 /** Path construction: replayed, and never read back, since the mirror answers no point-in-path query */
 const PATHS = new Set(["beginPath", "closePath", "moveTo", "lineTo", "bezierCurveTo", "quadraticCurveTo", "arc", "arcTo",
   "ellipse", "rect", "roundRect"]);
@@ -114,13 +116,13 @@ type Method = (this: Context, ...args: unknown[]) => unknown;
 type Members = Record<string, unknown>;
 /** What a recording context is: the mirror's members, each answered by the mirror, recorded, or both */
 function contextClass(mirror: Ctx2D): new (mirror: Ctx2D, rec: Recording) => Ctx2D {
-  class RecordingContext { constructor(readonly mirror: Ctx2D, readonly rec: Recording) {} }
+  class Recording2D { constructor(readonly mirror: Ctx2D, readonly rec: Recording) {} }
   const proto = Object.getPrototypeOf(mirror) as object;
   for (const name of Object.getOwnPropertyNames(proto)) {
     const d = Object.getOwnPropertyDescriptor(proto, name)!;
     if (name === "constructor") continue;
     if (typeof d.value !== "function") {
-      Object.defineProperty(RecordingContext.prototype, name, {
+      Object.defineProperty(Recording2D.prototype, name, {
         get(this: Context) { return (this.mirror as unknown as Members)[name]; },
         ...(d.set ? { set(this: Context, value: unknown) { this.rec.ops.push(SET, name, value); (this.mirror as unknown as Members)[name] = value; } } : {}),
       });
@@ -132,16 +134,13 @@ function contextClass(mirror: Ctx2D): new (mirror: Ctx2D, rec: Recording) => Ctx
     else if (READS.has(name)) method = function (...args) { return fn.apply(this.mirror, args); };
     else if (DRAWS.has(name) || PATHS.has(name)) method = function (...args) { this.rec.ops.push(CALL, name, args); };
     else if (TRANSFORMS.has(name)) {
-      const apply = (Transform.prototype as unknown as Record<string, (...a: unknown[]) => void>)[name];
-      method = function (...args) { this.rec.ops.push(CALL, name, args); apply.apply(this.rec.t, args); };
-    } else if (name === "save" || name === "restore" || name === "reset") {
-      // the mirror keeps the style state a save and restore bracket
-      const apply = (Transform.prototype as unknown as Record<string, () => void>)[name];
-      method = function (...args) { this.rec.ops.push(CALL, name, args); apply.call(this.rec.t); fn.apply(this.mirror, args); };
+      const apply = Transform.prototype[name as keyof Transform] as (this: Transform, ...a: unknown[]) => void;
+      const mirrored = STYLE_BRACKETS.has(name);
+      method = function (...args) { this.rec.ops.push(CALL, name, args); apply.apply(this.rec.t, args); if (mirrored) fn.apply(this.mirror, args); };
     } else method = function (...args) { this.rec.ops.push(CALL, name, args); return fn.apply(this.mirror, args); };
-    Object.defineProperty(RecordingContext.prototype, name, { value: method, writable: true, configurable: true });
+    Object.defineProperty(Recording2D.prototype, name, { value: method, writable: true, configurable: true });
   }
-  return RecordingContext as unknown as new (mirror: Ctx2D, rec: Recording) => Ctx2D;
+  return Recording2D as unknown as new (mirror: Ctx2D, rec: Recording) => Ctx2D;
 }
 let RecordingContext: ReturnType<typeof contextClass> | undefined;
 /** Mirror native operations for measurement while retaining them for display-list replay. */
