@@ -4,7 +4,7 @@
 
 import { modInverse, modPow } from "./jmath";
 import { DIGESTS, type Hash } from "./digest";
-import { concat } from "../abi";
+import { concat, hexBytes } from "../abi";
 import {
   readTlv, children, parseOne, expect, oidToString, tlv, seq, oid, derNull, octets, bits, integer, uintOf,
   bytesToBig, bigToBytes, DerError, SEQUENCE, BIT_STRING, OCTET_STRING, OID,
@@ -284,7 +284,6 @@ const DIGEST_INFO: Record<string, string> = {
   md5: "3020300c06082a864886f70d020505000410", sha1: "3021300906052b0e03021a05000414", sha224: "302d300d06096086480165030402040500041c",
   sha256: "3031300d060960864801650304020105000420", sha384: "3041300d060960864801650304020205000430", sha512: "3051300d060960864801650304020305000440",
 };
-const hexBytes = (h: string) => Uint8Array.from(h.match(/../g)!, (b) => parseInt(b, 16));
 /** EMSA-PKCS1-v1_5 of an already computed digest (the digest name picks the DigestInfo; null for none) */
 export function pkcs1SignPad(k: number, digestName: string | null, digest: Uint8Array): Uint8Array | null {
   const t = digestName ? concat([hexBytes(DIGEST_INFO[digestName]), digest]) : digest;

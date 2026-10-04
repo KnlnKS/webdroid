@@ -119,7 +119,6 @@ function stringValue(t: Tlv): string | null {
   if (t.tag === 0x0c) return new TextDecoder().decode(t.body);
   return STRING_TAGS.has(t.tag) ? String.fromCharCode(...t.body) : null;
 }
-const hex = (b: Uint8Array) => Array.from(b, (v) => v.toString(16).padStart(2, "0")).join("");
 /** X509_NAME_print_ex as conscrypt prints names (XN_FLAG_RFC2253 without ESC_MSB or UTF8_CONVERT),
  *  read back as UTF-8: last RDN first, specials and control characters escaped, other characters
  *  below 256 written as one byte each, wider ones as \UXXXX or \WXXXXXXXX */
@@ -128,7 +127,7 @@ export function nameRfc2253(name: Uint8Array): string {
     const [type, value] = children(expect(atv, SEQUENCE).body);
     const o = oidToString(expect(type, OID).body), short = SHORT[o];
     const s = short ? stringValue(value) : null;
-    if (s === null) return `${short ?? o}=#${hex(value.raw)}`;
+    if (s === null) return `${short ?? o}=#${value.raw.toHex()}`;
     const chars = [...s], bytes: number[] = [], ascii = (t: string) => { for (const ch of t) bytes.push(ch.charCodeAt(0)); };
     chars.forEach((ch, i) => {
       const c = ch.codePointAt(0)!;

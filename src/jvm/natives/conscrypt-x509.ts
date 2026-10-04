@@ -291,7 +291,7 @@ nc("asn1_write_free(J)V", (h: bigint) => release(h));
 
 // ── the text form of keys and certificates (EVP_PKEY_print_*, X509_print_ex), as OpenSSL lays it out
 const colonHex = (b: Uint8Array, indent: number, perLine = 15) => {
-  const parts = Array.from(b, (v) => v.toString(16).padStart(2, "0"));
+  const parts = b.toHex().match(/../g) ?? [];
   const lines: string[] = [];
   for (let i = 0; i < parts.length; i += perLine) lines.push(" ".repeat(indent) + parts.slice(i, i + perLine).join(":") + (i + perLine < parts.length ? ":" : ""));
   return lines.join("\n");
@@ -330,7 +330,7 @@ const oneLine = (name: Uint8Array) => nameRfc2253(name).split(/(?<!\\)[,+]/).rev
 const EKU_NAMES: Record<string, string> = { "1.3.6.1.5.5.7.3.1": "TLS Web Server Authentication", "1.3.6.1.5.5.7.3.2": "TLS Web Client Authentication",
   "1.3.6.1.5.5.7.3.3": "Code Signing", "1.3.6.1.5.5.7.3.4": "E-mail Protection", "1.3.6.1.5.5.7.3.8": "Time Stamping", "1.3.6.1.5.5.7.3.9": "OCSP Signing" };
 const KU_NAMES = ["Digital Signature", "Non Repudiation", "Key Encipherment", "Data Encipherment", "Key Agreement", "Certificate Sign", "CRL Sign", "Encipher Only", "Decipher Only"];
-const upperHex = (b: Uint8Array) => Array.from(b, (v) => v.toString(16).padStart(2, "0").toUpperCase()).join(":");
+const upperHex = (b: Uint8Array) => (b.toHex().toUpperCase().match(/../g) ?? []).join(":");
 const GN_PREFIX: Record<number, string> = { 1: "email", 2: "DNS", 6: "URI", 7: "IP Address", 4: "DirName", 8: "Registered ID" };
 function extensionText(oidText: string, value: Uint8Array): [string, string] | null {
   switch (oidText) {

@@ -31,8 +31,6 @@ const HISTORY = 16;
 const MIN_CRASH_INTERVAL_MS = 2 * 60_000;
 const IMPORTANCE_FOREGROUND = 100, IMPORTANCE_CACHED = 400;
 const PREFIX = "wd:exit-info:", storageKey = (pkg: string) => PREFIX + pkg;
-const base64 = (bytes: Uint8Array): string => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
-export const unbase64 = (s: string): Uint8Array => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 /** the packages with records, which AppExitInfoTracker.onPackageRemoved drops */
 export const exitRecordData: PackageState = {
@@ -92,8 +90,8 @@ function recordExit(status: ExitStatus): void {
     // a Java crash keeps no status; the others carry the exit code or the signal
     status: reason === REASON_CRASH ? 0 : status.code ?? status.signal,
     importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED, timestamp: wallMillis(),
-    description: noted?.description ?? null, state: stateSummary && base64(stateSummary),
-    tombstone: status.signal !== undefined && status.tombstone ? base64(status.tombstone) : null, dialog: noted?.dialog ?? false,
+    description: noted?.description ?? null, state: stateSummary && stateSummary.toBase64(),
+    tombstone: status.signal !== undefined && status.tombstone ? status.tombstone.toBase64() : null, dialog: noted?.dialog ?? false,
   });
 }
 onProcessExit(recordExit);

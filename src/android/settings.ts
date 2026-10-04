@@ -8,6 +8,7 @@
 // SettingsProvider.apk rather than on the boot class path. Answers are built in `driven`
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
+import { hexBytes } from "../jvm/abi";
 import { vcall, scall, staticField, newObj } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
@@ -159,11 +160,10 @@ function ssaid(record: PackageRecord): Promise<string> {
     let at = 0;
     for (const p of parts) { data.set(p, at); at += p.length; }
     const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
-    return Array.from(mac.subarray(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
+    return mac.subarray(0, 8).toHex();
   })());
   return id;
 }
-const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (h) => parseInt(h, 16));
 
 /** the rows a whole-table query or LIST answers: the readable, non-null settings */
 function* readableRows(c: Caller, table: Table): Gen<[string, string, string][]> {

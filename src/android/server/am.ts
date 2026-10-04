@@ -16,7 +16,7 @@ import { systemProviderHolder } from "../systemproviders";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
 import { uriText, type JUri } from "../net";
 import { systemFontMap } from "../fonts";
-import { appCrashed, exitRecords, noteApplicationFlags, setProcessStateSummary, unbase64, type ExitRecord } from "./appexitinfo";
+import { appCrashed, exitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo";
 import { callingIdentity, newStub, parceledList } from "../binder";
 import { packages } from "../packages";
 import { checkUidPermission } from "../permissions";
@@ -192,10 +192,10 @@ const exitInfo = driven(function* (r: ExitRecord): Gen<JObj> {
   const info: JObj = yield newObj(EXIT_INFO, "()V");
   setDeclared(info, EXIT_INFO, { mPid: r.pid, mRealUid: r.uid, mPackageUid: r.uid, mDefiningUid: r.uid, mProcessName: r.process, mPackageName: r.pkg,
     mReason: r.reason, mStatus: r.status, mImportance: r.importance, mTimestamp: BigInt(r.timestamp), mDescription: r.description,
-    mState: r.state && new Int8Array(unbase64(r.state).buffer) });
+    mState: r.state && new Int8Array(Uint8Array.fromBase64(r.state).buffer) });
   if (r.tombstone) {
     const retriever = (yield* awaited(newStub("webdroid/TombstoneRetriever"))) as JTombstoneRetriever;
-    retriever.tombstone = unbase64(r.tombstone);
+    retriever.tombstone = Uint8Array.fromBase64(r.tombstone);
     setDeclared(info, EXIT_INFO, { mNativeTombstoneRetriever: retriever });
   }
   return info;

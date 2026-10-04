@@ -54,7 +54,7 @@ export class SettingsStore {
   ssaidKey(): string {
     try { this.userKey ??= globalThis.localStorage?.getItem(KEY + ":ssaid") ?? null; } catch { /* storage unavailable */ }
     if (!this.userKey) {
-      this.userKey = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+      this.userKey = crypto.getRandomValues(new Uint8Array(32)).toHex().toUpperCase();
       try { globalThis.localStorage?.setItem(KEY + ":ssaid", this.userKey); } catch { /* private mode keeps it for the session */ }
     }
     return this.userKey;

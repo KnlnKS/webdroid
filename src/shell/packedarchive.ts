@@ -17,8 +17,7 @@ export type PackedArchiveIndex = {
 export const packedArchives = new Map<string, PackedArchive>();
 export async function sha256(bytes: Uint8Array): Promise<string> {
   const input = bytes.buffer instanceof ArrayBuffer ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
-  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", input)).toHex();
 }
 export class PackedArchive implements FileSource {
   readonly size: number;
