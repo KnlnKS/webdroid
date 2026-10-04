@@ -192,14 +192,13 @@ export class Natives {
   imports(ctx: HostContext, ids: Iterable<string>): Record<string, HostFn> {
     const out: Record<string, HostFn> = {};
     const throwJava = (t: { cls: string; msg: string | null; obj?: object }): never => {
-      if (process.env.DBG) console.error("THROW", t.cls, t.msg);
       const j = ctx.throwable(t.cls, t.msg);
       if (t.obj) ctx.bridge.copyFields(t.obj as Record<string, unknown>, j, t.cls);
       throw ctx.raise(j);
     };
     const raise = (e: unknown): never => {
       const t = this.src?.thrown(e);
-      if (!t) { if (process.env.DBG) console.error((e as Error).stack); throw e; }
+      if (!t) throw e;
       return throwJava(t);
     };
     const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new VIEWS[kind](ctx.mem.buffer, ptr, len);
@@ -214,7 +213,6 @@ export class Natives {
     for (const id of ids) {
       const p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
-      if (process.env.TRACE) { const g = p.fn; p.fn = function (this: unknown, ...a: unknown[]) { let r: unknown; try { r = g.apply(this, a); return r; } finally { if (process.env.TRACE === "stack") console.error(new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:")).slice(0, 12).map((l) => l.replace(/ \(wasm.*/, "")).join("\n")); console.error("N", id, a.map((x) => typeof x === "string" || typeof x === "number" ? JSON.stringify(x) : typeof x === "bigint" ? x + "n" : x && (x as {length?: number}).length !== undefined ? `[${(x as {length: number}).length}]` : typeof x), "=>", typeof r === "string" ? JSON.stringify(r) : typeof r); } }; }
       out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, wrapper(p, p.fn, raise, () => { ctx.gap(`${id}: native suspended (answers a Promise)`); return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }); }, view, put, ctx.bridge)), p.wrapped.get(ctx)!);
     }
     return out;

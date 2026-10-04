@@ -87,7 +87,7 @@ export class World {
     const names = (id: number) => this.names[id];
     this.host = {
       fmod: (a: number, b: number) => a % b,
-      gap: (id: number) => { if (process.env.TRACE) console.error("GAP", this.gapList[id], new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:") && !l.includes("ensure:")).slice(0, 14).map((l) => l.replace(/ \(wasm.*/, "").trim()).join("\n  < ")); this.onGap(id); },
+      gap: (id: number) => this.onGap(id),
       link: (slot: number) => this.linkSlot(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
@@ -113,8 +113,8 @@ export class World {
         if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => { if (process.env.TRACE) console.error("EXC", kind, excMessage(kind, a, b, c, d, e, names), new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:")).slice(0, 6).map((l) => l.replace(/ \(wasm.*/, "").trim()).join(" < ")); return (this.lastMessage = excMessage(kind, a, b, c, d, e, names)); },
-      capture: (exn: object) => { const e = new Error(); this.stacks.set(exn, e); if (process.env.TRACE) console.error("THROWABLE", javaFrames(e.stack ?? "", this.traces).slice(0, 10).map((f) => f.cls + "." + f.method).join(" < ")); },
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
+      capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
       stLine: (i: number) => this.frames[i].line,

@@ -152,7 +152,10 @@ export class Bridge {
     const { params, ret } = parseMethodDesc(impl.desc), kinds: Kind[] = ["L", ...params.map(kindOf)], rk = ret === "V" ? "V" : kindOf(ret);
     const call = this.w.hostFn(`b:call:${impl.cls}.${impl.key}`, kinds, rk, (cx, c) => { kinds.forEach((_, i) => c.lget(i)); cx.callMethod(c, impl); });
     return (...args: unknown[]) => {
-      const r = call(o, ...args.map((a, i) => kinds[i + 1] === "L" ? this.toJava(a, params[i]) : toBits(a, params[i])));
+      const given = args.map((a, i) => kinds[i + 1] === "L" ? this.toJava(a, params[i]) : toBits(a, params[i]));
+      const r = call(o, ...given);
+      // a primitive array the native passed is copied for the call; what the method wrote to it is the native's to read
+      args.forEach((a, i) => { if (ArrayBuffer.isView(a) && given[i] && !this.owners.has(a)) this.readBack(given[i] as object, a); });
       return rk === "V" ? undefined : rk === "L" ? this.toHost(r, ret) : fromBits(r, ret);
     };
   }
@@ -168,6 +171,11 @@ export class Bridge {
     const cls = this.src?.classOf?.(o);
     if (cls) return this.copyObject(o as Record<string, unknown>, cls);
     throw new Error(`a native returned a host value of no Java class where ${desc} was expected`);
+  }
+  private readBack(j: object, host: ArrayBufferView): void {
+    const bytes = host.byteLength, at = this.region(bytes);
+    this.op.acopy(j, at, 1);
+    new Uint8Array(host.buffer, host.byteOffset, bytes).set(new Uint8Array(this.w.mem.buffer, at, bytes));
   }
   private newArray(name: string): Fn {
     return this.w.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));
@@ -193,7 +201,6 @@ export class Bridge {
   copyFields(o: Record<string, unknown>, j: object, cls: string): void {
     for (const f of this.fieldsOf(cls).values()) {
       const v = o[mangleField(f.owner, f.name)];
-      if (process.env.TRACE) console.error("COPY", cls, f.name, v);
       if (v !== undefined) this.accessor("set", f)(j, f.kind === "L" ? this.toJava(v, f.desc) : toBits(v, f.desc));
     }
   }
