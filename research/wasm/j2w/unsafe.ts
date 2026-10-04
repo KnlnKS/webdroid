@@ -25,7 +25,7 @@ const kindOfTy = (t: Ty): Kind => kindOf(desc(t));
 const ELEM: Record<number, ElemKind> = { 1: "i8", 2: "i16", 4: "i32", 8: "i64" };
 
 /** host.info kinds of this file */
-export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, AllocInstance }
+export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, AllocInstance, StaticGet, StaticPut }
 /** the table slot of the accessor of field `a` for the operation `kind` (the field's kind must be `b`: 0 int-like, 1 long-like, 2 reference), 0 if there is none;
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
 export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number {
@@ -35,10 +35,12 @@ export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number 
     const jc = w.prog.get(name);
     return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } });
   }
-  const f = w.prog.get(name)?.fields[a & 0xfff];
-  if (!f || f.isStatic || f.kind !== (["I", "J", "L"] as const)[b]) return 0;
-  const op = kind === UInfo.FieldGet ? "get" : kind === UInfo.FieldPut ? "put" : "cas", k = f.kind;
+  const f = w.prog.get(name)?.fields[a & 0xfff], stat = kind === UInfo.StaticGet || kind === UInfo.StaticPut;
+  if (!f || f.isStatic !== stat || f.kind !== (["I", "J", "L"] as const)[b]) return 0;
+  const op = kind === UInfo.FieldGet || kind === UInfo.StaticGet ? "get" : kind === UInfo.FieldPut || kind === UInfo.StaticPut ? "put" : "cas", k = f.kind;
   const params: Kind[] = op === "get" ? ["L"] : op === "put" ? ["L", k] : ["L", k, k];
+  // a static field's accessor takes the receiver slot too, so reflection reaches both kinds the same way
+  if (stat) return w.synthSlot(`uf:s${op}:${a}`, { params, ret: op === "get" ? k : "V", body: (cx, c) => { const g = cx.staticGlobal(name, f.name); if (op === "get") c.gget(g); else c.lget(1).gset(g); } });
   return w.synthSlot(`uf:${op}:${a}`, { params, ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
     const st = cx.structFor(name), at = cx.fieldIndex(name, f), o = c.newLocal(refNull(st));
     c.lget(0).refCast(st).lset(o);

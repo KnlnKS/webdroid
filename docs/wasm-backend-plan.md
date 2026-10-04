@@ -349,7 +349,41 @@ locals (`FLOAT_LOCALS` in `method.ts`, one flag), fields, arrays, parameters and
 against `min(320,7000)`), which halves `fib(32)` (9.7 vs 5.4 ms); unit modules carry an empty start function. (2) Cross-module calls cannot
 inline, so small callees are grouped (without grouping `swsum` is 3x slower than the closed-world build; with it equal at 0.07 ms).
 
-### 4.6 S1-F: generated-code performance and the G1 timing (2026-10-04, `knlnks/wasm-f`)
+### 4.6 Natives and the host boundary (2026-10-04, `knlnks/wasm-d`)
+
+**ABI.** A native keeps the production value model: Strings as JS strings, primitive arrays as typed arrays over scratch memory, long as bigint.
+Every other reference (receiver, object, object array, a result that is an object) crosses as an opaque `externref` and meets the production
+function through `bridge.ts`. The bridge never reads a Java object itself: array length and elements, and one getter and setter per field, are
+generated Wasm (`World.hostFn`), and a field-reading `Proxy` per object lets a production native such as `Linux.close(fd)` run unchanged. A
+Java method a native calls on an object (`vcall`) resolves to the implementation the object's class has and runs as Wasm. For the length of
+the call an `Object` that is a primitive array is a copy that is written back; a host array becomes a Java array; an object the production
+runtime made (`StructStat`, a `FileDescriptor`) is copied field by field; a throwable a native raises keeps its subclass fields (`ErrnoException`).
+A `static ()V` native that fills in statics (`OsConstants.initConstants`) has them stored into the Wasm class. A native that answers a Promise is
+a recorded gap, as is anything JavaScriptCore's stack cannot answer (the caller class: Bun runs `W` only, `libdiff` blocks and counts the rest).
+
+**Natives landed** (Wasm unless noted): `Thread.currentThread` over a real main `Thread` (made as ART's `CreatePeer` does, `rt.thr` is the one
+global a scheduler changes), `nativeGetStatus`, interrupt flag; `Reference` and `FinalizerReference` natives (a referent is held until cleared);
+`Class.forName`, `getDeclaredClasses`, `VMClassLoader.findLoadedClass` and the boot class path entries; `Field.get/set*` with widening,
+receiver, access (the caller from the V8 frame) and final checks; `libcore.io.Memory` peek/poke over the `byte[]` a direct buffer lives in
+(`VMRuntime.addressOf` pins it, 50th bit of the address); every `Character` native (ASCII inline, the rest through ICU4J's `UCharacter` running as
+Wasm over the ICU data the production natives map); `String.<init>(int,int,char[])`; production natives now reachable with object receivers
+(`Linux`, `VMRuntime`, `Unix` file system, `FileChannelImpl`, zip, conscrypt). A mapped file's pages and the 64 KB digest path are asynchronous in
+production; the harness makes the ICU data resident first and runs the digest's JS form.
+
+**Results.** `diff.ts` 861/861 under node (the new `N.java` covers fields, `Class.forName`, direct buffers, the main thread, Unicode properties
+and references against the JDK and the JS tier); `libdiff.ts` 409 methods, 16,360 cases, 0 diffs under node; `classdiff.ts` and `lazytest.ts`
+pass under both. Under Bun `diff.ts` runs the 741 cases of `W`, `libdiff.ts` blocks 1,970 whose `System.<clinit>` needs the caller class.
+`jbench.ts` under node: **40 of 42 workloads match the JS tier**; `inetCached` stops at `android_getaddrinfo` (the production native builds
+`InetAddress` objects asynchronously). Fixed on the way: `findMethod` branched out of its own loop on the first parameter mismatch (an infinite
+loop for a class with two constructors), and `node` exited while an unref'd yield port held a pending await (`nodeshim.mjs` is now the entry:
+`node nodeshim.mjs bundle.mjs`).
+
+**Production findings.** The JS tier's `Field` lacks the receiver, type and final checks (`getBoolean` of an int field answers a number) and
+does not convert on widening reads and writes (`getLong` of an int field answers a number, `setByte` on a long field stores a number): `diff.ts`
+compares those cases with the JDK alone. Natives that need a lock-step thread (`wait`, `sleep`, `park`, `holdsLock`, `nativeCreate`) stay gaps
+for the scheduler; so do `Class.getSimpleNameNative`, the annotation natives and `getDeclaredConstructorsInternal`.
+
+### 4.7 S1-F: generated-code performance and the G1 timing (2026-10-04, `knlnks/wasm-f`)
 
 **Harness.** `bun g1.ts [workload ...] [--runs 5] [--reps 100] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "..."]`
 (`g1run.ts`, `g1platform.ts`, `g1fs.ts`). A workload is a `case` line of `scripts/jbench/Bench.java` or `research/wasm/j2w/java/G1.java`
@@ -418,7 +452,7 @@ linear-memory copy per call): 0.36 ms against 0.12 for the JS tier. `String.inde
 
 ### 4.4 Do not trust
 
-Any speed claim for the prototype except those in 4.6, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
+Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
 
 ## 5. Unverified facts the executor must check first
 

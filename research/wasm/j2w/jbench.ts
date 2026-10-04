@@ -2,7 +2,7 @@
 // production JS tier: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
 // --survey also compiles everything the workloads can reach (the old whole-program build) and lists what blocks it.
 // VMStack.getStackClass (Reflection.getCallerClass, so MethodHandles.lookup and anything caller-sensitive) reads V8's wasm frames, which JavaScriptCore
-// does not give: run under node with `bun build jbench.ts --target=node`, `import.meta.dir` replaced by this directory and `node --import ./nodeshim.mjs`.
+// does not give: run under node with `bun build jbench.ts --target=node`, `import.meta.dir` replaced by this directory and `node nodeshim.mjs bundle.mjs`, which keeps node alive across the unref'd yield port.
 // Needs the Android SDK (android.jar, d8) and javac. Run: bun jbench.ts [workload ...] [-v] [--survey]
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { isIntrinsic, loadDexes, program, world } from "./build";
-import { jsTier, natives } from "./oracle";
+import { jsTier, natives, processState } from "./oracle";
 import { reach } from "./reach";
 
 const root = join(import.meta.dir, "../../..");
@@ -48,6 +48,7 @@ for (const name of todo) {
   let want: string, got: string, hit: number[] = [];
   const w = world(prog, { natives });
   w.onGap = (id) => hit.push(id);
+  try { processState(w); } catch { /* the workload reports what blocks even this */ }
   try { want = String(await js("Bench", `w_${name}`, "()I", [])); } catch (e) { want = "throw"; }
   const t0 = performance.now();
   try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch (e) {
