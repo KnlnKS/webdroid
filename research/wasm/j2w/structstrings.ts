@@ -9,6 +9,7 @@ import { H } from "./consts";
 import { parseMethodDesc } from "../../../src/jvm/abi";
 import type { Compiler, Intrinsic } from "./j2w";
 import { HT, type StringRepr } from "./strings";
+import { bytesFactory } from "./strfactory";
 
 const STRING = "java/lang/String";
 /** the imported table (after the function table) holding the String constants, shared by all modules */
@@ -58,6 +59,16 @@ export class StructStrings implements StringRepr {
   newChars(): number {
     return this.fn("newChars", [T.i32], [ref(this.chars)], (c) => { c.lget(0).i32(1).call(this.cx.helper("newLen")).arrayNewDefault(this.chars); });
   }
+  /** newCharsKnown(n) -> (ref $chars): as newChars for a length that is no larger than an array that exists, so it only counts the allocation */
+  newCharsKnown(): number {
+    return this.fn("newCharsKnown", [T.i32], [ref(this.chars)], (c) => {
+      const g = this.cx.global("rt", "alloc", T.i32, true);
+      c.gget(g).lget(0).i32(1).raw(OP.i32_shl).raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.cx.helper("allocSlow")).end();
+      c.lget(0).arrayNewDefault(this.chars);
+    });
+  }
+  newKnown(): number { return this.newCharsKnown(); }
+  finish(c: Code, out: number): void { c.lget(out).call(this.mk()); }
   /** mk(chars) -> String */
   mk(): number {
     return this.fn("mk", [ref(this.chars)], [ref(this.st)], (c) => {
@@ -70,7 +81,7 @@ export class StructStrings implements StringRepr {
     return this.fn("sub", [T.anyref, T.i32, T.i32], [T.anyref], (c) => {
       const out = c.newLocal(ref(this.chars));
       c.lget(1).raw(OP.i32_eqz).lget(2); this.lenOf(c, 0); c.raw(OP.i32_eq, OP.i32_and).if_().lget(0).ret().end();
-      c.lget(2).call(this.newChars()).lset(out);
+      c.lget(2).call(this.newCharsKnown()).lset(out);
       c.lget(out).i32(0); this.charsOf(c, 0); c.lget(1).lget(2).arrayCopy(this.chars, this.chars);
       c.lget(out).call(this.mk());
     });
@@ -158,6 +169,8 @@ export class StructStrings implements StringRepr {
   private makeFactory(desc: string): number | undefined {
     const cx = this.cx, { params } = parseMethodDesc(desc), chars = this.chars, ctor = cx.prog.get(STRING)?.byKey.get("<init>" + desc);
     const host = () => ctor && cx.natives.factory(cx, ctor);
+    const decoder = bytesFactory(cx, this, desc, desc === "([BB)V" ? undefined : host());
+    if (decoder !== undefined) return decoder;
     const make = (name: string, body: (c: Code) => void) => {
       const c = new Code(params.length);
       body(c);
@@ -167,7 +180,7 @@ export class StructStrings implements StringRepr {
     /** the String of n chars of the char[] in local `src` from `from` */
     const copy = (c: Code, src: number, from: () => void, n: () => void) => {
       const out = c.newLocal(ref(chars));
-      n(); c.call(this.newChars()).lset(out);
+      n(); c.call(this.newCharsKnown()).lset(out);
       c.lget(out).i32(0); data(c, src, "i16"); from(); n(); c.arrayCopy(chars, chars);
       c.lget(out).call(this.mk());
     };
@@ -193,45 +206,6 @@ export class StructStrings implements StringRepr {
       });
       // the hidden constructor libcore's case mapping uses: a range of a char[] it filled itself, so the range needs no check
       case "(II[C)V": return make("String.<init>(II[C)V", (c) => { copy(c, 2, () => c.lget(0), () => c.lget(1)); });
-      // the compact form StringLatin1 and StringUTF16 build: coder 0 holds a char per byte, coder 1 two, low byte first
-      case "([BB)V": return make("String.<init>([BB)V", (c) => {
-        this.npe(c, 0);
-        const bytes = cx.tData.i8, d = c.newLocal(ref(bytes)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), out = c.newLocal(ref(chars));
-        data(c, 0, "i8").lset(d);
-        c.lget(d).arrayLen().lset(n);
-        c.lget(1).if_().lget(n).i32(1).raw(OP.i32_shr_s).lset(n).end();
-        c.lget(n).call(this.newChars()).lset(out);
-        const byte = (index: () => void) => { c.lget(d); index(); c.arrayGetU(bytes); };
-        c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1).lget(out).lget(i);
-        c.lget(1).if_(T.i32);
-        byte(() => c.lget(i).i32(1).raw(OP.i32_shl)); byte(() => c.lget(i).i32(1).raw(OP.i32_shl).i32(1).raw(OP.i32_add)); c.i32(8).raw(OP.i32_shl).raw(OP.i32_or);
-        c.else_(); byte(() => c.lget(i)); c.end();
-        c.arraySet(chars).lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-        c.lget(out).call(this.mk());
-      });
-      // bytes of the default charset (UTF-8): ASCII is the chars themselves, anything else is the host's decoder
-      case "([B)V": case "([BII)V": {
-        const h = host();
-        if (h === undefined) return undefined;
-        return make(`String.<init>${desc}`, (c) => {
-          const d = c.newLocal(ref(cx.tData.i8)), from = c.newLocal(T.i32), n = c.newLocal(T.i32), i = c.newLocal(T.i32), acc = c.newLocal(T.i32), b = c.newLocal(T.i32), out = c.newLocal(ref(chars));
-          const viaHost = () => { params.forEach((_, k) => c.lget(k)); c.call(h).ret(); };
-          c.lget(0).refIsNull().if_(); viaHost(); c.end();
-          data(c, 0, "i8").lset(d);
-          c.lget(d).arrayLen().lset(n);
-          if (desc === "([BII)V") {
-            outOfRange(c, 1, 2, n).if_(); viaHost(); c.end();
-            c.lget(1).lset(from).lget(2).lset(n);
-          }
-          c.lget(n).call(this.newChars()).lset(out);
-          c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1)
-            .lget(d).lget(from).lget(i).raw(OP.i32_add).arrayGetU(cx.tData.i8).lset(b)
-            .lget(out).lget(i).lget(b).arraySet(chars).lget(acc).lget(b).raw(OP.i32_or).lset(acc)
-            .lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-          c.lget(acc).i32(0x80).raw(OP.i32_and).if_(); viaHost(); c.end();
-          c.lget(out).call(this.mk());
-        });
-      }
       default: return host();
     }
   }
@@ -308,7 +282,7 @@ export const structIntrinsics = new Map<string, Intrinsic>();
   });
   def("toCharArray()[C", (cx, m, c) => {
     const s = S(cx), t = cx.tArr.i16, a = c.newLocal(ref(cx.tData.i16));
-    s.lenOf(c, 0).call(s.newChars()).lset(a);
+    s.lenOf(c, 0).call(s.newCharsKnown()).lset(a);
     c.lget(a).i32(0); s.charsOf(c, 0).i32(0); s.lenOf(c, 0); c.arrayCopy(cx.tData.i16, cx.tData.i16);
     c.gget(cx.vtGlobal("[C")).refAsNonNull().i32(0).lget(a).structNew(t);
   });
@@ -321,3 +295,29 @@ export const structIntrinsics = new Map<string, Intrinsic>();
       .lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().i32(0);
   });
 }
+
+// AbstractStringBuilder.putStringAt(index, str): str's chars into value at index, as one pass instead of coder() and getBytes; a char
+// that does not fit a byte makes the builder UTF-16 first (inflate), then every char of str is written as two bytes, low byte first
+structIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/String;)V", (cx, m, c) => {
+  const s = cx.str as StructStrings, ASB = "java/lang/AbstractStringBuilder", st = cx.structFor(ASB), field = (name: string, desc: string) => cx.fieldIndex(ASB, { owner: ASB, name, desc });
+  const VALUE = field("value", "[B"), CODER = field("coder", "B"), inflate = cx.prog.resolve(ASB, "inflate", "()V");
+  if (!inflate) { cx.gap(c, "AbstractStringBuilder.inflate"); return; }
+  const a = c.newLocal(ref(cx.tData.i16)), d = c.newLocal(refNull(cx.tData.i8)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), ch = c.newLocal(T.i32);
+  const value = () => c.lget(0).refCast(st).structGet(st, VALUE).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2).lset(d);
+  s.charsOf(c, 2).lset(a); c.lget(a).arrayLen().lset(n);
+  c.lget(0).refCast(st).structGet(st, CODER).raw(OP.i32_eqz).if_();
+  value();
+  c.block().block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1)
+    .lget(a).lget(i).arrayGetU(cx.tData.i16).ltee(ch).i32(0xff).raw(OP.i32_gt_u).brIf(2)
+    .lget(d).refAsNonNull().lget(1).lget(i).raw(OP.i32_add).lget(ch).arraySet(cx.tData.i8)
+    .lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().ret().end();
+  c.lget(0); cx.callMethod(c, inflate);
+  c.end();
+  value();
+  c.i32(0).lset(i);
+  c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1)
+    .lget(a).lget(i).arrayGetU(cx.tData.i16).lset(ch)
+    .lget(d).refAsNonNull().lget(1).lget(i).raw(OP.i32_add).i32(1).raw(OP.i32_shl).lget(ch).arraySet(cx.tData.i8)
+    .lget(d).refAsNonNull().lget(1).lget(i).raw(OP.i32_add).i32(1).raw(OP.i32_shl).i32(1).raw(OP.i32_add).lget(ch).i32(8).raw(OP.i32_shr_u).arraySet(cx.tData.i8)
+    .lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
+});

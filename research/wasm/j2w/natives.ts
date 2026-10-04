@@ -48,7 +48,7 @@ const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefine
 export const SIZE: Record<ElemKind, number> = { i8: 1, i16: 2, i32: 4, i64: 8, ref: 4 };
 type View = ArrayBufferView & { length: number };
 /** the typed array the production natives take for a primitive array class */
-export const VIEWS: Record<string, new (b: ArrayBuffer, o: number, n: number) => View> = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
+export const VIEWS: Record<string, new (b: ArrayBuffer | number, o?: number, n?: number) => View> = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
 
 /** String methods whose Java body needs charset or regex machinery (class objects, ICU natives), or ART's native doReplace, and whose
  *  production override is a self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */

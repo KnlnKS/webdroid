@@ -7,6 +7,7 @@ import { kindOf } from "./program";
 import { H } from "./consts";
 import { parseMethodDesc } from "../../../src/jvm/abi";
 import type { Compiler, Intrinsic } from "./j2w";
+import { bytesFactory } from "./strfactory";
 
 /** abstract heap types as ref.test/ref.cast immediates */
 export const HT = { extern: -17, any: -18, eq: -19 } as const;
@@ -71,8 +72,27 @@ export class JsStrings implements StringRepr {
     if (!this.factories.has(desc)) this.factories.set(desc, this.makeFactory(desc));
     return this.factories.get(desc);
   }
+  newKnown(): number {
+    return this.cx.memo("newKnown", () => {
+      const cx = this.cx, f = cx.mb.reserveFunc(cx.mb.addFuncType([T.i32], [ref(cx.tData.i16)]), "$newKnown"), c = new Code(1);
+      c.lget(0).i32(1).call(cx.helper("newLen")).arrayNewDefault(cx.tData.i16);
+      cx.mb.setBody(f, c.finish());
+      return f;
+    });
+  }
+  finish(c: Code, out: number): void { c.lget(out).i32(0).lget(out).arrayLen().call(this.b.fromCharCodeArray).anyConvertExtern(); }
+  equals(): number {
+    return this.cx.memo("jsEquals", () => {
+      const cx = this.cx, f = cx.mb.reserveFunc(cx.mb.addFuncType([T.anyref, T.anyref], [T.i32]), "$jsEquals");
+      cx.mb.setBody(f, new Code(2).lget(0).externConvertAny().lget(1).externConvertAny().call(this.b.equals).finish());
+      return f;
+    });
+  }
   private makeFactory(desc: string): number | undefined {
-    const { cx, b } = this, { params } = parseMethodDesc(desc), npe = (c: Code) => { c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); };
+    const { cx, b } = this, { params } = parseMethodDesc(desc), ctor0 = cx.prog.get(STRING)?.byKey.get("<init>" + desc);
+    const decoder = bytesFactory(cx, this, desc, desc === "([BB)V" ? undefined : ctor0 && cx.natives.factory(cx, ctor0));
+    if (decoder !== undefined) return decoder;
+    const npe = (c: Code) => { c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); };
     const c = new Code(params.length), fromChars = (data: number, from: () => void, to: () => void) => { c.lget(data); from(); to(); c.call(b.fromCharCodeArray).anyConvertExtern(); };
     const charData = () => { npe(c); return c.newLocal(refNull(cx.tData.i16)); };
     switch (desc) {
@@ -94,21 +114,6 @@ export class JsStrings implements StringRepr {
         const d = c.newLocal(refNull(cx.tData.i16));
         c.lget(2).refCast(cx.tArr.i16).structGet(cx.tArr.i16, 2).lset(d);
         fromChars(d, () => c.lget(0), () => c.lget(0).lget(1).raw(OP.i32_add)); break;
-      }
-      case "([BB)V": {
-        // the compact form StringLatin1 and StringUTF16 build: coder 0 holds a char per byte, coder 1 two, low byte first
-        npe(c);
-        const bytes = cx.tData.i8, d = c.newLocal(refNull(bytes)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), out = c.newLocal(refNull(cx.tData.i16));
-        c.lget(0).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2).lset(d).lget(d).refAsNonNull().arrayLen().lset(n);
-        c.lget(1).if_().lget(n).i32(1).raw(OP.i32_shr_s).lset(n).end();
-        c.lget(n).arrayNewDefault(cx.tData.i16).lset(out);
-        const byte = (index: () => void) => { c.lget(d).refAsNonNull(); index(); c.arrayGetU(bytes); };
-        c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1).lget(out).refAsNonNull().lget(i);
-        c.lget(1).if_(T.i32);
-        byte(() => c.lget(i).i32(1).raw(OP.i32_shl)); byte(() => c.lget(i).i32(1).raw(OP.i32_shl).i32(1).raw(OP.i32_add)); c.i32(8).raw(OP.i32_shl).raw(OP.i32_or);
-        c.else_(); byte(() => c.lget(i)); c.end();
-        c.arraySet(cx.tData.i16).lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-        c.lget(out).refAsNonNull().i32(0).lget(n).call(b.fromCharCodeArray).anyConvertExtern(); break;
       }
       default: { const ctor = cx.prog.get(STRING)?.byKey.get("<init>" + desc); return ctor && cx.natives.factory(cx, ctor); }
     }
