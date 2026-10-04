@@ -10,9 +10,9 @@ import { mid } from "./reach";
 
 export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
-  const intr = cx.opts.intrinsics.get(mid(m));
+  const intr = cx.intrinsic(m);
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return c.finish(); }
-  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: native/abstract`); return c.finish(); }
+  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return c.finish(); }
   try {
     // locals of a kind are only written when some instruction reads them: iterate the read set down to a fixpoint
     let rk: Set<string> | null = null;
@@ -48,7 +48,7 @@ class MC {
   rk(kind: Kind, reg: number): boolean { return !this.readKinds || this.readKinds.has(kind + reg); }
   loc(kind: Kind, reg: number): number {
     const k = kind + reg; let l = this.locals.get(k);
-    if (l === undefined) { l = this.code.newLocal(kind === "I" ? T.i32 : kind === "J" ? T.i64 : refNull(this.cx.tObj)); this.locals.set(k, l); }
+    if (l === undefined) { l = this.code.newLocal(this.cx.vtOf(kind)); this.locals.set(k, l); }
     return l;
   }
   get(kind: Kind, reg: number): void { this.reads.add(kind + reg); this.code.lget(this.loc(kind, reg)); }
@@ -68,8 +68,8 @@ class MC {
     let reg = item.regs - item.ins, pi = 0;
     if (!m.isStatic) this.locals.set("L" + reg++, pi++);
     for (const p of m.params) { this.locals.set(kindOf(p) + reg, pi++); reg += isWide(p) ? 2 : 1; }
-    if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(refNull(cx.tObj)); }
-    this.tmpL = c.newLocal(refNull(cx.tObj));
+    if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
+    this.tmpL = c.newLocal(T.anyref);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
     if (regions.length === 1 && !this.tries) {
@@ -78,10 +78,10 @@ class MC {
       return c.finish();
     }
     this.regionLocal = c.newLocal(T.i32);
-    if (!this.tries) this.excLocal = c.newLocal(refNull(cx.tObj));
+    if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     this.push("$disp"); c.loop();
     if (this.tries) {
-      this.push("$caught"); c.block(refNull(cx.tObj));
+      this.push("$caught"); c.block(T.anyref);
       c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
     }
     const n = regions.length;
@@ -175,7 +175,7 @@ class MC {
     const c = this.code, cx = this.cx;
     this.get("L", reg); c.refIsNull().if_().call(cx.helpers.npe).end(); this.get("L", reg);
   }
-  refTo(reg: number, struct: number) { this.nonNull(reg); if (struct !== this.cx.tObj) this.code.refCast(struct); }
+  refTo(reg: number, struct: number) { this.nonNull(reg); this.code.refCast(struct); }
 
   // ---------- kind analysis for if-eq/ne and moves
   analyzeKinds() {
@@ -277,7 +277,8 @@ class MC {
       case "const-wide/16": case "const-wide/32": c.i64(BigInt(b)); this.set("J", a); return;
       case "const-wide": c.i64(ins.wideLit); this.set("J", a); return;
       case "const-wide/high16": c.i64(BigInt(b) << 48n); this.set("J", a); return;
-      case "const-string": case "const-string/jumbo": case "const-class": case "const-method-handle": case "const-method-type":
+      case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L", a); return;
+      case "const-class": case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
@@ -296,7 +297,10 @@ class MC {
         this.arrayLength(b); this.set("I", a); return;
       }
       case "new-instance": {
-        const name = descToName(dex.type(b)); cx.emitEnsure(c, name); cx.emitNew(c, name); this.set("L", a); return;
+        const name = descToName(dex.type(b));
+        // a String is made by the constructor call (below), which assigns its register
+        if (cx.str.isString(name)) c.anyNull(); else { cx.emitEnsure(c, name); cx.emitNew(c, name); }
+        this.set("L", a); return;
       }
       case "new-array": {
         const desc = dex.type(ins.c), ek = elemKindOf(desc), vtg = cx.vtGlobal.get(desc);
@@ -342,7 +346,7 @@ class MC {
   constI(a: number, v: number) {
     const c = this.code;
     if (this.rk("I", a)) { c.i32(v); this.set("I", a); }
-    if (v === 0 && this.rk("L", a)) { c.refNull(this.cx.tObj); this.set("L", a); }
+    if (v === 0 && this.rk("L", a)) { c.anyNull(); this.set("L", a); }
   }
   arrayLength(reg: number) {
     const cx = this.cx, c = this.code;
@@ -399,10 +403,12 @@ class MC {
   }
   emitIget(ins: Ins) {
     const cx = this.cx, c = this.code, { decl, f } = this.fieldOf(ins.c), st = cx.structFor(decl);
+    cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); c.structGet(st, cx.fieldIndex(decl, f)); this.set(f.kind, ins.a);
   }
   emitIput(ins: Ins) {
     const cx = this.cx, c = this.code, { decl, f } = this.fieldOf(ins.c), st = cx.structFor(decl);
+    cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
   }
   emitStatic(ins: Ins) {
@@ -418,7 +424,7 @@ class MC {
     const cond = () => {
       switch (n) {
         case "if-eq": case "if-ne":
-          if (refA) { this.get("L", ins.a); this.get("L", ins.b); c.refEq(); } else { this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_eq); }
+          if (refA) { this.get("L", ins.a); this.get("L", ins.b); c.call(this.cx.helpers.acmp); } else { this.get("I", ins.a); this.get("I", ins.b); c.raw(OP.i32_eq); }
           if (n === "if-ne") c.raw(OP.i32_eqz); return;
         case "if-eqz": case "if-nez":
           if (refA) { this.get("L", ins.a); c.refIsNull(); } else { this.get("I", ins.a); c.raw(OP.i32_eqz); }
@@ -478,6 +484,10 @@ class MC {
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
       cx.emitEnsure(c, t.cls); pushArgs(); c.call(cx.fnOf(t));
+    } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
+      const make = cx.str.factory(desc);
+      if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
+      pushArgsFrom(this, ins, p.params); c.call(make); this.set("L", ins.regs[0]); return;
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
       const t = kind === "invoke-super" ? prog.resolve(prog.get(this.m.cls)?.isInterface ? decl : prog.get(this.m.cls)!.sup ?? decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
       if (!t) throw new Error("unresolved direct " + decl + "." + key);
@@ -493,7 +503,7 @@ class MC {
       else {
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
         c.lget(this.tmpL); pushArgsFrom(this, ins, p.params);
-        c.lget(this.tmpL).structGet(cx.tObj, 0);
+        c.lget(this.tmpL); cx.str.vtab(c, decl);
         if (declC && !declC.isInterface) {
           c.i32(cx.slotOf(decl, key)).arrayGet(cx.tVT);
         } else if (prog.get("java/lang/Object")!.byKey.has(key)) {

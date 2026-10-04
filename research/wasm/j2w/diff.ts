@@ -3,10 +3,10 @@
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compile, hostImports, loadDexes } from "./build";
+import { compile, compileModule, instantiate, loadDexes } from "./build";
 import { Program } from "./program";
 import { exportName } from "./j2w";
-import { jsTier } from "./oracle";
+import { jsTier, natives } from "./oracle";
 import { compare, genCases } from "./cases";
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-"));
@@ -20,10 +20,10 @@ sh(["d8", "--release", "--output", out, join(out, "W.class")]);
 
 const dex = join(out, "classes.dex");
 const methods = new Program(loadDexes(dex)).require("W").methods.filter((m) => m.isStatic && m.codeOff);
-const { bytes, cx } = compile([dex], methods.map((m) => ["W", m.name, m.desc]));
+const { bytes, cx } = compile([dex], methods.map((m) => ["W", m.name, m.desc]), natives);
 if (cx.gaps.size || cx.r.unresolved.size) throw new Error("compile gaps: " + JSON.stringify([...cx.gaps.keys(), ...cx.r.unresolved]));
 const js = await jsTier(loadDexes(dex));
-const { instance } = await WebAssembly.instantiate(bytes, hostImports());
+const instance = await instantiate(await compileModule(bytes), cx);
 const small: Record<string, number[]> = {
   fib: [0, 1, 2, 10, 20], sieve: [0, 1, 2, 10, 1000, 100000], xorshift: [0, 1, 10, 1000], mandel: [0, 1, 5, 24], swsum: [0, 1, 7, 100, 1000],
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],

@@ -9,17 +9,23 @@ const pool: Record<string, bigint[]> = {
   D: [0, -0, 1, -1, 0.5, 3.5, 1e10, -1e10, 1e300, NaN, Infinity, -Infinity, 3e9, -3e9, 40000.7].map(db),
 };
 /** values a sub-int parameter can hold, so every tier sees the same legal input */
+const STR = "Ljava/lang/String;";
+const strings = ["", "a", "hello", "Hello, World", "-123", "+7", "0x1F", "2147483648", "12abc", "  padded  ", "caf\u00e9", "\ud83d\ude00x", "\ud800", "ABCxyz", "1e3", "true", "3.14", "NaN", "a,b,,c", null];
 const narrow: Record<string, (v: bigint) => bigint> = { Z: (v) => v & 1n, B: (v) => BigInt.asIntN(8, v), S: (v) => BigInt.asIntN(16, v), C: (v) => BigInt.asUintN(16, v) };
-const kindOfParam = (p: string) => (p === "F" || p === "D" ? p : kindOf(p));
+const kindOfParam = (p: string) => (p === "F" || p === "D" ? p : p === STR ? "S" : kindOf(p));
 const retKind = (m: MethodInfo) => (m.ret === "F" || m.ret === "D" ? m.ret : "I");
+const result = (m: MethodInfo, v: unknown, toBits: (v: unknown) => bigint) => (m.ret === STR ? show(v) : fmt(retKind(m), toBits(v)));
 
-export type Case = { m: MethodInfo; args: bigint[] };
+export type Case = { m: MethodInfo; args: (bigint | string | null)[] };
+/** a String result as one comparable token: null apart from the text "null" */
+const show = (v: unknown) => (v === null ? "null" : JSON.stringify(v));
 /** `small` lists the arguments of single-int-parameter methods whose cost grows with the argument */
 export function genCases(methods: MethodInfo[], small: Record<string, number[]> = {}, perMethod = 40): Case[] {
   return methods.flatMap((m) => {
-    if (small[m.name]) return small[m.name].map((n) => ({ m, args: [BigInt(n)] }));
+    if (Object.hasOwn(small, m.name)) return small[m.name].map((n) => ({ m, args: [BigInt(n)] }));
     const ks = m.params.map(kindOfParam);
-    return Array.from({ length: perMethod }, (_, i) => ({ m, args: ks.map((k, j) => (narrow[m.params[j]] ?? ((v) => v))(pool[k][(i * (j + 3) + j * 5 + (i >> 2)) % pool[k].length])) }));
+    const pick = (k: string, i: number, j: number) => { const p = k === "S" ? strings : pool[k]; return p[(i * (j + 3) + j * 5 + (i >> 2)) % p.length]; };
+    return Array.from({ length: perMethod }, (_, i) => ({ m, args: ks.map((k, j) => k === "S" ? pick(k, i, j) as string | null : (narrow[m.params[j]] ?? ((v) => v))(pick(k, i, j) as bigint)) }));
   });
 }
 
@@ -33,8 +39,8 @@ export async function compare(cases: Case[], exportOf: (m: MethodInfo) => string
     const { m, args } = c, rk = retKind(m);
     const ref = jdk ? (jdk[i] === "throw" ? "throw" : fmt(rk, BigInt(jdk[i]))) : undefined;
     let wasm: string, tier: string;
-    try { wasm = fmt(rk, BigInt(exports[exportOf(m)](...args.map((a, j) => (m.params[j] === "J" || m.params[j] === "D" ? a : Number(a)))) as bigint)); } catch { wasm = "throw"; }
-    try { tier = fmt(rk, bitsOf(m.ret, await js(m.cls, m.name, m.desc, args.map((a, j) => unbits(m.params[j], a))))); } catch (e) {
+    try { wasm = result(m, exports[exportOf(m)](...args.map((a, j) => (m.params[j] === "J" || m.params[j] === "D" || typeof a !== "bigint" ? a : Number(a)))), (v) => BigInt(v as bigint)); } catch { wasm = "throw"; }
+    try { tier = result(m, await js(m.cls, m.name, m.desc, args.map((a, j) => typeof a === "bigint" ? unbits(m.params[j], a) : a)), (v) => bitsOf(m.ret, v)); } catch (e) {
       // Bun's JSC words a negative typed-array length differently from V8, which runtime.ts maps to NegativeArraySizeException
       tier = /InternalError: length cannot be negative/.test(String(e)) && wasm !== "throw" ? (explained++, wasm) : "throw";
     }

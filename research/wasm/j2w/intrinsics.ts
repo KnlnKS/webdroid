@@ -2,8 +2,9 @@ import { Code, OP } from "./code";
 import { T, refNull } from "./wasmbin";
 import type { Compiler, Intrinsic } from "./j2w";
 import type { ElemKind } from "./consts";
+import { stringIntrinsics } from "./strings";
 
-export const intrinsics = new Map<string, Intrinsic>();
+export const intrinsics = new Map<string, Intrinsic>(stringIntrinsics);
 export const externs: string[] = [];             // statics of classes the program may lack (d8 also emits Double.isNaN calls)
 const def = (key: string, f: Intrinsic, extern = false) => { intrinsics.set(key, f); if (extern) externs.push(key); };
 

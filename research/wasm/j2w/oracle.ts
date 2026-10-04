@@ -5,6 +5,21 @@ import { rt } from "../../../src/jvm/runtime";
 import "../../../src/natives";
 import { scall } from "../../../src/jvm/natives/jentry";
 import type { DexFile } from "../../../src/jvm/dex";
+import { JThrowable } from "../../../src/jvm/natives/jthrowable";
+import { mangleMethod, splitSig } from "../../../src/jvm/abi";
+import { Natives, type HostFn } from "./natives";
+
+/** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
+const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
+/** the natives the production runtime registered, which the Wasm tier imports */
+export const natives = new Natives({
+  find: (cls, key, isStatic, hasBody) => {
+    if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
+    const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
+    return (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined;
+  },
+  thrown: (e) => e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg } : undefined,
+});
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */

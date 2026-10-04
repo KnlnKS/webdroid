@@ -46,6 +46,12 @@ export class Code {
     else vt(t, this.b);
   }
   refNull(ht: number): this { this.b.push(0xd0); sleb(ht, this.b); return this; }
+  /** ref.null any: the null of every Java reference slot */
+  anyNull(): this { this.b.push(0xd0, 0x6e); return this; }
+  tableGet(t: number): this { this.b.push(0x25); uleb(t, this.b); return this; }
+  /** a JS value (a string) into a reference slot, and back for the js-string builtins */
+  anyOfExtern(): this { return this.gc(0x1a); }
+  externOfAny(): this { return this.gc(0x1b); }
   refIsNull(): this { this.b.push(0xd1); return this; }
   refEq(): this { this.b.push(0xd3); return this; }
   refAsNonNull(): this { this.b.push(0xd4); return this; }

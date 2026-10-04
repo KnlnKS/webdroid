@@ -10,14 +10,22 @@ import type { DexFile } from "../../../src/jvm/dex";
 
 import { H, f32bits, f64bits, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
+import { JsStrings, stringCtor, type StringRepr } from "./strings";
+import { HOST_THROWABLES, Natives } from "./natives";
 import { sleb } from "./wasmbin";
 
 /** the name a built module exports an entry under */
 export const exportName = (cls: string, name: string, desc: string) => `${cls.replace(/\//g, ".")}.${name}${desc}`;
-export const SEED_CLASSES = ["java/lang/Object", "java/lang/NullPointerException", "java/lang/ArrayIndexOutOfBoundsException", "java/lang/ArithmeticException",
+export const SEED_CLASSES = ["java/lang/Object", "java/lang/String", "java/lang/NullPointerException", "java/lang/ArrayIndexOutOfBoundsException", "java/lang/ArithmeticException",
   "java/lang/ClassCastException", "java/lang/NegativeArraySizeException", "java/lang/UnsatisfiedLinkError"];
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
-export interface Options { intrinsics: Map<string, Intrinsic>; stats?: boolean }
+export interface Options { intrinsics: Map<string, Intrinsic>; natives?: Natives; stats?: boolean }
+/** how `m` is implemented without bytecode: an intrinsic, a String constructor (a call site makes the string), or a host import */
+export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: Natives, m: MethodInfo): Intrinsic | undefined {
+  return intrinsics.get(m.cls + "." + m.key) ?? (m.isCtor && m.cls === "java/lang/String" ? stringCtor : natives.stub(m));
+}
+/** what every module is built to reach: the throwables natives raise, with the constructor the host calls */
+export const SEEDS = { instantiate: [...SEED_CLASSES, ...HOST_THROWABLES], methods: HOST_THROWABLES.map((c): [string, string, string] => [c, "<init>", "(Ljava/lang/String;)V"]) };
 
 export class Compiler {
   mb = new ModuleBuilder();
@@ -41,7 +49,10 @@ export class Compiler {
   hostImports: Record<string, number> = {};
   /** constructs this compiler cannot translate yet: each compiles to a call of host.gap(id) and a throw, never to a guess */
   gaps = new Map<string, number>();
-  constructor(public prog: Program, public opts: Options) {}
+  str: StringRepr = new JsStrings(this);
+  natives: Natives;
+  constructor(public prog: Program, public opts: Options) { this.natives = opts.natives ?? new Natives(); }
+  intrinsic(m: MethodInfo): Intrinsic | undefined { return intrinsicFor(this.opts.intrinsics, this.natives, m); }
 
   gap(c: Code, what: string): void {
     let id = this.gaps.get(what); if (id === undefined) this.gaps.set(what, id = this.gaps.size);
@@ -49,7 +60,7 @@ export class Compiler {
   }
 
   // ---------- type helpers
-  vtOf(k: Kind): VT { return k === "I" ? T.i32 : k === "J" ? T.i64 : refNull(this.tObj); }
+  vtOf(k: Kind): VT { return k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref; }
   sig(params: Kind[], ret: Kind | "V"): number {
     const key = params.join("") + ">" + ret;
     let s = this.sigType.get(key);
@@ -91,22 +102,21 @@ export class Compiler {
     this.tVT = mb.addType({ k: "array", elem: { t: T.i32, mut: true } });
     this.tObj = mb.addType({ k: "struct", fields: [{ t: ref(this.tVT), mut: false }, { t: T.i32, mut: true }], final: false });
     this.classStruct.set("java/lang/Object", this.tObj);
-    const dataElem: Record<ElemKind, VT> = { i8: T.i8, i16: T.i16, i32: T.i32, i64: T.i64, ref: refNull(this.tObj) };
+    const dataElem: Record<ElemKind, VT> = { i8: T.i8, i16: T.i16, i32: T.i32, i64: T.i64, ref: T.anyref };
     for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) {
       this.tData[k] = mb.addType({ k: "array", elem: { t: dataElem[k], mut: true } });
       this.tArr[k] = mb.addType({ k: "struct", fields: [{ t: ref(this.tVT), mut: false }, { t: T.i32, mut: true }, { t: ref(this.tData[k]), mut: false }], sup: this.tObj, final: false });
     }
-    this.tTagFn = mb.addFuncType([refNull(this.tObj)], []);
+    this.tTagFn = mb.addFuncType([T.anyref], []);
     // host imports (declared before any defined function)
     this.hostImports.fmod = mb.importFunc("host", "fmod", mb.addFuncType([T.f64, T.f64], [T.f64]));
     this.hostImports.gap = mb.importFunc("host", "gap", mb.addFuncType([T.i32], []));
+    this.str.importBuiltins();
+    this.natives.importHelpers(this);
     this.tag = mb.addTag(this.tTagFn); mb.export("jex", "tag", this.tag);
 
     const roots = entries.map(([c, n, d]) => { const m = prog.resolve(c, n, d); if (!m) throw new Error(`entry ${c}.${n}${d} not found`); return m; });
-    const isIntr = (m: MethodInfo) => this.opts.intrinsics.has(m.cls + "." + m.key);
-    this.r = reach(prog, roots, {
-      instantiate: SEED_CLASSES, methods: [],
-    }, isIntr);
+    this.r = reach(prog, roots, SEEDS, (m) => !!this.intrinsic(m));
     const r = this.r;
     // class ids: referenced classes + array classes, supers first
     const order: string[] = [];
@@ -116,9 +126,11 @@ export class Compiler {
     for (const n of order) this.classId.set(n, this.classId.size + 1);
     // array descriptors: ensure the primitive arrays used by new-array exist; object arrays by descriptor
     const arrayTypes = new Set(r.arrayTypes);
+    for (const a of this.str.arrays) arrayTypes.add(a);
     for (const a of arrayTypes) this.classId.set(a, this.classId.size + 1);
     // globals: vt per class, init state per class with init work, statics
     for (const [n] of this.classId) this.vtGlobal.set(n, mb.addGlobal(refNull(this.tVT), true, [0xd0, ...this.nullHt(this.tVT)]));
+    this.natives.declare(this, r.methods.values());
     // function indices
     for (const m of r.methods.values()) this.declareMethod(m);
     this.declareHelpers();
@@ -128,11 +140,13 @@ export class Compiler {
     this.emitHelpers();
     for (const m of r.methods.values()) this.emitMethod(m);
     for (const n of r.initClasses) this.emitInit(n);
+    this.natives.emitThrower(this);
     this.emitVTables();
     // table: identity
     const total = mb.nImportedFuncs + mb.funcTypes.length;
     const tbl = mb.addTable(T.funcref, total);
     mb.addElemActive(tbl, 0, Array.from({ length: total }, (_, i) => i));
+    this.str.finish();
     for (const [c, n, d] of entries) { const m = prog.resolve(c, n, d)!; mb.export(exportName(c, n, d), "func", this.fn.get(mid(m))!); }
     mb.export("table", "table", tbl);
     return mb.build();
@@ -151,7 +165,7 @@ export class Compiler {
     const key = owner + "." + name; if (this.staticGlobal.has(key)) return;
     const f = this.prog.get(owner)?.fields.find((x) => x.isStatic && x.name === name);
     if (!f) { this.staticGlobal.set(key, -1); return; }
-    const init = f.kind === "I" ? [0x41, 0] : f.kind === "J" ? [0x42, 0] : [0xd0, ...this.nullHt(this.tObj)];
+    const init = f.kind === "I" ? [0x41, 0] : f.kind === "J" ? [0x42, 0] : [0xd0, 0x6e];
     this.staticGlobal.set(key, this.mb.addGlobal(this.vtOf(f.kind), true, init));
   }
   needsInit(n: string): boolean {
@@ -183,7 +197,7 @@ export class Compiler {
           else if (d === "J") code.i64(BigInt(v as number)); else code.i32(Number(v));
           code.gset(gi);
         } else if (typeof v === "bigint") { if (fi.desc === "D") code.i64(f64bits(Number(v))); else code.i64(v); code.gset(gi); }
-        else if (typeof v === "string") this.gaps.set(`${n}.${fi.name}: static string value`, this.gaps.size);
+        else if (typeof v === "string") { this.str.literal(code, v); code.gset(gi); }
       });
     }
     const ci = c.byKey.get("<clinit>()V");
@@ -199,7 +213,7 @@ export class Compiler {
   // ---------- helpers (throwing, instance-of, division, compares)
   declareHelpers(): void {
     const mb = this.mb, h = this.helpers;
-    const L = (): VT => refNull(this.tObj);
+    const L = (): VT => T.anyref;
     const add = (name: string, params: VT[], results: VT[]) => { h[name] = mb.reserveFunc(mb.addFuncType(params, results), "$" + name); };
     add("npe", [], []); add("aioobe", [], []); add("arith", [], []); add("cce", [], []); add("nase", [], []); add("ule", [], []);
     add("idiv", [T.i32, T.i32], [T.i32]); add("irem", [T.i32, T.i32], [T.i32]); add("ldiv", [T.i64, T.i64], [T.i64]); add("lrem", [T.i64, T.i64], [T.i64]);
@@ -209,6 +223,7 @@ export class Compiler {
     add("cmplf", [T.f32, T.f32], [T.i32]); add("cmpgf", [T.f32, T.f32], [T.i32]); add("cmpld", [T.f64, T.f64], [T.i32]); add("cmpgd", [T.f64, T.f64], [T.i32]);
     add("hash", [L()], [T.i32]);
     add("abstract", [], []);
+    this.str.declare(add);
   }
   throwNew(c: Code, cls: string): void { /* inline: call per-class thrower */ c.call(this.throwerFor(cls)); }
   throwerFor(cls: string): number {
@@ -220,7 +235,7 @@ export class Compiler {
   private emitThrower(name: string, cls: string): void {
     const c = new Code(0);
     const ctor = this.prog.resolve(cls, "<init>", "()V");
-    const tmp = c.newLocal(refNull(this.tObj));
+    const tmp = c.newLocal(T.anyref);
     this.emitNew(c, cls); c.lset(tmp);
     if (ctor && this.fn.has(mid(ctor))) { c.lget(tmp).call(this.fn.get(mid(ctor))!); }
     c.lget(tmp).throw_(this.tag);
@@ -232,7 +247,7 @@ export class Compiler {
     const vtg = this.vtGlobal.get(cls); if (vtg === undefined) throw new Error("no vt for " + cls);
     const lay = this.prog.layout(cls);
     c.gget(vtg).refAsNonNull().i32(0);
-    for (const f of lay) { if (f.kind === "I") c.i32(0); else if (f.kind === "J") c.i64(0n); else c.refNull(this.tObj); }
+    for (const f of lay) { if (f.kind === "I") c.i32(0); else if (f.kind === "J") c.i64(0n); else c.anyNull(); }
     c.structNew(t);
   }
   emitHelpers(): void {
@@ -269,7 +284,7 @@ export class Compiler {
     {
       const c = new Code(3); const vt = c.newLocal(refNull(this.tVT));
       c.lget(0).refIsNull().if_().i32(0).ret().end();
-      c.lget(0).refAsNonNull().structGet(this.tObj, 0).lset(vt);
+      c.lget(0).call(h.vtab).lset(vt);
       c.lget(vt).refAsNonNull().i32(H.DEPTH).arrayGet(this.tVT).lget(2).raw(OP.i32_lt_s).if_().i32(0).ret().end();
       c.lget(vt).refAsNonNull().lget(2).i32(H.DISPLAY).raw(OP.i32_add).arrayGet(this.tVT).lget(1).raw(OP.i32_eq);
       mb.setBody(h.iof, c.finish());
@@ -278,7 +293,7 @@ export class Compiler {
     {
       const c = new Code(2); const vt = c.newLocal(refNull(this.tVT)); const p = c.newLocal(T.i32); const n = c.newLocal(T.i32); const i = c.newLocal(T.i32);
       c.lget(0).refIsNull().if_().i32(0).ret().end();
-      c.lget(0).refAsNonNull().structGet(this.tObj, 0).lset(vt);
+      c.lget(0).call(h.vtab).lset(vt);
       c.lget(vt).refAsNonNull().i32(H.EXTRA).arrayGet(this.tVT).lset(p);
       // skip slow pairs
       c.lget(vt).refAsNonNull().lget(p).arrayGet(this.tVT).lset(n);
@@ -308,10 +323,12 @@ export class Compiler {
     {
       const g = mb.addGlobal(T.i32, true, [0x41, 0]);
       mb.setBody(h.hash, (() => { const cc = new Code(1); const hv = cc.newLocal(T.i32);
-        cc.lget(0).refAsNonNull().structGet(this.tObj, 1).ltee(hv).raw(0x45).if_()
+        cc.lget(0).refTest(this.tObj).raw(OP.i32_eqz).if_().lget(0).call(h.shash).ret().end();
+        cc.lget(0).refCast(this.tObj).structGet(this.tObj, 1).ltee(hv).raw(0x45).if_()
           .gget(g).i32(0x3c6ef372 | 0).raw(OP.i32_add).ltee(hv).gset(g)
-          .lget(0).refAsNonNull().lget(hv).structSet(this.tObj, 1).end().lget(hv); return cc.finish(); })());
+          .lget(0).refCast(this.tObj).lget(hv).structSet(this.tObj, 1).end().lget(hv); return cc.finish(); })());
     }
+    this.str.emit();
   }
 
   // ---------- vtables
