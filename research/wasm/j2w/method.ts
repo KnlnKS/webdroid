@@ -12,7 +12,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
   const intr = cx.opts.intrinsics.get(mid(m));
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return c.finish(); }
-  if (!m.codeOff) { cx.stats.unresolved.push(mid(m)); const c = new Code(nparams); c.call(cx.helpers.ule).unreachable(); return c.finish(); }
+  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: native/abstract`); return c.finish(); }
   try {
     // locals of a kind are only written when some instruction reads them: iterate the read set down to a fixpoint
     let rk: Set<string> | null = null;
@@ -23,8 +23,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
     }
   } catch (e) {
     if ((e as Error).message === "unstructured") cx.stats.unstructured++;
-    else { cx.stats.unresolved.push(`${mid(m)}: ${(e as Error).message}`); }
-    const c = new Code(nparams); c.call(cx.helpers.ule).unreachable(); return c.finish();
+    const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return c.finish();
   }
 }
 
@@ -279,7 +278,7 @@ class MC {
       case "const-wide": c.i64(ins.wideLit); this.set("J", a); return;
       case "const-wide/high16": c.i64(BigInt(b) << 48n); this.set("J", a); return;
       case "const-string": case "const-string/jumbo": case "const-class": case "const-method-handle": case "const-method-type":
-        c.call(cx.helpers.ule).unreachable(); return;
+        cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
         const name = descToName(dex.type(b));
@@ -456,10 +455,16 @@ class MC {
     if (nx && nx.name.startsWith("move-result") && !this.prepared.leaders[nx.pc]) { this.consumed.add(nx.pc); this.set(kind, nx.a); }
     else c.drop();
   }
+  /** an invoke the compiler cannot translate: the code after it is dead, so a move-result stays unwritten */
+  invokeGap(ins: Ins, why: string) {
+    const insts = this.prepared.instructions, nx = insts[insts.indexOf(ins) + 1];
+    if (nx?.name.startsWith("move-result") && !this.prepared.leaders[nx.pc]) this.consumed.add(nx.pc);
+    this.cx.gap(this.code, `${mid(this.m)}: ${why}`);
+  }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;
     const kind = ins.name.replace("/range", "");
-    if (kind === "invoke-polymorphic" || kind === "invoke-custom") { c.call(cx.helpers.ule).unreachable(); return; }
+    if (kind === "invoke-polymorphic" || kind === "invoke-custom") { this.invokeGap(ins, kind); return; }
     const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), key = mr.name + desc;
     const p = parseMethodDesc(desc), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     const isStatic = kind === "invoke-static";
@@ -468,7 +473,7 @@ class MC {
       for (const pt of p.params) { this.get(kindOf(pt), ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
     };
     const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
-    if (decl[0] === "[") { c.call(cx.helpers.ule).unreachable(); return; }
+    if (decl[0] === "[") { this.invokeGap(ins, `array method ${key}`); return; }
     const callDirect = (mi: MethodInfo) => { cx.declareMethod(mi); c.call(cx.fnOf(mi)); };
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
@@ -484,7 +489,7 @@ class MC {
       const declC = prog.get(decl);
       if (impls.size === 1) {
         const t = [...impls][0]; this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); c.call(cx.fnOf(t));
-      } else if (impls.size === 0) { c.call(cx.helpers.ule).unreachable(); return; }
+      } else if (impls.size === 0) { this.invokeGap(ins, `no instantiated implementor of ${decl}.${key}`); return; }
       else {
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
         c.lget(this.tmpL); pushArgsFrom(this, ins, p.params);

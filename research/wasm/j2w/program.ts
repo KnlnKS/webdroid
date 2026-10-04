@@ -54,8 +54,9 @@ export class Program {
   }
   private build(dex: DexFile, def: ClassDef, name: string): JClass {
     const fields: FieldInfo[] = [];
+    // ART's Object declares its class and monitor words as fields; here they are the object header
     for (const [list, isStatic] of [[def.staticFields, true], [def.instanceFields, false]] as const) {
-      for (const f of list) {
+      for (const f of name === "java/lang/Object" && !isStatic ? [] : list) {
         const fr = dex.field(f.fieldIdx), desc = dex.type(fr.type);
         fields.push({ owner: name, name: fr.name, desc, kind: kindOf(desc), isStatic, flags: f.flags });
       }

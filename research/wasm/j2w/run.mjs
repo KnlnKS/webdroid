@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 const bytes = readFileSync(process.argv[2]);
-const { instance } = await WebAssembly.instantiate(bytes, { host: { fmod: (a, b) => a % b } });
-const e = instance.exports;
+const { instance } = await WebAssembly.instantiate(bytes, { host: { fmod: (a, b) => a % b, gap: () => {} } });
+const x = instance.exports, e = new Proxy(x, { get: (t, k) => t[Object.keys(t).find((n) => n.startsWith(k + "("))] });
 const t = (name, f) => { const a = performance.now(); const r = f(); console.log(name, r, (performance.now() - a).toFixed(1) + "ms"); };
 t("fib(27)", () => e["W.fib"](27));
 t("sieve(2e6)", () => e["W.sieve"](2000000));

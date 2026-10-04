@@ -12,6 +12,10 @@ import { H, f32bits, f64bits, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import { sleb } from "./wasmbin";
 
+/** the name a built module exports an entry under */
+export const exportName = (cls: string, name: string, desc: string) => `${cls.replace(/\//g, ".")}.${name}${desc}`;
+export const SEED_CLASSES = ["java/lang/Object", "java/lang/NullPointerException", "java/lang/ArrayIndexOutOfBoundsException", "java/lang/ArithmeticException",
+  "java/lang/ClassCastException", "java/lang/NegativeArraySizeException", "java/lang/UnsatisfiedLinkError"];
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
 export interface Options { intrinsics: Map<string, Intrinsic>; stats?: boolean }
 
@@ -30,12 +34,19 @@ export class Compiler {
   fnType = new Map<string, number>();
   sigType = new Map<string, number>();
   selector = new Map<string, number>();
-  stats = { methods: 0, unstructured: 0, unresolved: [] as string[], bytes: 0, tryMethods: 0, bodyBytes: 0 };
+  stats = { methods: 0, unstructured: 0, bytes: 0, tryMethods: 0, bodyBytes: 0 };
   helpers: Record<string, number> = {};
   vtData: number[][] = [];
   throwFns = new Map<string, number>();
   hostImports: Record<string, number> = {};
+  /** constructs this compiler cannot translate yet: each compiles to a call of host.gap(id) and a throw, never to a guess */
+  gaps = new Map<string, number>();
   constructor(public prog: Program, public opts: Options) {}
+
+  gap(c: Code, what: string): void {
+    let id = this.gaps.get(what); if (id === undefined) this.gaps.set(what, id = this.gaps.size);
+    c.i32(id).call(this.hostImports.gap).call(this.helpers.ule).unreachable();
+  }
 
   // ---------- type helpers
   vtOf(k: Kind): VT { return k === "I" ? T.i32 : k === "J" ? T.i64 : refNull(this.tObj); }
@@ -88,15 +99,13 @@ export class Compiler {
     this.tTagFn = mb.addFuncType([refNull(this.tObj)], []);
     // host imports (declared before any defined function)
     this.hostImports.fmod = mb.importFunc("host", "fmod", mb.addFuncType([T.f64, T.f64], [T.f64]));
-    this.hostImports.math1 = 0;
+    this.hostImports.gap = mb.importFunc("host", "gap", mb.addFuncType([T.i32], []));
     this.tag = mb.addTag(this.tTagFn); mb.export("jex", "tag", this.tag);
 
     const roots = entries.map(([c, n, d]) => { const m = prog.resolve(c, n, d); if (!m) throw new Error(`entry ${c}.${n}${d} not found`); return m; });
     const isIntr = (m: MethodInfo) => this.opts.intrinsics.has(m.cls + "." + m.key);
     this.r = reach(prog, roots, {
-      instantiate: ["java/lang/Object", "java/lang/NullPointerException", "java/lang/ArrayIndexOutOfBoundsException", "java/lang/ArithmeticException",
-        "java/lang/ClassCastException", "java/lang/NegativeArraySizeException", "java/lang/UnsatisfiedLinkError"],
-      methods: [],
+      instantiate: SEED_CLASSES, methods: [],
     }, isIntr);
     const r = this.r;
     // class ids: referenced classes + array classes, supers first
@@ -124,7 +133,7 @@ export class Compiler {
     const total = mb.nImportedFuncs + mb.funcTypes.length;
     const tbl = mb.addTable(T.funcref, total);
     mb.addElemActive(tbl, 0, Array.from({ length: total }, (_, i) => i));
-    for (const [c, n, d] of entries) { const m = prog.resolve(c, n, d)!; mb.export(`${c.replace(/\//g, ".")}.${n}`, "func", this.fn.get(mid(m))!); }
+    for (const [c, n, d] of entries) { const m = prog.resolve(c, n, d)!; mb.export(exportName(c, n, d), "func", this.fn.get(mid(m))!); }
     mb.export("table", "table", tbl);
     return mb.build();
   }
@@ -174,7 +183,7 @@ export class Compiler {
           else if (d === "J") code.i64(BigInt(v as number)); else code.i32(Number(v));
           code.gset(gi);
         } else if (typeof v === "bigint") { if (fi.desc === "D") code.i64(f64bits(Number(v))); else code.i64(v); code.gset(gi); }
-        else if (typeof v === "string") { /* string constants need String objects: unsupported in this prototype */ }
+        else if (typeof v === "string") this.gaps.set(`${n}.${fi.name}: static string value`, this.gaps.size);
       });
     }
     const ci = c.byKey.get("<clinit>()V");

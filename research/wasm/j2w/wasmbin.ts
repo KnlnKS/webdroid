@@ -141,7 +141,7 @@ export class ModuleBuilder {
     if (named.length) {
       const sub: number[] = []; uleb(named.length, sub);
       for (const [i, n] of named) { uleb(i, sub); name(n, sub); }
-      const c: number[] = []; name("name", c); c.push(1); uleb(sub.length, c); c.push(...sub); this.section(0, c, out);
+      const c: number[] = []; name("name", c); c.push(1); uleb(sub.length, c); for (const b of sub) c.push(b); this.section(0, c, out);
     }
     return Uint8Array.from(out);
   }

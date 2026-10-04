@@ -12,9 +12,13 @@ export function loadDexes(path: string) {
   const zip = zipTree(bytes);
   return Object.keys(zip).filter(isDexEntry).sort().flatMap((n) => dexesIn(zip[n], n));
 }
-export function compile(paths: string[], entries: [string, string, string][]) {
-  const dexes = paths.flatMap(loadDexes);
-  const prog = new Program(dexes); prog.addExterns(externs);
+export const hostImports = (gap: (id: number) => void = () => {}) => ({ host: { fmod: (a: number, b: number) => a % b, gap } });
+export function program(paths: string[]) {
+  const prog = new Program(paths.flatMap(loadDexes)); prog.addExterns(externs);
+  return prog;
+}
+export function compile(src: string[] | Program, entries: [string, string, string][]) {
+  const prog = Array.isArray(src) ? program(src) : src;
   const cx = new Compiler(prog, { intrinsics });
   const t0 = performance.now();
   const bytes = cx.build(entries);
@@ -29,5 +33,5 @@ if (import.meta.main) {
   }
   const { bytes, cx, ms } = compile(paths, entries);
   writeFileSync(out, bytes);
-  console.log(JSON.stringify({ bytes: bytes.length, ms: +ms.toFixed(1), methods: cx.stats.methods, unstructured: cx.stats.unstructured, unresolved: cx.stats.unresolved.slice(0, 40), nUnresolved: cx.stats.unresolved.length }));
+  console.log(JSON.stringify({ bytes: bytes.length, ms: +ms.toFixed(1), methods: cx.stats.methods, unstructured: cx.stats.unstructured, nGaps: cx.gaps.size, gaps: [...cx.gaps.keys()].slice(0, 40), unresolved: [...cx.r.unresolved].slice(0, 40) }));
 }
