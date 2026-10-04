@@ -52,14 +52,15 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   );
   // queries need the main loop too: a wedged loop must fail the step, not hold the run
   const query = <T>(p: T | Promise<T>, what: string) => withDeadline(Promise.resolve(p), deadlineMs, what);
-  // act while `text` shows, first waiting up to appearMs for it, at most `times` times
-  const whileShown = async (text: string, appearMs = 0, times: number, interval: number, act: () => Promise<unknown>) => {
-    const start = performance.now(), end = start + appearMs + Math.max(1500, times * interval + 800);
+  // act while `text` shows, first waiting up to appearMs for it, at most `times` times, until it
+  // has stayed away quietMs
+  const whileShown = async (text: string, appearMs = 0, times: number, interval: number, act: () => Promise<unknown>, quietMs = 400) => {
+    const start = performance.now(), end = start + appearMs + Math.max(1500, times * interval + 400 + quietMs);
     let acted = 0, absentAt = 0;
     while (performance.now() < end) {
       if (!await query(wd.locateText(text), "locateText")) {
         absentAt ||= performance.now();
-        if (performance.now() - absentAt >= 400 && (acted || performance.now() - start >= appearMs)) break;
+        if (performance.now() - absentAt >= quietMs && (acted || performance.now() - start >= appearMs)) break;
         await sleep(50);
       } else {
         absentAt = 0;
@@ -82,7 +83,7 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
       if (a.unlessResource && (await query(wd.uiTree(), "uiTree")).some((node: { resId: string; bounds: [number, number, number, number] }) =>
         node.resId === a.unlessResource && node.bounds[2] > 0 && node.bounds[3] > 0 &&
         node.bounds[0] < s.width && node.bounds[1] < s.height)) return;
-      if (a.whileText) await whileShown(a.whileText, a.appearMs, a.repeat ?? 1, a.everyMs ?? 500, () => wd.tap(a.x * s.width, a.y * s.height));
+      if (a.whileText) await whileShown(a.whileText, a.appearMs, a.repeat ?? 1, a.everyMs ?? 500, () => wd.tap(a.x * s.width, a.y * s.height), a.quietMs);
       else for (let i = 0; i < (a.repeat ?? 1); i++) {
         if (i) await sleep(a.everyMs ?? 500);
         await run(wd.tap(a.x * s.width, a.y * s.height));

@@ -1,6 +1,7 @@
 // Live API content and an optional notification alert make the launch golden nondeterministic.
 // The fast path asserts onboarding, search results and venue resources; the full path retains
-// the recorded Android flow. The API may re-show its announcement sheet during navigation.
+// the recorded Android flow. The list shows the API's announcement sheet again on each venue-list
+// update while none is shown, and a search's paging can update the list for several seconds.
 import { wait, type Flow } from "../types";
 
 const W = 1080, H = 2160;
@@ -14,7 +15,7 @@ const NEAR_ME = N(963, 618);          // the map's "Near Me" label (the search s
 const PROMO = "Not a Gold Card Member?";
 const VENUE_NAME = "com.resy.android:id/venueName";
 const LIST_VENUE = "com.resy.android:id/list_item_venue_name";
-const DISMISS_SHEET = { type: "tapAt", ...SHEET_CLOSE, repeat: 4, everyMs: 200, whileText: PROMO } as const;
+const DISMISS_SHEET = { type: "tapAt", ...SHEET_CLOSE, repeat: 30, everyMs: 300, whileText: PROMO, quietMs: 2000 } as const;
 
 export const resy: Flow = {
   app: "resy",

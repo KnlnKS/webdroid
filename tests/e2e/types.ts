@@ -17,8 +17,9 @@ type Action =
   | { type: "tapText"; text: string; optional?: boolean }
   /** Normalized 0..1 tap. Used directly when no stable text anchor exists. `repeat` taps the
    *  same point N times, `everyMs` apart, as ONE step — a burst with no capture in between.
-   *  `whileText` taps only while that text shows, first waiting up to `appearMs` for it. */
-  | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; appearMs?: number; unlessResource?: string }
+   *  `whileText` taps only while that text shows, first waiting up to `appearMs` for it, until it
+   *  has stayed away `quietMs` (default 400): an app that re-shows a sheet keeps getting taps. */
+  | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; appearMs?: number; quietMs?: number; unlessResource?: string }
   /**
    * Focus a field and type into it as ONE step. Kept atomic on purpose: dismissing the soft
    * keyboard between focus and typing clears editor focus on the emulator, so the text would
