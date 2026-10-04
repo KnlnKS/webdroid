@@ -38,7 +38,7 @@ const small: Record<string, number[]> = {
 const cases = genCases(methods.filter((m) => !process.argv[2] || m.name.includes(process.argv[2])), small);
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
 // the production reflection skips Field's type and receiver checks (getBoolean of an int field answers a number): its results for these are not an oracle
-const UNCHECKED = new Set(["inner", "members", "errType", "errReceiver", "errRefType", "errNullBox", "errNarrow"]), isUnchecked = (i: number) => UNCHECKED.has(cases[i].m.name);
+const UNCHECKED = new Set(["inner", "members", "annots", "errType", "errReceiver", "errRefType", "errNullBox", "errNarrow"]), isUnchecked = (i: number) => UNCHECKED.has(cases[i].m.name);
 const pick = <T,>(l: T[], unchecked: boolean) => l.filter((_, i) => isUnchecked(i) === unchecked);
 const r1 = await compare(pick(cases, false), (m) => entries.get(m)!, js, pick(jdk, false), hit);
 let at = 0;

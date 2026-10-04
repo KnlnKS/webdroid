@@ -81,6 +81,37 @@ public class N {
     r += (anon.getClass().getEnclosingMethod().getName().hashCode() & 0xff) + (anon.getClass().getEnclosingClass() == N.class ? 800 : 0) + (Local.class.getEnclosingMethod() != null ? 1600 : 0) + (Local.class.getEnclosingConstructor() == null ? 3200 : 0);
     return r + n * 0;
   }
+  public enum Color { RED, GREEN }
+  @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @interface Nested { int value(); }
+  @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @interface Full {
+    int i() default 5; long l() default 1L << 40; String s() default "dflt"; boolean z() default true; byte b() default 3; short sh() default 4; char ch() default 'q'; float f() default 1.5f; double d() default 2.5;
+    Class<?> c() default Object.class; Color e() default Color.GREEN; int[] ia() default {1, 2}; String[] sa() default {}; Class<?>[] ca() default {}; Color[] ea() default {Color.RED};
+    Nested n() default @Nested(7); Nested[] na() default {}; long[] la() default {}; double[] da() default {}; boolean[] za() default {true, false}; char[] cha() default {'a'};
+  }
+  @Full(i = 9, s = "x", z = false, ia = {3, 4, 5}, sa = {"a", "bb"}, c = String.class, e = Color.RED, n = @Nested(8), na = {@Nested(1), @Nested(2)}, la = {7L}, da = {0.5}, ch = 'z', f = 2.25f, sh = 300, b = -1, ca = {int.class, String[].class}, ea = {Color.GREEN, Color.RED})
+  static class Subject {
+    @Full int field; @Nested(6) static int other;
+    @Full(i = 1) void m(@Nested(3) int a, int b, @Nested(4) @Full String c) {} void plain() {} @Full Subject() {}
+  }
+  private static int full(Full a) {
+    int r = a.i() + a.s().length() * 3 + (a.z() ? 1 : 0) + (int) (a.l() >> 38) + a.b() + a.sh() + a.ch() + (int) (a.f() * 4) + (int) (a.d() * 4) + a.c().getName().length() * 5 + a.e().ordinal() * 7 + a.n().value() * 11;
+    for (int x : a.ia()) r += x * 13; for (String x : a.sa()) r += x.length() * 17; for (Class<?> x : a.ca()) r += x.getName().length() * 19; for (Color x : a.ea()) r += x.ordinal() * 23 + 1;
+    for (Nested x : a.na()) r += x.value() * 29; for (long x : a.la()) r += (int) x * 31; for (double x : a.da()) r += (int) (x * 8); for (boolean x : a.za()) r += x ? 37 : 41; for (char x : a.cha()) r += x;
+    return r + a.annotationType().getName().length() + a.ia().length * 43;
+  }
+  public static int annots(int n) throws Exception {
+    Full a = Subject.class.getAnnotation(Full.class), d = Subject.class.getDeclaredField("field").getAnnotation(Full.class), m = Subject.class.getDeclaredMethod("m", int.class, int.class, String.class).getAnnotation(Full.class);
+    int r = full(a) * 3 + full(d) * 5 + full(m) * 7;
+    r += (a.equals(Subject.class.getAnnotation(Full.class)) ? 1 : 0) + (a.equals(d) ? 2 : 0) + (d.equals(Subject.class.getDeclaredField("field").getAnnotation(Full.class)) ? 4 : 0);
+    r += Subject.class.getDeclaredAnnotations().length * 100 + Subject.class.getAnnotations().length * 1000 + N.class.getAnnotations().length * 10000;
+    java.lang.reflect.Method mm = Subject.class.getDeclaredMethod("m", int.class, int.class, String.class);
+    java.lang.annotation.Annotation[][] pa = mm.getParameterAnnotations();
+    r += pa.length * 100000 + pa[0].length * 1000000 + pa[1].length * 3000000 + pa[2].length * 7000000 + ((Nested) pa[0][0]).value();
+    r += Subject.class.getDeclaredField("other").getAnnotation(Nested.class).value() + Subject.class.getDeclaredField("other").getDeclaredAnnotations().length * 50;
+    r += Subject.class.getDeclaredMethod("plain").getAnnotations().length + (Subject.class.getDeclaredMethod("plain").getAnnotation(Full.class) == null ? 7 : 0);
+    r += Subject.class.getDeclaredConstructor().getAnnotation(Full.class).i() * 77 + Full.class.getAnnotations().length * 123;
+    return r + n * 0;
+  }
   public static int forName(int n) throws Exception {
     int r = 0;
     r += Class.forName("java.util.ArrayList").getName().length() + Class.forName("[I").getName().length() + Class.forName("[Ljava.lang.String;").getName().length();

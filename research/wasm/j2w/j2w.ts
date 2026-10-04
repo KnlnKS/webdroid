@@ -38,7 +38,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -81,7 +81,7 @@ export class Compiler implements Base {
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
       info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.i32, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
-      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]) };
+      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }

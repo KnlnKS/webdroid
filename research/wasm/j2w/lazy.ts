@@ -21,6 +21,7 @@ import { mhInvoke } from "./handles";
 import { hostText } from "./members";
 import { hostNet } from "./inet";
 import { generateProxy } from "./proxy";
+import { hostObject } from "./annotations";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
@@ -102,6 +103,7 @@ export class World {
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       text: (kind: number, a: number) => hostText(this, kind, a),
+      obj: (kind: number, a: number, b: number, filter: object | null) => hostObject(this, kind, a, b, filter),
       proxy: (name: string, interfaces: object, methods: object, exceptions: object) => generateProxy(this, name, interfaces, methods, exceptions),
       net: (op: number, node: string, a: number, b: number) => hostNet(this, op, node, a, b),
       mhInvoke: (mh: object, args: object, site: number, exact: number) => mhInvoke(this, mh, args, site, exact),
