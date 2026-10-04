@@ -82,7 +82,7 @@ export class Bridge {
     for (const [key, v] of Object.entries(stored)) {
       const [name, desc] = key.split(":"), f = this.w.prog.get(cls)?.fields.find((x) => x.isStatic && x.name === name && x.desc === desc);
       if (!f) continue;
-      this.w.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name)); })(f.kind === "L" ? this.toJava(v, desc) : toBits(v, desc));
+      this.w.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name, desc)); })(f.kind === "L" ? this.toJava(v, desc) : toBits(v, desc));
     }
   }
 

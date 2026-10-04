@@ -131,11 +131,11 @@ export class Compiler implements Base {
     return this.global(rt.mod, name, t, true);
   }
   vtGlobal(cls: string): number { return this.classGlobal(cls, "vt", refNull(this.tVT)); }
-  /** the global holding static field `name` of type `desc` of `owner`, which must declare it (a dex may declare one name with several types) */
-  staticGlobal(owner: string, name: string, desc: string): number {
-    const f = this.prog.get(owner)?.fields.find((x) => x.isStatic && x.name === name && x.desc === desc);
+  /** the global holding static field `name` of type `desc` of `owner`, which must declare it (a dex may declare one name with several types, so callers that know the type pass it) */
+  staticGlobal(owner: string, name: string, desc?: string): number {
+    const f = this.prog.get(owner)?.fields.find((x) => x.isStatic && x.name === name && (desc === undefined || x.desc === desc));
     if (!f) throw new Error(`static ${owner}.${name} not found`);
-    return this.classGlobal(owner, "s:" + name + ":" + desc, this.vtOf(f.kind));
+    return this.classGlobal(owner, "s:" + name + ":" + f.desc, this.vtOf(f.kind));
   }
   /** calls `m`: directly when this module defines it, else through its table slot (a lazy-link stub until it is compiled) */
   callMethod(c: Code, m: MethodInfo): void {

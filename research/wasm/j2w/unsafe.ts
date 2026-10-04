@@ -40,7 +40,7 @@ export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number 
   const op = kind === UInfo.FieldGet || kind === UInfo.StaticGet ? "get" : kind === UInfo.FieldPut || kind === UInfo.StaticPut ? "put" : "cas", k = f.kind;
   const params: Kind[] = op === "get" ? ["L"] : op === "put" ? ["L", k] : ["L", k, k];
   // a static field's accessor takes the receiver slot too, so reflection reaches both kinds the same way
-  if (stat) return w.synthSlot(`uf:s${op}:${a}`, { params, ret: op === "get" ? k : "V", body: (cx, c) => { const g = cx.staticGlobal(name, f.name); if (op === "get") c.gget(g); else c.lget(1).gset(g); } });
+  if (stat) return w.synthSlot(`uf:s${op}:${a}`, { params, ret: op === "get" ? k : "V", body: (cx, c) => { const g = cx.staticGlobal(name, f.name, f.desc); if (op === "get") c.gget(g); else c.lget(1).gset(g); } });
   return w.synthSlot(`uf:${op}:${a}`, { params, ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
     const st = cx.structFor(name), at = cx.fieldIndex(name, f), o = c.newLocal(refNull(st));
     c.lget(0).refCast(st).lset(o);
