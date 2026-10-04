@@ -14,7 +14,7 @@ import type { Code } from "./code";
 import type { World } from "./lazy";
 
 const PROXY = "java/lang/reflect/Proxy", HANDLER = "java/lang/reflect/InvocationHandler", EXEC = "java/lang/reflect/Executable", CLASS = "java/lang/Class";
-const NM_TABLE = 2, PROXY_FLAG = 0x40000;
+const NM_TABLE = 1, PROXY_FLAG = 0x40000;
 const OBJECT_ARRAY = "[Ljava/lang/Object;";
 
 export const proxyIntrinsics = new Map<string, Intrinsic>();

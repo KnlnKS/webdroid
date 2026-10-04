@@ -6,7 +6,7 @@ import { HEAP_LIMIT, heapUsed } from "./exc";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
-export interface G1Result { workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; error?: string }
+export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
 let heapBase = 0;
@@ -25,7 +25,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   heapBase = heapUsed();
   const w = cfg.mode === "wasm" ? world(program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]), { natives, heapUsed: collectedHeap }) : null;
   let hit = 0;
-  if (w) { w.onGap = () => hit++; processState(w); }
+  if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { processState(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
   const name = `w_${cfg.workload}`;
   const t0 = performance.now();
   const call = w ? w.entry(cfg.cls, name, "()I") : () => js(cfg.cls, name, "()I", []);
@@ -35,7 +35,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     out.times.push(performance.now() - t0);
     for (let i = 0; i < cfg.reps; i++) { const t = performance.now(); await call(); out.times.push(performance.now() - t); if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0)); }
   } catch (e) { const t = w?.throwable(e); out.error = hit ? `gap ${w!.gapList[0]}` : t ? `uncaught ${w!.classNameOf(t)}` : String(e).slice(0, 900); }
-  if (w) { out.compileMs = w.stats.compileMs; out.units = w.stats.units; }
+  if (w) { out.compileMs = w.stats.compileMs; out.units = w.stats.units; out.stats = structuredClone(w.stats); }
   return out;
 }
 (globalThis as { g1run?: typeof g1run }).g1run = g1run;

@@ -9,6 +9,7 @@ import { H } from "./consts";
 import { parseMethodDesc } from "../../../src/jvm/abi";
 import type { Compiler, Intrinsic } from "./j2w";
 import { bytesFactory } from "./strfactory";
+import { rt } from "./rtfns";
 
 /** abstract heap types as ref.test/ref.cast immediates */
 export const HT = { extern: -17, any: -18, eq: -19 } as const;
@@ -36,8 +37,6 @@ export interface StringRepr {
 export const stringCtor: Intrinsic = (cx, m, c) => { c.unreachable(); };
 
 const STRING = "java/lang/String";
-/** the imported table (after the function table) holding the String constants, shared by all modules */
-const STR_TABLE = 1;
 /** field indices of the struct after the Object header (0, 1) */
 const CHARS = 2, HASH = 3, JS = 4;
 
@@ -51,7 +50,33 @@ export class StructStrings implements StringRepr {
   }
   vtab(c: Code, _decl: string): void { c.refCast(this.cx.tObj).structGet(this.cx.tObj, 0); }
   /** the constants are String objects the host put in the shared table (World.stringId) */
-  literal(c: Code, s: string): void { c.i32(this.cx.w.stringId(s)).tableGet(STR_TABLE).anyConvertExtern(); }
+  /** a constant is made on first use and kept in a table of the module that uses it: the interned String of the JS string the engine imports as a constant */
+  literal(c: Code, s: string): void {
+    const cx = this.cx;
+    c.call(cx.memo("lit:" + s, () => {
+      const cache = this.cache(), k = this.nConsts++, f = cx.mb.reserveFunc(cx.mb.addFuncType([], [T.anyref]), "$lit"), b = new Code(0);
+      b.raw(0xfc, 16, cache).i32(k).raw(OP.i32_le_s).if_().anyNull().i32(k + 8).raw(0xfc, 15, cache).drop().end();
+      b.i32(k).tableGet(cache).refIsNull().if_().i32(k);
+      if (s.isWellFormed()) b.gget(cx.stringConst(s));
+      else {
+        // a name in an import section is UTF-8, which cannot hold a lone surrogate: the UTF-16 units come from a data segment
+        const units = Uint8Array.from({ length: 2 * s.length }, (_, i) => (s.charCodeAt(i >> 1) >> (8 * (i & 1))) & 255);
+        b.i32(0).i32(s.length).arrayNewData(cx.tData.i16, cx.mb.addDataPassive(units)).i32(0).i32(s.length).call(this.b.fromCharCodeArray);
+      }
+      b.call(this.fromJs()).call(this.intern()).raw(0x26, cache).end().i32(k).tableGet(cache);
+      cx.mb.setBody(f, b.finish());
+      return f;
+    }));
+  }
+  private nConsts = 0;
+  private cacheTable = -1;
+  private cache(): number { return this.cacheTable >= 0 ? this.cacheTable : (this.cacheTable = this.cx.mb.addTable(T.anyref, 0)); }
+  /** intern(s) -> the String the host holds for these chars (this one if it has none) */
+  intern(): number {
+    return this.fn("intern", [T.anyref], [T.anyref], (c) => {
+      c.lget(0).call(this.toJs()).lget(0).externConvertAny().call(this.cx.imp.intern).anyConvertExtern();
+    });
+  }
   toHost(c: Code): void { c.call(this.toJs()); }
   fromHost(c: Code): void { c.call(this.fromJs()); }
 
@@ -122,6 +147,7 @@ export class StructStrings implements StringRepr {
     });
   }
   /** fromJs(e) -> String: the chars of a JS string, which the String keeps as its own JS string */
+  fromJsFn(): number { return this.fromJs(); }
   private fromJs(): number {
     return this.fn("fromJs", [T.externref], [T.anyref], (c) => {
       const chars = c.newLocal(ref(this.chars)), s = c.newLocal(ref(this.st));
@@ -391,3 +417,6 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
   def("java/lang/Integer.parseInt(Ljava/lang/String;)I", parse(false));
   def("java/lang/Long.parseLong(Ljava/lang/String;)J", parse(true));
 }
+
+// strLit(js): the interned String of a JS string, for the class modules, which have no code of their own to make one
+rt("strLit", ["L"], "L", (cx, c) => { const s = cx.str as StructStrings; c.lget(0).externConvertAny().call(s.fromJsFn()).call(s.intern()); });

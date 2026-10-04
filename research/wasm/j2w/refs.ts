@@ -20,7 +20,7 @@ def(`${REFERENCE}.clearReferent()V`, (cx, c) => { const { st, at } = field(cx, "
 // FinalizerReference.makeCircularListIfUnenqueued: a reference not yet in a queue's list joins it as a one-element circle
 def(`${FINALIZER}.makeCircularListIfUnenqueued()Z`, (cx, c) => {
   const { st, at } = field(cx, "queueNext", "Ljava/lang/ref/Reference;");
-  c.lget(0).refCast(st).structGet(st, at).refIsNull().if_().lget(0).refCast(st).lget(0).structSet(st, at).i32(1).else_().i32(0).end();
+  c.lget(0).refCast(st).structGet(st, at).refIsNull().if_(T.i32).lget(0).refCast(st).lget(0).structSet(st, at).i32(1).else_().i32(0).end();
 });
 
 // Cleaner.create(referent, thunk): the Cleaner is made without its referent, which a PhantomReference never gives back, so that the host can

@@ -45,7 +45,7 @@ export function emitHandleCall(mc: MC, ins: Ins, exact: boolean): void {
     if (BOX[p]) box(cx, c, p);
     c.arraySet(data);
   });
-  c.lget(handle).externConvertAny().lget(arr).externConvertAny().i32(cx.w.stringId(`(${params.join("")})${ret}`)).i32(exact ? 1 : 0).call(cx.imp.mhInvoke).anyConvertExtern();
+  c.lget(handle).externConvertAny().lget(arr).externConvertAny().gget(cx.stringConst(`(${params.join("")})${ret}`)).i32(exact ? 1 : 0).call(cx.imp.mhInvoke).anyConvertExtern();
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
@@ -83,10 +83,10 @@ const descOfName = (n: string) => n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n
 const wrapperOf = (d: string) => BOX[d][0];
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
-export function mhInvoke(w: World, mh: object | null, args: object, siteId: number, exact: number): object | null {
+export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number): object | null {
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw new (WebAssembly as any).Exception(w.rt.tag, [w.makeThrowable(cls, msg)]); };
-  const site = /^\((.*)\)(.*)$/.exec(w.hostString(w.strs.get(siteId)) as string)!, sp = parseDescs(site[1]), sr = site[2];
+  const site = /^\((.*)\)(.*)$/.exec(siteId)!, sp = parseDescs(site[1]), sr = site[2];
   const nominal = s.typeOf(mh!), pt = s.ptypes(nominal), np = Array.from({ length: s.alen(pt) }, (_, i) => descOfName(w.nameOf(s.classId(s.aget(pt, i))))), nr = descOfName(w.nameOf(s.classId(s.rtype(nominal))));
   const wrong = () => fail("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
   const same = np.length === sp.length && np.every((d, i) => d === sp[i]) && nr === sr;

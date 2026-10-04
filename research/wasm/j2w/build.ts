@@ -1,4 +1,7 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AotStore } from "./aot";
+import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { dexesIn, isDexEntry } from "../../../src/jvm/dex";
 import { zipTree } from "../../../src/jvm/natives/jzip";
 import { Program } from "./program";
@@ -14,14 +17,24 @@ export function loadDexes(path: string) {
   const zip = zipTree(bytes);
   return Object.keys(zip).filter(isDexEntry).sort().flatMap((n) => dexesIn(zip[n], n));
 }
+/** WEBDROID_AOT=<dir> runs the harnesses over the precompiled platform assets (aotbuild.ts) in <dir> */
+const AOT = typeof process === "undefined" ? (globalThis as { G1_AOT?: string }).G1_AOT : process.env.WEBDROID_AOT;
+/** a page may have compiled modules ahead (g1.ts): they are in G1_MODULES by path */
+export const aotStore = (dir: string): AotStore => ({ get: (file) => (globalThis as { G1_MODULES?: Record<string, WebAssembly.Module> }).G1_MODULES?.[join(dir, file)] ?? new Uint8Array(readFileSync(join(dir, file))) });
 export function program(paths: string[]) {
+  // precompiled code is numbered by the platform's classes, so all of them come first, in class path order, before the app's
+  const platform = (p: string) => p.includes("/vendor/aosp/");
+  if (AOT) {
+    const root = paths.find(platform)?.split("/vendor/aosp/")[0];
+    if (root) paths = [...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j)), ...paths.filter((p) => !platform(p))];
+  }
   const prog = new Program(paths.flatMap(loadDexes)); prog.addExterns(externs);
   return prog;
 }
 /** what reach treats as a leaf: a method implemented without its bytecode */
 export const isIntrinsic = (natives: Natives) => (m: MethodInfo) => !!intrinsicFor(intrinsics, natives, m);
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, ...opts });
+  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, ...(AOT && { aot: aotStore(AOT) }), ...opts });
 }
 if (import.meta.main) {
   // bun build.ts <dex-or-jar...> --entry Cls.method(desc) ...: run the entries and print the compile statistics

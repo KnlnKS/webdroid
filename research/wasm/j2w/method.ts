@@ -106,17 +106,23 @@ export class MC {
   setF64() { if (!FLOAT_LOCALS && this.typing.def(this.cur.pc) >= 0) this.code.raw(OP.i64_reinterpret_f64); this.store(this.cur); }
 
   run(): Code {
-    const { m, item, cx } = this;
+    const { m, item, cx } = this, phase = cx.w.stats.phase;
+    let t = performance.now();
+    const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
     const prepared = this.prepared = prepareMethod(this.dex, item, m.desc, m.isStatic);
+    lap("prepare");
     let flow: Flow;
     try { flow = structureAny(prepared, item, Infinity); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
+    lap("flow");
     this.typing = inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
+    lap("infer");
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     this.findShadows();
     this.entryFacts = analyze(this);
+    lap("facts");
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
     // a parameter's web uses the parameter's local, unless floats live in float locals: then it is copied in once

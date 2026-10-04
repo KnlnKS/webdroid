@@ -9,6 +9,8 @@ export interface FieldInfo { owner: string; name: string; desc: string; kind: Ki
 export interface MethodInfo {
   cls: string; name: string; desc: string; flags: number; dex: DexFile; methodIdx: number; codeOff: number;
   key: string; isStatic: boolean; isCtor: boolean; params: string[]; ret: string;
+  /** position in its class's `methods`, which is also the offset of its table slot from the class's block */
+  index: number;
 }
 export interface JClass {
   name: string; dex: DexFile | null; def: ClassDef | null; sup: string | null; ifaces: string[]; flags: number;
@@ -57,8 +59,8 @@ export class Program {
       const [, cls, name, desc] = /^(.*)\.(\w+)(\(.*)$/.exec(key)!;
       if (this.classes.get(cls)?.dex) continue;
       const p = parseMethodDesc(desc);
-      const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret };
       const c = this.classes.get(cls) ?? this.stub(cls, "java/lang/Object");
+      const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret, index: c.methods.length };
       c.methods.push(m); c.byKey.set(m.key, m);
     }
     this.subclassMemo.clear(); this.implMemo.clear();
@@ -73,7 +75,7 @@ export class Program {
       }
     }
     const methods: MethodInfo[] = [];
-    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) methods.push(this.method(dex, name, m));
+    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) methods.push(this.method(dex, name, m, methods.length));
     const byKey = new Map(methods.map((m) => [m.key, m]));
     return {
       name, dex, def, sup: def.superIdx === 0xffffffff ? null : descToName(dex.type(def.superIdx)),
@@ -81,13 +83,14 @@ export class Program {
       fields, methods, byKey,
     };
   }
-  private method(dex: DexFile, cls: string, m: EncodedMethod): MethodInfo {
+  private method(dex: DexFile, cls: string, m: EncodedMethod, index: number): MethodInfo {
     const mr = dex.method(m.methodIdx), desc = dex.methodDesc(m.methodIdx), p = parseMethodDesc(desc);
     return { cls, name: mr.name, desc, flags: m.flags, dex, methodIdx: m.methodIdx, codeOff: m.codeOff, key: mkey(mr.name, desc),
-      isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret };
+      isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret, index };
   }
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
   addClass(jc: JClass): void {
+    jc.methods.forEach((m, i) => { m.index = i; });
     this.classes.set(jc.name, jc);
     this.subclassMemo.clear(); this.implMemo.clear();
   }

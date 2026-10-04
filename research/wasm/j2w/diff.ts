@@ -49,5 +49,4 @@ const bad = r1.bad + r2.bad, explained = r1.explained + r2.explained, blocked = 
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
-if (process.env.J2W_V) { const t: string[] = []; for (let i = 0; i < w.strs.length; i++) { const v = w.strs.get(i); if (v === null || typeof v === "string") t.push(i + ":" + String(v).slice(0, 30)); } console.log("bad table entries", t.length, t.slice(0, 5)); }
 process.exit(bad ? 1 : 0);

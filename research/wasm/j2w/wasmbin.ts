@@ -3,10 +3,23 @@
 export const enum T { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, i8 = 0x78, i16 = 0x77,
   funcref = 0x70, externref = 0x6f, anyref = 0x6e, eqref = 0x6d, i31ref = 0x6c, structref = 0x6b, arrayref = 0x6a, exnref = 0x69, nullref = 0x71 }
 export function uleb(n: number | bigint, out: number[]): void {
+  if (typeof n === "number" && n >= 0 && n <= 0xffffffff) {
+    for (; n >= 0x80; n = Math.floor(n / 128)) out.push((n % 128) | 0x80);
+    out.push(n);
+    return;
+  }
   let v = BigInt(n);
   for (;;) { const b = Number(v & 0x7fn); v >>= 7n; if (v === 0n) { out.push(b); return; } out.push(b | 0x80); }
 }
 export function sleb(n: number | bigint, out: number[]): void {
+  if (typeof n === "number" && n >= -0x80000000 && n <= 0x7fffffff) {
+    for (;;) {
+      const b = n & 0x7f;
+      n >>= 7;
+      if ((n === 0 && !(b & 0x40)) || (n === -1 && (b & 0x40))) { out.push(b); return; }
+      out.push(b | 0x80);
+    }
+  }
   let v = BigInt(n);
   for (;;) {
     const b = Number(v & 0x7fn); v >>= 7n;
@@ -15,10 +28,15 @@ export function sleb(n: number | bigint, out: number[]): void {
   }
 }
 const enc = new TextEncoder();
-export function name(s: string, out: number[]): void { const b = enc.encode(s); uleb(b.length, out); for (const x of b) out.push(x); }
+export function name(s: string, out: number[]): void {
+  const b = enc.encode(s);
+  uleb(b.length, out);
+  for (let i = 0; i < b.length; i++) out.push(b[i]);
+}
 
 /** A value type: number for plain types, or {ref: idx, nullable} */
 export type VT = number | { ht: number; nullable: boolean };
+export const vtKey = (t: VT): string => (typeof t === "number" ? String(t) : (t.nullable ? "n" : "r") + t.ht);
 export const refNull = (idx: number): VT => ({ ht: idx, nullable: true });
 export const ref = (idx: number): VT => ({ ht: idx, nullable: false });
 export function vt(t: VT, out: number[]): void {
@@ -53,7 +71,7 @@ export class ModuleBuilder {
   /** add a type in the current (or given) rec group; returns its index */
   addType(def: TypeDef, group = ++this.groups): number { this.types.push({ def, group }); return this.types.length - 1; }
   addFuncType(params: VT[], results: VT[]): number {
-    const key = JSON.stringify([params, results]);
+    const key = params.map(vtKey).join() + ">" + results.map(vtKey).join();
     let i = this.fnTypeCache.get(key);
     if (i === undefined) { i = this.addType({ k: "func", params, results, final: true }); this.fnTypeCache.set(key, i); }
     return i;
@@ -102,7 +120,6 @@ export class ModuleBuilder {
   addDataActive(mem: number, offset: number, bytes: Uint8Array | number[]): void { const d: number[] = [0x02]; uleb(mem, d); d.push(0x41); sleb(offset, d); d.push(0x0b); uleb(bytes.length, d); for (const b of bytes) d.push(b); this.datas.push(d); }
   addCustom(nm: string, bytes: number[]): void { this.customs.push({ name: nm, bytes }); }
 
-  private section(id: number, content: number[], out: number[]): void { out.push(id); uleb(content.length, out); for (let i = 0; i < content.length; i++) out.push(content[i]); }
   private encodeTypeDef(d: TypeDef, out: number[]): void {
     const subbed = d.sup !== undefined || d.final === false;
     if (subbed) { out.push(d.final === false || d.sup !== undefined ? (d.final === false ? 0x50 : 0x4f) : 0x4f); uleb(d.sup !== undefined ? 1 : 0, out); if (d.sup !== undefined) uleb(d.sup, out); }
@@ -113,8 +130,18 @@ export class ModuleBuilder {
     }
   }
   build(): Uint8Array {
-    const out: number[] = [0, 0x61, 0x73, 0x6d, 1, 0, 0, 0];
-    const vec = (items: number[][]): number[] => { const c: number[] = []; uleb(items.length, c); for (const it of items) for (const b of it) c.push(b); return c; };
+    const parts: ArrayLike<number>[] = [Uint8Array.of(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0)];
+    let size = 8;
+    const put = (a: ArrayLike<number>) => { parts.push(a); size += a.length; };
+    /** a section: its id, the length of its parts, then the parts */
+    const section = (id: number, body: ArrayLike<number>[]) => {
+      let len = 0;
+      for (const p of body) len += p.length;
+      const h: number[] = [id]; uleb(len, h); put(h);
+      for (const p of body) put(p);
+    };
+    const count = (n: number): number[] => { const c: number[] = []; uleb(n, c); return c; };
+    const vec = (id: number, items: ArrayLike<number>[]) => section(id, [count(items.length), ...items]);
     // types
     { const entries: number[][] = []; let i = 0;
       while (i < this.types.length) {
@@ -124,35 +151,40 @@ export class ModuleBuilder {
         for (let k = i; k < j; k++) this.encodeTypeDef(this.types[k].def, e);
         entries.push(e); i = j;
       }
-      this.section(1, vec(entries), out); }
-    if (this.imports.length) this.section(2, vec(this.imports.map((im) => { const e: number[] = []; name(im.mod, e); name(im.name, e); e.push(...im.desc); return e; })), out);
-    this.section(3, vec(this.funcTypes.map((t) => { const e: number[] = []; uleb(t, e); return e; })), out);
-    if (this.tables.length) this.section(4, vec(this.tables), out);
-    if (this.memories.length) this.section(5, vec(this.memories), out);
-    if (this.tags.length) this.section(13, vec(this.tags), out);
-    if (this.globals.length) this.section(6, vec(this.globals), out);
-    if (this.exports.length) this.section(7, vec(this.exports.map((x) => { const e: number[] = []; name(x.name, e); e.push(x.kind); uleb(x.idx, e); return e; })), out);
-    if (this.start >= 0) { const c: number[] = []; uleb(this.start, c); this.section(8, c, out); }
-    if (this.elems.length) this.section(9, vec(this.elems), out);
-    if (this.datas.length) { const c: number[] = []; uleb(this.datas.length, c); /* datacount section id 12 must precede code */ const dc: number[] = []; uleb(this.datas.length, dc); this.section(12, dc, out); }
-    for (const cu of this.customs) { const c: number[] = []; name(cu.name, c); c.push(...cu.bytes); this.section(0, c, out); }
+      vec(1, entries); }
+    if (this.imports.length) vec(2, this.imports.map((im) => { const e: number[] = []; name(im.mod, e); name(im.name, e); for (const x of im.desc) e.push(x); return e; }));
+    vec(3, this.funcTypes.map((t) => { const e: number[] = []; uleb(t, e); return e; }));
+    if (this.tables.length) vec(4, this.tables);
+    if (this.memories.length) vec(5, this.memories);
+    if (this.tags.length) vec(13, this.tags);
+    if (this.globals.length) vec(6, this.globals);
+    if (this.exports.length) vec(7, this.exports.map((x) => { const e: number[] = []; name(x.name, e); e.push(x.kind); uleb(x.idx, e); return e; }));
+    if (this.start >= 0) section(8, [count(this.start)]);
+    if (this.elems.length) vec(9, this.elems);
+    // the data count section precedes the code
+    if (this.datas.length) section(12, [count(this.datas.length)]);
+    for (const cu of this.customs) { const c: number[] = []; name(cu.name, c); section(0, [c, cu.bytes]); }
     {
-      const content: number[] = []; uleb(this.bodies.length, content);
-      const rel: number[] = [];
-      for (const b of this.bodies) { uleb(b.length, content); rel.push(content.length); for (let i = 0; i < b.length; i++) content.push(b[i]); }
-      const hdr: number[] = []; uleb(content.length, hdr);
-      const base = out.length + 1 + hdr.length;
-      this.bodyOffsets = rel.map((r) => base + r);
-      this.section(10, content, out);
+      // the code section is built by hand: a body's offset is where its local declarations begin
+      const lens = this.bodies.map((b) => { const l: number[] = []; uleb(b.length, l); return l; });
+      let len = count(this.bodies.length).length;
+      for (let i = 0; i < this.bodies.length; i++) len += lens[i].length + this.bodies[i].length;
+      const h: number[] = [10]; uleb(len, h); put(h); put(count(this.bodies.length));
+      this.bodyOffsets = [];
+      for (let i = 0; i < this.bodies.length; i++) { put(lens[i]); this.bodyOffsets.push(size); put(this.bodies[i]); }
     }
-    if (this.datas.length) this.section(11, vec(this.datas), out);
+    if (this.datas.length) vec(11, this.datas);
     // name section for function names (helps stack traces)
     const named = this.funcNames.map((n, i) => [i + this.nImportedFuncs, n] as const).filter(([, n]) => n);
     if (named.length) {
       const sub: number[] = []; uleb(named.length, sub);
       for (const [i, n] of named) { uleb(i, sub); name(n, sub); }
-      const c: number[] = []; name("name", c); c.push(1); uleb(sub.length, c); for (const b of sub) c.push(b); this.section(0, c, out);
+      const c: number[] = []; name("name", c); c.push(1); uleb(sub.length, c);
+      section(0, [c, sub]);
     }
-    return Uint8Array.from(out);
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (const p of parts) { out.set(p as ArrayLike<number> as Uint8Array, at); at += p.length; }
+    return out;
   }
 }
