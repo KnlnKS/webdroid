@@ -4069,3 +4069,29 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   Measured with jbench and alternating `lat` rounds against the previous tip while another checkout
   ran conformance suites on the host (load average 8–15), so frame-rate runs on both trees showed
   occasional 20–50 frames/s windows; those are host contention, not either tree.
+
+## Wasm backend gate results
+
+- G1 (2026-10-04, `5920452f`; node 24 and Chrome 153; shared host, load average 2–4, ±10% per workload;
+  js/wasm geometric means over the 42 jbench workloads). Steady state passes (node 1.54–1.76x, Chrome
+  1.74–1.90x against the JS tier, up from 0.84x on the first matching set; the 1.3x bar). First call passes
+  in node (1.97–2.42x) and fails in Chrome (0.73–0.76x, from 0.25x): small workloads are at JS parity, the
+  geomean is dragged by about 12 workloads that run platform or `framework.jar` code outside the AOT set or
+  that V8 must validate (a 204 MB framework set also failed to fetch in a Chrome page). "No workload more
+  than 10% slower" fails on: `sha256` (the harness runs the JS-form digest because a native cannot await
+  `crypto.subtle`; needs S3 suspension), `fbBulk` (no bulk operation between linear memory or a JS buffer
+  and a GC `byte[]`; about 0.25 ns per byte per `array.set`; the route is direct buffers in linear memory
+  with a native allocator), `strConcat`/`strSubstr`/`strBuild` (a struct plus an `i16` array per String
+  against one JS rope or slice; chars sharing reaches about 0.8x at best), `bbInts`, `ecdsaVerify`, `fbLoop`.
+  The decision: the design stands (Wasm GC beats JS 1.5–2.4x on allocation-heavy code, so the linear-memory
+  trigger G8 is not met), G1 stays open for the listed workloads and for Chrome first call, and each is
+  carried into S2 as a named defect: direct buffers in linear memory, framework chunks in the AOT set
+  sized below Chrome's fetch and 8 MiB synchronous-compile limits, and sha256 under S3.
+- Stack-class lookups (`Reflection.getCallerClass`) read V8's wasm frames, so the harnesses run under node;
+  JavaScriptCore names none. A module streamed with `compileStreaming` names its frames by URL, which broke
+  that lookup in Chrome (it looked like a builtins mismatch); `aotstore` streams again with the frames fixed.
+- The wasm gate work found and fixed production-tier bugs: handler register typing in `prepared.ts` (an int
+  constant assigned after the last throwing instruction was typed float, so `l >>>= 32` shifted by 0), and
+  pinned JS-tier divergences from Java: no `ArrayStoreException`, the most-specific default method, default
+  interfaces not initialised with the implementor, `Field` type/receiver/final checks and widening,
+  `String.startsWith(prefix, offset)` / `lastIndexOf(s, negative)` and null arguments.
