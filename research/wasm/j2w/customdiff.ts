@@ -18,26 +18,26 @@ const sh = (cmd: string[], input?: string) => {
   if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
   return r.stdout.toString();
 };
-sh(["javac", "--release", "17", "-d", out, join(here, "java/Rec.java"), join(here, "java/Mh.java"), join(here, "java/Ind.java"), join(here, "java/Ref.java")]);
-sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["javac", "--release", "17", "-d", out, join(here, "java/Rec.java"), join(here, "java/Mh.java"), join(here, "java/Vh.java"), join(here, "java/Ind.java"), join(here, "java/Ref.java")]);
+sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Vh|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(here, "../../../vendor/aosp", j));
 await jsTier(loadDexes(dex));
 const w = world([dex, ...jars], { natives }), hit: string[] = [];
 processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
-const methods = ["Rec", "Mh"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC && m.name !== "tBind"));
+const methods = ["Rec", "Mh", "Vh"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC && m.name !== "tBind"));
 const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
-  ...Object.fromEntries(methods.filter((m) => m.cls === "Mh").map((m) => [m.name, mh])), empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
+  ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh").map((m) => [m.name, mh])), empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
 const tier = await jsTier(loadDexes(dex));
-// the production tier has its own MethodHandle model (jinvoke.ts) and no Class.isRecord: the JDK alone decides those cases
+// the production tier has its own method handle and VarHandle model (jinvoke.ts) and no Class.isRecord: the JDK alone decides those cases
 const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
   const i = cases.findIndex((c) => c.m.cls === cls && c.m.name === name && c.args.every((a, j) => a === args[j] || Number(a) === Number(args[j])));
   return jdk[i] === "throw" ? Promise.reject(new Error("throw")) : Promise.resolve(entries.get(cases[i].m)!.length === 0 || cases[i].m.ret === "J" ? BigInt(jdk[i]) : Number(jdk[i]));
 };
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
+const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (wasm, js tier, jdk); ${threw} threw`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 // a bootstrap class libcore lacks is ART's NoClassDefFoundError at the site; LambdaMetafactory exists but returns null, which is a gap
