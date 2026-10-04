@@ -36,7 +36,7 @@
     "jbench": "bun scripts/jbench/run.ts",
     "conform": "bun scripts/conform/run.ts",
     "wasm": "bun scripts/wasm/run.ts",
-    "aot": "bun scripts/wasm/run.ts aot-build",
+    "aot": "bun scripts/wasm/run.ts aot",
     "build:core": "bun scripts/build-core.ts"
   },
   "dependencies": {

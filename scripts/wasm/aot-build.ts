@@ -1,23 +1,44 @@
-// Builds the ahead-of-time assets (aot.ts) of the first platform jars: one D (data) module per class group and one C (code) module per group,
+// Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate] [--app app.dex]
-// The Program holds every platform jar (class-hierarchy decisions are made over all of them); the first N jars (or the named ones) are numbered and compiled.
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--no-validate] [--app app.dex] [--force]
+// Without --out the build goes to vendor/wasm-aot/<key> (aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
+// The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
+// A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
+// and a page fetches and compiles what a start needs, so no module should be much larger than that.
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { externs } from "../../src/wasm/link/intrinsics";
 import { natives } from "./oracle";
+import { rt } from "../../src/jvm/runtime";
+import { hostNatives } from "../../src/wasm/host/hostnatives";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { packModule, type CHeader, type DHeader } from "../../src/wasm/link/aot";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import { compileModule } from "../../src/wasm/link/module";
 import { mid } from "../../src/wasm/compiler/ids";
-import { AOSP, ROOT } from "./paths";
+import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
+import { AOSP } from "./paths";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
-const out = flag("--out", join(ROOT, "vendor/wasm-aot/default")), nJars = +flag("--jars", "4"), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg");
+const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
+const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg"), maxModule = +flag("--max-module", "3072") * 1024;
+const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
+const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
+const appPath = flag("--app", "");
+
+// ---- where it goes
+let out = flag("--out", "");
+if (!out) {
+  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys()].sort();
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, appPath && readFileSync(appPath).toString("base64")]));
+  out = join(AOT_ROOT, key);
+  mkdirSync(AOT_ROOT, { recursive: true });
+  writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
+  if (existsSync(join(out, "startup.json")) && !process.argv.includes("--force")) { console.log(`build ${key} is up to date`); process.exit(); }
+}
 
 /** whether the build compiles `m`: it has bytecode or an implementation of its own (the rest stay abstract, or become a gap on demand) */
 const aotCompiles = (m: MethodInfo): boolean => !!m.codeOff || !!w.intrinsic(m);
@@ -30,18 +51,36 @@ export function keyOf(mode: string, name: string): string {
   const pkg = name.slice(0, name.lastIndexOf("/") + 1), m = /^pkg(\d+)$/.exec(mode);
   return m ? pkg.split("/").slice(0, +m[1]).join("/") : pkg;
 }
+/** keys that start a new group when the one being filled would pass `limit` (an estimate of the module's bytes: `size` of each class, called in definition order) */
+function chunked(mode: string, size: (name: string) => number, limit: number): (name: string) => string {
+  const open = new Map<string, { n: number; bytes: number }>();
+  return (name) => {
+    const key = keyOf(mode, name), bytes = size(name), g = open.get(key) ?? (open.set(key, { n: 0, bytes: 0 }), open.get(key)!);
+    if (g.bytes && g.bytes + bytes > limit) { g.n++; g.bytes = 0; }
+    g.bytes += bytes;
+    return g.n ? `${key}#${g.n}` : key;
+  };
+}
+const HARD_LIMIT = 7 * 1024 * 1024;
+// the bytes per dex code unit of a code module and per method and field of a data module, measured over the platform build
+const C_BYTES_PER_UNIT = 14, C_BYTES_PER_METHOD = 150, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19, D_BYTES_PER_CLASS = 330;
+const classSize = (kind: "c" | "d") => (name: string): number => {
+  const jc = prog.get(name)!;
+  if (kind === "d") return D_BYTES_PER_CLASS + jc.methods.length * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD;
+  return jc.methods.reduce((n, m) => n + (m.codeOff ? C_BYTES_PER_METHOD + C_BYTES_PER_UNIT * m.dex.code(m.codeOff).insns.length : 0), 0);
+};
 
-const jarNames = flag("--only", "").split(",").filter(Boolean);
-const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < nJars));
 const dexes = PLATFORM_JARS.map((j) => loadDexes(join(AOSP, j)));
 // an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
-const appDexes = flag("--app", "") ? loadDexes(flag("--app", "")) : [];
+const appDexes = appPath ? loadDexes(appPath) : [];
 const prog = new Program([...dexes.flat(), ...appDexes]); prog.addExterns(externs);
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: { dGroup: (n) => keyOf(dMode, n), cGroup: (n) => keyOf(cMode, n), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
+const w = world(prog, { natives, build: { dGroup: chunked(dMode, classSize("d"), maxModule), cGroup: chunked(cMode, classSize("c"), maxModule), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
 const aot = w.aot!;
 const t0 = performance.now();
-let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0;
+let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0, largest = 0;
+/** a module the estimate let grow past what Chrome compiles on the main thread (8 MiB) is a build error: the constants above need re-measuring */
+const sized = (file: string, n: number) => { largest = Math.max(largest, n); if (n > HARD_LIMIT) throw new Error(`${file} is ${n} bytes, over ${HARD_LIMIT}; lower --max-module`); };
 const validate = !process.argv.includes("--no-validate");
 /** V8's verdict on a module: the function it rejects, if any */
 const check = (bytes: Uint8Array): { fn: number; message: string } | undefined => {
@@ -88,7 +127,7 @@ cGroups.forEach((blocks, k) => {
     assumptions, allocs: [...cx.allocs], gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)), missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]),
     absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m) || skip.has(mid(m))).map((m) => w.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
-  writeFileSync(join(out, `c${k}.wasm`), file);
+  writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
 });
 aot.cGroupOf = aot.cGroupOf.map((g) => (empty.has(g) ? -1 : g));
@@ -105,7 +144,7 @@ dGroups.forEach((blocks, k) => {
   const bad = check(bytes);
   if (bad) throw new Error(`D ${k}: ${bad.message}`);
   const file = packModule(header, bytes);
-  writeFileSync(join(out, `d${k}.wasm`), file);
+  writeFileSync(join(out, `d${k}.wasm`), file); sized(`d${k}.wasm`, file.length);
   dBytes += file.length;
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module; building it can reserve more
@@ -127,7 +166,7 @@ const index = aot.finish();
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), index ${kb(JSON.stringify(index).length)}`);
-console.log(`compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
+console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
 if (skipped.length) console.log(`${skipped.length} methods left to the on-demand compiler:\n  ${skipped.join("\n  ")}`);
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
 process.exit();
