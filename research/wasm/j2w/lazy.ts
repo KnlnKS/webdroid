@@ -213,7 +213,14 @@ export class World {
     this.classes.set(name, rt);
     methods.forEach((m, i) => { this.slots[slotBase + i] = { k: "method", m, done: false }; });
     this.slots[slotBase + methods.length] = { k: "ensure" };
-
+    rt.exports = this.instantiate(this.classModule(rt, jc), { rt: { table: this.table }, host: this.host }).exports;
+    this.stats.classes++; this.stats.classMs += performance.now() - t0;
+    return rt;
+  }
+  /** The bytes of a class module: what a build-time mode would store beside the unit modules of Compiler.buildUnit, and instantiate in
+   *  the same order (importing the same table), instead of this linker doing both on demand. */
+  classModule(rt: ClassRt, jc: JClass | undefined): Uint8Array {
+    const { name, id, slotBase } = rt, methods = jc?.methods ?? [];
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
     const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
@@ -228,10 +235,10 @@ export class World {
     for (const f of jc?.fields ?? []) if (f.isStatic) {
       const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name, g); mb.export("s:" + f.name, "global", g);
     }
-    const stubs = methods.map((m) => {
+    const stubs = methods.map((m, i) => {
       const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
       const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-      return mb.addFunc(sig, this.stubBody(slotBase + methods.indexOf(m), sig, params, link), "stub:" + name + "." + m.name);
+      return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link), "stub:" + name + "." + m.name);
     });
     if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, jc, initG, statics, rt), "ensure:" + name));
     else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "ensure:" + name));
@@ -240,9 +247,7 @@ export class World {
       mb.start = mb.addFunc(mb.addFuncType([], []), new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).finish(), "$vt");
     }
     if (stubs.length) mb.addElemActive(0, slotBase, stubs);
-    rt.exports = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports;
-    this.stats.classes++; this.stats.classMs += performance.now() - t0;
-    return rt;
+    return mb.build();
   }
   /** ensure(): run once, superclass first, then the dex's static values and <clinit>; marked started before running so re-entry returns */
   private ensureBody(mb: ModuleBuilder, jc: JClass, initG: number, statics: Map<string, number>, rt: ClassRt): number[] {
