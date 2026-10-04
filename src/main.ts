@@ -18,6 +18,7 @@ import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
 import { perf, perfReset } from "./perf";
+import { loadTier, tier } from "./jvm/tier";
 import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "./jvm/profile";
 import { configureJvmCoverage } from "./jvm/coverage";
 import { onMain } from "./android/mainloop";
@@ -102,6 +103,7 @@ async function boot(file: string, local?: File) {
   shell.setState({ kind: "loading", file, stage: local ? "Opening package…" : "Downloading package…" });
   let rollbackAssets: (() => void) | undefined;
   try {
+    if (tier === "wasm") await loadTier();
     void startZygote();
     const [install] = await Promise.all([local ? openInstallLocal(local, fixProcessBitness) : openInstallRemote("/apks/" + encodeURIComponent(file), fixProcessBitness), provisionPackages(), loadSkia(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;

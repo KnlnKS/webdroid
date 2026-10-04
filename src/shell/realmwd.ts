@@ -5,6 +5,7 @@ import { rt } from "../jvm/runtime";
 import { appHost } from "../android/apphost";
 import { jvmCoverage } from "../jvm/coverage";
 import { perf } from "../perf";
+import { tier } from "../jvm/tier";
 import { mainDbg, onMain } from "../android/mainloop";
 import { guestClockControl, guestSleep } from "../guest-clock";
 import { nativeRequirements } from "./diagnostics";
@@ -17,7 +18,7 @@ import { processPresentation } from "./process-endpoint";
 export type RealmWd = ReturnType<typeof realmWd>;
 export function realmWd() {
   return {
-    rt, app: () => appHost, jvmCoverage, perf, mainDbg, guestClock: guestClockControl, nativeRequirements, native,
+    rt, tier, app: () => appHost, jvmCoverage, perf, mainDbg, guestClock: guestClockControl, nativeRequirements, native,
     // The same shape `uiautomator dump` reports, so the two hierarchies can be diffed directly:
     // absolute device px with the status bar included, which is the space a tap is expressed in.
     // A process that has ended shows no window; its own main loop answers nothing.

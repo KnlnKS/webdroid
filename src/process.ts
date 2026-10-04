@@ -24,6 +24,7 @@ import { hexBytes, u8 } from "./jvm/abi";
 import { configureJvmCoverage } from "./jvm/coverage";
 import { guestClockControl } from "./guest-clock";
 import { realmWd } from "./shell/realmwd";
+import { loadTier, tier } from "./jvm/tier";
 import { NOT_CRASHED } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
@@ -67,6 +68,7 @@ window.addEventListener("pagehide", () => {
   broker.fail(pid, "Process frame unloaded", NOT_CRASHED);
 }, { once: true });
 try {
+  if (tier === "wasm") await loadTier();
   mountPlatformData();
   void startZygote();
   const data = await broker.bootstrap(pid);

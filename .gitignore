@@ -27,4 +27,4 @@ dist/
 .wrangler/
 worker-configuration.d.ts
 tests/.node-*.mjs
-research/wasm/aot/
+vendor/wasm-aot/
