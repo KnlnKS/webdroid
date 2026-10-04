@@ -80,7 +80,7 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
   else for (let i = 0; i < 5; i++) i < n ? c.lget(i) : c.i32(0);
   c.call(cx.imp.excMessage).lset(msg);
   const detail = cx.prog.resolveField("java/lang/Throwable", "detailMessage", "Ljava/lang/String;"), st = cx.structFor("java/lang/Throwable");
-  if (detail && !detail.isStatic) c.lget(exn).refCast(st).lget(msg).anyConvertExtern().structSet(st, cx.fieldIndex("java/lang/Throwable", detail));
+  if (detail && !detail.isStatic) { c.lget(exn).refCast(st).lget(msg); cx.str.fromHost(c); c.structSet(st, cx.fieldIndex("java/lang/Throwable", detail)); }
   c.lget(exn).throw_(cx.tag);
 }
 

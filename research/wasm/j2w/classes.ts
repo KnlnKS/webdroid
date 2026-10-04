@@ -297,7 +297,7 @@ def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
 def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(0).externConvertAny().call(cx.imp.classByName).lset(id);
+  c.lget(0); cx.str.toHost(c); c.call(cx.imp.classByName).lset(id);
   c.lget(id).raw(OP.i32_eqz).if_().lget(0); cx.callRt(c, "cnfe"); c.end();
   const init = c.newLocal(T.i32);
   c.lget(1).if_(); cx.info(c, Info.EnsureSlot, () => c.lget(id)); c.ltee(init).if_().lget(init).callIndirect(cx.sig([], "V")).end().end();
@@ -308,7 +308,7 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(1).externConvertAny().call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
+  c.lget(1); cx.str.toHost(c); c.call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
 });
 
 // Class.getInnerClassFlags(default): the InnerClass annotation's flags, else `default`

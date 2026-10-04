@@ -34,7 +34,7 @@ export class Bridge {
   private undo: (() => void)[] = [];
   private saved: number[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
-  private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn };
+  private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
   constructor(private w: World, private src?: NativeSource) {}
   /** the array accessors, generated on first use (the World is still being constructed when its Bridge is) */
@@ -55,9 +55,10 @@ export class Bridge {
         c.lget(2).if_(); copy(true); c.else_(); copy(false); c.end().ret().end();
       }
     });
+    const js = hostFn("b:js", ["L"], "L", (cx, c) => { c.lget(0); cx.str.toHost(c); c.anyConvertExtern(); });
     const aget = hostFn("b:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); });
     const aset = hostFn("b:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
-    return this.ops = { alen, acopy, aget, aset };
+    return this.ops = { alen, acopy, aget, aset, js };
   }
 
   // ---------- the scope of a native call
@@ -97,6 +98,7 @@ export class Bridge {
     const o = v as object, hit = this.live.get(o) ?? this.facades.get(o);
     if (hit) return hit;
     const name = this.w.classNameOf(o);
+    if (name === "java/lang/String") return this.op.js(o);
     if (name[0] !== "[") return this.facade(o, name);
     return name.length === 2 ? this.primArray(o, name, range) : this.refArray(o, name);
   }
@@ -172,7 +174,7 @@ export class Bridge {
   // ---------- host to Java
   toJava(v: unknown, desc: string): unknown {
     if (v === null || v === undefined) return null;
-    if (typeof v === "string") return v;
+    if (typeof v === "string") return this.w.javaString(v);
     const o = v as object, known = this.owners.get(o);
     if (known) return known;
     if (ArrayBuffer.isView(o)) return this.newPrimArray(o as ArrayBufferView & { length: number });

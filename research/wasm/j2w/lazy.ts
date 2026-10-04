@@ -12,6 +12,7 @@ import { Code, OP } from "./code";
 import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
 import { Cha } from "./cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "./consts";
+import { structStrings } from "./strings";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
 import { Natives, type HostContext } from "./natives";
 import { Bridge } from "./bridge";
@@ -105,6 +106,7 @@ export class World {
         }
         return i;
       },
+      intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string) => {
         const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
@@ -150,9 +152,26 @@ export class World {
     if (i === undefined) {
       i = this.strings.size; this.strings.set(s, i);
       if (i >= this.strs.length) this.strs.grow(this.strs.length);
-      this.strs.set(i, s as never);
+      this.strs.set(i, (structStrings ? this.canonical(s) : s) as never);
     }
     return i;
+  }
+  /** the String objects made of JS strings, which are the constants and what String.intern answers */
+  private interned = new Map<string, object>();
+  private canonical(s: string): object {
+    let o = this.interned.get(s);
+    // the constants of the classes String needs to be made are the JS strings until the String class exists
+    if (!o && !this.stringClass) { this.pendingStrings.push(s); return s as never; }
+    if (!o) this.interned.set(s, o = this.javaString(s) as object);
+    return o;
+  }
+  private stringClass = false;
+  private pendingStrings: string[] = [];
+  private fromJs?: (s: string) => unknown;
+  /** the Java String of a JS string (a JS string itself when Strings are JS strings) */
+  javaString(s: string): unknown {
+    if (!structStrings) return s;
+    return (this.fromJs ??= this.hostFn("str:from", ["L"], "L", (cx, c) => { c.lget(0).externConvertAny(); cx.str.fromHost(c); }))(s);
   }
   /** how `m` is implemented without its bytecode, if it is */
   intrinsic(m: MethodInfo): Intrinsic | undefined { return intrinsicFor(this.opts.intrinsics, this.natives, m); }
@@ -314,6 +333,10 @@ export class World {
     methods.forEach((m, i) => { this.slots[slotBase + i] = { k: "method", m, done: false }; });
     this.slots[slotBase + methods.length] = { k: "ensure" };
     rt.exports = this.instantiate(this.classModule(rt, jc), { rt: this.rtImports(), host: this.host }).exports;
+    if (structStrings && name === "java/lang/String") {
+      this.stringClass = true;
+      for (const s of this.pendingStrings.splice(0)) this.strs.set(this.strings.get(s)!, this.canonical(s) as never);
+    }
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
     return rt;
   }
@@ -463,7 +486,7 @@ export class World {
         c.lget(exn).refCast(st).lget(0).structSet(st, cx.fieldIndex("java/lang/Throwable", detail)).lget(exn);
       }, "L");
       const f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m;
-      this.throwMakers.set(cls, make = (m) => f(m));
+      this.throwMakers.set(cls, make = (m) => f(m === null ? null : this.javaString(m)));
     }
     return make(msg);
   }
@@ -601,7 +624,8 @@ export class World {
     return (...args) => {
       try {
         if (m.isStatic && this.needsInit(m.cls)) (this.table.get(this.ensureSlot(m.cls)) as Function)();
-        return (this.table.get(slot) as Function)(...args);
+        const r = (this.table.get(slot) as Function)(...(structStrings ? args.map((a) => typeof a === "string" ? this.javaString(a) : a) : args));
+        return structStrings && typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
       } catch (e) { throw this.boundary(e); }
     };
   }

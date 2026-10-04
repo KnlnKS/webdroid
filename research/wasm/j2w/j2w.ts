@@ -8,7 +8,8 @@ import { compileMethod } from "./method";
 import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
-import { JsStrings, stringCtor, stringHelper, type StringRepr } from "./strings";
+import { JsStrings, stringCtor, structStrings, type StringRepr } from "./strings";
+import { StructStrings } from "./structstrings";
 import type { Natives } from "./natives";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -18,7 +19,7 @@ export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: Native
 }
 
 /** the types every module declares identically; Wasm canonicalises them across modules */
-export interface Base { tVT: number; tObj: number; tTagFn: number; tData: Record<ElemKind, number>; tArr: Record<ElemKind, number> }
+export interface Base { tVT: number; tObj: number; tStr: number; tTagFn: number; tData: Record<ElemKind, number>; tArr: Record<ElemKind, number> }
 export function declareBase(mb: ModuleBuilder): Base {
   const tVT = mb.addType({ k: "array", elem: { t: T.i32, mut: true } });
   const tObj = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i32, mut: true }], final: false });
@@ -28,16 +29,18 @@ export function declareBase(mb: ModuleBuilder): Base {
     tData[k] = mb.addType({ k: "array", elem: { t: dataElem[k], mut: true } });
     tArr[k] = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i32, mut: true }, { t: ref(tData[k]), mut: false }], sup: tObj, final: false });
   }
-  return { tVT, tObj, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
+  // a String when it is a struct (structstrings.ts): the Object header, the chars, the cached hash code and the JS string the host has seen
+  const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i32, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
+  return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
 /** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
 export const kindVT = (_tObj: number, k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
 
 export class Compiler implements Base {
   mb = new ModuleBuilder();
-  tVT!: number; tObj!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
+  tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; watch: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; watch: number; intern: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -69,13 +72,14 @@ export class Compiler implements Base {
     mb.importTable("rt", "table", T.funcref, 0);
     mb.importTable("rt", "strs", T.externref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
-    this.str = new JsStrings(this);
+    this.str = structStrings ? new StructStrings(this) : new JsStrings(this);
+    if (structStrings) this.classStruct.set("java/lang/String", this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
     const f = (name: string, p: VT[], r: VT[]) => mb.importFunc("host", name, mb.addFuncType(p, r));
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), watch: f("watch", [T.externref, T.externref], []) };
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), watch: f("watch", [T.externref, T.externref], []), intern: f("intern", [T.externref, T.externref], [T.externref]) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }
@@ -364,7 +368,7 @@ export class Compiler implements Base {
         return c.finish();
       }];
     }
-    const s = stringHelper(this, name, t);
+    const s = this.str.helper(name, t);
     if (s) return s;
     throw new Error("unknown helper " + name);
   }

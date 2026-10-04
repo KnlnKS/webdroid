@@ -26,7 +26,17 @@ export interface StringRepr {
   noFields(decl: string, field: string): void;
   /** the function making a String the way constructor `desc` does (its parameters in, the String out), or undefined */
   factory(desc: string): number | undefined;
+  /** turns the String on the stack into the JS string a native takes (null stays null), and a JS string a native answers into a String */
+  toHost(c: Code): void;
+  fromHost(c: Code): void;
+  /** a module-local helper over references (vtab, acmp, shash), see Compiler.helper */
+  helper(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] | undefined;
 }
+
+/** whether String is the struct over an i16 array (structstrings.ts) rather than the JS string; chosen once, by `J2W_STRINGS=struct` in the
+ *  environment or on globalThis */
+export const structStrings = (globalThis as { J2W_STRINGS?: string }).J2W_STRINGS === "struct"
+  || (typeof process !== "undefined" && process.env?.J2W_STRINGS === "struct");
 
 const BUILTINS = ["length", "charCodeAt", "concat", "substring", "equals", "test", "fromCharCodeArray", "intoCharCodeArray"] as const;
 type Builtin = (typeof BUILTINS)[number];
@@ -37,6 +47,9 @@ export class JsStrings implements StringRepr {
   constructor(private cx: Compiler) {}
 
   isString(cls: string): boolean { return cls === STRING; }
+  toHost(c: Code): void { c.externConvertAny(); }
+  fromHost(c: Code): void { c.anyConvertExtern(); }
+  helper(name: string, t: (p: VT[], r: VT[]) => number): [number, () => number[]] | undefined { return stringHelper(this.cx, name, t); }
   literal(c: Code, s: string): void { c.i32(this.cx.w.stringId(s)).tableGet(STR_TABLE).anyConvertExtern(); }
   vtab(c: Code, decl: string): void {
     if (this.cx.prog.isSubclass(STRING, decl)) c.call(this.cx.helper("vtab")); else c.refCast(this.cx.tObj).structGet(this.cx.tObj, 0);

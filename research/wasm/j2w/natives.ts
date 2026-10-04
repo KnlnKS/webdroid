@@ -97,6 +97,8 @@ interface Plan {
   ranges: Map<number, [number, number]>;
   /** the array class a result is, if any */
   retArray: string | null;
+  /** whether the result is a String */
+  retString: boolean;
   /** the descriptor of a result that is an object or an object array, which the Bridge turns into a Java value */
   retRef: string | null;
   /** the import of each World (they differ in memory and exceptions) */
@@ -126,7 +128,7 @@ export class Natives {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
     return p;
   }
   binds(m: MethodInfo): boolean { return typeof this.plan(m) !== "string"; }
@@ -176,10 +178,10 @@ export class Natives {
       const t = abi(d);
       if (t === undefined) { const a = this.copyIn(cx, c, i, d, scratch, p.ranges.get(i)); arrays.push(a); c.lget(a.ptr).lget(a.len); return; }
       c.lget(i);
-      if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (t === T.externref) c.externConvertAny();
+      if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (d === STRING) cx.str.toHost(c); else if (t === T.externref) c.externConvertAny();
     });
     c.call(imp);
-    if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) c.anyConvertExtern();
+    if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) { if (p.retString) cx.str.fromHost(c); else c.anyConvertExtern(); }
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
     const rlen = p.retArray ? c.newLocal(T.i32) : -1;
     if (p.retArray) c.lset(rlen);

@@ -5,14 +5,15 @@ import { emitRefCopy, classIntrinsics } from "./classes";
 import { unsafeIntrinsics } from "./unsafe";
 import { reflectIntrinsics } from "./reflect";
 import { H, type ElemKind } from "./consts";
-import { stringIntrinsics } from "./strings";
+import { stringIntrinsics, structStrings } from "./strings";
+import { structIntrinsics } from "./structstrings";
 import { charIntrinsics } from "./chars";
 import { threadIntrinsics } from "./threads";
 import { refIntrinsics } from "./refs";
 import { memoryIntrinsics } from "./memory";
 import { fieldIntrinsics } from "./fields";
 
-export const intrinsics = new Map<string, Intrinsic>([...stringIntrinsics, ...charIntrinsics]);
+export const intrinsics = new Map<string, Intrinsic>([...(structStrings ? structIntrinsics : stringIntrinsics), ...charIntrinsics]);
 export const externs: string[] = [];             // statics of classes the program may lack (d8 also emits Double.isNaN calls)
 const def = (key: string, f: Intrinsic, extern = false) => { intrinsics.set(key, f); if (extern) externs.push(key); };
 
@@ -32,7 +33,7 @@ def("java/lang/Throwable.nativeGetStackTrace(Ljava/lang/Object;)[Ljava/lang/Stac
   cx.emitNewArray(c, "[L" + STE + ";", () => c.lget(n)); c.lset(arr);
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
   cx.emitEnsure(c, STE); cx.emitNew(c, STE); c.lset(e);
-  c.lget(e).lget(i).i32(0).call(cx.imp.stString).anyConvertExtern().lget(i).i32(1).call(cx.imp.stString).anyConvertExtern().anyNull().lget(i).call(cx.imp.stLine);
+  c.lget(e).lget(i).i32(0).call(cx.imp.stString); cx.str.fromHost(c); c.lget(i).i32(1).call(cx.imp.stString); cx.str.fromHost(c); c.anyNull().lget(i).call(cx.imp.stLine);
   cx.callMethod(c, ctor);
   c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i).lget(e).arraySet(cx.tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().lget(arr);
