@@ -16,8 +16,8 @@ import { perf } from "../perf";
 import { wakeSoon, yieldToLoop } from "../jvm/yield";
 
 /** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
- *  inline; phase: which stage of a frame the main thread is in, so a stuck frame names it */
-export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued: 0, phase: "" };
+ *  inline */
+export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued: 0 };
 
 /** A thread may hold the JS thread this long between macrotask turns before its looper yields, so
  *  a message that keeps reposting itself cannot starve input, rendering or other realms. */

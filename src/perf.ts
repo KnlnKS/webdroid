@@ -2,24 +2,11 @@
 // beyond the three performance.now() pairs the frame loop already needs.
 export const perf = {
   frames: 0, completedFrames: 0, presentations: 0, frameMs: 0,
-  layoutPasses: 0, layoutMs: 0,
   draws: 0, drawMs: 0,
   measureText: 0, measureTextMiss: 0,
   rnRecord: 0, rnReplay: 0,
-  // how many repaints were asked for vs how many frames actually drew: tells "slow frame"
-  // apart from "we are drawing frames nobody asked for".
-  invalidates: 0,
-  // layout work: requests that name a view against those that re-measure the whole tree,
-  // onMeasure bodies that actually ran, views laid out at a size other than their measurement,
-  // and window-inset dispatches (each one forces a layout pass).
-  layoutRequests: 0, layoutRequestsAll: 0, onMeasures: 0, layoutMismatch: 0, insetsPasses: 0,
-  // TextView line breaking computed against served from a memo, measures a cache answered, and
-  // measures skipped because an EXACTLY spec matched the size the view already had
-  wraps: 0, wrapHits: 0, measureCacheHits: 0, exactSkips: 0,
-  // draw work: views painted against views their parent's clip rejected
-  viewsDrawn: 0, viewsRejected: 0,
   // a frame phase that threw. Must stay 0 on a healthy app; non-zero names a real gap.
-  layoutErrors: 0, drawErrors: 0,
+  drawErrors: 0,
   // wall time inside input dispatch, and lazy class compilation — both land ON the tap.
   inputMs: 0, compileMs: 0, classesCompiled: 0,
   // outermost static initializers' synchronous work, and resource tables and XML parsed
@@ -34,8 +21,8 @@ export const perf = {
   jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,
   jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0,
   jvmProfileDroppedMethods: 0,
-  // Surface frames (GL, native windows and decoded video), and Renderer wall time up to the swap.
-  glFrames: 0, glFrameMs: 0,
+  // Surface frames (GL, native windows and decoded video)
+  glFrames: 0,
   // the native tier: guest instructions, wall time in the core, slices, host calls, GLES draws,
   // and errors from native GL (counted under __wdGlProbe).
   nativeInstr: 0, nativeMs: 0, nativeSlices: 0, nativeHostCalls: 0, glDraws: 0, glErrors: 0,

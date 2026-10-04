@@ -13,7 +13,7 @@ export type ProcessDiagnostics = {
   native: string[];
   errors: string[] | null;
   perf: Record<string, number> | null;
-  queue: { queued: number; depth: number; phase: string } | null;
+  queue: { queued: number; depth: number } | null;
   compositor: unknown;
   coverage: { enabled: boolean; methods: string[] } | null;
 } | { status: "unavailable" } | { status: "failure"; message: string };
@@ -41,7 +41,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
           native: wd.nativeRequirements(),
           errors: wd.logs?.filter((line: string) => /^(error:|window.error:|unhandledrejection:)/.test(line)) ?? null,
           perf: wd.perf ? { ...wd.perf } : null,
-          queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth, phase: wd.mainDbg.phase } : null,
+          queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth } : null,
           compositor: Reflect.get(wd, "compositorStatus") ?? null,
           coverage: wd.jvmCoverage?.snapshot?.() ?? null } : { status: "unavailable" as const };
       });

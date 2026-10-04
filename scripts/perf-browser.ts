@@ -205,7 +205,6 @@ try {
     const raf = new Float64Array(capacity), presents = new Float64Array(capacity), inputPresent = new Float64Array(capacity);
     let nr = 0, np = 0, ni = 0, inputs = 0, hidden = document.hidden, queued = 0, depth = 0;
     let lastRaf = performance.now(), lastPresent = lastRaf, awaitingInput = 0, running = true;
-    const phases: Record<string, number> = {};
     const raw = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
     const canvas = document.getElementById("screen");
     let recording = !alignPresentation, anchorTime = 0;
@@ -236,8 +235,6 @@ try {
       nr++; lastRaf = now;
       hidden ||= document.hidden;
       queued = Math.max(queued, wd.mainDbg.queued); depth = Math.max(depth, wd.mainDbg.depth);
-      const phase = wd.mainDbg.phase;
-      phases[phase] = (phases[phase] ?? 0) + 1;
       if (running) rafId = requestAnimationFrame(sample);
     };
     let rafId = alignPresentation ? 0 : requestAnimationFrame(sample);
@@ -289,7 +286,7 @@ try {
     running = false; cancelAnimationFrame(rafId); clearInterval(timer); scheduled.forEach(clearTimeout);
     ImageBitmapRenderingContext.prototype.transferFromImageBitmap = raw;
     const perf = Object.fromEntries(Object.entries(end).map(([k, v]) => [k, v - (start[k] ?? 0)]));
-    return { ms: elapsed, perf, ticks: wd.ticks - ticks, hidden, queued, depth, phases, inputs, plannedInputs, issuedOffsets, actionInFlight: acting, actionErrors,
+    return { ms: elapsed, perf, ticks: wd.ticks - ticks, hidden, queued, depth, inputs, plannedInputs, issuedOffsets, actionInFlight: acting, actionErrors,
       ...(startState !== undefined ? { stateBefore: matchedState, stateWaitMs } : {}),
       ...(alignPresentation ? { anchorWaitMs: t0 - anchorStarted, anchorToStartMs: t0 - anchorTime } : {}),
       rafCount: nr, presentCount: np, droppedSamples: Math.max(0, nr - capacity) + Math.max(0, np - capacity),

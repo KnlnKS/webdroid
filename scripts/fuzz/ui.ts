@@ -98,7 +98,6 @@ function processSignals(processes: Awaited<ReturnType<typeof readProcesses>>): s
     for (const value of diagnostics.native) signals.push(`native:${prefix}:${value}`);
     for (const value of diagnostics.errors ?? []) signals.push(`error:${prefix}:${value}`);
     const perf = diagnostics.perf;
-    if (perf?.layoutErrors) signals.push(`layout:${prefix}`);
     if (perf?.drawErrors) signals.push(`draw:${prefix}`);
     if (perf?.glErrors) signals.push(`gl:${prefix}`);
   }
