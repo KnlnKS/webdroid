@@ -14,12 +14,13 @@ export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return c.finish(); }
   if (!m.codeOff) { cx.stats.unresolved.push(mid(m)); const c = new Code(nparams); c.call(cx.helpers.ule).unreachable(); return c.finish(); }
   try {
-    const rk = new Set<string>();
-    new MC(cx, m, null).run();                    // pass 1: which (kind, reg) locals are ever read
-    const mc1 = new MC(cx, m, rk); mc1.collect = true; mc1.run();
-    const mc = new MC(cx, m, rk); const body = mc.run();
-    cx.stats.methods++; cx.stats.bodyBytes += body.length;
-    return body;
+    // locals of a kind are only written when some instruction reads them: iterate the read set down to a fixpoint
+    let rk: Set<string> | null = null;
+    for (;;) {
+      const mc = new MC(cx, m, rk); const body = mc.run();
+      if (rk?.size === mc.reads.size) { cx.stats.methods++; cx.stats.bodyBytes += body.length; return body; }
+      rk = mc.reads;
+    }
   } catch (e) {
     if ((e as Error).message === "unstructured") cx.stats.unstructured++;
     else { cx.stats.unresolved.push(`${mid(m)}: ${(e as Error).message}`); }
@@ -30,7 +31,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
 const KS = { Z: 1, I: 2, L: 3, W: 4, X: 5 };
 class MC {
   code: Code; prepared!: PreparedMethod; flow!: Flow; item; dex;
-  collect = false;
+  reads = new Set<string>();
   locals = new Map<string, number>();
   nest: string[] = [];
   block = 0;
@@ -51,7 +52,7 @@ class MC {
     if (l === undefined) { l = this.code.newLocal(kind === "I" ? T.i32 : kind === "J" ? T.i64 : refNull(this.cx.tObj)); this.locals.set(k, l); }
     return l;
   }
-  get(kind: Kind, reg: number): void { if (this.readKinds === null || this.collect) this.readKinds?.add(kind + reg); this.code.lget(this.loc(kind, reg)); }
+  get(kind: Kind, reg: number): void { this.reads.add(kind + reg); this.code.lget(this.loc(kind, reg)); }
   set(kind: Kind, reg: number): void { this.code.lset(this.loc(kind, reg)); }
 
   run(): number[] {
@@ -62,17 +63,12 @@ class MC {
     this.flow = flow;
     this.analyzeKinds();
     // blocks
-    const insByBlock: Ins[][] = flow.starts.map(() => []);
-    for (const ins of prepared.instructions) insByBlock[flow.blockAt[ins.pc] >= 0 && prepared.leaders[ins.pc] ? flow.blockAt[ins.pc] : -1]?.push(ins);
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     const c = this.code;
-    // params -> vreg locals
     let reg = item.regs - item.ins, pi = 0;
-    if (!m.isStatic) { c.lget(pi); this.set("L", reg); pi++; reg++; }
-    for (const p of m.params) {
-      const k = kindOf(p); c.lget(pi); this.set(k, reg); pi++; reg += isWide(p) ? 2 : 1;
-    }
+    if (!m.isStatic) this.locals.set("L" + reg++, pi++);
+    for (const p of m.params) { this.locals.set(kindOf(p) + reg, pi++); reg += isWide(p) ? 2 : 1; }
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(refNull(cx.tObj)); }
     this.tmpL = c.newLocal(refNull(cx.tObj));
     const regions = flow.regions;
@@ -112,14 +108,13 @@ class MC {
   endBlk() { this.pop(); this.code.end(); }
 
   emitRegion(k: number) {
-    const r = this.flow.regions[k], c = this.code;
+    const r = this.flow.regions[k];
     const open: { close: number }[] = []; let next = 0;
     for (let p = 0; p <= r.order.length; p++) {
       while (open.length && open[open.length - 1].close === p) { open.pop(); this.endBlk(); }
       for (; next < r.scopes.length && r.scopes[next].open === p; next++) { const s = r.scopes[next]; open.push(s); this.blk(s.label, s.loop); }
       if (p < r.order.length) this.emitBlock(r.order[p]);
     }
-    void c;
   }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
@@ -186,7 +181,6 @@ class MC {
   // ---------- kind analysis for if-eq/ne and moves
   analyzeKinds() {
     const { prepared, item, dex, m } = this, nregs = item.regs;
-    const starts = prepared.instructions.filter((i) => prepared.leaders[i.pc]).map((i) => i.pc);
     const blocks = new Map<number, Ins[]>(); let cur: Ins[] = [];
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) { cur = []; blocks.set(ins.pc, cur); } cur.push(ins); }
     const entry = new Map<number, Uint8Array>();
@@ -217,7 +211,6 @@ class MC {
       const succ = [...branchTargets(item, last)]; if (!endsBlock(last.op)) succ.push(last.pc + last.len);
       for (const s of succ) if (blocks.has(s) && merge(s, st)) work.push(s);
     }
-    void starts;
   }
   transfer(ins: Ins, st: Uint8Array, setRet: (r: number) => void, getRet: () => number) {
     const n = ins.name, dex = this.dex, a = ins.a;
@@ -267,8 +260,9 @@ class MC {
     switch (n) {
       case "nop": return;
       case "move": case "move/from16": case "move/16": {
-        if (this.rk("I", b)) { this.get("I", b); this.set("I", a); }
-        if (this.rk("L", a) && this.readKinds && this.readKinds.has("L" + b)) { this.get("L", b); this.set("L", a); }
+        const ref = this.isRef(ins, b);
+        if (ref !== true && this.rk("I", a)) { this.get("I", b); this.set("I", a); }
+        if (ref !== false && this.rk("L", a)) { this.get("L", b); this.set("L", a); }
         return;
       }
       case "move-wide": case "move-wide/from16": case "move-wide/16": this.get("J", b); this.set("J", a); return;
@@ -413,12 +407,11 @@ class MC {
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
   }
   emitStatic(ins: Ins) {
-    const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { decl, f } = this.fieldOf(ins.b);
+    const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { f } = this.fieldOf(ins.b);
     cx.emitEnsure(c, f.owner);
     cx.declareStatic(f.owner, f.name);
     const g = cx.staticGlobal.get(f.owner + "." + f.name)!;
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind, ins.a); }
-    void decl;
   }
   emitIf(ins: Ins) {
     const c = this.code, flow = this.flow, target = ifTarget(ins), n = ins.name;
@@ -449,12 +442,11 @@ class MC {
     this.pop(); c.end();
   }
   emitSwitch(ins: Ins) {
-    const c = this.code, flow = this.flow, cases = switchCases(this.item, ins);
+    const c = this.code, cases = switchCases(this.item, ins);
     // compare chain (br_table is a later optimisation)
     for (const [key, target] of cases) {
       this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(target, false); this.pop(); c.end();
     }
-    void flow;
   }
   finishResult(ins: Ins, kind: Kind | "V") {
     // fold a following move-result into the producer
@@ -477,14 +469,14 @@ class MC {
     };
     const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
     if (decl[0] === "[") { c.call(cx.helpers.ule).unreachable(); return; }
-    const callDirect = (t: { cls: string; key: string }, mi: MethodInfo) => { cx.declareMethod(mi); c.call(cx.fnOf(mi)); void t; };
+    const callDirect = (mi: MethodInfo) => { cx.declareMethod(mi); c.call(cx.fnOf(mi)); };
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
       cx.emitEnsure(c, t.cls); pushArgs(); c.call(cx.fnOf(t));
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
       const t = kind === "invoke-super" ? prog.resolve(prog.get(this.m.cls)?.isInterface ? decl : prog.get(this.m.cls)!.sup ?? decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
       if (!t) throw new Error("unresolved direct " + decl + "." + key);
-      this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); callDirect(t, t);
+      this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); callDirect(t);
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
       const impls = new Set<MethodInfo>();

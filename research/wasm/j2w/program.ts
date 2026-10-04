@@ -27,6 +27,30 @@ export class Program {
         this.classes.set(name, this.build(dex, def, name));
       }
     }
+    this.addRuntimeClasses();
+  }
+  private stub(name: string, sup: string | null): JClass {
+    const c: JClass = { name, dex: null, def: null, sup, ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() };
+    this.classes.set(name, c); return c;
+  }
+  /** Classes the compiler's own helpers instantiate; stubbed when the loaded dexes (no framework) lack them. */
+  private addRuntimeClasses() {
+    const E = "java/lang/", chain: [string, string | null][] = [["Object", null], ["Throwable", "Object"], ["Exception", "Throwable"], ["RuntimeException", "Exception"],
+      ["NullPointerException", "RuntimeException"], ["ArithmeticException", "RuntimeException"], ["ClassCastException", "RuntimeException"],
+      ["NegativeArraySizeException", "RuntimeException"], ["IndexOutOfBoundsException", "RuntimeException"], ["ArrayIndexOutOfBoundsException", "IndexOutOfBoundsException"],
+      ["Error", "Throwable"], ["LinkageError", "Error"], ["UnsatisfiedLinkError", "LinkageError"]];
+    for (const [n, sup] of chain) if (!this.classes.has(E + n)) this.stub(E + n, sup && E + sup);
+  }
+  /** statics of library classes without bytecode here: resolvable stubs the compiler replaces with intrinsics */
+  addExterns(keys: string[]) {
+    for (const key of keys) {
+      const [, cls, name, desc] = /^(.*)\.(\w+)(\(.*)$/.exec(key)!;
+      if (this.classes.get(cls)?.dex) continue;
+      const p = parseMethodDesc(desc);
+      const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret };
+      const c = this.classes.get(cls) ?? this.stub(cls, "java/lang/Object");
+      c.methods.push(m); c.byKey.set(m.key, m);
+    }
   }
   private build(dex: DexFile, def: ClassDef, name: string): JClass {
     const fields: FieldInfo[] = [];

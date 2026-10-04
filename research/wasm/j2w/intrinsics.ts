@@ -4,7 +4,8 @@ import type { Compiler, Intrinsic } from "./j2w";
 import type { ElemKind } from "./consts";
 
 export const intrinsics = new Map<string, Intrinsic>();
-const def = (key: string, f: Intrinsic) => intrinsics.set(key, f);
+export const externs: string[] = [];             // statics of classes the program may lack (d8 also emits Double.isNaN calls)
+const def = (key: string, f: Intrinsic, extern = false) => { intrinsics.set(key, f); if (extern) externs.push(key); };
 
 def("java/lang/Object.hashCode()I", (cx, m, c) => { c.lget(0).call(cx.helpers.hash); });
 def("java/lang/System.identityHashCode(Ljava/lang/Object;)I", (cx, m, c) => { c.lget(0).refIsNull().if_(T.i32).i32(0).else_().lget(0).call(cx.helpers.hash).end(); });
@@ -13,6 +14,8 @@ def("java/lang/Float.floatToRawIntBits(F)I", (cx, m, c) => { c.lget(0); });
 def("java/lang/Float.intBitsToFloat(I)F", (cx, m, c) => { c.lget(0); });
 def("java/lang/Double.doubleToRawLongBits(D)J", (cx, m, c) => { c.lget(0); });
 def("java/lang/Double.longBitsToDouble(J)D", (cx, m, c) => { c.lget(0); });
+def("java/lang/Float.isNaN(F)Z", (cx, m, c) => { c.lget(0).raw(OP.f32_reinterpret_i32).lget(0).raw(OP.f32_reinterpret_i32, OP.f32_ne); }, true);
+def("java/lang/Double.isNaN(D)Z", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64).lget(0).raw(OP.f64_reinterpret_i64, OP.f64_ne); }, true);
 def("java/lang/StrictMath.sqrt(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9f, OP.i64_reinterpret_f64); });
 def("java/lang/StrictMath.floor(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9c, OP.i64_reinterpret_f64); });
 def("java/lang/StrictMath.ceil(D)D", (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, 0x9b, OP.i64_reinterpret_f64); });

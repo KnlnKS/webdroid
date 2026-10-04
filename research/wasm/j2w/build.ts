@@ -4,7 +4,7 @@ import { dexesIn, isDexEntry } from "../../../src/jvm/dex";
 import { zipTree } from "../../../src/jvm/natives/jzip";
 import { Program } from "./program";
 import { Compiler } from "./j2w";
-import { intrinsics } from "./intrinsics";
+import { intrinsics, externs } from "./intrinsics";
 
 export function loadDexes(path: string) {
   const bytes = new Uint8Array(readFileSync(path));
@@ -14,7 +14,7 @@ export function loadDexes(path: string) {
 }
 export function compile(paths: string[], entries: [string, string, string][]) {
   const dexes = paths.flatMap(loadDexes);
-  const prog = new Program(dexes);
+  const prog = new Program(dexes); prog.addExterns(externs);
   const cx = new Compiler(prog, { intrinsics });
   const t0 = performance.now();
   const bytes = cx.build(entries);
