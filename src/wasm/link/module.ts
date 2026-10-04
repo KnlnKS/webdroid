@@ -7,3 +7,4 @@ const COMPILE_OPTIONS: CompileOptions = { builtins: ["js-string"], importedStrin
 
 export const compileModule = (bytes: Uint8Array): WebAssembly.Module => new (WebAssembly.Module as unknown as ModuleWithOptions)(bytes as BufferSource, COMPILE_OPTIONS);
 export const compileStream = (source: Promise<Response>): Promise<WebAssembly.Module> => (WebAssembly.compileStreaming as unknown as StreamWithOptions)(source, COMPILE_OPTIONS);
+export const compileBytes = (bytes: Uint8Array): Promise<WebAssembly.Module> => (WebAssembly.compile as unknown as (bytes: BufferSource, options: CompileOptions) => Promise<WebAssembly.Module>)(bytes as BufferSource, COMPILE_OPTIONS);
