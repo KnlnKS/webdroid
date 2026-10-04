@@ -249,7 +249,8 @@ cross-origin isolation required for threads; strings must be copied at every hos
 (instruction emitter), `program.ts` (class model, CHA helpers), `reach.ts` (RTA reachability), `consts.ts`,
 `j2w.ts` (types, helpers, vtables, class init, module assembly), `method.ts` (per-method compile using `Flow`,
 kind analysis, all opcode families except strings/MethodHandles/monitors), `intrinsics.ts`, `build.ts`, `dis.ts`,
-`java/W.java` and `run.mjs`.
+`java/W.java`, `run.mjs`, and the differential harnesses `oracle.ts` (the production JS tier as oracle), `cases.ts`, `diff.ts`,
+`libdiff.ts` and `jbench.ts`.
 
 ### 4.2 What it showed
 
@@ -258,12 +259,40 @@ produced the same results as the JDK. Module size 2.9 KB, compile 7.6 ms in Bun.
 
 ### 4.3 What is wrong or untested
 
-- `mandel` returned 0 (expected 2196322.0) and `collatz` returned 2,864,133 (expected 307). I did not find the
-  cause; the disassembly of `collatz` shows wide registers, `move` of int registers into pairs, `cmp-long`, `shr-long/2addr`
-  and a loop with a `goto` back edge. Treat the compiler as unverified until these match.
-- No workloads on AOSP library bytecode ran (ArrayList/HashMap etc. need strings, class objects, reflection-backed
-  `Arrays.copyOf`, class init).
-- No speed comparison against the production JS tier on real DEX was taken.
+Status after the S0 differential work (`research/wasm/j2w/`; the first two need javac, d8 and java on PATH):
+
+| Harness | Subject | Oracles | Result |
+|---|---|---|---|
+| `diff.ts` | 30 static methods of `W.java`, 775 cases | JDK and the production JS tier | 775/775 agree. The earlier `mandel`/`collatz` mismatches are gone. 2 JS-tier results are explained: Bun's JSC words a negative typed-array length differently from V8, so `rt` maps `new int[-1]` to `InternalError` instead of `NegativeArraySizeException` (production runs V8; `runtime.ts` matches only V8's wording) |
+| `libdiff.ts` | primitive-only statics of `java.lang.{Integer,Long,Short,Byte,Character,Boolean,Float,Double,Math,StrictMath}`, `Objects`, `Arrays`, FP16, compiled from the unchanged core-oj/core-libart dex | JS tier running the same bytecode | 322 candidates, 87 compile without a gap in their closure; 3,480 cases, 0 diffs. The rest are blocked by const-string (139), natives (74) or a closure over 1,000 methods (22) |
+| `jbench.ts` | the 42 `scripts/jbench/Bench.java` workloads, each cut out as `static int w_<name>()` (generated, not copied) and compiled over all boot jars | JS tier | all 42 compile into one valid 6.9 MB module (17,859 methods, 23 s) with every unsupported construct recorded as a gap; none runs to a result, every one traps at its first gap |
+
+Bugs found and fixed by this work: ART's `java.lang.Object` declares `shadow$_klass_`/`shadow$_monitor_` fields, which
+broke struct layout and invalidated every module built with real core-oj (they are now the object header);
+`wasmbin` overflowed the stack on large modules; and unsupported constructs compiled to a silent trap
+(`const-string`, `const-class`, `invoke-polymorphic`, array methods, calls with no instantiated implementor, natives).
+Each now goes through `Compiler.gap`, which records it and calls `host.gap(id)`, so the harness reports the first gap
+a run hits. Nothing is faked: a gap throws `UnsatisfiedLinkError`.
+
+**S1 work list, from the 17,859 methods the jbench workloads reach** (counts are blocked methods; a method can appear
+under several rows; `bun jbench.ts -v` lists them all):
+
+| Missing feature | Blocked methods | First gap of | Needed for |
+|---|---|---|---|
+| Strings: `const-string` and string static initial values | 2,811 (+12 jumbo) | `Integer.<clinit>` (`Class.getPrimitiveClass("int")`) hits `listAddGet`, `listIter`, `listRemove`, `mapInt`, `deque`, `sort`, `linkedList`, `scanTokens`, `format`, `casts`, `ssb*`; `Bench.<clinit>` (KEYS) hits `mapStr`, `mapWalk`, `linkedMap`, `hashSet`, `treeMap`, `mix`, `parseFail*`, `zipOpen`, `spannedCopy`; `Float`/`Double.<clinit>` hit `b64java`, `jsonParse`, `jsonWrite`, `dtoa`; the workload body itself for `sha256`, `ecdsaVerify`, `certParse`, `smallAlloc`, `scanLines`, `strConcat`, `inetCached`, `linkify`; `StringBuffer.<clinit>` for `monitors` | every workload |
+| Class objects: `const-class`, `Object.getClass` (reads the removed `shadow$_klass_`), `Class` methods | 340 const-class; 789 calls with no instantiated implementor, of which 374 on `Class` (`getName` 100, `getComponentType`, `getClassLoader`, `isAssignableFrom`, `newInstance`), then `reflect.Field/Constructor/Method` | `Unsafe.<clinit>` for `fbLoop`, `fbBulk`, `bbInts`, `dbInts`; `Base64$Encoder.<clinit>` for `b64android` | NIO buffers, `Arrays.copyOf(.., Class)`, `Enum.values()` via clone |
+| Array methods: `clone()` (101 sites: enum `values()`, `ArrayList`, ICU) | 101 | | `listAddGet` family (`Arrays.copyOf`), enums |
+| Natives with no intrinsic | 263: `libcore.io.Linux` 46, `jdk.internal.misc.Unsafe` 23 (+ `sun.misc.Unsafe` 11), `libcore.io.Memory` 14, `VMRuntime` 12, `Character` 12, ICU `MatcherNative` 11, `String` 11, `Math` 10, `Thread` 8, `FileDispatcherImpl` 8 | `AtomicLong.VMSupportsCS8()` for `random` | `random`, NIO, zip, files, crypto |
+| `invoke-polymorphic` (VarHandle/MethodHandle) | 51 (+3 range): `ForkJoinPool` and `WorkQueue`, `AtomicInteger`, `AtomicLong`, `CountedCompleter` | | `AtomicInteger`/`AtomicLong` (`random`, `ConcurrentHashMap` users), executors |
+| `invoke-super` to interface default methods (`unresolved direct`) | 31, all `java.time.chrono`/`temporal` | | `java.time` (format, zip entries) |
+| Monitors | not a gap: `monitor-enter/exit` are null checks, valid only while a process has one Java thread | | `monitors`; revisit with S1 threads |
+| Whole-program reach | not a gap, a size problem: `Locale.getDefault()`, `Object.toString()` or `Objects.checkIndex` alone reach 7,854 methods and 716 classes from core-oj+core-libart, so any workload that can throw or concatenate compiles about 15,000 methods | | S1 needs lazy per-method or per-class modules (G3), not closed-world reach |
+
+`casts` is the smallest case: 26 methods, blocked only by `Integer.<clinit>` (string plus the `getPrimitiveClass`
+native and `const-class`), so it is the first jbench workload to turn green once strings and class objects exist.
+Still untested: `invoke-custom` (no site reached), DEX-level fuzzing of instruction sequences, `framework.jar`
+and app code through `diff`, `fwtest` and the conformance suites. There is no speed comparison against the JS tier on
+real DEX (the compile of 17.9k methods takes 23 s, so cold-start numbers must wait for lazy compilation).
 
 ### 4.4 Do not trust
 
@@ -330,8 +359,11 @@ Follow AGENTS.md verification at each stage (`typecheck`, `test`, `smoke` with z
 - Add counters to `lat`/`run.json`: host crossings per tap, wasm vs js time, module count, baseline-compiled functions.
 - Record JS-tier baselines for jbench, `lat` (cold/warm), launch profiles and heap size per app.
 - Fix the `mandel`/`collatz` mismatches and add a differential test harness (JS tier vs Wasm tier per method,
-  random inputs, plus DEX-level fuzz on instruction sequences).
-- **Accept:** G2 harness runs on `W.java` and the jbench classes with zero diffs.
+  random inputs, plus DEX-level fuzz on instruction sequences). *Done except DEX-level fuzz: see 4.3.*
+- **Accept:** G2 harness runs on `W.java` and the jbench classes with zero diffs. *Status: zero diffs on `W.java`
+  (against the JDK and the JS tier) and on 87 compiled AOSP library statics; the 42 jbench workloads compile but every
+  one stops at its first gap (strings, then class objects, per the 4.3 table), so they have no result to diff yet.
+  The acceptance closes when the S1 string and class-object work lets `bun jbench.ts` report MATCH.*
 
 ### S1. Core compiler to a closed set
 - Finish opcodes: strings (const-string, String ops via the chosen representation), class objects, monitors,
