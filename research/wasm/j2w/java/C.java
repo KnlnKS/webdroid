@@ -1,0 +1,129 @@
+/** Class model tests: every method is a static int(int) that exercises one feature once. Run by classdiff.ts. */
+public class C {
+  interface I { default int f() { return 1; } int g(); }
+  interface J extends I { default int f() { return 2 + I.super.f(); } }
+  static class A implements I { public int g() { return 5; } }
+  static class B extends A implements J { }
+  static class D implements I { public int f() { return 10 + I.super.f(); } public int g() { return 6; } }
+  static class K implements Cloneable { int a = 3; long b = 4; Object c; K dup() throws CloneNotSupportedException { return (K) super.clone(); } }
+  static abstract class Abs { }
+
+  public static int classIdent(int n) {
+    Object a = new A(), b = new B();
+    int r = (a.getClass() == A.class ? 1 : 0) + (b.getClass() == B.class ? 2 : 0) + (a.getClass() != b.getClass() ? 4 : 0);
+    r += new int[1].getClass() == int[].class ? 8 : 0;
+    r += new A[0].getClass() == A[].class ? 16 : 0;
+    r += new A[0].getClass() != B[].class ? 32 : 0;
+    r += new A[0][].getClass() == A[][].class ? 64 : 0;
+    return r;
+  }
+  public static int classApi(int n) {
+    int r = 0;
+    r += A.class.isInstance(new B()) ? 1 : 0;
+    r += B.class.isAssignableFrom(A.class) ? 2 : 0;
+    r += I.class.isAssignableFrom(B.class) ? 4 : 0;
+    r += A[].class.getComponentType() == A.class ? 32 : 0;
+    r += A.class.getComponentType() == null ? 64 : 0;
+    r += I.class.isInterface() ? 128 : 0;
+    r += B.class.getSuperclass() == A.class ? 256 : 0;
+    r += A[].class.isArray() ? 512 : 0;
+    r += I.class.isInstance(new int[0]) ? 0 : 1024;
+    r += Object.class.isAssignableFrom(I.class) ? 2048 : 0;
+    r += Abs.class.getModifiers() & 0x400;
+    r += Object.class.getSuperclass() == null ? 16384 : 0;
+    return r;
+  }
+  public static int jsWrong_classApi(int n) {
+    int r = 0;
+    r += A[].class.isAssignableFrom(B[].class) ? 8 : 0;
+    r += Object[].class.isAssignableFrom(A[].class) ? 16 : 0;
+    r += Cloneable.class.isAssignableFrom(int[].class) ? 4096 : 0;
+    r += I.class.getSuperclass() == null ? 8192 : 0;
+    return r;
+  }
+  public static int newInstance(int n) throws Exception {
+    Object o = A.class.newInstance();
+    return (o instanceof A ? 1 : 0) + (o.getClass() == A.class ? 2 : 0) + (((I) o).g() == 5 ? 4 : 0);
+  }
+  public static int defaults(int n) {
+    I a = new A(), d = new D();
+    return a.f() * 100 + d.f() + (a.g() + d.g()) * 1000;
+  }
+  public static int jsWrong_defaultSpecific(int n) { I b = new B(); return b.f() + new B().f() * 10; }
+  public static int arrayClone(int n) {
+    int[] a = {1, 2, 3}; int[] b = a.clone(); b[0] = 9;
+    long[] l = {5L, 6L}; long[] m = l.clone();
+    A[] x = new B[2]; x[0] = new B(); A[] y = x.clone(); y[1] = new B();
+    char[][] cc = new char[2][]; cc[0] = new char[3]; cc[1] = new char[1]; char[][] c2 = cc.clone();
+    byte[] bb = {7}; boolean[] zz = {true}; short[] ss = {8};
+    long r = a[0] + b[0] * 10 + m[1] + (y.getClass() == B[].class ? 100 : 0) + (x[1] == null ? 200 : 0) + (c2[1] == cc[1] ? 400 : 0) + bb.clone()[0] + (zz.clone()[0] ? 1 : 0) + ss.clone()[0];
+    return (int) r;
+  }
+  public static int objectClone(int n) throws Exception {
+    K k = new K(); k.c = k; k.a = 7;
+    K c = k.dup();
+    return (c != k ? 1 : 0) + (c.a == 7 ? 2 : 0) + (c.b == 4 ? 4 : 0) + (c.c == k ? 8 : 0) + (c.getClass() == K.class ? 16 : 0);
+  }
+  public static int arrayStoreOk(int n) {
+    int r = 0;
+    Object[] a = new A[2];
+    a[0] = new B(); a[1] = new A(); r += 1;
+    I[] ia = new A[1]; ia[0] = new A(); r += 2;
+    Object[] oa = new Object[2]; oa[0] = new int[2]; oa[1] = new A[1]; r += 4;
+    Object[][] aa = new A[1][]; aa[0] = new B[1]; r += 8;
+    a[1] = null; r += 16;
+    return r;
+  }
+  public static int jsWrong_arrayStore(int n) {
+    int r = 0;
+    Object[] a = new A[2];
+    try { a[0] = new Object(); } catch (ArrayStoreException e) { r += 1; }
+    Object[] ba = new B[1];
+    try { ba[0] = new A(); } catch (ArrayStoreException e) { r += 16; }
+    Object[][] aa = new A[1][];
+    try { aa[0] = new Object[1]; } catch (ArrayStoreException e) { r += 64; }
+    I[] ia = new A[1];
+    try { ((Object[]) ia)[0] = new D(); r += 2; } catch (ArrayStoreException e) { r += 4; }
+    return r;
+  }
+  public static int arrayCasts(int n) {
+    Object o = new B[1];
+    int r = (o instanceof A[] ? 1 : 0) + (o instanceof I[] ? 2 : 0) + (o instanceof Object[] ? 4 : 0) + (o instanceof int[] ? 0 : 8) + (o instanceof B[] ? 16 : 0) + (o instanceof D[] ? 0 : 32)
+      + (o instanceof Cloneable ? 64 : 0) + (o instanceof java.io.Serializable ? 128 : 0) + (o instanceof Object ? 256 : 0) + (new A[0][] instanceof Object[][] ? 512 : 0) + (new int[0][] instanceof Object[] ? 1024 : 0);
+    A[] ok = (A[]) o; r += ok.length;
+    try { Object[] bad = (D[]) o; r += 4096; } catch (ClassCastException e) { r += 2048; }
+    try { int[] bad = (int[]) (Object) new long[1]; r += 8192; } catch (ClassCastException e) { r += 16384; }
+    return r;
+  }
+
+  static class P { static int x = Q.y + 1; }
+  static class Q { static int y = P.x + 10; }
+  public static int initCycle(int n) { return P.x * 100 + Q.y; }
+  static class Q2 { static int y = P2.x + 10; }
+  static class P2 { static int x = Q2.y + 1; }
+  public static int initCycleReverse(int n) { return Q2.y * 100 + P2.x; }
+
+  static int z() { return 0; }
+  static class F { static int v = 1 / z(); static int g() { return 1; } }
+  public static int initFails(int n) {
+    int r = 0; Throwable t1 = null, t2 = null;
+    try { F.g(); } catch (Throwable t) { t1 = t; }
+    try { F.g(); } catch (Throwable t) { t2 = t; }
+    r += t1 instanceof ExceptionInInitializerError ? 1 : 0;
+    r += t1 != null && t1.getCause() instanceof ArithmeticException ? 2 : 0;
+    r += t2 instanceof NoClassDefFoundError ? 4 : 0;
+    return r;
+  }
+  static class E { static int v = 1; static { if (v == 1) throw new Error2(); } }
+  static class Error2 extends Error { }
+  public static int initError(int n) {
+    try { return E.v; } catch (Throwable t) { return t instanceof Error2 ? 1 : 2; }
+  }
+  static class Base { static int b = 5; static int log = 0; static { log = log * 10 + 1; } }
+  static class Sub extends Base { static int s = 6; static { log = log * 10 + 2; } }
+  public static int initOrder(int n) { int s = Sub.s; return s * 1000 + Base.log * 10 + Base.b; }
+  interface WithDefault { int V = Order.next(1); default int d() { return 1; } }
+  static class Order { static int last; static int next(int v) { last = last * 10 + v; return v; } }
+  static class Impl implements WithDefault { }
+  public static int jsWrong_initDefaultIface(int n) { new Impl(); return Order.last; }
+}

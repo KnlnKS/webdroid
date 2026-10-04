@@ -108,16 +108,31 @@ export class Program {
     for (let c: JClass | undefined = this.classes.get(cls); c; c = c.sup ? this.classes.get(c.sup) : undefined) {
       const m = c.byKey.get(key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
     }
-    // default methods: most specific interface providing a body
-    const seen = new Set<string>(); let found: MethodInfo | undefined;
+    // default methods: the most specific one, i.e. none whose interface is a superinterface of another candidate's
+    const seen = new Set<string>(), found: MethodInfo[] = [];
     const visit = (n: string) => {
-      if (seen.has(n) || found) return; seen.add(n);
+      if (seen.has(n)) return; seen.add(n);
       const c = this.classes.get(n); if (!c) return;
-      const m = c.byKey.get(key); if (m && !(m.flags & ACC.ABSTRACT) && !(m.flags & ACC.STATIC)) { found = m; return; }
+      const m = c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
       for (const i of c.ifaces) visit(i);
     };
-    for (let c: JClass | undefined = this.classes.get(cls); c && !found; c = c.sup ? this.classes.get(c.sup) : undefined) for (const i of c.ifaces) visit(i);
-    return found;
+    for (let c: JClass | undefined = this.classes.get(cls); c; c = c.sup ? this.classes.get(c.sup) : undefined) for (const i of c.ifaces) visit(i);
+    return found.find((m) => found.every((o) => o === m || !this.isSubclass(o.cls, m.cls)));
+  }
+  /** the method an invoke-super in class `cur` of a reference to `decl.name+desc` runs: found from the interface when `decl` is one, else from the superclass */
+  superTarget(cur: string, decl: string, name: string, desc: string): MethodInfo | undefined {
+    return this.resolve(this.get(decl)?.isInterface ? decl : this.get(cur)?.sup ?? decl, name, desc);
+  }
+  /** the superinterfaces of class `cls` that declare a default method: initialized with it (JLS 12.4.1) */
+  defaultIfaces(cls: string): string[] {
+    const out = new Set<string>();
+    const visit = (i: string) => {
+      const c = this.classes.get(i); if (!c || out.has(i)) return;
+      if (c.methods.some((m) => !m.isStatic && !(m.flags & ACC.ABSTRACT))) out.add(i);
+      c.ifaces.forEach(visit);
+    };
+    for (let c = this.classes.get(cls); c; c = c.sup ? this.classes.get(c.sup) : undefined) c.ifaces.forEach(visit);
+    return [...out];
   }
   resolveField(cls: string, name: string, desc: string): FieldInfo | undefined {
     const seen = new Set<string>();

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { compile, hostImports, loadDexes, program } from "./build";
-import { exportName, SEED_CLASSES } from "./j2w";
+import { exportName, SEED_CLASSES, SEED_METHODS } from "./j2w";
+import { implied } from "./classes";
 import { intrinsics } from "./intrinsics";
 import { jsTier } from "./oracle";
 import { reach } from "./reach";
@@ -37,7 +38,7 @@ const blockers = (reached: Iterable<string>) => { const set = new Set(reached); 
 const kind = (b: string) => (b.split(": ").slice(1).join(": ").split(" ").filter((w) => /^[a-z][a-z-]*(\/[a-z]+)?$/.test(w)).slice(0, 4).join(" ")) || b.split(" ")[0];
 const tally = (bs: string[]) => { const c = new Map<string, number>(); for (const b of bs) c.set(kind(b), (c.get(kind(b)) ?? 0) + 1); return [...c].sort((x, y) => y[1] - x[1]).map(([k, n]) => `${k}:${n}`).join(" "); };
 
-const reaches = new Map(todo.map((w) => [w, reach(prog, [prog.resolve("Bench", `w_${w}`, "()I")!], { instantiate: SEED_CLASSES, methods: [] }, (m) => intrinsics.has(m.cls + "." + m.key)).methods] as const));
+const reaches = new Map(todo.map((w) => [w, reach(prog, [prog.resolve("Bench", `w_${w}`, "()I")!], { instantiate: SEED_CLASSES, methods: SEED_METHODS }, (m) => intrinsics.has(m.cls + "." + m.key), implied).methods] as const));
 const union = new Set([...reaches.values()].flatMap((r) => [...r.keys()]));
 console.log(`blockers in the ${union.size} methods the workloads reach: ${blockers(union).length} [${tally(blockers(union))}]`);
 if (verbose) console.log("    " + blockers(union).join("\n    "));

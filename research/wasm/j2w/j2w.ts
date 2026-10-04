@@ -11,11 +11,18 @@ import type { DexFile } from "../../../src/jvm/dex";
 import { H, f32bits, f64bits, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import { sleb } from "./wasmbin";
+import { ClassModel, implied } from "./classes";
+import { InitModel } from "./init";
 
 /** the name a built module exports an entry under */
 export const exportName = (cls: string, name: string, desc: string) => `${cls.replace(/\//g, ".")}.${name}${desc}`;
-export const SEED_CLASSES = ["java/lang/Object", "java/lang/NullPointerException", "java/lang/ArrayIndexOutOfBoundsException", "java/lang/ArithmeticException",
-  "java/lang/ClassCastException", "java/lang/NegativeArraySizeException", "java/lang/UnsatisfiedLinkError"];
+/** the exceptions the compiler's own helpers throw, by helper name */
+export const THROWN = { npe: "java/lang/NullPointerException", aioobe: "java/lang/ArrayIndexOutOfBoundsException", arith: "java/lang/ArithmeticException",
+  cce: "java/lang/ClassCastException", nase: "java/lang/NegativeArraySizeException", ule: "java/lang/UnsatisfiedLinkError",
+  ase: "java/lang/ArrayStoreException", ncdfe: "java/lang/NoClassDefFoundError", inste: "java/lang/InstantiationException" };
+export const SEED_CLASSES = ["java/lang/Object", ...Object.values(THROWN), "java/lang/ExceptionInInitializerError", "java/lang/Class"];
+/** methods the generated runtime code calls */
+export const SEED_METHODS: [string, string, string][] = [["java/lang/Class", "isAssignableFrom", "(Ljava/lang/Class;)Z"]];
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
 export interface Options { intrinsics: Map<string, Intrinsic>; stats?: boolean }
 
@@ -27,8 +34,6 @@ export class Compiler {
   classStruct = new Map<string, number>();
   classId = new Map<string, number>();
   vtGlobal = new Map<string, number>();
-  initGlobal = new Map<string, number>();
-  ensureFn = new Map<string, number>();
   staticGlobal = new Map<string, number>();           // "owner.name" -> global idx
   fn = new Map<string, number>();                      // method id -> func idx
   fnType = new Map<string, number>();
@@ -41,6 +46,8 @@ export class Compiler {
   hostImports: Record<string, number> = {};
   /** constructs this compiler cannot translate yet: each compiles to a call of host.gap(id) and a throw, never to a guess */
   gaps = new Map<string, number>();
+  cm = new ClassModel(this);
+  init = new InitModel(this);
   constructor(public prog: Program, public opts: Options) {}
 
   gap(c: Code, what: string): void {
@@ -105,9 +112,10 @@ export class Compiler {
     const roots = entries.map(([c, n, d]) => { const m = prog.resolve(c, n, d); if (!m) throw new Error(`entry ${c}.${n}${d} not found`); return m; });
     const isIntr = (m: MethodInfo) => this.opts.intrinsics.has(m.cls + "." + m.key);
     this.r = reach(prog, roots, {
-      instantiate: SEED_CLASSES, methods: [],
-    }, isIntr);
+      instantiate: SEED_CLASSES, methods: SEED_METHODS,
+    }, isIntr, implied);
     const r = this.r;
+    this.cm.extendReach(r);
     // class ids: referenced classes + array classes, supers first
     const order: string[] = [];
     const seen = new Set<string>();
@@ -122,12 +130,14 @@ export class Compiler {
     // function indices
     for (const m of r.methods.values()) this.declareMethod(m);
     this.declareHelpers();
-    for (const n of r.initClasses) this.declareInit(n);
+    this.cm.declare();
+    for (const n of r.initClasses) this.init.declare(n);
     for (const key of r.staticFields) { const [owner, name] = [key.slice(0, key.lastIndexOf(".")), key.slice(key.lastIndexOf(".") + 1)]; this.declareStatic(owner, name); }
     // bodies
     this.emitHelpers();
+    this.cm.emit();
     for (const m of r.methods.values()) this.emitMethod(m);
-    for (const n of r.initClasses) this.emitInit(n);
+    for (const n of r.initClasses) this.init.emit(n);
     this.emitVTables();
     // table: identity
     const total = mb.nImportedFuncs + mb.funcTypes.length;
@@ -154,54 +164,33 @@ export class Compiler {
     const init = f.kind === "I" ? [0x41, 0] : f.kind === "J" ? [0x42, 0] : [0xd0, ...this.nullHt(this.tObj)];
     this.staticGlobal.set(key, this.mb.addGlobal(this.vtOf(f.kind), true, init));
   }
-  needsInit(n: string): boolean {
-    const c = this.prog.get(n); if (!c) return false;
-    if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
-    return c.sup ? this.needsInit(c.sup) : false;
-  }
-  declareInit(n: string): void {
-    if (!this.needsInit(n)) return;
-    this.initGlobal.set(n, this.mb.addGlobal(T.i32, true, [0x41, 0]));
-    this.ensureFn.set(n, this.mb.reserveFunc(this.sig([], "V"), `ensure:${n}`));
-  }
-  emitInit(n: string): void {
-    const f = this.ensureFn.get(n); if (f === undefined) return;
-    const c = this.prog.get(n)!; const code = new Code(0);
-    const g = this.initGlobal.get(n)!;
-    code.gget(g).if_().ret().end().i32(1).gset(g);
-    if (c.sup && this.ensureFn.has(c.sup)) code.call(this.ensureFn.get(c.sup)!);
-    // static values from the dex
-    if (c.def?.staticValuesOff) {
-      const vals = c.dex!.encodedArray(c.def.staticValuesOff);
-      const sfields = c.fields.filter((f) => f.isStatic);
-      vals.forEach((v, i) => {
-        const fi = sfields[i]; if (!fi || v === null || v === 0 || v === 0n || v === false) return;
-        const gi = this.staticGlobal.get(n + "." + fi.name); if (gi === undefined || gi < 0) return;
-        if (typeof v === "number" || typeof v === "boolean") {
-          const d = fi.desc;
-          if (d === "F") code.i32(f32bits(v as number)); else if (d === "D") code.i64(f64bits(v as number));
-          else if (d === "J") code.i64(BigInt(v as number)); else code.i32(Number(v));
-          code.gset(gi);
-        } else if (typeof v === "bigint") { if (fi.desc === "D") code.i64(f64bits(Number(v))); else code.i64(v); code.gset(gi); }
-        else if (typeof v === "string") this.gaps.set(`${n}.${fi.name}: static string value`, this.gaps.size);
-      });
-    }
-    const ci = c.byKey.get("<clinit>()V");
-    if (ci && this.fn.has(mid(ci))) code.call(this.fn.get(mid(ci))!);
-    this.mb.setBody(f, code.finish());
+  /** the dex's static initial values of class `n`, written into its static globals */
+  emitStatics(code: Code, n: string): void {
+    const c = this.prog.get(n)!;
+    if (!c.def?.staticValuesOff) return;
+    const vals = c.dex!.encodedArray(c.def.staticValuesOff);
+    const sfields = c.fields.filter((f) => f.isStatic);
+    vals.forEach((v, i) => {
+      const fi = sfields[i]; if (!fi || v === null || v === 0 || v === 0n || v === false) return;
+      const gi = this.staticGlobal.get(n + "." + fi.name); if (gi === undefined || gi < 0) return;
+      if (typeof v === "number" || typeof v === "boolean") {
+        const d = fi.desc;
+        if (d === "F") code.i32(f32bits(v as number)); else if (d === "D") code.i64(f64bits(v as number));
+        else if (d === "J") code.i64(BigInt(v as number)); else code.i32(Number(v));
+        code.gset(gi);
+      } else if (typeof v === "bigint") { if (fi.desc === "D") code.i64(f64bits(Number(v))); else code.i64(v); code.gset(gi); }
+      else if (typeof v === "string") this.gaps.set(`${n}.${fi.name}: static string value`, this.gaps.size);
+    });
   }
   /** emit "ensure class initialized" at a use site */
-  emitEnsure(c: Code, cls: string): void {
-    const g = this.initGlobal.get(cls); if (g === undefined) return;
-    c.gget(g).i32(0).raw(OP.i32_eq).if_().call(this.ensureFn.get(cls)!).end();
-  }
+  emitEnsure(c: Code, cls: string): void { this.init.ensure(c, cls); }
 
   // ---------- helpers (throwing, instance-of, division, compares)
   declareHelpers(): void {
     const mb = this.mb, h = this.helpers;
     const L = (): VT => refNull(this.tObj);
     const add = (name: string, params: VT[], results: VT[]) => { h[name] = mb.reserveFunc(mb.addFuncType(params, results), "$" + name); };
-    add("npe", [], []); add("aioobe", [], []); add("arith", [], []); add("cce", [], []); add("nase", [], []); add("ule", [], []);
+    for (const k in THROWN) add(k, [], []);
     add("idiv", [T.i32, T.i32], [T.i32]); add("irem", [T.i32, T.i32], [T.i32]); add("ldiv", [T.i64, T.i64], [T.i64]); add("lrem", [T.i64, T.i64], [T.i64]);
     add("iof", [L(), T.i32, T.i32], [T.i32]);            // obj, class id, depth
     add("implements", [L(), T.i32], [T.i32]);            // obj, interface id
@@ -209,12 +198,6 @@ export class Compiler {
     add("cmplf", [T.f32, T.f32], [T.i32]); add("cmpgf", [T.f32, T.f32], [T.i32]); add("cmpld", [T.f64, T.f64], [T.i32]); add("cmpgd", [T.f64, T.f64], [T.i32]);
     add("hash", [L()], [T.i32]);
     add("abstract", [], []);
-  }
-  throwNew(c: Code, cls: string): void { /* inline: call per-class thrower */ c.call(this.throwerFor(cls)); }
-  throwerFor(cls: string): number {
-    const k = { "java/lang/NullPointerException": "npe", "java/lang/ArrayIndexOutOfBoundsException": "aioobe", "java/lang/ArithmeticException": "arith", "java/lang/ClassCastException": "cce",
-      "java/lang/NegativeArraySizeException": "nase", "java/lang/UnsatisfiedLinkError": "ule" }[cls]!;
-    return this.helpers[k];
   }
   /** emits allocation + no-arg ctor + throw of exception class `cls` */
   private emitThrower(name: string, cls: string): void {
@@ -237,9 +220,7 @@ export class Compiler {
   }
   emitHelpers(): void {
     const h = this.helpers, mb = this.mb;
-    this.emitThrower("npe", "java/lang/NullPointerException"); this.emitThrower("aioobe", "java/lang/ArrayIndexOutOfBoundsException");
-    this.emitThrower("arith", "java/lang/ArithmeticException"); this.emitThrower("cce", "java/lang/ClassCastException");
-    this.emitThrower("nase", "java/lang/NegativeArraySizeException"); this.emitThrower("ule", "java/lang/UnsatisfiedLinkError");
+    for (const [k, cls] of Object.entries(THROWN)) this.emitThrower(k, cls);
     mb.setBody(h.abstract, (() => { const c = new Code(0); c.call(h.ule).unreachable(); return c.finish(); })());
     // division
     const div = (name: string, wide: boolean, rem: boolean) => {
@@ -366,9 +347,7 @@ export class Compiler {
         if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
       }
       // interfaces implemented
-      const ifs = new Set<number>();
-      const addI = (i: string) => { const ic = prog.get(i); const iid = this.classId.get(i); if (iid) ifs.add(iid); ic?.ifaces.forEach(addI); };
-      if (!arr) for (let k: JClass | undefined = c; k; k = k.sup ? prog.get(k.sup) : undefined) k.ifaces.forEach(addI);
+      const ifs = this.cm.ifaceIds(n);
       body[H.EXTRA] = body.length;
       body.push(slow.length / 2, ...slow, ifs.size, ...ifs);
       spans.push([n, words.length, body.length]);
@@ -378,6 +357,7 @@ export class Compiler {
     const seg = mb.addDataPassive(bytes);
     const c = new Code(0);
     for (const [n, off, len] of spans) c.i32(off * 4).i32(len).arrayNewData(this.tVT, seg).gset(this.vtGlobal.get(n)!);
+    this.cm.emitStart(c);
     const startFn = mb.addFunc(mb.addFuncType([], []), c.finish(), "$start");
     mb.start = startFn;
   }

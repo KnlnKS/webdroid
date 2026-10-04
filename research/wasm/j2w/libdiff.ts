@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { compile, hostImports, loadDexes, program } from "./build";
 import { compare, genCases } from "./cases";
-import { exportName, SEED_CLASSES } from "./j2w";
+import { exportName, SEED_CLASSES, SEED_METHODS } from "./j2w";
+import { implied } from "./classes";
 import { intrinsics } from "./intrinsics";
 import { jsTier } from "./oracle";
 import { reach } from "./reach";
@@ -19,7 +20,7 @@ const prim = /^[IJFDZBSC]$/, only = process.argv.slice(2);
 const cand = CLASSES.filter((c) => !only.length || only.some((p) => c.startsWith(p))).flatMap((c) => prog.get(c)?.methods ?? [])
   .filter((m) => m.isStatic && m.codeOff && !m.isCtor && m.name !== "<clinit>" && m.params.every((p) => prim.test(p)) && prim.test(m.ret));
 const isIntr = (m: { cls: string; key: string }) => intrinsics.has(m.cls + "." + m.key);
-const closures = new Map(cand.map((m) => [m, reach(prog, [m], { instantiate: SEED_CLASSES, methods: [] }, isIntr)] as const));
+const closures = new Map(cand.map((m) => [m, reach(prog, [m], { instantiate: SEED_CLASSES, methods: SEED_METHODS }, isIntr, implied)] as const));
 const small = cand.filter((m) => closures.get(m)!.methods.size <= MAX_REACH);
 const { bytes, cx } = compile(prog, small.map((m) => [m.cls, m.name, m.desc]));
 const { instance } = await WebAssembly.instantiate(bytes, hostImports());

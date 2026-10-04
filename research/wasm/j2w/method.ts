@@ -7,6 +7,7 @@ import { descToName, parseMethodDesc, isWide } from "../../../src/jvm/abi";
 import { prepareMethod, branchTargets, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../../src/jvm/prepared";
 import { structure, Go, type Flow } from "../../../src/jvm/structure";
 import { mid } from "./reach";
+import { emitPolymorphic } from "./poly";
 
 export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
@@ -160,7 +161,7 @@ class MC {
     if (name === "java/lang/Object") { obj(); c.refIsNull().raw(OP.i32_eqz); return; }
     if (name[0] === "[") {
       const ek = elemKindOf(name);
-      if (ek === "ref") { obj(); c.refTest(cx.tArr.ref); }
+      if (ek === "ref") { obj(); c.i32(id!).call(cx.cm.fn.instArr); }
       else { obj(); c.i32(id!).i32(1).call(cx.helpers.iof); }
       return;
     }
@@ -277,7 +278,8 @@ class MC {
       case "const-wide/16": case "const-wide/32": c.i64(BigInt(b)); this.set("J", a); return;
       case "const-wide": c.i64(ins.wideLit); this.set("J", a); return;
       case "const-wide/high16": c.i64(BigInt(b) << 48n); this.set("J", a); return;
-      case "const-string": case "const-string/jumbo": case "const-class": case "const-method-handle": case "const-method-type":
+      case "const-class": cx.cm.constClass(c, descToName(dex.type(b))); this.set("L", a); return;
+      case "const-string": case "const-string/jumbo": case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
@@ -385,8 +387,10 @@ class MC {
   }
   emitAput(ins: Ins) {
     const c = this.code, cx = this.cx, { k } = this.elemOf(ins.name), d = this.dloc(k);
-    this.nonNull(ins.b); c.refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
+    this.nonNull(ins.b); c.lset(this.tmpL);
+    c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);
+    if (k === "ref") cx.cm.emitStoreCheck(c, this.tmpL, () => this.get("L", ins.a));
     c.lget(d).refAsNonNull(); this.get("I", ins.c);
     this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
     c.arraySet(cx.tData[k]);
@@ -464,8 +468,11 @@ class MC {
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;
     const kind = ins.name.replace("/range", "");
-    if (kind === "invoke-polymorphic" || kind === "invoke-custom") { this.invokeGap(ins, kind); return; }
-    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), key = mr.name + desc;
+    if (kind === "invoke-custom") { this.invokeGap(ins, kind); return; }
+    if (kind === "invoke-polymorphic") return emitPolymorphic(this, ins);
+    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = descToName(dex.type(mr.cls)), key = mr.name + desc;
+    // an array's methods are Object's, except clone, which copies the array
+    const decl = declared[0] === "[" ? "java/lang/Object" : declared;
     const p = parseMethodDesc(desc), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     const isStatic = kind === "invoke-static";
     const pushArgs = () => {
@@ -473,13 +480,16 @@ class MC {
       for (const pt of p.params) { this.get(kindOf(pt), ins.regs[ri]); ri += isWide(pt) ? 2 : 1; }
     };
     const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
-    if (decl[0] === "[") { this.invokeGap(ins, `array method ${key}`); return; }
+    if (declared !== decl && key === "clone()Ljava/lang/Object;") {
+      if (!cx.cm.on) { this.invokeGap(ins, "array clone: java/lang/Class is not in the program"); return; }
+      this.nonNull(ins.regs[0]); c.call(cx.cm.fn.aclone); this.finishResult(ins, "L"); return;
+    }
     const callDirect = (mi: MethodInfo) => { cx.declareMethod(mi); c.call(cx.fnOf(mi)); };
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
       cx.emitEnsure(c, t.cls); pushArgs(); c.call(cx.fnOf(t));
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
-      const t = kind === "invoke-super" ? prog.resolve(prog.get(this.m.cls)?.isInterface ? decl : prog.get(this.m.cls)!.sup ?? decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
+      const t = kind === "invoke-super" ? prog.superTarget(this.m.cls, decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
       if (!t) throw new Error("unresolved direct " + decl + "." + key);
       this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); callDirect(t);
     } else {
