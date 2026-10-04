@@ -41,7 +41,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; dexOpen: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; watch: number; intern: number; claim: number; sync: number; block: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; dexOpen: number; galloc: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; watch: number; intern: number; claim: number; sync: number; block: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
@@ -68,6 +68,7 @@ export class Compiler implements Base {
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
   private memory = false;
+  private guestMemory = false;
   private classStruct = new Map<string, number>();
   private sigType = new Map<string, number>();
   private globalImports = new Map<string, number>();
@@ -85,7 +86,7 @@ export class Compiler implements Base {
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), galloc: f("galloc", [T.externref, T.i32], [T.i64]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
       proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), claim: f("claim", [T.externref, T.i64], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     this.str.importBuiltins();
@@ -96,6 +97,15 @@ export class Compiler implements Base {
   scratch(): number {
     if (!this.memory) { this.mb.importMemory("rt", "mem", 1); this.memory = true; }
     return this.global("rt", "sp", T.i32, true);
+  }
+  /** the native core's memory as this module's memory, for a runtime function that works on it (guest.ts) */
+  guest(): void {
+    if (this.guestMemory) return;
+    if (this.memory) throw new Error("a module has one memory");
+    if (!this.w.opts.guest) throw new Error("this World has no guest memory");
+    const shared = this.w.guestShared;
+    this.mb.importMemory("rt", "gmem", 1, shared ? 65535 : undefined, shared);
+    this.memory = this.guestMemory = true;
   }
   /** a function of this module defined on first use under `key` */
   memo(key: string, make: () => number): number {

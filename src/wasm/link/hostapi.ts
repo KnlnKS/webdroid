@@ -37,6 +37,14 @@ export interface NativeSource {
   hostSpecs?(): HostSpec[];
 }
 
+/** the native core's linear memory, where direct buffers live and native code reads them: a block is addressed by the 64-bit address the guest knows it by */
+export interface GuestMemory {
+  readonly memory: WebAssembly.Memory;
+  /** zeroed memory of `n` bytes, or 0n */
+  alloc(n: number): bigint;
+  free(address: bigint): void;
+}
+
 /** how Java objects cross to a native and back */
 export interface HostBridge {
   begin(): number;

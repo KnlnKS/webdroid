@@ -7,6 +7,7 @@ import { Program } from "../../src/wasm/compiler/program";
 import { World } from "../../src/wasm/link/world";
 import { intrinsics } from "../../src/wasm/link/intrinsics";
 import { hostNet } from "../../src/wasm/host/inet";
+import { guestMemory } from "../../src/wasm/host/guest";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { jsTier, natives, processState } from "./oracle";
 
@@ -40,7 +41,7 @@ async function probe(): Promise<ProbeResult> {
   await jsTier([]);
   const jars = await fetchPlatformJars();
   const platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
-  const b0 = performance.now(), w = new World(new Program([], platform), { intrinsics, natives, heapUsed, net: hostNet, aot: store });
+  const b0 = performance.now(), w = new World(new Program([], platform), { intrinsics, natives, heapUsed, net: hostNet, guest: guestMemory, aot: store });
   processState(w);
   const bootMs = performance.now() - b0, s = w.stats;
   return { tier, attached: !!w.aot, syncRequests, aheadMs, bootMs, compileMs: s.compileMs, moduleMs: s.moduleMs, instantiateMs: s.instantiateMs, aotMs: s.aot.ms,

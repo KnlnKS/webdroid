@@ -11,6 +11,7 @@ import { Program } from "../compiler/program";
 import { World } from "../link/world";
 import { externs, intrinsics } from "../link/intrinsics";
 import { hostNet } from "./inet";
+import { guestMemory } from "./guest";
 import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
 import { natives, nativeSource } from "./nativesource";
 import { count, heapUsed } from "./stats";
@@ -22,7 +23,7 @@ declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; _
 export function createWorld(dexes: DexFile[]): World {
   const prog = new Program(dexes);
   prog.addExterns(externs);
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
   return w;

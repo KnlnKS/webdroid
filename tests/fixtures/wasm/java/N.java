@@ -132,6 +132,42 @@ public class N {
     ib.position(0); ib.put(new int[] { n, n + 1, n + 2 }); r += b.getInt(8);
     return r;
   }
+  /** array bulk transfers in both byte orders, views, slices, direct to direct and heap to direct */
+  public static int directBulk(int n) {
+    ByteBuffer b = ByteBuffer.allocateDirect(256 + n);
+    int r = 0;
+    float[] f = new float[16]; double[] d = new double[9]; long[] l = new long[7]; int[] iv = new int[13]; short[] sv = new short[11]; char[] cv = new char[10];
+    for (int i = 0; i < f.length; i++) f[i] = i * 1.5f + n;
+    for (int i = 0; i < d.length; i++) d[i] = i * 2.25 - n;
+    for (int i = 0; i < l.length; i++) l[i] = 0x0102030405060708L * (i + n + 1);
+    for (int i = 0; i < iv.length; i++) iv[i] = 0x01020304 * (i + 1) + n;
+    for (int i = 0; i < sv.length; i++) sv[i] = (short) (0x0102 * (i + 1) + n);
+    for (int i = 0; i < cv.length; i++) cv[i] = (char) (0x0a0b + i * 257 + n);
+    for (ByteOrder o : new ByteOrder[] { ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN }) {
+      b.clear(); b.order(o);
+      b.asFloatBuffer().put(f); r = r * 31 + b.getInt(4) + b.get(7);
+      b.position(70); b.asDoubleBuffer().put(d, 2, 5); r = r * 31 + (int) b.getLong(78) + b.get(87);
+      b.position(120); b.asLongBuffer().put(l); r = r * 31 + (int) (b.getLong(128) >> 16) + b.get(130);
+      b.position(10); b.asIntBuffer().put(iv, 1, 9); b.position(0); r = r * 31 + b.getInt(14) + b.get(11);
+      b.position(190); b.asShortBuffer().put(sv); r = r * 31 + b.getShort(194) + b.get(191);
+      b.position(220); b.asCharBuffer().put(cv, 3, 6); r = r * 31 + b.getChar(224) + b.get(221);
+      float[] g = new float[16]; b.position(0); b.asFloatBuffer().get(g); for (float x : g) r = r * 31 + Float.floatToIntBits(x);
+      double[] h = new double[5]; b.position(70); b.asDoubleBuffer().get(h); for (double x : h) r = r * 31 + (int) (Double.doubleToLongBits(x) >> 20);
+      long[] m = new long[7]; b.position(120); b.asLongBuffer().get(m); for (long x : m) r = r * 31 + (int) (x >> 8);
+      int[] j = new int[9]; b.position(10); b.asIntBuffer().get(j); for (int x : j) r = r * 31 + x;
+      short[] t = new short[11]; b.position(190); b.asShortBuffer().get(t); for (short x : t) r = r * 31 + x;
+      char[] u = new char[6]; b.position(220); b.asCharBuffer().get(u); for (char x : u) r = r * 31 + x;
+    }
+    b.clear(); b.order(ByteOrder.nativeOrder());
+    ByteBuffer c = ByteBuffer.allocateDirect(100); b.position(5).limit(45); c.put(b); r = r * 31 + c.position() + c.get(0) + c.get(39);
+    ByteBuffer s = c.slice(); s.put(3, (byte) (n + 9)); c.position(0); r = r * 31 + c.get(3) + s.capacity();
+    ByteBuffer dup = c.duplicate(); dup.put(0, (byte) 77); r = r * 31 + c.get(0);
+    ByteBuffer heap = ByteBuffer.allocate(30); for (int i = 0; i < 30; i++) heap.put(i, (byte) (i * 3 + n));
+    c.clear(); c.put(heap); r = r * 31 + c.position() + c.get(29); c.position(0); heap.clear(); c.limit(30); heap.put(c); r = r * 31 + heap.get(17);
+    try { c.asReadOnlyBuffer().put((byte) 1); } catch (java.nio.ReadOnlyBufferException e) { r += 7; }
+    try { b.position(0); b.asIntBuffer().put(new int[300]); } catch (java.nio.BufferOverflowException e) { r += 11; }
+    return r;
+  }
   public static int thread(int n) {
     Thread t = Thread.currentThread();
     int r = t.getName().length() + t.getPriority() + (t.isDaemon() ? 1 : 0) + (t.isAlive() ? 10 : 0) + t.getState().ordinal() * 100 + (t == Thread.currentThread() ? 1000 : 0);

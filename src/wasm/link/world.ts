@@ -13,7 +13,7 @@ import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, ty
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
-import type { HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
+import type { GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
 import { Sched, defaultLoop, ROOT, type HostLoop } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, typeName } from "./classes";
@@ -40,6 +40,8 @@ export interface WorldOptions {
   heapUsed: () => number;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;
+  /** the native core's memory, which direct buffers are allocated in; a World that only builds code needs none */
+  guest?: GuestMemory;
   /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
   claim?: (owner: object, handle: bigint) => void;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
@@ -97,7 +99,7 @@ export class World {
   absent = new Map<string, Set<number>>();
   /** the messages of the link errors (linkage.ts) compiled code throws, by index */
   linkMessages: string[] = [];
-  /** the byte[]s whose addresses VMRuntime.addressOf has given out (memory.ts), by the index the address holds */
+  /** the Method objects of proxy classes, which their compiled code reads by index (proxy.ts) */
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
   /** scratch linear memory natives copy arrays through, and its allocation top */
@@ -145,7 +147,7 @@ export class World {
       proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
-      pin: (object: object) => this.pin(object),
+      galloc: (owner: object, n: number) => this.allocGuest(owner, n),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
@@ -412,7 +414,7 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, mem: this.mem, sp: this.sp }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -734,7 +736,7 @@ export class World {
     if (yes === undefined) this.claimers.set(f.owner, yes = !!this.prog.get(f.owner)?.byKey.get("finalize()V")?.codeOff);
     return yes;
   }
-  /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
+  /** keeps a Java object in the table compiled code reads by index (the Method objects of a proxy class) */
   pin(object: object): number {
     let i = this.pinned.get(object);
     if (i === undefined) {
@@ -744,6 +746,18 @@ export class World {
     }
     return i;
   }
+  /** the native blocks of the direct buffers, freed when the object that owns each is collected */
+  private blocks = new FinalizationRegistry<bigint>((address) => this.opts.guest!.free(address));
+  /** a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0 */
+  private allocGuest(owner: object, n: number): bigint {
+    const guest = this.opts.guest;
+    if (!guest) throw new Error("this World has no guest memory");
+    const address = guest.alloc(n);
+    if (address) this.blocks.register(owner, address);
+    return address;
+  }
+  /** whether the guest memory is shared, which a module that imports it must declare */
+  get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }
   /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
   addHostClass(spec: HostSpec): void { this.hosts.add(spec); }
   /** adds a class that no dex defines, with the body of each of its methods */
