@@ -6,7 +6,7 @@ import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, curThread, JThr
 import { park } from "../src/jvm/natives/jthread";
 import { type JClassLoader } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
-import { JObj, rt, type ClassInfo } from "../src/jvm/runtime";
+import { JObj, rt, TYPE_MARK, type ClassInfo } from "../src/jvm/runtime";
 import { Strand } from "../src/jvm/suspend";
 import { scall, loadLibcore, mountApexData } from "./java";
 import { detached } from "../src/jvm/natives/jthrowable";
@@ -761,4 +761,11 @@ test("every linked class carries both calling conventions of its methods", () =>
   for (const [name, info] of rt.classes) for (const o of info.ctor ? [info.ctor, info.ctor.prototype] : [])
     for (const k of Object.getOwnPropertyNames(o)) if (/^(m\$|i\$|\$clinit$)/.test(k) && typeof o[k] === "function" && !Object.hasOwn(o, "x" + k)) missing.push(`${name}.${k}`);
   expect(missing).toEqual([]);
+});
+
+test("a linked class prototype marks the types iof reports", () => {
+  const proto = rt.link("java/util/ArrayList").ctor.prototype as Record<string, unknown>;
+  for (const name of ["java/util/List", "java/util/Collection", "java/lang/Object", "java/util/RandomAccess"]) expect(proto[TYPE_MARK + name]).toBe(1);
+  for (const name of ["java/util/Map", "java/lang/Number"]) expect(proto[TYPE_MARK + name]).toBeUndefined();
+  expect(rt.iof(Object.create(proto), "java/util/List")).toBe(1);
 });

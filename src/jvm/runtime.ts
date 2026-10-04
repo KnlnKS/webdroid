@@ -120,6 +120,9 @@ export class ClassInfo {
   }
 }
 
+/** the prototype property prefix whose `1` says an instance is of the named type */
+export const TYPE_MARK = "$I$";
+
 /** the app heap's limit, as Runtime.maxMemory reports it */
 export const HEAP_LIMIT = 512 * 1024 * 1024;
 /** development and test builds make a read of a field a native class lacks throw, when it happens */
@@ -539,6 +542,7 @@ export class Runtime {
       if (this.nativeIfaces().has(name)) info.flags |= ACC.INTERFACE;
       info.ctor = native.ctor;
       this.adopt(info, name !== "java/lang/Object" ? native.sup ?? "java/lang/Object" : null, native.ifaces ?? []);
+      this.markTypes(info);
       // a spec declared over a bytecode superclass inherits its fields and methods
       const sup = info.superInfo;
       if (sup && !sup.native && Object.getPrototypeOf(native.ctor) === JObj) {
@@ -565,6 +569,7 @@ export class Runtime {
       info.types.add(name).add("java/lang/Object");
       info.ctor = new Function("S", `return class ${name.replace(/[^A-Za-z0-9_$]/g, "_")}$stub extends S {}`)(JObj);
       info.ctor.$i = info;
+      this.markTypes(info);
       info.state = 2;
       info.compiled = true;
       return info;
@@ -589,6 +594,7 @@ export class Runtime {
     // without a hidden-class transition each, and V8 makes it fast again once it serves lookups
     dictionaryMode(info.ctor.prototype);
     info.ctor.$i = info;
+    this.markTypes(info);
     if (this.platformClasses.has(name) && def.virtualMethods.some((m) => m.codeOff && dex.method(m.methodIdx).name === "finalize" && dex.methodDesc(m.methodIdx) === "()V"))
       this.claimOnStore(info, def, dex);
     const staticNames = new Map<string, number>();
@@ -623,6 +629,15 @@ export class Runtime {
         set(this: Record<string, bigint>, h: bigint) { this[slot] = h; R.claimHandle?.(this, h); },
       });
     }
+  }
+
+  /** Marks the class's prototype with every type it is assignable to, so a compiled instance-of
+   *  or check-cast in the root runtime is one property read. A forked loader's classes stay
+   *  unmarked: its same-named types are distinct classes, which only `iof` tells apart. */
+  private markTypes(info: ClassInfo) {
+    if (this.parent || info.owner?.parent || !info.ctor) return;
+    const proto = info.ctor.prototype as Record<string, unknown>;
+    for (const t of info.types) proto[TYPE_MARK + t] ??= 1;
   }
 
   /** link the supertypes and take on every name the class is assignable to */

@@ -145,6 +145,7 @@ function that parks, takes a signal or spends its slice budget still suspends it
   (`v.$I$<type> === 1`). This took a plain-JS replica from 19 to 5 ns per check. Fall back to
   `iof` for primitives, arrays and forked class loaders.
 - **Expected:** 2–4 ms per Mihon tap.
+- **Done:** compiled sites test the mark first; jbench `casts` 3.45 to 2.55 ms. Root runtime only; `iof` keeps the full check.
 
 ### Tier 2: frame pacing and per-frame cost
 

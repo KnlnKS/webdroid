@@ -5,7 +5,7 @@
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { mangleMethod, directName, frameName, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
-import { ACC, JObj, type Runtime, type ClassInfo } from "./runtime";
+import { ACC, JObj, TYPE_MARK, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
@@ -300,6 +300,11 @@ class MethodEmitter {
     this.constants.push(value);
     return `K[${index}]`;
   }
+  /** a test of the prototype's type mark (runtime.ts markTypes), ahead of the site cache's; a
+   *  forked runtime's sites resolve names to its own classes, which the marks do not tell apart */
+  private typeMark(v: string, tname: string, rest: string): string {
+    return this.R.parent ? "" : `${v}[${JSON.stringify(TYPE_MARK + tname)}]${rest}`;
+  }
   private prop(name: string): string { return this.cold ? `[${this.literal(name)}]` : `.${name}`; }
   private temp(name: string): string { return this.cold ? `F.$${name}` : `$${name}`; }
   private get t(): string { return this.temp("t"); }
@@ -569,17 +574,17 @@ ${profileEnd}
       case "monitor-enter": this.guard(`R.me(${this.reg(i.a)},${this.reg(i.a)}.$mon)`, out); break;
       case "monitor-exit": out.push(`R.mx(${this.reg(i.a)},${this.reg(i.a)}.$mon);`); break;
       case "check-cast": {
-        const v = this.reg(i.a), name = this.literal(descToName(dex.type(i.b)));
+        const v = this.reg(i.a), tname = descToName(dex.type(i.b)), name = this.literal(tname);
         if (this.cold) { out.push(`R.cc(${v},${name});`); break; }
         const k = this.icSlot();
-        out.push(`if(${v}!=null&&${v}!==0&&${v}.constructor!==$ic[${k}]&&${v}.constructor!==$ic[${k + 2}])R.ccc(${v},${name},$ic,${k});`);
+        out.push(`if(${v}!=null&&${v}!==0&&${this.typeMark(v, tname, "!==1&&")}${v}.constructor!==$ic[${k}]&&${v}.constructor!==$ic[${k + 2}])R.ccc(${v},${name},$ic,${k});`);
         break;
       }
       case "instance-of": {
-        const v = this.reg(i.b), name = this.literal(descToName(dex.type(i.c)));
+        const v = this.reg(i.b), tname = descToName(dex.type(i.c)), name = this.literal(tname);
         if (this.cold) { out.push(`${this.reg(i.a)}=R.iof(${v},${name});`); break; }
         const k = this.icSlot();
-        out.push(`${this.reg(i.a)}=${v}==null?0:${v}.constructor===$ic[${k}]?$ic[${k + 1}]:${v}.constructor===$ic[${k + 2}]?$ic[${k + 3}]:R.iofc(${v},${name},$ic,${k});`);
+        out.push(`${this.reg(i.a)}=${v}==null?0:${this.typeMark(v, tname, "===1?1:")}${v}.constructor===$ic[${k}]?$ic[${k + 1}]:${v}.constructor===$ic[${k + 2}]?$ic[${k + 3}]:R.iofc(${v},${name},$ic,${k});`);
         break;
       }
       case "array-length": out.push(`${this.reg(i.a)}=${this.reg(i.b)}.length;`); break;

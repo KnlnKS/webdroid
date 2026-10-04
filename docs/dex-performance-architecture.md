@@ -63,7 +63,8 @@ arrays are typed arrays and object arrays carry `$t`.
   sync-first; `vcallAsync` is for the few callers that chain on completion.
   An `async` native would make every Java caller suspend on every call.
 - **Dispatch.** Direct-call caches follow lazy stubs to their current body.
-  `instance-of`/`check-cast` in hot code compare the receiver's constructor
+  `instance-of`/`check-cast` read a per-type mark on the receiver's prototype (set at link; none in
+  forked runtimes) before comparing its constructor
   with a per-site cache before the full check.
 - **Constants.** Reaching-definition typing of numeric constants runs only
   for methods with a float or double reader; the rest mark constant-null
