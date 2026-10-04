@@ -32,12 +32,12 @@ const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
 const tier = await jsTier(loadDexes(dex));
-// the production tier has its own MethodHandle model (jinvoke.ts) and is no oracle for handles: the JDK alone decides those cases
+// the production tier has its own MethodHandle model (jinvoke.ts) and no Class.isRecord: the JDK alone decides those cases
 const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
   const i = cases.findIndex((c) => c.m.cls === cls && c.m.name === name && c.args.every((a, j) => a === args[j] || Number(a) === Number(args[j])));
   return jdk[i] === "throw" ? Promise.reject(new Error("throw")) : Promise.resolve(entries.get(cases[i].m)!.length === 0 || cases[i].m.ret === "J" ? BigInt(jdk[i]) : Number(jdk[i]));
 };
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
+const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (wasm, js tier, jdk); ${threw} threw`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 // a bootstrap class libcore lacks is ART's NoClassDefFoundError at the site; LambdaMetafactory exists but returns null, which is a gap

@@ -18,5 +18,6 @@ public class Rec {
   public static int eqOther(int a) { Object o = a == 0 ? null : a == 1 ? "x" : a == 2 ? new Empty() : mk(a, 0); return mk(a, 0).equals(o) ? 1 : 0; }
   public static int empty(int a) { return new Empty().hashCode() + (new Empty().equals(new Empty()) ? 10 : 0) + new Empty().toString().length(); }
   public static int nested(int a) { return new Gen<Pub>(new Pub(a, new Pub(a + 1, null)), mk(a, 0)).toString().hashCode(); }
+  public static int recordInfo(int a) { return (Point.class.isRecord() ? 1 : 0) + (Rec.class.isRecord() ? 10 : 0) + Point.class.getDeclaredConstructors().length * 100 + Point.class.getSimpleName().length() * 1000 + Point.class.getDeclaredMethods().length * 10000; }
   public static int nullRecv(int a) { Point p = a == 0 ? null : mk(a, 0); try { return p.hashCode(); } catch (NullPointerException e) { return -1; } }
 }

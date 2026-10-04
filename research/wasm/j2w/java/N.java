@@ -57,6 +57,30 @@ public class N {
     for (Class<?> c : N.class.getDeclaredClasses()) r += c.getModifiers();
     return r + PrivInner.class.getModifiers() + ProtInner.class.getModifiers() + n * 0;
   }
+  @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) @interface RA {}
+  @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.CLASS) @interface CA {}
+  @RA @CA static class Annotated {
+    @RA int f; @CA int g; int plain; static @RA int sf;
+    @RA Annotated() {} Annotated(int a) {} private Annotated(String s, long l) {}
+    @RA void m() {} @CA void n() {} public static void p(int a, String b) {} private int q() { return 0; } @RA static long s() { return 1; }
+  }
+  @RA static class Sub extends Annotated {}
+  public static int members(int n) throws Exception {
+    int r = 0;
+    for (Class<?> c : new Class<?>[] {N.class, Annotated.class, PrivInner.class, int.class, int[].class, String[][].class, String.class, Object.class, void.class}) r = r * 31 + c.getSimpleName().hashCode();
+    Object anon = new Object() {};
+    class Local {}
+    r = r * 31 + anon.getClass().getSimpleName().length() * 7 + Local.class.getSimpleName().hashCode();
+    for (Class<?> c : new Class<?>[] {Annotated.class, Sub.class, N.class}) r = r * 31 + (c.isAnnotationPresent(RA.class) ? 1 : 0) + (c.isAnnotationPresent(CA.class) ? 2 : 0);
+    for (java.lang.reflect.Method m : Annotated.class.getDeclaredMethods()) r += m.getName().hashCode() + m.getParameterTypes().length * 3 + m.getModifiers() + (m.isAnnotationPresent(RA.class) ? 7 : 0) + (m.isAnnotationPresent(CA.class) ? 11 : 0);
+    r = r * 31 + Annotated.class.getDeclaredMethods().length;
+    for (java.lang.reflect.Constructor<?> k : Annotated.class.getDeclaredConstructors()) r += k.getParameterTypes().length * 5 + k.getModifiers() + (k.isAnnotationPresent(RA.class) ? 13 : 0);
+    r = r * 31 + Annotated.class.getConstructors().length + Annotated.class.getMethods().length * 1000;
+    for (java.lang.reflect.Field f : Annotated.class.getDeclaredFields()) r += f.getName().hashCode() + (f.isAnnotationPresent(RA.class) ? 17 : 0) + (f.isAnnotationPresent(CA.class) ? 19 : 0);
+    r += (Annotated.class.getDeclaringClass() == N.class ? 100 : 0) + (N.class.getDeclaringClass() == null ? 200 : 0) + (anon.getClass().getDeclaringClass() == null ? 400 : 0);
+    r += (anon.getClass().getEnclosingMethod().getName().hashCode() & 0xff) + (anon.getClass().getEnclosingClass() == N.class ? 800 : 0) + (Local.class.getEnclosingMethod() != null ? 1600 : 0) + (Local.class.getEnclosingConstructor() == null ? 3200 : 0);
+    return r + n * 0;
+  }
   public static int forName(int n) throws Exception {
     int r = 0;
     r += Class.forName("java.util.ArrayList").getName().length() + Class.forName("[I").getName().length() + Class.forName("[Ljava.lang.String;").getName().length();

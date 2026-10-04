@@ -17,6 +17,7 @@ import type { Compiler, Intrinsic } from "./j2w";
 import type { World } from "./lazy";
 import { hostUnsafe, UInfo } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
+import { hostMembers, MInfo } from "./members";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -59,6 +60,7 @@ function canAccess(caller: string, decl: JClass, flags: number, w: World): boole
   return samePackage || !!(flags & ACC.PROTECTED) && w.prog.isSubclass(caller, decl.name);
 }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
+  if (kind >= MInfo.ExecCount) return hostMembers(w, kind, a, b);
   if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
   if (kind >= UInfo.FieldGet) return hostUnsafe(w, kind, a, b);
   const name = w.nameOf(a), jc = w.prog.get(name), arr = name[0] === "[", fields = jc?.def ? jc.fields : [];
