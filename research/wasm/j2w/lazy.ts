@@ -34,7 +34,7 @@ export interface WorldOptions {
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; methodSlots: Map<string, number>; nMethods: number; exports: WebAssembly.Exports }
 type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
-/** methods compiled into one module: a method and its small callees, in code units of the callee, up to MAX_GROUP together */
+/** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
@@ -451,9 +451,9 @@ export class World {
       const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.includes(t) && this.slots[this.slotOf(t)]?.k === "method" && this.ran(t) > 0);
       callees.sort((a, b) => this.ran(b) - this.ran(a));
       for (const t of callees) {
-        if (out.length >= MAX_GROUP || out.includes(t)) continue;
+        if (out.length >= MAX_GROUP) break;
         out.push(t);
-        (this.slots[this.slotOf(t)]!.k === "method" && (this.slots[this.slotOf(t)] as { done: boolean }).done ? copies : installed).push(t);
+        (this.slots[this.slotOf(t)] as { done: boolean }).done ? copies.push(t) : installed.push(t);
       }
     }
     return { installed, copies };
