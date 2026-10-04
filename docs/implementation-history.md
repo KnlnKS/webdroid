@@ -3254,6 +3254,18 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
     libraries failing to find libart. The one native requirement, ARM64 syscall 291 (statx),
     answers ENOSYS as a pre-4.11 kernel would; TikTok's own code issues it (bionic's stat calls do not).
 
+- 2026-10-03, Resy's venue steps timing out (`11 venue-offer-close`, `12 venue-retry`): live
+  content, not webdroid. Tapping the sheet's X ran its listener (`dismiss()`), and the fragment and
+  dialog were destroyed; a new sheet replaced it within about 0.4 s. ResyListActivity calls
+  `loadAnnouncements` from `updateVenues` on every venue-list update and shows the first
+  announcement whenever no "announcement" fragment exists (`addAnnouncementHistory`, which
+  `canShowAnnouncement` reads, has no callers). After the "Car" search the API answered each
+  `loadAfter` with the same bookmark (23) and one venue, so paging (page size and prefetch 20)
+  appended the same venue ten times over 5-8 s until 24 rows were loaded. Each update re-showed
+  the sheet, so the flow's four taps ran out. The flow now taps while the sheet shows until it
+  has stayed away 2 s (tapAt `quietMs`). Resy `--live` passed 3/3. The occasional `08 search-go`
+  and `13 venue-back` failures did not reproduce in 4 runs.
+
 - 2026-10-02, guest memory committed as used, in a shared memory (the realm-memory item):
   - Candidates, measured in headless Chromium 153 (a page with a ~600 MB retained heap and an
     allocation loop that promotes): V8 counts a wasm memory's committed bytes, shared or
