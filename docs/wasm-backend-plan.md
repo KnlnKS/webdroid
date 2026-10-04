@@ -271,11 +271,18 @@ Any speed claim for the prototype. The only timing evidence in this document is 
 
 ## 5. Unverified facts the executor must check first
 
-From the platform report (training knowledge or secondary sources): Safari JSPI status (reported "27"), Firefox JSPI
-version (conflicting), `wasm:js-string` in Safari, memory64 caps on mobile, V8 limits (128 KB max function body,
-50k locals), custom descriptors status (reported origin trial in Chrome 149), shared-everything threads (Phase 1).
-Also unverified: effect of compilation hints, sync-compile size limit on the main thread, code caching of Wasm
-modules built at runtime, `call_indirect` vs `call_ref` cost at scale, TeaVM/J2CL/Hoot lessons.
+Resolved on 2026-10-04 with `research/wasm/probe.mjs` and `probe-tiering.mjs` (matrix and versions in
+`research/wasm/platform-status.md`). Still open after that pass:
+
+- Firefox: nothing measured. Playwright's Firefox 153 Nightly does not start on the dev host. Its JSPI/GC/EH/builtins
+  status is a secondary claim.
+- Mobile memory64 caps, `call_indirect` vs `call_ref` cost at scale, TeaVM/J2CL/Hoot lessons (not probed).
+- Code caching in headed Chrome (headless showed none, below).
+
+Resolved: the V8 max function body is about 7.65 MB (not 128 KB) and 50,000 locals; the main-thread sync-compile limit
+is 8 MiB in Chrome (none in the WebKit build); custom descriptors are flag-only in Chrome 153; JSPI, GC, exnref EH,
+tail calls and `wasm:js-string` are present in Chrome 151/153 and the WebKit build; the WebKit build lacks memory64,
+multi-memory and relaxed SIMD; runtime-built modules were not code-cached in headless Chrome.
 
 ## 6. Gates (run before the stage that depends on them)
 
@@ -289,6 +296,27 @@ modules built at runtime, `call_indirect` vs `call_ref` cost at scale, TeaVM/J2C
 | G6 | Boot image | Serialize the post-init framework heap; time the loader | loader under 50 ms for the boot heap (hypothesis), `clinit` time drops |
 | G7 | Browser matrix | Run JSPI, GC, EH, tail calls, builtins probes in Firefox and WebKit builds in `~/Library/Caches/ms-playwright` | a documented support matrix; decide whether a non-JSPI mode is required |
 | G8 | Linear-memory trigger | Only if G1 fails or S1 attributes hitches to same-process threads | decision recorded in docs/decisions/ |
+
+### G7 result (2026-10-04, Chrome 153, Chromium 151, WebKit 2359; Firefox not measurable)
+
+Supported on both measured engines: Wasm GC, exnref and legacy EH, tail calls, `wasm:js-string` builtins, JSPI
+(including the rule that suspending through a JS frame throws). Chrome-only of the features probed: memory64,
+multi-memory, relaxed SIMD. Do not use those on the default path. Custom descriptors are not shipped (flag-only).
+**A non-JSPI mode is not required for Chrome or the WebKit build.** It is required only if Firefox must run the Wasm
+tier, and Firefox is unmeasured. If it is, the cheapest fallback is a capability check (`WebAssembly.promising`) that keeps
+the existing JS tier for that process; no asyncify or CPS in the Wasm compiler. Details in `platform-status.md`.
+Rerun the matrix on Firefox before S3.
+
+### G4 hint result
+
+Compilation hints do not work in shipping Chrome. The `compilationHints` section (and
+`metadata.code.compilation_priority`) is ignored by Chrome 153 and Chromium 151, with and without
+`--js-flags=--experimental-wasm-compilation-hints`: tiering is identical for every hint value and a section with the wrong
+count is accepted. The encoding itself is right: Node 24 (V8 13.6) with the flag honours it (`0x2a` compiles the function
+with TurboFan at module compile, before the first call; a wrong count is a CompileError). The G4 mechanisms to use in Chrome are
+therefore back-edge re-entry (outlined loop bodies called repeatedly) or ahead-of-time choice of which functions get
+eager optimization by other means; hints are not an option until V8 ships them. Gate G4 itself (kernels reaching optimized
+speed within 100 ms) remains to be run with the S1 compiler.
 
 ## 7. Staged plan
 
