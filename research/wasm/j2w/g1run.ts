@@ -1,7 +1,7 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex) or on the production JS tier,
 // timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
 import { loadDexes, program, world } from "./build";
-import { jsTier, natives } from "./oracle";
+import { jsTier, natives, processState } from "./oracle";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
@@ -13,7 +13,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   console.warn = () => {};
   const w = cfg.mode === "wasm" ? world(program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]), { natives }) : null;
   let hit = 0;
-  if (w) w.onGap = () => hit++;
+  if (w) { w.onGap = () => hit++; processState(w); }
   const name = `w_${cfg.workload}`;
   const t0 = performance.now();
   const call = w ? w.entry(cfg.cls, name, "()I") : () => js(cfg.cls, name, "()I", []);
@@ -22,7 +22,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     out.result = String(await call());
     out.times.push(performance.now() - t0);
     for (let i = 0; i < cfg.reps; i++) { const t = performance.now(); await call(); out.times.push(performance.now() - t); }
-  } catch (e) { out.error = hit ? `gap ${w!.gapList[0]}` : String(e).slice(0, 200); }
+  } catch (e) { out.error = hit ? `gap ${w!.gapList[0]}` : String(e).slice(0, 900); }
   if (w) { out.compileMs = w.stats.compileMs; out.units = w.stats.units; }
   return out;
 }

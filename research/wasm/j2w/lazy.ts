@@ -475,10 +475,11 @@ export class World {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
       // the callees that have run, busiest first: code the first tier never saw run is not worth compiling into the unit
-      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.includes(t) && this.slots[this.slotOf(t)]?.k === "method" && this.ran(t) > 0);
+      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slots[this.slotOf(t)]?.k === "method" && this.ran(t) > 0);
       callees.sort((a, b) => this.ran(b) - this.ran(a));
       for (const t of callees) {
         if (out.length >= MAX_GROUP) break;
+        if (out.some((o) => mid(o) === mid(t))) continue;
         out.push(t);
         (this.slots[this.slotOf(t)] as { done: boolean }).done ? copies.push(t) : installed.push(t);
       }
