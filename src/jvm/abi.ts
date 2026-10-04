@@ -266,14 +266,13 @@ export function frameOf(line: string): [string, string, number] | null {
 }
 
 let hashCounter = 1;
-const hashes = new WeakMap<object, number>();
-/** System.identityHashCode: a string's String.hashCode, else a hash an object keeps for life */
+/** System.identityHashCode: a string's String.hashCode, else a hash an object keeps for life in an own `$ih` slot */
 export function idHash(o: unknown): number {
   if (o === null || o === undefined) return 0;
   if (typeof o === "string") return stringHash(o);
   if (typeof o !== "object" && typeof o !== "function") return stringHash(String(o));
-  let h = hashes.get(o as object);
-  if (h === undefined) { h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff); hashes.set(o as object, h); }
+  let h = (o as { $ih?: number }).$ih;
+  if (h === undefined) { h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff); (o as { $ih?: number }).$ih = h; }
   return h;
 }
 /** String.hashCode */

@@ -49,6 +49,7 @@ rt.register({
       // hidden class and the field loads that see both stay monomorphic
       const c = (this.constructor as typeof JObj).$i?.def ? new this.constructor() : Object.create(Object.getPrototypeOf(this));
       Object.assign(c, this);
+      if (c.$ih !== undefined) c.$ih = undefined;
       return c;
     },
     ...monitorMethods,
