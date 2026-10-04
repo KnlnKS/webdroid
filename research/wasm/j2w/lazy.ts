@@ -366,10 +366,10 @@ export class World {
     const s = this.slots[slot];
     if (!s || s.k === "ensure" || s.done) return;
     const t0 = performance.now(), cx = new Compiler(this);
-    const group = s.k === "method" ? this.group(s.m) : [];
-    const built = s.k === "method" ? cx.buildUnit(group) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
+    const { installed: group, copies } = s.k === "method" ? this.group(s.m) : { installed: [], copies: [] };
+    const built = s.k === "method" ? cx.buildUnit(group, copies) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
-    this.stats.compileMs += performance.now() - t0; this.stats.units++; this.stats.methods += group.length || 1;
+    this.stats.compileMs += performance.now() - t0; this.stats.units++; this.stats.methods += group.length + copies.length || 1;
     let exports: Record<string, any>;
     try { exports = this.instantiate(built.bytes, this.unitImports(cx)).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.name}: ${(e as Error).message}`); }
     const install = (at: number, name: string) => {
@@ -416,17 +416,20 @@ export class World {
     }
     return make(msg);
   }
-  /** `m` and the small methods it calls directly that are not compiled yet: V8 can inline calls inside a module but not through the table */
-  private group(m: MethodInfo): MethodInfo[] {
-    const out = [m];
-    if (!m.codeOff || this.intrinsic(m)) return out;
+  /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
+   *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
+  private group(m: MethodInfo): { installed: MethodInfo[]; copies: MethodInfo[] } {
+    const out = [m], installed = [m], copies: MethodInfo[] = [];
+    if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
       for (const t of this.smallCallees(out[i])) {
         const sl = this.slots[this.slotOf(t)];
-        if (out.length < MAX_GROUP && !out.includes(t) && sl?.k === "method" && !sl.done) out.push(t);
+        if (out.length >= MAX_GROUP || out.includes(t) || sl?.k !== "method") continue;
+        out.push(t);
+        (sl.done ? copies : installed).push(t);
       }
     }
-    return out;
+    return { installed, copies };
   }
   private groupOf = new Map<number, number[]>();
   private callees = new Map<MethodInfo, MethodInfo[]>();

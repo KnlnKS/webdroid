@@ -48,6 +48,8 @@ export class Compiler implements Base {
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
   /** the method being compiled */
   private owner?: MethodInfo;
+  /** the installed method of the unit being compiled, which the CHA decisions of every method in it count against */
+  private assumer?: MethodInfo;
   str: StringRepr;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
@@ -145,7 +147,7 @@ export class Compiler implements Base {
   devirt(decl: string, name: string, desc: string): MethodInfo | "none" | "many" {
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length > 1) return "many";
-    this.assumptions.push([decl, name, desc, t[0], this.owner]);
+    this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0] ?? "none";
   }
   /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
@@ -305,14 +307,17 @@ export class Compiler implements Base {
   }
 
   // ---------- units
-  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>" */
-  buildUnit(methods: MethodInfo[]): { bytes: Uint8Array; traces: FnTrace[] } {
-    const { mb, w } = this;
-    this.natives.declare(this, methods);
-    for (const m of methods) this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), mid(m)));
-    const codes = methods.map((m) => { this.owner = m; return compileMethod(this, m); });
-    methods.forEach((m, i) => { const f = this.fn.get(mid(m))!; const code = codes[i]; mb.setBody(f, code.finish()); mb.export("m" + w.slotOf(m), "func", f); });
-    return this.finishModule(methods.map((m, i) => ({ name: mid(m), f: this.fn.get(mid(m))!, code: codes[i], m })));
+  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
+   *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. */
+  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
+    const { mb, w } = this, all = methods.concat(copies);
+    this.natives.declare(this, all);
+    // a copy's name differs from the installed method's so a stack frame finds its own offsets (traces are keyed by name)
+    const label = (m: MethodInfo, i: number) => (i < methods.length ? mid(m) : `${mid(m)}#${w.stats.units}`);
+    all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
+    const codes = all.map((m) => { this.owner = m; this.assumer = methods[0]; return compileMethod(this, m); });
+    all.forEach((m, i) => { const f = this.fn.get(mid(m))!; mb.setBody(f, codes[i].finish()); if (i < methods.length) mb.export("m" + w.slotOf(m), "func", f); });
+    return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
   buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V"): { bytes: Uint8Array; traces: FnTrace[] } {
