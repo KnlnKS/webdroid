@@ -37,7 +37,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; watch: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -75,7 +75,7 @@ export class Compiler implements Base {
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []) };
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), watch: f("watch", [T.externref, T.externref], []) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }

@@ -27,7 +27,7 @@ export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
   /** the production natives, bound to host imports by descriptor (natives.ts) */
   natives?: Natives;
-  /** bytes in use on the heap, compared with the heap limit each time a window of allocation is used up */
+  /** bytes in use on the heap; what it has grown by since the World was made is compared with the heap limit each time a window of allocation is used up */
   heapUsed?: () => number;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
   stackTraceLimit?: number;
@@ -83,6 +83,8 @@ export class World {
     this.natives = opts.natives ?? new Natives();
     this.bridge = new Bridge(this, this.natives.source);
     this.cha = new Cha(prog);
+    // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
+    const heap = opts.heapUsed ?? heapUsed, heapBase = heap();
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => this.names[id];
     this.host = {
@@ -91,7 +93,7 @@ export class World {
       link: (slot: number) => this.linkSlot(slot),
       hot: (slot: number) => this.upgrade(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
-      heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
+      heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
       pin: (array: object) => {
@@ -103,6 +105,7 @@ export class World {
         }
         return i;
       },
+      watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string) => {
         const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
         return n === "" || (n[0] === "[" ? !/^([ZBCSIJFD]|L.+;)$/.test(e) || (e[0] === "L" && !this.prog.get(e.slice(1, -1))?.def && !this.prog.get(e.slice(1, -1))) : !this.prog.get(n)) ? 0 : this.idOf(n);
@@ -626,6 +629,11 @@ export class World {
     return frames.slice(skip);
   }
   private hostFns = new Map<string, Function>();
+  /** runs the Cleaner of a native allocation once its referent has been collected (sun.misc.Cleaner.create), as ART's reference queue daemon does */
+  private cleaners = new FinalizationRegistry<object>((cleaner) => {
+    const clean = this.prog.resolve("sun/misc/Cleaner", "clean", "()V");
+    if (clean) try { this.hostFn("cleaner:clean", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, clean); })(cleaner); } catch { /* the Cleaner reports a failing thunk itself */ }
+  });
   /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
   hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void): (...a: any[]) => any {
     let f = this.hostFns.get(name);

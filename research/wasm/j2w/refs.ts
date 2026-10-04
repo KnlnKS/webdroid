@@ -2,6 +2,7 @@
 // its referent is reachable from anywhere, and this heap is the engine's: a reference holds its referent until the program clears it, and
 // nothing is ever enqueued by the collector.
 import type { Code } from "./code";
+import { T } from "./wasmbin";
 import type { Compiler, Intrinsic } from "./j2w";
 
 const REFERENCE = "java/lang/ref/Reference", FINALIZER = "java/lang/ref/FinalizerReference";
@@ -20,4 +21,18 @@ def(`${REFERENCE}.clearReferent()V`, (cx, c) => { const { st, at } = field(cx, "
 def(`${FINALIZER}.makeCircularListIfUnenqueued()Z`, (cx, c) => {
   const { st, at } = field(cx, "queueNext", "Ljava/lang/ref/Reference;");
   c.lget(0).refCast(st).structGet(st, at).refIsNull().if_().lget(0).refCast(st).lget(0).structSet(st, at).i32(1).else_().i32(0).end();
+});
+
+// Cleaner.create(referent, thunk): the Cleaner is made without its referent, which a PhantomReference never gives back, so that the host can
+// see the referent die and run the Cleaner (World.cleaners); the object keeps it alive for no other reason
+refIntrinsics.set("sun/misc/Cleaner.create(Ljava/lang/Object;Ljava/lang/Runnable;)Lsun/misc/Cleaner;", (cx, m, c) => {
+  const CLEANER = "sun/misc/Cleaner", ctor = cx.prog.resolve(CLEANER, "<init>", "(Ljava/lang/Object;Ljava/lang/Runnable;)V"), add = cx.prog.resolve(CLEANER, "add", "(Lsun/misc/Cleaner;)Lsun/misc/Cleaner;");
+  if (!ctor || !add) { cx.gap(c, "sun.misc.Cleaner"); return; }
+  const cleaner = c.newLocal(T.anyref);
+  c.lget(1).refIsNull().if_(T.anyref).anyNull().else_();
+  cx.emitEnsure(c, CLEANER); cx.emitNew(c, CLEANER); c.lset(cleaner);
+  c.lget(cleaner).anyNull().lget(1); cx.callMethod(c, ctor);
+  c.lget(0).externConvertAny().lget(cleaner).externConvertAny().call(cx.imp.watch);
+  c.lget(cleaner); cx.callMethod(c, add);
+  c.end();
 });
