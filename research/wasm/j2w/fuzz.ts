@@ -1,6 +1,7 @@
 // Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
 // javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm, on the production JS tier and on the JDK; results must be bit-identical.
-// Run from the repository root: bun research/wasm/j2w/fuzz.ts [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java]   (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch)
+// Run from the repository root: bun research/wasm/j2w/fuzz.ts [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
+// (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,9 @@ import { loadDexes, world } from "./build";
 import { compare, genCases } from "./cases";
 import { jsTier, natives } from "./oracle";
 import { ACC } from "./program";
+import { irreducibleClass } from "./irfuzz";
+import { Irreducible, Flow } from "../../../src/jvm/structure";
+import { prepareMethod } from "../../../src/jvm/prepared";
 import { underNode } from "./undernode";
 
 await underNode(import.meta.path);
@@ -132,8 +136,10 @@ const sh = (cmd: string[], input?: string) => {
   return r.stdout.toString();
 };
 const fi = process.argv.indexOf("--file");
-writeFileSync(join(out, "F.java"), fi < 0 ? generated : readFileSync(process.argv[fi + 1], "utf8"));
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, "F.java", join(import.meta.dir, "java/Ref.java")]);
+const irreducible = process.argv.includes("--irreducible");
+if (irreducible) writeFileSync(join(out, "F.class"), irreducibleClass("F", count, rnd));
+else writeFileSync(join(out, "F.java"), fi < 0 ? generated : readFileSync(process.argv[fi + 1], "utf8"));
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...irreducible ? [] : ["F.java"], join(import.meta.dir, "java/Ref.java")]);
 sh(["d8", ...(process.argv.includes("--debug") ? [] : ["--release"]), "--output", out, join(out, "F.class"), ...readdirSync(out).filter((f) => /^F\$.*\.class$/.test(f)).map((f) => join(out, f))]);
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
@@ -147,11 +153,15 @@ const js: typeof tier = (cls, name, desc, a, instance) => {
   const hang = new Promise<never>((_, reject) => { timer = setTimeout(() => { console.log(`js tier hang in ${cls}.${name}(${a.join(", ")})`); reject(new Error("hang")); }, 20000); });
   return Promise.race([tier(cls, name, desc, a, instance), hang]).finally(() => clearTimeout(timer));
 };
+const cyclic = irreducible ? methods.filter((m) => {
+  const item = m.dex.code(m.codeOff);
+  try { new Flow(prepareMethod(m.dex, item, m.desc, true), item, Infinity); return false; } catch (e) { return e instanceof Irreducible; }
+}).length : 0;
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const cases = genCases(methods, {}, perMethod);
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
 const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, js, jdk, hit);
-console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} generated methods (wasm, js tier, jdk); ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules`);
+console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} generated methods (wasm, js tier, jdk); ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules${irreducible ? `; ${cyclic} irreducible` : ""}`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 if (bad || blocked) console.log(`source: ${join(out, "F.java")}`);
 process.exit(bad || blocked ? 1 : 0);

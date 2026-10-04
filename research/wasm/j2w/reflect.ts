@@ -18,9 +18,9 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt }
+export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt }
 /** a member's (class id, index) packed into the cookie */
-const BOX: Record<string, [string, string, string]> = {
+export const BOX: Record<string, [string, string, string]> = {
   Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
   S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
   F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],
@@ -28,7 +28,7 @@ const BOX: Record<string, [string, string, string]> = {
 
 /** the member classes a class lists in its dalvik.annotation.MemberClasses system annotation */
 function members(jc: JClass | undefined): string[] {
-  const v = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "Ldalvik/annotation/MemberClasses;")?.elements.value;
+  const v = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/MemberClasses")?.elements.value;
   return Array.isArray(v) ? v.flatMap((e) => e && typeof e === "object" && "idx" in e ? [descToName(jc!.dex!.type(e.idx))] : []) : [];
 }
 
@@ -68,16 +68,21 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
     case RInfo.MethodParamType: return sigOf(w, m).params[b & 0xff];
     case RInfo.MethodRet: return sigOf(w, m).ret;
     case RInfo.MethodFlags: return m.flags;
-    case RInfo.MethodInvoke: return w.synthSlot(`invoke:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m) });
+    case RInfo.MethodInvoke: return w.synthSlot(`invoke:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, true, false) });
+    case RInfo.MethodCall: case RInfo.MethodCallDirect: {
+      const direct = kind === RInfo.MethodCallDirect;
+      return w.synthSlot(`call:${direct}:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, false, direct) });
+    }
   }
   return 0;
 }
 
-/** the thunk body: params (receiver, Object[]) -> Object */
-function invokeBody(cx: Compiler, c: Code, m: MethodInfo): void {
+/** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle
+ *  lets it through, and calls the method itself rather than the receiver's override when it invokes a super or direct method. */
+function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct: boolean): void {
   const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref), recv = c.newLocal(T.anyref);
   if (m.params.length) c.lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(args);
-  c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
+  if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
   if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
   else if (!m.isStatic) { c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); c.lget(0).lset(recv); c.lget(recv); }
   else cx.emitEnsure(c, m.cls);
@@ -88,7 +93,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo): void {
     if (box) { c.refAsNonNull(); classMethod(cx, c, ...box); }
   }
   const prog = cx.prog, decl = prog.get(m.cls)!;
-  if (m.isStatic || ctor || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
+  if (m.isStatic || ctor || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
   else {
     const ps: ("I" | "J" | "L")[] = ["L", ...m.params.map(kindOf)], sig = cx.sig(ps, m.ret === "V" ? "V" : kindOf(m.ret));
     c.lget(recv).call(cx.helper("vtab"));
@@ -105,6 +110,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo): void {
   else if (BOX[m.ret]) {
     const [boxCls] = BOX[m.ret]; classMethod(cx, c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
   }
+  if (!wrap) return;
   c.br(2).end().unreachable().end();
   // what the method threw, wrapped
   const ite = prog.resolve(ITE, "<init>", "(Ljava/lang/Throwable;)V");

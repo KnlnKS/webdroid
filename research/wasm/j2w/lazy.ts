@@ -18,6 +18,11 @@ import { Natives, type HostContext } from "./natives";
 import { Bridge } from "./bridge";
 import { rtfns, type Synth } from "./rtfns";
 import { hostInfo, typeName } from "./classes";
+import { mhInvoke } from "./handles";
+import { hostText } from "./members";
+import { hostNet } from "./inet";
+import { generateProxy } from "./proxy";
+import { hostObject } from "./annotations";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
@@ -62,6 +67,10 @@ export class World {
   private stacks = new WeakMap<object, Error>();
   private frames: JavaFrame[] = [];
   private assumptions = new Map<string, Assumption>();
+  /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
+  private absent = new Map<string, Set<number>>();
+  /** the messages of the link errors (linkage.ts) compiled code throws, by index */
+  linkMessages: string[] = [];
   /** the strings of String constants, by index, and the table they are read from */
   private strings = new Map<string, number>();
   strs = new WebAssembly.Table({ element: "externref", initial: 64 });
@@ -96,16 +105,13 @@ export class World {
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
+      text: (kind: number, a: number) => hostText(this, kind, a),
+      obj: (kind: number, a: number, b: number, filter: object | null) => hostObject(this, kind, a, b, filter),
+      proxy: (name: string, interfaces: object, methods: object, exceptions: object) => generateProxy(this, name, interfaces, methods, exceptions),
+      net: (op: number, node: string, a: number, b: number) => hostNet(this, op, node, a, b),
+      mhInvoke: (mh: object, args: object, site: number, exact: number) => mhInvoke(this, mh, args, site, exact),
       // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
-      pin: (array: object) => {
-        let i = this.pinned.get(array);
-        if (i === undefined) {
-          i = this.pinned.size; this.pinned.set(array, i);
-          if (i >= this.nm.length) this.nm.grow(this.nm.length);
-          this.nm.set(i, array as never);
-        }
-        return i;
-      },
+      pin: (object: object) => this.pin(object),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string) => {
@@ -119,7 +125,7 @@ export class World {
         if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => this.linkMessages[id])),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
@@ -140,6 +146,10 @@ export class World {
     let s = this.selectors.get(key);
     if (!s) { this.selectors.set(key, s = this.selKeys.length); this.selKeys.push(key); }
     return s;
+  }
+  linkId(message: string): number {
+    const id = this.linkMessages.indexOf(message);
+    return id >= 0 ? id : this.linkMessages.push(message) - 1;
   }
   gapId(what: string): number {
     let id = this.gaps.get(what);
@@ -174,7 +184,9 @@ export class World {
     return (this.fromJs ??= this.hostFn("str:from", ["L"], "L", (cx, c) => { c.lget(0).externConvertAny(); cx.str.fromHost(c); }))(s);
   }
   /** how `m` is implemented without its bytecode, if it is */
-  intrinsic(m: MethodInfo): Intrinsic | undefined { return intrinsicFor(this.opts.intrinsics, this.natives, m); }
+  intrinsic(m: MethodInfo): Intrinsic | undefined { return this.madeUp.get(mid(m)) ?? intrinsicFor(this.opts.intrinsics, this.natives, m); }
+  /** the bodies of the methods of classes made at run time (addClass), by method id */
+  private madeUp = new Map<string, Intrinsic>();
   needsInit(n: string): boolean {
     const c = this.prog.get(n); if (!c) return false;
     if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
@@ -457,6 +469,10 @@ export class World {
       if (!a) this.assumptions.set(key, a = { decl, name, desc, target, slots: new Set() });
       a.slots.add(owner ? this.slotOf(owner) : slot);
     }
+    for (const [name, owner] of cx.absent) {
+      const slots = this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!;
+      slots.add(owner ? this.slotOf(owner) : slot);
+    }
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
@@ -596,6 +612,26 @@ export class World {
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
   addDexes(dexes: DexFile[]): string[] {
     const added = this.prog.add(dexes);
+    this.loaded(added);
+    return added;
+  }
+  /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
+  pin(object: object): number {
+    let i = this.pinned.get(object);
+    if (i === undefined) {
+      i = this.pinned.size; this.pinned.set(object, i);
+      if (i >= this.nm.length) this.nm.grow(this.nm.length);
+      this.nm.set(i, object as never);
+    }
+    return i;
+  }
+  /** adds a class that no dex defines, with the body of each of its methods */
+  addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>): void {
+    for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
+    this.prog.addClass(jc);
+    this.loaded([jc.name]);
+  }
+  private loaded(added: string[]): void {
     this.cha.index(added);
     for (const [key, a] of this.assumptions) {
       const t = this.cha.targets(a.decl, a.name, a.desc);
@@ -603,7 +639,8 @@ export class World {
       for (const slot of a.slots) this.invalidate(slot);
       this.assumptions.delete(key);
     }
-    return added;
+    for (const name of added) for (const slot of this.absent.get(name) ?? []) this.invalidate(slot);
+    for (const name of added) this.absent.delete(name);
   }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   private invalidate(slot: number): void {

@@ -13,6 +13,7 @@ import type { Code } from "./code";
 import type { Compiler, Intrinsic } from "./j2w";
 import type { World } from "./lazy";
 import { idOfClass } from "./classes";
+import { rt } from "./rtfns";
 
 /** the first array element's offset, above every field id */
 export const ARRAY_BASE = 1 << 30;
@@ -53,6 +54,52 @@ export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number 
   } });
 }
 
+/** array elements by storage kind: bytes each */
+const SIZES = { i8: 1, i16: 2, i32: 4, i64: 8 } as const;
+/** the array element holding byte `at` of the array (local `at`), as an i64 in `value` and the bit offset of the byte within it in `shift` */
+function element(cx: Compiler, c: Code, ek: keyof typeof SIZES, data: number, at: number, shift: number): void {
+  const size = SIZES[ek], d = cx.tData[ek];
+  c.lget(data).refAsNonNull().lget(at).i32(Math.log2(size)).raw(OP.i32_shr_u);
+  if (ek === "i8" || ek === "i16") c.arrayGetU(d); else c.arrayGet(d);
+  if (ek !== "i64") c.raw(OP.i64_extend_i32_u);
+  c.lget(at).i32(size - 1).raw(OP.i32_and).i32(3).raw(OP.i32_shl).lset(shift);
+}
+// uget(array, byte offset, width): `width` bytes of the array from that offset, little-endian, in an i64
+rt("uget", ["L", "I", "I"], "J", (cx, c) => {
+  const res = c.newLocal(T.i64), k = c.newLocal(T.i32), at = c.newLocal(T.i32), shift = c.newLocal(T.i32);
+  for (const ek of ["i8", "i16", "i32", "i64"] as const) {
+    const t = cx.tArr[ek], data = c.newLocal(refNull(cx.tData[ek]));
+    c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).lset(data);
+    c.lget(2).i32(1).raw(OP.i32_sub).lset(k);
+    c.block().loop().lget(k).i32(0).raw(OP.i32_lt_s).brIf(1);
+    c.lget(1).lget(k).raw(OP.i32_add).lset(at);
+    element(cx, c, ek, data, at, shift);
+    c.lget(shift).raw(OP.i64_extend_i32_u, OP.i64_shr_u).i64(0xffn).raw(OP.i64_and);
+    c.lget(res).i64(8n).raw(OP.i64_shl).raw(OP.i64_or).lset(res);
+    c.lget(k).i32(1).raw(OP.i32_sub).lset(k).br(0).end().end();
+    c.lget(res).ret().end();
+  }
+  cx.gap(c, "Unsafe: a read of this array"); c.i64(0n);
+});
+// uput(array, byte offset, width, value): the low `width` bytes of value into the array from that offset
+rt("uput", ["L", "I", "I", "J"], "V", (cx, c) => {
+  const k = c.newLocal(T.i32), at = c.newLocal(T.i32), shift = c.newLocal(T.i32);
+  for (const ek of ["i8", "i16", "i32", "i64"] as const) {
+    const t = cx.tArr[ek], d = cx.tData[ek], data = c.newLocal(refNull(d)), i64 = ek === "i64";
+    c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).lset(data);
+    c.block().loop().lget(k).lget(2).raw(OP.i32_ge_s).brIf(1);
+    c.lget(1).lget(k).raw(OP.i32_add).lset(at);
+    c.lget(data).refAsNonNull().lget(at).i32(Math.log2(SIZES[ek])).raw(OP.i32_shr_u);
+    element(cx, c, ek, data, at, shift);                        // the element, widened to i64
+    c.i64(0xffn).lget(shift).raw(OP.i64_extend_i32_u, OP.i64_shl).i64(-1n).raw(OP.i64_xor, OP.i64_and);
+    c.lget(3).lget(k).i32(3).raw(OP.i32_shl).raw(OP.i64_extend_i32_u, OP.i64_shr_u).i64(0xffn).raw(OP.i64_and).lget(shift).raw(OP.i64_extend_i32_u, OP.i64_shl).raw(OP.i64_or);
+    if (!i64) c.raw(OP.i32_wrap_i64);
+    c.arraySet(d);
+    c.lget(k).i32(1).raw(OP.i32_add).lset(k).br(0).end().end().ret().end();
+  }
+  cx.gap(c, "Unsafe: a write of this array");
+});
+
 export const unsafeIntrinsics = new Map<string, Intrinsic>();
 const U = "jdk/internal/misc/Unsafe.";
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => unsafeIntrinsics.set(U + key, (cx, m, c) => f(cx, c));
@@ -83,20 +130,13 @@ function emitGet(cx: Compiler, c: Code, t: Ty): void {
   c.lget(OBJ).refCast(tArr[ek]).structGet(tArr[ek], 2).lget(idx);
   if (ek === "i8" || ek === "i16") signed ? c.arrayGetS(tData[ek]) : c.arrayGetU(tData[ek]); else c.arrayGet(tData[ek]);
   c.else_();
-  if (w > 1 && t !== "L") {            // a wider read of a byte[]: little-endian bytes
-    const data = c.newLocal(refNull(tData.i8)), at = c.newLocal(T.i32);
-    c.lget(OBJ).refTest(tArr.i8).if_(cx.vtOf(k));
-    c.lget(OBJ).refCast(tArr.i8).structGet(tArr.i8, 2).lset(data);
-    c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_sub).raw(OP.i32_wrap_i64).lset(at);
-    wide ? c.i64(0n) : c.i32(0);
-    for (let j = w - 1; j >= 0; j--) {
-      wide ? c.i64(8n).raw(OP.i64_shl) : c.i32(8).raw(OP.i32_shl);
-      c.lget(data).refAsNonNull().lget(at).i32(j).raw(OP.i32_add).arrayGetU(tData.i8);
-      if (wide) c.raw(OP.i64_extend_i32_u, OP.i64_or); else c.raw(OP.i32_or);
-    }
-    if (t === "S") c.raw(OP.i32_extend16_s);
-    c.else_(); cx.gap(c, `Unsafe.get${NAME[t]} on this array`); c.unreachable().end();
-  } else { cx.gap(c, `Unsafe.get${NAME[t]} on this array`); c.unreachable(); }
+  // an access of another width than the array's elements: the bytes of the elements, little-endian, as a ByteBuffer view reads them
+  if (t === "L") { cx.gap(c, "Unsafe.getReference on this array"); c.unreachable(); }
+  else {
+    c.lget(OBJ).lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_sub).raw(OP.i32_wrap_i64).i32(w); cx.callRt(c, "uget");
+    if (k === "I") c.raw(OP.i32_wrap_i64);
+    if (t === "B") c.raw(OP.i32_extend8_s); else if (t === "S") c.raw(OP.i32_extend16_s);
+  }
   c.end();
   c.else_();
   const slot = slotOf(cx, c, UInfo.FieldGet, k);
@@ -111,19 +151,12 @@ function emitPut(cx: Compiler, c: Code, t: Ty): void {
   c.lget(OBJ).refTest(tArr[ek]).if_();
   c.lget(OBJ).refCast(tArr[ek]).structGet(tArr[ek], 2).lget(idx).lget(V).arraySet(tData[ek]);
   c.else_();
-  if (w > 1 && t !== "L") {
-    const data = c.newLocal(refNull(tData.i8)), at = c.newLocal(T.i32);
-    c.lget(OBJ).refTest(tArr.i8).if_();
-    c.lget(OBJ).refCast(tArr.i8).structGet(tArr.i8, 2).lset(data);
-    c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_sub).raw(OP.i32_wrap_i64).lset(at);
-    for (let j = 0; j < w; j++) {
-      c.lget(data).refAsNonNull().lget(at).i32(j).raw(OP.i32_add).lget(V);
-      if (j) { w === 8 ? c.i64(BigInt(8 * j)).raw(OP.i64_shr_u) : c.i32(8 * j).raw(OP.i32_shr_u); }
-      if (w === 8) c.raw(OP.i32_wrap_i64);
-      c.arraySet(tData.i8);
-    }
-    c.else_(); cx.gap(c, `Unsafe.put${NAME[t]} on this array`); c.unreachable().end();
-  } else { cx.gap(c, `Unsafe.put${NAME[t]} on this array`); c.unreachable(); }
+  if (t === "L") { cx.gap(c, "Unsafe.putReference on this array"); c.unreachable(); }
+  else {
+    c.lget(OBJ).lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_sub).raw(OP.i32_wrap_i64).i32(w).lget(V);
+    if (k === "I") c.raw(OP.i64_extend_i32_u);
+    cx.callRt(c, "uput");
+  }
   c.end();
   c.else_();
   const slot = slotOf(cx, c, UInfo.FieldPut, k);

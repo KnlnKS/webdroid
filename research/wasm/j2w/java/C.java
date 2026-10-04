@@ -140,7 +140,7 @@ public class C {
   static class Impl implements WithDefault { }
   public static int jsWrong_initDefaultIface(int n) { new Impl(); return Order.last; }
 
-  // ---- VarHandle: the Wasm tier replaces fh/av (they build handles the way findVarHandle would) with intrinsics
+  // ---- VarHandle: handles made by Lookup.findVarHandle and MethodHandles.arrayElementVarHandle
   static class S { int i = 5; long l = 1L << 40; Object o; int j = 7; }
   static final java.lang.invoke.VarHandle VI = fh(0), VL = fh(1), VO = fh(2), VJ = fh(3), VA = av(0), VLA = av(1), VOA = av(2);
   static java.lang.invoke.VarHandle fh(int ordinal) {

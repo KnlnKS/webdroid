@@ -7,6 +7,7 @@ import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
+import type { LinkFailure } from "./linkage";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
 import { JsStrings, stringCtor, structStrings, type StringRepr } from "./strings";
 import { StructStrings } from "./structstrings";
@@ -40,7 +41,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; watch: number; intern: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; watch: number; intern: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -49,6 +50,10 @@ export class Compiler implements Base {
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
+  /** the thrower of each link error this module's code raises at a site */
+  linkErrors: string[] = [];
+  /** classes whose absence this module's code fails a site on (linkage.ts), with the method that relies on it */
+  absent: [string, MethodInfo | undefined][] = [];
   /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
   counting = true;
   /** the slots whose budget globals this module imports */
@@ -79,7 +84,8 @@ export class Compiler implements Base {
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), watch: f("watch", [T.externref, T.externref], []), intern: f("intern", [T.externref, T.externref], [T.externref]) };
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.i32, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
+      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), intern: f("intern", [T.externref, T.externref], [T.externref]) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }
@@ -152,12 +158,13 @@ export class Compiler implements Base {
     const f = this.fn.get(mid(m));
     if (f !== undefined) c.call(f); else c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m));
   }
-  /** the only implementation of decl.name+desc among all loaded classes, "none" without one (a call then finds an abstract method), "many" otherwise */
-  devirt(decl: string, name: string, desc: string): MethodInfo | "none" | "many" {
+  /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
+   *  class, a dex) may implement it, even for a frame that is already running */
+  devirt(decl: string, name: string, desc: string): MethodInfo | "many" {
     const t = this.w.cha.targets(decl, name, desc);
-    if (t.length > 1) return "many";
+    if (t.length !== 1) return "many";
     this.assumptions.push([decl, name, desc, t[0], this.assumer]);
-    return t[0] ?? "none";
+    return t[0];
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {
@@ -190,6 +197,13 @@ export class Compiler implements Base {
     this.gaps.push(what);
     c.i32(this.w.gapId(what)).call(this.imp.gap);
     this.callThrower(c, "ule");
+  }
+  /** the error ART raises where this site's class or member does not resolve, thrown when the site runs */
+  linkError(c: Code, f: LinkFailure): void {
+    this.linkErrors.push(f.thrower);
+    if (f.absent) this.absent.push([f.absent, this.assumer]);
+    c.i32(this.w.linkId(f.message));
+    this.callThrower(c, f.thrower);
   }
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
   callThrower(c: Code, name: Thrower): void {

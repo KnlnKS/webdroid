@@ -5,10 +5,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { OP } from "./code";
 import { loadDexes, program, world } from "./build";
 import { intrinsics } from "./intrinsics";
 import { jsTier, natives } from "./oracle";
+import { underNode } from "./undernode";
+
+await underNode(import.meta.path);
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = (cmd: string[], input?: string) => {
@@ -19,17 +21,6 @@ const sh = (cmd: string[], input?: string) => {
 sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(here, "java/C.java"), join(here, "java/Ref.java")]);
 sh(["d8", "--release", "--min-api", "34", "--output", out, ...new Bun.Glob("C*.class").scanSync(out).toArray().map((f) => join(out, f))]);
 
-// Handles the way Lookup.findVarHandle makes them (which needs strings): a FieldVarHandle whose artField is the id of one of
-// C$S's fields, chosen by ordinal in the order of C.fh's name list, and an ArrayElementVarHandle
-intrinsics.set("C.fh(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => {
-  const FV = "java/lang/invoke/FieldVarHandle", st = cx.structFor(FV), o = c.newLocal(cx.vtOf("L"));
-  const S = cx.prog.get("C$S")!, ids = ["i", "l", "o", "j"].map((n) => cx.idOf("C$S") << 12 | S.fields.findIndex((f) => f.name === n));
-  cx.emitNew(c, FV); c.lset(o);
-  c.lget(o).refCast(st).i32(ids[0]);
-  ids.forEach((id, k) => { if (k) c.i32(id).lget(0).i32(k).raw(OP.i32_ne).select(); });
-  c.raw(OP.i64_extend_i32_u).structSet(st, cx.fieldIndex(FV, { owner: FV, name: "artField", desc: "J" })).lget(o);
-});
-intrinsics.set("C.av(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => { cx.emitNew(c, "java/lang/invoke/ArrayElementVarHandle"); });
 // System.<clinit> needs strings and the whole properties machinery, which System.arraycopy does not
 intrinsics.set("java/lang/System.<clinit>()V", () => {});
 
