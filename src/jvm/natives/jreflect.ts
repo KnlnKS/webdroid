@@ -136,10 +136,18 @@ export class JField extends JAccessibleObject {
 }
 /** A static read is also the class's first use: a constant that has not been initialized yet
  *  reads as undefined, which is the zero the caller then takes for the field's real value. */
-const readField = driven(function* readField(this: JField, o: unknown): Gen {
-  const p = rt.initClass(this.owner); if (p) yield p;
-  return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
+const readNow = (f: JField, o: unknown, boxed: boolean) => {
+  const v = f.isStatic ? f.owner.ctor[f.prop] : (o as Record<string, unknown>)[f.prop];
+  return boxed ? boxReturn(f.desc, v) : v;
+};
+const readAfterInit = driven(function* (this: JField, p: Promise<void>, o: unknown, boxed: boolean): Gen {
+  yield p;
+  return readNow(this, o, boxed);
 });
+function readField(this: JField, o: unknown, boxed = false) {
+  const p = rt.initClass(this.owner);
+  return p ? readAfterInit.call(this, p, o, boxed) : readNow(this, o, boxed);
+}
 const writeField = driven(function* writeField(this: JField, o: unknown, value: unknown, boxed = false): Gen<void> {
   const p = rt.initClass(this.owner); if (p) yield p;
   if (boxed) value = argFor(this.desc, value);
@@ -217,14 +225,12 @@ rt.register({
     "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
     ...accessibleMethods,
     "getDeclaringClass()Ljava/lang/Class;": declaringClass,
-    "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JField, o: unknown): Gen {
-      return boxReturn(this.desc, yield readField.call(this, o));
-    }),
+    "get(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JField, o: unknown) { return readField.call(this, o, true); },
     "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JField, o: unknown, v: unknown) {
       return writeField.call(this, o, v, true);
     },
     ...Object.fromEntries((["Int I", "Long J", "Boolean Z", "Float F", "Double D", "Byte B", "Short S", "Char C"])
-      .map((t) => [`get${t.slice(0, -2)}(Ljava/lang/Object;)${t.slice(-1)}`, readField])),
+      .map((t) => [`get${t.slice(0, -2)}(Ljava/lang/Object;)${t.slice(-1)}`, function (this: JField, o: unknown) { return readField.call(this, o); }])),
     ...Object.fromEntries(["Boolean Z", "Byte BSIJFD", "Char CIJFD", "Short SIJFD", "Int IJFD", "Long JFD", "Float FD", "Double D"].map((spec) => {
       const [name, targets] = spec.split(" ");
       return [`set${name}(Ljava/lang/Object;${targets[0]})V`, function (this: JField, o: unknown, value: number | bigint) {
@@ -498,18 +504,17 @@ rt.register({
     "isSynthetic()Z": function (this: JMethod) { return (this.mods >> 12) & 1; },
     "isBridge()Z": function (this: JMethod) { return (this.mods >> 6) & 1; },
     "isVarArgs()Z": function (this: JMethod) { return (this.mods >> 7) & 1; },
-    "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMethod, recv: unknown, args: unknown[] | null): Gen {
+    "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMethod, recv: unknown, args: unknown[] | null) {
       const ps = parseMethodDesc(this.desc).params, a = (args ?? []).map((v, i) => argFor(ps[i], v));
       const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? lateMethod.find?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
-      if (this.isStatic) { const init = rt.initClass(this.owner); if (init) yield init; }
+      const strand = rt.cur, init = this.isStatic ? rt.initClass(this.owner) : null;
+      if (init) return rt.drive(finishInvoke.call(this, init, target, recv, a), strand);
       let val: unknown;
-      try {
-        const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
-        val = r instanceof Promise ? yield r : r;
-      } catch (e) { throw yield invocationTarget(e); }
-      return boxReturn(parseMethodDesc(this.desc).ret, val);
-    }),
+      try { val = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a); }
+      catch (e) { return rt.drive(failInvoke(e), strand); }
+      return val instanceof Promise ? rt.drive(pendingInvoke.call(this, val), strand) : boxReturn(parseMethodDesc(this.desc).ret, val);
+    },
     ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
     "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) { return genericMethodTypes(this.owner, this.name, this.desc).ret; },
@@ -527,6 +532,21 @@ rt.register({
   },
 });
 /** Method.invoke and Constructor.newInstance report what the target threw inside this wrapper */
+function* failInvoke(e: unknown): Gen { throw yield invocationTarget(e); }
+function* pendingInvoke(this: JMethod, pending: Promise<unknown>): Gen {
+  let val: unknown;
+  try { val = yield pending; } catch (e) { throw yield invocationTarget(e); }
+  return boxReturn(parseMethodDesc(this.desc).ret, val);
+}
+function* finishInvoke(this: JMethod, init: Promise<void>, target: Function, recv: unknown, a: unknown[]): Gen {
+  yield init;
+  let val: unknown;
+  try {
+    const r = target.apply(this.isStatic ? this.owner.ctor : recv, a);
+    val = r instanceof Promise ? yield r : r;
+  } catch (e) { throw yield invocationTarget(e); }
+  return boxReturn(parseMethodDesc(this.desc).ret, val);
+}
 const invocationTarget = (e: unknown) => newObj("java/lang/reflect/InvocationTargetException", "(Ljava/lang/Throwable;)V", rt.jx(e));
 // ── reflect Constructor. <init> mangles to i$<hash(desc)> with NO class component, so a
 // ctor must always be invoked through the prototype of the class that DECLARES it.

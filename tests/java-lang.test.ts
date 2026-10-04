@@ -307,6 +307,14 @@ describe("reflection-field", () => {
   const owner = rt.link("test/PrimitiveFields");
   const field = (desc: string, isStatic = false) => Object.assign(new JField(), { owner, prop: "value", desc, isStatic });
 
+  test("reflective reads finish synchronously, and identity hashes are stable and not cloned", () => {
+    const o = new Fields(); o.value = 7;
+    expect(vcall(field("I"), "getInt", "(Ljava/lang/Object;)I", o)).toBe(7);
+    const h = vcall(o, "hashCode", "()I");
+    expect(vcall(o, "hashCode", "()I")).toBe(h);
+    expect(vcall(vcall(o, "clone", "()Ljava/lang/Object;"), "hashCode", "()I")).not.toBe(h);
+  });
+
   test("proxy creation shares classes without crossing interface sets", async () => {
     const names = ["test/ConcurrentProxyA", "test/ConcurrentProxyB"];
     rt.markers(...names);

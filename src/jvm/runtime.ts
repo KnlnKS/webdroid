@@ -226,7 +226,7 @@ export class Runtime {
    * resumed native runs as the strand that entered it and releases it when it finishes or
    * suspends again.
    */
-  drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.cur, false); }
+  drive<T>(g: Gen<T>, strand = this.cur): T | Promise<T> { return this.driveStep(g, undefined, false, strand, false); }
   private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, strand: Strand, resumed: boolean): T | Promise<T> {
     for (;;) {
       let step: IteratorResult<unknown, T>;
