@@ -29,7 +29,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
 }
 
 const KS = { Z: 1, I: 2, L: 3, W: 4, X: 5 };
-class MC {
+export class MC {
   code: Code; prepared!: PreparedMethod; flow!: Flow; item; dex;
   reads = new Set<string>();
   locals = new Map<string, number>();

@@ -126,4 +126,58 @@ public class C {
   static class Order { static int last; static int next(int v) { last = last * 10 + v; return v; } }
   static class Impl implements WithDefault { }
   public static int jsWrong_initDefaultIface(int n) { new Impl(); return Order.last; }
+
+  // ---- VarHandle: the Wasm tier replaces fh/av (they build handles the way findVarHandle would) with intrinsics
+  static class S { int i = 5; long l = 1L << 40; Object o; int j = 7; }
+  static final java.lang.invoke.VarHandle VI = fh(0), VL = fh(1), VO = fh(2), VJ = fh(3), VA = av(0), VLA = av(1), VOA = av(2);
+  static java.lang.invoke.VarHandle fh(int ordinal) {
+    try { String[] names = {"i", "l", "o", "j"}; Class<?>[] types = {int.class, long.class, Object.class, int.class};
+      return java.lang.invoke.MethodHandles.lookup().findVarHandle(S.class, names[ordinal], types[ordinal]);
+    } catch (ReflectiveOperationException e) { throw new Error(e); }
+  }
+  static java.lang.invoke.VarHandle av(int ordinal) {
+    return java.lang.invoke.MethodHandles.arrayElementVarHandle(ordinal == 0 ? int[].class : ordinal == 1 ? long[].class : Object[].class);
+  }
+  public static int varHandleInt(int n) {
+    S s = new S(); int r = 0;
+    r += (int) VI.get(s);                                  // 5
+    VI.set(s, 11);
+    r += (int) VI.getAndAdd(s, 4) * 10;                    // 110, i = 15
+    r += VI.compareAndSet(s, 15, 20) ? 1000 : 0;           // i = 20
+    r += VI.compareAndSet(s, 15, 30) ? 2000 : 0;
+    r += (int) VI.compareAndExchange(s, 20, 21) == 20 ? 4000 : 0;
+    r += (int) VI.getAndSet(s, 99) * 10000;                // 21
+    r += (int) VI.getAndBitwiseOr(s, 4);                   // 99
+    r += (int) VI.getVolatile(s) + (int) VJ.getAcquire(s);  // 99 | 4 = 103, j = 7
+    VJ.setRelease(s, 2); VJ.setOpaque(s, (int) VJ.getOpaque(s) + 1);
+    r += s.j * 100000 + (VJ.weakCompareAndSetPlain(s, 3, 9) ? 1000000 : 0) + s.j * 10000000;
+    return r + s.i;
+  }
+  public static long varHandleLong(int n) {
+    S s = new S(); long r = (long) VL.get(s);
+    r += (long) VL.getAndAdd(s, 5L) + (long) VL.getAndBitwiseXor(s, 3L) + (long) VL.getAndSet(s, -1L);
+    return r + (VL.compareAndSet(s, -1L, 1L << 33) ? 1 : 0) + s.l;
+  }
+  public static int varHandleRef(int n) {
+    S s = new S(), t = new S(); int r = 0;
+    r += VO.get(s) == null ? 1 : 0;
+    r += VO.compareAndSet(s, null, t) ? 2 : 0;
+    r += VO.compareAndSet(s, null, s) ? 4 : 0;
+    r += (S) VO.getAndSet(s, null) == t ? 8 : 0;
+    VO.set(s, s); r += s.o == s ? 16 : 0;
+    r += VO.compareAndExchange(s, s, t) == s ? 32 : 0;
+    r += s.o == t ? 64 : 0;
+    return r;
+  }
+  public static int varHandleArray(int n) {
+    int[] ia = new int[4]; long[] la = new long[3]; Object[] oa = new Object[2]; int r = 0;
+    VA.set(ia, 1, 7); r += (int) VA.getAndAdd(ia, 1, 5) + ia[1] * 10;      // 7 + 120
+    r += VA.compareAndSet(ia, 2, 0, 9) ? 1000 : 0;
+    r += (int) VA.get(ia, 2) * 10000;
+    VLA.set(la, 2, 1L << 35); r += (long) VLA.getAndAdd(la, 2, 1L) == 1L << 35 ? 100000 : 0; r += la[2] == (1L << 35) + 1 ? 200000 : 0;
+    Object x = new Object(); VOA.set(oa, 0, x); r += VOA.compareAndSet(oa, 0, x, oa) ? 400000 : 0; r += oa[0] == oa ? 800000 : 0;
+    try { VA.get(ia, 4); } catch (ArrayIndexOutOfBoundsException e) { r += 1600000; }
+    try { VI.get(null); } catch (NullPointerException e) { r += 3200000; }
+    return r;
+  }
 }

@@ -80,6 +80,7 @@ export function reach(prog: Program, roots: MethodInfo[], seeds: { instantiate: 
         const f = prog.resolveField(decl, fr.name, dex.type(fr.type));
         const owner = f?.owner ?? decl; requireInit(owner); r.staticFields.add(owner + "." + fr.name);
       } else if (n.startsWith("invoke-")) {
+        if (n.startsWith("invoke-polymorphic") && descToName(dex.type(dex.method(ins.b).cls)) === "java/lang/invoke/VarHandle") { ref("java/lang/invoke/FieldVarHandle"); ref("java/lang/invoke/ArrayElementVarHandle"); return; }
         if (n.startsWith("invoke-polymorphic") || n.startsWith("invoke-custom")) { r.unresolved.add(`${mid(m)}: ${n}`); return; }
         const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls));
         const kind = n.replace("/range", "");
