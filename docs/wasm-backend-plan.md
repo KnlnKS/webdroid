@@ -57,7 +57,7 @@ Research artifacts:
 - Liftoff code ran 2.4x slower than TurboFan (509 ms vs 209 ms for the same loop, first vs second call).
   **There is no OSR**: a long-running loop inside one call stays in baseline code until the function is called
   again. My attempt to force optimized tier-up with a `compilationHints` custom section had no effect in Chrome 153
-  (either unsupported or encoded wrongly; unresolved).
+  (the same bytes work as specified on Node 24 with the flag, so shipping Chrome ignores them; see "G4 hint result").
 - 1,000 tiny modules (each a struct subtype + one function written into a shared imported table): compile +
   instantiate 21 ms total. Calls across modules through the shared table work (13 ns including a JS to Wasm entry).
 - Structurally identical struct types **canonicalize to one type across modules**. Two Java classes with the same
@@ -303,8 +303,7 @@ Any speed claim for the prototype. The only timing evidence in this document is 
 Resolved on 2026-10-04 with `research/wasm/probe.mjs` and `probe-tiering.mjs` (matrix and versions in
 `research/wasm/platform-status.md`). Still open after that pass:
 
-- Firefox: nothing measured. Playwright's Firefox 153 Nightly does not start on the dev host. Its JSPI/GC/EH/builtins
-  status is a secondary claim.
+- Firefox is out of scope (decision 2026-10-04); no non-JSPI mode is built.
 - Mobile memory64 caps, `call_indirect` vs `call_ref` cost at scale, TeaVM/J2CL/Hoot lessons (not probed).
 - Code caching in headed Chrome (headless showed none, below).
 
@@ -331,10 +330,7 @@ multi-memory and relaxed SIMD; runtime-built modules were not code-cached in hea
 Supported on both measured engines: Wasm GC, exnref and legacy EH, tail calls, `wasm:js-string` builtins, JSPI
 (including the rule that suspending through a JS frame throws). Chrome-only of the features probed: memory64,
 multi-memory, relaxed SIMD. Do not use those on the default path. Custom descriptors are not shipped (flag-only).
-**A non-JSPI mode is not required for Chrome or the WebKit build.** It is required only if Firefox must run the Wasm
-tier, and Firefox is unmeasured. If it is, the cheapest fallback is a capability check (`WebAssembly.promising`) that keeps
-the existing JS tier for that process; no asyncify or CPS in the Wasm compiler. Details in `platform-status.md`.
-Rerun the matrix on Firefox before S3.
+**A non-JSPI mode is not required for Chrome or the WebKit build.** Firefox is out of scope, so no fallback is built. Details in `platform-status.md`.
 
 ### G4 hint result
 
