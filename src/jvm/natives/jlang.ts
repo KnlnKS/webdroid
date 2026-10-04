@@ -45,7 +45,9 @@ rt.register({
     "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return info?.jclass ?? (info?.owner ?? rt).classFor(jclsName(this)); },
     "clone()Ljava/lang/Object;": function (this: any) {
       if (Array.isArray(this) || ArrayBuffer.isView(this)) return rt.arrCall(this, "clone");
-      const c = Object.create(Object.getPrototypeOf(this));
+      // a bytecode class's constructor only initializes its fields, so the copy keeps the original's
+      // hidden class and the field loads that see both stay monomorphic
+      const c = (this.constructor as typeof JObj).$i?.def ? new this.constructor() : Object.create(Object.getPrototypeOf(this));
       Object.assign(c, this);
       return c;
     },
