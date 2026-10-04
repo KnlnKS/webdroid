@@ -1,6 +1,6 @@
 import { Code, OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
-import { ACC, kindOf, type Kind, type MethodInfo } from "./program";
+import { kindOf, type Kind, type MethodInfo } from "./program";
 import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { descToName, parseMethodDesc, isWide } from "../../../src/jvm/abi";
@@ -17,7 +17,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
     // locals of a kind are only written when some instruction reads them: iterate the read set down to a fixpoint
     let rk: Set<string> | null = null;
     for (;;) {
-      const mc = new MC(cx, m, rk); const body = mc.run();
+      const mc: MC = new MC(cx, m, rk); const body = mc.run();
       if (rk?.size === mc.reads.size) return body;
       rk = mc.reads;
     }
@@ -139,7 +139,7 @@ class MC {
     }
   }
   emitCatch() {
-    const c = this.code, cx = this.cx, dex = this.dex;
+    const c = this.code, dex = this.dex;
     const dispatchTo = (addr: number) => { const ri = this.regionOfPc.get(addr); if (ri === undefined) throw new Error("handler not region entry"); c.i32(ri).lset(this.regionLocal).br(this.depth("$disp")); };
     for (const t of this.item.tries) {
       c.lget(this.pcLocal).i32(t.start).raw(OP.i32_ge_s).lget(this.pcLocal).i32(t.end).raw(OP.i32_lt_s).raw(OP.i32_and).if_(); this.push("if");
@@ -177,7 +177,7 @@ class MC {
 
   // ---------- kind analysis for if-eq/ne and moves
   analyzeKinds() {
-    const { prepared, item, dex, m } = this, nregs = item.regs;
+    const { prepared, item, m } = this, nregs = item.regs;
     const blocks = new Map<number, Ins[]>(); let cur: Ins[] = [];
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) { cur = []; blocks.set(ins.pc, cur); } cur.push(ins); }
     const entry = new Map<number, Uint8Array>();

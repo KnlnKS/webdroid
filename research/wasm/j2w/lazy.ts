@@ -35,6 +35,8 @@ export class World {
   gaps = new Map<string, number>();
   gapList: string[] = [];
   onGap: (id: number) => void = () => {};
+  /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
+  lastMessage: string | null = null;
   stats = { classes: 0, units: 0, bytes: 0, compileMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
   private slots: (Slot | undefined)[] = [];
   private classes = new Map<string, ClassRt>();
@@ -47,7 +49,7 @@ export class World {
   private stacks = new WeakMap<object, Error>();
   private assumptions = new Map<string, Assumption>();
   private host: Record<string, Function>;
-  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global };
+  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; classId: (o: object) => number };
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
 
@@ -62,7 +64,7 @@ export class World {
       link: (slot: number) => this.linkSlot(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
-      excMessage: (kind: number, a: number, b: number) => excMessage(kind, a, b, names),
+      excMessage: (kind: number, a: number, b: number) => (this.lastMessage = excMessage(kind, a, b, names)),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
     };
     this.slots.length = FIRST_FREE_SLOT;
@@ -183,6 +185,8 @@ export class World {
     const i32Init = (v: number) => { const o = [0x41]; sleb(v, o); return o; };
     mb.export("alloc", "global", mb.addGlobal(T.i32, true, i32Init(-ALLOC_WINDOW)));
     mb.export("hash", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
+    mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
       const params = THROWERS[name].params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, []);
       const f = mb.addFunc(sig, this.stubBody(SLOT[name], sig, params, link), "stub:" + name);
@@ -190,7 +194,7 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, classId: x.classId };
   }
 
   /** the class module of `name`, built on first use */
@@ -269,7 +273,8 @@ export class World {
     this.stats.compileMs += performance.now() - t0; this.stats.units++;
     const imports: Record<string, any> = { rt: { table: this.table, tag: this.rt.tag, alloc: this.rt.alloc, hash: this.rt.hash }, host: this.host };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
-    const inst = this.instantiate(built.bytes, imports);
+    let inst: WebAssembly.Instance;
+    try { inst = this.instantiate(built.bytes, imports); } catch (e) { (globalThis as any).BAD = built.bytes; throw new Error(`unit ${built.traces[0].name}: ${(e as Error).message}`); }
     s.stub = this.table.get(slot) as Function;
     this.table.set(slot, (inst.exports as Record<string, any>)[s.k === "method" ? "m" + slot : "m"]);
     s.done = true;
@@ -309,7 +314,7 @@ export class World {
   }
 
   // ---------- calling in from JS, and exceptions
-  /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception of `javaTag` */
+  /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception (see `throwable`) */
   entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
     const m = this.prog.resolve(cls, name, desc);
     if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
@@ -318,7 +323,13 @@ export class World {
       try { return (this.table.get(slot) as Function)(...args); } catch (e) { throw this.boundary(e); }
     };
   }
-  get javaTag(): any { return this.rt.tag; }
+  /** the Java throwable a call from JS threw, if `e` is one */
+  throwable(e: unknown): object | undefined {
+    const X = (WebAssembly as any).Exception;
+    return e instanceof X && e.is(this.rt.tag) ? e.getArg(this.rt.tag, 0) : undefined;
+  }
+  /** the class of a Java object that crossed to JS */
+  classNameOf(obj: object): string { return this.names[this.rt.classId(obj)]; }
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
    *  becomes the StackOverflowError a handler above this call would have received */
   private boundary(e: unknown): unknown {
@@ -326,13 +337,23 @@ export class World {
     try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; }
     return e;
   }
-  /** the Java frames recorded by Throwable.fillInStackTrace for `exn`, innermost first, without the frames of its own construction */
-  stackTrace(exn: object): JavaFrame[] {
-    const err = this.stacks.get(exn);
+  /** the Java frames Throwable.nativeFillInStackTrace recorded under `state`, innermost first, without the frames of the throwable's own construction */
+  stackTrace(state: object): JavaFrame[] {
+    const err = this.stacks.get(state);
     if (!err) return [];
     const frames = javaFrames(err.stack ?? "", this.traces);
     let skip = 0;
-    while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace|<init>)$/.test(frames[skip].method)) skip++;
+    while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace)$|^<init>$/.test(frames[skip].method) && (frames[skip].method !== "<init>" || this.prog.isSubclass(frames[skip].cls.replace(/\./g, "/"), "java/lang/Throwable"))) skip++;
     return frames.slice(skip);
+  }
+  /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
+  fieldReader(cls: string, name: string, desc: string): (obj: object) => unknown {
+    const f = this.prog.resolveField(cls, name, desc);
+    if (!f) throw new Error(`field ${cls}.${name} not found`);
+    const cx = new Compiler(this), st = cx.structFor(cls);
+    const { bytes } = cx.buildSynthetic("get:" + name, ["L"], (c) => { c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f)); }, f.kind);
+    const imports: Record<string, any> = { rt: { table: this.table, tag: this.rt.tag, alloc: this.rt.alloc, hash: this.rt.hash }, host: this.host };
+    for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
+    return (this.instantiate(bytes, imports).exports as Record<string, any>).m;
   }
 }

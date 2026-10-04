@@ -268,9 +268,9 @@ export class Compiler implements Base {
     methods.forEach((m, i) => { const f = this.fn.get(mid(m))!; const code = codes[i]; mb.setBody(f, code.finish()); mb.export("m" + w.slotOf(m), "func", f); });
     return this.finishModule(methods.map((m, i) => ({ name: mid(m), f: this.fn.get(mid(m))!, code: codes[i], m })));
   }
-  /** a body made of generated code instead of DEX (the implicit-exception throwers) */
-  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void): { bytes: Uint8Array; traces: FnTrace[] } {
-    const f = this.mb.reserveFunc(this.sig(params, "V"), "$" + name), c = new Code(params.length);
+  /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
+  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V"): { bytes: Uint8Array; traces: FnTrace[] } {
+    const f = this.mb.reserveFunc(this.sig(params, ret), "$" + name), c = new Code(params.length);
     body(c);
     this.mb.setBody(f, c.finish());
     this.mb.export("m", "func", f);

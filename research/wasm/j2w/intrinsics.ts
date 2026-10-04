@@ -9,7 +9,11 @@ const def = (key: string, f: Intrinsic, extern = false) => { intrinsics.set(key,
 
 def("java/lang/Object.hashCode()I", (cx, m, c) => { c.lget(0).call(cx.helper("hash")); });
 def("java/lang/System.identityHashCode(Ljava/lang/Object;)I", (cx, m, c) => { c.lget(0).refIsNull().if_(T.i32).i32(0).else_().lget(0).call(cx.helper("hash")).end(); });
-def("java/lang/Throwable.nativeFillInStackTrace()Ljava/lang/Object;", (cx, m, c) => { c.lget(0).externConvertAny().call(cx.imp.capture).lget(0); });
+// the stack state is an Object the host keys the captured stack by; nativeGetStackTrace(state) turns it into StackTraceElements
+def("java/lang/Throwable.nativeFillInStackTrace()Ljava/lang/Object;", (cx, m, c) => {
+  const state = c.newLocal(refNull(cx.tObj));
+  cx.emitNew(c, "java/lang/Object"); c.lset(state).lget(state).externConvertAny().call(cx.imp.capture).lget(state);
+});
 def("java/lang/Float.floatToRawIntBits(F)I", (cx, m, c) => { c.lget(0); });
 def("java/lang/Float.intBitsToFloat(I)F", (cx, m, c) => { c.lget(0); });
 def("java/lang/Double.doubleToRawLongBits(D)J", (cx, m, c) => { c.lget(0); });
