@@ -144,9 +144,12 @@ export class Program {
   /** a descriptor of a dex file of `loader`, with the class names it names replaced by the keys of the classes the loader sees under them */
   private rewrite(loader: Loader, desc: string): string {
     const m = /^(\[*)L(.+);$/.exec(desc);
-    const key = m && this.lookup(loader, m[2]);
-    return key === undefined || key === m![2] ? desc : `${m![1]}L${key};`;
+    if (!m) return desc;
+    const key = this.lookup(loader, m[2]);
+    return key === undefined || key === m[2] ? desc : `${m[1]}L${key};`;
   }
+  /** the key of the class `name` that `loader` itself defines (not its ancestors) */
+  definedBy(loader: Loader, name: string): string | undefined { return loader.parent ? loader.defined.get(name) : this.has(name) ? name : undefined; }
   has(name: string): boolean { return this.classes.has(name) || !!this.base?.has(name); }
   /** every class, the base's first */
   *all(): Generator<JClass> {

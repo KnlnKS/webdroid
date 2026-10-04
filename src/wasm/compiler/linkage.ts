@@ -3,7 +3,7 @@
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex";
 import { descToName } from "../../jvm/abi";
-import { ACC, type FieldInfo, type MethodInfo, type Program } from "./program";
+import { ACC, javaName, type FieldInfo, type MethodInfo, type Program } from "./program";
 import type { Thrower } from "../link/exc";
 
 export interface LinkFailure {
@@ -13,7 +13,7 @@ export interface LinkFailure {
   absent?: string;
 }
 
-const dotted = (n: string) => n.replace(/\//g, ".");
+const dotted = (n: string) => javaName(n).replace(/\//g, ".");
 const PRIMS: Record<string, string> = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double", V: "void" };
 /** a descriptor as ART's PrettyDescriptor prints it */
 export const prettyType = (d: string): string => (d[0] === "[" ? prettyType(d.slice(1)) + "[]" : d[0] === "L" ? dotted(d.slice(1, -1)) : PRIMS[d]);

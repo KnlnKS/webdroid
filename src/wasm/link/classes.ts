@@ -10,7 +10,7 @@
 import { OP } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts";
-import { ACC, type JClass } from "../compiler/program";
+import { ACC, javaName as stripLoader, type JClass } from "../compiler/program";
 import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
@@ -18,6 +18,7 @@ import type { World } from "./world";
 import { hostUnsafe, UInfo } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";
+import { Lookup, LOADER_OF_CLASS } from "./loaders";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -30,7 +31,7 @@ const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const isPrim = (n: string) => n in PRIM;
 export const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d.length === 1 ? "#" + d : d;
 const descOf = (name: string) => isPrim(name) ? name.slice(1) : name[0] === "[" ? name : `L${name};`;
-const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : n.replace(/\//g, ".");
+const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : stripLoader(n).replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
   const a = jc?.def && jc.dex!.classAnnotations(jc.def).cls.find((x) => x.type === "dalvik/annotation/InnerClass")?.elements.accessFlags;
@@ -150,6 +151,7 @@ rt("mkClass", ["I"], "L", (cx, c) => {
   const info = (kind: number, b?: () => void) => cx.info(c, kind, () => c.lget(0), b);
   const set = (name: string, d: string, v: () => void) => { c.lget(k); v(); c.structSet(cs, field(cx, name, d)); };
   set("accessFlags", "I", () => info(Info.Flags)); set("primitiveType", "I", () => info(Info.Primitive)); set("dexTypeIndex", "I", () => c.lget(0));
+  set("classLoader", "Ljava/lang/ClassLoader;", () => { c.i32(LOADER_OF_CLASS); c.lget(0); c.i32(0); c.refNull(-17); c.call(cx.imp.obj).anyConvertExtern(); });
   for (const [name, kind] of [["superClass", Info.Super], ["componentType", Info.Component]] as const) {
     info(kind).if_(); set(name, "Ljava/lang/Class;", () => { info(kind); cx.callRt(c, "classOf"); }); c.end();
   }
@@ -297,22 +299,22 @@ def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
   emitString(cx, c, () => cx.info(c, Info.NameLen, () => c.lget(id)), (j) => cx.info(c, Info.NameChar, () => c.lget(id), () => c.lget(j)));
 });
 
-// Class.classForName(name, initialize, loader): one namespace of loaded dexes, so the loader does not matter
+// Class.classForName(name, initialize, loader): the class `loader` sees under that name (loaders.ts)
 def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(0); cx.str.toHost(c); c.call(cx.imp.classByName).lset(id);
+  c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.Visible); c.call(cx.imp.classByName).lset(id);
   c.lget(id).raw(OP.i32_eqz).if_().lget(0); cx.callRt(c, "cnfe"); c.end();
   const init = c.newLocal(T.i32);
   c.lget(1).if_(); cx.info(c, Info.EnsureSlot, () => c.lget(id)); c.ltee(init).if_().lget(init).callIndirect(cx.sig([], "V")).end().end();
   c.lget(id); cx.callRt(c, "classOf");
 });
 
-// VMClassLoader.findLoadedClass(loader, name): every class of the loaded dexes is the boot loader's, so it is found if defined at all
+// VMClassLoader.findLoadedClass(loader, name): the class `loader` itself defines under that name, its ancestors' not included (loaders.ts)
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(1); cx.str.toHost(c); c.call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
+  c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
 });
 
 // Class.getInnerClassFlags(default): the InnerClass annotation's flags, else `default`
