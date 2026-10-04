@@ -48,7 +48,7 @@ const bundle = async (browser: boolean) => {
 };
 const base64 = Bun.spawnSync(["node", "-p", "typeof Uint8Array.fromBase64"]).stdout.toString().trim() === "function" ? [] : ["--js-base-64"];
 const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
-  const r = Bun.spawnSync(["node", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: root } });
+  const r = Bun.spawnSync(["node", "--expose-gc", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: root } });
   const line = r.stdout.toString().split("\n").find((l) => l.startsWith("G1"));
   if (!line) throw new Error(`${cfg.workload}/${cfg.mode}: ${r.stderr.toString().slice(0, 400)}`);
   return JSON.parse(line.slice(2));
@@ -66,7 +66,7 @@ async function chromeRun() {
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(root, p) : null;
     return file && existsSync(file) ? new Response(Bun.file(file), { headers: iso }) : new Response("", { status: 404 });
   } });
-  const browser = await chromium.launch({ channel: "chrome", headless: true, args: v8Flags ? [`--js-flags=${v8Flags}`] : [] });
+  const browser = await chromium.launch({ channel: "chrome", headless: true, args: [`--js-flags=--expose-gc ${v8Flags}`] });
   const version = browser.version();
   return { version, run: async (cfg: G1Config): Promise<G1Result> => {
     const page = await (await browser.newContext()).newPage();
@@ -105,7 +105,7 @@ for (const engine of engines) {
       if (entry.blocked && (mode === "wasm" || i > 0)) continue;
       const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root }));
       entry[mode].push(r);
-      if (mode === "wasm" && i === 0 && (r.error || r.result !== entry.js[0].result)) entry.blocked = true;
+      if (mode === "wasm" && i === 0 && ((r.error && !r.result) || r.result !== entry.js[0].result)) entry.blocked = true;
     }
     loads.push(loadavg()[0]);
   }
@@ -121,6 +121,8 @@ for (const engine of engines) {
     const bc = byClass.get(classOf.get(w)!) ?? (byClass.set(classOf.get(w)!, { first: [], steady: [] }), byClass.get(classOf.get(w)!)!);
     bc.first.push(xf); bc.steady.push(xs);
     rows.push({ w, result: e.js[0].result, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
+    const cut = e.wasm.find((x) => x.error);
+    if (cut) console.log(`  note: ${w} stopped early (${cut.error}); its steady state is over the calls that completed`);
     console.log(w.padEnd(11), rng(f(e.js, "first")).padStart(9), rng(f(e.wasm, "first")).padStart(11), xf.toFixed(2).padStart(6), rng(f(e.js, "steady")).padStart(11), rng(f(e.wasm, "steady")).padStart(12), xs.toFixed(2).padStart(6), "  ", med(f(e.wasm, "warm")).toFixed(3), " ", med(e.wasm.map((x) => x.compileMs ?? 0)).toFixed(0));
   }
   for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over ${r.steady.length} matching ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
