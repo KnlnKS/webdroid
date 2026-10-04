@@ -851,6 +851,11 @@ export class World {
       } catch (e) { throw this.boundary(e); } finally { s.end(); }
     };
   }
+  /** runs `f`, a call into Java, leaving the frame depth as it was when a Java exception unwinds it */
+  unwound<T>(f: () => T): T {
+    const depth = this.rt.depth.value;
+    try { return f(); } catch (e) { this.rt.depth.value = depth; throw e; }
+  }
   /** the Java throwable a call from JS threw, if `e` is one */
   throwable(e: unknown): object | undefined {
     return e instanceof WebAssembly.Exception && e.is(this.rt.tag) ? e.getArg(this.rt.tag, 0) as object : undefined;

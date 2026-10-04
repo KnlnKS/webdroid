@@ -12,6 +12,8 @@ import { World } from "../link/world";
 import { externs, intrinsics } from "../link/intrinsics";
 import { hostNet } from "./inet";
 import { guestMemory } from "./guest";
+import { wasmJni } from "./jni";
+import { useJniVm } from "../../native/jnivm";
 import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
 import { natives, nativeSource } from "./nativesource";
 import { count, heapUsed } from "./stats";
@@ -36,6 +38,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       if (world) { world.addDexes([dex]); return; }
       world = createWorld([dex]);
       useEntry(wasmEntry(world));
+      useJniVm(wasmJni(world));
       fieldNames.find = fieldNamesOf(world);
       rt.mkThrowable = hostThrowable;
       const make = rt.make.bind(rt);

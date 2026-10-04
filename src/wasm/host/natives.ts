@@ -7,7 +7,7 @@
 import { Code, OP } from "../compiler/code";
 import { T, type VT } from "../compiler/wasmbin";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
-import { kindOf, type MethodInfo } from "../compiler/program";
+import { ACC, kindOf, type MethodInfo } from "../compiler/program";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { mid } from "../compiler/ids";
 import { decodeInstructions } from "../../jvm/prepared";
@@ -21,7 +21,7 @@ import { emitSave, ROOT } from "../link/sched";
 
 /** the primitive array classes natives take and return */
 const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
-const STRING = "Ljava/lang/String;", STRING_CLASS = "java/lang/String";
+const OBJECT = "Ljava/lang/Object;", STRING = "Ljava/lang/String;", STRING_CLASS = "java/lang/String";
 const isPrimArray = (d: string) => PRIM_ARRAYS.includes(d);
 const isRef = (d: string) => d[0] === "L" || d[0] === "[";
 const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefined : T.externref)
@@ -67,6 +67,8 @@ interface Plan {
   suspends: boolean;
   /** whether it always does, which leaves the Suspending import alone */
   always: boolean;
+  /** whether it takes and answers Java values as they are (HostFn.javaValues): its references are all opaque */
+  raw: boolean;
   /** the class whose statics a `static ()V` native fills in, which the Bridge copies into the Wasm class */
   initializes: string | null;
   /** the import's parameters, with an array as two (pointer, length) */
@@ -104,15 +106,17 @@ export class Natives implements NativeBinder {
     const ctor = m.isCtor && m.cls === STRING_CLASS, recv = !m.isStatic && !ctor;
     // a String is not an object: bytecode that reads its representation (count, hash) is replaced by the production methods
     if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); this.byMethod.set(m, p); return p; }
-    const found = this.src?.find(specClass(m.cls), m.key, m.isStatic, m.codeOff !== 0), fn = found;
-    const args = recv ? [m.cls === STRING_CLASS ? STRING : `L${m.cls};`, ...m.params] : m.params, params: VT[] = [];
+    // a native with no implementation yet (a JNI library binds its natives when it is loaded) finds one when it is called
+    const cls = specClass(m.cls), fn = this.src?.find(cls, m.key, m.isStatic, m.codeOff !== 0) ?? (!m.codeOff && m.flags & ACC.NATIVE ? this.src?.late?.(cls, m.key) : undefined);
+    const raw = !!fn?.javaValues, opaque = (d: string) => (raw && isRef(d) ? OBJECT : d);
+    const args = (recv ? [m.cls === STRING_CLASS ? STRING : `L${m.cls};`, ...m.params] : m.params).map(opaque), params: VT[] = [];
     p = !fn ? "unregistered" : "";
     for (const d of p ? [] : args) {
       const t = abi(d);
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
-    const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn), always: !!fn && waitsAlways(fn), initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    const rd = opaque(ctor ? STRING : m.ret), ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
+    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn), always: !!fn && waitsAlways(fn), raw, initializes: !raw && m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: !raw && isRef(rd) && rd !== STRING && !retArray ? rd : null });
     this.byMethod.set(m, p);
     return p;
   }
@@ -284,8 +288,8 @@ const makers = new Map<string, Maker>();
  *  A Suspending native is the same in an async function: it works on private copies of its arrays, and the Bridge scope it opened is set
  *  aside while it waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
-  const objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp;
+  const objects = p.args.map((d) => !p.raw && isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + p.raw;
   let make = makers.get(key);
   if (!make) {
     const at: number[] = [];

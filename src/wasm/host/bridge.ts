@@ -234,15 +234,20 @@ export class Bridge implements HostBridge {
     const nd = demangle(mangled), impl = nd && this.w.prog.implFor(cls, nd[0], nd[1]);
     return impl ? (...args: unknown[]) => this.invoke(impl, o, args) : undefined;
   }
-  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value: the way a native calls into Java. A static
-   *  method's class is initialized first. A primitive array passed is copied for the call, and what the method wrote to it is read back. */
-  invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
+  /** the generated function that calls `m`, over Java values */
+  private caller(m: MethodInfo) {
     const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
     const call = this.w.hostFn(`b:call:${m.cls}.${m.key}`, kinds, rk, (cx, c) => {
       if (m.isStatic) cx.emitEnsure(c, m.cls);
       kinds.forEach((_, i) => c.lget(i));
       cx.callMethod(c, m);
     });
+    return { call, rk };
+  }
+  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value: the way a native calls into Java. A static
+   *  method's class is initialized first. A primitive array passed is copied for the call, and what the method wrote to it is read back. */
+  invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
+    const { call, rk } = this.caller(m);
     const nested = this.saved.length > 0, mark = nested ? 0 : this.begin();
     try {
       const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i]));
@@ -251,6 +256,34 @@ export class Bridge implements HostBridge {
       return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r, m.ret);
     } finally { if (!nested) this.end(mark); }
   }
+
+  // ---------- Java values, for native code that holds Java objects itself (JNI): nothing is copied or wrapped, so an array is the one Java has
+  /** Java method `m` on `recv` with Java values (a reference as it is, a float or double as a number, a long as a bigint): a Java value */
+  call(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
+    const { call, rk } = this.caller(m);
+    const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? a : toBits(a, m.params[i]));
+    const r = this.w.unwound(() => call(...(m.isStatic ? [] : [recv]), ...given));
+    return rk === "V" ? undefined : rk === "L" ? r : fromBits(r, m.ret);
+  }
+  /** field `f` of `o`, or of its class when static, as a Java value; the class of a static field is initialized by whoever found the field */
+  read(f: FieldInfo, o: object | null): unknown {
+    const raw = f.isStatic ? this.staticAccessor("get", f)() : this.accessor("get", f)(o);
+    return f.kind === "L" ? raw : fromBits(raw, f.desc);
+  }
+  write(f: FieldInfo, o: object | null, v: unknown): void {
+    const given = f.kind === "L" ? v : toBits(v, f.desc);
+    if (f.isStatic) this.staticAccessor("set", f)(given); else this.accessor("set", f)(o, given);
+  }
+  private staticAccessor(op: "get" | "set", f: FieldInfo): Fn {
+    return this.w.hostFn(`b:${op}s:${f.owner}.${f.name}:${f.desc}`, op === "get" ? [] : [f.kind], op === "get" ? f.kind : "V", (cx, c) => {
+      const g = cx.staticGlobal(f.owner, f.name, f.desc);
+      if (op === "get") c.gget(g); else c.lget(0).gset(g);
+    });
+  }
+  arrayLength(a: object): number { return this.op.alen(a); }
+  element(a: object, i: number): unknown { return this.op.aget(a, i); }
+  setElement(a: object, i: number, v: unknown): void { this.op.aset(a, i, v); }
+  newArray(name: string, n: number): object { return this.newArrayOf(name)(n); }
 
   // ---------- host to Java
   toJava(v: unknown, desc: string): unknown {
@@ -271,17 +304,17 @@ export class Bridge implements HostBridge {
     this.op.acopy(j, at, 1, 0, (host as unknown as { length: number }).length);
     new Uint8Array(host.buffer, host.byteOffset, bytes).set(new Uint8Array(this.w.mem.buffer, at, bytes));
   }
-  private newArray(name: string): Fn {
+  private newArrayOf(name: string): Fn {
     return this.w.hostFn("b:new:" + name, ["I"], "L", (cx, c) => cx.emitNewArray(c, name, () => c.lget(0)));
   }
   private newPrimArray(a: ArrayBufferView & { length: number }): object {
-    const name = ARRAY_OF.find(([t]) => a instanceof t)![1], j = this.newArray(name)(a.length), bytes = a.byteLength, at = this.region(bytes);
+    const name = ARRAY_OF.find(([t]) => a instanceof t)![1], j = this.newArrayOf(name)(a.length), bytes = a.byteLength, at = this.region(bytes);
     new Uint8Array(this.w.mem.buffer, at, bytes).set(new Uint8Array(a.buffer, a.byteOffset, bytes));
     this.op.acopy(j, at, 0, 0, a.length);
     return j;
   }
   private newRefArray(a: unknown[] & { $t?: string }, desc: string): object {
-    const elem = a.$t ?? (desc[0] === "[" ? desc.slice(1) : "Ljava/lang/Object;"), j = this.newArray("[" + elem)(a.length);
+    const elem = a.$t ?? (desc[0] === "[" ? desc.slice(1) : "Ljava/lang/Object;"), j = this.newArrayOf("[" + elem)(a.length);
     a.forEach((e, i) => this.op.aset(j, i, this.toJava(e, elem)));
     return j;
   }
