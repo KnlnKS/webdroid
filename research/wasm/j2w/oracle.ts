@@ -1,7 +1,7 @@
 // The production JS tier as an oracle: DEX methods run on src/jvm with the AOSP boot jars (tests/platform) loaded.
 import "../../../tests/platform";
 import { inspect } from "node:util";
-import { rt } from "../../../src/jvm/runtime";
+import { rt, JObj } from "../../../src/jvm/runtime";
 import "../../../src/natives";
 import { scall, vcall } from "../../../src/jvm/natives/jentry";
 import type { DexFile } from "../../../src/jvm/dex";
@@ -11,14 +11,23 @@ import { Natives, type HostFn } from "./natives";
 
 /** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
+const lookup = (cls: string, key: string, isStatic: boolean) => {
+  const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
+  return (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined;
+};
+/** natives that read the ICU data asynchronously and take no arguments: a native cannot suspend in the Wasm tier, so their value is
+ *  resolved once, from the same production implementation, before it runs */
+const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
+  ["getUnicodeVersion", "getCldrVersion", "getIcuVersion", "getTzdbVersion"].map((name) => [cls, `${name}()Ljava/lang/String;`] as const));
+const settled = new Map<string, unknown>();
 /** the natives the production runtime registered, which the Wasm tier imports */
 export const natives = new Natives({
   find: (cls, key, isStatic, hasBody) => {
     if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
     if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
-    const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
-    return (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined;
+    return settled.has(cls + "." + key) ? () => settled.get(cls + "." + key) : lookup(cls, key, isStatic);
   },
+  classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
   thrown: (e) => e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg } : undefined,
 });
 
@@ -37,6 +46,7 @@ export const fmt = (k: string, v: bigint) => {
 export async function jsTier(dexes: DexFile[]) {
   for (const d of dexes) rt.loadDex(d);
   rt.linkNatives();
+  for (const [cls, key] of ICU_VERSIONS) { const f = lookup(cls, key, true) ?? lookup(cls, key, false); if (f) settled.set(cls + "." + key, await f.call(null)); }
   // the process state ActivityThread.main leaves, as scripts/jbench/runner.ts sets it
   await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
   await scall("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "java.io.tmpdir", "/data/local/tmp");

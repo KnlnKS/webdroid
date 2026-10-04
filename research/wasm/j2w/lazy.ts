@@ -14,6 +14,7 @@ import { Cha } from "./cha";
 import { H, f32bits, f64bits } from "./consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
 import { Natives, type HostContext } from "./natives";
+import { Bridge } from "./bridge";
 import { rtfns, type Synth } from "./rtfns";
 import { hostInfo } from "./classes";
 import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
@@ -67,8 +68,9 @@ export class World {
   mem = new WebAssembly.Memory({ initial: 1 });
   sp = new WebAssembly.Global({ value: "i32", mutable: true }, 8);
   natives: Natives;
+  bridge: Bridge;
   private host: Record<string, Function>;
-  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
@@ -76,6 +78,7 @@ export class World {
   constructor(prog: Program, public opts: WorldOptions) {
     this.prog = prog;
     this.natives = opts.natives ?? new Natives();
+    this.bridge = new Bridge(this, this.natives.source);
     this.cha = new Cha(prog);
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => this.names[id];
@@ -250,6 +253,7 @@ export class World {
     // the Class objects by class id (grown by classOf) and the id of the running Java thread, which init words record
     mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
     mb.export("tid", "global", mb.addGlobal(T.i32, true, i32Init(1)));
+    mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
@@ -259,10 +263,10 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, classId: x.classId };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, thr: x.thr, classId: x.classId };
   }
 
-  private rtImports() { const { tag, alloc, hash, ctab, tid } = this.rt; return { table: this.table, strs: this.strs, tag, alloc, hash, ctab, tid, mem: this.mem, sp: this.sp }; }
+  private rtImports() { const { tag, alloc, hash, ctab, tid, thr } = this.rt; return { table: this.table, strs: this.strs, tag, alloc, hash, ctab, tid, thr, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -390,7 +394,7 @@ export class World {
   }
   private hostCtx?: HostContext;
   private hostContext(): HostContext {
-    return this.hostCtx ??= { mem: this.mem, sp: this.sp, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
   /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */
@@ -504,6 +508,16 @@ export class World {
     let skip = 0;
     while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace)$|^<init>$/.test(frames[skip].method) && (frames[skip].method !== "<init>" || this.prog.isSubclass(frames[skip].cls.replace(/\./g, "/"), "java/lang/Throwable"))) skip++;
     return frames.slice(skip);
+  }
+  private hostFns = new Map<string, Function>();
+  /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
+  hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void): (...a: any[]) => any {
+    let f = this.hostFns.get(name);
+    if (!f) {
+      const cx = new Compiler(this), { bytes } = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
+      this.hostFns.set(name, f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m);
+    }
+    return f as never;
   }
   /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
   fieldReader(cls: string, name: string, desc: string): (obj: object) => unknown {

@@ -7,6 +7,7 @@ import { reflectIntrinsics } from "./reflect";
 import { H, type ElemKind } from "./consts";
 import { stringIntrinsics } from "./strings";
 import { charIntrinsics } from "./chars";
+import { threadIntrinsics } from "./threads";
 
 export const intrinsics = new Map<string, Intrinsic>([...stringIntrinsics, ...charIntrinsics]);
 export const externs: string[] = [];             // statics of classes the program may lack (d8 also emits Double.isNaN calls)
@@ -82,4 +83,4 @@ for (const [d, k] of [["Z", "i8"], ["B", "i8"], ["C", "i16"], ["S", "i16"], ["I"
 // Math natives with a Wasm instruction: Math.floor/ceil/rint are f64.floor/ceil/nearest, which round as Java does
 for (const [name, op] of [["floor", 0x9c], ["ceil", 0x9b], ["rint", 0x9e]] as const) def(`java/lang/Math.${name}(D)D`, (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, op, OP.i64_reinterpret_f64); });
 
-for (const [key, f] of [...classIntrinsics, ...unsafeIntrinsics, ...reflectIntrinsics]) intrinsics.set(key, f);
+for (const [key, f] of [...classIntrinsics, ...unsafeIntrinsics, ...reflectIntrinsics, ...threadIntrinsics]) intrinsics.set(key, f);
