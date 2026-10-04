@@ -30,6 +30,7 @@ export class Bridge {
   /** during a call: the host form of each array it reached, the Java array of each host form */
   private live = new Map<object, object>();
   private owners = new WeakMap<object, object>();
+  private bases = new WeakMap<object, number>();
   private undo: (() => void)[] = [];
   private saved: number[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
@@ -44,13 +45,13 @@ export class Bridge {
       for (const k of KINDS) { const t = cx.tArr[k]; c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).refAsNonNull().arrayLen().ret().end(); }
       c.i32(-1);
     });
-    // acopy(array, pointer, toMemory): all of a primitive array to or from linear memory
-    const acopy = hostFn("b:acopy", ["L", "I", "I"], "V", (cx, c) => {
+    // acopy(array, pointer, toMemory, from, count): elements [from, from + count) of a primitive array to or from linear memory
+    const acopy = hostFn("b:acopy", ["L", "I", "I", "I", "I"], "V", (cx, c) => {
       cx.scratch();
       for (const k of ["i8", "i16", "i32", "i64"] as const) {
         const t = cx.tArr[k], data = c.newLocal({ ht: cx.tData[k], nullable: true });
         c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).lset(data);
-        const copy = (toMem: boolean) => c.lget(data).refAsNonNull().lget(1).lget(data).refAsNonNull().arrayLen().call(copyFn(cx, k, toMem));
+        const copy = (toMem: boolean) => c.lget(data).refAsNonNull().lget(1).lget(3).lget(4).call(copyFn(cx, k, toMem));
         c.lget(2).if_(); copy(true); c.else_(); copy(false); c.end().ret().end();
       }
     });
@@ -60,16 +61,19 @@ export class Bridge {
   }
 
   // ---------- the scope of a native call
-  begin(): number { this.saved.push(this.w.sp.value as number); return this.undo.length; }
+  begin(): number { this.saved.push(-1); return this.undo.length; }
   /** stores back what the call wrote to the arrays it reached, and releases the scratch it used */
   end(mark: number): void {
     try { for (const u of this.undo.splice(mark).reverse()) u(); } finally {
-      this.w.sp.value = this.saved.pop()!;
+      const sp = this.saved.pop()!;
+      if (sp >= 0) this.w.sp.value = sp;
       if (!this.saved.length) this.live.clear();
     }
   }
   private region(bytes: number): number {
-    const at = (((this.w.sp.value as number) + 7) & -8), need = at + bytes, have = this.w.mem.buffer.byteLength;
+    const top = this.saved.length - 1, sp = this.w.sp.value as number;
+    if (this.saved[top] < 0) this.saved[top] = sp;
+    const at = ((sp + 7) & -8), need = at + bytes, have = this.w.mem.buffer.byteLength;
     if (need > have) this.w.mem.grow(Math.ceil((need - have) / 65536));
     this.w.sp.value = need;
     return at;
@@ -87,22 +91,27 @@ export class Bridge {
   }
 
   // ---------- Java to host
-  toHost(v: unknown, _desc?: string): unknown {
+  /** `range` is the (offset, length) the native's contract names inside a primitive array, when it does (natives.ts RANGES): only those elements cross */
+  toHost(v: unknown, _desc?: string, range?: [number, number]): unknown {
     if (v === null || v === undefined || typeof v === "string") return v ?? null;
     const o = v as object, hit = this.live.get(o) ?? this.facades.get(o);
     if (hit) return hit;
     const name = this.w.classNameOf(o);
     if (name[0] !== "[") return this.facade(o, name);
-    return name.length === 2 ? this.primArray(o, name) : this.refArray(o, name);
+    return name.length === 2 ? this.primArray(o, name, range) : this.refArray(o, name);
   }
-  private primArray(o: object, name: string): unknown {
+  private primArray(o: object, name: string, range?: [number, number]): unknown {
     const len = this.op.alen(o), size = SIZE[elemKindOf(name)], at = this.region(len * size);
-    this.op.acopy(o, at, 1);
-    const host = new VIEWS[name[1]](this.w.mem.buffer.slice(at, at + len * size), 0, len);
-    this.live.set(o, host); this.owners.set(host, o);
-    this.undo.push(() => { new Uint8Array(this.w.mem.buffer, at, len * size).set(new Uint8Array(host.buffer, host.byteOffset, len * size)); this.op.acopy(o, at, 0); });
+    const [from, count] = range && range[0] >= 0 && range[1] >= 0 && range[0] <= len && range[1] <= len - range[0] ? range : [0, len];
+    this.op.acopy(o, at, 1, from, count);
+    const host = new VIEWS[name[1]](count), bytes = new Uint8Array(host.buffer), lo = from * size, n = count * size;
+    bytes.set(new Uint8Array(this.w.mem.buffer, at + lo, n));
+    this.live.set(o, host); this.owners.set(host, o); this.bases.set(host, from);
+    this.undo.push(() => { new Uint8Array(this.w.mem.buffer, at + lo, n).set(bytes); this.op.acopy(o, at, 0, from, count); });
     return host;
   }
+  /** `offset`, an index into the whole array, as an index into `host`, which holds the elements from a range's start */
+  offsetIn(host: unknown, offset: number): number { return offset - (this.bases.get(host as object) ?? 0); }
   private refArray(o: object, name: string): unknown {
     const len = this.op.alen(o), elem = name.slice(1), host: unknown[] & { $t?: string } = new Array(len);
     this.live.set(o, host); this.owners.set(host, o);
@@ -174,7 +183,7 @@ export class Bridge {
   }
   private readBack(j: object, host: ArrayBufferView): void {
     const bytes = host.byteLength, at = this.region(bytes);
-    this.op.acopy(j, at, 1);
+    this.op.acopy(j, at, 1, 0, (host as unknown as { length: number }).length);
     new Uint8Array(host.buffer, host.byteOffset, bytes).set(new Uint8Array(this.w.mem.buffer, at, bytes));
   }
   private newArray(name: string): Fn {
@@ -183,7 +192,7 @@ export class Bridge {
   private newPrimArray(a: ArrayBufferView & { length: number }): object {
     const name = ARRAY_OF.find(([t]) => a instanceof t)![1], j = this.newArray(name)(a.length), bytes = a.byteLength, at = this.region(bytes);
     new Uint8Array(this.w.mem.buffer, at, bytes).set(new Uint8Array(a.buffer, a.byteOffset, bytes));
-    this.op.acopy(j, at, 0);
+    this.op.acopy(j, at, 0, 0, a.length);
     return j;
   }
   private newRefArray(a: unknown[] & { $t?: string }, desc: string): object {
