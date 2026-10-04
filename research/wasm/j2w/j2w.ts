@@ -166,10 +166,10 @@ export class Compiler implements Base {
   gap(c: Code, what: string): void {
     this.gaps.push(what);
     c.i32(this.w.gapId(what)).call(this.imp.gap);
-    this.callThrower(c, "ule"); c.unreachable();
+    this.callThrower(c, "ule");
   }
-  /** calls thrower `name` with its arguments already pushed; it never returns */
-  callThrower(c: Code, name: Thrower): void { c.i32(SLOT[name]).callIndirect(this.sig(THROWERS[name].params, "V")); }
+  /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
+  callThrower(c: Code, name: Thrower): void { c.i32(SLOT[name]).callIndirect(this.sig(THROWERS[name].params, "V")).unreachable(); }
 
   // ---------- allocation
   private allocBytes(c: Code, add: () => void): void {

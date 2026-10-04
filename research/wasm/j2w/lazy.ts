@@ -226,7 +226,7 @@ export class World {
   private abstractSlot(key: string): number {
     const p = parseMethodDesc(key.slice(key.indexOf("(")));
     const params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
-    return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); c.unreachable(); } });
+    return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); } });
   }
 
   // ---------- runtime and class modules

@@ -338,7 +338,7 @@ def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Fiel
   cx.info(c, Info.FieldNameLen, () => c.lget(id), () => c.lget(k)); c.lget(len).raw(OP.i32_eq).if_();
   c.lget(id).lget(k).lget(1).lget(len); cx.callRt(c, "nameEq"); c.if_().lget(id).lget(k); cx.callRt(c, "mkField"); c.ret().end().end();
   c.lget(k).i32(1).raw(OP.i32_add).lset(k).br(0).end().end();
-  cx.callThrower(c, "nsfe"); c.unreachable();
+  cx.callThrower(c, "nsfe");
 });
 def("java/lang/Class.getDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0); cx.callRt(c, "declFields"); });
 def("java/lang/Class.getDeclaredFieldsUnchecked(Z)[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.lget(1); cx.callRt(c, "declFields"); });

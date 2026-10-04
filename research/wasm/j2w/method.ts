@@ -488,7 +488,7 @@ export class MC {
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
       const only = cx.devirt(decl, mr.name, desc), declC = prog.get(decl);
-      if (only === "none") { this.nonNull(ins.regs[0]); c.drop(); cx.callThrower(c, "ame"); c.unreachable(); this.finishResult(ins, retK); return; }
+      if (only === "none") { this.nonNull(ins.regs[0]); c.drop(); cx.callThrower(c, "ame"); this.finishResult(ins, retK); return; }
       if (only !== "many") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
       else {
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
