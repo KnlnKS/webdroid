@@ -17,7 +17,8 @@ const [dexDir, runner, cls, filter = ""] = process.argv.slice(2);
 const dexFiles = readdirSync(dexDir).filter((f) => f.endsWith(".dex")).sort().map((f) => join(dexDir, f));
 await jsTier(dexFiles.flatMap(loadDexes));
 const jars = [0, 1, 2, 3, 4, 12, 18].map((i) => join(AOSP, PLATFORM_JARS[i]));
-const w = world([...dexFiles, ...jars], { natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+// the runner's own output (60 MB of test names for the largest class, two bytes a char here) is far over ART's 512 MB limit with the suite's objects: the limit is raised
+const w = world([...dexFiles, ...jars], { heapLimit: 3 * 2 ** 30, natives, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
 w.onGap = (id) => { if (process.env.CONFORM_DEBUG) console.error("gap: " + w.gapList[id]); };
 for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
 useEntry(wasmEntry(w));
@@ -46,5 +47,6 @@ catch (e) {
   text = `F\t${cls}\t${(t ? await describe(w.bridge.toHost(t)) : process.env.CONFORM_DEBUG ? String((e as Error).stack) : String(e)).replace(/\s*\n\s*/g, " | ")}\n`;
 }
 if (process.env.CONFORM_DEBUG) for (const id of suspendedNatives) console.error("suspended: " + id);
-process.stdout.write("\u0001" + text);
+// a pipe takes its bytes asynchronously: exiting first cuts the output at the pipe's buffer
+await new Promise<void>((done) => process.stdout.write("\u0001" + text, () => done()));
 process.exit(0);

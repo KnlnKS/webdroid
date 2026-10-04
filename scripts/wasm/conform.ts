@@ -31,9 +31,10 @@ const wasmCommand = await bundleForNode(`${import.meta.dir}/conformone.ts`, []);
 const jsCommand = ["bun", `${import.meta.dir}/../conform/run.ts`];
 
 /** one class on one tier: the lines it answers, or why it answered none */
-async function runClass(command: string[], cls: string): Promise<{ tests: Map<string, Outcome>; skipped: Map<string, string>; seconds: number }> {
+async function runClass(command: string[], cls: string, wasmTier: boolean): Promise<{ tests: Map<string, Outcome>; skipped: Map<string, string>; seconds: number }> {
   const t0 = performance.now();
-  const proc = Bun.spawn([...command, ...(testFilter ? [testFilter] : [])], { stdout: "pipe", stderr: "pipe" });
+  // CONFORM_DEBUG asks the Wasm child for its gaps and the natives that waited; the JS runner takes it to mean its own traces
+  const proc = Bun.spawn([...command, ...(testFilter ? [testFilter] : [])], { stdout: "pipe", stderr: "pipe", env: wasmTier ? process.env : { ...process.env, CONFORM_DEBUG: undefined } });
   const timer = setTimeout(() => proc.kill(), CLASS_TIMEOUT_MS);
   const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   await proc.exited;
@@ -69,7 +70,7 @@ for (const [suiteName, classMatch] of plan) {
   const seconds = { wasm: 0, js: 0 }, started = performance.now();
   const work = selected.flatMap((cls) => [[cls, "wasm"] as const, ...(withJs ? [[cls, "js"] as const] : [])]);
   await pool(work, async ([cls, tier]) => {
-    const r = await runClass(tier === "wasm" ? [...wasmCommand, dexDir, runner, cls] : [...jsCommand, suiteName, "--one", cls], cls);
+    const r = await runClass(tier === "wasm" ? [...wasmCommand, dexDir, runner, cls] : [...jsCommand, suiteName, "--one", cls], cls, tier === "wasm");
     (tier === "wasm" ? wasm : js).set(cls, r.tests);
     if (tier === "wasm") skipped.set(cls, r.skipped);
     seconds[tier] += r.seconds;

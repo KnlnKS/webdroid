@@ -40,6 +40,8 @@ export interface WorldOptions {
   heapUsed: () => number;
   /** a collection of the host heap, when it has a way to ask for one: the limit applies to live data, and `heapUsed` counts the garbage not yet swept */
   collect?: () => void;
+  /** the heap limit in bytes (ART's 512 MB unless the host says otherwise) */
+  heapLimit?: number;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;
   /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
@@ -126,7 +128,7 @@ export class World {
     this.bridge = this.natives.bridge(this);
     this.cha = new Cha(prog);
     // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
-    const heap = opts.heapUsed, heapBase = heap();
+    const heap = opts.heapUsed, heapBase = heap(), limit = opts.heapLimit ?? HEAP_LIMIT;
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => javaName(this.names[id]);
     this.host = {
@@ -140,7 +142,7 @@ export class World {
       }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
-      heapCheck: () => (heap() - heapBase > HEAP_LIMIT && (opts.collect?.(), heap() - heapBase > HEAP_LIMIT) ? 1 : 0),
+      heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
       obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),
