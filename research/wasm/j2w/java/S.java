@@ -1,5 +1,6 @@
 /** String and StringBuilder behaviour over the AOSP libraries: each method folds its string operations into an int. Characters beyond Latin-1 take the UTF-16 paths. */
 public class S {
+  static final String K = "k\u00e9y\ud83d\ude00"; static final String E = ""; static String lazy = K + "!"; static final String[] NAMES = {"a", K, E, null};
   static String mk(int n, int stride) { char[] c = new char[n]; for (int i = 0; i < n; i++) c[i] = (char) ('a' + (i * stride + n) % 26 + (stride > 7 ? 0x3b0 : 0)); return new String(c); }
   public static int basics(int n) {
     String a = mk(n, 7), b = mk(n, 7), c = mk(n + 1, 7);
@@ -50,5 +51,8 @@ public class S {
     int r = m.size() * 1000 + keys.size(); for (String k : keys) r = r * 31 + m.get(k).hashCode() + (m.containsKey(k) ? 1 : 0);
     java.util.TreeMap<String, String> t = new java.util.TreeMap<>(m); for (java.util.Map.Entry<String, String> e : t.entrySet()) r = r * 17 + e.getKey().hashCode() - e.getValue().length();
     return r + (m.containsKey("nope") ? 1 : 0);
+  }
+  public static int statics(int n) {
+    return K.length() + K.hashCode() + E.length() + lazy.hashCode() + NAMES.length + NAMES[1].hashCode() + (NAMES[3] == null ? 1 : 0) + (K == NAMES[1] ? 2 : 0) + n;
   }
 }
