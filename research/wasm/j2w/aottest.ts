@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { loadDexes, world } from "./build";
+import { natives } from "./oracle";
 
 if (!process.env.WEBDROID_AOT) { console.log("aottest: set WEBDROID_AOT to a build (aotbuild.ts)"); process.exit(1); }
 const root = join(import.meta.dir, "../../.."), jars = PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j));
@@ -22,7 +23,7 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
 
 {
-  const w = world([join(out, "classes.dex"), ...jars]);
+  const w = world([join(out, "classes.dex"), ...jars], { natives });
   check("the build is attached", !!w.aot, true);
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
@@ -33,7 +34,7 @@ const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
   check("and the plain list is as before", w.entry("Aot2", "plain", "()I")(), 0);
 }
 {
-  const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars]);
+  const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars], { natives });
   check("the build is attached with the app's classes in the Program", !!w.aot, true);
   check("the subclass takes effect", w.entry("Aot2", "sub", "()I")(), 1);
   check("code that relied on the one indexOf is not installed", w.stats.aot.dead >= 1, true);

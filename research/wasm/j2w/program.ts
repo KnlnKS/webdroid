@@ -90,6 +90,7 @@ export class Program {
   }
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
   addClass(jc: JClass): void {
+    jc.methods.forEach((m, i) => { m.index = i; });
     this.classes.set(jc.name, jc);
     this.subclassMemo.clear(); this.implMemo.clear();
   }

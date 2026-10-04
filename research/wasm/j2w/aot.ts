@@ -15,6 +15,7 @@ import type { ClassRt, World } from "./lazy";
 import type { DexFile } from "../../../src/jvm/dex";
 import type { MethodInfo } from "./program";
 import type { FnTrace } from "./j2w";
+import { mid } from "./reach";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
