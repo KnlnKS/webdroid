@@ -65,7 +65,7 @@ export class World {
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -344,7 +344,7 @@ export class World {
     return mod;
   }
   instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
-    const m = mod instanceof WebAssembly.Module ? mod : this.compile(mod), t0 = performance.now();
+    const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, t0 = performance.now();
     const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
     this.stats.instantiateMs += performance.now() - t0;
     return inst;

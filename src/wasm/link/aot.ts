@@ -19,8 +19,9 @@ import { mid } from "../compiler/ids";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
-  /** a module file: its bytes, or the module itself where the host has compiled it ahead of use; "index.json" is always bytes */
-  get(file: string): Uint8Array | WebAssembly.Module;
+  /** a module file: its bytes, or the module itself where the host has compiled it ahead of use; "index.json" is always bytes. A file the host does not
+   *  have is a miss: the code it holds is compiled on demand instead. */
+  get(file: string): Uint8Array | WebAssembly.Module | undefined;
 }
 /** how a build groups the platform classes: classes with the same key share a D (data) or C (code) module; no C key leaves a class to the on-demand compiler */
 export interface AotBuild { dGroup(cls: string): string; cGroup(cls: string): string | null; /** the dexes whose classes are numbered and compiled */ dexes: Set<DexFile> }
@@ -147,7 +148,9 @@ export class AotRuntime {
 
   /** attaches the build in `store` to `w`, whose Program holds the platform dexes it was made from (and possibly more after them); undefined if it was made from other ones */
   static attach(w: World, store: AotStore): AotRuntime | undefined {
-    const index = JSON.parse(new TextDecoder().decode(store.get("index.json") as Uint8Array)) as AotIndex;
+    const raw = store.get("index.json") as Uint8Array | undefined;
+    if (!raw) return undefined;
+    const index = JSON.parse(new TextDecoder().decode(raw)) as AotIndex;
     if (index.version !== VERSION) return undefined;
     // the first `index.classes` classes with bytecode must come from exactly the dexes of the build
     const seen: string[] = [], rest: string[] = [];
@@ -187,7 +190,11 @@ export class AotRuntime {
   }
 
   // ---- numbering
-  reservedBase(name: string): number | undefined { return this.reservedBases.get(name); }
+  /** the slots of a class compiled on demand although the build numbered it: those the build gave it */
+  reservedBase(name: string): number | undefined {
+    const id = this.w.ids.get(name);
+    return this.reservedBases.get(name) ?? (id !== undefined && id <= this.nSeeded ? this.w.blockBase[id - 1] : undefined);
+  }
   /** a build records the slots reserved after the platform classes */
   reserved(tag: string | [string, number]): void { if (this.building) this.tail.push(tag); }
   /** a build records the classes touched while it compiles one module */
@@ -203,12 +210,15 @@ export class AotRuntime {
     const seeded = id <= this.nSeeded, base = seeded ? w.blockBase[id - 1] : this.reservedBases.get(name);
     if (base === undefined) return undefined;
     const g = seeded ? (this.building ? this.dGroupOf : this.dOf)[id - 1] : this.building ? this.dKeys.length : this.index.extraGroup;
-    return { name, id, mod: "g" + g, slotBase: base, nMethods: w.prog.get(name)?.methods.length ?? 0, exports: this.building ? {} : this.loadD(g) };
+    const exports = this.building ? {} : this.loadD(g);
+    return exports && { name, id, mod: "g" + g, slotBase: base, nMethods: w.prog.get(name)?.methods.length ?? 0, exports };
   }
-  private loadD(g: number): WebAssembly.Exports {
+  private loadD(g: number): WebAssembly.Exports | undefined {
     let ex = this.dExports[g];
     if (ex) return ex;
-    const w = this.w, mod = this.module(`d${g}.wasm`), head = header<DHeader>(mod);
+    const w = this.w, mod = this.module(`d${g}.wasm`);
+    if (!mod) return undefined;
+    const head = header<DHeader>(mod);
     ex = this.dExports[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
@@ -218,13 +228,25 @@ export class AotRuntime {
   }
   /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (scripts/wasm/aot-startup.ts) */
   loaded: string[] = [];
-  /** a file of the build as a compiled module */
-  private module(file: string): WebAssembly.Module {
-    const w = this.w, t0 = performance.now(), f = this.store!.get(file);
+  /** the files the store did not have when they were first wanted. The answer is kept: a D module that arrived later would define again the globals of a class
+   *  already compiled on demand, and a C module is only used with the D modules it was made against. */
+  missed = new Set<string>();
+  private ready(file: string): boolean {
+    if (this.missed.has(file)) return false;
+    if (this.store!.get(file)) return true;
+    this.missed.add(file); this.w.stats.aot.missed++;
+    return false;
+  }
+  /** a file of the build as a compiled module, or undefined for a miss */
+  private module(file: string): WebAssembly.Module | undefined {
+    if (!this.ready(file)) return undefined;
+    const w = this.w, t0 = performance.now(), f = this.store!.get(file)!;
     this.loaded.push(file);
-    if (f instanceof WebAssembly.Module) { w.stats.aot.readMs += performance.now() - t0; return f; }
-    w.stats.aot.readMs += performance.now() - t0; w.stats.aot.bytes += f.length;
-    return w.compile(f);
+    w.stats.aot.readMs += performance.now() - t0;
+    // not `instanceof WebAssembly.Module`: a module compiled by the page belongs to the page's realm, not a process frame's
+    if (!ArrayBuffer.isView(f)) return f;
+    w.stats.aot.bytes += f.byteLength;
+    return w.compile(f as Uint8Array);
   }
 
   /** whether platform method `m` of block `b` was installed by a loaded code module */
@@ -239,9 +261,12 @@ export class AotRuntime {
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
-    const w = this.w, mod = this.module(`c${c}.wasm`), head = header<CHeader>(mod);
-    // a module imports the natives it calls: without them (a World with other natives than the build's) its methods are compiled on demand
-    if (!head.natives.every((id) => this.native(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    const w = this.w, mod = this.module(`c${c}.wasm`);
+    if (!mod) { this.cState[c] = DEAD; return false; }
+    const head = header<CHeader>(mod);
+    // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
+    // a store that lacks a D module) its methods are compiled on demand
+    if (!head.natives.every((id) => this.native(id)) || !head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) w.link(w.names[id]);
     for (const s of head.synth) w.ensureSynth(s);
