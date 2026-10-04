@@ -42,11 +42,11 @@ export class CompileClient implements CompileService {
   /** starts the worker over `w`'s Program as it is now: `aotBase` is where the platform build's files are fetched from, and `w` has `app` attached if it says so */
   start(w: World, aotBase: string | undefined, app: AppIndex | undefined): void {
     const dexes = new Set<DexFile>();
-    for (const c of w.prog.own()) { if (!c.dex || c.name.includes("@")) return this.retire("a class loader of its own"); dexes.add(c.dex); }
+    for (const c of w.prog.own()) { if (c.name.includes("@")) return this.retire("a class loader of its own"); if (c.dex) dexes.add(c.dex); }
     this.w = w; this.state = "starting";
     const t0 = performance.now(), sync = w.since(w.base), list = containers(dexes);
     this.marks = w.numbering();
-    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, initialized: w.newlyInitialized() }, list.map(([, b]) => b.buffer as ArrayBuffer));
+    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, initialized: w.newlyInitialized(), hostClasses: w.hostClassNames() }, list.map(([, b]) => b.buffer as ArrayBuffer));
     this.stats.startMs = t0;
   }
   private loaded = false;

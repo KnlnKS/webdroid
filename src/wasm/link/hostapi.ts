@@ -5,8 +5,24 @@ import type { MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
 import type { DexFile } from "../../jvm/dex";
+import type { Sched } from "./sched";
 
 export type HostFn = (...a: any[]) => unknown;
+
+/** a Java class a registered spec implements in the host (rt.register outside the VM's own classes): its Java objects have a host object of `ctor` beside them, which its natives take as `this` */
+export interface HostSpec {
+  name: string;
+  sup: string | null;
+  ifaces: string[];
+  /** the methods the spec implements, by name+descriptor, with "static " for a static one */
+  methods: string[];
+  /** the Java-visible instance fields and the host properties that hold them */
+  fields: [javaName: string, prop: string][];
+  ctor: new () => object;
+}
+/** the class that holds, beside an existing class, the methods of its spec that a superclass declares (hostclass.ts); the natives are found under the class's own name */
+export const HOSTED = "$$host";
+export const specClass = (cls: string): string => (cls.endsWith(HOSTED) ? cls.slice(0, -HOSTED.length) : cls);
 
 export interface NativeSource {
   /** the registered implementation of `cls`.`key` (name+descriptor); an instance method's `this` is its receiver. A String
@@ -18,6 +34,8 @@ export interface NativeSource {
   classOf?(v: unknown): string | undefined;
   /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" */
   stores?(cls: string, run: () => void): Record<string, unknown>;
+  /** the classes the host implements */
+  hostSpecs?(): HostSpec[];
 }
 
 /** how Java objects cross to a native and back */
@@ -29,6 +47,8 @@ export interface HostBridge {
   offsetIn(host: unknown, offset: number): number;
   toJava(v: unknown, desc: string): unknown;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
+  /** sets the scope of the call in progress aside while its strand waits, and answers the function that takes it up again */
+  hold(): () => void;
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }
@@ -40,6 +60,8 @@ export interface HostContext {
   throwable(cls: string, msg: string | null): object;
   raise(throwable: object): unknown;
   bridge: HostBridge;
+  /** the strands: a Suspending import is made by `sched.suspending`, and `sched.running` is the strand a native that calls back into Java runs it as */
+  sched: Sched;
   /** records that compiled code ran into something it cannot do (World.onGap) */
   gap(what: string): void;
 }

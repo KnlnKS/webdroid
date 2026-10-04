@@ -310,6 +310,11 @@ export class AotRuntime {
     return w.compile(f as Uint8Array);
   }
 
+  /** the host implements `m`: the build's code for it is not to be used */
+  override(m: MethodInfo): void {
+    const base = this.reservedBase(m.cls) ?? this.w.preassigned.get(m.cls);
+    if (base !== undefined) this.overridden.add(base + m.index);
+  }
   /** whether platform method `m` of block `b` was installed by a loaded code module */
   installed(b: number, m: MethodInfo): boolean { const c = this.cOf[b]; return c >= 0 && this.cState[c] === LIVE && this.has(c, this.w.blockBase[b] + m.index); }
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }

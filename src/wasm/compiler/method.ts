@@ -4,7 +4,7 @@ import { kindOf, type Kind, type MethodInfo } from "./program";
 import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { descToName, parseMethodDesc, isWide } from "../../jvm/abi";
-import { prepareMethod, endsBlock, ifTarget, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
+import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
 import { Flow, Go, structureAny } from "../../jvm/structure";
 import { mid } from "./ids";
 import { constClass, emitStoreCheck } from "../link/classes";
@@ -24,7 +24,9 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return c; }
   if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return c; }
   try {
-    return new MC(cx, m).run();
+    const mc = new MC(cx, m);
+    mc.run();
+    return mc.weigh();
   } catch (e) {
     const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return c;
   }
@@ -121,6 +123,7 @@ export class MC {
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     this.findShadows();
+    this.findWaiting();
     this.entryFacts = analyze(this);
     lap("facts");
     const c = this.code;
@@ -138,6 +141,7 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
+    if (prepared.instructions.some((i) => i.name.startsWith("invoke"))) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -148,7 +152,7 @@ export class MC {
     }
     this.regionLocal = c.newLocal(T.i32);
     if (!this.tries) this.excLocal = c.newLocal(T.anyref);
-    this.push("$disp"); c.loop();
+    this.push("$disp"); c.loop(); this.fuel();
     if (this.tries) {
       this.push("$caught"); c.block(T.anyref);
       c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
@@ -169,6 +173,25 @@ export class MC {
     c.unreachable();
     return c;
   }
+  /** the local holding the depth before this method's frame, if it counts one */
+  private entryDepth = -1;
+  private fuelLocal = -1;
+  /** the heads of loops that can wait for something another strand does: a loop whose body calls, locks or reads a field. A loop of arithmetic and array
+   *  elements only (the kernels) has no fuel check, which cost them 40 to 150%; it ends by itself or is a hang in any VM */
+  private waiting = new Set<number>();
+  private findWaiting(): void {
+    const ins = this.prepared.instructions;
+    for (const b of ins) for (const t of branchTargets(this.item, b)) {
+      if (t > b.pc || this.waiting.has(t)) continue;
+      if (ins.some((x) => x.pc >= t && x.pc <= b.pc && /^(invoke|monitor|[is]get)/.test(x.name))) this.waiting.add(t);
+    }
+  }
+  private fuel() { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32))); }
+  /** where the frame's weight (exc.ts MAX_DEPTH) goes in the code, known once the locals are */
+  private weights: number[] = [];
+  private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
+  /** gives the frame the weight of its parameters and locals */
+  weigh(): Code { for (const at of this.weights) this.code.patch(at, 4 + this.code.nparams + this.code.localTypes.length); return this.code; }
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
   depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
@@ -176,7 +199,10 @@ export class MC {
     this.push(label);
     if (!loop) { this.code.block(bt); return; }
     this.code.loop(bt);
-    if (this.cx.counting && label[0] === "L") this.cx.emitCount(this.code, this.m);
+    if (label[0] === "L") {
+      if (this.cx.counting) this.cx.emitCount(this.code, this.m);
+      if (this.waiting.has(+label.slice(1))) this.fuel();
+    }
   }
   endBlk() { this.pop(); this.code.end(); }
 
@@ -216,6 +242,7 @@ export class MC {
   }
   emitCatch() {
     const c = this.code, dex = this.dex;
+    if (this.entryDepth >= 0) this.weights.push(...this.cx.emitLeave(c, this.entryDepth, true));
     const dispatchTo = (addr: number) => { const ri = this.regionOfPc.get(addr); if (ri === undefined) throw new Error("handler not region entry"); c.i32(ri).lset(this.regionLocal).br(this.depth("$disp")); };
     for (const t of this.item.tries) {
       c.lget(this.pcLocal).i32(t.start).raw(OP.i32_ge_s).lget(this.pcLocal).i32(t.end).raw(OP.i32_lt_s).raw(OP.i32_and).if_(); this.push("if");
@@ -315,10 +342,10 @@ export class MC {
       }
       case "move-result": case "move-result-wide": case "move-result-object": throw new Error("move-result without invoke at " + ins.pc);
       case "move-exception": c.lget(this.excLocal); this.set("L"); return;
-      case "return-void": c.ret(); return;
-      case "return": this.get("I", a); c.ret(); return;
-      case "return-wide": this.get("J", a); c.ret(); return;
-      case "return-object": this.get("L", a); c.ret(); return;
+      case "return-void": this.leave(); c.ret(); return;
+      case "return": this.get("I", a); this.leave(); c.ret(); return;
+      case "return-wide": this.get("J", a); this.leave(); c.ret(); return;
+      case "return-object": this.get("L", a); this.leave(); c.ret(); return;
       case "const/4": case "const/16": case "const": this.constNarrow(b); return;
       case "const/high16": this.constNarrow(b << 16); return;
       case "const-wide/16": case "const-wide/32": this.constWide(BigInt(b)); return;
@@ -328,7 +355,7 @@ export class MC {
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
       case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
-      case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
+      case "monitor-enter": case "monitor-exit": this.nonNull(a); c.call(cx.helper(ins.name === "monitor-enter" ? "menter" : "mexit")); return;
       case "check-cast": {
         if (this.unresolved(dex.type(b))) return;
         const name = descToName(dex.type(b));
@@ -355,7 +382,7 @@ export class MC {
       case "filled-new-array": case "filled-new-array/range": {
         const desc = dex.type(b), ek = elemKindOf(desc);
         if (this.unresolved(desc)) { this.consumeResult(ins); return; }
-        c.gget(cx.vtGlobal(desc)).refAsNonNull().i32(0);
+        c.gget(cx.vtGlobal(desc)).refAsNonNull().i64(0n);
         for (const r of ins.regs) { ek === "ref" ? this.get("L", r) : this.get("I", r); }
         c.arrayNewFixed(cx.tData[ek], ins.regs.length).structNew(cx.tArr[ek]);
         this.finishResult(ins, "L"); return;
@@ -468,6 +495,7 @@ export class MC {
     const { decl, f } = r, st = cx.structFor(decl);
     cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
+    if (cx.w.claims(f)) { this.refTo(ins.b, st); c.externConvertAny(); this.get("J", ins.a); c.call(cx.imp.claim); }
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), r = this.fieldOf(ins.b, true);

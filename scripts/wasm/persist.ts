@@ -45,6 +45,13 @@ const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
 const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, aot: aotStore, ...opts });
+/** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts). Their overlays change the platform's classes, so the World has a platform Program of its own. */
+function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
+  const own = new Program(platformDexes); own.addExterns(externs);
+  const w = new World(new Program(dexes, own), { intrinsics, natives, heapUsed, aot: aotStore, ...opts });
+  for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
+  return w;
+}
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
 const ports: WorkerPort[] = [];
@@ -102,9 +109,9 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 // ---- second-tier units from the worker
 {
   const w = world(app), client = new CompileClient(spawn());
-  const hooked = new World(new Program(app, platform), { intrinsics, natives, heapUsed, aot: aotStore, compiler: client });
+  const hooked = hosted(app, { compiler: client });
   client.start(hooked, BASE, undefined);
-  await until("the worker starts", () => client.ready);
+  await until("the worker starts", () => client.ready || !!client.retired);
   const hot = hooked.entry("Pst", "hot", "(I)I"), base = w.entry("Pst", "hot", "(I)I");
   for (let i = 0; i < 400 && !client.stats.adopted; i++) { check("hot answers while jobs run", hot(4000), base(4000)); await new Promise((r) => setTimeout(r, 1)); }
   await until("a unit is adopted", () => client.stats.adopted > 0);
@@ -123,7 +130,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 }
 {
   // something the worker cannot follow stops it, and the page compiles inline from then on
-  const client = new CompileClient(spawn()), w = new World(new Program(app, platform), { intrinsics, natives, heapUsed, aot: aotStore, compiler: client });
+  const client = new CompileClient(spawn()), w = hosted(app, { compiler: client });
   client.start(w, BASE, undefined);
   await until("the worker starts", () => client.ready);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), w.prog.newLoader(w.prog.root, null));
@@ -131,6 +138,28 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   const call = w.entry("Pst", "hot", "(I)I");
   for (let i = 0; i < 4000 && !w.stats.upgrades; i++) call(4000);
   check("and the hot method is compiled inline", w.stats.upgrades > 0, true);
+}
+
+{
+  // the worker applies the host's classes and overlays itself when the page has them; a page whose classes the worker does not end with is refused
+  const port = spawn(), got: { type: string; message?: string }[] = [];
+  port.onmessage = ({ data }) => got.push(data);
+  await until("the worker loads", () => got.some((m) => m.type === "loaded"));
+  port.postMessage({ type: "init", dexes: [], hostClasses: ["not/Hosted"], aot: { base: BASE } });
+  await until("the worker answers", () => got.some((m) => m.type === "failed" || m.type === "ready"));
+  check("a worker whose host classes are not the page's fails to start", got.some((m) => m.type === "failed" && /host classes/.test(m.message ?? "")), true);
+}
+{
+  // the numbering of host classes and their hidden halves is the page's: hot code over a World with them is adopted whole
+  const w = world(app), client = new CompileClient(spawn()), hooked = hosted(app, { compiler: client });
+  check("host classes exist", hooked.hostClassNames().length > 0, true);
+  client.start(hooked, BASE, undefined);
+  await until("the worker starts", () => client.ready || !!client.retired);
+  const hot = hooked.entry("Pst", "hot", "(I)I");
+  for (let i = 0; i < 400 && !client.stats.adopted; i++) { hot(4000); await new Promise((r) => setTimeout(r, 1)); }
+  check("a unit is adopted over a World with host classes", client.stats.adopted > 0, true);
+  check("and the answers are the same", answers(hooked).join(), answers(w).join());
+  client.close();
 }
 
 // ---- the app build

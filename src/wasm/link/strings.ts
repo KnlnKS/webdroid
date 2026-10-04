@@ -122,7 +122,7 @@ export class StructStrings implements StringRepr {
   mk(): number {
     return this.fn("mk", [ref(this.chars)], [ref(this.st)], (c) => {
       this.cx.w.allocated.add(STRING);
-      c.gget(this.cx.vtGlobal(STRING)).refAsNonNull().i32(0).lget(0).i32(0).refNull(HT.extern).structNew(this.st);
+      c.gget(this.cx.vtGlobal(STRING)).refAsNonNull().i64(0n).lget(0).i32(0).refNull(HT.extern).structNew(this.st);
     });
   }
   /** sub(s, from, n) -> String: the chars [from, from + n), the String itself when that is all of them */
@@ -241,7 +241,7 @@ export class StructStrings implements StringRepr {
       // a new object with the chars of the old one
       case "(Ljava/lang/String;)V": return make("String.<init>(String)V", (c) => {
         this.npe(c, 0);
-        c.gget(cx.vtGlobal(STRING)).refAsNonNull().i32(0).lget(0).refCast(cx.tStr).structGet(cx.tStr, CHARS).lget(0).refCast(cx.tStr).structGet(cx.tStr, HASH).refNull(HT.extern).structNew(cx.tStr);
+        c.gget(cx.vtGlobal(STRING)).refAsNonNull().i64(0n).lget(0).refCast(cx.tStr).structGet(cx.tStr, CHARS).lget(0).refCast(cx.tStr).structGet(cx.tStr, HASH).refNull(HT.extern).structNew(cx.tStr);
       });
       case "([C)V": return make("String.<init>([C)V", (c) => {
         this.npe(c, 0);
@@ -334,7 +334,7 @@ export const stringIntrinsics = new Map<string, Intrinsic>();
     const s = S(cx), t = cx.tArr.i16, a = c.newLocal(ref(cx.tData.i16));
     s.lenOf(c, 0).call(s.newCharsKnown()).lset(a);
     c.lget(a).i32(0); s.charsOf(c, 0).i32(0); s.lenOf(c, 0); c.arrayCopy(cx.tData.i16, cx.tData.i16);
-    c.gget(cx.vtGlobal("[C")).refAsNonNull().i32(0).lget(a).structNew(t);
+    c.gget(cx.vtGlobal("[C")).refAsNonNull().i64(0n).lget(a).structNew(t);
   });
   // 1 when some char does not fit a byte
   def("coder()B", (cx, m, c) => {

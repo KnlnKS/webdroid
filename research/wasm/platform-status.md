@@ -119,3 +119,18 @@ lacks JSPI at the time S3 starts.
 
 ## Not answered (needs follow-up)
 Items 10 (branch hinting, call_ref perf), 11 (tiering thresholds, code cache), 12 (instantiation cost, instance limits), 13 (citations for TeaVM, J2CL, Blazor, Go, Hoot lessons) and the ref.cast and boundary-cost numbers were not verified. Do not cite their UNVERIFIED lines as fact.
+
+## JSPI probes for the threads substrate (2026-10-04, node 24.19 / V8 13.6, M4 Pro)
+
+`node --experimental-wasm-jspi` is needed (`WebAssembly.Suspending` and `promising` are undefined without it); `scripts/wasm/undernode.ts` passes it. Chrome 153 has JSPI on.
+
+| Fact | Result |
+|---|---|
+| plain import called from Wasm | 4 ns |
+| Suspending import whose function answers a number (no Promise) | 52 ns: it still suspends, and microtasks run (order: caller continues, queued microtask, import returns) |
+| Suspending import whose function is async and answers at once | 46 ns |
+| 1,000 stacks suspended in one import, started and resumed | 2.5 ms and 0.5 ms |
+| recursion depth, trivial frame, no suspension | main stack 15,500; `promising` stack 16,500 (the same limit); `--stack-size` scales both |
+| catching the stack overflow RangeError in Wasm (`try_table catch_all`) | not caught, on either stack: it escapes to the caller |
+| `promising` entry of a plain export (`WebAssembly.promising(f)(x)`) + await, against the plain call | 1.4 us against 0.9 us per call, including the await |
+| Suspending import called on a stack that is not a `promising` one | `SuspendError: trying to suspend without WebAssembly.promising`, even when the function answers a plain value |

@@ -160,7 +160,7 @@ rt("mkClass", ["I"], "L", (cx, c) => {
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
   c.lget(data).refAsNonNull().lget(i).i32(1).raw(OP.i32_shl); info(Info.Iface, () => c.lget(i)); cx.callRt(c, "classOf"); c.arraySet(tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-  set("ifTable", "[Ljava/lang/Object;", () => c.gget(cx.vtGlobal(OBJ_ARRAY)).refAsNonNull().i32(0).lget(data).refAsNonNull().structNew(tArr.ref));
+  set("ifTable", "[Ljava/lang/Object;", () => c.gget(cx.vtGlobal(OBJ_ARRAY)).refAsNonNull().i64(0n).lget(data).refAsNonNull().structNew(tArr.ref));
   c.end().lget(o);
 });
 // instArr(obj, id): obj is a reference array assignable to array class `id`; Object[] takes every reference array, the rest is
@@ -212,7 +212,7 @@ rt("aclone", ["L"], "L", (cx, c) => {
     c.lget(0).refTest(t).if_();
     c.lget(0).refCast(t).lset(a).lget(a).structGet(t, 2).lset(src).lget(src).refAsNonNull().arrayLen().lset(n).lget(n).arrayNewDefault(d).lset(dst);
     c.lget(dst).refAsNonNull().i32(0).lget(src).refAsNonNull().i32(0).lget(n).arrayCopy(d, d);
-    c.lget(a).structGet(t, 0).i32(0).lget(dst).refAsNonNull().structNew(t).ret().end();
+    c.lget(a).structGet(t, 0).i64(0n).lget(dst).refAsNonNull().structNew(t).ret().end();
   }
   c.anyNull();
 });
@@ -262,7 +262,7 @@ rt("declFields", ["I", "I"], "L", (cx, c) => {
   each(() => { keep(); c.if_().lget(count).i32(1).raw(OP.i32_add).lset(count).end(); });
   c.lget(count).arrayNewDefault(tData.ref).lset(data);
   each(() => { keep(); c.if_().lget(data).refAsNonNull().lget(i).lget(0).lget(k); cx.callRt(c, "mkField"); c.arraySet(tData.ref).lget(i).i32(1).raw(OP.i32_add).lset(i).end(); });
-  c.gget(cx.vtGlobal(FIELD_ARRAY)).refAsNonNull().i32(0).lget(data).refAsNonNull().structNew(tArr.ref);
+  c.gget(cx.vtGlobal(FIELD_ARRAY)).refAsNonNull().i64(0n).lget(data).refAsNonNull().structNew(tArr.ref);
 });
 // nameEq(cid, k, name, len): the String `name` of length `len` spells the name of the k-th declared field of class cid
 rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => {

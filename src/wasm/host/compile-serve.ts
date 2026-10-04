@@ -29,7 +29,7 @@ export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launc
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; build?: BuildRoots }
+  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; build?: BuildRoots }
   | { type: "add"; dexes: Containers }
   | { type: "upgrade"; id: number; keep: boolean; sync: Numbering; job: UpgradeJob };
 export type CompileResponse =
@@ -55,6 +55,9 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const index = req.aot ? await env.fetchBytes(req.aot.base + "index.json") : undefined;
     w = new World(new Program(appDexes, platform), { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, compileOnly: true,
       ...index && { aot: { get: (file) => (file === "index.json" ? index : undefined) }, ...req.aot!.app && { app: { index: req.aot!.app, store: { get: () => undefined } } } } });
+    // the classes the host implements are added as the page added them; they and the overlays on dex classes shape what compiles
+    if (req.hostClasses?.length) for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);
+    if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     // an app build numbers from where a World starts, before the page's numbering is followed
     if (req.build) {
       const t1 = performance.now(), methods = select(req.build), build = buildApp(w, methods);
