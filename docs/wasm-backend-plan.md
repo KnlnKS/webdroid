@@ -395,7 +395,164 @@ its own), `steady` the median of the last half of 100 calls, `warm` calls 2 to 1
 compiler A/B measures Wasm only. `watdump.ts <workload> <method>` prints generated code. **The host was shared (load average 4 to 8 on 14
 cores) for everything below; every table says so, spreads are 2 to 10%, and the authoritative run must be redone on an idle machine.**
 
-@@TABLES@@
+**G1 tables** (merged with `knlnks/bytecode-wasm` at `4d783acc`; every workload whose Wasm result equals the JS tier's; two workloads stop early on a pre-existing OutOfMemoryError after about 14 calls: `scanTokens`, `scanLines`, their numbers are over the calls that completed; `inetCached` is still blocked by an Unsafe accessor). Wasm more than 10% slower in steady state (js/wasm), node: zipOpen 0.01, sha256 0.10, fbBulk 0.17, parseInts 0.18, strConcat 0.19, strBuild 0.29, strIndex 0.76, b64android 0.78, strSubstr 0.78, bbInts 0.79, switchSparse 0.85, strCompare 0.87, scanTokens 0.88, strChars 0.89, scanLines 0.89; Chrome adds jsonWrite 0.45, format 0.77, fbLoop 0.87 and has strIndex 0.25, strSubstr 0.44, strChars 0.56, strCompare 0.63 (builtins, see V8 findings). The first four and `fbBulk` are dominated by the natives bridge: `$copy:i8` copies the whole array element by element on every native call (66% of `zipOpen`, whose `initCEN` takes 49 ms over a 1000-entry directory where the JS tier uses a native ZipFile) and by the host String factories (`decodeString`); that is a change to the bridge (range copies), not to generated code. first-call times are not comparable with the JS tier's (it has no compile step, and node's JS tier caches).
+
+**node v24.19.0 (V8 13.6.233.17-node.51)**, 3 runs x 100 reps, medians (min-max) in ms, load average 1.3-2.5 on 14 cores. Wasm warm = calls 2 to 11.
+
+| workload | JS first | Wasm first | JS steady | Wasm steady | steady js/wasm | Wasm warm |
+|---|---|---|---|---|---|---|
+| sha256 | 70.6 | 563 | 0.411 | 3.9 (3.9-3.9) | 0.10x | 4.0 |
+| ecdsaVerify | 68.2 | 580 | 0.344 | 0.332 (0.331-0.334) | 1.04x | 0.432 |
+| certParse | 133 | 969 | 0.141 | 0.135 (0.134-0.139) | 1.04x | 0.235 |
+| listAddGet | 21.7 | 13.4 | 0.081 | 0.037 (0.035-0.040) | 2.17x | 0.262 |
+| listIter | 21.4 | 13.2 | 0.115 | 0.066 (0.066-0.066) | 1.74x | 0.220 |
+| listRemove | 24.3 | 14.2 | 1.9 | 0.665 (0.665-0.668) | 2.86x | 0.751 |
+| mapStr | 21.8 | 10.8 | 0.214 | 0.141 (0.140-0.142) | 1.52x | 0.329 |
+| mapInt | 21.5 | 11.1 | 0.150 | 0.089 (0.088-0.089) | 1.69x | 0.312 |
+| mapWalk | 23.5 | 13.8 | 0.295 | 0.136 (0.134-0.139) | 2.17x | 0.300 |
+| linkedMap | 23.2 | 11.8 | 0.211 | 0.127 (0.125-0.127) | 1.67x | 0.361 |
+| hashSet | 21.8 | 10.5 | 0.200 | 0.125 (0.122-0.125) | 1.60x | 0.249 |
+| smallAlloc | 3.0 | 7.5 | 0.105 | 0.032 (0.031-0.033) | 3.32x | 0.251 |
+| deque | 22.0 | 15.2 | 0.127 | 0.049 (0.046-0.049) | 2.60x | 0.179 |
+| treeMap | 25.6 | 19.3 | 0.399 | 0.314 (0.314-0.314) | 1.27x | 0.545 |
+| sort | 31.2 | 36.0 | 0.291 | 0.284 (0.284-0.295) | 1.03x | 0.926 |
+| mix | 27.7 | 20.1 | 1.3 | 0.806 (0.787-0.810) | 1.58x | 1.0 |
+| linkedList | 22.1 | 12.3 | 0.087 | 0.032 (0.032-0.032) | 2.67x | 0.175 |
+| b64java | 29.4 | 27.8 | 0.832 | 0.831 (0.829-0.853) | 1.00x | 0.861 |
+| b64android | 24.4 | 18.2 | 0.616 | 0.793 (0.769-0.815) | 0.78x | 0.729 |
+| jsonParse | 50.0 | 134 | 3.3 | 2.4 (2.3-2.4) | 1.39x | 3.3 |
+| jsonWrite | 62.7 | 173 | 7.5 | 7.6 (7.5-7.6) | 0.99x | 9.8 |
+| scanTokens | 199 | 1122 | 9.3 | 10.6 (10.3-10.9) | 0.88x | 11.2 |
+| scanLines | 183 | 1102 | 3.7 | 4.2 (4.2-4.5) | 0.89x | 6.9 |
+| format | 49.7 | 135 | 2.3 | 1.6 (1.6-1.6) | 1.44x | 5.3 |
+| dtoa | 26.8 | 31.9 | 1.3 | 0.403 (0.402-0.405) | 3.16x | 0.974 |
+| parseFail | 12.1 | 18.3 | 7.4 | 2.8 (2.8-2.9) | 2.60x | 3.1 |
+| parseFailMixed | 21.6 | 24.5 | 6.8 | 2.7 (2.7-2.7) | 2.52x | 3.6 |
+| fbLoop | 22.2 | 24.0 | 0.132 | 0.138 (0.137-0.138) | 0.96x | 0.299 |
+| fbBulk | 2.6 | 17.5 | 0.037 | 0.220 (0.219-0.220) | 0.17x | 0.224 |
+| bbInts | 21.8 | 20.2 | 0.187 | 0.237 (0.234-0.237) | 0.79x | 0.272 |
+| dbInts | 22.2 | 19.3 | 0.355 | 0.129 (0.129-0.130) | 2.75x | 0.254 |
+| casts | 30.7 | 12.2 | 2.5 | 0.385 (0.381-0.398) | 6.49x | 0.420 |
+| monitors | 20.6 | 11.0 | 0.244 | 0.093 (0.093-0.093) | 2.63x | 0.154 |
+| random | 22.4 | 12.4 | 0.612 | 0.067 (0.067-0.084) | 9.11x | 0.114 |
+| strConcat | 19.6 | 8.6 | 0.027 | 0.142 (0.141-0.144) | 0.19x | 0.436 |
+| zipOpen | 147 | 492 | 0.466 | 60.3 (60.3-60.5) | 0.01x | 61.3 |
+| ssbAppend | 33.4 | 37.0 | 0.332 | 0.179 (0.177-0.183) | 1.86x | 0.850 |
+| ssbEdit | 32.0 | 35.1 | 0.333 | 0.104 (0.102-0.106) | 3.19x | 1.6 |
+| ssbGetSpans | 33.3 | 38.4 | 0.871 | 0.638 (0.635-0.646) | 1.36x | 1.2 |
+| spannedCopy | 9.0 | 19.0 | 0.242 | 0.168 (0.166-0.170) | 1.44x | 1.1 |
+| linkify | 16.4 | 49.6 | 0.031 | 0.023 (0.022-0.023) | 1.36x | 0.033 |
+| loopOnce | 39.3 | 23.5 | 38.2 | 7.1 (7.1-7.1) | 5.36x | 7.2 |
+| loopChunk | 39.3 | 12.9 | 7.1 | 7.1 (7.1-7.1) | 1.00x | 7.2 |
+| divLoop | 5.1 | 5.5 | 4.2 | 0.371 (0.371-0.371) | 11.24x | 0.390 |
+| longDiv | 1.8 | 5.8 | 0.339 | 0.188 (0.188-0.188) | 1.80x | 0.199 |
+| switchDense | 1.2 | 5.5 | 0.068 | 0.073 (0.070-0.073) | 0.93x | 0.069 |
+| switchSparse | 1.3 | 5.4 | 0.068 | 0.081 (0.080-0.081) | 0.85x | 0.073 |
+| refArray | 19.9 | 6.0 | 0.191 | 0.205 (0.204-0.208) | 0.93x | 0.206 |
+| matrix | 22.4 | 7.8 | 0.198 | 0.066 (0.066-0.066) | 3.01x | 0.086 |
+| sieve | 2.2 | 6.0 | 0.229 | 0.206 (0.196-0.214) | 1.12x | 0.218 |
+| intLoop | 1.9 | 5.8 | 0.957 | 0.187 (0.187-0.189) | 5.13x | 0.194 |
+| longLoop | 1.9 | 5.2 | 0.424 | 0.133 (0.133-0.133) | 3.18x | 0.136 |
+| doubleLoop | 20.6 | 5.6 | 0.692 | 0.071 (0.071-0.071) | 9.80x | 0.072 |
+| arraySum | 1.4 | 5.4 | 0.118 | 0.062 (0.059-0.064) | 1.91x | 0.063 |
+| fieldLoop | 19.9 | 5.6 | 0.104 | 0.067 (0.065-0.069) | 1.55x | 0.070 |
+| allocLoop | 20.3 | 6.2 | 0.160 | 0.012 (0.012-0.012) | 13.41x | 0.144 |
+| virtualMono | 19.8 | 6.3 | 0.083 | 0.033 (0.033-0.033) | 2.54x | 0.033 |
+| virtualBi | 20.5 | 8.3 | 0.544 | 0.124 (0.124-0.138) | 4.39x | 0.128 |
+| interfaceBi | 20.3 | 8.1 | 0.552 | 0.235 (0.235-0.246) | 2.35x | 0.237 |
+| linkedNodes | 20.5 | 6.9 | 0.255 | 0.046 (0.046-0.046) | 5.56x | 0.165 |
+| strChars | 21.2 | 8.1 | 0.252 | 0.283 (0.281-0.285) | 0.89x | 0.285 |
+| strEquals | 20.0 | 6.4 | 0.106 | 0.106 (0.103-0.107) | 0.99x | 0.357 |
+| strIndex | 20.3 | 8.6 | 0.272 | 0.358 (0.349-0.359) | 0.76x | 0.498 |
+| strBuild | 19.6 | 14.7 | 0.119 | 0.415 (0.411-0.417) | 0.29x | 0.615 |
+| strSubstr | 21.9 | 8.2 | 0.300 | 0.384 (0.382-0.397) | 0.78x | 0.400 |
+| strCompare | 19.9 | 5.6 | 0.034 | 0.039 (0.035-0.040) | 0.87x | 0.270 |
+| parseInts | 19.8 | 12.0 | 0.067 | 0.382 (0.378-0.388) | 0.18x | 0.412 |
+| exceptions | 23.5 | 7.3 | 3.1 | 1.4 (1.4-1.4) | 2.20x | 1.2 |
+
+jbench: 41 workloads, geometric mean js/wasm: steady 1.28x, first call 0.78x
+
+G1 extras: 27 workloads, geometric mean js/wasm: steady 1.83x, first call 1.46x
+
+
+**Chrome 153.0.8010.53**, 3 runs x 100 reps, medians (min-max) in ms, load average 1.2-3.0 on 14 cores. Wasm warm = calls 2 to 11.
+
+| workload | JS first | Wasm first | JS steady | Wasm steady | steady js/wasm | Wasm warm |
+|---|---|---|---|---|---|---|
+| sha256 | 40.1 | 505 | 0.465 | 4.1 (4.1-4.1) | 0.11x | 4.2 |
+| ecdsaVerify | 40.6 | 525 | 0.290 | 0.285 (0.280-0.295) | 1.02x | 0.365 |
+| certParse | 142 | 885 | 0.205 | 0.130 (0.125-0.130) | 1.58x | 0.240 |
+| listAddGet | 3.1 | 16.6 | 0.080 | 0.035 (0.035-0.035) | 2.29x | 0.285 |
+| listIter | 3.0 | 16.6 | 0.100 | 0.055 (0.055-0.055) | 1.82x | 0.240 |
+| listRemove | 5.9 | 16.8 | 1.5 | 0.630 (0.630-0.630) | 2.40x | 0.710 |
+| mapStr | 3.1 | 13.3 | 0.505 | 0.145 (0.140-0.145) | 3.48x | 0.345 |
+| mapInt | 2.7 | 14.2 | 0.170 | 0.090 (0.090-0.090) | 1.89x | 0.335 |
+| mapWalk | 4.1 | 16.6 | 0.365 | 0.135 (0.135-0.140) | 2.70x | 0.540 |
+| linkedMap | 4.1 | 14.9 | 0.420 | 0.130 (0.130-0.130) | 3.23x | 0.375 |
+| hashSet | 3.2 | 13.4 | 0.525 | 0.135 (0.130-0.135) | 3.89x | 0.280 |
+| smallAlloc | 1.8 | 10.4 | 0.100 | 0.030 (0.030-0.030) | 3.33x | 0.305 |
+| deque | 3.6 | 18.2 | 0.115 | 0.045 (0.045-0.070) | 2.56x | 0.215 |
+| treeMap | 6.7 | 21.5 | 0.370 | 0.330 (0.330-0.330) | 1.12x | 0.590 |
+| sort | 12.0 | 37.6 | 0.285 | 0.280 (0.280-0.285) | 1.02x | 1.0 |
+| mix | 8.2 | 22.8 | 2.2 | 0.970 (0.895-0.975) | 2.22x | 1.2 |
+| linkedList | 3.4 | 15.6 | 0.070 | 0.030 (0.030-0.030) | 2.33x | 0.195 |
+| b64java | 12.7 | 31.7 | 0.950 | 0.850 (0.820-0.870) | 1.12x | 0.880 |
+| b64android | 5.6 | 20.7 | 1.1 | 0.870 (0.840-0.880) | 1.24x | 0.865 |
+| jsonParse | 34.2 | 102 | 3.1 | 2.9 (2.9-2.9) | 1.07x | 3.8 |
+| jsonWrite | 44.5 | 141 | 7.3 | 16.0 (15.7-16.1) | 0.45x | 16.0 |
+| scanTokens | 195 | 1049 | 13.9 | 12.6 (12.4-12.7) | 1.10x | 14.9 |
+| scanLines | 154 | 1021 | 5.1 | 4.1 (3.8-4.2) | 1.25x | 5.2 |
+| format | 38.8 | 103 | 2.5 | 3.2 (3.0-3.4) | 0.77x | 5.0 |
+| dtoa | 10.4 | 34.2 | 3.2 | 0.445 (0.440-0.445) | 7.10x | 1.1 |
+| parseFail | 16.6 | 20.8 | 11.8 | 3.0 (3.0-3.0) | 3.92x | 3.5 |
+| parseFailMixed | 23.8 | 27.6 | 10.0 | 3.0 (2.9-3.0) | 3.38x | 4.1 |
+| fbLoop | 3.9 | 25.7 | 0.130 | 0.150 (0.150-0.150) | 0.87x | 0.290 |
+| fbBulk | 2.1 | 21.2 | 0.040 | 0.225 (0.225-0.230) | 0.18x | 0.230 |
+| bbInts | 3.4 | 24.4 | 0.215 | 0.225 (0.220-0.230) | 0.96x | 0.360 |
+| dbInts | 3.8 | 22.5 | 0.330 | 0.135 (0.135-0.135) | 2.44x | 0.250 |
+| casts | 12.1 | 15.6 | 2.0 | 0.430 (0.420-0.435) | 4.66x | 0.455 |
+| monitors | 2.4 | 13.9 | 0.215 | 0.100 (0.100-0.100) | 2.15x | 0.140 |
+| random | 4.3 | 14.9 | 0.590 | 0.070 (0.070-0.070) | 8.43x | 0.205 |
+| strConcat | 1.5 | 11.7 | 0.030 | 0.165 (0.165-0.170) | 0.18x | 0.420 |
+| zipOpen | 122 | 457 | 0.625 | 60.0 (59.8-60.1) | 0.01x | 61.3 |
+| ssbAppend | 15.3 | 42.8 | 0.285 | 0.155 (0.155-0.165) | 1.84x | 1.0 |
+| ssbEdit | 14.7 | 39.8 | 0.250 | 0.100 (0.095-0.100) | 2.50x | 1.7 |
+| ssbGetSpans | 13.5 | 43.1 | 0.800 | 0.615 (0.610-0.615) | 1.30x | 1.1 |
+| spannedCopy | 7.7 | 22.6 | 0.190 | 0.150 (0.150-0.155) | 1.27x | 1.0 |
+| linkify | 11.1 | 53.1 | 0.035 | 0.025 (0.025-0.025) | 1.40x | 0.035 |
+| loopOnce | 40.1 | 27.6 | 38.3 | 7.4 (7.2-7.4) | 5.21x | 7.5 |
+| loopChunk | 40.5 | 15.6 | 38.3 | 7.3 (7.1-7.4) | 5.24x | 7.5 |
+| divLoop | 2.3 | 8.2 | 1.0 | 0.390 (0.370-0.395) | 2.64x | 0.390 |
+| longDiv | 2.0 | 8.3 | 0.270 | 0.190 (0.190-0.190) | 1.42x | 0.210 |
+| switchDense | 0.920 | 8.0 | 0.075 | 0.070 (0.070-0.075) | 1.07x | 0.075 |
+| switchSparse | 0.880 | 8.2 | 0.070 | 0.080 (0.070-0.080) | 0.87x | 0.085 |
+| refArray | 3.0 | 8.8 | 0.195 | 0.190 (0.190-0.190) | 1.03x | 0.200 |
+| matrix | 4.0 | 10.5 | 0.250 | 0.070 (0.070-0.070) | 3.57x | 0.090 |
+| sieve | 2.2 | 8.6 | 0.235 | 0.125 (0.120-0.145) | 1.88x | 0.140 |
+| intLoop | 1.8 | 8.2 | 0.960 | 0.200 (0.190-0.205) | 4.80x | 0.215 |
+| longLoop | 2.1 | 7.7 | 0.455 | 0.135 (0.135-0.135) | 3.37x | 0.155 |
+| doubleLoop | 2.4 | 8.4 | 0.605 | 0.075 (0.075-0.080) | 8.07x | 0.080 |
+| arraySum | 1.1 | 8.6 | 0.075 | 0.060 (0.060-0.060) | 1.25x | 0.065 |
+| fieldLoop | 2.8 | 8.5 | 0.780 | 0.070 (0.070-0.070) | 11.14x | 0.070 |
+| allocLoop | 2.2 | 8.8 | 0.150 | 0.035 (0.035-0.035) | 4.29x | 0.135 |
+| virtualMono | 1.4 | 8.8 | 0.080 | 0.075 (0.075-0.075) | 1.07x | 0.075 |
+| virtualBi | 2.1 | 10.8 | 0.485 | 0.125 (0.125-0.145) | 3.88x | 0.135 |
+| interfaceBi | 2.3 | 10.7 | 0.480 | 0.250 (0.245-0.250) | 1.92x | 0.250 |
+| linkedNodes | 2.2 | 9.9 | 0.230 | 0.065 (0.065-0.065) | 3.54x | 0.070 |
+| strChars | 1.9 | 10.5 | 0.240 | 0.430 (0.405-0.430) | 0.56x | 0.445 |
+| strEquals | 2.0 | 9.2 | 0.295 | 0.130 (0.125-0.140) | 2.27x | 0.365 |
+| strIndex | 2.1 | 11.6 | 0.175 | 0.710 (0.705-0.715) | 0.25x | 0.815 |
+| strBuild | 1.6 | 17.9 | 0.125 | 0.435 (0.430-0.435) | 0.29x | 0.660 |
+| strSubstr | 3.5 | 10.8 | 0.250 | 0.570 (0.555-0.570) | 0.44x | 0.685 |
+| strCompare | 1.5 | 8.1 | 0.025 | 0.040 (0.040-0.040) | 0.63x | 0.160 |
+| parseInts | 1.5 | 14.8 | 0.065 | 0.335 (0.330-0.335) | 0.19x | 0.410 |
+| exceptions | 4.7 | 9.9 | 2.4 | 1.6 (1.6-1.6) | 1.48x | 1.6 |
+
+jbench: 41 workloads, geometric mean js/wasm: steady 1.39x, first call 0.24x
+
+G1 extras: 27 workloads, geometric mean js/wasm: steady 1.67x, first call 0.25x
+
+
 
 **What changed, in the order of measured effect** (steady geometric mean js/wasm over the 11 jbench workloads that match, V8 13.6, 3 to 5 runs
 each, so +-5%; the starting point is `3702b732` plus the harness):
