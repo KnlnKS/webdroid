@@ -1,33 +1,27 @@
 // Unresolved references (java/lk): a class or member the dex names that the running program lacks must fail at its use site with the error and
 // message ART gives, and execution up to it must be unaffected. The error class is compared with the JDK; the messages are ART's (class_linker.cc,
-// common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: bun linkdiff.ts
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync } from "node:fs";
+// common_throws.cc). A dex loaded later that defines the class undoes the failure. Needs javac, d8 and java. Run: bun run wasm linkdiff
+import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, world } from "./lib";
 import { jsTier, natives, processState } from "./oracle";
-import { underNode } from "./undernode";
+import { AOSP, JAVA } from "./paths";
+import { filesIn, shellIn } from "./tools";
 
-await underNode(import.meta.path);
-
-const here = import.meta.dir, root = join(here, "../../.."), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(root, "vendor/aosp", j));
+const jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 const out = mkdtempSync(join(tmpdir(), "j2w-lk-")), v1 = join(out, "v1"), v2 = join(out, "v2"), run = join(out, "run"), gone = join(out, "gone");
-const sh = (cmd: string[], input?: string) => {
-  const r = Bun.spawnSync(cmd, { cwd: out, stdin: input === undefined ? "ignore" : new TextEncoder().encode(input) });
-  if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
-  return r.stdout.toString();
-};
-const src = (d: string, ...n: string[]) => n.map((x) => join(here, "java/lk", d, `${x}.java`));
+const sh = shellIn(out);
+const src = (d: string, ...n: string[]) => n.map((x) => join(JAVA, "lk", d, `${x}.java`));
 for (const d of [v1, v2, run, gone]) mkdirSync(d);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", v1, ...src("", "Lk", "LkX", "LkGone", "LkGoneEx", "LkP", "LkI", "LkC")]);
 sh(["javac", "--release", "8", "-Xlint:-options", "-cp", v1, "-d", v2, ...src("v2", "LkP", "LkI", "LkC")]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", run, join(here, "java/Ref.java")]);
-const classes = (dir: string, re: RegExp) => readdirSync(dir).filter((f) => re.test(f)).map((f) => join(dir, f));
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", run, join(JAVA, "Ref.java")]);
 // the program that runs: Lk against the changed classes, without LkGone and LkGoneEx
-for (const f of [...classes(v2, /\.class$/), ...classes(v1, /^LkX?\.class$/)]) copyFileSync(f, join(run, f.split("/").pop()!));
-sh(["d8", "--release", "--output", out, ...classes(run, /^Lk/)]);
-sh(["d8", "--release", "--output", gone, ...classes(v1, /^LkGone/)]);
+for (const f of [...filesIn(v2, /\.class$/), ...filesIn(v1, /^LkX?\.class$/)]) copyFileSync(f, join(run, f.split("/").pop()!));
+sh(["d8", "--release", "--output", out, ...filesIn(run, /^Lk/)]);
+sh(["d8", "--release", "--output", gone, ...filesIn(v1, /^LkGone/)]);
 
 const loc = join(out, "classes.dex"), at = (cls: string) => ` (declaration of '${cls}' appears in ${loc})`;
 const ncdfe = (d: string) => `java.lang.NoClassDefFoundError: Failed resolution of: ${d}`;

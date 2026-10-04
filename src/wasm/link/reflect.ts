@@ -3,16 +3,16 @@
 // Executable's other fields (declaringClass, accessFlags, dexMethodIndex) are filled as ART does. Invoking is a generated thunk per
 // method (host.info hands out its table slot): it unboxes the Object[] into the method's parameters, dispatches as the invoke
 // instruction would, boxes the result and wraps what the method throws in InvocationTargetException.
-import { OP } from "./code";
-import { T, refNull } from "./wasmbin";
-import { ACC, kindOf, type JClass, type MethodInfo } from "./program";
-import { descToName } from "../../../src/jvm/abi";
-import { H } from "./consts";
+import { OP } from "../compiler/code";
+import { T, refNull } from "../compiler/wasmbin";
+import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program";
+import { descToName } from "../../jvm/abi";
+import { H } from "../compiler/consts";
 import { emitString, idOfClass, classMethod, typeName } from "./classes";
-import { rt } from "./rtfns";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
-import type { World } from "./lazy";
+import { rt } from "../compiler/rtfns";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { World } from "./world";
 
 const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method", CTOR = "java/lang/reflect/Constructor";
 const CLASS_ARRAY = "[Ljava/lang/Class;";

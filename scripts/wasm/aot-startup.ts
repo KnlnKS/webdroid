@@ -1,18 +1,16 @@
 // Records which module files a start of the process (the state ActivityThread.main leaves) loads, into startup.json beside the build, so that a page can fetch and
-// compile them in parallel before the World runs. Run: WEBDROID_AOT=<dir> bun aotstartup.ts
+// compile them in parallel before the World runs. Run: WEBDROID_AOT=<dir> bun run wasm aot-startup
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { world } from "./lib";
 import { jsTier, natives, processState } from "./oracle";
-import { underNode } from "./undernode";
+import { AOSP } from "./paths";
 
-await underNode(import.meta.path);
 const dir = process.env.WEBDROID_AOT;
 if (!dir) throw new Error("set WEBDROID_AOT to a build");
 await jsTier([]);
-const root = join(import.meta.dir, "../../..");
-const w = world(PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j)), { natives });
+const w = world(PLATFORM_JARS.map((j) => join(AOSP, j)), { natives });
 processState(w);
 writeFileSync(join(dir, "startup.json"), JSON.stringify(w.aot!.loaded));
 console.log(`${w.aot!.loaded.length} files`);

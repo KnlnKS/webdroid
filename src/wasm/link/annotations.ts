@@ -2,22 +2,22 @@
 // libcore's own AnnotationFactory.createAnnotation(type, AnnotationMember[]) (an InvocationHandler over a Proxy, see proxy.ts), whose members carry the
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
-import { OP } from "./code";
-import type { JClass } from "./program";
-import { descToName } from "../../../src/jvm/abi";
+import { OP } from "../compiler/code";
+import type { JClass } from "../compiler/program";
+import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName } from "./classes";
 import { BOX } from "./reflect";
-import { VIEWS } from "./natives";
-import type { EncAnnotation, EncVal } from "../../../src/jvm/dex";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
-import type { World } from "./lazy";
+import { VIEWS } from "../compiler/copy";
+import type { EncAnnotation, EncVal } from "../../jvm/dex";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { World } from "./world";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember", EXEC = "java/lang/reflect/Executable";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature";
 const RUNTIME = 1, SYSTEM = 2;
 
-export const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField }
+const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField }
 
 /** the annotations of the element whose object the host was given, and the dex that holds them */
 function elementOf(w: World, kind: Ann, a: number): { jc: JClass; set: EncAnnotation[]; params?: EncAnnotation[][] } {

@@ -5,8 +5,8 @@
 import { OP } from "./code";
 import { T } from "./wasmbin";
 import { ACC } from "./program";
-import { Info, fieldId, vtId, classMethod } from "./classes";
-import { UInfo } from "./unsafe";
+import { Info, fieldId, vtId, classMethod } from "../link/classes";
+import { UInfo } from "../link/unsafe";
 import { rt } from "./rtfns";
 import type { Code } from "./code";
 import type { Compiler, Intrinsic } from "./j2w";

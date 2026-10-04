@@ -1,26 +1,26 @@
 // Compile sweep: every method with code in the given jars or APKs (default: the first six boot jars, up to framework.jar, and apks/FitNotes.apk) is compiled alone by the
 // Wasm compiler against the whole boot class path, and each failure is reported by cause: a gap (a construct with no translation, recorded by
 // Compiler.gap), a compiler exception, or a module V8 rejects. The exit status is non-zero when a cause outside KNOWN occurs.
-// Run from the repository root: bun research/wasm/j2w/sweep.ts [path ...] [-v]
+// Run from the repository root: bun run wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, world } from "./build";
-import { externs } from "./intrinsics";
-import { Program } from "./program";
-import { Compiler } from "./j2w";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, world } from "./lib";
+import { externs } from "../../src/wasm/link/intrinsics";
+import { Program } from "../../src/wasm/compiler/program";
+import { Compiler } from "../../src/wasm/compiler/j2w";
 import { natives } from "./oracle";
-import { mid } from "./reach";
-import { COMPILE_OPTIONS } from "./lazy";
+import { mid } from "../../src/wasm/compiler/ids";
+import { compileModule } from "../../src/wasm/link/module";
+import { AOSP, ROOT } from "./paths";
 
 /** what is understood and not yet translated: natives with no host implementation, String constructors strings.ts lacks, and an invoke-custom whose bootstrap is
  *  libcore's LambdaMetafactory (a stub that returns null: ART cannot link a lambda, d8 desugars them) */
 const KNOWN = [/^native: /, /^String\.<init>\(/, /^invoke-custom .*LambdaMetafactory/];
 
-const root = join(import.meta.dir, "../../..");
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 // the default covers the jars the AOT build compiles (aotbuild.ts leaves a method it cannot compile to the on-demand compiler, so only the sweep says one is invalid)
-const targets = args.length ? args.map((a) => resolve(a)) : [...PLATFORM_JARS.slice(0, 6).map((j) => join(root, "vendor/aosp", j)), join(root, "apks/FitNotes.apk")];
-const jars = PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j));
+const targets = args.length ? args.map((a) => resolve(a)) : [...PLATFORM_JARS.slice(0, 6).map((j) => join(AOSP, j)), join(ROOT, "apks/FitNotes.apk")];
+const jars = PLATFORM_JARS.map((j) => join(AOSP, j));
 let unexplained = 0;
 for (const target of targets) {
   // the boot class path comes first, as in ART: an app's stubs of platform classes (R8 API outlines) never shadow the platform's, and an app sees only the platform
@@ -42,7 +42,7 @@ for (const target of targets) {
       for (const t of new Set(cx.linkErrors)) linked.set(t, (linked.get(t) ?? 0) + 1);
       if (cx.gaps.length) for (const g of new Set(cx.gaps.map((g) => (g.startsWith(id + ": ") ? g.slice(id.length + 2) : g).replace(/\d+/g, "N")))) fail(g);
       else {
-        try { new WebAssembly.Module(bytes as BufferSource, COMPILE_OPTIONS as never); clean++; } catch (e) { fail("invalid module: " + (e as Error).message.replace(/.*?: /, "").replace(/@\+\d+/g, "").replace(/\d+/g, "N")); }
+        try { compileModule(bytes); clean++; } catch (e) { fail("invalid module: " + (e as Error).message.replace(/.*?: /, "").replace(/@\+\d+/g, "").replace(/\d+/g, "N")); }
       }
     } catch (e) { fail("compiler crash: " + (e as Error).message.replace(/\d+/g, "N")); }
   }

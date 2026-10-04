@@ -4,38 +4,18 @@
 // stub copies it to and back from. Every other reference (a receiver, an object, an array of objects) crosses as an opaque
 // externref; the host side turns it into the value the production native expects, and a reference result back into a Java value,
 // through the Bridge (bridge.ts), which reaches fields and elements only through generated Wasm accessors.
-import { Code, OP } from "./code";
-import { T, type VT } from "./wasmbin";
-import type { Compiler, Intrinsic } from "./j2w";
-import { kindOf, type MethodInfo } from "./program";
-import { elemKindOf, type ElemKind } from "./consts";
-import { mid } from "./reach";
-import { decodeInstructions } from "../../../src/jvm/prepared";
-import { descToName } from "../../../src/jvm/abi";
-import type { Bridge } from "./bridge";
-
-export type HostFn = (...a: any[]) => unknown;
-export interface NativeSource {
-  /** the registered implementation of `cls`.`key` (name+descriptor); an instance method's `this` is its receiver. A String
-   *  constructor's key is `<init>desc` and its implementation answers the String */
-  find(cls: string, key: string, isStatic: boolean, hasBody: boolean): HostFn | undefined;
-  /** a Java throwable raised by a native, by class and message */
-  thrown(e: unknown): { cls: string; msg: string | null; obj?: object } | undefined;
-  /** the Java class name of an object the production runtime made, if `v` is one: a native result the Bridge copies into the Wasm heap */
-  classOf?(v: unknown): string | undefined;
-  /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" */
-  stores?(cls: string, run: () => void): Record<string, unknown>;
-}
-/** what the host side needs from the World */
-export interface HostContext {
-  mem: WebAssembly.Memory; sp: WebAssembly.Global;
-  /** a Java throwable of a class with a message, and the exception that throws it through Wasm */
-  throwable(cls: string, msg: string | null): object;
-  raise(throwable: object): unknown;
-  bridge: Bridge;
-  /** records that compiled code ran into something it cannot do (World.onGap) */
-  gap(what: string): void;
-}
+import { Code, OP } from "../compiler/code";
+import { T, type VT } from "../compiler/wasmbin";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import { kindOf, type MethodInfo } from "../compiler/program";
+import { elemKindOf, type ElemKind } from "../compiler/consts";
+import { mid } from "../compiler/ids";
+import { decodeInstructions } from "../../jvm/prepared";
+import { descToName } from "../../jvm/abi";
+import { Bridge } from "./bridge";
+import type { HostBridge, HostContext, HostFn, NativeBinder, NativeSource } from "../link/hostapi";
+import type { World } from "../link/world";
+import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
 
 /** the primitive array classes natives take and return */
 const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
@@ -44,12 +24,6 @@ const isPrimArray = (d: string) => PRIM_ARRAYS.includes(d);
 const isRef = (d: string) => d[0] === "L" || d[0] === "[";
 const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefined : T.externref)
   : ({ Z: T.i32, B: T.i32, S: T.i32, C: T.i32, I: T.i32, F: T.f32, D: T.f64, J: T.i64 } as Record<string, VT>)[d];
-/** bytes per element, by storage kind */
-export const SIZE: Record<ElemKind, number> = { i8: 1, i16: 2, i32: 4, i64: 8, ref: 4 };
-type View = ArrayBufferView & { length: number };
-/** the typed array the production natives take for a primitive array class */
-export const VIEWS: Record<string, (new (b: ArrayBuffer, o: number, n: number) => View) & (new (n: number) => View)> = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
-
 /** String methods whose Java body needs charset or regex machinery (class objects, ICU natives), or ART's native doReplace, and whose
  *  production override is a self-contained JS routine; the rest of String runs its bytecode unless that reads the representation */
 const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(|^replace\(CC\)/;
@@ -105,10 +79,11 @@ interface Plan {
   wrapped?: WeakMap<HostContext, HostFn>;
 }
 
-export class Natives {
+export class Natives implements NativeBinder {
   private plans = new Map<string, Plan | string>();
   constructor(private src?: NativeSource) {}
   get source(): NativeSource | undefined { return this.src; }
+  bridge(w: World): HostBridge { return new Bridge(w, this.src); }
 
   /** `m` as a host import; `override` asks for the production method even where the bytecode would run (an intrinsic's error path) */
   private plan(m: MethodInfo, override = false): Plan | string {
@@ -258,55 +233,13 @@ export class Natives {
   }
 }
 
-/** copy(data, pointer, from, count): elements [from, from + count) of the array to (`toMem`) or from linear memory, where element i is at
- *  pointer + i * size. Eight bytes at a time through two 32-bit words, element by element for the tail and for 64-bit elements. */
-export function copyFn(cx: Compiler, ek: ElemKind, toMem: boolean): number {
-  return cx.memo(`copy:${ek}:${toMem}`, () => {
-    const c = new Code(4), i = c.newLocal(T.i32), end = c.newLocal(T.i32), arr = cx.tData[ek], size = SIZE[ek], pack = size === 8 ? 1 : 4 / size;
-    const get = (k: number) => { c.lget(0).lget(i); if (k) c.i32(k).raw(OP.i32_add); return ek === "i32" || ek === "i64" ? c.arrayGet(arr) : c.arrayGetU(arr); };
-    const addr = () => c.lget(1).lget(i).i32(Math.log2(size)).raw(OP.i32_shl).raw(OP.i32_add);
-    const advance = (n: number) => c.lget(i).i32(n).raw(OP.i32_add).lset(i);
-    c.lget(2).lset(i).lget(2).lget(3).raw(OP.i32_add).lset(end);
-    if (pack > 1 || ek === "i32") {
-      const bits = 32 / pack, words = 2, step = pack * words, w = c.newLocal(T.i32);
-      c.block().loop().lget(i).i32(step).raw(OP.i32_add).lget(end).raw(OP.i32_gt_s).brIf(1);
-      for (let word = 0; word < words; word++) {
-        if (toMem) {
-          addr(); get(word * pack);
-          for (let k = 1; k < pack; k++) get(word * pack + k).i32(k * bits).raw(OP.i32_shl).raw(OP.i32_or);
-          c.mem(OP.i32_store, 0, word * 4);
-        } else {
-          addr().mem(OP.i32_load, 0, word * 4).lset(w);
-          for (let k = 0; k < pack; k++) {
-            c.lget(0).lget(i).i32(word * pack + k).raw(OP.i32_add).lget(w);
-            if (k) c.i32(k * bits).raw(OP.i32_shr_u);
-            c.arraySet(arr);
-          }
-        }
-      }
-      advance(step).br(0).end().end();
-    }
-    c.block().loop().lget(i).lget(end).raw(OP.i32_ge_s).brIf(1);
-    if (toMem) {
-      addr(); get(0);
-      if (ek === "i16") c.mem(OP.i32_store16, 1); else if (ek === "i8") c.mem(OP.i32_store8, 0); else c.mem(ek === "i64" ? OP.i64_store : OP.i32_store, ek === "i64" ? 3 : 2);
-    } else {
-      c.lget(0).lget(i); addr();
-      if (ek === "i16") c.mem(OP.i32_load16_u, 1); else if (ek === "i8") c.mem(OP.i32_load8_u, 0); else c.mem(ek === "i64" ? OP.i64_load : OP.i32_load, ek === "i64" ? 3 : 2);
-      c.arraySet(arr);
-    }
-    advance(1).br(0).end().end();
-    return cx.mb.addFunc(cx.mb.addFuncType([{ ht: arr, nullable: false }, T.i32, T.i32, T.i32], []), c.finish(), `$copy:${ek}:${toMem}`);
-  });
-}
-
 type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: View | null) => number,
-  B: Bridge, D: string[], RD: string | null, CLS: string | null) => HostFn;
+  B: HostBridge, D: string[], RD: string | null, CLS: string | null) => HostFn;
 const makers = new Map<string, Maker>();
 /** one function per shape: a native runs under try/catch so a Java throwable it raises becomes a Wasm exception, and a native that
  *  suspends (answers a Promise) is reported, not mistaken for a value; array parameters become views, an array result is stored, and
  *  other references are turned into host values for the call and back into Java values after it (bridge.ts) */
-function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: Bridge): HostFn {
+function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge): HostFn {
   const objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
   const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]);
   let make = makers.get(key);

@@ -4,18 +4,18 @@
 // type against the handle's (invokeExact: equal, else WrongMethodTypeException; invoke: asType's conversions of boxing, unboxing, widening and casts),
 // calls the member through a generated thunk and answers the boxed result, which the site unboxes. A handle that is a transformer (a combinator:
 // bindTo, filterArguments, asType of a different shape) runs Java code over ART's EmulatedStackFrame, which this does not model: that is a gap.
-import { OP } from "./code";
-import { T } from "./wasmbin";
-import { kindOf } from "./program";
-import { isWide, descToName } from "../../../src/jvm/abi";
+import { OP } from "../compiler/code";
+import { T } from "../compiler/wasmbin";
+import { kindOf } from "../compiler/program";
+import { isWide, descToName } from "../../jvm/abi";
 import { hostReflect, RInfo, BOX } from "./reflect";
-import { prettyType } from "./linkage";
-import { WIDEN } from "./fields";
-import type { Code } from "./code";
-import type { Compiler } from "./j2w";
-import type { World } from "./lazy";
-import type { MC } from "./method";
-import type { PreparedInstruction as Ins } from "../../../src/jvm/prepared";
+import { prettyType } from "../compiler/linkage";
+import { WIDEN } from "../compiler/fields";
+import type { Code } from "../compiler/code";
+import type { Compiler } from "../compiler/j2w";
+import type { World } from "./world";
+import type { MC } from "../compiler/method";
+import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
 
@@ -66,8 +66,8 @@ function state(w: World): State {
   jc.dex!.encodedArray(jc.def!.staticValuesOff).forEach((v, i) => { if (sf[i]) kinds[sf[i].name] = v as number; });
   s = {
     kinds,
-    handleKind: w.fieldReader(MH, "handleKind", "I") as never, art: w.fieldReader(MH, "artFieldOrMethod", "J") as never, typeOf: w.fieldReader(MH, "type", `L${MT};`),
-    ptypes: w.fieldReader(MT, "ptypes", `[L${CLASS};`), rtype: w.fieldReader(MT, "rtype", `L${CLASS};`), classId: w.fieldReader(CLASS, "dexTypeIndex", "I") as never,
+    handleKind: w.fieldReader<number>(MH, "handleKind", "I"), art: w.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.fieldReader<object>(MH, "type", `L${MT};`),
+    ptypes: w.fieldReader<object>(MT, "ptypes", `[L${CLASS};`), rtype: w.fieldReader<object>(MT, "rtype", `L${CLASS};`), classId: w.fieldReader<number>(CLASS, "dexTypeIndex", "I"),
     alen: w.hostFn("mh:alen", ["L"], "I", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).refAsNonNull().arrayLen(); }),
     aget: w.hostFn("mh:aget", ["L", "I"], "L", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).arrayGet(cx.tData.ref); }),
     aset: w.hostFn("mh:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); }),
@@ -85,7 +85,7 @@ const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).
 
 export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number): object | null {
   const s = state(w);
-  const fail = (cls: string, msg: string | null): never => { throw new (WebAssembly as any).Exception(w.rt.tag, [w.makeThrowable(cls, msg)]); };
+  const fail = (cls: string, msg: string | null): never => { throw w.exception(w.makeThrowable(cls, msg)); };
   const site = /^\((.*)\)(.*)$/.exec(siteId)!, sp = parseDescs(site[1]), sr = site[2];
   const nominal = s.typeOf(mh!), pt = s.ptypes(nominal), np = Array.from({ length: s.alen(pt) }, (_, i) => descOfName(w.nameOf(s.classId(s.aget(pt, i))))), nr = descOfName(w.nameOf(s.classId(s.rtype(nominal))));
   const wrong = () => fail("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);

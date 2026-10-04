@@ -1,29 +1,24 @@
 // Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex), on the JDK and on the
-// production JS tier; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun diff.ts [method-name-filter]
+// production JS tier; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun run wasm diff [method-name-filter]
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, world } from "./lib";
 import { jsTier, natives } from "./oracle";
-import { ACC } from "./program";
-import { namesWasmFrames } from "./exc";
+import { ACC } from "../../src/wasm/compiler/program";
+import { namesWasmFrames } from "../../src/wasm/link/exc";
 import { compare, genCases } from "./cases";
-import { underNode } from "./undernode";
+import { AOSP, JAVA } from "./paths";
+import { shellIn } from "./tools";
 
-await underNode(import.meta.path);
-
-const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-"));
-const sh = (cmd: string[], input?: string) => {
-  const r = Bun.spawnSync(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), cwd: out });
-  if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
-  return r.stdout.toString();
-};
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(here, "java/W.java"), join(here, "java/S.java"), join(here, "java/N.java"), join(here, "java/Ref.java")]);
+const out = mkdtempSync(join(tmpdir(), "j2w-"));
+const sh = shellIn(out);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "W.java"), join(JAVA, "S.java"), join(JAVA, "N.java"), join(JAVA, "Ref.java")]);
 sh(["d8", "--release", "--output", out, ...readdirSync(out).filter((f) => /^[WSN](\$\w+)?\.class$/.test(f)).map((f) => join(out, f))]);
 
 const dex = join(out, "classes.dex");
-const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(here, "../../../vendor/aosp", j))], { natives }), hit: string[] = [];
+const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives }), hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
 // S and N run String, StringBuilder and the natives over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
 const methods = ["W", ...(namesWasmFrames() ? ["S", "N"] : [])].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));

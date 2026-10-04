@@ -7,32 +7,29 @@
 import { cpus, loadavg, tmpdir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
+import { AOSP, JAVA, ROOT } from "./paths";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools";
 
-const here = import.meta.dir, root = join(here, "../../..");
+const here = import.meta.dir;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", ""), refPath = flag("--ref", ""), v8Flags = flag("--v8-flags", "");
 const only = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && !v[i - 1]?.startsWith("--"));
 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
-const out = join(tmpdir(), "g1"), sources = [["Bench", join(root, "scripts/jbench/Bench.java")], ["G1", join(here, "java/G1.java")]];
+const out = join(tmpdir(), "g1"), sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
 mkdirSync(out, { recursive: true });
-const sh = (cmd: string[]) => { const r = Bun.spawnSync(cmd, { cwd: out }); if (r.exitCode) throw new Error(`${cmd[0]}: ${r.stderr}`); };
+const sh = shellIn(out);
 const names: string[] = [], classOf = new Map<string, string>(), cut = sources.map(([cls, file]) => {
-  const text = readFileSync(file, "utf8");
-  const methods = text.split("\n").flatMap((l) => {
-    const m = /^\s*((?:case "\w+": )+)(.*)$/.exec(l); if (!m) return [];
-    return [...m[1].matchAll(/"(\w+)"/g)].map((x) => (names.push(x[1]), classOf.set(x[1], cls), `static int w_${x[1]}() throws Exception { String w = "${x[1]}"; ${m[2]} }`));
-  });
-  return { cls, file, text: text.replace(/}\s*$/, methods.join("\n") + "\n}\n") };
+  const { names: own, source } = cutWorkloads(readFileSync(file, "utf8"));
+  for (const n of own) { names.push(n); classOf.set(n, cls); }
+  return { cls, file, text: source };
 });
 const dex = join(out, "classes.dex");
 if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file).mtimeMs)) {
   for (const c of cut) writeFileSync(join(out, `${c.cls}.java`), c.text);
-  sh(["javac", "--release", "11", "-cp", `${androidPlatform(35)}/android.jar`, "-d", out, ...cut.map((c) => `${c.cls}.java`)]);
-  sh([androidTool("d8"), "--min-api", "26", "--output", out, ...readdirSync(out).filter((f) => f.endsWith(".class")).map((f) => join(out, f))]);
+  dexAndroid(sh, out, cut.map((c) => `${c.cls}.java`));
 }
 const todo = names.filter((n) => !only.length || only.includes(n));
 
@@ -48,7 +45,7 @@ const bundle = async (browser: boolean) => {
 };
 const base64 = Bun.spawnSync(["node", "-p", "typeof Uint8Array.fromBase64"]).stdout.toString().trim() === "function" ? [] : ["--js-base-64"];
 const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
-  const r = Bun.spawnSync(["node", "--expose-gc", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: root } });
+  const r = Bun.spawnSync(["node", "--expose-gc", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: ROOT } });
   const line = r.stdout.toString().split("\n").find((l) => l.startsWith("G1"));
   if (!line) throw new Error(`${cfg.workload}/${cfg.mode}: ${r.stderr.toString().slice(0, 400)}`);
   return JSON.parse(line.slice(2));
@@ -57,15 +54,15 @@ async function chromeRun() {
   const { chromium } = await import("playwright");
   const bundlePath = await bundle(true);
   const aotDir = process.env.WEBDROID_AOT, startup: string[] = aotDir && process.env.G1_PREFETCH ? (JSON.parse(readFileSync(join(aotDir, "startup.json"), "utf8")) as string[]).filter((f) => f[0] === process.env.G1_PREFETCH || process.env.G1_PREFETCH === "1") : [];
-  const preload = [dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j)), ...(aotDir ? readdirSync(aotDir).filter((f) => !startup.includes(f)).map((f) => join(aotDir, f)) : [])];
+  const preload = [dex, ...PLATFORM_JARS.map((j) => join(AOSP, j)), ...(aotDir ? readdirSync(aotDir).filter((f) => !startup.includes(f)).map((f) => join(aotDir, f)) : [])];
   // cross-origin isolation gives performance.now() microsecond resolution instead of 0.1 ms
   const iso = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
   const server = Bun.serve({ port: 0, fetch(req) {
     const u = new URL(req.url), p = u.pathname;
-    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(root)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const t0=performance.now();globalThis.G1_MODULES={};await Promise.all(${JSON.stringify(startup.map((f) => join(aotDir!, f)))}.map(async(p)=>G1_MODULES[p]=${process.env.G1_STREAM ? 'await WebAssembly.compileStreaming(fetch("/m?p="+encodeURIComponent(p)),{builtins:["js-string"],importedStringConstants:"#"})' : 'await WebAssembly.compile(await (await fetch("/m?p="+encodeURIComponent(p))).arrayBuffer(),{builtins:["js-string"],importedStringConstants:"#"})'}));globalThis.G1_AHEAD=performance.now()-t0;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(ROOT)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const t0=performance.now();globalThis.G1_MODULES={};await Promise.all(${JSON.stringify(startup.map((f) => join(aotDir!, f)))}.map(async(p)=>G1_MODULES[p]=${process.env.G1_STREAM ? 'await WebAssembly.compileStreaming(fetch("/m?p="+encodeURIComponent(p)),{builtins:["js-string"],importedStringConstants:"#"})' : 'await WebAssembly.compile(await (await fetch("/m?p="+encodeURIComponent(p))).arrayBuffer(),{builtins:["js-string"],importedStringConstants:"#"})'}));globalThis.G1_AHEAD=performance.now()-t0;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
     if (p === "/m") return new Response(Bun.file(u.searchParams.get("p")!), { headers: { "content-type": "application/wasm", ...iso } });
     if (p === "/g1.js") return new Response(Bun.file(bundlePath), { headers: { "content-type": "text/javascript", ...iso } });
-    const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(root, p) : null;
+    const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
     return file && existsSync(file) ? new Response(Bun.file(file), { headers: iso }) : new Response("", { status: 404 });
   } });
   const browser = await chromium.launch({ channel: "chrome", headless: true, args: [`--js-flags=--expose-gc ${v8Flags}`] });
@@ -107,7 +104,7 @@ for (const engine of engines) {
       const entry = got.get(w)!;
       if (ref && mode === "js") continue;
       if (entry.blocked && (mode === "wasm" || i > 0)) continue;
-      const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root }));
+      const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT }));
       entry[mode].push(r);
       if (mode === "wasm" && i === 0 && ((r.error && !r.result) || r.result !== entry.js[0].result)) entry.blocked = true;
     }

@@ -1,5 +1,5 @@
-import type { DexFile, ClassDef, EncodedMethod } from "../../../src/jvm/dex";
-import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
+import type { DexFile, ClassDef, EncodedMethod } from "../../jvm/dex";
+import { descToName, parseMethodDesc } from "../../jvm/abi";
 
 export const ACC = { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 0x10, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400, CONSTRUCTOR: 0x10000 };
 export type Kind = "I" | "J" | "L";               // wasm-level kinds: i32 (int,float bits,small ints), i64 (long,double bits), ref

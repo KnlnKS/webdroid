@@ -1,49 +1,22 @@
 // The production JS tier as an oracle: DEX methods run on src/jvm with the AOSP boot jars (tests/platform) loaded.
-import "../../../tests/platform";
+import "../../tests/platform";
 import { inspect } from "node:util";
-import { rt, JObj } from "../../../src/jvm/runtime";
-import "../../../src/natives";
-import { scall, vcall } from "../../../src/jvm/natives/jentry";
-import type { DexFile } from "../../../src/jvm/dex";
-import { JThrowable } from "../../../src/jvm/natives/jthrowable";
-import { mangleMethod, splitSig } from "../../../src/jvm/abi";
-import { Natives, type HostFn } from "./natives";
-import type { World } from "./lazy";
-import { hostNatives, syncVariants } from "./hostnatives";
-import { PLATFORM_DATA } from "../../../src/jvm/bootclasspath";
-import { isResident, mapExternal, pagesIn, unmapExternal } from "../../../src/jvm/natives/jmemory";
-import { vfs } from "../../../src/shell/vfs";
+import { rt } from "../../src/jvm/runtime";
+import "../../src/natives";
+import { scall, vcall } from "../../src/jvm/natives/jentry";
+import type { DexFile } from "../../src/jvm/dex";
+import { lookup, settled } from "../../src/wasm/host/nativesource";
+import type { World } from "../../src/wasm/link/world";
+import { PLATFORM_DATA } from "../../src/jvm/bootclasspath";
+import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory";
+import { vfs } from "../../src/shell/vfs";
 
-/** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
-const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
-const lookup = (cls: string, key: string, isStatic: boolean) => {
-  const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
-  const production = (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined, id = cls + "." + key;
-  return hostNatives.get(id) ?? (production && syncVariants.get(id)?.(production)) ?? production;
-};
+export { natives } from "../../src/wasm/host/nativesource";
+
 /** natives that read the ICU data asynchronously and take no arguments: a native cannot suspend in the Wasm tier, so their value is
  *  resolved once, from the same production implementation, before it runs */
 const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
   ["getUnicodeVersion", "getCldrVersion", "getIcuVersion", "getTzdbVersion"].map((name) => [cls, `${name}()Ljava/lang/String;`] as const));
-const settled = new Map<string, unknown>();
-/** the natives the production runtime registered, which the Wasm tier imports */
-export const natives = new Natives({
-  find: (cls, key, isStatic, hasBody) => {
-    if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
-    if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
-    return settled.has(cls + "." + key) ? () => settled.get(cls + "." + key) : lookup(cls, key, isStatic);
-  },
-  classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
-  // every static is unset while the native runs, so what it stores is what it wrote
-  stores: (cls, run) => {
-    const info = rt.link(cls), unset = Symbol(), saved = [...info.staticFieldTable].map(([key, prop]) => [key, prop, info.ctor[prop]] as const);
-    for (const [, prop] of saved) info.ctor[prop] = unset;
-    try { run(); return Object.fromEntries(saved.filter(([, prop]) => info.ctor[prop] !== unset).map(([key, prop]) => [key, info.ctor[prop]])); }
-    finally { for (const [, prop, v] of saved) info.ctor[prop] = v; }
-  },
-  thrown: (e) => e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg, obj: e } : undefined,
-});
-
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
 /** float/double results and arguments cross harnesses as raw bits */
 export const fb = (x: number) => (f32[0] = x, BigInt(u32[0] | 0)), db = (x: number) => (f64[0] = x, BigInt.asIntN(64, u64[0]));

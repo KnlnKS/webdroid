@@ -1,8 +1,9 @@
-import { decodeInstructions, type PreparedInstruction as Ins } from "../../../src/jvm/prepared";
-import { descToName } from "../../../src/jvm/abi";
-import { ACC, Program, type MethodInfo, mkey } from "./program";
+import { decodeInstructions, type PreparedInstruction as Ins } from "../../src/jvm/prepared";
+import { descToName } from "../../src/jvm/abi";
+import { ACC, Program, type MethodInfo, mkey } from "../../src/wasm/compiler/program";
+import { mid } from "../../src/wasm/compiler/ids";
 
-export interface Reach {
+interface Reach {
   methods: Map<string, MethodInfo>;           // "cls.name+desc" -> method
   instantiated: Set<string>;
   referenced: Set<string>;                     // classes needing ids (casts, catches, instance-of, instantiated)
@@ -13,7 +14,6 @@ export interface Reach {
   arrayTypes: Set<string>;                     // array descriptors used ("[I", "[Ljava/lang/Object;"...)
   staticFields: Set<string>;
 }
-export const mid = (m: MethodInfo) => m.cls + "." + m.key;
 
 export function reach(prog: Program, roots: MethodInfo[], seeds: { instantiate: string[]; methods: [string, string, string][] }, isIntrinsic: (m: MethodInfo) => boolean): Reach {
   const r: Reach = { methods: new Map(), instantiated: new Set(), referenced: new Set(), initClasses: new Set(), ifaceSelectors: new Map(),

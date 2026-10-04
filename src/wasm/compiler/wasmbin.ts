@@ -43,9 +43,9 @@ export function vt(t: VT, out: number[]): void {
   if (typeof t === "number") { out.push(t); return; }
   out.push(t.nullable ? 0x63 : 0x64); sleb(t.ht, out);
 }
-export type StorageT = VT;
-export interface FieldT { t: StorageT; mut: boolean }
-export type TypeDef =
+type StorageT = VT;
+interface FieldT { t: StorageT; mut: boolean }
+type TypeDef =
   | { k: "func"; params: VT[]; results: VT[]; sup?: number; final?: boolean }
   | { k: "struct"; fields: FieldT[]; sup?: number; final?: boolean }
   | { k: "array"; elem: FieldT; sup?: number; final?: boolean };

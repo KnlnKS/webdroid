@@ -1,27 +1,14 @@
 // Linux.android_getaddrinfo (libcore/io/Linux.java): the production native builds its InetAddress[] through InetAddress.getByAddress, which its runtime
 // can only run asynchronously. The resolution is the production one (the hosts file, numeric forms, the relay's answer), which answers synchronously for
 // everything but a name the relay must look up; the objects are made here, by the same call, in the Wasm program. A name that needs the relay is a gap.
-import { OP } from "./code";
-import { T } from "./wasmbin";
-import { resolveHost } from "../../../src/native/net-address";
-import type { Intrinsic } from "./j2w";
-import type { World } from "./lazy";
+import { OP } from "../compiler/code";
+import { T } from "../compiler/wasmbin";
+import type { Intrinsic } from "../compiler/j2w";
 
 const STRUCT = "android/system/StructAddrinfo", INET = "java/net/InetAddress", GAI = "android/system/GaiException";
 /** the answer of op 0 for a lookup that cannot finish synchronously */
-const ASYNC = -0x80000000;
+export const ASYNC = -0x80000000;
 export const enum NetOp { Resolve, Byte }
-
-const resolved = new WeakMap<World, number[][]>();
-/** host.net(op, node, a, b): Resolve answers the number of addresses of `node` (family a, flags b) or minus an EAI code; Byte answers byte b of address a, or the length for b = -1 */
-export function hostNet(w: World, op: NetOp, node: string, a: number, b: number): number {
-  if (op === NetOp.Byte) { const address = resolved.get(w)![a]; return b < 0 ? address.length : address[b]; }
-  const found = resolveHost(node, a, b);
-  if (found instanceof Promise) return ASYNC;
-  if (typeof found === "number") return -found;
-  resolved.set(w, found);
-  return found.length;
-}
 
 export const inetIntrinsics = new Map<string, Intrinsic>();
 inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;", (cx, m, c) => {

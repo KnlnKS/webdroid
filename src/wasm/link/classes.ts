@@ -7,14 +7,14 @@
 // Reference arrays share one wrapper type, so their class and covariance live in the header vt and the Class objects.
 // Anything that needs a struct type per class (allocation by Class.newInstance, Object.clone, arrays by component class) asks the
 // host for the slot of a generated function for that class.
-import { OP } from "./code";
-import { T, refNull } from "./wasmbin";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "./consts";
-import { ACC, type JClass } from "./program";
-import { rt } from "./rtfns";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
-import type { World } from "./lazy";
+import { OP } from "../compiler/code";
+import { T, refNull } from "../compiler/wasmbin";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts";
+import { ACC, type JClass } from "../compiler/program";
+import { rt } from "../compiler/rtfns";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { World } from "./world";
 import { hostUnsafe, UInfo } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";

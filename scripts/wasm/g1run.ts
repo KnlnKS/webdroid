@@ -1,9 +1,10 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex) or on the production JS tier,
 // timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
-import { loadDexes, program, world } from "./build";
+import { loadDexes, program, world } from "./lib";
 import { jsTier, natives, processState } from "./oracle";
-import { HEAP_LIMIT, heapUsed } from "./exc";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
+import { HEAP_LIMIT } from "../../src/wasm/link/exc";
+import { heapUsed } from "../../src/wasm/host/stats";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
 export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }

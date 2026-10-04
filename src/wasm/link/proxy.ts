@@ -4,14 +4,14 @@
 // objects libcore passed in through the table compiled code reads by index (World.pin). The result is unboxed as ART does: null for a primitive is a
 // NullPointerException, a value of another class a ClassCastException, and a checked exception the method does not declare is wrapped in
 // UndeclaredThrowableException.
-import { OP } from "./code";
-import { T, refNull } from "./wasmbin";
-import { ACC, type JClass, type MethodInfo } from "./program";
+import { OP } from "../compiler/code";
+import { T, refNull } from "../compiler/wasmbin";
+import { ACC, type JClass, type MethodInfo } from "../compiler/program";
 import { BOX } from "./reflect";
-import { descToName } from "../../../src/jvm/abi";
-import type { Compiler, Intrinsic } from "./j2w";
-import type { Code } from "./code";
-import type { World } from "./lazy";
+import { descToName } from "../../jvm/abi";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { Code } from "../compiler/code";
+import type { World } from "./world";
 
 const PROXY = "java/lang/reflect/Proxy", HANDLER = "java/lang/reflect/InvocationHandler", EXEC = "java/lang/reflect/Executable", CLASS = "java/lang/Class";
 const NM_TABLE = 1, PROXY_FLAG = 0x40000;
@@ -45,7 +45,7 @@ export function generateProxy(w: World, name: string, interfaces: object, method
   const bodies = new Map<MethodInfo, Intrinsic>();
   const add = (m: MethodInfo, body: Intrinsic) => { jc.methods.push(m); jc.byKey.set(m.key, m); bodies.set(m, body); };
   const made = (src: Pick<MethodInfo, "name" | "desc" | "key" | "params" | "ret">, flags: number): MethodInfo =>
-    ({ cls: internal, name: src.name, desc: src.desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: src.key, isStatic: false, isCtor: src.name === "<init>", params: src.params, ret: src.ret });
+    ({ cls: internal, name: src.name, desc: src.desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: src.key, isStatic: false, isCtor: src.name === "<init>", params: src.params, ret: src.ret, index: jc.methods.length });
   add(made({ name: "<init>", desc: `(L${HANDLER};)V`, key: `<init>(L${HANDLER};)V`, params: [`L${HANDLER};`], ret: "V" }, ACC.PUBLIC), (cx, m, c) => {
     c.lget(0).lget(1); cx.callMethod(c, cx.prog.resolve(PROXY, "<init>", `(L${HANDLER};)V`)!);
   });

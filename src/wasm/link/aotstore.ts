@@ -1,7 +1,7 @@
 // The build's files in a page or worker: fetched and compiled ahead of use, off the main thread, and read synchronously, the way World needs them, when the code that wants one runs. A file nobody asked for ahead is
 // fetched synchronously, which only a worker may do.
 import type { AotStore } from "./aot";
-import { COMPILE_OPTIONS } from "./lazy";
+import { compileStream } from "./module";
 
 export class FetchStore implements AotStore {
   private modules = new Map<string, WebAssembly.Module>();
@@ -10,7 +10,7 @@ export class FetchStore implements AotStore {
   /** starts fetching and compiling `files`; resolves when all are ready */
   prefetch(files: string[]): Promise<void> {
     return Promise.all(files.filter((f) => !this.modules.has(f)).map(async (f) => {
-      this.modules.set(f, await WebAssembly.compileStreaming(fetch(this.base + f), COMPILE_OPTIONS as never));
+      this.modules.set(f, await compileStream(fetch(this.base + f)));
     })).then(() => undefined);
   }
   /** fetches a file that is data (the index) */

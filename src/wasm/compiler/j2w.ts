@@ -1,20 +1,20 @@
-// One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see lazy.ts for the linker.
+// One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
 import { ModuleBuilder, T, ref, refNull, type VT } from "./wasmbin";
 import { Code, OP } from "./code";
 import { Program, kindOf, type Kind, type MethodInfo } from "./program";
-import { mid } from "./reach";
+import { mid } from "./ids";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
-import type { ClassRt, World } from "./lazy";
+import type { ClassRt, World } from "../link/world";
 import { rtfns } from "./rtfns";
 import type { LinkFailure } from "./linkage";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "./exc";
-import { StructStrings, stringCtor, type StringRepr } from "./strings";
-import type { Natives } from "./natives";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
+import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
+import type { NativeBinder } from "../link/hostapi";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
 /** how `m` is implemented without its bytecode: an intrinsic, a String constructor (a call site makes the string), or a host import */
-export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: Natives, m: MethodInfo): Intrinsic | undefined {
+export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: NativeBinder, m: MethodInfo): Intrinsic | undefined {
   return intrinsics.get(mid(m)) ?? (m.isCtor && m.cls === "java/lang/String" ? stringCtor : natives.stub(m));
 }
 

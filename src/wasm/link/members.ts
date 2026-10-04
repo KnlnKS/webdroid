@@ -1,16 +1,16 @@
 // What a class's dex says about its members: java.lang.Class's simple name and nesting, the declared methods and constructors as Method and Constructor
 // arrays, and which annotations a class, method or field carries (art/runtime/native/java_lang_Class.cc, dex_file_annotations.cc). The members of a
 // class are named as reflect.ts names them: Executable.artMethod = class id << 16 | index in the class's methods, Field.artFieldIndex = class id << 12 | index in its fields.
-import { OP } from "./code";
-import { T } from "./wasmbin";
-import { ACC, type JClass } from "./program";
-import { descToName } from "../../../src/jvm/abi";
+import { OP } from "../compiler/code";
+import { T } from "../compiler/wasmbin";
+import { ACC, type JClass } from "../compiler/program";
+import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName, PRIM } from "./classes";
-import { rt } from "./rtfns";
-import type { EncAnnotation } from "../../../src/jvm/dex";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
-import type { World } from "./lazy";
+import { rt } from "../compiler/rtfns";
+import type { EncAnnotation } from "../../jvm/dex";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { World } from "./world";
 
 const EXEC = "java/lang/reflect/Executable";
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
@@ -18,7 +18,7 @@ const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotati
 const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 
 export const enum MInfo { ExecCount = 300, ExecAt, ClassAnn, ExecAnn, FieldAnn, IsRecord, DeclaringClass, EnclosingClass, EnclosingIndex, CompareParams, ThrowsCount, ThrowsAt, EnclosingOwner, IsAnonymous }
-export const enum TextKind { SimpleName }
+const enum TextKind { SimpleName }
 
 type Annotations = ReturnType<NonNullable<JClass["dex"]>["classAnnotations"]>;
 const parsed = new WeakMap<JClass, Annotations>();

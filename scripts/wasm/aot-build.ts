@@ -1,25 +1,23 @@
 // Builds the ahead-of-time assets (aot.ts) of the first platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun aotbuild.ts [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate] [--app app.dex]
+//   bun run aot -- [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate] [--app app.dex]
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the first N jars (or the named ones) are numbered and compiled.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, world } from "./build";
-import { Program } from "./program";
-import { externs } from "./intrinsics";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, world } from "./lib";
+import { Program } from "../../src/wasm/compiler/program";
+import { externs } from "../../src/wasm/link/intrinsics";
 import { natives } from "./oracle";
-import { Compiler } from "./j2w";
-import { packModule, type CHeader, type DHeader } from "./aot";
-import type { MethodInfo } from "./program";
-import { mid } from "./reach";
-import { underNode } from "./undernode";
+import { Compiler } from "../../src/wasm/compiler/j2w";
+import { packModule, type CHeader, type DHeader } from "../../src/wasm/link/aot";
+import type { MethodInfo } from "../../src/wasm/compiler/program";
+import { compileModule } from "../../src/wasm/link/module";
+import { mid } from "../../src/wasm/compiler/ids";
+import { AOSP, ROOT } from "./paths";
 
-await underNode(import.meta.path);
-
-const root = join(import.meta.dir, "../../..");
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
-const out = flag("--out", join(import.meta.dir, "../aot/default")), nJars = +flag("--jars", "4"), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg");
+const out = flag("--out", join(ROOT, "vendor/wasm-aot/default")), nJars = +flag("--jars", "4"), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg");
 
 /** whether the build compiles `m`: it has bytecode or an implementation of its own (the rest stay abstract, or become a gap on demand) */
 const aotCompiles = (m: MethodInfo): boolean => !!m.codeOff || !!w.intrinsic(m);
@@ -35,7 +33,7 @@ export function keyOf(mode: string, name: string): string {
 
 const jarNames = flag("--only", "").split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < nJars));
-const dexes = PLATFORM_JARS.map((j) => loadDexes(join(root, "vendor/aosp", j)));
+const dexes = PLATFORM_JARS.map((j) => loadDexes(join(AOSP, j)));
 // an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
 const appDexes = flag("--app", "") ? loadDexes(flag("--app", "")) : [];
 const prog = new Program([...dexes.flat(), ...appDexes]); prog.addExterns(externs);
@@ -49,7 +47,7 @@ const validate = !process.argv.includes("--no-validate");
 const check = (bytes: Uint8Array): { fn: number; message: string } | undefined => {
   if (!validate) return undefined;
   const t = performance.now();
-  try { new WebAssembly.Module(bytes as BufferSource, { builtins: ["js-string"], importedStringConstants: "#" } as never); } catch (e) {
+  try { compileModule(bytes); } catch (e) {
     const message = (e as Error).message, m = /function #(\d+)/.exec(message);
     return { fn: m ? +m[1] : -1, message };
   } finally { v8Ms += performance.now() - t; }
@@ -111,15 +109,15 @@ dGroups.forEach((blocks, k) => {
   dBytes += file.length;
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module; building it can reserve more
-let extras = 0, xbytes: Uint8Array, xtouch: Set<string>;
-for (;;) {
-  const names = aot.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
-  if (extras && names.length === extras) break;
+const extraNames = () => aot.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
+let extras: number, xbytes: Uint8Array, xtouch: Set<string>;
+do {
+  const names = extraNames();
   extras = names.length;
   aot.beginTouch();
   xbytes = w.classModule(names.map((n) => w.link(n)));
   xtouch = aot.endTouch();
-}
+} while (extraNames().length !== extras);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);
 writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;

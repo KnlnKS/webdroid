@@ -1,14 +1,14 @@
 // invoke-custom: a call site's bootstrap method and constant arguments are in the dex (call_site_item), so a site whose bootstrap this file
 // knows is linked at compile time. java.lang.runtime.ObjectMethods.bootstrap (records) is generated from its getter handles: AOSP's own
-// implementation is a chain of method-handle combinators, which need ART's emulated stack frames (see handles.ts).
+// implementation is a chain of method-handle combinators, which need ART's emulated stack frames (see link/mhandles.ts).
 import { OP } from "./code";
 import { T } from "./wasmbin";
-import { descToName } from "../../../src/jvm/abi";
+import { descToName } from "../../jvm/abi";
 import { ACC } from "./program";
-import { RInfo, BOX } from "./reflect";
+import { RInfo, BOX } from "../link/reflect";
 import { failed, resolveFieldRef, resolveInvoke } from "./linkage";
-import type { EncVal } from "../../../src/jvm/dex";
-import type { PreparedInstruction as Ins } from "../../../src/jvm/prepared";
+import type { EncVal } from "../../jvm/dex";
+import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import type { MC } from "./method";
 
 const OBJECT_METHODS = "java/lang/runtime/ObjectMethods.bootstrap";
@@ -31,7 +31,7 @@ export function emitCustom(mc: MC, ins: Ins): void {
 
 function objectMethods(mc: MC, ins: Ins, cs: EncVal[]): void {
   const { cx, code: c, dex } = mc, prog = cx.prog;
-  const what = cs[1] as string, proto = dex.proto((cs[2] as { idx: number }).idx), extra = cs.slice(3);
+  const what = cs[1] as string, extra = cs.slice(3);
   const gap = (why: string) => mc.invokeGap(ins, `invoke-custom ObjectMethods.${what}: ${why}`);
   const record = descToName(dex.type((extra[0] as { idx: number }).idx)), names = extra[1] as string, labels = names ? names.split(";") : [];
   const comps: Component[] = [];

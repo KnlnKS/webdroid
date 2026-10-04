@@ -1,15 +1,15 @@
 // The String constructors that turn bytes into chars, for either representation of String: the compact form StringLatin1 builds, the
 // deprecated hibyte forms, and the charset forms. ASCII (any byte below 0x80, the same chars in UTF-8, US-ASCII and ISO-8859-1) is
 // widened here; anything else, and every argument the constructors reject, is the production implementation (natives.ts).
-import { Code, OP } from "./code";
-import { T, ref } from "./wasmbin";
-import { kindOf } from "./program";
-import { parseMethodDesc } from "../../../src/jvm/abi";
-import type { Compiler } from "./j2w";
+import { Code, OP } from "../compiler/code";
+import { T, ref } from "../compiler/wasmbin";
+import { kindOf } from "../compiler/program";
+import { parseMethodDesc } from "../../jvm/abi";
+import type { Compiler } from "../compiler/j2w";
 
 const CHARSET = "java/nio/charset/Charset";
 
-export interface CharsTarget {
+interface CharsTarget {
   /** a function (count) -> a new char array, for a count no larger than an existing array's */
   newKnown(): number;
   /** pushes the String made of the char array in local `out` */

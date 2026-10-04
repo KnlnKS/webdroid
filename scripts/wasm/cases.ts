@@ -1,6 +1,6 @@
 // Argument generation and the Wasm-vs-oracle comparison shared by the differential harnesses.
-import { mangleField, mangleMethod } from "../../../src/jvm/abi";
-import { kindOf, type MethodInfo } from "./program";
+import { mangleField } from "../../src/jvm/abi";
+import { kindOf, type MethodInfo } from "../../src/wasm/compiler/program";
 import { bitsOf, db, fb, fmt, unbits } from "./oracle";
 
 const pool: Record<string, bigint[]> = {
@@ -19,7 +19,7 @@ const kindOfParam = (p: string) => (p === "F" || p === "D" ? p : p === STR ? "S"
 const retKind = (m: MethodInfo) => (m.ret === "F" || m.ret === "D" ? m.ret : "I");
 
 /** the parameters of the exported function: a String method takes its receiver first */
-export const paramsOf = (m: MethodInfo) => (m.isStatic ? m.params : [STR, ...m.params]);
+const paramsOf = (m: MethodInfo) => (m.isStatic ? m.params : [STR, ...m.params]);
 export type Case = { m: MethodInfo; args: (bigint | string | null)[] };
 /** a String result as one comparable token: null apart from the text "null" */
 const show = (v: unknown) => (v === null ? "null" : JSON.stringify(v));

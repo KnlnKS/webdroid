@@ -6,14 +6,13 @@
 // link kinds without merging live ranges. A web whose mask ends at 0 is a true conflict; a web
 // whose mask keeps several bits (a constant never constrained by a use) is "underdetermined".
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
-import type { CodeItem, DexFile } from "../../../src/jvm/dex";
-import { decodeInstructions, type PreparedInstruction } from "../../../src/jvm/prepared";
+import type { CodeItem, DexFile } from "../../jvm/dex";
+import { decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
 import { buildCfg } from "./cfg";
 import { NO_THROW, isInvoke, isInstanceInvoke } from "./opinfo";
 
 export const I = 1, F = 2, R = 4, J = 8, D = 16;
 const N32 = I | F | R, WIDE = J | D;
-export const KIND_NAMES: Record<number, string> = { [I]: "I", [F]: "F", [R]: "R", [J]: "J", [D]: "D" };
 const kc = (c: string) => (c === "L" || c === "[" ? R : c === "J" ? J : c === "D" ? D : c === "F" ? F : I);
 
 interface Eff { u: number[]; d: number; dm: number; link: number; zero: boolean; fconst: boolean }
@@ -21,7 +20,7 @@ const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0, zero: false, fconst: false };
 const NO_USES = new Int32Array(0);
 
 /** The webs of one method: nodes are definitions (parameters included), unioned at joins where the register is live. */
-export interface WebAnalysis {
+interface WebAnalysis {
   regs: number;
   ins: readonly PreparedInstruction[];
   /** per node */
@@ -170,7 +169,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
-export interface Components { kf(node: number): number; roots: Set<number>; mask: Map<number, number>; used: Map<number, number>; zero: Map<number, number> }
+interface Components { kf(node: number): number; roots: Set<number>; mask: Map<number, number>; used: Map<number, number>; zero: Map<number, number> }
 export function components(a: WebAnalysis): Components {
   const kp = new Map<number, number>();
   const kf = (x: number): number => { let r = kp.get(x) ?? x; while (r !== (kp.get(r) ?? r)) r = kp.get(r) ?? r; return r; };

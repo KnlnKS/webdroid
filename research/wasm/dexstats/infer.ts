@@ -1,7 +1,9 @@
-// Corpus statistics over the compiler's web analysis (j2w/infer.ts): conflicts, underdetermined webs, multi-kind vregs, local counts.
+// Corpus statistics over the compiler's web analysis (src/wasm/compiler/infer.ts): conflicts, underdetermined webs, multi-kind vregs, local counts.
 import type { CodeItem, DexFile } from "../../../src/jvm/dex";
 import { decodeInstructions, type PreparedInstruction } from "../../../src/jvm/prepared";
-import { analyzeWebs, components, parseDesc, retOf, I, F, R, J, D, KIND_NAMES } from "../j2w/infer";
+import { analyzeWebs, components, parseDesc, retOf, I, F, R, J, D } from "../../../src/wasm/compiler/infer";
+
+const KIND_NAMES: Record<number, string> = { [I]: "I", [F]: "F", [R]: "R", [J]: "J", [D]: "D" };
 
 export { I, F, R, J, D, KIND_NAMES, retOf, parseDesc };
 const WIDE = J | D;

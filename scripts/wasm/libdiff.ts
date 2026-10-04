@@ -1,14 +1,15 @@
 // Primitive-only static methods of the AOSP libraries, compiled from the boot dex unchanged, against the JS tier running the same bytecode.
 // A method takes part when everything it reaches compiles without a gap; the rest are counted by their first blocker.
-// Run: bun libdiff.ts [class-prefix ...]
+// Run: bun run wasm libdiff [class-prefix ...]
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { isIntrinsic, loadDexes, program, world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { isIntrinsic, loadDexes, program, world } from "./lib";
 import { compare, genCases } from "./cases";
-import { intrinsics } from "./intrinsics";
+import { intrinsics } from "../../src/wasm/link/intrinsics";
 import { jsTier, natives } from "./oracle";
 import { reach } from "./reach";
-import { namesWasmFrames } from "./exc";
+import { namesWasmFrames } from "../../src/wasm/link/exc";
+import { AOSP } from "./paths";
 
 const CLASSES = ["java/lang/Integer", "java/lang/Long", "java/lang/Short", "java/lang/Byte", "java/lang/Character", "java/lang/Boolean", "java/lang/Float", "java/lang/Double",
   "java/lang/Math", "java/lang/StrictMath", "libcore/util/FP16", "java/util/Objects", "java/util/Arrays", "java/lang/StringUTF16", "java/lang/StringLatin1", "java/lang/String", "java/lang/Long$LongCache"];
@@ -18,7 +19,7 @@ const CONDITIONAL = /beyond ASCII/;
 /** the JS tier's overrides clamp an offset as JS does ("abc".startsWith("", 7) is true, "a".lastIndexOf("a", -1) is 0); Java answers false and -1,
  *  as the bytecode run here does */
 const JS_DEVIATES = ["java/lang/String.startsWith(Ljava/lang/String;I)Z", "java/lang/String.lastIndexOf(Ljava/lang/String;I)I"];
-const jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(import.meta.dir, "../../../vendor/aosp", j));
+const jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 const prog = program(jars), js = await jsTier(jars.flatMap(loadDexes));
 const prim = /^([IJFDZBSC]|Ljava\/lang\/String;)$/, only = process.argv.slice(2);
 const cand = CLASSES.filter((c) => !only.length || only.some((p) => c.startsWith(p))).flatMap((c) => prog.get(c)?.methods ?? [])

@@ -1,8 +1,8 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
-import { ModuleBuilder, T } from "./wasmbin";
-import { Code } from "./code";
-import type { Kind } from "./program";
-import type { Compiler, FnTrace } from "./j2w";
+import { ModuleBuilder, T } from "../compiler/wasmbin";
+import { Code } from "../compiler/code";
+import type { Kind } from "../compiler/program";
+import type { Compiler, FnTrace } from "../compiler/j2w";
 
 /** ART's heap limit, as src/jvm/runtime.ts HEAP_LIMIT: the JS tier throws OutOfMemoryError past it too */
 export const HEAP_LIMIT = 512 * 1024 * 1024;
@@ -123,10 +123,3 @@ export function namesWasmFrames(): boolean {
 }
 
 export const isStackOverflow = (e: unknown): boolean => e instanceof RangeError && /call stack/i.test(e.message);
-
-/** bytes in use on the JS heap, which holds the Wasm GC heap in V8 */
-export function heapUsed(): number {
-  const p = (globalThis as { performance?: { memory?: { usedJSHeapSize: number } } }).performance?.memory;
-  if (p) return p.usedJSHeapSize;
-  return typeof process !== "undefined" ? process.memoryUsage().heapUsed : 0;
-}

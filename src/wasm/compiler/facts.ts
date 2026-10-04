@@ -3,7 +3,7 @@
 // initialization never goes back and a null check stays true until its web is redefined, so a fact survives until its web is written.
 // A reference that field accesses cast to a struct type more than once keeps the cast in a local of that type (the "shadow"), so a later
 // access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
-import { endsBlock, branchTargets, type PreparedInstruction as Ins } from "../../../src/jvm/prepared";
+import { endsBlock, branchTargets, type PreparedInstruction as Ins } from "../../jvm/prepared";
 import { R as KR } from "./infer";
 import type { MC } from "./method";
 

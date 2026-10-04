@@ -2,17 +2,17 @@
 // for it, the JS string. A String is then an Object like any other (it carries its vtable), so a virtual call needs no test for it,
 // and character access is an array access instead of a call of a wasm:js-string builtin. A native sees the JS string, made and
 // cached on first use; a JS string a native answers is copied into an array once.
-import { Code, OP } from "./code";
-import { T, ref, refNull, type VT } from "./wasmbin";
-import { kindOf } from "./program";
-import { H } from "./consts";
-import { parseMethodDesc } from "../../../src/jvm/abi";
-import type { Compiler, Intrinsic } from "./j2w";
+import { Code, OP } from "../compiler/code";
+import { T, ref, refNull, type VT } from "../compiler/wasmbin";
+import { kindOf } from "../compiler/program";
+import { H } from "../compiler/consts";
+import { parseMethodDesc } from "../../jvm/abi";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
 import { bytesFactory } from "./strfactory";
-import { rt } from "./rtfns";
+import { rt } from "../compiler/rtfns";
 
 /** abstract heap types as ref.test/ref.cast immediates */
-export const HT = { extern: -17, any: -18, eq: -19 } as const;
+const HT = { extern: -17, any: -18, eq: -19 } as const;
 
 export interface StringRepr {
   /** imports the string builtins; before any function of the module is defined */

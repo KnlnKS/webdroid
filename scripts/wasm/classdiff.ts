@@ -1,36 +1,31 @@
 // Class-model differential test: the static int(int) methods of java/C.java, compiled lazily over the AOSP boot dex, against the
 // production JS tier and the JDK. Each method runs once (class initialization state persists in every tier).
-// Needs javac, d8 and java on PATH. Run: bun classdiff.ts [method-name-filter]
-import { mkdtempSync } from "node:fs";
+// Needs javac, d8 and java on PATH. Run: bun run wasm classdiff [method-name-filter]
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, program, world } from "./build";
-import { intrinsics } from "./intrinsics";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, program, world } from "./lib";
+import { intrinsics } from "../../src/wasm/link/intrinsics";
 import { jsTier, natives } from "./oracle";
-import { underNode } from "./undernode";
+import { AOSP, JAVA } from "./paths";
+import { shellIn } from "./tools";
 
-await underNode(import.meta.path);
-
-const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-c-"));
-const sh = (cmd: string[], input?: string) => {
-  const r = Bun.spawnSync(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), cwd: out });
-  if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
-  return r.stdout.toString();
-};
-sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(here, "java/C.java"), join(here, "java/Ref.java")]);
-sh(["d8", "--release", "--min-api", "34", "--output", out, ...new Bun.Glob("C*.class").scanSync(out).toArray().map((f) => join(out, f))]);
+const out = mkdtempSync(join(tmpdir(), "j2w-c-"));
+const sh = shellIn(out);
+sh(["javac", "--release", "11", "-Xlint:-options", "-d", out, join(JAVA, "C.java"), join(JAVA, "Ref.java")]);
+sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^C.*\.class$/.test(f)).map((f) => join(out, f))]);
 
 // System.<clinit> needs strings and the whole properties machinery, which System.arraycopy does not
 intrinsics.set("java/lang/System.<clinit>()V", () => {});
 
 // AbstractMethodError: Sub inherits m() from a Base that was recompiled abstract
 sh(["mkdir", "-p", "am"]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(here, "java/am1/Am.java"), join(here, "java/am1/AmBase.java")]);
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(here, "java/am2/AmBase.java")]);
-sh(["d8", "--release", "--output", join(out, "am"), ...new Bun.Glob("Am*.class").scanSync(join(out, "am")).toArray().map((f) => join(out, "am", f))]);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(JAVA, "am1/Am.java"), join(JAVA, "am1/AmBase.java")]);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", "am", join(JAVA, "am2/AmBase.java")]);
+sh(["d8", "--release", "--output", join(out, "am"), ...readdirSync(join(out, "am")).filter((f) => /^Am.*\.class$/.test(f)).map((f) => join(out, "am", f))]);
 const amExpected = sh(["java", "-cp", join(out, "am"), "Am"]).trim();
-const dex = join(out, "classes.dex"), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(here, "../../../vendor/aosp", j));
+const dex = join(out, "classes.dex"), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
 const prog = program([dex, ...jars]), only = process.argv[2];
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
 const js = await jsTier(loadDexes(dex));

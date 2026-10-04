@@ -1,18 +1,16 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
-// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm, on the production JS tier and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun customdiff.ts
+// MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm, on the production JS tier and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { jsTier, natives, processState } from "./oracle";
-import { loadDexes } from "./build";
-import { ACC } from "./program";
+import { loadDexes, world } from "./lib";
+import { ACC } from "../../src/wasm/compiler/program";
 import { compare, genCases } from "./cases";
-import { underNode } from "./undernode";
 import { Pool, u2, u4 } from "./classfile";
-
-await underNode(import.meta.path);
+import { AOSP, JAVA } from "./paths";
+import { shellIn } from "./tools";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and an interface getter, the method handle kinds a record never uses */
 function handClasses(): Record<string, Uint8Array> {
@@ -51,16 +49,12 @@ function handClasses(): Record<string, Uint8Array> {
   pq("Pq", "java/lang/Object", true); pq("Pq2", "Pq", false);
   return out;
 }
-const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-cu-"));
-const sh = (cmd: string[], input?: string) => {
-  const r = Bun.spawnSync(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), cwd: out });
-  if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
-  return r.stdout.toString();
-};
+const out = mkdtempSync(join(tmpdir(), "j2w-cu-"));
+const sh = shellIn(out);
 for (const [n, bytes] of Object.entries(handClasses())) writeFileSync(join(out, n + ".class"), bytes);
-sh(["javac", "--release", "17", "-cp", out, "-d", out, join(here, "java/Rec.java"), join(here, "java/Mh.java"), join(here, "java/Vh.java"), join(here, "java/Px.java"), join(here, "java/Pt.java"), join(here, "java/Ind.java"), join(here, "java/Ref.java")]);
+sh(["javac", "--release", "17", "-cp", out, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java")]);
 sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Vh|Px|Pt|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
-const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(here, "../../../vendor/aosp", j));
+const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 await jsTier(loadDexes(dex));
 const w = world([dex, ...jars], { natives }), hit: string[] = [];
 processState(w);

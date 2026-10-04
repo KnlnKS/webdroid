@@ -2,10 +2,10 @@
 // reaches it by the address VMRuntime.addressOf names. In the Wasm heap that array cannot move either, but it is not in linear memory, so
 // addressOf pins it in a table and answers an address that says which: NM_BASE + (table index << 32) + byte offset. The peek and poke natives
 // read and write the array when handed such an address, and every other address is native memory, which the production natives answer.
-import { OP } from "./code";
-import { T, refNull } from "./wasmbin";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
+import { OP } from "../compiler/code";
+import { T, refNull } from "../compiler/wasmbin";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
 
 /** the pinned arrays' address space, above the external mappings' (jmemory.ts EXTERNAL..EXTERNAL * 2) */
 const NM_BASE = 1n << 50n, NM_TABLE = 1;

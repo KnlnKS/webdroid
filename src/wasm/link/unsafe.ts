@@ -5,18 +5,18 @@
 // table slot (hostUnsafe); arrays are handled inline: an element of the operation's own width directly, a wider access to a byte[] as
 // little-endian bytes (what heap ByteBuffer views do). Raw addresses (the getInt(long) forms) belong to the native heap and stay
 // with the production natives.
-import { OP } from "./code";
-import { T, refNull } from "./wasmbin";
-import { kindOf, type Kind } from "./program";
-import type { ElemKind } from "./consts";
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
-import type { World } from "./lazy";
+import { OP } from "../compiler/code";
+import { T, refNull } from "../compiler/wasmbin";
+import { kindOf, type Kind } from "../compiler/program";
+import type { ElemKind } from "../compiler/consts";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { World } from "./world";
 import { idOfClass } from "./classes";
-import { rt } from "./rtfns";
+import { rt } from "../compiler/rtfns";
 
 /** the first array element's offset, above every field id */
-export const ARRAY_BASE = 1 << 30;
+const ARRAY_BASE = 1 << 30;
 type Ty = "Z" | "B" | "S" | "C" | "I" | "F" | "J" | "D" | "L";
 const TYPES: Ty[] = ["Z", "B", "S", "C", "I", "F", "J", "D", "L"];
 const WIDTH: Record<Ty, number> = { Z: 1, B: 1, S: 2, C: 2, I: 4, F: 4, J: 8, D: 8, L: 4 };
@@ -123,7 +123,6 @@ const onArray = (c: Code) => c.lget(OFF).i64(BigInt(ARRAY_BASE)).raw(OP.i64_ge_s
 function emitGet(cx: Compiler, c: Code, t: Ty): void {
   const k = kindOfTy(t), w = WIDTH[t], ek: ElemKind = t === "L" ? "ref" : ELEM[w], { tArr, tData } = cx;
   const signed = t === "B" || t === "S";
-  const wide = w === 8;
   onArray(c).if_(cx.vtOf(k));
   const idx = index(c, t);
   c.lget(OBJ).refTest(tArr[ek]).if_(cx.vtOf(k));

@@ -35,7 +35,7 @@ public class Mh {
   public static int tNullRecv(int a) throws Throwable { try { return (int) L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).invokeExact((Mh) null, a); } catch (NullPointerException e) { return -200; } }
   public static int tWrongType(int a) throws Throwable { try { return (int) L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).invokeExact((long) a, 4); } catch (WrongMethodTypeException e) { return -300; } }
   public static int tCast(int a) throws Throwable { try { return (int) L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).invoke((Object) "s", 4); } catch (ClassCastException e) { return -400; } }
-  /** a combinator: its handle is a transformer, which needs ART's EmulatedStackFrame (handles.ts) */
+  /** a combinator: its handle is a transformer, which needs ART's EmulatedStackFrame (link/mhandles.ts) */
   public static int tBind(int a) throws Throwable { return (int) L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).bindTo(new Mh()).invokeExact(a); }
   public static int tType(int a) throws Throwable { return L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).type().parameterCount() + a; }
 }

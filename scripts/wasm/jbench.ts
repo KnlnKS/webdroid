@@ -3,35 +3,26 @@
 // --survey also compiles everything the workloads can reach (the old whole-program build) and lists what blocks it.
 // VMStack.getStackClass (Reflection.getCallerClass, so MethodHandles.lookup and anything caller-sensitive) reads V8's wasm frames, which JavaScriptCore
 // does not give, so a run under Bun re-executes itself bundled under node (undernode.ts).
-// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: bun research/wasm/j2w/jbench.ts [workload ...] [-v] [--survey]
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+// Needs the Android SDK (android.jar, d8) and javac. Run from the repository root: bun run wasm jbench [workload ...] [-v] [--survey]
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { isIntrinsic, loadDexes, program, world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { isIntrinsic, loadDexes, program, world } from "./lib";
 import { jsTier, natives, processState } from "./oracle";
 import { reach } from "./reach";
-import { underNode } from "./undernode";
+import { AOSP, ROOT } from "./paths";
+import { cutWorkloads, dexAndroid, shellIn } from "./tools";
 
-await underNode(import.meta.path);
-
-const root = join(import.meta.dir, "../../..");
-const text = readFileSync(join(root, "scripts/jbench/Bench.java"), "utf8"), out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
+const text = readFileSync(join(ROOT, "scripts/jbench/Bench.java"), "utf8"), out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
 const verbose = process.argv.includes("-v"), survey = process.argv.includes("--survey"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
-const sh = (cmd: string[]) => { const r = Bun.spawnSync(cmd, { cwd: out }); if (r.exitCode) throw new Error(`${cmd[0]}: ${r.stderr}`); };
+const sh = shellIn(out);
 
-// a workload is a `case "x": body` line of Bench.run; its body becomes `static int w_x()` so each compiles on its own
-const names: string[] = [];
-const methods = text.split("\n").flatMap((l) => {
-  const m = /^\s*((?:case "\w+": )+)(.*)$/.exec(l); if (!m) return [];
-  return [...m[1].matchAll(/"(\w+)"/g)].map((x) => (names.push(x[1]), `static int w_${x[1]}() throws Exception { String w = "${x[1]}"; ${m[2]} }`));
-});
-writeFileSync(join(out, "Bench.java"), text.replace(/}\s*$/, methods.join("\n") + "\n}\n"));
-sh(["javac", "--release", "11", "-cp", `${androidPlatform(35)}/android.jar`, "-d", out, "Bench.java"]);
-sh([androidTool("d8"), "--min-api", "26", "--output", out, ...readdirSync(out).filter((f) => f.endsWith(".class")).map((f) => join(out, f))]);
+const { names, source } = cutWorkloads(text);
+writeFileSync(join(out, "Bench.java"), source);
+dexAndroid(sh, out, ["Bench.java"]);
 
-const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j))]), js = await jsTier(loadDexes(dex));
+const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))]), js = await jsTier(loadDexes(dex));
 const todo = names.filter((n) => !only.length || only.includes(n));
 const isIntr = isIntrinsic(natives);
 const reaches = new Map<string, ReturnType<typeof reach>>();

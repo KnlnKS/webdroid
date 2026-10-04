@@ -11,12 +11,12 @@ import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind } from "./program";
 import { elemKindOf } from "./consts";
-import { descToName, isWide, varHandleValues } from "../../../src/jvm/abi";
-import { emitStoreCheck, classMethod, Info } from "./classes";
-import { UInfo } from "./unsafe";
-import type { PreparedInstruction as Ins } from "../../../src/jvm/prepared";
+import { descToName, isWide, varHandleValues } from "../../jvm/abi";
+import { emitStoreCheck, classMethod, Info } from "../link/classes";
+import { UInfo } from "../link/unsafe";
+import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import type { MC } from "./method";
-import { emitHandleCall } from "./handles";
+import { emitHandleCall } from "../link/mhandles";
 
 const VH = "java/lang/invoke/VarHandle", FVH = "java/lang/invoke/FieldVarHandle", MAX_CANDIDATES = 64;
 type Family = "I" | "F" | "J" | "D" | "L";

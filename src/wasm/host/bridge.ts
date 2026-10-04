@@ -4,13 +4,13 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object the production runtime made (a Struct*) is copied field by field.
-import { demangle, mangleField, parseMethodDesc } from "../../../src/jvm/abi";
-import { elemKindOf, type ElemKind } from "./consts";
-import { kindOf, type FieldInfo, type Kind } from "./program";
-import type { Compiler } from "./j2w";
-import type { World } from "./lazy";
-import type { NativeSource } from "./natives";
-import { VIEWS, SIZE, copyFn } from "./natives";
+import { demangle, mangleField, parseMethodDesc } from "../../jvm/abi";
+import { elemKindOf, type ElemKind } from "../compiler/consts";
+import { kindOf, type FieldInfo, type Kind } from "../compiler/program";
+import type { Compiler } from "../compiler/j2w";
+import type { World } from "../link/world";
+import type { HostBridge, NativeSource } from "../link/hostapi";
+import { VIEWS, SIZE, copyFn } from "../compiler/copy";
 
 type Fn = (...a: any[]) => any;
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
@@ -24,7 +24,7 @@ const fromBits = (v: number | bigint, desc: string): unknown => desc === "F" ? (
 const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32[0] = v as number, i32[0]) : desc === "D" ? (f64[0] = v as number, i64[0])
   : desc === "J" ? BigInt(v as bigint) : desc === "Z" ? +(v as boolean) : v;
 
-export class Bridge {
+export class Bridge implements HostBridge {
   /** the host form of each Java object a native has seen, so its identity is stable across calls */
   private facades = new WeakMap<object, object>();
   /** during a call: the host form of each array it reached, the Java array of each host form */
@@ -40,7 +40,7 @@ export class Bridge {
   /** the array accessors, generated on first use (the World is still being constructed when its Bridge is) */
   private get op() {
     if (this.ops) return this.ops;
-    const hostFn = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: import("./code").Code) => void) => this.w.hostFn(name, params, ret, body);
+    const hostFn = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: import("../compiler/code").Code) => void) => this.w.hostFn(name, params, ret, body);
     const alen = hostFn("b:alen", ["L"], "I", (cx, c) => {
       for (const k of KINDS) { const t = cx.tArr[k]; c.lget(0).refTest(t).if_().lget(0).refCast(t).structGet(t, 2).refAsNonNull().arrayLen().ret().end(); }
       c.i32(-1);

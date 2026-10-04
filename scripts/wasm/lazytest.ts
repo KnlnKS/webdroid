@@ -1,21 +1,22 @@
 // The linker's own tests: CHA devirtualisation undone by a dex loaded later, the implicit exceptions with their messages, heap limits,
-// StackOverflowError at the Java edge. Needs javac and d8. Run: bun lazytest.ts
-import { mkdtempSync, readdirSync } from "node:fs";
+// StackOverflowError at the Java edge. Needs javac and d8. Run: bun run wasm lazytest
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, world } from "./build";
-import { HEAP_LIMIT } from "./exc";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, world } from "./lib";
+import { HEAP_LIMIT } from "../../src/wasm/link/exc";
+import { AOSP, JAVA } from "./paths";
+import { filesIn, shellIn } from "./tools";
 
-const root = join(import.meta.dir, "../../.."), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(root, "vendor/aosp", j));
+const jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-lz-"));
-const sh = (cmd: string[]) => { const r = Bun.spawnSync(cmd, { cwd: out }); if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`); };
-const src = ["W", "Ex", "Lz", "Lz2"].map((n) => join(here, `java/${n}.java`));
+const sh = shellIn(out);
+const src = ["W", "Ex", "Lz", "Lz2"].map((n) => join(JAVA, `${n}.java`));
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...src]);
-const classes = (re: RegExp) => readdirSync(out).filter((f) => re.test(f)).map((f) => join(out, f));
-sh(["d8", "--release", "--output", out, ...classes(/^(Ex|Lz)(\$\w+)?\.class$/)]);
+sh(["d8", "--release", "--output", out, ...filesIn(out, /^(Ex|Lz)(\$\w+)?\.class$/)]);
 sh(["mkdir", "-p", "out2"]);
-sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...classes(/^Lz2(\$\w+)?\.class$/)]);
+sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Lz2(\$\w+)?\.class$/)]);
 
 let failed = 0;
 const check = (what: string, got: unknown, want: unknown) => { if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };

@@ -1,14 +1,14 @@
 // The Java thread of the process, while it has one. ART makes the main Thread when the runtime starts: allocated and recorded as the
 // running thread before its constructor runs, which calls Thread.currentThread(). `thr` (the runtime module's global) is the running
 // thread, the one place a scheduler changes when there are several.
-import type { Code } from "./code";
-import type { Compiler, Intrinsic } from "./j2w";
-import { rt } from "./rtfns";
-import { OP } from "./code";
-import { T } from "./wasmbin";
+import type { Code } from "../compiler/code";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import { rt } from "../compiler/rtfns";
+import { OP } from "../compiler/code";
+import { T } from "../compiler/wasmbin";
 
 const THREAD = "java/lang/Thread", GROUP = "java/lang/ThreadGroup", NORM_PRIORITY = 5;
-export const currentThread = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
+const currentThread = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
 /** the interrupt flag of the running thread (the other Thread objects can only be unstarted) */
 const isCurrent = (cx: Compiler, c: Code) => c.lget(0).gget(currentThread(cx)).call(cx.helper("acmp"));
 const interruptFlag = (cx: Compiler) => cx.global("rt", "intr", T.i32, true);

@@ -1,21 +1,20 @@
 // Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
 // javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm, on the production JS tier and on the JDK; results must be bit-identical.
-// Run from the repository root: bun research/wasm/j2w/fuzz.ts [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
+// Run from the repository root: bun run wasm fuzz [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java] [--irreducible]
 // (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch; --irreducible: methods of random block graphs, see irfuzz.ts)
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { loadDexes, world } from "./build";
+import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { loadDexes, world } from "./lib";
 import { compare, genCases } from "./cases";
 import { jsTier, natives } from "./oracle";
-import { ACC } from "./program";
+import { ACC } from "../../src/wasm/compiler/program";
 import { irreducibleClass } from "./irfuzz";
-import { Irreducible, Flow } from "../../../src/jvm/structure";
-import { prepareMethod } from "../../../src/jvm/prepared";
-import { underNode } from "./undernode";
-
-await underNode(import.meta.path);
+import { Irreducible, Flow } from "../../src/jvm/structure";
+import { prepareMethod } from "../../src/jvm/prepared";
+import { AOSP, JAVA } from "./paths";
+import { shellIn } from "./tools";
 
 /** only the first LEAVES methods are called, and they call nothing: their cost is not multiplied along a chain of calls */
 const LEAVES = 8;
@@ -130,20 +129,16 @@ const generated = `public class F {
 }\n`;
 
 const out = mkdtempSync(join(tmpdir(), "j2w-fuzz-"));
-const sh = (cmd: string[], input?: string) => {
-  const r = Bun.spawnSync(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), cwd: out });
-  if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
-  return r.stdout.toString();
-};
+const sh = shellIn(out);
 const fi = process.argv.indexOf("--file");
 const irreducible = process.argv.includes("--irreducible");
 if (irreducible) writeFileSync(join(out, "F.class"), irreducibleClass("F", count, rnd));
 else writeFileSync(join(out, "F.java"), fi < 0 ? generated : readFileSync(process.argv[fi + 1], "utf8"));
-sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...irreducible ? [] : ["F.java"], join(import.meta.dir, "java/Ref.java")]);
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, ...irreducible ? [] : ["F.java"], join(JAVA, "Ref.java")]);
 sh(["d8", ...(process.argv.includes("--debug") ? [] : ["--release"]), "--output", out, join(out, "F.class"), ...readdirSync(out).filter((f) => /^F\$.*\.class$/.test(f)).map((f) => join(out, f))]);
 
 const dex = join(out, "classes.dex"), hit: string[] = [];
-const w = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(import.meta.dir, "../../../vendor/aosp", j))], { natives });
+const w = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j))], { natives });
 w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
 const tier = await jsTier(loadDexes(dex));

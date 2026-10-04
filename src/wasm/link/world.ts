@@ -7,34 +7,36 @@
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
-import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "./wasmbin";
-import { Code, OP } from "./code";
-import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
-import { Cha } from "./cha";
-import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "./consts";
-import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
-import { Natives, type HostContext } from "./natives";
-import { Bridge } from "./bridge";
-import { rtfns, type Synth } from "./rtfns";
+import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
+import { Code, OP } from "../compiler/code";
+import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "../compiler/program";
+import { Cha } from "../compiler/cha";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
+import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
+import type { HostBridge, HostContext, HostNet, NativeBinder } from "./hostapi";
+import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, typeName } from "./classes";
-import { mhInvoke } from "./handles";
+import { mhInvoke } from "./mhandles";
 import { hostText } from "./members";
-import { hostNet } from "./inet";
+import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
-import { decodeInstructions } from "../../../src/jvm/prepared";
-import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
-import { mid } from "./reach";
-import type { DexFile } from "../../../src/jvm/dex";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, type JavaFrame, type Thrower } from "./exc";
+import { decodeInstructions } from "../../jvm/prepared";
+import { descToName, parseMethodDesc } from "../../jvm/abi";
+import { mid } from "../compiler/ids";
+import type { DexFile } from "../../jvm/dex";
+import { compileModule } from "./module";
 import { AotRuntime, type AotBuild, type AotStore } from "./aot";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
-  /** the production natives, bound to host imports by descriptor (natives.ts) */
-  natives?: Natives;
+  /** the registered natives, bound to host imports by descriptor (host/natives.ts) */
+  natives: NativeBinder;
   /** bytes in use on the heap; what it has grown by since the World was made is compared with the heap limit each time a window of allocation is used up */
-  heapUsed?: () => number;
+  heapUsed: () => number;
+  /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
+  net?: HostNet;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
   stackTraceLimit?: number;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
@@ -50,8 +52,6 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; stub?: F
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
 /** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it); a compiler that has not run yet is assumed to need UPGRADE_FIRST_MS */
 const UPGRADE_SHARE = 0.3, UPGRADE_FIRST_MS = 1;
-/** the JS String builtins, and String constants as imports named by their text */
-export const COMPILE_OPTIONS = { builtins: ["js-string"], importedStringConstants: "#" };
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
 export class World {
@@ -93,10 +93,10 @@ export class World {
   /** scratch linear memory natives copy arrays through, and its allocation top */
   mem = new WebAssembly.Memory({ initial: Math.ceil((COUNT_BASE + 4 * COUNT_SLOTS) / 65536) + 1 });
   sp = new WebAssembly.Global({ value: "i32", mutable: true }, COUNT_BASE + 4 * COUNT_SLOTS);
-  natives: Natives;
-  bridge: Bridge;
+  natives: NativeBinder;
+  bridge: HostBridge;
   host: Record<string, Function>;
-  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
   /** the synthetic functions whose stub module exists */
   private stubbed = new Set<number>();
@@ -106,11 +106,11 @@ export class World {
 
   constructor(prog: Program, public opts: WorldOptions) {
     this.prog = prog;
-    this.natives = opts.natives ?? new Natives();
-    this.bridge = new Bridge(this, this.natives.source);
+    this.natives = opts.natives;
+    this.bridge = this.natives.bridge(this);
     this.cha = new Cha(prog);
     // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
-    const heap = opts.heapUsed ?? heapUsed, heapBase = heap();
+    const heap = opts.heapUsed, heapBase = heap();
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => this.names[id];
     this.host = {
@@ -124,7 +124,7 @@ export class World {
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
       obj: (kind: number, a: number, b: number, filter: object | null) => this.javaValue(hostObject(this, kind, a, b, filter)),
       proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
-      net: (op: number, node: unknown, a: number, b: number) => hostNet(this, op, this.hostString(node) as string, a, b),
+      net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
       // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
       pin: (object: object) => this.pin(object),
@@ -339,13 +339,13 @@ export class World {
 
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {
-    const t0 = performance.now(), mod = new WebAssembly.Module(bytes as BufferSource, COMPILE_OPTIONS as never);
+    const t0 = performance.now(), mod = compileModule(bytes);
     this.stats.moduleMs += performance.now() - t0; this.stats.bytes += bytes.length;
     return mod;
   }
-  instantiate(mod: Uint8Array | WebAssembly.Module, imports: WebAssembly.Imports): WebAssembly.Instance {
+  instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
     const m = mod instanceof WebAssembly.Module ? mod : this.compile(mod), t0 = performance.now();
-    const inst = new WebAssembly.Instance(m, imports);
+    const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
     this.stats.instantiateMs += performance.now() - t0;
     return inst;
   }
@@ -577,7 +577,7 @@ export class World {
   private nativeFns = new Map<string, Function>();
   private hostCtx?: HostContext;
   hostContext(): HostContext {
-    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
   /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */
@@ -769,7 +769,7 @@ export class World {
       if (s?.k === "ensure" || !s?.done) continue;
       const stub = s.stub ?? this.aot?.stub(x);
       if (!stub) continue;
-      this.table.set(x, stub); s.done = false; s.hot = false; this.stats.invalidated++;
+      this.table.set(x, stub); s.done = false; if (s.k === "method") s.hot = false; this.stats.invalidated++;
       this.groupOf.delete(x);
     }
   }
@@ -790,9 +790,10 @@ export class World {
   }
   /** the Java throwable a call from JS threw, if `e` is one */
   throwable(e: unknown): object | undefined {
-    const X = (WebAssembly as any).Exception, x = e as any;
-    return e instanceof X && x.is(this.rt.tag) ? x.getArg(this.rt.tag, 0) : undefined;
+    return e instanceof WebAssembly.Exception && e.is(this.rt.tag) ? e.getArg(this.rt.tag, 0) as object : undefined;
   }
+  /** the Wasm exception that throws Java throwable `t` */
+  exception(t: object): WebAssembly.Exception { return new WebAssembly.Exception(this.rt.tag, [t]); }
   /** the class of a Java object that crossed to JS */
   classNameOf(obj: object): string { return this.names[this.rt.classId(obj)]; }
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
@@ -827,11 +828,11 @@ export class World {
     return f as never;
   }
   /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
-  fieldReader(cls: string, name: string, desc: string): (obj: object) => unknown {
+  fieldReader<T = unknown>(cls: string, name: string, desc: string): (obj: object) => T {
     const f = this.prog.resolveField(cls, name, desc);
     if (!f) throw new Error(`field ${cls}.${name} not found`);
     const cx = new Compiler(this), st = cx.structFor(cls);
     const { bytes } = cx.buildSynthetic("get:" + name, ["L"], (c) => { c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f)); }, f.kind);
-    return (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m;
+    return (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m as (obj: object) => T;
   }
 }

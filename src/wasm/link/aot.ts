@@ -11,11 +11,11 @@
 //  - Soundness. A C module records the class-hierarchy decisions it relies on. They are checked when it is loaded, against the classes
 //    added since the build, and kept with the other assumptions of the World afterwards, so a dex added later undoes them like the rest;
 //    a method whose decisions do not hold is put back to its lazy-link stub, and compiled on demand.
-import type { ClassRt, World } from "./lazy";
-import type { DexFile } from "../../../src/jvm/dex";
-import type { MethodInfo } from "./program";
-import type { FnTrace } from "./j2w";
-import { mid } from "./reach";
+import type { ClassRt, World } from "./world";
+import type { DexFile } from "../../jvm/dex";
+import type { MethodInfo } from "../compiler/program";
+import type { FnTrace } from "../compiler/j2w";
+import { mid } from "../compiler/ids";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
@@ -72,7 +72,7 @@ export const VERSION = 2;
 const dexSig = (d: DexFile): string => [d.fileSize, d.classDefCount, d.stringCount, d.typeCount, d.version].join(":");
 
 const rle = (a: number[]): number[] => { const o: number[] = []; for (const v of a) { if (o.length && o[o.length - 2] === v) o[o.length - 1]++; else o.push(v, 1); } return o; };
-const unrle = (a: number[]): Int32Array => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
+const unrle = (a: number[]): Int32Array<ArrayBuffer> => { let n = 0; for (let i = 1; i < a.length; i += 2) n += a[i]; const o = new Int32Array(n); let k = 0; for (let i = 0; i < a.length; i += 2) o.fill(a[i], k, k += a[i + 1]); return o; };
 const uleb = (n: number, o: number[]) => { for (; n >= 0x80; n = Math.floor(n / 128)) o.push((n % 128) | 0x80); o.push(n); };
 /** `wasm` with the custom sections the runtime reads: the header, and the traces of its functions */
 export function packModule(header: object, wasm: Uint8Array, traces?: { slot: number; offsets: Int32Array; pcs: Int32Array }[]): Uint8Array {
@@ -121,7 +121,6 @@ export class AotRuntime {
   // ---- build
   tail: AotIndex["tail"] = [];
   private touching: Set<string> | null = null;
-  private groups?: AotBuild;
   private dexSigs = new Set<string>();
   dGroupOf: number[] = [];
   /** the name of the D module the build gives the classes it reserves slots for after the platform's */
@@ -133,7 +132,6 @@ export class AotRuntime {
   constructor(private w: World, build?: AotBuild) {
     this.building = !!build;
     if (!build) return;
-    this.groups = build;
     this.nSeeded = w.seedPlatform((d) => build.dexes.has(d) && !!this.dexSigs.add(dexSig(d)));
     const dIds = new Map<string, number>(), cIds = new Map<string, number>(), id = (m: Map<string, number>, keys: string[], k: string | null) => {
       if (k === null) return -1;
@@ -218,7 +216,7 @@ export class AotRuntime {
     for (const s of head.synth) w.ensureSynth(s);
     return ex;
   }
-  /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (aotstartup.ts) */
+  /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (scripts/wasm/aot-startup.ts) */
   loaded: string[] = [];
   /** a file of the build as a compiled module */
   private module(file: string): WebAssembly.Module {
