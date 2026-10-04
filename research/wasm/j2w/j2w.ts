@@ -187,7 +187,17 @@ export class Compiler implements Base {
     this.callThrower(c, "ule");
   }
   /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
-  callThrower(c: Code, name: Thrower): void { c.i32(SLOT[name]).callIndirect(this.sig(THROWERS[name].params, "V")).unreachable(); }
+  callThrower(c: Code, name: Thrower): void {
+    // a function of this module that makes the indirect call keeps each failing arm a plain call, which the engine inlines and sizes more cheaply
+    const f = this.memo("throw:" + name, () => {
+      const params = THROWERS[name].params, fn = this.mb.reserveFunc(this.sig(params, "V"), "$throw_" + name), t = new Code(params.length);
+      params.forEach((_, i) => t.lget(i));
+      t.i32(SLOT[name]).callIndirect(this.sig(params, "V")).unreachable();
+      this.mb.setBody(fn, t.finish());
+      return fn;
+    });
+    c.call(f).unreachable();
+  }
 
   // ---------- allocation
   private allocBytes(c: Code, add: () => void): void {
