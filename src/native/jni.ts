@@ -5,13 +5,12 @@ import { mem } from "./mem";
 import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, PTR, stp, ldp, type HostRet, hostTrace } from "./host";
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime, type Gen } from "../jvm/runtime";
-import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8 } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8, encodeModifiedUtf8 } from "../jvm/abi";
 import { after, curThread } from "../jvm/natives/jentry";
 import { stackTraceText } from "../jvm/natives/jthrowable";
 import { JClass } from "../jvm/natives/jlang";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { addressOf, capacity, directAddress, isBuffer, newDirectBuffer } from "../jvm/natives/jnio";
-const enc = new TextEncoder();
 
 export const jniMissing = new Set<string>();
 export const jniTrace = { on: false };
@@ -302,22 +301,6 @@ function pin(arr: any, type: string, isCopy: number): number {
   return p;
 }
 
-/** A string as ART's JNI hands it out: modified UTF-8 (NUL is C0 80, a lone surrogate three bytes),
- *  except that a valid surrogate pair is one four-byte sequence. */
-function jniUtf8(s: string): Uint8Array {
-  if (/^[\x01-\x7f]*$/.test(s)) return enc.encode(s);
-  const out: number[] = [];
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c > 0 && c < 0x80) out.push(c);
-    else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
-    else if ((c & 0xfc00) === 0xd800 && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-      const cp = 0x10000 + ((c - 0xd800) << 10) + (s.charCodeAt(++i) - 0xdc00);
-      out.push(0xf0 | cp >> 18, 0x80 | cp >> 12 & 63, 0x80 | cp >> 6 & 63, 0x80 | cp & 63);
-    } else out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
-  }
-  return Uint8Array.from(out);
-}
 /** writes the bytes and a NUL at p, or at a fresh allocation */
 function putUtf8(bytes: Uint8Array, p = mem.malloc(bytes.length + 1)): number {
   mem.u8.set(bytes, p); mem.u8[p + bytes.length] = 0;
@@ -481,11 +464,11 @@ export function jniInit(): void {
     const end = mem.u8.indexOf(0, p);
     return toRef(decodeModifiedUtf8(mem.u8, p, end < 0 ? mem.u8.length : end));
   });
-  def(168, "GetStringUTFLength", (_c, a) => { a.p(); return jniUtf8((deref(a.p()) as string) ?? "").length; });
-  def(169, "GetStringUTFChars", (_c, a) => { a.p(); const s = (deref(a.p()) as string) ?? ""; const isCopy = a.p(); const p = putUtf8(jniUtf8(s)); if (isCopy) mem.st8(isCopy, 1); return p; });
+  def(168, "GetStringUTFLength", (_c, a) => { a.p(); return encodeModifiedUtf8((deref(a.p()) as string) ?? "").length; });
+  def(169, "GetStringUTFChars", (_c, a) => { a.p(); const s = (deref(a.p()) as string) ?? ""; const isCopy = a.p(); const p = putUtf8(encodeModifiedUtf8(s)); if (isCopy) mem.st8(isCopy, 1); return p; });
   def(170, "ReleaseStringUTFChars", (_c, a) => { a.p(); a.p(); mem.free(a.p()); });
   def(220, "GetStringRegion", (_c, a) => { a.p(); const s = deref(a.p()) as string; const st = a.i(), n = a.i(), buf = a.p(); for (let i = 0; i < n; i++) mem.st16(buf + i * 2, s.charCodeAt(st + i)); });
-  def(221, "GetStringUTFRegion", (_c, a) => { a.p(); const s = deref(a.p()) as string; const st = a.i(), n = a.i(), buf = a.p(); putUtf8(jniUtf8(s.slice(st, st + n)), buf); });
+  def(221, "GetStringUTFRegion", (_c, a) => { a.p(); const s = deref(a.p()) as string; const st = a.i(), n = a.i(), buf = a.p(); putUtf8(encodeModifiedUtf8(s.slice(st, st + n)), buf); });
   def(224, "GetStringCritical", T[165]!);
   def(225, "ReleaseStringCritical", T[166]!);
   // arrays

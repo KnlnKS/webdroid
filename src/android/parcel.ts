@@ -3,7 +3,7 @@
 // cells, UTF-16 strings, 24-byte flat objects) so dataSize/dataPosition agree with a device. What
 // has no byte form here — a binder, a descriptor — rides in a side table keyed by its position.
 import { JObj, rt, declaredField } from "../jvm/runtime";
-import { utf8, u8 } from "../jvm/abi";
+import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi";
 import { scall } from "../jvm/natives/jentry";
 import { fdInt, mkFd } from "../jvm/natives/jio";
 import { javaCloseFd, javaDupFd } from "../native/fs";
@@ -99,20 +99,7 @@ export function readString(p: NativeParcel): string | null {
 }
 function writeString8(p: NativeParcel, s: string | null) {
   if (s === null) return writeInt(p, -1);
-  let bytes: Uint8Array;
-  if (!/[\0\ud800-\udfff]/.test(s)) bytes = utf8.enc.encode(s);
-  else {
-    // ART String8 uses modified NUL/surrogates but four bytes for paired supplementary characters.
-    const out: number[] = [];
-    for (const ch of s) {
-      const c = ch.codePointAt(0)!;
-      if (c > 0 && c < 0x80) out.push(c);
-      else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
-      else if (c < 0x10000) out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
-      else out.push(0xf0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
-    }
-    bytes = Uint8Array.from(out);
-  }
+  const bytes = encodeModifiedUtf8(s);
   writeInt(p, bytes.length);
   const at = writeInplace(p, bytes.length + 1);
   p.buf.set(bytes, at);

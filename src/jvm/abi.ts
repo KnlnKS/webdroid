@@ -189,6 +189,21 @@ export function decodeModifiedUtf8(bytes: Uint8Array, pos = 0, end = bytes.lengt
   return charsToString(out, 0, o);
 }
 
+/** modified UTF-8 as ART's JNI and String8 write it: NUL is C0 80 and a lone surrogate three bytes,
+ *  but a valid surrogate pair is one four-byte sequence */
+export function encodeModifiedUtf8(s: string): Uint8Array {
+  if (!/[\0\ud800-\udfff]/.test(s)) return utf8.enc.encode(s);
+  const out: number[] = [];
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (c > 0 && c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
+    else if (c < 0x10000) out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+    else out.push(0xf0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+  }
+  return Uint8Array.from(out);
+}
+
 export const i8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Int8Array(b.buffer, b.byteOffset + off, len);
 export const u8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Uint8Array(b.buffer, b.byteOffset + off, len);
 /** bytes as a Web API that refuses shared memory takes them: a view of guest memory, where Java's
