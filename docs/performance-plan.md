@@ -50,9 +50,15 @@ Idle apps use about 2% of the thread (260–350 ms per 15 s), so idle polling is
 | `0abb33aa` | A JNI native's first slice runs before any await; a native that returns there completes on its caller's stack | A trivial native: 0.60 → 0.37 µs, no Promise; Doodle Jump GL 33.2 → 34.4 frames/s (noise); Lichess and Organic Maps unchanged |
 | `2a0198e1` | Compiled callers no longer test each call: a suspending callee throws, and the frame's catch saves it (two calling conventions, `src/jvm/suspend.ts`) | jbench: smallAlloc −46%, deque −23%, treeMap −19%, sort −14%, jsonParse −11%; interface calls into intrinsics +4–6%; launches and taps within noise (4 alternating `lat` rounds) |
 | `8b12db19` | `jbench` passes `--js-base-64` to Node 24 | The tool failed on every workload |
+| `9faa1d74` | Prototypes carry a `$I$<type>` mark, so compiled instance-of/check-cast test one property first | jbench `casts`: 3.45 → 2.55 ms (agent run) |
+| `bdb6be6a` | The render-thread animator draw runs behind the main thread's `doFrame` and is skipped if a draw already happened; `perf.frameMs` closes on idle vsyncs; `perf.presentLagMs` added | Calculator: draws 226 → 143, 2.09 → 1.19 per main frame |
+| `dcd22c01` | Text helpers (surrogates, `f32`, graphemes, bidi controls) shared from `shaping.ts` | −1 line net, same behaviour |
+| `e23a2e30`, `5d74f83d` | Identity hash in an own `$ih` slot; `Field.get`/`Method.invoke` answer inline unless the callee suspends | Micro (pre-rebase): first hash 43 → 13 ns, `Field.get` 79 → 26 ns, `Method.invoke` 104 → 59 ns |
+| `4ae6a100`, `27571e49` | The recorder keeps its own affine and save stack, path ops are record-only, one bounds helper and one CSS color builder | Recording micro 487 → 115 ms; Mihon scroll flat; checkpoint PNGs byte-identical |
+| `ede10abc` | `lat` reports methods reached and cold-started per tap | Warm taps show zero cold work |
 | `0c3e17b5`…`80548932` | Dead code and duplicate helpers removed (orphaned bidi tables, 16 counters nothing wrote, handle/socket leftovers, hex/base64/UTF-8/modified-UTF-8/`be32` duplicates) | −342/+108 lines |
 
-Gates on the tip:
+Gates on the tip (re-run after merging the items above: typecheck clean, 1142 tests pass, FitNotes smoke 0 method failures, `e2e` 7/7, `lat` gate passed with Mihon warm theme taps 94/75 ms; the earlier figures below are from before the merge):
 - typecheck, and `bun run test` (1137 pass).
 - FitNotes smoke: 0 method failures, and the same 199 missing references as the base.
 - `bun run e2e`: 7/7.
