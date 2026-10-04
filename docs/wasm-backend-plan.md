@@ -296,6 +296,16 @@ Still untested: `invoke-custom` (no site reached), DEX-level fuzzing of instruct
 and app code through `diff`, `fwtest` and the conformance suites. There is no speed comparison against the JS tier on
 real DEX (cold-start numbers can now be taken, see 4.5, but every jbench workload still stops at its first string or class-object gap).
 
+### 4.4b Differential coverage (S1-E, 2026-10-04, `knlnks/wasm-e`)
+
+All three run from the repository root and re-execute themselves bundled under node (`undernode.ts`; V8 frames are needed for caller-sensitive natives):
+
+- `bun research/wasm/j2w/jbench.ts`: one fresh `World` per workload, table of Wasm result, JS-tier result and MATCH/DIFF/BLOCKED(first gap). On the merged tree: 41 MATCH, 0 DIFF, 1 BLOCKED (`inetCached`, `Linux.android_getaddrinfo` answers a Promise). The earlier "hang" of 11 workloads was the harness: the JS tier's yield port is unref'd, so node exited with the workload suspended.
+- `bun research/wasm/j2w/fuzz.ts [--seed N --methods N --depth N --debug --file F.java]`: random Java (int/long/float/double/narrow casts, arrays, 2-D arrays, fields, virtual/interface calls, instanceof/casts, labelled loops, switches, try/catch/finally, custom exceptions, synchronized, calls) compiled with javac and d8, run on Wasm, the JS tier and the JDK. 70 seeds x 3,600 cases: Wasm and the JDK never differ. It found two bugs, below.
+- `bun research/wasm/j2w/sweep.ts [jar|apk ...]`: compiles every method alone and groups failures by cause. framework.jar: 219,874 methods, 18 fail (15 `invoke-custom`, 3 `MethodHandle.invoke`). FitNotes 7 (calls into optional or newer platform APIs). Mihon 190 (171 irreducible flow, Kotlin coroutine state machines; 19 absent platform APIs). Zero unexplained.
+
+Bugs found: (1) the class module exported static fields by name only, so a dex that declares one name with two types (R8 output) produced a duplicate export or an ill-typed global; they are now keyed by name and type. (2) Production JS tier, `src/jvm/prepared.ts`: a handler's reaching definitions came from the state at the end of every block in the try range, so an int constant assigned after the last throwing instruction (d8 shares the register with a float the handler reads) was typed float (`const 32` became 4.5e-44). Handler edges now carry the state before each instruction that can throw (`tests/float-handler.test.ts`; 20 of the fuzzer's failing methods, one cause). Also: `Flow` limits scope nesting to 256 for the JS parser; Wasm bodies are no longer limited (8 AIDL `onTransact`/`getDefaultTransactionName` methods compile). Open: d8 emits irreducible loops (tail-merged invokes) even for plain Java, and Compose/coroutine state machines are irreducible, so Flow rejects ~0.2% of app methods; they need a dispatch-loop fallback. An unresolved class or member compiles to a gap (UnsatisfiedLinkError) where ART throws NoClassDefFoundError/NoSuchMethodError.
+
 ### 4.5 S1 compiler architecture (2026-10-04, `knlnks/wasm-c`)
 
 Measured in Bun (JavaScriptCore) and Node 24 (V8 13.6), M4 Pro, single runs, other agents running: indicative.

@@ -2,7 +2,7 @@
 // Wasm compiler against the whole boot class path, and each failure is reported by cause: a gap (a construct with no translation, recorded by
 // Compiler.gap), a compiler exception, or a module V8 rejects. The exit status is non-zero when a cause outside KNOWN occurs.
 // Run from the repository root: bun research/wasm/j2w/sweep.ts [path ...] [-v]
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { loadDexes, world } from "./build";
 import { externs } from "./intrinsics";
@@ -17,7 +17,7 @@ const KNOWN = [/^native: /, /^unresolved reference to a /, /^String\.<init>\(/, 
 
 const root = join(import.meta.dir, "../../..");
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
-const targets = args.length ? args : [join(root, "vendor/aosp/framework.jar"), join(root, "apks/FitNotes.apk")];
+const targets = args.length ? args.map((a) => resolve(a)) : [join(root, "vendor/aosp/framework.jar"), join(root, "apks/FitNotes.apk")];
 const jars = PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j));
 let unexplained = 0;
 for (const target of targets) {
