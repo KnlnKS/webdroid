@@ -11,11 +11,11 @@ import { ModuleBuilder, T, refNull, sleb, uleb, type VT } from "./wasmbin";
 import { Code, OP } from "./code";
 import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
 import { Cha } from "./cha";
-import { H, f32bits, f64bits } from "./consts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "./consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
 import { Natives, type HostContext } from "./natives";
 import { rtfns, type Synth } from "./rtfns";
-import { hostInfo } from "./classes";
+import { hostInfo, typeName } from "./classes";
 import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
@@ -160,6 +160,11 @@ export class World {
     // ancestors beyond the fixed display are tested like interfaces, from the id list at the end
     const ifs = new Set<number>();
     chain.forEach((cn, i) => { const cid = cn === name ? id : this.idOf(cn); if (i < H.MAXD) body[H.DISPLAY + i] = cid; else ifs.add(cid); });
+    if (arr) {
+      const comp = typeName(name.slice(1)), cc = prog.get(comp), d = cc && !cc.isInterface ? prog.chain(comp).length - 1 : -1;
+      body[ELEM] = this.idOf(comp);
+      body[ELEM_KIND] = !cc ? ELEM_OTHER : cc.isInterface || d >= H.MAXD ? ELEM_IFACE : d + 1;
+    }
     keys.forEach((key, i) => { const m = impl(key); body[H.VTAB + i] = m ? this.slotOf(m) : this.abstractSlot(key); });
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];

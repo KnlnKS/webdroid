@@ -1,7 +1,8 @@
 // G1 timing: every jbench workload the Wasm tier already reproduces, first call and steady state, Wasm against the production JS tier,
 // in node and in headless Chrome (so Liftoff and TurboFan tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java;
 // new ones join as soon as their Wasm result matches the JS tier's. Every measurement is a fresh engine; runs interleave JS and Wasm.
-//   bun g1.ts [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json]
+//   bun g1.ts [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json]
+// --ref takes the JS tier's numbers (and which workloads match) from an earlier --json run and measures only Wasm, for A/B work on the compiler.
 // Needs javac, d8, node and (for chrome) Playwright's Chrome. The host is shared: the load average is printed and a high one flags the table noisy.
 import { cpus, loadavg, tmpdir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -12,7 +13,7 @@ import type { G1Config, G1Result } from "./g1run";
 
 const here = import.meta.dir, root = join(here, "../../..");
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
-const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", "");
+const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", ""), refPath = flag("--ref", "");
 const only = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && !v[i - 1]?.startsWith("--"));
 
 // ---- Bench.java with each workload cut into its own static method (as jbench.ts does)
@@ -80,17 +81,25 @@ const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a
 interface Sample { first: number; warm: number; steady: number; result: string; error?: string; compileMs?: number }
 const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), result: r.result, error: r.error, compileMs: r.compileMs });
 const loads: number[] = [loadavg()[0]];
+type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
+const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
 const report: Record<string, unknown> = { cores: cpus().length, reps, runs, loadStart: loadavg()[0], engines: {} };
 
 for (const engine of engines) {
   let run: (c: G1Config) => G1Result | Promise<G1Result>, label = "node " + Bun.spawnSync(["node", "-p", "process.version + ' (V8 ' + process.versions.v8 + ')'"]).stdout.toString().trim(), close = async () => {};
   if (engine === "node") run = nodeRun(await bundle(false));
   else { const c = await chromeRun(); run = c.run; close = c.close; label = "Chrome " + c.version; }
-  const got = new Map<string, { js: Sample[]; wasm: Sample[]; blocked: boolean }>(todo.map((w) => [w, { js: [], wasm: [], blocked: false }]));
+  const refRows = new Map((ref?.[engine]?.rows ?? []).map((r) => [r.w, r]));
+  const got = new Map<string, { js: Sample[]; wasm: Sample[]; blocked: boolean }>();
+  for (const w of todo) if (!ref || refRows.has(w)) {
+    const r = refRows.get(w);
+    got.set(w, { js: r ? r.jsFirst.map((first, i) => ({ first, warm: 0, steady: r.jsSteady[i], result: r.result })) : [], wasm: [], blocked: false });
+  }
   for (let i = 0; i < runs; i++) {
-    for (const w of todo) for (const mode of ["js", "wasm"] as const) {
+    for (const w of got.keys()) for (const mode of ["js", "wasm"] as const) {
       const entry = got.get(w)!;
-      if (entry.blocked && mode === "wasm") continue;
+      if (ref && mode === "js") continue;
+      if (entry.blocked && (mode === "wasm" || i > 0)) continue;
       const r = sample(await run({ mode, workload: w, reps, dex, root }));
       entry[mode].push(r);
       if (mode === "wasm" && i === 0 && (r.error || r.result !== entry.js[0].result)) entry.blocked = true;
@@ -106,7 +115,7 @@ for (const engine of engines) {
     const rng = (a: number[]) => `${med(a).toFixed(a[0] < 1 ? 3 : 1)} [${Math.min(...a).toFixed(a[0] < 1 ? 3 : 1)}-${Math.max(...a).toFixed(a[0] < 1 ? 3 : 1)}]`;
     const xf = med(f(e.js, "first")) / med(f(e.wasm, "first")), xs = med(f(e.js, "steady")) / med(f(e.wasm, "steady"));
     ratios.first.push(xf); ratios.steady.push(xs);
-    rows.push({ w, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
+    rows.push({ w, result: e.js[0].result, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
     console.log(w.padEnd(11), rng(f(e.js, "first")).padStart(9), rng(f(e.wasm, "first")).padStart(11), xf.toFixed(2).padStart(6), rng(f(e.js, "steady")).padStart(11), rng(f(e.wasm, "steady")).padStart(12), xs.toFixed(2).padStart(6), "  ", med(f(e.wasm, "warm")).toFixed(3), " ", med(e.wasm.map((x) => x.compileMs ?? 0)).toFixed(0));
   }
   if (ratios.steady.length) console.log(`geometric-mean speedup (js/wasm) over ${ratios.steady.length} matching workloads: first call ${geo(ratios.first).toFixed(2)}x, steady state ${geo(ratios.steady).toFixed(2)}x`);
