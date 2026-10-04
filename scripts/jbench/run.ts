@@ -23,8 +23,10 @@ if (!existsSync(dex) || statSync(dex).mtimeMs < statSync(src).mtimeMs) {
   run([androidTool("d8"), "--min-api", "26", "--output", out, `${out}/classes/Bench.class`]);
 }
 run(["bun", "build", "--target=node", `--outfile=${out}/runner.js`, `${import.meta.dir}/runner.ts`]);
+// Node before 25 ships the base64 Uint8Array methods the core loader uses behind a V8 flag
+const base64 = run(["node", "-p", "typeof Uint8Array.fromBase64"]).trim() === "function" ? [] : ["--js-base-64"];
 const all = [...(await Bun.file(src).text()).matchAll(/case "(\w+)":/g)].map((m) => m[1]);
 for (const w of args.filter((a) => !a.startsWith("--")).length ? args.filter((a) => !a.startsWith("--")) : all) {
-  process.stdout.write(run(["node", `${out}/runner.js`, w, reps], { JBENCH_DEX: dex, ...(cut ? { WEBDROID_BYTECODE: cut } : {}) })
+  process.stdout.write(run(["node", ...base64, `${out}/runner.js`, w, reps], { JBENCH_DEX: dex, ...(cut ? { WEBDROID_BYTECODE: cut } : {}) })
     .split("\n").filter((l) => l.startsWith("{")).join("\n") + "\n");
 }
