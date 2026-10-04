@@ -12,7 +12,7 @@ export interface NativeSource {
    *  constructor's key is `<init>desc` and its implementation answers the String */
   find(cls: string, key: string, isStatic: boolean, hasBody: boolean): HostFn | undefined;
   /** a Java throwable raised by a native, by class and message */
-  thrown(e: unknown): { cls: string; msg: string | null; obj?: object } | undefined;
+  thrown(e: unknown): { cls: string; msg: string | null; obj?: object; java?: object } | undefined;
   /** the Java class name of an object the production runtime made, if `v` is one: a native result the Bridge copies into the Wasm heap */
   classOf?(v: unknown): string | undefined;
   /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" */
@@ -28,6 +28,8 @@ export interface HostBridge {
   offsetIn(host: unknown, offset: number): number;
   toJava(v: unknown, desc: string): unknown;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
+  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
+  invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }
 
 /** what the host side needs from the World */

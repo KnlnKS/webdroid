@@ -798,7 +798,7 @@ export class World {
   classNameOf(obj: object): string { return this.names[this.rt.classId(obj)]; }
   /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
    *  becomes the StackOverflowError a handler above this call would have received */
-  private boundary(e: unknown): unknown {
+  boundary(e: unknown): unknown {
     if (!isStackOverflow(e)) return e;
     try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; }
     return e;

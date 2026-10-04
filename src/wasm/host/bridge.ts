@@ -4,13 +4,16 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object the production runtime made (a Struct*) is copied field by field.
-import { demangle, mangleField, parseMethodDesc } from "../../jvm/abi";
+import { demangle, mangleField } from "../../jvm/abi";
+import { rt } from "../../jvm/runtime";
+import { JThrowable } from "../../jvm/natives/jthrowable";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
-import { kindOf, type FieldInfo, type Kind } from "../compiler/program";
+import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { Compiler } from "../compiler/j2w";
 import type { World } from "../link/world";
 import type { HostBridge, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
+import { count } from "./stats";
 
 type Fn = (...a: any[]) => any;
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
@@ -20,9 +23,15 @@ const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer), f64 = new Flo
 const ARRAY_OF: [Function, string][] = [[Int8Array, "[B"], [Uint8Array, "[Z"], [Uint16Array, "[C"], [Int16Array, "[S"], [Int32Array, "[I"], [BigInt64Array, "[J"], [Float32Array, "[F"], [Float64Array, "[D"]];
 
 /** a field value as the production runtime holds it: floats and doubles are numbers, a long a bigint, a boolean 0 or 1 */
-const fromBits = (v: number | bigint, desc: string): unknown => desc === "F" ? (i32[0] = v as number, f32[0]) : desc === "D" ? (i64[0] = v as bigint, f64[0]) : v;
-const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32[0] = v as number, i32[0]) : desc === "D" ? (f64[0] = v as number, i64[0])
+export const fromBits = (v: number | bigint, desc: string): unknown => desc === "F" ? (i32[0] = v as number, f32[0]) : desc === "D" ? (i64[0] = v as bigint, f64[0]) : v;
+export const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32[0] = v as number, i32[0]) : desc === "D" ? (f64[0] = v as number, i64[0])
   : desc === "J" ? BigInt(v as bigint) : desc === "Z" ? +(v as boolean) : v;
+
+/** the Java object a facade stands for */
+export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;
+/** what host code probes any object for (promises, serializers, error reporters), which is no read of a Java field */
+const PROBES = new Set(["then", "toJSON", "message", "stack", "jsStack", "name", "$javaClass", "asymmetricMatch", "nodeType"]);
+const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
 export class Bridge implements HostBridge {
   /** the host form of each Java object a native has seen, so its identity is stable across calls */
@@ -135,18 +144,23 @@ export class Bridge implements HostBridge {
       if (op === "get") c.structGet(st, at); else c.lget(1).structSet(st, at);
     });
   }
+  /** a throwable's facade stands where the production runtime's JThrowable does (`instanceof`, `msg`, `cause`) */
   private facade(o: object, name: string): object {
-    const fields = this.fieldsOf(name), bridge = this;
-    const proxy = new Proxy({}, {
-      get(_t, p) {
+    const fields = this.fieldsOf(name), bridge = this, throwable = this.w.prog.isSubclass(name, THROWABLE);
+    const proxy = new Proxy(Object.create(throwable ? JThrowable.prototype : Object.prototype), {
+      get(t, p) {
         if (p === REF) return o;
-        const f = typeof p === "string" ? fields.get(p) : undefined;
-        if (!f) return typeof p === "string" && p.startsWith("m$") ? bridge.method(o, name, p) : undefined;
+        const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
+        if (!f) {
+          if (typeof p === "string" && p.startsWith("m$")) return bridge.method(o, name, p);
+          if (typeof p === "string" && !(p in t) && !PROBES.has(p)) { count("wasmFacadeMisses"); rt.noteMissing(`facade ${name}.${p}`); }
+          return Reflect.get(t, p);
+        }
         const raw = bridge.accessor("get", f)(o);
         return f.kind === "L" ? bridge.toHost(raw, f.desc) : fromBits(raw, f.desc);
       },
       set(_t, p, v) {
-        const f = typeof p === "string" ? fields.get(p) : undefined;
+        const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
         if (!f) throw new Error(`${name} has no field behind ${String(p)}`);
         bridge.accessor("set", f)(o, f.kind === "L" ? bridge.toJava(v, f.desc) : toBits(v, f.desc));
         return true;
@@ -159,16 +173,24 @@ export class Bridge implements HostBridge {
   /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
   private method(o: object, cls: string, mangled: string): Fn | undefined {
     const nd = demangle(mangled), impl = nd && this.w.prog.implFor(cls, nd[0], nd[1]);
-    if (!impl) return undefined;
-    const { params, ret } = parseMethodDesc(impl.desc), kinds: Kind[] = ["L", ...params.map(kindOf)], rk = ret === "V" ? "V" : kindOf(ret);
-    const call = this.w.hostFn(`b:call:${impl.cls}.${impl.key}`, kinds, rk, (cx, c) => { kinds.forEach((_, i) => c.lget(i)); cx.callMethod(c, impl); });
-    return (...args: unknown[]) => {
-      const given = args.map((a, i) => kinds[i + 1] === "L" ? this.toJava(a, params[i]) : toBits(a, params[i]));
-      const r = call(o, ...given);
-      // a primitive array the native passed is copied for the call; what the method wrote to it is the native's to read
+    return impl ? (...args: unknown[]) => this.invoke(impl, o, args) : undefined;
+  }
+  /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value: the way a native calls into Java. A static
+   *  method's class is initialized first. A primitive array passed is copied for the call, and what the method wrote to it is read back. */
+  invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown {
+    const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
+    const call = this.w.hostFn(`b:call:${m.cls}.${m.key}`, kinds, rk, (cx, c) => {
+      if (m.isStatic) cx.emitEnsure(c, m.cls);
+      kinds.forEach((_, i) => c.lget(i));
+      cx.callMethod(c, m);
+    });
+    const nested = this.saved.length > 0, mark = nested ? 0 : this.begin();
+    try {
+      const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i]));
+      const r = call(...(m.isStatic ? [] : [recv]), ...given);
       args.forEach((a, i) => { if (ArrayBuffer.isView(a) && given[i] && !this.owners.has(a)) this.readBack(given[i] as object, a); });
-      return rk === "V" ? undefined : rk === "L" ? this.toHost(r, ret) : fromBits(r, ret);
-    };
+      return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r, m.ret);
+    } finally { if (!nested) this.end(mark); }
   }
 
   // ---------- host to Java
@@ -202,7 +224,7 @@ export class Bridge implements HostBridge {
     a.forEach((e, i) => this.op.aset(j, i, this.toJava(e, elem)));
     return j;
   }
-  /** an object the production runtime made, copied into the Wasm heap with its fields (not its identity) */
+  /** an object the host made with rt.make (a Struct*, a FileDescriptor), copied into the Wasm heap with its fields (not its identity): an object the host creates to keep is made with newObj */
   private copyObject(o: Record<string, unknown>, cls: string): object {
     const j = this.w.hostFn("b:alloc:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })();
     this.copyFields(o, j, cls);

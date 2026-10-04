@@ -7,6 +7,7 @@
 //   linkdiff     unresolved references fail at their use site as ART does
 //   lazytest     CHA undone by a later dex, implicit exceptions, heap limits, the tiers
 //   aottest      precompiled platform code stays sound as classes arrive (builds a platform AOT first unless WEBDROID_AOT names one)
+//   entry        host code calls Java through jentry on the JS tier, over a World and (entrytier) through ?tier=wasm: the same answers and exceptions
 //   fuzz         random verifiable methods as Wasm, on the JS tier and on the JDK (seeds 1 to 6 unless arguments are given)
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
@@ -20,7 +21,7 @@ import { runUnderNode } from "./undernode";
 interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
-  linkdiff: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
+  linkdiff: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
   sweep: { node: false, all: true }, aottest: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false },
 };
@@ -38,6 +39,10 @@ async function runSuite(name: string, args: string[]): Promise<number> {
     let status = 0;
     for (const seed of FUZZ_SEEDS) status ||= await exec(name, ["--seed", String(seed)], process.env);
     return status;
+  }
+  if (name === "entry") {
+    const dir = mkdtempSync(join(tmpdir(), "wasm-entry-out-")), env = { ...process.env, WASM_ENTRY_OUT: join(dir, "tier.json") };
+    try { return (await exec(name, args, env)) || await exec("entrytier", [], { ...env, WEBDROID_TIER: "wasm" }); } finally { rmSync(dir, { recursive: true, force: true }); }
   }
   if (name !== "aottest" || process.env.WEBDROID_AOT) return exec(name, args, process.env);
   const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));

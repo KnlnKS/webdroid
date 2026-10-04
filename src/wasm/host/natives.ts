@@ -206,7 +206,8 @@ export class Natives implements NativeBinder {
   /** the "n" import module for `ids`: each native with its exception and suspension handling, and its arrays viewed in memory */
   imports(ctx: HostContext, ids: Iterable<string>): Record<string, HostFn> {
     const out: Record<string, HostFn> = {};
-    const throwJava = (t: { cls: string; msg: string | null; obj?: object }): never => {
+    const throwJava = (t: { cls: string; msg: string | null; obj?: object; java?: object }): never => {
+      if (t.java) throw ctx.raise(t.java);
       const j = ctx.throwable(t.cls, t.msg);
       if (t.obj) ctx.bridge.copyFields(t.obj as Record<string, unknown>, j, t.cls);
       throw ctx.raise(j);

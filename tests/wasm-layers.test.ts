@@ -30,3 +30,9 @@ test("src/wasm keeps its layers", () => {
   }
   expect(violations).toEqual([]);
 });
+
+test("host code holds Java objects only as the facades toHost makes", () => {
+  const root = resolve(import.meta.dir, "..", "src/wasm/host");
+  const raw = [...new Glob("*.ts").scanSync(root)].filter((file) => /\b(?:w|world)\.entry\(/.test(readFileSync(resolve(root, file), "utf8")));
+  expect(raw).toEqual([]);
+});

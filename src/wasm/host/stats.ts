@@ -1,5 +1,7 @@
-/** the Wasm tier's counters by name, read into the harness telemetry */
-export const wasmStats: Record<string, number> = {};
+// The Wasm tier's counters live in `perf` (src/perf.ts), which is what a page reports as run.json's counters.
+import { perf } from "../../perf";
+
+export const count = (name: "wasmEntries" | "wasmFacadeMisses" | "wasmGaps"): void => { perf[name]++; };
 
 /** bytes in use on the JS heap, which holds the Wasm GC heap in V8 */
 export function heapUsed(): number {

@@ -5,13 +5,24 @@ import { rt } from "../../src/jvm/runtime";
 import "../../src/natives";
 import { scall, vcall } from "../../src/jvm/natives/jentry";
 import type { DexFile } from "../../src/jvm/dex";
-import { lookup, settled } from "../../src/wasm/host/nativesource";
+import { lookup, nativeSource, settled } from "../../src/wasm/host/nativesource";
+import { Natives } from "../../src/wasm/host/natives";
 import type { World } from "../../src/wasm/link/world";
 import { PLATFORM_DATA } from "../../src/jvm/bootclasspath";
 import { isResident, mapExternal, pagesIn, unmapExternal } from "../../src/jvm/natives/jmemory";
 import { vfs } from "../../src/shell/vfs";
 
-export { natives } from "../../src/wasm/host/nativesource";
+/** the natives of the production runtime, over the JS tier that has the same dexes: a `static ()V` native that fills in static fields (initConstants)
+ *  runs there, every static unset, and what it stored is what it wrote */
+export const natives = new Natives({
+  ...nativeSource,
+  stores: (cls, run) => {
+    const info = rt.link(cls), unset = Symbol(), saved = [...info.staticFieldTable].map(([key, prop]) => [key, prop, info.ctor[prop]] as const);
+    for (const [, prop] of saved) info.ctor[prop] = unset;
+    try { run(); return Object.fromEntries(saved.filter(([, prop]) => info.ctor[prop] !== unset).map(([key, prop]) => [key, info.ctor[prop]])); }
+    finally { for (const [, prop, v] of saved) info.ctor[prop] = v; }
+  },
+});
 
 /** natives that read the ICU data asynchronously and take no arguments: a native cannot suspend in the Wasm tier, so their value is
  *  resolved once, from the same production implementation, before it runs */
