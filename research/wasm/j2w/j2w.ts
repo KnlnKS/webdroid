@@ -19,7 +19,7 @@ export const exportName = (cls: string, name: string, desc: string) => `${cls.re
 /** the exceptions the compiler's own helpers throw, by helper name */
 export const THROWN = { npe: "java/lang/NullPointerException", aioobe: "java/lang/ArrayIndexOutOfBoundsException", arith: "java/lang/ArithmeticException",
   cce: "java/lang/ClassCastException", nase: "java/lang/NegativeArraySizeException", ule: "java/lang/UnsatisfiedLinkError",
-  ase: "java/lang/ArrayStoreException", ncdfe: "java/lang/NoClassDefFoundError", inste: "java/lang/InstantiationException" };
+  ase: "java/lang/ArrayStoreException", ncdfe: "java/lang/NoClassDefFoundError", inste: "java/lang/InstantiationException", nsfe: "java/lang/NoSuchFieldException" };
 export const SEED_CLASSES = ["java/lang/Object", ...Object.values(THROWN), "java/lang/ExceptionInInitializerError", "java/lang/Class"];
 /** methods the generated runtime code calls */
 export const SEED_METHODS: [string, string, string][] = [["java/lang/Class", "isAssignableFrom", "(Ljava/lang/Class;)Z"]];

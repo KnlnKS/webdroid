@@ -38,6 +38,7 @@ def("java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V", (cx,
       .lget(1).lget(4).raw(OP.i32_add).lget(s).refAsNonNull().arrayLen().raw(OP.i32_gt_u).raw(OP.i32_or)
       .lget(3).lget(4).raw(OP.i32_add).lget(dd).refAsNonNull().arrayLen().raw(OP.i32_gt_u).raw(OP.i32_or)
       .if_().call(cx.helpers.aioobe).end();
+    if (k === "ref") cx.cm.emitRefCopy(c);
     c.lget(dd).refAsNonNull().lget(3).lget(s).refAsNonNull().lget(1).lget(4).arrayCopy(d, d).ret().end();
   }
   c.call(cx.helpers.cce);

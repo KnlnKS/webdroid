@@ -180,4 +180,32 @@ public class C {
     try { VI.get(null); } catch (NullPointerException e) { r += 3200000; }
     return r;
   }
+
+  static class T2 { public int a; int b; public static long c; private Object d; protected A e; }
+  public static int fieldsApi(int n) {
+    java.lang.reflect.Field[] fs = T2.class.getDeclaredFields();
+    int r = fs.length;
+    for (java.lang.reflect.Field f : fs) {
+      int m = f.getModifiers();
+      r += (f.getType().isPrimitive() ? 10 : 0) + (f.getType() == Object.class ? 100 : 0) + (f.getType() == A.class ? 1000 : 0) + (f.getDeclaringClass() == T2.class ? 10000 : 0)
+        + ((m & 1) != 0 ? 100000 : 0) + ((m & 8) != 0 ? 1000000 : 0) + ((m & 2) != 0 ? 10000000 : 0);
+    }
+    return r + S.class.getDeclaredFields().length * 100000000;
+  }
+  public static int jsWrong_arraycopyStore(int n) {
+    Object[] src = {new A(), new Object(), new A()}; A[] dst = new A[3]; int r = 0;
+    try { System.arraycopy(src, 0, dst, 0, 3); } catch (ArrayStoreException e) { r += 1; }
+    r += dst[0] != null ? 2 : 0;
+    r += dst[1] == null && dst[2] == null ? 4 : 0;
+    Object[] ok = new B[2]; A[] from = {new B(), new B(), new A()};
+    System.arraycopy(from, 0, ok, 0, 2); r += ok[1] != null ? 8 : 0;
+    try { System.arraycopy(from, 1, ok, 0, 2); } catch (ArrayStoreException e) { r += 16; }
+    Object[] wide = new Object[3]; System.arraycopy(from, 0, wide, 1, 2); r += wide[2] == from[1] ? 32 : 0;
+    System.arraycopy(from, 0, from, 1, 2); r += from[2] == from[1] ? 64 : 0;
+    return r;
+  }
+  public static int newInstance2(int n) {
+    Object[] c = (Object[]) java.lang.reflect.Array.newInstance(A.class, 3);
+    return (c.getClass() == A[].class ? 1000 : 0) + c.length * 10000;
+  }
 }

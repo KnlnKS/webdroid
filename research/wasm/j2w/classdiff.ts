@@ -31,6 +31,8 @@ intrinsics.set("C.fh(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => {
   ids.forEach((id, k) => { if (k) c.i32(id).lget(0).i32(k).raw(OP.i32_ne).select(); });
   c.raw(OP.i64_extend_i32_u).structSet(st, cx.fieldIndex(FV, { owner: FV, name: "artField", desc: "J" })).lget(o);
 });
+// System.<clinit> needs strings and the whole properties machinery, which System.arraycopy does not
+intrinsics.set("java/lang/System.<clinit>()V", () => {});
 intrinsics.set("C.av(I)Ljava/lang/invoke/VarHandle;", (cx, m, c) => { cx.emitNew(c, "java/lang/invoke/ArrayElementVarHandle"); });
 const dex = join(out, "classes.dex"), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(here, "../../../vendor/aosp", j));
 const prog = program([dex, ...jars]);
