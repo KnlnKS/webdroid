@@ -863,6 +863,8 @@ export class World {
     return yes;
   }
   /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
+  /** the array pinned under table index `i` (memory.ts) */
+  pinnedAt(i: number): object { return this.nm.get(i) as object; }
   pin(object: object): number {
     let i = this.pinned.get(object);
     if (i === undefined) {

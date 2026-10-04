@@ -52,9 +52,11 @@ async function drive(it: Generator<unknown, unknown, unknown>, ctx: HostContext 
   return step.value;
 }
 
+/** the services the host implements behind binder: what they call may wait, and they take arrays (out parameters) */
+export const SERVICES = "webdroid/";
 /** whether native `id` is imported as Suspending */
 export function suspends(id: string, fn: HostFn, arrays: boolean): boolean {
-  return (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || MAY_SUSPEND.has(id) || suspendedNatives.has(id) || (arrays && (declared ? declared.has(id) : mayWait(fn)));
+  return (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || MAY_SUSPEND.has(id) || suspendedNatives.has(id) || (arrays && (id.startsWith(SERVICES) || (declared ? declared.has(id) : mayWait(fn))));
 }
 
 /** a plain import answered a Promise: nothing can wait there. It is reported, and the next module that imports it gets it as Suspending */

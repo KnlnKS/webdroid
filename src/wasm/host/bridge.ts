@@ -5,7 +5,7 @@
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object the production runtime made (a Struct*) is copied field by field.
 import { demangle, mangleField } from "../../jvm/abi";
-import { rt } from "../../jvm/runtime";
+import { rt, JObj } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
@@ -15,6 +15,7 @@ import type { Strand } from "../link/sched";
 import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
 import { count } from "./stats";
+import { handle, release } from "../../android/handles";
 
 type Fn = (...a: any[]) => any;
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
@@ -157,7 +158,7 @@ export class Bridge implements HostBridge {
   /** a throwable's facade stands where the production runtime's JThrowable does (`instanceof`, `msg`, `cause`) */
   private facade(o: object, name: string): object {
     const fields = this.fieldsOf(name), bridge = this, throwable = this.w.prog.isSubclass(name, THROWABLE);
-    const proxy = new Proxy(Object.create(throwable ? JThrowable.prototype : Object.prototype), {
+    const proxy = new Proxy(Object.create(throwable ? JThrowable.prototype : JObj.prototype), {
       get(t, p) {
         if (p === REF) return o;
         if (p === "jframes" && throwable) return bridge.frames(o);
@@ -260,6 +261,12 @@ export class Bridge implements HostBridge {
     } finally { if (!nested) this.end(mark); }
   }
 
+  address(address: bigint): bigint {
+    if (address >> 50n !== 1n) return address;
+    const host = this.toHost(this.w.pinnedAt(Number((address >> 32n) & 0x3ffffn))), h = handle(host as object);
+    this.undo.push(() => release(h));
+    return h;
+  }
   /** `invoke` on strand `s`, whose stack can wait: the host value, or a Promise of it when the call waited. The call itself has no scope: the natives it reaches open their own,
    *  and one scope that outlived them would hand a native the copy of an array an earlier native reached */
   invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
@@ -289,6 +296,8 @@ export class Bridge implements HostBridge {
     const java = this.shellOf(o);
     if (java) return java;
     const cls = this.src?.classOf?.(o);
+    // a throwable a native raised without Java code (hostThrowable) becomes a Java one with its message
+    if (cls && o instanceof JThrowable) return this.w.makeThrowable(cls, o.msg);
     if (cls) return this.copyObject(o as Record<string, unknown>, cls);
     throw new Error(`a native returned a host value of no Java class (${(o as { constructor?: { name?: string } }).constructor?.name}) where ${desc} was expected`);
   }

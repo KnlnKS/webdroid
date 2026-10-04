@@ -3,7 +3,8 @@
 import { jarray, mangleField, stringHash } from "../abi";
 import { rt, driven, type Gen } from "../runtime";
 import { intrinsicCompiler } from "./jbox";
-import { vcall, scall } from "./jentry";
+import { vcall, scall, newObj } from "./jentry";
+import { tier } from "../tier";
 
 const AL = "java/util/ArrayList", HM = "java/util/HashMap", NODE = "java/util/HashMap$Node", ITR = "java/util/ArrayList$Itr";
 const DATA = mangleField(AL, "elementData"), SIZE = mangleField(AL, "size"), MOD = mangleField("java/util/AbstractList", "modCount");
@@ -23,6 +24,12 @@ function arrayList(): new () => Obj {
 
 /** A java.util.ArrayList over `items`, which it takes as its backing array. */
 export function newArrayList(items: unknown[] = []): Obj {
+  // the Wasm tier's objects are not JS objects with these fields: the list is built through its Java API, which answers at once as nothing here waits
+  if (tier === "wasm") {
+    const list = newObj(AL, "(I)V", items.length) as Obj;
+    for (const item of items) vcall(list, "add", "(Ljava/lang/Object;)Z", item);
+    return list;
+  }
   const l = new (arrayList())();
   l[DATA] = jarray(items);
   l[SIZE] = items.length;
@@ -49,6 +56,11 @@ export const mkEnumeration = (items: unknown[]): unknown =>
 
 /** a Java collection of class `cls` holding `items`, added in order */
 const newCollection = driven(function* newCollection(cls: string, items: Iterable<unknown>): Gen<Obj> {
+  if (tier === "wasm") {
+    const c = yield newObj(cls, "()V");
+    for (const item of items) yield vcall(c, "add", "(Ljava/lang/Object;)Z", item);
+    return c;
+  }
   const info = rt.link(cls);
   const init = rt.initClass(info);
   if (init) yield init;

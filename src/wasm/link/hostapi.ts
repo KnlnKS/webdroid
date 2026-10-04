@@ -51,6 +51,8 @@ export interface HostBridge {
   hold(): () => void;
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
+  /** a handle (android/handles.ts) to the host copy of the array that address `address` names, when it names a pinned array (VMRuntime.addressOf), for the length of the call; else the address */
+  address(address: bigint): bigint;
   /** `invoke` on strand `s`, whose stack can wait: a Promise of the host value when the call waited */
   invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }

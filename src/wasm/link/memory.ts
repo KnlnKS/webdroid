@@ -112,9 +112,10 @@ for (const [kind, ek, w, swaps] of ARRAYS) for (const peek of [true, false]) {
   });
 }
 
-// VMRuntime.addressOf(array): a byte[] is pinned (the one direct buffers allocate), anything else is the production handle
+// VMRuntime.addressOf(array): a byte[] is pinned (the one direct buffers allocate), and so is an int[] (the one TypedArray's data lives in, which natives reach through
+// the Bridge: natives.ts ADDRESSES); anything else is the production handle
 memoryIntrinsics.set("dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", (cx, m, c) => {
-  c.lget(1).refTest(cx.tArr.i8).if_(T.i64);
+  c.lget(1).refTest(cx.tArr.i8).lget(1).refTest(cx.tArr.i32).raw(OP.i32_or).if_(T.i64);
   c.lget(1).externConvertAny().call(cx.imp.pin).raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl).i64(NM_BASE).raw(OP.i64_or);
   c.else_(); cx.natives.call(cx, c, m); c.end();
 });

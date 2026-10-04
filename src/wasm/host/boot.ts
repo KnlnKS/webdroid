@@ -5,7 +5,9 @@ import { FetchStore } from "../link/aotstore";
 import { rt, fieldNames } from "../../jvm/runtime";
 import { useEntry } from "../../jvm/natives/jentry";
 import type { TierBackend } from "../../jvm/tier";
-import type { DexFile } from "../../jvm/dex";
+import { dexesIn, isDexEntry, type DexFile } from "../../jvm/dex";
+import { centralDir, entryBytes } from "../../jvm/natives/jzip";
+import { vfs } from "../../shell/vfs";
 import { Program } from "../compiler/program";
 import { fetchPlatformJars, jarDexes } from "../../android/framework";
 import { PLATFORM_JARS } from "../../jvm/provenance";
@@ -41,17 +43,32 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
 export async function bootWasmTier(): Promise<TierBackend> {
   const [store, jars] = await Promise.all([openAot(), fetchPlatformJars()]);
   const platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
-  const world = createWorld(new Program([], platform), { aot: store });
+  const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined>();
+  const world = createWorld(new Program([], platform), { aot: store, dexes: (path) => openDexes(path, appDexes, opened) });
   useEntry(wasmEntry(world));
   fieldNames.find = fieldNamesOf(world);
   rt.mkThrowable = hostThrowable;
   rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(world, cls); };
   return {
     loadDex(dex, isPlatform) {
-      if (!isPlatform) world.addDexes([dex]);
+      if (!isPlatform) { appDexes.push(dex); world.addDexes([dex]); }
     },
   };
 }
+
+/** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
+ *  when its bytes are resident */
+function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined>): DexFile[] | undefined {
+  if (!opened.has(path)) {
+    const bytes = /^\/data\/app\/.*\.apk$/.test(path) && app.length ? null : vfs.readFile(path);
+    opened.set(path, bytes === null ? app : bytes instanceof Uint8Array ? bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? dexesOf(bytes, path) : dexesIn(bytes, path) : undefined);
+  }
+  return opened.get(path);
+}
+const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
+  const dir = centralDir(zip);
+  return [...dir.keys()].filter(isDexEntry).sort().flatMap((name) => dexesIn(entryBytes(zip, dir.get(name)!), `${label}:${name}`));
+};
 
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled: fetched once by the tab,
  *  and the compiled modules are shared by the process frames, which are same-origin. Undefined when the server has no build for the sources, which leaves all code to

@@ -14,7 +14,7 @@ import { externs } from "../../src/wasm/link/intrinsics";
 import { natives } from "./oracle";
 import { rt } from "../../src/jvm/runtime";
 import { hostNatives } from "../../src/wasm/host/hostnatives";
-import { MAY_SUSPEND } from "../../src/wasm/host/suspend";
+import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
 import { waitingNatives } from "../../src/wasm/host/nativesource";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { packModule, type CHeader, type DHeader } from "../../src/wasm/link/aot";
@@ -34,7 +34,7 @@ const appPath = flag("--app", "");
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
-  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
+  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
   const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, appPath && readFileSync(appPath).toString("base64")]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });

@@ -66,9 +66,16 @@ export function wasmEntry(w: World): Entry {
   const call = (key: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, ...args: unknown[]): unknown =>
     onStrand((s) => w.callFn(key, params, ret, body)(s, ...args));
   const scoped = <T>(f: () => T): T => { const mark = bridge.begin(); try { return f(); } finally { bridge.end(mark); } };
+  /** a JThread (what host code holds of a thread) is the Java Thread of its strands: the main thread's is made by its first Thread.currentThread() */
+  const threadObject = (t: JThread): object => {
+    const rec = t === mainThread ? sched.mainRec : recs.get(t) ?? sched.mainRec;
+    if (!rec.obj) asThread(rec, () => enter(() => invoke(prog.resolve("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;")!, null, [])));
+    return rec.obj!;
+  };
   const receiver = (obj: unknown, what: string): object => {
+    if (obj instanceof JThread) return threadObject(obj);
     if (obj === null || obj === undefined) throw new TypeError(`Cannot read properties of ${obj} (reading '${what}')`);
-    if (obj instanceof JObj && !refOf(obj) && !w.hosts.specOfHost(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
+    if (obj instanceof JObj && !(obj instanceof JThrowable) && !refOf(obj) && !w.hosts.specOfHost(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
     return bridge.toJava(obj, OBJECT) as object;
   };
   const alloc = (cls: string) => call("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); }) as object | Promise<object>;

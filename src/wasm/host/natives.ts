@@ -55,15 +55,18 @@ const RANGES: [string, ...[number, number, number][]][] = [
   ...["EVP_DigestUpdate", "EVP_DigestSignUpdate", "EVP_DigestVerifyUpdate", "EVP_DigestVerifyFinal", "HMAC_Update", "CMAC_Update", "BIO_write"].map((n): [string, [number, number, number]] => [`com/android/org/conscrypt/NativeCrypto.${n}`, [1, 2, 3]]),
   ["com/android/org/conscrypt/NativeCrypto.EVP_CipherUpdate", [3, 4, 5]],
 ];
+/** natives whose `long` parameters (by position, receiver first) are addresses VMRuntime.addressOf gave for an int[]: TypedArray's data, which AssetManager.applyStyle fills in */
+const ADDRESSES: [string, ...number[]][] = [["android/content/res/AssetManager.nativeApplyStyle", 6, 7]];
+const addressesOf = (m: MethodInfo): number[] => ADDRESSES.find(([prefix]) => (m.cls + "." + m.key).startsWith(prefix))?.slice(1) as number[] ?? [];
 const rangesOf = (m: MethodInfo): Map<number, [number, number]> => {
   const id = m.cls + "." + m.key, out = new Map<number, [number, number]>(), shift = m.isStatic || m.isCtor ? 0 : 1;
   for (const [prefix, ...triples] of RANGES) if (id.startsWith(prefix)) for (const [a, o, l] of triples) out.set(a + shift, [o + shift, l + shift]);
   return out;
 };
 
-/** whether a native that answers a Promise where it was not expected to may still wait: its call site settles the Promise with a Suspending import. Not one with arrays,
- *  whose views are scratch memory other strands reuse while this one waits; a Suspending native keeps private copies of them */
-const parkable = (p: Plan): boolean => !p.suspends && !p.always && !p.retArray && !p.args.some(isPrimArray);
+/** whether a native that answers a Promise where it was not expected to may still wait: its call site settles the Promise with a Suspending import. Its arrays are views of the
+ *  scratch region it reserved, which stays reserved while it waits (the call site lowers the scratch top only if nothing was reserved above it meanwhile) */
+const parkable = (p: Plan): boolean => !p.suspends && !p.always;
 /** the import that settles a Promise answered by a native whose import returns `ret` */
 const settleKey = (p: Plan): string => "settle:" + (p.ret === null ? "v" : p.ret === T.externref ? "x" : p.ret === T.i64 ? "j" : p.ret === T.f32 ? "f" : p.ret === T.f64 ? "d" : "i");
 
@@ -81,6 +84,8 @@ interface Plan {
   args: string[];
   /** per array parameter (position in `args`), the positions of its offset and length parameters */
   ranges: Map<number, [number, number]>;
+  /** the parameters that are addresses of pinned arrays */
+  addresses: number[];
   /** the array class a result is, if any */
   retArray: string | null;
   /** whether the result is a String */
@@ -118,7 +123,7 @@ export class Natives implements NativeBinder {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn, args.some(isPrimArray) || isPrimArray(rd)), always: !!fn && waitsAlways(fn), initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn, args.some(isPrimArray) || isPrimArray(rd)), always: !!fn && waitsAlways(fn), initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), addresses: addressesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
     this.byMethod.set(m, p);
     return p;
   }
@@ -172,6 +177,7 @@ export class Natives implements NativeBinder {
     const restore = p.suspends ? emitSave(cx, c) : null;
     const arrays: ReturnType<Natives["copyIn"]>[] = [];
     const scratch = p.args.some(isPrimArray) || p.retArray ? cx.scratch() : -1, sp0 = scratch >= 0 ? c.newLocal(T.i32) : -1;
+    const top = scratch >= 0 && parkable(p) ? c.newLocal(T.i32) : -1;
     if (scratch >= 0) c.gget(scratch).lset(sp0);
     p.args.forEach((d, i) => {
       const t = abi(d);
@@ -179,6 +185,7 @@ export class Natives implements NativeBinder {
       c.lget(i);
       if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (d === STRING) cx.str.toHost(c); else if (t === T.externref) c.externConvertAny();
     });
+    if (top >= 0) c.gget(scratch).i32(7).raw(OP.i32_add).i32(-8).raw(OP.i32_and).lset(top);
     if (!restore) {
       c.call(imp);
       // the native answered a Promise: this strand settles it, waiting on its own stack, and takes its value in place of the placeholder the import answered
@@ -206,7 +213,8 @@ export class Natives implements NativeBinder {
     if (p.retArray) c.lset(rlen);
     for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.from).lget(a.count).call(this.copy(cx, a.ek, false)).end();
     if (p.retArray) this.copyOut(cx, c, p.retArray, rlen, scratch);
-    if (scratch >= 0) c.lget(sp0).gset(scratch);
+    if (top >= 0) c.gget(scratch).lget(top).raw(OP.i32_le_u).if_().lget(sp0).gset(scratch).end();
+    else if (scratch >= 0) c.lget(sp0).gset(scratch);
   }
   /** copies array parameter `i` of class `d` into a fresh scratch region, leaving its (pointer, length), or (0, -1) for null; only the
    *  elements [from, from + count) are copied when the native's contract names a range inside the array (RANGES), all of them otherwise */
@@ -262,7 +270,8 @@ export class Natives implements NativeBinder {
     // a result array is left at the scratch top, which the stub copies out
     const put = (r: View | null) => {
       if (r === null) return -1;
-      const at = ctx.sp.value as number, need = at + r.byteLength, have = ctx.mem.buffer.byteLength;
+      const at = ((ctx.sp.value as number) + 7) & -8, need = at + r.byteLength, have = ctx.mem.buffer.byteLength;
+      ctx.sp.value = at;
       if (need > have) ctx.mem.grow(Math.ceil((need - have) / 65536));
       new (r.constructor as typeof Uint8Array)(ctx.mem.buffer, at, r.length).set(r as never);
       return r.length;
@@ -308,8 +317,8 @@ const makers = new Map<string, Maker>();
  *  A Suspending native is the same in an async function: it works on private copies of its arrays, and the Bridge scope it opened is set
  *  aside while it waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
-  const parked = parkable(p), objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + parked + (p.ret ?? "v");
+  const parked = parkable(p), objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null || p.addresses.length > 0;
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + p.addresses + susp + parked + (p.ret ?? "v");
   let make = makers.get(key);
   if (!make) {
     const at: number[] = [];
@@ -323,12 +332,13 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
       pre.push(`const h${i}=B.toHost(a${at[i]},D[${i}]${r ? `,[a${at[r[0]]},a${at[r[1]]}]` : ""});`);
       if (r) args[r[0]] = `B.offsetIn(h${i},a${at[r[0]]})`;
     });
+    for (const i of p.addresses) args[i] = `B.address(a${at[i]})`;
     const call = p.initializes !== null ? "B.initialize(CLS,f)" : p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
     const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
     // the arrays and the scratch top as they were when the call began, set again after the wait
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
-    const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}return r}catch(e){return raise(e)}finally{${scope[1]}}`;
+    const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
     const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp)}X.give(own);` : parked ? park : "if(r instanceof Promise)return suspended();";
     make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
