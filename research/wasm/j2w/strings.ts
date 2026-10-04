@@ -345,3 +345,49 @@ stringIntrinsics.set("java/lang/AbstractStringBuilder.putStringAt(ILjava/lang/St
     .lget(d).refAsNonNull().lget(1).lget(i).raw(OP.i32_add).i32(1).raw(OP.i32_shl).i32(1).raw(OP.i32_add).lget(ch).i32(8).raw(OP.i32_shr_u).arraySet(cx.tData.i8)
     .lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
 });
+
+// Integer.toString(int) and Long.toString(long) in base 10, written into a char array; parseInt(String) and parseLong(String) of an optional
+// minus and up to 9 (18) digits, where anything else (a sign, a radix, a number too long to be safe, a bad digit) is the library method with its exceptions
+{
+  const def = (key: string, f: Intrinsic) => stringIntrinsics.set(key, f);
+  const toStr = (wide: boolean): Intrinsic => (cx, m, c) => {
+    const s = cx.str as StructStrings, W = wide ? T.i64 : T.i32, u = c.newLocal(W), len = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), out = c.newLocal(ref(cx.tData.i16)), t = c.newLocal(W);
+    const k = (n: number) => (wide ? c.i64(BigInt(n)) : c.i32(n));
+    const op = (i32op: number, i64op: number) => c.raw(wide ? i64op : i32op);
+    // the magnitude as an unsigned number: negating MIN_VALUE wraps to itself, which unsigned division reads right
+    c.lget(0); k(0); op(OP.i32_lt_s, OP.i64_lt_s); c.lset(neg);
+    c.lget(neg).if_(W); k(0); c.lget(0); op(OP.i32_sub, OP.i64_sub); c.else_().lget(0).end().lset(u);
+    c.lget(neg).lset(len).lget(u).lset(t);
+    c.block().loop().lget(len).i32(1).raw(OP.i32_add).lset(len).lget(t); k(10); op(0x6e, 0x80); c.ltee(t); k(0); op(OP.i32_ne, OP.i64_ne).brIf(0).end().end();
+    c.lget(len).call(s.newCharsKnown()).lset(out).lget(len).lset(i);
+    c.block().loop().lget(i).i32(1).raw(OP.i32_sub).lset(i)
+      .lget(out).lget(i).lget(u); k(10); op(0x70, 0x82); if (wide) c.raw(OP.i32_wrap_i64); c.i32(48).raw(OP.i32_add).arraySet(cx.tData.i16);
+    c.lget(u); k(10); op(0x6e, 0x80); c.ltee(u); k(0); op(OP.i32_ne, OP.i64_ne).brIf(0).end().end();
+    c.lget(neg).if_().lget(out).i32(0).i32(45).arraySet(cx.tData.i16).end();
+    c.lget(out).call(s.mk());
+  };
+  def("java/lang/Integer.toString(I)Ljava/lang/String;", toStr(false));
+  def("java/lang/Long.toString(J)Ljava/lang/String;", toStr(true));
+  const parse = (wide: boolean): Intrinsic => (cx, m, c) => {
+    const s = cx.str as StructStrings, ci = cx.tData.i16, a = c.newLocal(ref(ci)), n = c.newLocal(T.i32), i = c.newLocal(T.i32), neg = c.newLocal(T.i32), d = c.newLocal(T.i32), acc = c.newLocal(wide ? T.i64 : T.i32);
+    const owner = wide ? "java/lang/Long" : "java/lang/Integer", slow = cx.prog.resolve(owner, wide ? "parseLong" : "parseInt", `(Ljava/lang/String;I)${wide ? "J" : "I"}`);
+    if (!slow) { cx.gap(c, owner + ".parse"); return; }
+    const max = wide ? 18 : 9, fallback = () => { c.lget(0).i32(10); cx.callMethod(c, slow); c.ret(); };
+    c.lget(0).refIsNull().if_(); fallback(); c.end();
+    s.charsOf(c, 0).lset(a); c.lget(a).arrayLen().lset(n);
+    c.lget(n).raw(OP.i32_eqz).if_(); fallback(); c.end();
+    c.lget(a).i32(0).arrayGetU(ci).i32(45).raw(OP.i32_eq).lset(neg);
+    c.lget(neg).lset(i);
+    // at least one digit, at most max
+    c.lget(n).lget(i).raw(OP.i32_sub).i32(max).raw(OP.i32_gt_s).lget(n).lget(i).raw(OP.i32_eq).raw(OP.i32_or).if_(); fallback(); c.end();
+    c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1)
+      .lget(a).lget(i).arrayGetU(ci).i32(48).raw(OP.i32_sub).ltee(d).i32(9).raw(OP.i32_gt_u).if_(); fallback(); c.end();
+    if (wide) c.lget(acc).i64(10n).raw(OP.i64_mul).lget(d).raw(OP.i64_extend_i32_u, OP.i64_add).lset(acc);
+    else c.lget(acc).i32(10).raw(OP.i32_mul).lget(d).raw(OP.i32_add).lset(acc);
+    c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
+    c.lget(neg).if_(wide ? T.i64 : T.i32); if (wide) c.i64(0n).lget(acc).raw(OP.i64_sub); else c.i32(0).lget(acc).raw(OP.i32_sub);
+    c.else_().lget(acc).end();
+  };
+  def("java/lang/Integer.parseInt(Ljava/lang/String;)I", parse(false));
+  def("java/lang/Long.parseLong(Ljava/lang/String;)J", parse(true));
+}

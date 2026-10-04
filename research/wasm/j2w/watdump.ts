@@ -15,7 +15,7 @@ const w = world(program([dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aos
 const units: Uint8Array[] = [];
 const inst = (w as unknown as { instantiate(b: Uint8Array, i: unknown): unknown }).instantiate;
 (w as unknown as { instantiate: unknown }).instantiate = function (this: unknown, bytes: Uint8Array, imports: unknown) { units.push(bytes); return inst.call(this, bytes, imports); };
-const call = w.entry("Bench", `w_${workload}`, "()I"); for (let i = 0; i < Number(process.env.CALLS ?? 1); i++) call();
+const call = w.entry(process.env.CLS ?? "Bench", `w_${workload}`, "()I"); for (let i = 0; i < Number(process.env.CALLS ?? 1); i++) call();
 const bin = join(import.meta.dir, "../node_modules/.bin/wasm-dis"), file = join(tmpdir(), "g1/unit.wasm");
 for (const bytes of units) {
   writeFileSync(file, bytes);
