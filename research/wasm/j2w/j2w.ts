@@ -7,7 +7,7 @@ import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, type Thrower } from "./exc";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
 import { JsStrings, stringCtor, stringHelper, type StringRepr } from "./strings";
 import type { Natives } from "./natives";
 
@@ -37,7 +37,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -46,8 +46,14 @@ export class Compiler implements Base {
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
+  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
+  counting = true;
+  /** the slots whose budget globals this module imports */
+  counted = new Set<number>();
   /** the method being compiled */
   private owner?: MethodInfo;
+  /** the installed method of the unit being compiled, which the CHA decisions of every method in it count against */
+  private assumer?: MethodInfo;
   str: StringRepr;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
@@ -69,7 +75,7 @@ export class Compiler implements Base {
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]) };
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref], [T.i32]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }
@@ -146,12 +152,24 @@ export class Compiler implements Base {
   devirt(decl: string, name: string, desc: string): MethodInfo | "none" | "many" {
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length > 1) return "many";
-    this.assumptions.push([decl, name, desc, t[0], this.owner]);
+    this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0] ?? "none";
   }
-  /** emit "ensure class initialized" at a use site */
-  emitEnsure(c: Code, cls: string): void {
-    if (!this.w.needsInit(cls)) return;
+  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
+  guards(decl: string, name: string, desc: string): MethodInfo[] {
+    return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.fn.has(mid(m)));
+  }
+  /** counts down `m`'s budget by one and asks the host to upgrade the method when it reaches zero */
+  emitCount(c: Code, m: MethodInfo): void {
+    const slot = this.w.slotOf(m), g = this.global("cnt", String(slot), T.i32, true);
+    this.counted.add(slot);
+    c.gget(g).i32(1).raw(OP.i32_sub).gset(g).gget(g).raw(OP.i32_eqz).if_().i32(slot).call(this.imp.hot).end();
+  }
+  /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
+   *  never goes back), is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun), or is in `known`,
+   *  the classes every path to here has already requested */
+  emitEnsure(c: Code, cls: string, known?: Set<string>): void {
+    if (known?.has(cls) || !this.w.needsInit(cls) || this.w.initialized(cls) || (this.owner && this.prog.chain(this.owner.cls).includes(cls))) return;
     c.gget(this.classGlobal(cls, "init", T.i32)).i32(INIT_DONE).raw(OP.i32_ne).if_().i32(this.w.ensureSlot(cls)).callIndirect(this.sig([], "V")).end();
   }
   idOf(name: string): number { return this.w.idOf(name); }
@@ -167,29 +185,76 @@ export class Compiler implements Base {
   gap(c: Code, what: string): void {
     this.gaps.push(what);
     c.i32(this.w.gapId(what)).call(this.imp.gap);
-    this.callThrower(c, "ule"); c.unreachable();
+    this.callThrower(c, "ule");
   }
-  /** calls thrower `name` with its arguments already pushed; it never returns */
-  callThrower(c: Code, name: Thrower): void { c.i32(SLOT[name]).callIndirect(this.sig(THROWERS[name].params, "V")); }
+  /** calls thrower `name` with its arguments already pushed; it never returns, which the code says so the engine sees a check's failing arm end */
+  callThrower(c: Code, name: Thrower): void {
+    // a function of this module that makes the indirect call keeps each failing arm a plain call, which the engine inlines and sizes more cheaply
+    const f = this.memo("throw:" + name, () => {
+      const params = THROWERS[name].params, fn = this.mb.reserveFunc(this.sig(params, "V"), "$throw_" + name), t = new Code(params.length);
+      params.forEach((_, i) => t.lget(i));
+      t.i32(SLOT[name]).callIndirect(this.sig(params, "V")).unreachable();
+      this.mb.setBody(fn, t.finish());
+      return fn;
+    });
+    c.call(f).unreachable();
+  }
 
   // ---------- allocation
   private allocBytes(c: Code, add: () => void): void {
     const g = this.global("rt", "alloc", T.i32, true);
     c.gget(g); add(); c.raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
   }
+  /** a function of this module with the given body: a call is much shorter than the sequence, which keeps the callers small for the engine's inliner */
+  private local(key: string, params: Kind[], ret: Kind | "V", body: (c: Code) => void, result?: VT): number {
+    return this.memo(key, () => {
+      const type = result ? this.mb.addFuncType(params.map((k) => this.vtOf(k)), [result]) : this.sig(params, ret);
+      const f = this.mb.reserveFunc(type, "$" + key), c = new Code(params.length);
+      body(c);
+      this.mb.setBody(f, c.finish());
+      return f;
+    });
+  }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
-    const lay = this.prog.layout(cls);
-    this.allocBytes(c, () => c.i32(8 + lay.reduce((n, f) => n + (f.kind === "J" ? 8 : 4), 0)));
-    c.gget(this.vtGlobal(cls)).refAsNonNull().i32(0);
-    for (const f of lay) { if (f.kind === "I") c.i32(0); else if (f.kind === "J") c.i64(0n); else c.anyNull(); }
-    c.structNew(this.structFor(cls));
+    this.w.allocated.add(cls);
+    c.call(this.local("new:" + cls, [], "L", (n) => {
+      const lay = this.prog.layout(cls);
+      this.allocBytes(n, () => n.i32(8 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
+      n.gget(this.vtGlobal(cls)).refAsNonNull().i32(0);
+      for (const f of lay) { if (f.kind === "I") n.i32(0); else if (f.kind === "J") n.i64(0n); else n.anyNull(); }
+      n.structNew(this.structFor(cls));
+    }, ref(this.structFor(cls))));
   }
   /** push a new array of class `desc` whose length `pushLen` pushes; negative or oversized lengths throw */
   emitNewArray(c: Code, desc: string, pushLen: () => void): void {
     const ek = elemKindOf(desc), shift = { i8: 0, i16: 1, i32: 2, i64: 3, ref: 2 }[ek];
-    c.gget(this.vtGlobal(desc)).refAsNonNull().i32(0);
-    pushLen(); c.i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
+    pushLen();
+    c.call(this.local("newarray:" + desc, ["I"], "L", (n) => {
+      n.gget(this.vtGlobal(desc)).refAsNonNull().i32(0).lget(0).i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
+    }, ref(this.tArr[ek])));
+  }
+  /** a function of this module: is its (anyref) argument an instance of class, interface or array `name`? null is not */
+  instanceOfFn(name: string): number {
+    return this.local("instanceof:" + name, ["L"], "I", (c) => {
+      const id = this.idOf(name);
+      if (name === "java/lang/Object") { c.lget(0).refIsNull().raw(OP.i32_eqz); return; }
+      if (name[0] === "[") {
+        if (elemKindOf(name) === "ref") { c.lget(0).i32(id); this.callRt(c, "instArr"); } else c.lget(0).i32(id).i32(1).call(this.helper("iof"));
+        return;
+      }
+      c.lget(0);
+      if (this.prog.get(name)?.isInterface || this.prog.chain(name).length > H.MAXD) c.i32(id).call(this.helper("implements"));
+      else c.i32(id).i32(this.prog.chain(name).length - 1).call(this.helper("iof"));
+    });
+  }
+  /** a function of this module that returns its argument if it can be cast to `name` (null can) and throws ClassCastException otherwise */
+  castFn(name: string): number {
+    return this.local("cast:" + name, ["L"], "L", (c) => {
+      c.lget(0).refIsNull().raw(OP.i32_eqz).if_().lget(0).call(this.instanceOfFn(name)).raw(OP.i32_eqz).if_();
+      c.lget(0).call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT).i32(this.idOf(name)); this.callThrower(c, "cce");
+      c.end().end().lget(0);
+    });
   }
 
   // ---------- module-local helpers, defined on first use
@@ -305,14 +370,19 @@ export class Compiler implements Base {
   }
 
   // ---------- units
-  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>" */
-  buildUnit(methods: MethodInfo[]): { bytes: Uint8Array; traces: FnTrace[] } {
-    const { mb, w } = this;
-    this.natives.declare(this, methods);
-    for (const m of methods) this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), mid(m)));
-    const codes = methods.map((m) => { this.owner = m; return compileMethod(this, m); });
-    methods.forEach((m, i) => { const f = this.fn.get(mid(m))!; const code = codes[i]; mb.setBody(f, code.finish()); mb.export("m" + w.slotOf(m), "func", f); });
-    return this.finishModule(methods.map((m, i) => ({ name: mid(m), f: this.fn.get(mid(m))!, code: codes[i], m })));
+  /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
+   *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
+   *  unit is the second tier: its methods do not count. */
+  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false): { bytes: Uint8Array; traces: FnTrace[] } {
+    const { mb, w } = this, all = methods.concat(copies);
+    this.counting = !hot;
+    this.natives.declare(this, all);
+    // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
+    const label = (m: MethodInfo, i: number) => (hot || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
+    all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
+    const codes = all.map((m) => { this.owner = m; this.assumer = methods[0]; return compileMethod(this, m); });
+    all.forEach((m, i) => { const f = this.fn.get(mid(m))!; mb.setBody(f, codes[i].finish()); if (i < methods.length) mb.export("m" + w.slotOf(m), "func", f); });
+    return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
   buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V"): { bytes: Uint8Array; traces: FnTrace[] } {

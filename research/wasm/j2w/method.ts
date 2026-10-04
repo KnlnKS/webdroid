@@ -1,5 +1,5 @@
 import { Code, OP } from "./code";
-import { T, refNull, type VT } from "./wasmbin";
+import { T, ref, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind, type MethodInfo } from "./program";
 import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
@@ -9,6 +9,7 @@ import { Flow, Go } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 import { constClass, emitStoreCheck } from "./classes";
 import { emitPolymorphic } from "./poly";
+import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
@@ -40,6 +41,12 @@ export class MC {
   consumed = new Set<number>();            // move-result pcs folded into their invoke
   tries: boolean;
   regionOfPc = new Map<number, number>();
+  /** what holds on every path to the start of each block, and at the instruction being emitted (facts.ts) */
+  entryFacts: Facts[] = [];
+  facts: Facts = newFacts();
+  /** "web:struct" of the field accesses that share a cast, and the local holding it */
+  shadowKeys = new Set<string>();
+  shadows = new Map<string, number>();
   constructor(public cx: Compiler, public m: MethodInfo) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
@@ -106,6 +113,8 @@ export class MC {
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
+    this.findShadows();
+    this.entryFacts = analyze(this);
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
     // a parameter's web uses the parameter's local, unless floats live in float locals: then it is copied in once
@@ -121,6 +130,7 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
+    if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
     if (regions.length === 1 && !this.tries) {
@@ -154,7 +164,12 @@ export class MC {
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
   depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
-  blk(label: string, loop: boolean, bt: VT | null = null) { this.push(label); loop ? this.code.loop(bt) : this.code.block(bt); }
+  blk(label: string, loop: boolean, bt: VT | null = null) {
+    this.push(label);
+    if (!loop) { this.code.block(bt); return; }
+    this.code.loop(bt);
+    if (this.cx.counting && label[0] === "L") this.cx.emitCount(this.code, this.m);
+  }
   endBlk() { this.pop(); this.code.end(); }
 
   emitRegion(k: number) {
@@ -170,7 +185,8 @@ export class MC {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
     this.block = b;
     if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
-    for (const ins of inss) this.emit(ins);
+    this.facts = cloneFacts(this.entryFacts[b]);
+    for (const ins of inss) { this.emit(ins); step(this, ins, this.facts); }
     const last = inss[inss.length - 1];
     if (!endsBlock(last.op)) {
       const taken = last.op >= 0x32 && last.op <= 0x3d ? flow.blockAt[ifTarget(last)] : -1;
@@ -206,27 +222,63 @@ export class MC {
     }
   }
   /** pushes i32: obj (pushed by `obj`) is an instance of class/interface/array `name` (null -> 0) */
-  emitInstanceOfTest(name: string, obj: () => void) {
-    const cx = this.cx, c = this.code, id = cx.idOf(name);
-    if (name === "java/lang/Object") { obj(); c.refIsNull().raw(OP.i32_eqz); return; }
-    if (name[0] === "[") {
-      const ek = elemKindOf(name);
-      if (ek === "ref") { obj(); c.i32(id); cx.callRt(c, "instArr"); }
-      else { obj(); c.i32(id).i32(1).call(cx.helper("iof")); }
-      return;
-    }
-    const jc = cx.prog.get(name);
-    obj();
-    if (jc?.isInterface) c.i32(id).call(cx.helper("implements"));
-    else if (cx.prog.chain(name).length > H.MAXD) c.i32(id).call(cx.helper("implements"));
-    else c.i32(id).i32(cx.prog.chain(name).length - 1).call(cx.helper("iof"));
-  }
+  emitInstanceOfTest(name: string, obj: () => void) { obj(); this.code.call(this.cx.instanceOfFn(name)); }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
     const c = this.code, cx = this.cx;
+    if (this.facts.nonNull.has(this.useWeb(reg))) { this.get("L", reg); return; }
     this.get("L", reg); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); this.get("L", reg);
   }
-  refTo(reg: number, struct: number) { this.nonNull(reg); this.code.refCast(struct); }
+  /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
+  ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
+  /** the class whose initialization `ins` requests, as its translation does */
+  ensureTarget(ins: Ins): string | undefined {
+    const n = ins.name;
+    if (n === "new-instance") { const name = descToName(this.dex.type(ins.b)); return this.cx.str.isString(name) ? undefined : name; }
+    if (n.startsWith("sget") || n.startsWith("sput")) return this.fieldOf(ins.b).f.owner;
+    if (n === "invoke-static" || n === "invoke-static/range") {
+      const mr = this.dex.method(ins.b), decl = descToName(this.dex.type(mr.cls));
+      return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
+    }
+    return undefined;
+  }
+  isStringInit(ins: Ins): boolean {
+    const mr = this.dex.method(ins.b);
+    return mr.name === "<init>" && this.cx.str.isString(descToName(this.dex.type(mr.cls)));
+  }
+  /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
+  definesNonNull(ins: Ins, f: Facts): boolean {
+    const n = ins.name;
+    if (n === "new-instance") return !this.cx.str.isString(descToName(this.dex.type(ins.b)));
+    if (n === "const-string" || n === "const-string/jumbo" || n === "const-class" || n === "new-array" || n === "move-exception") return true;
+    if (n.startsWith("move-object") || n === "check-cast") { const w = this.typing.use(ins.pc, n === "check-cast" ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
+    return false;
+  }
+  /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
+  shadowKey(ins: Ins): string | undefined {
+    if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
+    const w = this.typing.use(ins.pc, ins.b);
+    if (w < 0) return undefined;
+    const key = `${w}:${this.cx.structFor(this.fieldOf(ins.c).decl)}`;
+    return this.shadowKeys.has(key) ? key : undefined;
+  }
+  private findShadows() {
+    const seen = new Set<string>();
+    for (const ins of this.prepared.instructions) {
+      if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) continue;
+      const w = this.typing.use(ins.pc, ins.b);
+      if (w < 0) continue;
+      const key = `${w}:${this.cx.structFor(this.fieldOf(ins.c).decl)}`;
+      if (seen.has(key)) this.shadowKeys.add(key); else seen.add(key);
+    }
+  }
+  refTo(reg: number, struct: number) {
+    const c = this.code, key = `${this.useWeb(reg)}:${struct}`;
+    let local = this.shadows.get(key);
+    if (this.facts.typed.has(key) && local !== undefined) { c.lget(local); return; }
+    this.nonNull(reg); c.refCast(struct);
+    if (this.shadowKeys.has(key)) { if (local === undefined) this.shadows.set(key, local = c.newLocal(refNull(struct))); c.ltee(local); }
+  }
 
   // ---------- instruction emission
   emit(ins: Ins) {
@@ -260,19 +312,11 @@ export class MC {
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
         const name = descToName(dex.type(b));
-        if (name !== "java/lang/Object") {
-          this.get("L", a); c.refIsNull().raw(OP.i32_eqz).if_();
-          this.emitInstanceOfTest(name, () => this.get("L", a)); c.raw(OP.i32_eqz).if_();
-          this.get("L", a); c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(name)); cx.callThrower(c, "cce"); c.end().end();
-        }
         // the cast value is a definition of its own: a web other than the operand's needs the reference copied in
-        if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); }
-        return;
+        if (name === "java/lang/Object") { if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); } return; }
+        this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
       }
-      case "instance-of": {
-        this.get("L", ins.b); c.refIsNull().if_(T.i32).i32(0).else_();
-        this.emitInstanceOfTest(descToName(dex.type(ins.c)), () => this.get("L", ins.b)); c.end(); this.set("I"); return;
-      }
+      case "instance-of": this.get("L", ins.b); c.call(cx.instanceOfFn(descToName(dex.type(ins.c)))); this.set("I"); return;
       case "array-length": {
         // any array wrapper has the data array in field 2; use the ref wrapper type check-free via per-kind unknown -> test kinds
         this.arrayLength(b); this.set("I"); return;
@@ -280,7 +324,7 @@ export class MC {
       case "new-instance": {
         const name = descToName(dex.type(b));
         // a String is made by the constructor call, which assigns its register
-        if (cx.str.isString(name)) c.anyNull(); else { cx.emitEnsure(c, name); cx.emitNew(c, name); }
+        if (cx.str.isString(name)) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case "new-array": {
@@ -363,17 +407,17 @@ export class MC {
   }
   /** leaves the data array of array register `reg` in tmp local ... returns local holding (ref $Data) */
   dataLocal = new Map<ElemKind, number>();
-  dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(refNull(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
+  dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(ref(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
   idxCheck(k: ElemKind, idxReg: number) {
     const c = this.code, d = this.dloc(k);
-    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_();
-    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
+    this.get("I", idxReg); c.lget(d).arrayLen().raw(OP.i32_ge_u).if_();
+    this.get("I", idxReg); c.lget(d).arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
   }
   emitAget(ins: Ins) {
     const c = this.code, cx = this.cx, { k, sign } = this.elemOf(ins.name), d = this.dloc(k);
     this.nonNull(ins.b); c.refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);
-    c.lget(d).refAsNonNull(); this.get("I", ins.c);
+    c.lget(d); this.get("I", ins.c);
     sign === "s" ? c.arrayGetS(cx.tData[k]) : sign === "u" ? c.arrayGetU(cx.tData[k]) : c.arrayGet(cx.tData[k]);
     this.set(k === "ref" ? "L" : k === "i64" ? "J" : "I");
   }
@@ -383,7 +427,7 @@ export class MC {
     c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);
     if (k === "ref") emitStoreCheck(cx, c, this.tmpL, () => this.get("L", ins.a));
-    c.lget(d).refAsNonNull(); this.get("I", ins.c);
+    c.lget(d); this.get("I", ins.c);
     this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
     c.arraySet(cx.tData[k]);
   }
@@ -405,7 +449,7 @@ export class MC {
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { f } = this.fieldOf(ins.b);
-    cx.emitEnsure(c, f.owner);
+    this.ensure(f.owner);
     const g = cx.staticGlobal(f.owner, f.name, f.desc);
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind); }
   }
@@ -438,8 +482,21 @@ export class MC {
     this.pop(); c.end();
   }
   emitSwitch(ins: Ins) {
-    const c = this.code, cases = switchCases(this.item, ins);
-    // compare chain (br_table is a later optimisation)
+    const c = this.code, cases = switchCases(this.item, ins), flow = this.flow;
+    const lo = Math.min(...cases.map(([k]) => k)), hi = Math.max(...cases.map(([k]) => k));
+    // keys dense enough make a jump table, when every target is a label (a hole and the fall-through go to the end of the block)
+    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, flow.blockAt[t], false); return g === Go.Break || g === Go.Continue; });
+    if (cases.length >= 4 && hi - lo < 4 * cases.length && labelled) {
+      const target = new Map(cases);
+      this.push("$sw"); c.block();
+      this.get("I", ins.a); c.i32(lo).raw(OP.i32_sub);
+      c.brTable(Array.from({ length: hi - lo + 1 }, (_, i) => {
+        const t = target.get(lo + i);
+        return t === undefined ? 0 : this.depth((flow.go(this.block, flow.blockAt[t], false) === Go.Break ? "B" : "L") + t);
+      }), 0);
+      this.pop(); c.end();
+      return;
+    }
     for (const [key, target] of cases) {
       this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(target, false); this.pop(); c.end();
     }
@@ -476,7 +533,7 @@ export class MC {
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
-      cx.emitEnsure(c, t.cls); pushArgs(); cx.callMethod(c, t);
+      this.ensure(t.cls); pushArgs(); cx.callMethod(c, t);
     } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
@@ -488,11 +545,13 @@ export class MC {
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
       const only = cx.devirt(decl, mr.name, desc), declC = prog.get(decl);
-      if (only === "none") { this.nonNull(ins.regs[0]); c.drop(); cx.callThrower(c, "ame"); c.unreachable(); this.finishResult(ins, retK); return; }
+      if (only === "none") { this.nonNull(ins.regs[0]); c.drop(); cx.callThrower(c, "ame"); this.finishResult(ins, retK); return; }
       if (only !== "many") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
       else {
+        // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
+        const guards = cx.guards(decl, mr.name, desc), recv = () => { c.lget(this.tmpL); pushArgsFrom(this, ins, p.params); };
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
-        c.lget(this.tmpL); pushArgsFrom(this, ins, p.params);
+        recv();
         c.lget(this.tmpL); cx.str.vtab(c, decl);
         if (declC && !declC.isInterface) {
           c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
@@ -503,17 +562,26 @@ export class MC {
           // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
           const vtl = this.vtLocal();
           c.lset(vtl);
-          c.lget(vtl).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-            .lget(vtl).refAsNonNull().i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
-            .lget(vtl).refAsNonNull().i32(sel).call(cx.helper("imtslow")).end();
+          c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
+            .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
+            .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
         }
-        c.callIndirect(sigIdx());
+        // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
+        if (guards.length) {
+          const slot = this.slotLocal(), type = sigIdx();
+          c.lset(slot);
+          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type).call(cx.fn.get(mid(g))!).else_(); }
+          c.lget(slot).callIndirect(type);
+          for (const _ of guards) c.end();
+        } else c.callIndirect(sigIdx());
       }
     }
     this.finishResult(ins, retK);
   }
+  slotl = -1;
+  slotLocal() { if (this.slotl < 0) this.slotl = this.code.newLocal(T.i32); return this.slotl; }
   vtl = -1;
-  vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(refNull(this.cx.tVT)); return this.vtl; }
+  vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(ref(this.cx.tVT)); return this.vtl; }
 
   emitArith(ins: Ins) {
     const c = this.code, n = ins.name, a = ins.a, b = ins.b, cx = this.cx;

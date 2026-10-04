@@ -11,13 +11,13 @@ import { ModuleBuilder, T, refNull, sleb, uleb, type VT } from "./wasmbin";
 import { Code, OP } from "./code";
 import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
 import { Cha } from "./cha";
-import { H, f32bits, f64bits } from "./consts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "./consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "./j2w";
 import { Natives, type HostContext } from "./natives";
 import { Bridge } from "./bridge";
 import { rtfns, type Synth } from "./rtfns";
-import { hostInfo } from "./classes";
-import { SLOT, FIRST_FREE_SLOT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
+import { hostInfo, typeName } from "./classes";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
 import { mid } from "./reach";
@@ -33,10 +33,10 @@ export interface WorldOptions {
   stackTraceLimit?: number;
 }
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; methodSlots: Map<string, number>; nMethods: number; exports: WebAssembly.Exports }
-type Slot = { k: "method"; m: MethodInfo; done: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
+type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
-/** methods compiled into one module: a method and its small callees, in code units of the callee, up to MAX_GROUP together */
-const MAX_GROUP = 8, SMALL_CALLEE = 100;
+/** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
+const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
 export class World {
@@ -49,7 +49,7 @@ export class World {
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
+  stats = { classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   private classes = new Map<string, ClassRt>();
   private ids = new Map<string, number>();
@@ -89,6 +89,7 @@ export class World {
       fmod: (a: number, b: number) => a % b,
       gap: (id: number) => this.onGap(id),
       link: (slot: number) => this.linkSlot(slot),
+      hot: (slot: number) => this.upgrade(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
@@ -157,6 +158,8 @@ export class World {
     if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
+  /** whether class initialization has finished, for a class whose module is already built */
+  initialized(n: string): boolean { return (this.classes.get(n)?.exports.init as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
   vslots(n: string): string[] {
     let s = this.vslotCache.get(n); if (s) return s;
@@ -185,6 +188,11 @@ export class World {
     // ancestors beyond the fixed display are tested like interfaces, from the id list at the end
     const ifs = new Set<number>();
     chain.forEach((cn, i) => { const cid = cn === name ? id : this.idOf(cn); if (i < H.MAXD) body[H.DISPLAY + i] = cid; else ifs.add(cid); });
+    if (arr) {
+      const comp = typeName(name.slice(1)), cc = prog.get(comp), d = cc && !cc.isInterface ? prog.chain(comp).length - 1 : -1;
+      body[ELEM] = this.idOf(comp);
+      body[ELEM_KIND] = !cc ? ELEM_OTHER : cc.isInterface || d >= H.MAXD ? ELEM_IFACE : d + 1;
+    }
     keys.forEach((key, i) => { const m = impl(key); body[H.VTAB + i] = m ? this.slotOf(m) : this.abstractSlot(key); });
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];
@@ -246,7 +254,7 @@ export class World {
   private abstractSlot(key: string): number {
     const p = parseMethodDesc(key.slice(key.indexOf("(")));
     const params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
-    return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); c.unreachable(); } });
+    return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); } });
   }
 
   // ---------- runtime and class modules
@@ -381,26 +389,41 @@ export class World {
   }
 
   // ---------- compiling methods on demand
-  /** host.link: compile what `slot` stands for, with the small methods it calls, and put them in the table */
+  /** host.link: compile what `slot` stands for and put it in the table. A method is compiled alone, cheaply, and counts its calls and loop
+   *  iterations; `upgrade` recompiles the hot ones with their small callees. */
   private linkSlot(slot: number): void {
     const s = this.slots[slot];
     if (!s || s.k === "ensure" || s.done) return;
     const t0 = performance.now(), cx = new Compiler(this);
-    const group = s.k === "method" ? this.group(s.m) : [];
-    const built = s.k === "method" ? cx.buildUnit(group) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
+    const built = s.k === "method" ? cx.buildUnit([s.m]) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
-    this.stats.compileMs += performance.now() - t0; this.stats.units++; this.stats.methods += group.length || 1;
+    this.stats.units++; this.stats.methods += 1;
+    this.install(s.k === "method" ? [slot] : [], false, cx, built, slot, t0);
+  }
+  /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
+  private upgrade(slot: number): void {
+    const s = this.slots[slot];
+    if (s?.k !== "method" || !s.done || s.hot) return;
+    const t0 = performance.now(), cx = new Compiler(this), { installed, copies } = this.group(s.m);
+    const built = cx.buildUnit(installed, copies, true);
+    this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
+    this.install(installed.map((m) => this.slotOf(m)), true, cx, built, slot, t0);
+  }
+  /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
+  private install(group: number[], hot: boolean, cx: Compiler, built: { bytes: Uint8Array; traces: FnTrace[] }, slot: number, t0: number): void {
+    const s = this.slots[slot]!;
+    this.stats.compileMs += performance.now() - t0;
     let exports: Record<string, any>;
-    try { exports = this.instantiate(built.bytes, this.unitImports(cx)).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : s.name}: ${(e as Error).message}`); }
-    const install = (at: number, name: string) => {
+    try { exports = this.instantiate(built.bytes, this.unitImports(cx)).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
+    const set = (at: number, name: string) => {
       const sl = this.slots[at] as Exclude<Slot, { k: "ensure" }>;
-      sl.stub = this.table.get(at) as Function; sl.done = true;
+      if (!sl.done) sl.stub = this.table.get(at) as Function;
+      sl.done = true;
       this.table.set(at, exports[name]);
     };
     if (s.k === "method") {
-      const at = group.map((m) => this.slotOf(m));
-      for (const x of at) { install(x, "m" + x); this.groupOf.set(x, at); }
-    } else install(slot, "m");
+      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slots[x] as { hot?: boolean }).hot = hot; }
+    } else set(slot, "m");
     for (const t of built.traces) this.traces.set(t.name, t);
     for (const [decl, name, desc, target, owner] of cx.assumptions) {
       const key = `${decl}.${name}${desc}`;
@@ -413,6 +436,11 @@ export class World {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
       n: this.natives.imports(this.hostContext(), cx.nativeImports.keys()) };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
+    imports.cnt = Object.fromEntries([...cx.counted].map((slot) => {
+      const g = new WebAssembly.Global({ value: "i32", mutable: true }, HOT_BUDGET);
+      this.counters.set(slot, g);
+      return [slot, g];
+    }));
     return imports;
   }
   private hostCtx?: HostContext;
@@ -436,21 +464,45 @@ export class World {
     }
     return make(msg);
   }
-  /** `m` and the small methods it calls directly that are not compiled yet: V8 can inline calls inside a module but not through the table */
-  private group(m: MethodInfo): MethodInfo[] {
-    const out = [m];
-    if (!m.codeOff || this.intrinsic(m)) return out;
+  /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
+   *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
+  private group(m: MethodInfo): { installed: MethodInfo[]; copies: MethodInfo[] } {
+    const out = [m], installed = [m], copies: MethodInfo[] = [];
+    this.plan = new Map();
+    if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
+    this.noteAllocations(m);
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
-      for (const t of this.smallCallees(out[i])) {
-        const sl = this.slots[this.slotOf(t)];
-        if (out.length < MAX_GROUP && !out.includes(t) && sl?.k === "method" && !sl.done) out.push(t);
+      if (!out[i].codeOff || this.intrinsic(out[i])) continue;
+      if (i) this.noteAllocations(out[i]);
+      // the callees that have run, busiest first: code the first tier never saw run is not worth compiling into the unit
+      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slots[this.slotOf(t)]?.k === "method" && this.ran(t) > 0);
+      callees.sort((a, b) => this.ran(b) - this.ran(a));
+      for (const t of callees) {
+        if (out.length >= MAX_GROUP) break;
+        if (out.some((o) => mid(o) === mid(t))) continue;
+        out.push(t);
+        (this.slots[this.slotOf(t)] as { done: boolean }).done ? copies.push(t) : installed.push(t);
       }
     }
-    return out;
+    return { installed, copies };
   }
+  /** calls and loop iterations counted for `t` so far: methods compiled by the second tier count as busy, the Wasm-written intrinsics always run */
+  private ran(t: MethodInfo): number {
+    const sl = this.slots[this.slotOf(t)] as { done: boolean; hot?: boolean };
+    if (this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    if (sl.hot) return HOT_BUDGET;
+    const g = this.counters.get(this.slotOf(t));
+    return sl.done && g ? HOT_BUDGET - g.value : 0;
+  }
+  /** classes some compiled code allocates: the ones a virtual call is likely to find */
+  allocated = new Set<string>();
+  /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
+  plan = new Map<string, MethodInfo[]>();
   private groupOf = new Map<number, number[]>();
   private callees = new Map<MethodInfo, MethodInfo[]>();
-  /** methods `m` calls directly (static, non-constructor direct, or a virtual call CHA resolves to one target) that are worth compiling beside it */
+  /** the first tier's budget counter of each compiled method, by slot */
+  private counters = new Map<number, WebAssembly.Global>();
+  /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
   private smallCallees(m: MethodInfo): MethodInfo[] {
     let out = this.callees.get(m);
     if (out) return out;
@@ -460,13 +512,51 @@ export class World {
       const op = ins.op;
       if (!(op >= 0x6e && op <= 0x72) && !(op >= 0x74 && op <= 0x78)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
-      if (decl[0] === "[" || kind === "invoke-super" || mr.name === "<init>") continue;
+      if (decl[0] === "[" || kind === "invoke-super") continue;
       const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
         : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
-      if (t && t !== m && t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE && !out.includes(t)) out.push(t);
+      if (t && t !== m && this.inlinable(t) && !out.includes(t)) out.push(t);
     }
     this.callees.set(m, out);
     return out;
+  }
+  /** the classes `m` allocates join the allocated set before its virtual calls are planned: it is about to run */
+  private noteAllocations(m: MethodInfo): void {
+    for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
+      if (ins.op !== 0x22) continue;
+      const name = descToName(m.dex.type(ins.b));
+      if (this.prog.get(name)) this.allocated.add(name);
+    }
+  }
+  /** the implementations of `m`'s virtual calls that are worth a guarded direct call, recorded in `plan` for the emitter */
+  private guarded(m: MethodInfo): MethodInfo[] {
+    const out: MethodInfo[] = [], dex = m.dex;
+    for (const ins of decodeInstructions(dex.code(m.codeOff).insns)) {
+      const op = ins.op;
+      if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78) continue;
+      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), key = `${decl}.${mr.name}${desc}`;
+      if (decl[0] === "[") continue;
+      let t = this.plan.get(key);
+      if (!t) this.plan.set(key, t = this.cha.targets(decl, mr.name, desc).length > 1 ? this.likely(decl, mr.name, desc) : []);
+      for (const x of t) if (!out.includes(x)) out.push(x);
+    }
+    return out;
+  }
+  /** the small implementations of decl.name+desc among the allocated subclasses, most common first, unless there are more kinds than guards to test */
+  private likely(decl: string, name: string, desc: string): MethodInfo[] {
+    const count = new Map<MethodInfo, number>();
+    for (const cls of this.allocated) {
+      if (cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
+      const t = this.prog.implFor(cls, name, desc);
+      if (t) count.set(t, (count.get(t) ?? 0) + 1);
+    }
+    if (count.size > MAX_GUARDS) return [];
+    return [...count].filter(([t]) => this.inlinable(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  }
+  /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
+  private inlinable(t: MethodInfo): boolean {
+    if (this.opts.intrinsics.has(mid(t))) return true;
+    return !!t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE;
   }
   /** the gaps compiling `m` runs into, without installing it (a static check, and the unit a build-time mode would emit) */
   gapsOf(m: MethodInfo): string[] {
@@ -494,7 +584,7 @@ export class World {
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       const s = this.slots[x];
       if (s?.k === "ensure" || !s?.done || !s.stub) continue;
-      this.table.set(x, s.stub); s.done = false; this.stats.invalidated++;
+      this.table.set(x, s.stub); s.done = false; s.hot = false; this.stats.invalidated++;
       this.groupOf.delete(x);
     }
   }
@@ -506,7 +596,10 @@ export class World {
     if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
     const slot = this.slotOf(m);
     return (...args) => {
-      try { return (this.table.get(slot) as Function)(...args); } catch (e) { throw this.boundary(e); }
+      try {
+        if (m.isStatic && this.needsInit(m.cls)) (this.table.get(this.ensureSlot(m.cls)) as Function)();
+        return (this.table.get(slot) as Function)(...args);
+      } catch (e) { throw this.boundary(e); }
     };
   }
   /** the Java throwable a call from JS threw, if `e` is one */

@@ -25,6 +25,7 @@ export class Program {
   /** load more dexes (open world); returns the names of the classes they define. The first definition of a name wins (classpath order). */
   add(dexes: DexFile[]): string[] {
     const added: string[] = [];
+    this.subclassMemo.clear(); this.implMemo.clear();
     for (const dex of dexes) {
       for (let i = 0; i < dex.classDefCount; i++) {
         const def = dex.classDef(i);
@@ -59,6 +60,7 @@ export class Program {
       const c = this.classes.get(cls) ?? this.stub(cls, "java/lang/Object");
       c.methods.push(m); c.byKey.set(m.key, m);
     }
+    this.subclassMemo.clear(); this.implMemo.clear();
   }
   private build(dex: DexFile, def: ClassDef, name: string): JClass {
     const fields: FieldInfo[] = [];
@@ -85,11 +87,19 @@ export class Program {
   }
   get(name: string): JClass | undefined { return this.classes.get(name); }
   require(name: string): JClass { const c = this.classes.get(name); if (!c) throw new Error("class not found: " + name); return c; }
+  private subclassMemo = new Map<string, Map<string, boolean>>();
+  private implMemo = new Map<string, Map<string, MethodInfo | undefined>>();
   isSubclass(a: string, b: string): boolean {
     if (a === b) return true;
-    const c = this.classes.get(a); if (!c) return false;
-    if (c.sup && this.isSubclass(c.sup, b)) return true;
-    return c.ifaces.some((i) => this.isSubclass(i, b));
+    let m = this.subclassMemo.get(a);
+    if (!m) this.subclassMemo.set(a, m = new Map());
+    let r = m.get(b);
+    if (r === undefined) {
+      const c = this.classes.get(a);
+      r = !!c && ((!!c.sup && this.isSubclass(c.sup, b)) || c.ifaces.some((i) => this.isSubclass(i, b)));
+      m.set(b, r);
+    }
+    return r;
   }
   /** resolve a method declared in `cls` or inherited (superclasses, then interfaces) */
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
@@ -113,6 +123,14 @@ export class Program {
   /** a concrete (non-abstract) implementation of name+desc for runtime class `cls` */
   implFor(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);
+    let memo = this.implMemo.get(cls);
+    if (!memo) this.implMemo.set(cls, memo = new Map());
+    if (memo.has(key)) return memo.get(key);
+    const found = this.findImpl(cls, key);
+    memo.set(key, found);
+    return found;
+  }
+  private findImpl(cls: string, key: string): MethodInfo | undefined {
     for (let c: JClass | undefined = this.classes.get(cls); c; c = c.sup ? this.classes.get(c.sup) : undefined) {
       const m = c.byKey.get(key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
     }

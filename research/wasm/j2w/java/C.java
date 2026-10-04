@@ -86,6 +86,19 @@ public class C {
     try { ((Object[]) ia)[0] = new D(); r += 2; } catch (ArrayStoreException e) { r += 4; }
     return r;
   }
+  public static int jsWrong_arrayStoreIface(int n) {
+    int r = 0;
+    Object[] ia = new I[2], ba = new B[1], ca = new Comparable[1], sa = new CharSequence[1];
+    ia[0] = new A(); ia[1] = new B(); r += 1;
+    try { ia[0] = new Object(); } catch (ArrayStoreException e) { r += 2; }
+    try { ia[0] = new int[1]; } catch (ArrayStoreException e) { r += 4; }
+    try { ba[0] = new D(); } catch (ArrayStoreException e) { r += 8; }
+    ca[0] = "s"; ca[0] = 7; r += 16;
+    try { ca[0] = new Object(); } catch (ArrayStoreException e) { r += 32; }
+    sa[0] = "t"; r += 64;
+    try { sa[0] = 7; } catch (ArrayStoreException e) { r += 128; }
+    return r;
+  }
   public static int arrayCasts(int n) {
     Object o = new B[1];
     int r = (o instanceof A[] ? 1 : 0) + (o instanceof I[] ? 2 : 0) + (o instanceof Object[] ? 4 : 0) + (o instanceof int[] ? 0 : 8) + (o instanceof B[] ? 16 : 0) + (o instanceof D[] ? 0 : 32)

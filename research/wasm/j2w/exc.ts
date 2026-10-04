@@ -7,6 +7,8 @@ import type { Compiler, FnTrace } from "./j2w";
 /** ART's heap limit, as src/jvm/runtime.ts HEAP_LIMIT: the JS tier throws OutOfMemoryError past it too */
 export const HEAP_LIMIT = 512 * 1024 * 1024;
 export const MAX_ARRAY_BYTES = HEAP_LIMIT;
+/** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
+export const HOT_BUDGET = 5000;
 /** bytes allocated between two heap checks; allocation counts up to zero from -ALLOC_WINDOW */
 export const ALLOC_WINDOW = 8 << 20;
 

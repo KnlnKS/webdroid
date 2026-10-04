@@ -9,7 +9,7 @@
 // host for the slot of a generated function for that class.
 import { OP } from "./code";
 import { T, refNull } from "./wasmbin";
-import { H, type ElemKind } from "./consts";
+import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "./consts";
 import { ACC, type JClass } from "./program";
 import { rt } from "./rtfns";
 import type { Code } from "./code";
@@ -109,7 +109,12 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
 export const constClass = (cx: Compiler, c: Code, name: string): void => { c.i32(cx.idOf(name)); cx.callRt(c, "classOf"); };
 /** before storing the value pushed by `value` into the reference array wrapper in local `arr`: ArrayStoreException when it does not fit */
 export function emitStoreCheck(cx: Compiler, c: Code, arr: number, value: () => void): void {
-  c.lget(arr); vtId(cx, c); c.i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
+  // Object[] takes anything; a value of exactly the component class (nearly every store into a typed array) needs no call
+  const comp = c.scratch();
+  c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 0).i32(ELEM).arrayGet(cx.tVT).ltee(comp).i32(cx.idOf("java/lang/Object")).raw(OP.i32_ne).if_();
+  value(); c.refIsNull().raw(OP.i32_eqz).if_();
+  value(); c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).lget(comp).raw(OP.i32_ne).if_().lget(arr); value(); cx.callRt(c, "astore"); c.end();
+  c.end().end();
 }
 /** in System.arraycopy's reference-array case (src, sp, dst, dp, n are locals 0..4, bounds checked): a copy with store checks unless dst takes src's elements anyway */
 export function emitRefCopy(cx: Compiler, c: Code): void {
@@ -166,14 +171,24 @@ rt("instArr", ["L", "I"], "I", (cx, c) => {
 });
 // astore(array, value): ArrayStoreException unless value's class is assignable to the array's component class
 rt("astore", ["L", "L"], "V", (cx, c) => {
-  const w = c.newLocal(T.i32), e = c.newLocal(T.i32), v = c.newLocal(T.i32);
+  const { tVT, tArr } = cx, avt = c.newLocal(refNull(tVT)), vvt = c.newLocal(refNull(tVT)), e = c.newLocal(T.i32), k = c.newLocal(T.i32);
+  const word = (vt: number, i: number) => c.lget(vt).refAsNonNull().i32(i).arrayGet(tVT);
+  const fail = () => { word(vvt, H.ID); word(avt, H.ID); cx.callThrower(c, "asx"); };
   c.lget(1).refIsNull().if_().ret().end();
-  c.lget(0).refAsNonNull(); vtId(cx, c); c.lset(w);
-  cx.info(c, Info.Component, () => c.lget(w)); c.lset(e);
-  c.lget(1).refAsNonNull(); vtId(cx, c); c.lset(v);
-  c.lget(v).lget(e).raw(OP.i32_eq).if_().ret().end();
-  c.lget(e); cx.callRt(c, "classOf"); c.lget(v); cx.callRt(c, "classOf"); isAssignableFrom(cx, c);
-  c.raw(OP.i32_eqz).if_().lget(v).lget(w); cx.callThrower(c, "asx"); c.end();
+  c.lget(0).refCast(tArr.ref).structGet(tArr.ref, 0).lset(avt);
+  c.lget(1).call(cx.helper("vtab")).lset(vvt);
+  word(avt, ELEM).lset(e);
+  word(vvt, H.ID).lget(e).raw(OP.i32_eq).if_().ret().end();
+  word(avt, ELEM_KIND).lset(k);
+  // a class within the display: the value's ancestor at the component's depth
+  c.lget(k).i32(0).raw(OP.i32_gt_s).if_();
+  word(vvt, H.DEPTH).lget(k).i32(1).raw(OP.i32_sub).raw(OP.i32_ge_s).if_();
+  c.lget(vvt).refAsNonNull().lget(k).i32(H.DISPLAY - 1).raw(OP.i32_add).arrayGet(tVT).lget(e).raw(OP.i32_eq).if_().ret().end().end();
+  fail(); c.end();
+  c.lget(k).i32(ELEM_IFACE).raw(OP.i32_eq).if_().lget(1).lget(e).call(cx.helper("implements")).if_().ret().end(); fail(); c.end();
+  // an array component: Class.isAssignableFrom decides
+  c.lget(e); cx.callRt(c, "classOf"); word(vvt, H.ID); cx.callRt(c, "classOf"); isAssignableFrom(cx, c);
+  c.raw(OP.i32_eqz).if_(); fail(); c.end();
 });
 // acopy(src, sp, dst, dp, n): element-wise copy between reference arrays of different classes; an element dst cannot hold throws
 // ArrayStoreException after the elements before it have been copied (System.arraycopy)
@@ -365,7 +380,7 @@ def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Fiel
   cx.info(c, Info.FieldNameLen, () => c.lget(id), () => c.lget(k)); c.lget(len).raw(OP.i32_eq).if_();
   c.lget(id).lget(k).lget(1).lget(len); cx.callRt(c, "nameEq"); c.if_().lget(id).lget(k); cx.callRt(c, "mkField"); c.ret().end().end();
   c.lget(k).i32(1).raw(OP.i32_add).lset(k).br(0).end().end();
-  cx.callThrower(c, "nsfe"); c.unreachable();
+  cx.callThrower(c, "nsfe");
 });
 def("java/lang/Class.getDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0); cx.callRt(c, "declFields"); });
 def("java/lang/Class.getDeclaredFieldsUnchecked(Z)[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.lget(1); cx.callRt(c, "declFields"); });

@@ -20,6 +20,12 @@ for (const f of frames.slice(0, 3)) {
   check(`line of ${f.method}`, f.line > 0, true);
 }
 check("lines follow the source", frames[0].line < frames[1].line && frames[1].line < frames[2].line, true);
+// the same after the three methods have run enough to be recompiled with each other copied in (the frames of a copy carry the same names)
+const callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
+for (let i = 0; i < 6000; i++) callA(0);
+check("methods were recompiled", w.stats.upgrades > 0, true);
+const hot = w.stackTrace(w.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(callA(1) as object) as object);
+check("frames after the second tier", hot.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" "), frames.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" "));
 let top: unknown;
 try { top = w.entry("Ex", "top", "([Ljava/lang/StackTraceElement;)I")(w.entry("java/lang/Throwable", "nativeGetStackTrace", "(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;")(state)); } catch (e) { top = "threw " + (w.throwable(e) ? w.classNameOf(w.throwable(e)!) : e) + " gaps " + w.gapList.join("; "); }
 check("getStackTrace builds StackTraceElements", top, 15);

@@ -1,4 +1,4 @@
-import { sleb, uleb, vt, type VT } from "./wasmbin";
+import { T, sleb, uleb, vt, type VT } from "./wasmbin";
 /** instruction emitter for one function body */
 export class Code {
   b: number[] = [];
@@ -10,6 +10,9 @@ export class Code {
   /** length of the local declarations finish() prepends */
   prefixLen = 0;
   constructor(public nparams: number) {}
+  private scratchI32 = -1;
+  /** an i32 local for values that live within one expression */
+  scratch(): number { return this.scratchI32 < 0 ? (this.scratchI32 = this.newLocal(T.i32)) : this.scratchI32; }
   newLocal(t: VT): number { this.localTypes.push(t); return this.nparams + this.localTypes.length - 1; }
   raw(...x: number[]): this { for (const v of x) this.b.push(v); return this; }
   u(n: number): this { uleb(n, this.b); return this; }
@@ -30,6 +33,8 @@ export class Code {
   block(bt: number | VT | null = null): this { this.b.push(0x02); this.bt(bt); return this; }
   loop(bt: number | VT | null = null): this { this.b.push(0x03); this.bt(bt); return this; }
   if_(bt: number | VT | null = null): this { this.b.push(0x04); this.bt(bt); return this; }
+  /** an if whose block type is the function type `type`: it takes that type's parameters from the stack under the condition */
+  ifType(type: number): this { this.b.push(0x04); sleb(type, this.b); return this; }
   else_(): this { this.b.push(0x05); return this; }
   end(): this { this.b.push(0x0b); return this; }
   br(d: number): this { this.b.push(0x0c); uleb(d, this.b); return this; }

@@ -85,7 +85,7 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
       if (!jc?.def || jc.isInterface) continue;
       jc.fields.forEach((f, i) => { if (!f.isStatic && family(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, fi: cx.fieldIndex(cn, f) }); });
     }
-    if (R === "java/lang/Void") cx.callThrower(c, "npe"), c.unreachable();        // the receiver is the literal null
+    if (R === "java/lang/Void") cx.callThrower(c, "npe");        // the receiver is the literal null
     else {
       if (!cands.length || cands.length > MAX_CANDIDATES) return gap(`${cands.length} candidate fields`);
       const vh = c.newLocal(cx.vtOf("L")), recv = c.newLocal(cx.vtOf("L")), fid = c.newLocal(T.i32);
