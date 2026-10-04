@@ -47,6 +47,8 @@ export class Compiler implements Base {
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
+  /** the thrower of each link error this module's code raises at a site */
+  linkErrors: string[] = [];
   /** classes whose absence this module's code fails a site on (linkage.ts), with the method that relies on it */
   absent: [string, MethodInfo | undefined][] = [];
   /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
@@ -192,6 +194,7 @@ export class Compiler implements Base {
   }
   /** the error ART raises where this site's class or member does not resolve, thrown when the site runs */
   linkError(c: Code, f: LinkFailure): void {
+    this.linkErrors.push(f.thrower);
     if (f.absent) this.absent.push([f.absent, this.assumer]);
     c.i32(this.w.linkId(f.message));
     this.callThrower(c, f.thrower);

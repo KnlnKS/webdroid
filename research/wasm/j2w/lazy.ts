@@ -64,7 +64,7 @@ export class World {
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
   private absent = new Map<string, Set<number>>();
   /** the messages of the link errors (linkage.ts) compiled code throws, by index */
-  private linkMessages: string[] = [];
+  linkMessages: string[] = [];
   /** the strings of String constants, by index, and the table they are read from */
   private strings = new Map<string, number>();
   strs = new WebAssembly.Table({ element: "externref", initial: 64 });

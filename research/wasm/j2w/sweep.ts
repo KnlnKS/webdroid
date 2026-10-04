@@ -11,9 +11,9 @@ import { Compiler } from "./j2w";
 import { natives } from "./oracle";
 import { mid } from "./reach";
 
-/** what is understood and not yet translated: natives with no host implementation, references to platform APIs the boot jars lack, String constructors strings.ts lacks, MethodHandle call sites
+/** what is understood and not yet translated: natives with no host implementation, String constructors strings.ts lacks, MethodHandle call sites
  *  and invoke-custom (poly.ts handles VarHandle only) */
-const KNOWN = [/^native: /, /^unresolved reference to a /, /^String\.<init>\(/, /^invoke-custom$/, /^java\/lang\/invoke\/MethodHandle\.invoke/];
+const KNOWN = [/^native: /, /^String\.<init>\(/, /^invoke-custom$/, /^java\/lang\/invoke\/MethodHandle\.invoke/];
 
 const root = join(import.meta.dir, "../../..");
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
@@ -27,14 +27,9 @@ for (const target of targets) {
   prog.addExterns(externs);
   const w = world(prog, { natives });
   const names = new Set([...prog.classes.values()].filter((c) => c.dex && mine.has(c.dex)).map((c) => c.name));
-  // such a reference (an optional library, a newer SDK than this build, a field R8 left dangling) throws a link error in ART when it executes
-  const causeOf = (what: string, m: string) => {
-    const cause = what.startsWith(m + ": ") ? what.slice(m.length + 2) : what;
-    const owner = /^(?:unresolved \w+|field not found) ([^.]+)\./.exec(cause)?.[1];
-    return owner === undefined ? cause.replace(/\d+/g, "N") : `unresolved reference to a ${names.has(owner) ? "member its app class lacks" : "platform class or member the boot jars lack"}`;
-  };
   const causes = new Map<string, string[]>();
   let total = 0, clean = 0, bodyless = 0;
+  const linked = new Map<string, number>();
   const t0 = performance.now();
   for (const name of names) for (const m of w.prog.get(name)?.methods ?? []) {
     if (!m.codeOff) { bodyless++; continue; }
@@ -42,13 +37,16 @@ for (const target of targets) {
     const id = mid(m), fail = (cause: string) => (causes.get(cause) ?? (causes.set(cause, []), causes.get(cause)!)).push(id);
     try {
       const cx = new Compiler(w), { bytes } = cx.buildUnit([m]);
-      if (cx.gaps.length) for (const g of new Set(cx.gaps.map((g) => causeOf(g, id)))) fail(g);
+      for (const t of new Set(cx.linkErrors)) linked.set(t, (linked.get(t) ?? 0) + 1);
+      if (cx.gaps.length) for (const g of new Set(cx.gaps.map((g) => (g.startsWith(id + ": ") ? g.slice(id.length + 2) : g).replace(/\d+/g, "N")))) fail(g);
       else {
         try { new WebAssembly.Module(bytes as BufferSource); clean++; } catch (e) { fail("invalid module: " + (e as Error).message.replace(/.*?: /, "").replace(/@\+\d+/g, "").replace(/\d+/g, "N")); }
       }
     } catch (e) { fail("compiler crash: " + (e as Error).message.replace(/\d+/g, "N")); }
   }
   console.log(`${target}: ${total} methods with code (${bodyless} without), ${clean} compile clean, ${total - clean} fail in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+  if (linked.size) console.log(`  ${[...linked.values()].reduce((a, b) => a + b, 0)} methods throw a link error at a site, as ART does (${[...linked].map(([t, n]) => `${t} ${n}`).join(", ")}), counted as compiled`);
+  if (verbose) for (const msg of w.linkMessages) console.log("    link error: " + msg);
   for (const [cause, ms] of [...causes].sort((a, b) => b[1].length - a[1].length)) {
     const known = KNOWN.some((k) => k.test(cause));
     if (!known) unexplained += ms.length;
