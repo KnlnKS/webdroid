@@ -216,12 +216,17 @@ These matter through GC (3% of busy time at 4× throttle) and through V8's inlin
 - **Throwable capture.** Capture costs about 200 ns per captured frame at 64 frames. Count
   throws per gated tap first. If they matter, cap capture depth for throws the compiler cannot
   prove are discarded (a behaviour decision: fewer frames in `printStackTrace`).
-- **Display-list recording.** Every op also executes on a 1×1 mirror context, including path
-  construction and style sets. `getTransform()` allocates a `DOMMatrix` per translate, clip,
-  restore and `quickReject`.
-  - Keep a JS affine and a save stack in `NativeCanvas`, as SkCanvas does.
-  - Make path ops record-only.
-  - This removes the mirror's Proxy.
+- **Display-list recording (done).** A recording context keeps its own transform and save stack
+  (`Transform` in `recording.ts`), so `getTransform()` allocates nothing for translate, clip,
+  restore and `quickReject`, and path construction is record-only. The mirror's Proxy is a class
+  generated from the context's prototype. Canvas2D rounds arguments to float and ignores a
+  non-finite argument or any transform under a singular matrix; rotation delegates to the
+  browser's own sine and cosine, which differ from V8's in the last bit. A micro benchmark of
+  save, translate, scale, clipRect, quickReject, path ops, fillRect and restore (500k iterations,
+  Chromium): 487 ms → 115 ms. Mihon settings scrolling (`perf-browser`, begin-to-finish
+  recording time per 15 s, 3 alternating runs): 247 → 265 ms, drawMs 131 → 130 ms. That window
+  records only ~700 ops/s and the Java draw code dominates it, so the saving is not visible there
+  and the difference is not attributed to the change.
 - **Binder.** An incoming transaction makes a fresh JThread, and each local call creates two
   parcels with Maps and copies them twice: about 25 allocations. Pool the `execTransact` pair and
   reuse an idle binder thread. Measured ≤0.5 ms per tap, so this is low priority.
@@ -269,9 +274,8 @@ HarfBuzz and Skia already show this. Measured candidates:
 
 - `CORE_LIBC` in `native/core.ts` repeats `libc.zig`'s `Fn` order by hand, and `TABLE_SIZE`
   duplicates `abi.zig`'s `JIT_SLOTS`. Export them from Zig or add a parity check.
-- Bounds math exists in four forms: `deviceBounds`, `deviceRect`, `canvasLocalBounds` and inline
-  corner math in `rendernode.ts`. Move one non-allocating helper into `matrix.ts`.
-- Color strings are built in three places.
+- Bounds math: `deviceBounds` and `localBounds` in `matrix.ts` replace the four forms; the
+  functor rects now use `deviceBounds`' arithmetic. Color strings: `cssColor` is the one builder.
 - Text helpers are duplicated: surrogate tests, `Math.fround` aliases, grapheme segmenters, and
   two control-character predicates.
 - Shaping is cached for measurement but not layout (`shaping.ts` `layout()` against

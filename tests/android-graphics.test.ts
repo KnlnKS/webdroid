@@ -8,7 +8,8 @@ import { NativePath, nativePathOf, pathIsConvex } from "../src/android/path";
 import { canvasOver, canvasOf } from "../src/android/canvas";
 import { glSurfaces } from "../src/native/egl-current";
 import { NativeRenderNode } from "../src/android/rendernode";
-import { about, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
+import { about, deviceBounds, localBounds, mapPoint, mul, rotateM, scaleM, translateM } from "../src/android/matrix";
+import { Transform } from "../src/android/recording";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
 import { newObj, linkInit, vcall } from "../src/jvm/natives/jentry";
@@ -344,6 +345,27 @@ describe("path-copy", () => {
     expect(pathIsConvex(path)).toBe(false);
     path.ops = [["m", Infinity, 0]];
     expect(pathIsConvex(path)).toBe(false);
+  });
+});
+
+describe("recorded-transform", () => {
+  test("a recording's matrix follows Canvas2D: float arguments, a save stack, and no-ops under a singular matrix", () => {
+    const t = new Transform();
+    t.save();
+    t.translate(0.1, 2);
+    t.scale(2, 3);
+    expect([t.a, t.d, t.e, t.f]).toEqual([2, 3, Math.fround(0.1), 2]);
+    t.restore();
+    expect([t.a, t.e]).toEqual([1, 0]);
+    t.setTransform(0, 0, 0, 0, 5, 5);
+    t.translate(1, 1);
+    expect([t.e, t.f]).toEqual([5, 5]);
+  });
+  test("bounds map a rect, and the target into local coordinates", () => {
+    const m = { a: 2, b: 0, c: 0, d: 2, e: 10, f: 20 };
+    expect(Array.from(deviceBounds(m, 1, 1, 3, 4))).toEqual([12, 22, 16, 28]);
+    expect(Array.from(localBounds(m, 100, 100)!)).toEqual([-5, -10, 45, 40]);
+    expect(localBounds({ ...m, a: 0, d: 0 }, 100, 100)).toBeNull();
   });
 });
 

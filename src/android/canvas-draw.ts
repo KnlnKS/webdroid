@@ -28,7 +28,7 @@ function drawPath(nc: NativeCanvas, path: NativePath, p: NativePaint) {
   }
   const bounds = canvasLocalBounds(nc.ctx);
   if (!bounds) return;
-  const [inverse, rule] = inversePath(path, ...bounds);
+  const [inverse, rule] = inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]);
   nc.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
 }
 function drawRect(nc: NativeCanvas, l: number, t: number, r: number, b: number, p: NativePaint) {

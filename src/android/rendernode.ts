@@ -6,7 +6,7 @@
 // projection and stretch are properties kept, not drawn; animators run from the frame loop
 // (rtanimator.ts), and position listeners hear where a frame drew their node (positionUpdates).
 
-import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, type Ctx2D, type DisplayList } from "./recording";
+import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, transformOf, type Ctx2D, type DisplayList } from "./recording";
 import { rt } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
 import { NativePath } from "./path";
@@ -14,7 +14,7 @@ import { perf } from "../perf";
 import type { NativeRenderEffect } from "./rendereffect";
 import { NativePaint, copyPaint, paintAt } from "./paint";
 import { type NativeColorFilter, COMPOSITE } from "./graphics";
-import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt } from "./matrix";
+import { Camera3D, type Mat, IDENTITY, identity, mul, translateM, scaleM, about, setPivotedTransform, invert, isIdentity, applyMatrix, matrixAt, deviceBounds } from "./matrix";
 import { NativeCanvas, canvasAt, drawInLayer, clipRoundRect } from "./canvas";
 import { drawCircle, drawRoundRect } from "./canvas-draw";
 import { addAnimator, endAnimators } from "./rtanimator";
@@ -141,15 +141,11 @@ const sameCoordinate = (a: number, b: number) => a === b || Number.isNaN(a) && N
 function notePosition(ctx: Ctx2D, n: NativeRenderNode): void {
   ctx.save();
   setViewProperties(ctx, n);
-  const m = ctx.getTransform();
+  const m = transformOf(ctx), d = deviceBounds(m, 0, 0, n.width, n.height);
+  let l = d[0], t = d[1], r = d[2], b = d[3];
+  const identityScale = m.b === 0 && m.c === 0 && m.a === 1 && m.d === 1;
   ctx.restore();
-  const ax = m.a * n.width, cy = m.c * n.height, bx = m.b * n.width, dy = m.d * n.height;
-  const x0 = m.a * 0, y0 = m.b * 0, x1 = m.c * 0, y1 = m.d * 0;
-  let l = Math.min(x0 + x1 + m.e, x0 + cy + m.e, ax + x1 + m.e, ax + cy + m.e);
-  let t = Math.min(y0 + y1 + m.f, y0 + dy + m.f, bx + y1 + m.f, bx + dy + m.f);
-  let r = Math.max(x0 + x1 + m.e, x0 + cy + m.e, ax + x1 + m.e, ax + cy + m.e);
-  let b = Math.max(y0 + y1 + m.f, y0 + dy + m.f, bx + y1 + m.f, bx + dy + m.f);
-  if (m.b === 0 && m.c === 0 && m.a === 1 && m.d === 1) {
+  if (identityScale) {
     l = Math.round(l); t = Math.round(t); r = Math.round(r); b = Math.round(b);
   }
   l = Math.trunc(l); t = Math.trunc(t); r = Math.trunc(r); b = Math.trunc(b);

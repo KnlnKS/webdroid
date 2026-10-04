@@ -3,7 +3,7 @@
 // paint is applied to a draw. The draws themselves are canvas-draw.ts. A Java canvas holds a
 // handle to a NativeCanvas in mNativeCanvasWrapper, and TS reaches it through canvasOf.
 
-import { isRecording, nestedRecording, recordOrRun, replay, type Ctx2D, type DisplayList, type Recorder } from "./recording";
+import { isRecording, nestedRecording, recordOrRun, replay, transformOf, type Ctx2D, type DisplayList, type Recorder } from "./recording";
 import { tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { rt, type JObj, declaredField } from "../jvm/runtime";
 import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
@@ -13,7 +13,7 @@ import { BlurMask } from "./maskfilter";
 import { strokeRec } from "./patheffect";
 import { NativePaint, copyPaint, beginPaintShadow } from "./paint";
 import { setEdges, emptyBox, type Box, type NativeColorFilter, NativeBitmapShader, canvasLocalBounds, shaderIdentity, recolor } from "./graphics";
-import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale } from "./matrix";
+import { type Affine, setAffine, applyMatrix, matrixAt, deviceScale, deviceBounds } from "./matrix";
 
 /** the Java canvases TS hands framework and app code: a Canvas or RecordingCanvas peer */
 export type JavaCanvas = JObj;
@@ -159,7 +159,7 @@ export class NativeCanvas {
     const blend = p.compositeOp();
     const prev = blend ? this.ctx.globalCompositeOperation : null;
     const filter = blur ? this.ctx.filter : null;
-    if (blur) this.ctx.filter = `blur(${blur.sigma * deviceScale(this.ctx.getTransform())}px)`;
+    if (blur) this.ctx.filter = `blur(${blur.sigma * deviceScale(transformOf(this.ctx))}px)`;
     try {
       if (blend) this.ctx.globalCompositeOperation = blend;
       if (p.style === 0 || p.style === 2) {
@@ -287,7 +287,7 @@ export class NativeCanvas {
   }
   /** intersect with (l, t, r, b) under the matrix, clipped by the context too; false once empty */
   clipRect(l: number, t: number, r: number, b: number): boolean {
-    const ctx = this.ctx, m = ctx.getTransform();
+    const ctx = this.ctx, m = transformOf(ctx);
     if (l > r) { const x = l; l = r; r = x; }
     if (t > b) { const y = t; t = b; b = y; }
     if (r === l || b === t || !(m.a * m.d - m.b * m.c)) {
@@ -363,7 +363,7 @@ export class NativeCanvas {
     // RenderNode replay supplies the parent transform and the actual destination bounds.
     recordOrRun(this.ctx, apply);
     this.persist(apply);
-    const m = this.ctx.getTransform();
+    const m = transformOf(this.ctx);
     if (this.clipEmpty || !(m.a * m.d - m.b * m.c)) return !this.clipEmpty;
     const d = deviceBounds(m, l, t, r, b), x0 = Math.round(d[0]), y0 = Math.round(d[1]), x1 = Math.round(d[2]), y1 = Math.round(d[3]);
     const exact = m.b === 0 && m.c === 0;
@@ -387,7 +387,7 @@ export class NativeCanvas {
       if (path.inverseFill !== out) {
         const bounds = canvasLocalBounds(c);
         if (!bounds) return;
-        const [inverse, rule] = inversePath(path, ...bounds);
+        const [inverse, rule] = inversePath(path, bounds[0], bounds[1], bounds[2], bounds[3]);
         c.clip(inverse, rule);
       } else c.clip(path.path(), path.fillRule);
     };
@@ -402,7 +402,7 @@ export class NativeCanvas {
   /** intersect the bounds with an anti-aliased clip's local bounds, rounded out */
   private narrowOut(l: number, t: number, r: number, b: number) {
     if (this.clipEmpty) return;
-    const m = this.ctx.getTransform();
+    const m = transformOf(this.ctx);
     if (!(m.a * m.d - m.b * m.c)) { this.setClipEmpty(); return; }
     const d = deviceBounds(m, l, t, r, b);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
@@ -411,13 +411,13 @@ export class NativeCanvas {
    *  outset a pixel for anti-aliasing */
   quickReject(l: number, t: number, r: number, b: number): boolean {
     if (this.clipEmpty) return true;
-    const d = deviceBounds(this.ctx.getTransform(), l, t, r, b);
+    const d = deviceBounds(transformOf(this.ctx), l, t, r, b);
     if (!(Number.isFinite(d[0]) && Number.isFinite(d[1]) && Number.isFinite(d[2]) && Number.isFinite(d[3]))) return true;
     return !(Math.max(d[0], this.cl - 1) < Math.min(d[2], this.cr + 1) && Math.max(d[1], this.ct - 1) < Math.min(d[3], this.cb + 1));
   }
   /** SkiaCanvas::getClipBounds: the device clip's bounds in local coordinates, rounded */
   clipBounds(): Box | null {
-    const matrix = this.ctx.getTransform();
+    const matrix = transformOf(this.ctx);
     const a = Math.fround(matrix.a), b = Math.fround(matrix.b), c = Math.fround(matrix.c), d = Math.fround(matrix.d);
     const e = Math.fround(matrix.e), f = Math.fround(matrix.f);
     const det = a * d - b * c;
@@ -434,7 +434,7 @@ export class NativeCanvas {
   /** a layer confines what is drawn in it to its device bounds, rounded out */
   clipToLayer(bounds: Box | null) {
     if (!bounds) return;
-    const d = deviceBounds(this.ctx.getTransform(), bounds.left, bounds.top, bounds.right, bounds.bottom);
+    const d = deviceBounds(transformOf(this.ctx), bounds.left, bounds.top, bounds.right, bounds.bottom);
     this.narrow(Math.floor(d[0]), Math.floor(d[1]), Math.ceil(d[2]), Math.ceil(d[3]));
   }
 }
@@ -472,16 +472,6 @@ function intersectClip(subject: number[], shape: number[]): number[] {
   }
   return out;
 }
-const devBox = new Float64Array(4);
-/** the device-space bounding box [x0, y0, x1, y1] of (l, t, r, b) under `m`, in a shared buffer */
-function deviceBounds(m: DOMMatrix, l: number, t: number, r: number, b: number): Float64Array {
-  const x = m.a * l + m.c * t + m.e, y = m.b * l + m.d * t + m.f;
-  const wx = m.a * (r - l), wy = m.b * (r - l), hx = m.c * (b - t), hy = m.d * (b - t);
-  devBox[0] = x + Math.min(0, wx) + Math.min(0, hx); devBox[1] = y + Math.min(0, wy) + Math.min(0, hy);
-  devBox[2] = x + Math.max(0, wx) + Math.max(0, hx); devBox[3] = y + Math.max(0, wy) + Math.max(0, hy);
-  return devBox;
-}
-
 // ── the Java side: one bridge, and the peers TS makes ──
 let wrapperField = "";
 const wrapper = () => wrapperField ||= declaredField("android/graphics/Canvas", "mNativeCanvasWrapper");
@@ -678,7 +668,7 @@ rt.registerJnis("android/graphics/Canvas", {
   "nRestoreUnclippedLayer(JIJ)V": (h: bigint, count: number, p: bigint) => { const nc = drawingCanvas(h); restoreBehind(nc, count, nc.paint(p)); },
 
   "nTranslate(JFF)V": (h: bigint, x: number, y: number) => {
-    const ctx = canvasAt(h).ctx, m = ctx.getTransform();
+    const ctx = canvasAt(h).ctx, m = transformOf(ctx);
     // a singular matrix stays singular: Canvas2D would drop a translate under one
     if (m.a * m.d === m.b * m.c) ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
     else ctx.translate(x, y);
@@ -691,7 +681,7 @@ rt.registerJnis("android/graphics/Canvas", {
   "nConcat(J[F)V": (h: bigint, v: Float32Array) => canvasAt(h).ctx.transform(v[0], v[4], v[1], v[5], v[3], v[7]),
   "nSetMatrix(JJ)V": (h: bigint, m: bigint) => { if (m) applyMatrix(canvasAt(h).ctx, matrixAt(m), true); else canvasAt(h).ctx.setTransform(1, 0, 0, 1, 0, 0); },
   "nGetMatrix(JJ)V": (h: bigint, into: bigint) => {
-    const t = canvasAt(h).ctx.getTransform();
+    const t = transformOf(canvasAt(h).ctx);
     setAffine(matrixAt(into), t.a, t.b, t.c, t.d, t.e, t.f);
   },
 

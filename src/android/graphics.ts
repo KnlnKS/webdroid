@@ -2,8 +2,8 @@
 
 import { rt, declaredField } from "../jvm/runtime";
 import type { NativeBitmap } from "./bitmap";
-import type { Ctx2D } from "./recording";
-import type { Affine } from "./matrix";
+import { transformOf, type Ctx2D } from "./recording";
+import { localBounds, type Affine } from "./matrix";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -196,15 +196,8 @@ export function gradient(local: Affine | null, g: CanvasGradient, colors: Int32A
   return new NativeGradient(local, g);
 }
 
-/** the target's whole area in the context's local coordinates, null under a singular transform */
-export function canvasLocalBounds(ctx: Ctx2D): [number, number, number, number] | null {
-  const inverse = ctx.getTransform().inverse();
-  const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
-    .map(([x, y]) => inverse.transformPoint({ x, y }));
-  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
-  return [Math.min(...points.map(p => p.x)), Math.min(...points.map(p => p.y)),
-    Math.max(...points.map(p => p.x)), Math.max(...points.map(p => p.y))];
-}
+/** the target's whole area in the context's local coordinates, null under a singular transform; valid until the next bounds call */
+export function canvasLocalBounds(ctx: Ctx2D): Float64Array | null { return localBounds(transformOf(ctx), ctx.canvas.width, ctx.canvas.height); }
 const tintCache = new WeakMap<NativeBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
 /** `b` through a colour filter — `tint` blended by the BlendMode named `mode`, or every pixel through
  *  a 4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
