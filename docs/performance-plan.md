@@ -91,6 +91,14 @@ Each item lists its mechanism, its evidence, the expected gain and how to verify
   installs bodies the worker has already compiled, so it is a change of conditions as §4.4 notes.
 - **Target:** zero cold calls on second taps, and under 500 on first taps after a warm launch.
 - **Verify:** `bun run lat --warm`, cold-call counters per tap, and peak memory.
+- **Measured (`lat` now reports `methodsReached`, `methodsCold`, `coldCalls` per tap):** the
+  persisted-profile promotion already exists. A method an earlier launch ran is recorded at idle
+  and installs from its persisted body at first call. On warm launches no gated tap of Mihon or
+  FitNotes reaches a cold method or makes a cold call (Mihon launch: 1,503 cold methods and 12k
+  cold calls against 15,700 and 176k on a first launch; taps 38/75/81/72 ms warm against 47/89/94/84).
+  Nothing remains for a profile signal or a larger idle budget to remove on warm taps, so neither
+  was implemented. What is left on warm taps is hot Java time and class compilation (`compileMs`
+  3.8-5 ms on the first two Mihon taps).
 
 **1.2 Give background threads their own core where the platform allows it.**
 - **Mechanism (fact):** all Java threads of a process share one JS realm, because they share

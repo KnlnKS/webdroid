@@ -18,6 +18,8 @@ export const perf = {
   // leaf method bodies that cannot suspend (no call, static access, monitor or allocation)
   // against those that can, which carry a save point and a lazily built resumable body.
   syncMethods: 0, asyncMethods: 0,
+  // methods first called, and those that began cold (no persisted or offered body)
+  methodsReached: 0, methodsCold: 0,
   coldCalls: 0, coldHandlers: 0, hotMethods: 0, osrMethods: 0,
   // Detailed JVM attribution is populated only under ?jvmProfile=1.
   jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,

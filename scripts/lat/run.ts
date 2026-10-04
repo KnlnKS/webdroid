@@ -32,7 +32,7 @@ const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json"), qu
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
-const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "coldCalls", "drawMs", "frameMs", "presentations", "presentLagMs",
+const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "methodsReached", "methodsCold", "coldCalls", "drawMs", "frameMs", "presentations", "presentLagMs",
   // populated under ?jvmProfile=1 only
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 

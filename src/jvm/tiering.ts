@@ -128,6 +128,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     return installed();
   };
   const install = (fn: JvmFunction): JvmFunction => { retarget(rec.stub, fn); return fn; };
+  perf.methodsReached++;
   if (persist) recordUse(entryKey);
   const persisted = persist && jvmProfiler.tier !== "cold" ? stored(entryKey) : undefined;
   if (persisted) {
@@ -138,6 +139,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   const prepared = emit.prepare();
   if (prepared.sync) return install(compile(emit.entry(prepared, true)));
   if (jvmProfiler.tier === "js") return install(compile(emit.entry(prepared, false)));
+  perf.methodsCold++;
   let cold: ColdMethod | null = emit.cold(prepared);
   let calls = 0, hot: JvmFunction | undefined, entryPending = true, resumePending = false;
   const settle = (fn: JvmFunction): JvmFunction => {
