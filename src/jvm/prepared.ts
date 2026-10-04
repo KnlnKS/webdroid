@@ -269,8 +269,13 @@ function typeConstants(
     if (!block) throw new Error(`missing basic block ${leader}`);
     let lastReturnType = "";
     liveDefs = markConsumers ? defs : null;
+    /** what each handler sees: the state before every instruction that can throw into it, not the state at the block's end */
+    const thrown: [handler: number, defs: Defs, arrays: ArrayKinds][] = [];
     for (const instruction of block) {
       const { op, a, b, c } = instruction;
+      if (!markConsumers && code.tries.length && canThrow(op)) {
+        for (const handler of handlersAt(code, instruction.pc)) if (body.has(handler)) thrown.push([handler, new Map(defs), new Map(arrays)]);
+      }
       if (liveDefs) {
         floatReads(dex, instruction, retType, (reg) => arrays.get(reg), mark);
         if (isInstanceInvoke(op) && liveDefs.get(instruction.regs[0])?.size) instruction.nullRecv = true;
@@ -299,7 +304,7 @@ function typeConstants(
         if (source) defs.set(a, source); else defs.delete(a);
       } else if (writesRegister(op)) defs.delete(a);
     }
-    return { defs, arrays };
+    return { defs, arrays, thrown };
   };
 
   const paramArrays: ArrayKinds = new Map();
@@ -326,23 +331,37 @@ function typeConstants(
     }
     successors.set(leader, [...targets]);
   }
-  for (const region of code.tries) {
-    const handlers = region.handlers.map(([, address]) => address)
-      .concat(region.catchAllAddr >= 0 ? [region.catchAllAddr] : []);
-    for (const [leader, block] of body) {
-      const last = block.at(-1);
-      if (!last || last.pc < region.start || leader >= region.end) continue;
-      const targets = successors.get(leader);
-      if (!targets) throw new Error(`missing successors for block ${leader}`);
-      for (const handler of handlers) if (body.has(handler) && !targets.includes(handler)) targets.push(handler);
-    }
-  }
-
   const inDefs = new Map<number, Defs>(leaders.map((leader) => [leader, new Map()] as const));
   const inArrays = new Map<number, ArrayKinds | null>(leaders.map((leader) => [leader, null] as const));
   inArrays.set(leaders[0], new Map(paramArrays));
   const work = [...leaders];
   const queued = new Set(leaders);
+  /** merges the definitions and array kinds that reach `target` into its entry state and queues it when that grew */
+  const flow = (target: number, defs: Defs, arrays: ArrayKinds) => {
+    let changed = false;
+    const destination = inDefs.get(target);
+    if (!destination) throw new Error(`missing definition state for block ${target}`);
+    for (const [reg, definitions] of defs) {
+      const existing = destination.get(reg);
+      if (!existing) { destination.set(reg, definitions); changed = true; continue; }
+      if (existing === definitions) continue;
+      let merged: Set<MutableInstruction> | undefined;
+      for (const definition of definitions) {
+        if (!existing.has(definition)) (merged ??= new Set(existing)).add(definition);
+      }
+      if (merged) { destination.set(reg, merged); changed = true; }
+    }
+    const destinationArrays = inArrays.get(target);
+    if (destinationArrays === null || destinationArrays === undefined) {
+      inArrays.set(target, new Map(arrays));
+      changed = true;
+    } else {
+      for (const [reg, kind] of [...destinationArrays]) {
+        if (arrays.get(reg) !== kind) { destinationArrays.delete(reg); changed = true; }
+      }
+    }
+    if (changed && !queued.has(target)) { queued.add(target); work.push(target); }
+  };
   for (let workIndex = 0; workIndex < work.length; workIndex++) {
     const leader = work[workIndex];
     queued.delete(leader);
@@ -351,37 +370,21 @@ function typeConstants(
     const state = run(leader, new Map(entryDefs), new Map(inArrays.get(leader) ?? []), false);
     const targets = successors.get(leader);
     if (!targets) throw new Error(`missing successors for block ${leader}`);
-    for (const target of targets) {
-      let changed = false;
-      const destination = inDefs.get(target);
-      if (!destination) throw new Error(`missing definition state for block ${target}`);
-      for (const [reg, definitions] of state.defs) {
-        const existing = destination.get(reg);
-        if (!existing) { destination.set(reg, definitions); changed = true; continue; }
-        if (existing === definitions) continue;
-        let merged: Set<MutableInstruction> | undefined;
-        for (const definition of definitions) {
-          if (!existing.has(definition)) (merged ??= new Set(existing)).add(definition);
-        }
-        if (merged) { destination.set(reg, merged); changed = true; }
-      }
-      const destinationArrays = inArrays.get(target);
-      if (destinationArrays === null || destinationArrays === undefined) {
-        inArrays.set(target, new Map(state.arrays));
-        changed = true;
-      } else {
-        for (const [reg, kind] of [...destinationArrays]) {
-          if (state.arrays.get(reg) !== kind) { destinationArrays.delete(reg); changed = true; }
-        }
-      }
-      if (changed && !queued.has(target)) { queued.add(target); work.push(target); }
-    }
+    for (const target of targets) flow(target, state.defs, state.arrays);
+    for (const [handler, defs, arrays] of state.thrown) flow(handler, defs, arrays);
   }
   for (const leader of leaders) {
     const entryDefs = inDefs.get(leader);
     if (!entryDefs) throw new Error(`missing definition state for block ${leader}`);
     run(leader, new Map(entryDefs), new Map(inArrays.get(leader) ?? []), true);
   }
+}
+
+/** Can the instruction raise an exception? Moves, constants, jumps, tests, comparisons, conversions and arithmetic cannot (an integer division can). */
+function canThrow(op: number): boolean {
+  if (op <= 0x19 || op >= 0x28 && op <= 0x3d || op >= 0x7b && op <= 0x8f) return false;
+  if (op >= 0x90 && op <= 0xe2) return [0x93, 0x94, 0x9e, 0x9f, 0xb3, 0xb4, 0xbe, 0xbf, 0xd3, 0xd4, 0xdb, 0xdc].includes(op);
+  return true;
 }
 
 /** the registers an instruction names; a written one comes first */
