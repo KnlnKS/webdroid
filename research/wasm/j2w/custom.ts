@@ -21,7 +21,10 @@ export function emitCustom(mc: MC, ins: Ins): void {
   const dex = mc.dex, cs = dex.callSite(ins.b) as EncVal[];
   const boot = dex.methodHandle((cs[0] as { idx: number }).idx), bm = dex.method(boot.idx), name = `${descToName(dex.type(bm.cls))}.${bm.name}`;
   if (name === OBJECT_METHODS) return objectMethods(mc, ins, cs);
-  mc.invokeGap(ins, `invoke-custom ${name}`);
+  // ART resolves the bootstrap method first: a class or method it lacks is the error at the site (StringConcatFactory, SwitchBootstraps are not in libcore)
+  const target = resolveInvoke(mc.cx.prog, "invoke-static", descToName(dex.type(bm.cls)), bm.name, dex.methodDesc(boot.idx), mc.m.cls);
+  if (failed(target)) { mc.consumeResult(ins); return mc.linkFail(target); }
+  mc.invokeGap(ins, `invoke-custom ${name}: only ObjectMethods.bootstrap is linked (libcore's LambdaMetafactory.metafactory returns null)`);
 }
 
 function objectMethods(mc: MC, ins: Ins, cs: EncVal[]): void {

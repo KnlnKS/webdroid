@@ -18,8 +18,8 @@ const sh = (cmd: string[], input?: string) => {
   if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
   return r.stdout.toString();
 };
-sh(["javac", "--release", "17", "-d", out, join(here, "java/Rec.java"), join(here, "java/Mh.java"), join(here, "java/Ref.java")]);
-sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["javac", "--release", "17", "-d", out, join(here, "java/Rec.java"), join(here, "java/Mh.java"), join(here, "java/Ind.java"), join(here, "java/Ref.java")]);
+sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(here, "../../../vendor/aosp", j));
 await jsTier(loadDexes(dex));
 const w = world([dex, ...jars], { natives }), hit: string[] = [];
@@ -40,6 +40,11 @@ const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
 const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (wasm, js tier, jdk); ${threw} threw`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
+// a bootstrap class libcore lacks is ART's NoClassDefFoundError at the site; LambdaMetafactory exists but returns null, which is a gap
+const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.lastMessage}` : String(e); } };
+const concat = outcome("concat"), lambda = outcome("lambda");
+if (concat !== "java/lang/NoClassDefFoundError: Failed resolution of: Ljava/lang/invoke/StringConcatFactory;") { console.log(`FAIL concat: ${concat}`); process.exit(1); }
+if (!lambda.startsWith("java/lang/UnsatisfiedLinkError")) { console.log(`FAIL lambda: ${lambda}`); process.exit(1); }
 // a transformer handle is a recorded gap, not a result
 hit.length = 0;
 let transformer = true;
