@@ -1,22 +1,54 @@
-import { ACC, mkey, type MethodInfo, type Program } from "./program";
+import { ACC, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
+
+/** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
+ *  classes' members are not built for it. */
+class Index {
+  readonly subs = new Map<string, string[]>();                 // direct subtypes (subclasses and implementors)
+  private classes: JClass[] = [];
+  /** every method that can be an implementation (not static, not abstract), by name+descriptor: the classes that declare one. Built on first use. */
+  private implementors?: Map<string, string | string[]>;
+  add(c: JClass): void {
+    this.classes.push(c);
+    for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
+    if (this.implementors) this.declare(c);
+  }
+  declaring(key: string): string[] {
+    if (!this.implementors) { this.implementors = new Map(); for (const c of this.classes) this.declare(c); }
+    const l = this.implementors.get(key);
+    return l === undefined ? [] : typeof l === "string" ? [l] : l;
+  }
+  private declare(c: JClass): void {
+    for (const [key, flags] of declaredMethods(c)) if (!(flags & (ACC.STATIC | ACC.ABSTRACT))) {
+      // most keys have one declaring class: no array for them
+      const l = this.implementors!.get(key);
+      if (l === undefined) this.implementors!.set(key, c.name); else if (typeof l === "string") this.implementors!.set(key, [l, c.name]); else l.push(c.name);
+    }
+  }
+}
 
 /** Class-hierarchy analysis over every class the Program knows, so a decision stays valid for classes that are linked later;
- *  a dex added afterwards can still falsify it, which `World.addDexes` checks against the recorded assumptions. */
+ *  a dex added afterwards can still falsify it, which `World.addDexes` checks against the recorded assumptions.
+ *  The index of a base Program is built once and kept in the Program, which processes share. */
 export class Cha {
-  private subs = new Map<string, string[]>();                 // direct subtypes (subclasses and implementors)
+  private base: Index[] = [];
+  private own = new Index();
   private memo = new Map<string, MethodInfo[]>();
-  /** every method that can be an implementation (not static, not abstract), by name+descriptor */
-  private impls = new Map<string, MethodInfo[]>();
-  constructor(private prog: Program) { this.index(prog.classes.keys()); }
+  constructor(private prog: Program) {
+    for (let p = prog.base; p; p = p.base) this.base.unshift(sharedIndex(p));
+    for (const c of prog.own()) this.own.add(c);
+  }
 
   index(names: Iterable<string>): void {
-    for (const n of names) {
-      const c = this.prog.get(n)!;
-      for (const m of c.methods) if (!(m.flags & (ACC.STATIC | ACC.ABSTRACT))) { const l = this.impls.get(m.key); if (l) l.push(m); else this.impls.set(m.key, [m]); }
-      for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(n); else this.subs.set(s, [n]); }
-    }
+    for (const n of names) this.own.add(this.prog.get(n)!);
     this.memo.clear();
   }
+  private subsOf(n: string): string[] {
+    const l = this.own.subs.get(n);
+    let out = l;
+    for (const b of this.base) { const x = b.subs.get(n); if (x) out = out ? [...x, ...out] : x; }
+    return out ?? [];
+  }
+  private declaring(key: string): string[] { return [...this.base.flatMap((b) => b.declaring(key)), ...this.own.declaring(key)]; }
 
   /** The distinct implementations a call of decl.name+desc can reach among the concrete subtypes of decl (decl included),
    *  cut off at two: callers only distinguish none, one and many. */
@@ -33,12 +65,14 @@ export class Cha {
       seen.add(n); budget--;
       const c = this.prog.get(n);
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) { const m = this.prog.implFor(n, name, desc); if (m) found.add(m); }
-      const l = this.subs.get(n); if (l) stack.push(...l);
+      stack.push(...this.subsOf(n));
     }
     if (budget <= 0 && stack.length && found.size < 2) {
       found.clear();
-      for (const m of this.impls.get(mkey(name, desc)) ?? []) {
+      const key = mkey(name, desc);
+      for (const cls of this.declaring(key)) {
         if (found.size >= 2) break;
+        const m = this.prog.get(cls)!.byKey.get(key)!;
         if (this.reaches(decl, m)) found.add(m);
       }
     }
@@ -57,9 +91,15 @@ export class Cha {
       seen.add(n);
       const c = p.get(n);
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT) && (!filter || p.isSubclass(n, filter)) && p.implFor(n, key.slice(0, key.indexOf("(")), key.slice(key.indexOf("("))) === m) return true;
-      const l = this.subs.get(n); if (l) stack.push(...l);
+      stack.push(...this.subsOf(n));
     }
     return false;
   }
 }
 const WALK = 64;
+
+const sharedIndex = (p: Program): Index => {
+  let x = p.shared.get("cha") as Index | undefined;
+  if (!x) { p.shared.set("cha", x = new Index()); for (const c of p.own()) x.add(c); }
+  return x;
+};

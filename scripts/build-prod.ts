@@ -4,6 +4,7 @@ import { prepareSystemPackages } from "./system-packages";
 import { PLATFORM_JARS } from "../src/jvm/provenance";
 import { PLATFORM_DATA } from "../src/jvm/bootclasspath";
 import { buildId } from "./build-id";
+import { AOT_ROOT, sourceKey, type AotManifest } from "./wasm/aot-key";
 
 const out = "dist";
 const partSize = 24 * 1024 * 1024;
@@ -56,5 +57,17 @@ for (const name of aospFiles) {
   large[`/${path}`] = { parts, size, partSize };
 }
 await Bun.write(join(out, "large-assets.json"), JSON.stringify(large));
+
+// The Wasm tier's platform build (bun run aot). It is optional, but one made from other sources than these would run code the compiler no longer produces.
+// Every module is below the 25 MiB asset file limit, the files are far below the 20,000 of the free plan (docs: workers/platform/limits, static assets),
+// and the files of a key never change, so they are cached for good; current.json names the key and must revalidate.
+const manifestFile = Bun.file(join(AOT_ROOT, "current.json"));
+if (await manifestFile.exists()) {
+  const manifest = await manifestFile.json() as AotManifest;
+  if (manifest.source !== sourceKey()) throw new Error("vendor/wasm-aot is a build of other sources; run bun run aot");
+  await cp(join(AOT_ROOT, manifest.key), join(out, "aot", manifest.key), { recursive: true });
+  await Bun.write(join(out, "aot/current.json"), JSON.stringify(manifest));
+  await Bun.write(join(out, "_headers"), "/aot/*/*\n  Cache-Control: public, max-age=31536000, immutable\n");
+}
 
 console.log(`Production assets ready in ${out}/`);

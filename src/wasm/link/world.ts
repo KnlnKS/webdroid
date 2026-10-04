@@ -9,7 +9,7 @@
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "../compiler/program";
+import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
@@ -21,6 +21,7 @@ import { hostText } from "./members";
 import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
+import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -43,6 +44,9 @@ export interface WorldOptions {
   aot?: AotStore;
   /** a build of that code: classes, slots and selectors are numbered but nothing is instantiated */
   build?: AotBuild;
+  /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
+   *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
+  dexes?: (path: string) => DexFile[] | undefined;
 }
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
@@ -65,7 +69,7 @@ export class World {
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -112,7 +116,7 @@ export class World {
     // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
     const heap = opts.heapUsed, heapBase = heap();
     if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
-    const names = (id: number) => this.names[id];
+    const names = (id: number) => javaName(this.names[id]);
     this.host = {
       fmod: (a: number, b: number) => a % b,
       gap: (id: number) => this.onGap(id),
@@ -122,18 +126,15 @@ export class World {
       heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
-      obj: (kind: number, a: number, b: number, filter: object | null) => this.javaValue(hostObject(this, kind, a, b, filter)),
+      obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),
       proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
-      // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
       pin: (object: object) => this.pin(object),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
-      classByName: (name: string) => {
-        const n = name.replace(/\./g, "/"), e = n.replace(/^\[+/, "");
-        return n === "" || (n[0] === "[" ? !/^([ZBCSIJFD]|L.+;)$/.test(e) || (e[0] === "L" && !this.prog.get(e.slice(1, -1))?.def && !this.prog.get(e.slice(1, -1))) : !this.prog.get(n)) ? 0 : this.idOf(n);
-      },
+      classByName: (name: string, scope: unknown, mode: number) => classByName(this, this.hostString(name) as string, scope, mode),
+      dexOpen: (path: unknown, loader: object | null) => dexOpen(this, path, loader),
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
       stackClass: (n: number) => {
         const frames = javaFrames(new Error().stack ?? "", this.frameTraces), f = frames[n + 1];
@@ -144,7 +145,7 @@ export class World {
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => this.linkMessages[id])),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
-      stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
+      stString: (i: number, which: number) => (which ? this.frames[i].method : javaName(this.frames[i].cls)),
       stLine: (i: number) => this.frames[i].line,
     };
     this.slots.length = FIRST_FREE_SLOT;
@@ -155,10 +156,10 @@ export class World {
   /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
   seedPlatform(accept: (dex: DexFile) => boolean): number {
     let n = 0;
-    for (const c of this.prog.classes.values()) {
+    for (const c of this.prog.all()) {
       if (!c.dex || !accept(c.dex)) continue;
       if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
-      this.addBlock(c.name, c.methods.length + 1); n++;
+      this.addBlock(c.name, methodCount(c) + 1); n++;
     }
     return n;
   }
@@ -344,7 +345,7 @@ export class World {
     return mod;
   }
   instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
-    const m = mod instanceof WebAssembly.Module ? mod : this.compile(mod), t0 = performance.now();
+    const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, t0 = performance.now();
     const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
     this.stats.instantiateMs += performance.now() - t0;
     return inst;
@@ -699,8 +700,8 @@ export class World {
   // ---------- open world
   /** load more dexes. A CHA decision that one of their classes falsifies is undone: its callers go back to lazy-link stubs, so the next call
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
-  addDexes(dexes: DexFile[]): string[] {
-    const added = this.prog.add(dexes);
+  addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {
+    const added = this.prog.add(dexes, loader);
     this.loaded(added);
     return added;
   }

@@ -7,6 +7,7 @@ import { openInstall } from "./src/shell/install";
 import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
 import { buildId } from "./scripts/build-id";
+import { aotFile, aotManifest } from "./scripts/wasm/aot-serve";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
 import { parseIpv4 } from "./src/shell/relay";
@@ -152,6 +153,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
       if (ext === "html") return sandboxDocument(req, new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } }));
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
+    "/aot/current.json": aotManifest,
+    "/aot/:key/:file": (req) => aotFile(req.params.key, req.params.file),
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
     "/harfbuzz.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz.wasm"),

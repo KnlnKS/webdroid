@@ -3,7 +3,7 @@
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
 import { OP } from "../compiler/code";
-import type { JClass } from "../compiler/program";
+import { javaName, type JClass } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName } from "./classes";
 import { BOX } from "./reflect";
@@ -87,7 +87,7 @@ function valueOf(w: World, s: ReturnType<typeof make>, dex: EncAnnotation["dex"]
   const ref = v as { kind: string; idx: number; anno?: EncAnnotation };
   if (ref.kind === "type") {
     const name = typeName(dex.type(ref.idx));
-    return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : s.typeNotPresent(w.javaString(name.replace(/\//g, ".")), null);
+    return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : s.typeNotPresent(w.javaString(javaName(name).replace(/\//g, ".")), null);
   }
   if (ref.kind === "enum") {
     const fr = dex.field(ref.idx), cls = descToName(dex.type(fr.cls)), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);

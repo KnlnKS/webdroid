@@ -6,7 +6,7 @@
 // bindTo, filterArguments, asType of a different shape) runs Java code over ART's EmulatedStackFrame, which this does not model: that is a gap.
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
-import { kindOf } from "../compiler/program";
+import { javaName, kindOf } from "../compiler/program";
 import { isWide, descToName } from "../../jvm/abi";
 import { hostReflect, RInfo, BOX } from "./reflect";
 import { prettyType } from "../compiler/linkage";
@@ -101,9 +101,9 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     if (to.length === 1) {
       if (v === null) return fail("java/lang/NullPointerException", `Expected to unbox a '${prettyType(from)}' primitive type but was returned null`);
       const have = WRAPPER.get(nameOfObj(w, v));
-      return have === undefined || !WIDEN[have].includes(to) ? fail("java/lang/ClassCastException", `Cannot convert ${nameOfObj(w, v).replace(/\//g, ".")} to ${prettyType(to)}`) : primConv(w, have, to)(v);
+      return have === undefined || !WIDEN[have].includes(to) ? fail("java/lang/ClassCastException", `Cannot convert ${javaName(nameOfObj(w, v)).replace(/\//g, ".")} to ${prettyType(to)}`) : primConv(w, have, to)(v);
     }
-    return v === null || isInstance(w, to, v) ? v : fail("java/lang/ClassCastException", `Cannot cast ${nameOfObj(w, v).replace(/\//g, ".")} to ${prettyType(to)}`);
+    return v === null || isInstance(w, to, v) ? v : fail("java/lang/ClassCastException", `Cannot cast ${javaName(nameOfObj(w, v)).replace(/\//g, ".")} to ${prettyType(to)}`);
   };
   const given = Array.from({ length: sp.length }, (_, i) => convert(s.aget(args, i), sp[i], np[i]));
   const out = (v: object | null) => convert(v, nr, sr);

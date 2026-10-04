@@ -5,6 +5,7 @@
 //   classdiff    class initialisation and the class model against the JS tier and the JDK
 //   customdiff   invoke-custom and MethodHandle call sites
 //   linkdiff     unresolved references fail at their use site as ART does
+//   loaders      two DexClassLoaders defining one class name: distinct classes, statics and Class objects, found each through its own loader
 //   lazytest     CHA undone by a later dex, implicit exceptions, heap limits, the tiers
 //   aottest      precompiled platform code stays sound as classes arrive (builds a platform AOT first unless WEBDROID_AOT names one)
 //   entry        host code calls Java through jentry on the JS tier, over a World and (entrytier) through ?tier=wasm: the same answers and exceptions
@@ -12,18 +13,22 @@
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
 //   g1           the jbench workloads timed in node and headless Chrome (not part of `all`)
-// Tools: watdump prints the code generated for a method, aot-build writes the AOT assets of the platform jars, aot-startup the module list a start of the process loads.
-import { mkdtempSync, rmSync } from "node:fs";
+//   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
+//                (not part of `all`; needs a build from `bun run aot`)
+// Tools: watdump prints the code generated for a method; `aot` (bun run aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process
+// loads (aot-build, then aot-startup), and makes that build the one the server offers.
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AOT_ROOT } from "./aot-key";
 import { runUnderNode } from "./undernode";
 
 interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
-  linkdiff: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
+  linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
   sweep: { node: false, all: true }, aottest: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
-  "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false },
+  "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
 
@@ -34,7 +39,25 @@ async function exec(name: string, args: string[], env: Env): Promise<number> {
   return Bun.spawnSync(["bun", file, ...args], { stdio: ["inherit", "inherit", "inherit"], env }).exitCode ?? 1;
 }
 
+/** builds the platform assets, records which of their modules a start loads and makes the build the current one */
+async function buildAot(args: string[]): Promise<number> {
+  const status = await exec("aot-build", args, process.env);
+  if (status) return status;
+  const at = args.indexOf("--out"), keyed = at < 0, key = keyed ? (JSON.parse(readFileSync(join(AOT_ROOT, "latest.json"), "utf8")) as { key: string }).key : "";
+  const dir = keyed ? join(AOT_ROOT, key) : args[at + 1];
+  if (!existsSync(join(dir, "startup.json"))) {
+    const startup = await exec("aot-startup", [], { ...process.env, WEBDROID_AOT: dir });
+    if (startup) return startup;
+  }
+  if (keyed) {
+    copyFileSync(join(AOT_ROOT, "latest.json"), join(AOT_ROOT, "current.json"));
+    for (const old of readdirSync(AOT_ROOT).filter((f) => f !== key && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
+  }
+  return 0;
+}
+
 async function runSuite(name: string, args: string[]): Promise<number> {
+  if (name === "aot") return buildAot(args);
   if (name === "fuzz" && !args.length) {
     let status = 0;
     for (const seed of FUZZ_SEEDS) status ||= await exec(name, ["--seed", String(seed)], process.env);
@@ -47,7 +70,7 @@ async function runSuite(name: string, args: string[]): Promise<number> {
   if (name !== "aottest" || process.env.WEBDROID_AOT) return exec(name, args, process.env);
   const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));
   try {
-    return (await exec("aot-build", ["--out", dir], process.env)) || await exec(name, args, { ...process.env, WEBDROID_AOT: dir });
+    return (await exec("aot-build", ["--out", dir, "--jars", "4"], process.env)) || await exec(name, args, { ...process.env, WEBDROID_AOT: dir });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
