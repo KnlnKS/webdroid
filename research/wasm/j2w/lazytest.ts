@@ -32,6 +32,18 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   check("Lz.test after", w.entry("Lz", "test", "()I")(), 11);
 }
 
+// ---- tiers: a method that uses up its budget is recompiled (here inside a loop, so the next call is the second tier) and answers the same
+{
+  const w = world([join(out, "classes.dex"), ...jars]), call = w.entry("Lz", "sum", "(I)I");
+  const first = call(40000), up = w.stats.upgrades;
+  check("hot loop upgraded", up >= 1, true);
+  check("second tier answers the same", call(40000), first);
+  check("an upgraded method is not upgraded again", (call(40000), w.stats.upgrades), up);
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")));
+  check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
+  check("and the method is compiled afresh", call(1000), 11 * 1000);
+}
+
 // ---- implicit exceptions: class (caught by Java code) and message (computed by the host)
 {
   const w = world([join(out, "classes.dex"), ...jars], { heapUsed: () => 0 });
