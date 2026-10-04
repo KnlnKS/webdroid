@@ -48,6 +48,8 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; stub?: F
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
 /** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
+/** second-tier compiling may take this many ms, plus this share of the time since the first request for it */
+const UPGRADE_FREE_MS = 10, UPGRADE_SHARE = 0.3;
 /** the JS String builtins, and String constants as imports named by their text */
 export const COMPILE_OPTIONS = { builtins: ["js-string"], importedStringConstants: "#" };
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
@@ -502,11 +504,18 @@ export class World {
   private upgrade(slot: number): void {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
-    const t0 = performance.now(), cx = new Compiler(this), { installed, copies } = this.group(s.m);
+    // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it, and a method that asks too soon asks again after another budget
+    const t0 = performance.now();
+    this.hotSince ??= t0;
+    if (this.upgradeMs > UPGRADE_FREE_MS + UPGRADE_SHARE * (t0 - this.hotSince)) { new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] = 0; return; }
+    const cx = new Compiler(this), { installed, copies } = this.group(s.m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
     this.install(installed.map((m) => this.slotOf(m)), true, cx, built, slot, t0);
+    this.upgradeMs += performance.now() - t0;
   }
+  private hotSince?: number;
+  private upgradeMs = 0;
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
   private install(group: number[], hot: boolean, cx: Compiler, built: { bytes: Uint8Array; traces: FnTrace[] }, slot: number, t0: number): void {
     const s = this.slotAt(slot)!;
