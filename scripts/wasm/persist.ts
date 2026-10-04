@@ -1,6 +1,7 @@
 // The compile worker and the persisted app build: the protocol (compile-serve.ts over a MessageChannel, so the numbering handshake runs as it does with a Worker), second-tier units
 // compiled elsewhere and adopted only while the numbering they rely on is the World's, an app build attached on top of the platform build and kept sound as dexes arrive, and the
 // bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`bun run wasm persist` makes a small one). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
+import { guestMemory } from "../../src/wasm/host/guest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,11 +45,10 @@ const platformDexes = PLATFORM_JARS.flatMap((j) => loadDexes(join(AOSP, j)));
 const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
-const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, aot: aotStore, ...opts });
-/** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts). Their overlays change the platform's classes, so the World has a platform Program of its own. */
+const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, guest: guestMemory, aot: aotStore, ...opts });
+/** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
-  const own = new Program(platformDexes); own.addExterns(externs);
-  const w = new World(new Program(dexes, own), { intrinsics, natives, heapUsed, aot: aotStore, ...opts });
+  const w = world(dexes, opts);
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
   return w;
 }

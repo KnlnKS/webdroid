@@ -11,6 +11,7 @@ import { intrinsicFor } from "../../src/wasm/compiler/j2w";
 import type { NativeBinder } from "../../src/wasm/link/hostapi";
 import { Natives } from "../../src/wasm/host/natives";
 import { hostNet } from "../../src/wasm/host/inet";
+import { guestMemory } from "../../src/wasm/host/guest";
 import { heapUsed } from "../../src/wasm/host/stats";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 
@@ -37,5 +38,5 @@ export function program(paths: string[]) {
 /** what reach treats as a leaf: a method implemented without its bytecode */
 export const isIntrinsic = (natives: NativeBinder) => (m: MethodInfo) => !!intrinsicFor(intrinsics, natives, m);
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, net: hostNet, ...(AOT && { aot: aotStore(AOT) }), ...opts });
+  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts });
 }

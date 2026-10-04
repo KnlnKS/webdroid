@@ -57,10 +57,13 @@ export function weakHandle(o: object): bigint {
   return h;
 }
 
+/** how the tier that holds Java arrays apart from the host's gives natives the arrays whose handles it handed out (the Wasm tier: a view the native's writes are stored back from) */
+export const handleViews = { of: null as ((o: object) => unknown) | null };
+
 /** the object behind a long, or undefined for the null handle */
 export function deref<T>(h: bigint): T {
-  const n = Number(h), o = objs[n];
-  return (o === WEAK ? refs[n]!.deref() : o) as T;
+  const n = Number(h), o = objs[n], v = o === WEAK ? refs[n]!.deref() : o;
+  return (handleViews.of !== null && typeof v === "object" && v !== null && Object.getPrototypeOf(v) === null ? handleViews.of(v) : v) as T;
 }
 
 export function release(h: bigint): void {

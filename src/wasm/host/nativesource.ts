@@ -30,6 +30,11 @@ export const nativeSource: NativeSource = {
     if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
     return settled.has(cls + "." + key) ? () => settled.get(cls + "." + key) : lookup(cls, key, isStatic);
   },
+  late: (cls, key) => Object.assign(function (this: unknown, ...args: unknown[]) {
+    const bound = rt.jniFn(cls, key) as HostFn | null;
+    if (!bound) throw rt.ulink(cls, ...splitSig(key));
+    return bound.apply(this, args);
+  }, { javaValues: true }),
   classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
   // a Java exception the host caught from a call into Java and rethrows is thrown as it is, never copied
   thrown: (e) => {

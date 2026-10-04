@@ -16,6 +16,9 @@ import { World, type WorldOptions } from "../link/world";
 import type { HostLoop } from "../link/sched";
 import { externs, intrinsics } from "../link/intrinsics";
 import { hostNet } from "./inet";
+import { guestMemory } from "./guest";
+import { wasmJni } from "./jni";
+import { useJniVm } from "../../native/jnivm";
 import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
 import { natives, nativeSource } from "./nativesource";
 import { count, heapUsed } from "./stats";
@@ -33,7 +36,7 @@ const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
   return w;
@@ -48,6 +51,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   const start = (made: World) => {
     world = made;
     useEntry(wasmEntry(made));
+    useJniVm(wasmJni(made));
     fieldNames.find = fieldNamesOf(made);
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };

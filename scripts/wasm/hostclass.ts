@@ -8,7 +8,8 @@ import { fieldNames, rt } from "../../src/jvm/runtime";
 import { jsEntry, scall, useEntry } from "../../src/jvm/natives/jentry";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { fieldNamesOf, hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
-import { loadDexes, world } from "./lib";
+import { Program } from "../../src/wasm/compiler/program";
+import { loadDexes, program, world } from "./lib";
 import { jsTier, natives } from "./oracle";
 import { AOSP } from "./paths";
 import { deref, ownedHandle } from "../../src/android/handles";
@@ -33,6 +34,22 @@ const fail = (what: string) => { failed++; console.log("FAIL " + what); };
 js.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  js    ${want}\n  wasm  ${wasm[i]}`); });
 if (wasm.length !== js.length) fail(`${wasm.length} answers for ${js.length}`);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
+
+// Worlds over one platform Program, as the process frames of a tab are: the host classes are each World's own, the platform's classes are not changed, and every World behaves alike
+{
+  const platform = program(jars), mk = () => { const x = world(new Program(loadDexes(dex), platform), { natives }); for (const spec of natives.source!.hostSpecs!()) x.addHostClass(spec); return x; };
+  const worlds = [mk(), mk()], name = (x: typeof w) => x.hostClassNames().join();
+  if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
+  for (const x of [worlds[0], worlds[1], worlds[0]]) {
+    useEntry(wasmEntry(x)); fieldNames.find = fieldNamesOf(x);
+    for (const m of ["runnable", "list", "http"]) {
+      const got = String(x.entry("Hc", m, "()Ljava/lang/String;")()), want = js.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
+      if (got !== want) fail(`a World over a shared platform Program answers Hc.${m} ${got}, not ${want}`);
+    }
+  }
+  if (!platform.get("java/net/HttpURLConnection")!.byKey.get("getRequestMethod()Ljava/lang/String;")!.codeOff) fail("a World changed a class of the platform Program");
+  useEntry(wasmEntry(w)); fieldNames.find = fieldNamesOf(w);
+}
 
 // lifetime: the Java object and the host object live and die together
 setFlagsFromString("--expose-gc");
