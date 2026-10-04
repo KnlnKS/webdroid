@@ -1,20 +1,20 @@
-// Each scripts/jbench workload, cut out of Bench.java as its own static method, compiles to Wasm over the AOSP boot dex in one
-// module and runs against the production JS tier; what blocks each workload is listed.
-// Needs the Android SDK (android.jar, d8) and javac. Run: bun jbench.ts [workload ...] [-v]
+// Each scripts/jbench workload, cut out of Bench.java as its own static method, runs lazily compiled over the AOSP boot dex against the
+// production JS tier: only the methods a workload executes are compiled, and the first construct the compiler has no translation for is reported.
+// --survey also compiles everything the workloads can reach (the old whole-program build) and lists what blocks it.
+// Needs the Android SDK (android.jar, d8) and javac. Run: bun jbench.ts [workload ...] [-v] [--survey]
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { androidPlatform, androidTool } from "../../../scripts/android-sdk";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
-import { compile, hostImports, loadDexes, program } from "./build";
-import { exportName, SEED_CLASSES } from "./j2w";
+import { loadDexes, program, world } from "./build";
 import { intrinsics } from "./intrinsics";
 import { jsTier } from "./oracle";
 import { reach } from "./reach";
 
 const root = join(import.meta.dir, "../../..");
 const text = readFileSync(join(root, "scripts/jbench/Bench.java"), "utf8"), out = mkdtempSync(join(tmpdir(), "j2w-jb-"));
-const verbose = process.argv.includes("-v"), only = process.argv.slice(2).filter((a) => a !== "-v");
+const verbose = process.argv.includes("-v"), survey = process.argv.includes("--survey"), only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const sh = (cmd: string[]) => { const r = Bun.spawnSync(cmd, { cwd: out }); if (r.exitCode) throw new Error(`${cmd[0]}: ${r.stderr}`); };
 
 // a workload is a `case "x": body` line of Bench.run; its body becomes `static int w_x()` so each compiles on its own
@@ -29,23 +29,30 @@ sh([androidTool("d8"), "--min-api", "26", "--output", out, ...readdirSync(out).f
 
 const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j))]), js = await jsTier(loadDexes(dex));
 const todo = names.filter((n) => !only.length || only.includes(n));
-const { bytes, cx, ms } = compile(prog, todo.map((w) => ["Bench", `w_${w}`, "()I"]));
-const module = await WebAssembly.compile(bytes);
-console.log(`one module, ${todo.length} workloads: ${cx.r.methods.size} methods, ${(bytes.length / 1048576).toFixed(1)} MB, compiled in ${(ms / 1000).toFixed(1)} s; unstructured=${cx.stats.unstructured}`);
-const gapAt = [...cx.gaps.keys()], bad = [...gapAt, ...[...cx.r.unresolved].filter((b) => b.includes(": ") || b.startsWith("missing"))];
-const blockers = (reached: Iterable<string>) => { const set = new Set(reached); return bad.filter((b) => set.has(b.split(": ")[0]) || b.startsWith("missing")); };
-const kind = (b: string) => (b.split(": ").slice(1).join(": ").split(" ").filter((w) => /^[a-z][a-z-]*(\/[a-z]+)?$/.test(w)).slice(0, 4).join(" ")) || b.split(" ")[0];
-const tally = (bs: string[]) => { const c = new Map<string, number>(); for (const b of bs) c.set(kind(b), (c.get(kind(b)) ?? 0) + 1); return [...c].sort((x, y) => y[1] - x[1]).map(([k, n]) => `${k}:${n}`).join(" "); };
+const isIntr = (m: { cls: string; key: string }) => intrinsics.has(m.cls + "." + m.key);
+const reaches = new Map<string, ReturnType<typeof reach>>();
+if (survey) {
+  for (const w of todo) reaches.set(w, reach(prog, [prog.resolve("Bench", `w_${w}`, "()I")!], { instantiate: [], methods: [] }, isIntr));
+  const union = new Map([...reaches.values()].flatMap((r) => [...r.methods]));
+  console.log(`${todo.length} workloads reach ${union.size} methods in the closed world`);
+  const w = world(prog), t0 = performance.now();
+  const gaps = new Set([...union.values()].flatMap((m) => w.gapsOf(m)).concat([...reaches.values()].flatMap((r) => [...r.unresolved])));
+  console.log(`closed-world compile of all ${union.size}: ${((performance.now() - t0) / 1000).toFixed(1)} s, ${gaps.size} blockers`);
+  if (verbose) console.log("    " + [...gaps].join("\n    "));
+}
 
-const reaches = new Map(todo.map((w) => [w, reach(prog, [prog.resolve("Bench", `w_${w}`, "()I")!], { instantiate: SEED_CLASSES, methods: [] }, (m) => intrinsics.has(m.cls + "." + m.key)).methods] as const));
-const union = new Set([...reaches.values()].flatMap((r) => [...r.keys()]));
-console.log(`blockers in the ${union.size} methods the workloads reach: ${blockers(union).length} [${tally(blockers(union))}]`);
-if (verbose) console.log("    " + blockers(union).join("\n    "));
-
-for (const w of todo) {
+// a fresh World per workload: its state (class initialisers cut short by a gap) must not leak into the next, and the numbers are cold-start costs
+const total = { units: 0, compileMs: 0, instantiateMs: 0, classes: 0, classMs: 0 };
+for (const name of todo) {
   let want: string, got: string, hit: number[] = [];
-  try { want = String(await js("Bench", `w_${w}`, "()I", [])); } catch (e) { want = "throw"; }
-  try { got = String(((await WebAssembly.instantiate(module, hostImports((id) => hit.push(id)))).exports as any)[exportName("Bench", `w_${w}`, "()I")]()); } catch { got = "trap"; }
-  console.log(`${w.padEnd(15)} reach=${String(reaches.get(w)!.size).padStart(5)} blockers=${String(blockers(reaches.get(w)!.keys()).length).padStart(4)}  js=${want} wasm=${got}${got === want ? " MATCH" : hit.length ? ` BLOCKED at ${gapAt[hit[0]]}` : " DIFF"}`);
+  const w = world(prog);
+  w.onGap = (id) => hit.push(id);
+  try { want = String(await js("Bench", `w_${name}`, "()I", [])); } catch (e) { want = "throw"; }
+  const t0 = performance.now();
+  try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch { got = "trap"; }
+  const ms = performance.now() - t0;
+  for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += w.stats[k];
+  console.log(`${name.padEnd(15)} reach=${String(reaches.get(name)?.methods.size ?? "-").padStart(5)} compiled=${String(w.stats.units).padStart(4)} classes=${String(w.stats.classes).padStart(3)} ${ms.toFixed(0).padStart(5)} ms  js=${want} wasm=${got}${got === want ? " MATCH" : hit.length ? ` BLOCKED at ${w.gapList[hit[0]]}` : " DIFF"}`);
   if (got !== want && !hit.length) process.exitCode = 1;
 }
+console.log(`total: ${total.units} methods compiled in ${total.compileMs.toFixed(0)} ms (instantiate ${total.instantiateMs.toFixed(0)} ms), ${total.classes} class modules (${total.classMs.toFixed(0)} ms)`);

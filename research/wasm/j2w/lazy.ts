@@ -1,0 +1,338 @@
+// The linker: classes and methods become Wasm modules when first needed, all sharing one funcref table.
+//
+//  - A class module (one per class, built the first time any code names the class) defines the class's vtable, init flag and static
+//    fields as exported globals, and one lazy-link stub per method, installed in a contiguous block of table slots.
+//  - A stub calls host.link(slot), which compiles that method into a unit module (Compiler.buildUnit) and replaces the slot's entry,
+//    then calls through the slot; every call between modules is `call_indirect slot`, so a compiled method needs no relinking.
+//  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
+//
+// A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
+import { ModuleBuilder, T, refNull, sleb, type VT } from "./wasmbin";
+import { Code } from "./code";
+import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
+import { Cha } from "./cha";
+import { H, f32bits, f64bits } from "./consts";
+import { Compiler, declareBase, kindVT, type FnTrace, type Intrinsic } from "./j2w";
+import { SLOT, FIRST_FREE_SLOT, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, heapUsed, type JavaFrame, type Thrower } from "./exc";
+import type { DexFile } from "../../../src/jvm/dex";
+
+export interface WorldOptions {
+  intrinsics: Map<string, Intrinsic>;
+  /** bytes in use on the heap, compared with the heap limit each time a window of allocation is used up */
+  heapUsed?: () => number;
+  /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
+  stackTraceLimit?: number;
+}
+export interface ClassRt { name: string; id: number; mod: string; slotBase: number; methodSlots: Map<string, number>; nMethods: number; exports: WebAssembly.Exports }
+type Slot = { k: "method"; m: MethodInfo; done: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function } | { k: "ensure" };
+interface Assumption { decl: string; name: string; desc: string; target: MethodInfo; slots: Set<number> }
+
+export class World {
+  prog: Program;
+  cha: Cha;
+  table = new WebAssembly.Table({ element: "anyfunc", initial: 256 });
+  /** constructs the compiler has no translation for: each compiles to host.gap(id) and a throw, never to a guess */
+  gaps = new Map<string, number>();
+  gapList: string[] = [];
+  onGap: (id: number) => void = () => {};
+  stats = { classes: 0, units: 0, bytes: 0, compileMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0 };
+  private slots: (Slot | undefined)[] = [];
+  private classes = new Map<string, ClassRt>();
+  private ids = new Map<string, number>();
+  private names = [""];
+  private selectors = new Map<string, number>();
+  private selKeys = [""];
+  private vslotCache = new Map<string, string[]>();
+  private traces = new Map<string, FnTrace>();
+  private stacks = new WeakMap<object, Error>();
+  private assumptions = new Map<string, Assumption>();
+  private host: Record<string, Function>;
+  private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global };
+  private imtCache = new Map<number, number>();
+  private compiled = new Map<MethodInfo, string[]>();
+
+  constructor(prog: Program, public opts: WorldOptions) {
+    this.prog = prog;
+    this.cha = new Cha(prog);
+    if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
+    const names = (id: number) => this.names[id];
+    this.host = {
+      fmod: (a: number, b: number) => a % b,
+      gap: (id: number) => this.onGap(id),
+      link: (slot: number) => this.linkSlot(slot),
+      imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
+      heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
+      excMessage: (kind: number, a: number, b: number) => excMessage(kind, a, b, names),
+      capture: (exn: object) => { this.stacks.set(exn, new Error()); },
+    };
+    this.slots.length = FIRST_FREE_SLOT;
+    this.startRuntime();
+  }
+
+  // ---------- ids, selectors, vtable layout
+  idOf(name: string): number {
+    let id = this.ids.get(name);
+    if (id === undefined) { this.ids.set(name, id = this.names.length); this.names.push(name); }
+    return id;
+  }
+  selectorId(key: string): number {
+    let s = this.selectors.get(key);
+    if (!s) { this.selectors.set(key, s = this.selKeys.length); this.selKeys.push(key); }
+    return s;
+  }
+  gapId(what: string): number {
+    let id = this.gaps.get(what);
+    if (id === undefined) { this.gaps.set(what, id = this.gaps.size); this.gapList.push(what); }
+    return id;
+  }
+  needsInit(n: string): boolean {
+    const c = this.prog.get(n); if (!c) return false;
+    if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
+    return c.sup ? this.needsInit(c.sup) : false;
+  }
+  /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
+  vslots(n: string): string[] {
+    let s = this.vslotCache.get(n); if (s) return s;
+    const c = this.prog.get(n);
+    s = n === "java/lang/Object" || !c ? [] : [...this.vslots(c.sup ?? "java/lang/Object")];
+    if (c && !c.isInterface) {
+      for (const m of c.methods) if (!m.isStatic && !m.isCtor && !(m.flags & ACC.PRIVATE) && !s.includes(m.key)) s.push(m.key);
+      const addIface = (i: string) => { const ic = this.prog.get(i); if (!ic) return; for (const m of ic.methods) if (!m.isStatic && !s!.includes(m.key)) s!.push(m.key); ic.ifaces.forEach(addIface); };
+      for (let k: JClass | undefined = c; k; k = k.sup ? this.prog.get(k.sup) : undefined) k.ifaces.forEach(addIface);
+    }
+    this.vslotCache.set(n, s); return s;
+  }
+  /** vtable index of virtual method `key` as seen from class `decl` */
+  vslot(decl: string, key: string): number {
+    const i = this.vslots(decl).indexOf(key);
+    if (i < 0) throw new Error(`no vtable slot for ${decl}.${key}`);
+    return H.VTAB + i;
+  }
+  private vtWords(name: string, id: number): Int32Array {
+    const prog = this.prog, arr = name[0] === "[", c = prog.get(name);
+    const chain = arr ? ["java/lang/Object", name] : prog.chain(name).reverse();   // Object first
+    const depth = chain.length - 1;
+    if (depth > H.MAXD - 1) throw new Error("class hierarchy too deep for fixed display: " + name);
+    const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => { const j = key.indexOf("("); return prog.implFor(arr ? "java/lang/Object" : name, key.slice(0, j), key.slice(j)); };
+    const body: number[] = new Array(H.VTAB + keys.length).fill(0);
+    body[H.ID] = id; body[H.DEPTH] = depth;
+    chain.forEach((cn, i) => { body[H.DISPLAY + i] = cn === name ? id : this.idOf(cn); });
+    keys.forEach((key, i) => { const m = impl(key); body[H.VTAB + i] = m ? this.slotOf(m) : SLOT.ule; });
+    // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
+    const slow: number[] = [];
+    if (!arr) for (const key of keys) {
+      const sel = this.selectors.get(key), m = sel ? impl(key) : undefined;
+      if (!sel || !m) continue;
+      const s = sel % H.IMT_N, f = this.slotOf(m);
+      if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
+    }
+    const ifs = new Set<number>();
+    const addI = (i: string) => { const ic = prog.get(i); if (ic) { ifs.add(this.idOf(i)); ic.ifaces.forEach(addI); } };
+    if (!arr) for (let k: JClass | undefined = c; k; k = k.sup ? prog.get(k.sup) : undefined) k.ifaces.forEach(addI);
+    // extra region: [capacity, count, (selector, slot) x capacity, interface count, interface ids]
+    const cap = slow.length / 2 + 16;
+    body[H.EXTRA] = body.length;
+    body.push(cap, slow.length / 2, ...slow, ...new Array(2 * cap - slow.length).fill(0), ifs.size, ...ifs);
+    return Int32Array.from(body);
+  }
+  private imtMiss(cls: number, sel: number): number {
+    const k = cls * 65536 + sel;
+    let slot = this.imtCache.get(k);
+    if (slot === undefined) {
+      const key = this.selKeys[sel], j = key.indexOf("("), name = this.names[cls];
+      const m = this.prog.implFor(name[0] === "[" ? "java/lang/Object" : name, key.slice(0, j), key.slice(j));
+      this.imtCache.set(k, slot = m ? this.slotOf(m) : SLOT.ule);
+    }
+    return slot;
+  }
+
+  // ---------- slots
+  private reserveSlots(n: number): number {
+    const base = this.slots.length;
+    this.slots.length += n;
+    const have = this.table.length;
+    if (this.slots.length > have) this.table.grow(Math.max(this.slots.length - have, have));
+    return base;
+  }
+  slotOf(m: MethodInfo): number {
+    const rt = this.link(m.cls), i = rt.methodSlots.get(m.key);
+    if (i === undefined) throw new Error("method not in its class: " + m.cls + "." + m.key);
+    return i;
+  }
+  ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
+
+  // ---------- runtime and class modules
+  private instantiate(bytes: Uint8Array, imports: WebAssembly.Imports): WebAssembly.Instance {
+    const t0 = performance.now();
+    const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes as BufferSource), imports);
+    this.stats.instantiateMs += performance.now() - t0;
+    this.stats.bytes += bytes.length;
+    return inst;
+  }
+  private stubBody(slot: number, sig: number, params: VT[], link: number): number[] {
+    const c = new Code(params.length);
+    c.i32(slot).call(link);
+    params.forEach((_, i) => c.lget(i));
+    return c.i32(slot).callIndirect(sig).finish();
+  }
+  private startRuntime(): void {
+    const mb = new ModuleBuilder(), b = declareBase(mb);
+    mb.importTable("rt", "table", T.funcref, 0);
+    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    mb.export("tag", "tag", mb.addTag(b.tTagFn));
+    const i32Init = (v: number) => { const o = [0x41]; sleb(v, o); return o; };
+    mb.export("alloc", "global", mb.addGlobal(T.i32, true, i32Init(-ALLOC_WINDOW)));
+    mb.export("hash", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    for (const name of Object.keys(SLOT) as Thrower[]) {
+      const params = THROWERS[name].params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, []);
+      const f = mb.addFunc(sig, this.stubBody(SLOT[name], sig, params, link), "stub:" + name);
+      mb.addElemActive(0, SLOT[name], [f]);
+      this.slots[SLOT[name]] = { k: "thrower", name, done: false };
+    }
+    const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash };
+  }
+
+  /** the class module of `name`, built on first use */
+  link(name: string): ClassRt {
+    let rt = this.classes.get(name);
+    if (rt) return rt;
+    const t0 = performance.now();
+    const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
+    const slotBase = this.reserveSlots(methods.length + 1);
+    rt = { name, id, mod: "c" + id, slotBase, methodSlots: new Map(methods.map((m, i) => [m.key, slotBase + i])), nMethods: methods.length, exports: {} };
+    this.classes.set(name, rt);
+    methods.forEach((m, i) => { this.slots[slotBase + i] = { k: "method", m, done: false }; });
+    this.slots[slotBase + methods.length] = { k: "ensure" };
+
+    const mb = new ModuleBuilder(), b = declareBase(mb);
+    mb.importTable("rt", "table", T.funcref, 0);
+    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
+    const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : nullInit(b.tObj));
+    const isArray = name[0] === "[";
+    const vtG = isArray || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
+    if (vtG >= 0) mb.export("vt", "global", vtG);
+    const initG = mb.addGlobal(T.i32, true, [0x41, 0]);
+    mb.export("init", "global", initG);
+    const statics = new Map<string, number>();
+    for (const f of jc?.fields ?? []) if (f.isStatic) {
+      const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name, g); mb.export("s:" + f.name, "global", g);
+    }
+    const stubs = methods.map((m) => {
+      const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
+      const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
+      return mb.addFunc(sig, this.stubBody(slotBase + methods.indexOf(m), sig, params, link), "stub:" + name + "." + m.name);
+    });
+    if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b.tObj, jc, initG, statics, rt), "ensure:" + name));
+    else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "ensure:" + name));
+    if (vtG >= 0) {
+      const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
+      mb.start = mb.addFunc(mb.addFuncType([], []), new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).finish(), "$vt");
+    }
+    if (stubs.length) mb.addElemActive(0, slotBase, stubs);
+    rt.exports = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports;
+    this.stats.classes++; this.stats.classMs += performance.now() - t0;
+    return rt;
+  }
+  /** ensure(): run once, superclass first, then the dex's static values and <clinit>; marked started before running so re-entry returns */
+  private ensureBody(mb: ModuleBuilder, tObj: number, jc: JClass, initG: number, statics: Map<string, number>, rt: ClassRt): number[] {
+    const c = new Code(0), voidSig = mb.addFuncType([], []);
+    c.gget(initG).if_().ret().end().i32(1).gset(initG);
+    if (jc.sup && this.needsInit(jc.sup)) c.i32(this.ensureSlot(jc.sup)).callIndirect(voidSig);
+    if (jc.def?.staticValuesOff) {
+      const sfields = jc.fields.filter((f) => f.isStatic);
+      jc.dex!.encodedArray(jc.def.staticValuesOff).forEach((v, i) => {
+        const fi = sfields[i], g = fi && statics.get(fi.name);
+        if (!fi || g === undefined || v === null || v === 0 || v === 0n || v === false) return;
+        if (typeof v === "number" || typeof v === "boolean") {
+          if (fi.desc === "F") c.i32(f32bits(v as number)); else if (fi.desc === "D") c.i64(f64bits(v as number));
+          else if (fi.desc === "J") c.i64(BigInt(v as number)); else c.i32(Number(v));
+          c.gset(g);
+        } else if (typeof v === "bigint") { c.i64(fi.desc === "D" ? f64bits(Number(v)) : v); c.gset(g); }
+        else if (typeof v === "string") this.gapId(`${jc.name}.${fi.name}: static string value`);
+      });
+    }
+    const ci = jc.byKey.get("<clinit>()V");
+    if (ci) c.i32(rt.methodSlots.get(ci.key)!).callIndirect(voidSig);
+    void tObj;
+    return c.finish();
+  }
+
+  // ---------- compiling methods on demand
+  /** host.link: compile what `slot` stands for and put it in the table */
+  private linkSlot(slot: number): void {
+    const s = this.slots[slot];
+    if (!s || s.k === "ensure" || s.done) return;
+    const t0 = performance.now(), cx = new Compiler(this);
+    const built = s.k === "method" ? cx.buildUnit([s.m]) : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
+    this.stats.compileMs += performance.now() - t0; this.stats.units++;
+    const imports: Record<string, any> = { rt: { table: this.table, tag: this.rt.tag, alloc: this.rt.alloc, hash: this.rt.hash }, host: this.host };
+    for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
+    const inst = this.instantiate(built.bytes, imports);
+    s.stub = this.table.get(slot) as Function;
+    this.table.set(slot, (inst.exports as Record<string, any>)[s.k === "method" ? "m" + slot : "m"]);
+    s.done = true;
+    for (const t of built.traces) this.traces.set(t.name, t);
+    for (const [decl, name, desc, target] of cx.assumptions) {
+      const key = `${decl}.${name}${desc}`;
+      let a = this.assumptions.get(key);
+      if (!a) this.assumptions.set(key, a = { decl, name, desc, target, slots: new Set() });
+      a.slots.add(slot);
+    }
+  }
+  /** the gaps compiling `m` runs into, without installing it (a static check, and the unit a build-time mode would emit) */
+  gapsOf(m: MethodInfo): string[] {
+    let g = this.compiled.get(m);
+    if (!g) { const cx = new Compiler(this); cx.buildUnit([m]); this.compiled.set(m, g = cx.gaps); }
+    return g;
+  }
+
+  // ---------- open world
+  /** load more dexes. A CHA decision that one of their classes falsifies is undone: its callers go back to lazy-link stubs, so the next call
+   *  compiles against the new hierarchy. Frames already executing keep the old code. */
+  addDexes(dexes: DexFile[]): string[] {
+    const added = this.prog.add(dexes);
+    this.cha.index(added);
+    for (const [key, a] of this.assumptions) {
+      const t = this.cha.targets(a.decl, a.name, a.desc);
+      if (t.length === 1 && t[0] === a.target) continue;
+      for (const slot of a.slots) this.invalidate(slot);
+      this.assumptions.delete(key);
+    }
+    return added;
+  }
+  private invalidate(slot: number): void {
+    const s = this.slots[slot];
+    if (s?.k === "ensure" || !s?.done || !s.stub) return;
+    this.table.set(slot, s.stub); s.done = false; this.stats.invalidated++;
+  }
+
+  // ---------- calling in from JS, and exceptions
+  /** a JS function that calls the Java method; a Java exception arrives as a WebAssembly.Exception of `javaTag` */
+  entry(cls: string, name: string, desc: string): (...args: unknown[]) => unknown {
+    const m = this.prog.resolve(cls, name, desc);
+    if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
+    const slot = this.slotOf(m);
+    return (...args) => {
+      try { return (this.table.get(slot) as Function)(...args); } catch (e) { throw this.boundary(e); }
+    };
+  }
+  get javaTag(): any { return this.rt.tag; }
+  /** V8 does not let Wasm catch its stack overflow RangeError, so Java handlers cannot see it; at the edge of the Java world it
+   *  becomes the StackOverflowError a handler above this call would have received */
+  private boundary(e: unknown): unknown {
+    if (!isStackOverflow(e)) return e;
+    try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; }
+    return e;
+  }
+  /** the Java frames recorded by Throwable.fillInStackTrace for `exn`, innermost first, without the frames of its own construction */
+  stackTrace(exn: object): JavaFrame[] {
+    const err = this.stacks.get(exn);
+    if (!err) return [];
+    const frames = javaFrames(err.stack ?? "", this.traces);
+    let skip = 0;
+    while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace|<init>)$/.test(frames[skip].method)) skip++;
+    return frames.slice(skip);
+  }
+}

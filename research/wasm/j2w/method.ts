@@ -8,22 +8,21 @@ import { prepareMethod, branchTargets, endsBlock, ifTarget, switchCases, type Pr
 import { structure, Go, type Flow } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 
-export function compileMethod(cx: Compiler, m: MethodInfo): number[] {
+export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
-  const intr = cx.opts.intrinsics.get(mid(m));
-  if (intr) { const c = new Code(nparams); intr(cx, m, c); return c.finish(); }
-  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: native/abstract`); return c.finish(); }
+  const intr = cx.w.opts.intrinsics.get(mid(m));
+  if (intr) { const c = new Code(nparams); intr(cx, m, c); return c; }
+  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: native/abstract`); return c; }
   try {
     // locals of a kind are only written when some instruction reads them: iterate the read set down to a fixpoint
     let rk: Set<string> | null = null;
     for (;;) {
       const mc = new MC(cx, m, rk); const body = mc.run();
-      if (rk?.size === mc.reads.size) { cx.stats.methods++; cx.stats.bodyBytes += body.length; return body; }
+      if (rk?.size === mc.reads.size) return body;
       rk = mc.reads;
     }
   } catch (e) {
-    if ((e as Error).message === "unstructured") cx.stats.unstructured++;
-    const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return c.finish();
+    const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return c;
   }
 }
 
@@ -54,7 +53,7 @@ class MC {
   get(kind: Kind, reg: number): void { this.reads.add(kind + reg); this.code.lget(this.loc(kind, reg)); }
   set(kind: Kind, reg: number): void { this.code.lset(this.loc(kind, reg)); }
 
-  run(): number[] {
+  run(): Code {
     const { m, item, cx } = this;
     const prepared = this.prepared = prepareMethod(this.dex, item, m.desc, m.isStatic);
     const flow = structure(prepared, item);
@@ -75,7 +74,7 @@ class MC {
     if (regions.length === 1 && !this.tries) {
       this.emitRegion(0);
       c.unreachable();
-      return c.finish();
+      return c;
     }
     this.regionLocal = c.newLocal(T.i32);
     if (!this.tries) this.excLocal = c.newLocal(refNull(cx.tObj));
@@ -98,7 +97,7 @@ class MC {
     }
     this.pop(); c.end();                            // $disp loop
     c.unreachable();
-    return c.finish();
+    return c;
   }
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
@@ -156,24 +155,23 @@ class MC {
   }
   /** pushes i32: obj (pushed by `obj`) is an instance of class/interface/array `name` (null -> 0) */
   emitInstanceOfTest(name: string, obj: () => void) {
-    const cx = this.cx, c = this.code, id = cx.classId.get(name);
+    const cx = this.cx, c = this.code, id = cx.idOf(name);
     if (name === "java/lang/Object") { obj(); c.refIsNull().raw(OP.i32_eqz); return; }
     if (name[0] === "[") {
       const ek = elemKindOf(name);
       if (ek === "ref") { obj(); c.refTest(cx.tArr.ref); }
-      else { obj(); c.i32(id!).i32(1).call(cx.helpers.iof); }
+      else { obj(); c.i32(id).i32(1).call(cx.helper("iof")); }
       return;
     }
     const jc = cx.prog.get(name);
-    if (id === undefined) { c.i32(0); return; }
     obj();
-    if (jc?.isInterface) c.i32(id).call(cx.helpers.implements);
-    else c.i32(id).i32(cx.prog.chain(name).length - 1).call(cx.helpers.iof);
+    if (jc?.isInterface) c.i32(id).call(cx.helper("implements"));
+    else c.i32(id).i32(cx.prog.chain(name).length - 1).call(cx.helper("iof"));
   }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
     const c = this.code, cx = this.cx;
-    this.get("L", reg); c.refIsNull().if_().call(cx.helpers.npe).end(); this.get("L", reg);
+    this.get("L", reg); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); this.get("L", reg);
   }
   refTo(reg: number, struct: number) { this.nonNull(reg); if (struct !== this.cx.tObj) this.code.refCast(struct); }
 
@@ -256,6 +254,7 @@ class MC {
   emit(ins: Ins) {
     const n = ins.name, c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
     if (this.consumed.has(ins.pc)) return;
+    c.pc = ins.pc;
     switch (n) {
       case "nop": return;
       case "move": case "move/from16": case "move/16": {
@@ -284,7 +283,8 @@ class MC {
         const name = descToName(dex.type(b));
         if (name === "java/lang/Object") return;
         this.get("L", a); c.refIsNull().raw(OP.i32_eqz).if_();
-        this.emitInstanceOfTest(name, () => this.get("L", a)); c.raw(OP.i32_eqz).if_().call(cx.helpers.cce).end().end();
+        this.emitInstanceOfTest(name, () => this.get("L", a)); c.raw(OP.i32_eqz).if_();
+        this.get("L", a); c.refAsNonNull().structGet(cx.tObj, 0).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(name)); cx.callThrower(c, "cce"); c.end().end();
         return;
       }
       case "instance-of": {
@@ -299,14 +299,11 @@ class MC {
         const name = descToName(dex.type(b)); cx.emitEnsure(c, name); cx.emitNew(c, name); this.set("L", a); return;
       }
       case "new-array": {
-        const desc = dex.type(ins.c), ek = elemKindOf(desc), vtg = cx.vtGlobal.get(desc);
-        if (vtg === undefined) throw new Error("array class missing " + desc);
-        this.get("I", ins.b); c.i32(0).raw(OP.i32_lt_s).if_().call(cx.helpers.nase).end();
-        c.gget(vtg).refAsNonNull().i32(0); this.get("I", ins.b); c.arrayNewDefault(cx.tData[ek]).structNew(cx.tArr[ek]); this.set("L", a); return;
+        cx.emitNewArray(c, dex.type(ins.c), () => this.get("I", ins.b)); this.set("L", a); return;
       }
       case "filled-new-array": case "filled-new-array/range": {
-        const desc = dex.type(b), ek = elemKindOf(desc), vtg = cx.vtGlobal.get(desc)!;
-        c.gget(vtg).refAsNonNull().i32(0);
+        const desc = dex.type(b), ek = elemKindOf(desc);
+        c.gget(cx.vtGlobal(desc)).refAsNonNull().i32(0);
         for (const r of ins.regs) { ek === "ref" ? this.get("L", r) : this.get("I", r); }
         c.arrayNewFixed(cx.tData[ek], ins.regs.length).structNew(cx.tArr[ek]);
         this.finishResult(ins, "L"); return;
@@ -323,10 +320,10 @@ class MC {
       case "throw": this.nonNull(a); c.throw_(cx.tag); return;
       case "goto": case "goto/16": case "goto/32": this.jump(ins.pc + a, true); return;
       case "packed-switch": case "sparse-switch": this.emitSwitch(ins); return;
-      case "cmpl-float": this.f32(b); this.f32(ins.c); c.call(cx.helpers.cmplf); this.set("I", a); return;
-      case "cmpg-float": this.f32(b); this.f32(ins.c); c.call(cx.helpers.cmpgf); this.set("I", a); return;
-      case "cmpl-double": this.f64(b); this.f64(ins.c); c.call(cx.helpers.cmpld); this.set("I", a); return;
-      case "cmpg-double": this.f64(b); this.f64(ins.c); c.call(cx.helpers.cmpgd); this.set("I", a); return;
+      case "cmpl-float": this.f32(b); this.f32(ins.c); c.call(cx.helper("cmplf")); this.set("I", a); return;
+      case "cmpg-float": this.f32(b); this.f32(ins.c); c.call(cx.helper("cmpgf")); this.set("I", a); return;
+      case "cmpl-double": this.f64(b); this.f64(ins.c); c.call(cx.helper("cmpld")); this.set("I", a); return;
+      case "cmpg-double": this.f64(b); this.f64(ins.c); c.call(cx.helper("cmpgd")); this.set("I", a); return;
       case "cmp-long": this.get("J", b); this.get("J", ins.c); c.raw(0x55); this.get("J", b); this.get("J", ins.c); c.raw(OP.i64_lt_s).raw(OP.i32_sub); this.set("I", a); return;
       case "if-eq": case "if-ne": case "if-eqz": case "if-nez": case "if-lt": case "if-ge": case "if-gt": case "if-le":
       case "if-ltz": case "if-gez": case "if-gtz": case "if-lez": this.emitIf(ins); return;
@@ -373,7 +370,8 @@ class MC {
   dloc(k: ElemKind): number { let l = this.dataLocal.get(k); if (l === undefined) { l = this.code.newLocal(refNull(this.cx.tData[k])); this.dataLocal.set(k, l); } return l; }
   idxCheck(k: ElemKind, idxReg: number) {
     const c = this.code, d = this.dloc(k);
-    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_().call(this.cx.helpers.aioobe).end();
+    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen().raw(OP.i32_ge_u).if_();
+    this.get("I", idxReg); c.lget(d).refAsNonNull().arrayLen(); this.cx.callThrower(c, "aioobe"); c.end();
   }
   emitAget(ins: Ins) {
     const c = this.code, cx = this.cx, { k, sign } = this.elemOf(ins.name), d = this.dloc(k);
@@ -408,8 +406,7 @@ class MC {
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { f } = this.fieldOf(ins.b);
     cx.emitEnsure(c, f.owner);
-    cx.declareStatic(f.owner, f.name);
-    const g = cx.staticGlobal.get(f.owner + "." + f.name)!;
+    const g = cx.staticGlobal(f.owner, f.name);
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind, ins.a); }
   }
   emitIf(ins: Ins) {
@@ -474,38 +471,34 @@ class MC {
     };
     const sigIdx = () => { const ps: Kind[] = isStatic ? [] : ["L"]; for (const pt of p.params) ps.push(kindOf(pt)); return cx.sig(ps, retK); };
     if (decl[0] === "[") { this.invokeGap(ins, `array method ${key}`); return; }
-    const callDirect = (mi: MethodInfo) => { cx.declareMethod(mi); c.call(cx.fnOf(mi)); };
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
-      cx.emitEnsure(c, t.cls); pushArgs(); c.call(cx.fnOf(t));
+      cx.emitEnsure(c, t.cls); pushArgs(); cx.callMethod(c, t);
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
       const t = kind === "invoke-super" ? prog.resolve(prog.get(this.m.cls)?.isInterface ? decl : prog.get(this.m.cls)!.sup ?? decl, mr.name, desc) : prog.resolve(decl, mr.name, desc);
       if (!t) throw new Error("unresolved direct " + decl + "." + key);
-      this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); callDirect(t);
+      this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, t);
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
-      const impls = new Set<MethodInfo>();
-      for (const cn of cx.r.instantiated) if (prog.isSubclass(cn, decl)) { const im = prog.implFor(cn, mr.name, desc); if (im) impls.add(im); }
-      const declC = prog.get(decl);
-      if (impls.size === 1) {
-        const t = [...impls][0]; this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); c.call(cx.fnOf(t));
-      } else if (impls.size === 0) { this.invokeGap(ins, `no instantiated implementor of ${decl}.${key}`); return; }
+      const only = cx.devirt(decl, mr.name, desc), declC = prog.get(decl);
+      if (only === "none") { this.invokeGap(ins, `no implementor of ${decl}.${key}`); return; }
+      if (only !== "many") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
       else {
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
         c.lget(this.tmpL); pushArgsFrom(this, ins, p.params);
         c.lget(this.tmpL).structGet(cx.tObj, 0);
         if (declC && !declC.isInterface) {
-          c.i32(cx.slotOf(decl, key)).arrayGet(cx.tVT);
+          c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
         } else if (prog.get("java/lang/Object")!.byKey.has(key)) {
-          c.i32(cx.slotOf("java/lang/Object", key)).arrayGet(cx.tVT);
+          c.i32(cx.w.vslot("java/lang/Object", key)).arrayGet(cx.tVT);
         } else {
-          const sel = cx.selectorId(key), s = sel % H.IMT_N;
+          const sel = cx.w.selectorId(key), s = sel % H.IMT_N;
           // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
           const vtl = this.vtLocal();
           c.lset(vtl);
           c.lget(vtl).refAsNonNull().i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
             .lget(vtl).refAsNonNull().i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
-            .lget(vtl).refAsNonNull().i32(sel).call(cx.helpers.imtslow).end();
+            .lget(vtl).refAsNonNull().i32(sel).call(cx.helper("imtslow")).end();
         }
         c.callIndirect(sigIdx());
       }
@@ -559,7 +552,7 @@ class MC {
       if (opn === "div" || opn === "rem") {
         const direct = lit && ins.c !== 0 && ins.c !== -1;
         X(); Y();
-        if (direct) c.raw(opn === "div" ? OP.i32_div_s : OP.i32_rem_s); else c.call(opn === "div" ? cx.helpers.idiv : cx.helpers.irem);
+        if (direct) c.raw(opn === "div" ? OP.i32_div_s : OP.i32_rem_s); else c.call(cx.helper(opn === "div" ? "idiv" : "irem"));
         this.set("I", a); return;
       }
       X(); Y(); c.raw(map[opn]); this.set("I", a); return;
@@ -569,13 +562,13 @@ class MC {
       if (opn === "shl" || opn === "shr" || opn === "ushr") {
         X(); this.get("I", yr); c.raw(OP.i64_extend_i32_u, opn === "shl" ? OP.i64_shl : opn === "shr" ? OP.i64_shr_s : OP.i64_shr_u); this.set("J", a); return;
       }
-      if (opn === "div" || opn === "rem") { X(); Y(); c.call(opn === "div" ? cx.helpers.ldiv : cx.helpers.lrem); this.set("J", a); return; }
+      if (opn === "div" || opn === "rem") { X(); Y(); c.call(cx.helper(opn === "div" ? "ldiv" : "lrem")); this.set("J", a); return; }
       X(); Y(); c.raw(map[opn]); this.set("J", a); return;
     }
     // float/double
     if (opn === "rem") {
-      if (type === "float") { X(); c.raw(OP.f64_promote_f32); Y(); c.raw(OP.f64_promote_f32).call(cx.hostImports.fmod).raw(OP.f32_demote_f64); }
-      else { X(); Y(); c.call(cx.hostImports.fmod); }
+      if (type === "float") { X(); c.raw(OP.f64_promote_f32); Y(); c.raw(OP.f64_promote_f32).call(cx.imp.fmod).raw(OP.f32_demote_f64); }
+      else { X(); Y(); c.call(cx.imp.fmod); }
       fin(); return;
     }
     const f32 = { add: OP.f32_add, sub: OP.f32_sub, mul: OP.f32_mul, div: OP.f32_div } as Record<string, number>;

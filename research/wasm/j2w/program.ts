@@ -19,15 +19,22 @@ export const mkey = (name: string, desc: string) => name + desc;
 export class Program {
   classes = new Map<string, JClass>();
   constructor(dexes: DexFile[]) {
+    this.add(dexes);
+    this.addRuntimeClasses();
+  }
+  /** load more dexes (open world); returns the names of the classes they define. The first definition of a name wins (classpath order). */
+  add(dexes: DexFile[]): string[] {
+    const added: string[] = [];
     for (const dex of dexes) {
       for (let i = 0; i < dex.classDefCount; i++) {
         const def = dex.classDef(i);
         const name = descToName(dex.type(def.typeIdx));
-        if (this.classes.has(name)) continue;          // first definition wins (boot classpath order)
+        if (this.classes.has(name)) continue;
         this.classes.set(name, this.build(dex, def, name));
+        added.push(name);
       }
     }
-    this.addRuntimeClasses();
+    return added;
   }
   private stub(name: string, sup: string | null): JClass {
     const c: JClass = { name, dex: null, def: null, sup, ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() };
@@ -38,7 +45,8 @@ export class Program {
     const E = "java/lang/", chain: [string, string | null][] = [["Object", null], ["Throwable", "Object"], ["Exception", "Throwable"], ["RuntimeException", "Exception"],
       ["NullPointerException", "RuntimeException"], ["ArithmeticException", "RuntimeException"], ["ClassCastException", "RuntimeException"],
       ["NegativeArraySizeException", "RuntimeException"], ["IndexOutOfBoundsException", "RuntimeException"], ["ArrayIndexOutOfBoundsException", "IndexOutOfBoundsException"],
-      ["Error", "Throwable"], ["LinkageError", "Error"], ["UnsatisfiedLinkError", "LinkageError"]];
+      ["Error", "Throwable"], ["LinkageError", "Error"], ["UnsatisfiedLinkError", "LinkageError"],
+      ["VirtualMachineError", "Error"], ["OutOfMemoryError", "VirtualMachineError"], ["StackOverflowError", "VirtualMachineError"]];
     for (const [n, sup] of chain) if (!this.classes.has(E + n)) this.stub(E + n, sup && E + sup);
   }
   /** statics of library classes without bytecode here: resolvable stubs the compiler replaces with intrinsics */
