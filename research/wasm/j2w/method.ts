@@ -9,7 +9,7 @@ import { structure, Go, type Flow } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 import { constClass, emitStoreCheck } from "./classes";
 import { emitPolymorphic } from "./poly";
-import { analyze, cloneFacts, step, type Facts } from "./facts";
+import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
@@ -43,7 +43,10 @@ export class MC {
   regionOfPc = new Map<number, number>();
   /** what holds on every path to the start of each block, and at the instruction being emitted (facts.ts) */
   entryFacts: Facts[] = [];
-  facts: Facts = { nonNull: new Set(), inited: new Set() };
+  facts: Facts = newFacts();
+  /** "web:struct" of the field accesses that share a cast, and the local holding it */
+  shadowKeys = new Set<string>();
+  shadows = new Map<string, number>();
   constructor(public cx: Compiler, public m: MethodInfo) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
@@ -110,6 +113,7 @@ export class MC {
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
+    this.findShadows();
     this.entryFacts = analyze(this);
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
@@ -126,6 +130,7 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
+    if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
     if (regions.length === 1 && !this.tries) {
@@ -159,7 +164,12 @@ export class MC {
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
   depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
-  blk(label: string, loop: boolean, bt: VT | null = null) { this.push(label); loop ? this.code.loop(bt) : this.code.block(bt); }
+  blk(label: string, loop: boolean, bt: VT | null = null) {
+    this.push(label);
+    if (!loop) { this.code.block(bt); return; }
+    this.code.loop(bt);
+    if (this.cx.counting && label[0] === "L") this.cx.emitCount(this.code, this.m);
+  }
   endBlk() { this.pop(); this.code.end(); }
 
   emitRegion(k: number) {
@@ -258,7 +268,31 @@ export class MC {
     if (n.startsWith("move-object") || n === "check-cast") { const w = this.typing.use(ins.pc, n === "check-cast" ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
     return false;
   }
-  refTo(reg: number, struct: number) { this.nonNull(reg); this.code.refCast(struct); }
+  /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
+  shadowKey(ins: Ins): string | undefined {
+    if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
+    const w = this.typing.use(ins.pc, ins.b);
+    if (w < 0) return undefined;
+    const key = `${w}:${this.cx.structFor(this.fieldOf(ins.c).decl)}`;
+    return this.shadowKeys.has(key) ? key : undefined;
+  }
+  private findShadows() {
+    const seen = new Set<string>();
+    for (const ins of this.prepared.instructions) {
+      if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) continue;
+      const w = this.typing.use(ins.pc, ins.b);
+      if (w < 0) continue;
+      const key = `${w}:${this.cx.structFor(this.fieldOf(ins.c).decl)}`;
+      if (seen.has(key)) this.shadowKeys.add(key); else seen.add(key);
+    }
+  }
+  refTo(reg: number, struct: number) {
+    const c = this.code, key = `${this.useWeb(reg)}:${struct}`;
+    let local = this.shadows.get(key);
+    if (this.facts.typed.has(key) && local !== undefined) { c.lget(local); return; }
+    this.nonNull(reg); c.refCast(struct);
+    if (this.shadowKeys.has(key)) { if (local === undefined) this.shadows.set(key, local = c.newLocal(refNull(struct))); c.ltee(local); }
+  }
 
   // ---------- instruction emission
   emit(ins: Ins) {

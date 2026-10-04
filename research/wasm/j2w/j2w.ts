@@ -7,7 +7,7 @@ import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, type Thrower } from "./exc";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
 import { JsStrings, stringCtor, stringHelper, type StringRepr } from "./strings";
 import type { Natives } from "./natives";
 
@@ -37,7 +37,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; hot: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
@@ -46,6 +46,10 @@ export class Compiler implements Base {
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
+  /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
+  counting = true;
+  /** the slots whose budget globals this module imports */
+  counted = new Set<number>();
   /** the method being compiled */
   private owner?: MethodInfo;
   /** the installed method of the unit being compiled, which the CHA decisions of every method in it count against */
@@ -70,7 +74,7 @@ export class Compiler implements Base {
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]) };
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), hot: f("hot", [T.i32], []) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }
@@ -153,6 +157,12 @@ export class Compiler implements Base {
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {
     return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.fn.has(mid(m)));
+  }
+  /** counts down `m`'s budget by one and asks the host to upgrade the method when it reaches zero */
+  emitCount(c: Code, m: MethodInfo): void {
+    const slot = this.w.slotOf(m), g = this.global("cnt", String(slot), T.i32, true);
+    this.counted.add(slot);
+    c.gget(g).i32(1).raw(OP.i32_sub).gset(g).gget(g).raw(OP.i32_eqz).if_().i32(slot).call(this.imp.hot).end();
   }
   /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
    *  never goes back), is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun), or is in `known`,
@@ -314,12 +324,14 @@ export class Compiler implements Base {
 
   // ---------- units
   /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
-   *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. */
-  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
+   *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
+   *  unit is the second tier: its methods do not count. */
+  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this, all = methods.concat(copies);
+    this.counting = !hot;
     this.natives.declare(this, all);
-    // a copy's name differs from the installed method's so a stack frame finds its own offsets (traces are keyed by name)
-    const label = (m: MethodInfo, i: number) => (i < methods.length ? mid(m) : `${mid(m)}#${w.stats.units}`);
+    // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
+    const label = (m: MethodInfo, i: number) => (hot || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
     all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
     const codes = all.map((m) => { this.owner = m; this.assumer = methods[0]; return compileMethod(this, m); });
     all.forEach((m, i) => { const f = this.fn.get(mid(m))!; mb.setBody(f, codes[i].finish()); if (i < methods.length) mb.export("m" + w.slotOf(m), "func", f); });

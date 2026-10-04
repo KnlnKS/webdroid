@@ -1,17 +1,21 @@
 // What holds on every path reaching an instruction, so the emitter drops checks that cannot fail: a reference web already null-checked (or
 // made by an allocation or constant), a class whose initialization an earlier instruction on every path has requested. Class
 // initialization never goes back and a null check stays true until its web is redefined, so a fact survives until its web is written.
-// Handler entries start empty: a throw can come from anywhere in the try range.
+// A reference that field accesses cast to a struct type more than once keeps the cast in a local of that type (the "shadow"), so a later
+// access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
 import { endsBlock, branchTargets, type PreparedInstruction as Ins } from "../../../src/jvm/prepared";
 import { R as KR } from "./infer";
 import type { MC } from "./method";
 
-export interface Facts { nonNull: Set<number>; inited: Set<string> }
-export const cloneFacts = (f: Facts): Facts => ({ nonNull: new Set(f.nonNull), inited: new Set(f.inited) });
+/** `typed` holds "web:struct" for a web whose shadow local for that struct type currently holds the web's value */
+export interface Facts { nonNull: Set<number>; inited: Set<string>; typed: Set<string> }
+export const newFacts = (): Facts => ({ nonNull: new Set(), inited: new Set(), typed: new Set() });
+export const cloneFacts = (f: Facts): Facts => ({ nonNull: new Set(f.nonNull), inited: new Set(f.inited), typed: new Set(f.typed) });
 const meet = (a: Facts, b: Facts): boolean => {
   let changed = false;
   for (const w of a.nonNull) if (!b.nonNull.has(w)) { a.nonNull.delete(w); changed = true; }
   for (const c of a.inited) if (!b.inited.has(c)) { a.inited.delete(c); changed = true; }
+  for (const k of a.typed) if (!b.typed.has(k)) { a.typed.delete(k); changed = true; }
   return changed;
 };
 
@@ -32,21 +36,24 @@ export function step(mc: MC, ins: Ins, f: Facts): void {
   const d = mc.typing.def(ins.pc);
   const cls = mc.ensureTarget(ins);
   if (cls) for (const c of mc.cx.prog.chain(cls)) f.inited.add(c);
+  const shadow = mc.shadowKey(ins);
+  if (shadow) f.typed.add(shadow);
   if (d < 0) return;
   const nn = mc.definesNonNull(ins, f);
   f.nonNull.delete(d);
   if (nn) f.nonNull.add(d);
+  for (const k of f.typed) if (k.startsWith(d + ":")) f.typed.delete(k);
 }
 
 /** the facts at the entry of each block */
 export function analyze(mc: MC): Facts[] {
   const flow = mc.flow, n = flow.starts.length, entry: (Facts | undefined)[] = new Array(n);
-  const start: Facts = { nonNull: new Set(), inited: new Set() };
+  const start = newFacts();
   if (!mc.m.isStatic) { const w = mc.typing.param(mc.item.regs - mc.item.ins); if (w >= 0) start.nonNull.add(w); }
   entry[0] = start;
   const handlers = new Set<number>();
   for (const t of mc.item.tries) { for (const [, h] of t.handlers) handlers.add(flow.blockAt[h]); if (t.catchAllAddr >= 0) handlers.add(flow.blockAt[t.catchAllAddr]); }
-  for (const h of handlers) entry[h] = { nonNull: new Set(), inited: new Set() };
+  for (const h of handlers) entry[h] = newFacts();
   const push = (s: number, out: Facts) => {
     if (handlers.has(s)) return false;
     const cur = entry[s];
@@ -74,5 +81,5 @@ export function analyze(mc: MC): Facts[] {
       if (!endsBlock(last.op) && flow.blockAt[fall] >= 0) edge(fall, false);
     }
   }
-  return entry.map((e) => e ?? { nonNull: new Set(), inited: new Set() });
+  return entry.map((e) => e ?? newFacts());
 }
