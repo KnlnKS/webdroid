@@ -1,4 +1,4 @@
-import { T, sleb, uleb, vt, type VT } from "./wasmbin";
+import { T, sleb, uleb, vt, vtKey, type VT } from "./wasmbin";
 /** instruction emitter for one function body */
 export class Code {
   b: number[] = [];
@@ -98,9 +98,10 @@ export class Code {
     // locals: run-length encode consecutive identical types
     const out: number[] = [];
     const groups: [number, VT][] = [];
+    let lastKey = "";
     for (const t of this.localTypes) {
-      const last = groups[groups.length - 1];
-      if (last && JSON.stringify(last[1]) === JSON.stringify(t)) last[0]++; else groups.push([1, t]);
+      const key = vtKey(t);
+      if (groups.length && key === lastKey) groups[groups.length - 1][0]++; else { groups.push([1, t]); lastKey = key; }
     }
     uleb(groups.length, out);
     for (const [n, t] of groups) { uleb(n, out); vt(t, out); }

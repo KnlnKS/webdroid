@@ -7,7 +7,7 @@
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
-import { ModuleBuilder, T, refNull, sleb, uleb, type VT } from "./wasmbin";
+import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "./wasmbin";
 import { Code, OP } from "./code";
 import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "./program";
 import { Cha } from "./cha";
@@ -17,11 +17,12 @@ import { Natives, type HostContext } from "./natives";
 import { Bridge } from "./bridge";
 import { rtfns, type Synth } from "./rtfns";
 import { hostInfo, typeName } from "./classes";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, heapUsed, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../../src/jvm/prepared";
 import { descToName, parseMethodDesc } from "../../../src/jvm/abi";
 import { mid } from "./reach";
 import type { DexFile } from "../../../src/jvm/dex";
+import { AotRuntime, type AotBuild, type AotStore } from "./aot";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -31,12 +32,19 @@ export interface WorldOptions {
   heapUsed?: () => number;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
   stackTraceLimit?: number;
+  /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
+  aot?: AotStore;
+  /** a build of that code: classes, slots and selectors are numbered but nothing is instantiated */
+  build?: AotBuild;
 }
-export interface ClassRt { name: string; id: number; mod: string; slotBase: number; methodSlots: Map<string, number>; nMethods: number; exports: WebAssembly.Exports }
+/** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
+export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
 type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
 /** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
+/** the JS String builtins, and String constants as imports named by their text */
+export const COMPILE_OPTIONS = { builtins: ["js-string"], importedStringConstants: "#" };
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
 export class World {
@@ -45,36 +53,43 @@ export class World {
   table = new WebAssembly.Table({ element: "anyfunc", initial: 256 });
   /** constructs the compiler has no translation for: each compiles to host.gap(id) and a throw, never to a guess */
   gaps = new Map<string, number>();
+  /** the gaps of the code in this World by id; precompiled code numbers all of its gaps, but only those of modules that are loaded are listed */
   gapList: string[] = [];
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
+  /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
+  blockBase: number[] = [];
+  private blockSize: number[] = [];
+  blockClass: string[] = [];
   private classes = new Map<string, ClassRt>();
-  private ids = new Map<string, number>();
-  private names = [""];
-  private selectors = new Map<string, number>();
-  private selKeys = [""];
+  ids = new Map<string, number>();
+  names = [""];
+  selectors = new Map<string, number>();
+  selKeys = [""];
   private vslotCache = new Map<string, string[]>();
-  private traces = new Map<string, FnTrace>();
+  traces = new Map<string, FnTrace>();
+  /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
+  private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) } as Map<string, FnTrace>;
   private stacks = new WeakMap<object, Error>();
   private frames: JavaFrame[] = [];
-  private assumptions = new Map<string, Assumption>();
-  /** the strings of String constants, by index, and the table they are read from */
-  private strings = new Map<string, number>();
-  strs = new WebAssembly.Table({ element: "externref", initial: 64 });
+  assumptions = new Map<string, Assumption>();
   /** the byte[]s whose addresses VMRuntime.addressOf has given out (memory.ts), by the index the address holds */
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
   /** scratch linear memory natives copy arrays through, and its allocation top */
-  mem = new WebAssembly.Memory({ initial: 1 });
-  sp = new WebAssembly.Global({ value: "i32", mutable: true }, 8);
+  mem = new WebAssembly.Memory({ initial: Math.ceil((COUNT_BASE + 4 * COUNT_SLOTS) / 65536) + 1 });
+  sp = new WebAssembly.Global({ value: "i32", mutable: true }, COUNT_BASE + 4 * COUNT_SLOTS);
   natives: Natives;
   bridge: Bridge;
-  private host: Record<string, Function>;
+  host: Record<string, Function>;
   private rt!: { tag: any; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
+  /** the synthetic functions whose stub module exists */
+  private stubbed = new Set<number>();
+  aot?: AotRuntime;
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
 
@@ -109,7 +124,7 @@ export class World {
       },
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
       stackClass: (n: number) => {
-        const frames = javaFrames(new Error().stack ?? "", this.traces), f = frames[n + 1];
+        const frames = javaFrames(new Error().stack ?? "", this.frameTraces), f = frames[n + 1];
         // JavaScriptCore's stack has no Wasm frame names: that is a missing capability, not a stack that is not n frames deep
         if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
@@ -122,6 +137,45 @@ export class World {
     };
     this.slots.length = FIRST_FREE_SLOT;
     this.startRuntime();
+    this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
+  }
+
+  /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
+  seedPlatform(accept: (dex: DexFile) => boolean): number {
+    let n = 0;
+    for (const c of this.prog.classes.values()) {
+      if (!c.dex || !accept(c.dex)) continue;
+      if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
+      this.addBlock(c.name, c.methods.length + 1); n++;
+    }
+    return n;
+  }
+  /** replays the reservation of a runtime function's slot (aot.ts) */
+  reserveSynth(name: string): void { this.synth.set(name, this.reserveSlots(1)); }
+  /** reserves the slots of a class: one per method and one for its `ensure` */
+  addBlock(name: string, size: number): number {
+    const base = this.reserveSlots(size);
+    this.blockBase.push(base); this.blockSize.push(size); this.blockClass.push(name);
+    return base;
+  }
+  /** the index of the class block that owns `slot` (platform classes come first, in id order), or -1 */
+  blockOf(slot: number): number {
+    let lo = 0, hi = this.blockBase.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (this.blockBase[m] <= slot) lo = m; else hi = m - 1; }
+    return lo < this.blockBase.length && slot >= this.blockBase[lo] && slot < this.blockBase[lo] + this.blockSize[lo] ? lo : -1;
+  }
+  /** the slot's entry, if it has been made */
+  peek(slot: number): Slot | undefined { return this.slots[slot]; }
+  /** the slot's entry; the slots of classes are made when first asked for */
+  slotAt(slot: number): Slot | undefined {
+    let s = this.slots[slot];
+    if (s) return s;
+    const b = this.blockOf(slot);
+    if (b < 0) return undefined;
+    const i = slot - this.blockBase[b];
+    if (i === this.blockSize[b] - 1) return this.slots[slot] = { k: "ensure" };
+    const m = this.prog.get(this.blockClass[b])!.methods[i];
+    return this.slots[slot] = { k: "method", m, done: !!this.aot?.installed(b, m) };
   }
 
   // ---------- ids, selectors, vtable layout
@@ -138,18 +192,9 @@ export class World {
   }
   gapId(what: string): number {
     let id = this.gaps.get(what);
-    if (id === undefined) { this.gaps.set(what, id = this.gaps.size); this.gapList.push(what); }
+    if (id === undefined) this.gaps.set(what, id = this.gaps.size);
+    this.gapList[id] ??= what;
     return id;
-  }
-  /** the index of String constant `s` in the shared table */
-  stringId(s: string): number {
-    let i = this.strings.get(s);
-    if (i === undefined) {
-      i = this.strings.size; this.strings.set(s, i);
-      if (i >= this.strs.length) this.strs.grow(this.strs.length);
-      this.strs.set(i, s as never);
-    }
-    return i;
   }
   /** how `m` is implemented without its bytecode, if it is */
   intrinsic(m: MethodInfo): Intrinsic | undefined { return intrinsicFor(this.opts.intrinsics, this.natives, m); }
@@ -159,7 +204,7 @@ export class World {
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
   /** whether class initialization has finished, for a class whose module is already built */
-  initialized(n: string): boolean { return (this.classes.get(n)?.exports.init as WebAssembly.Global | undefined)?.value === INIT_DONE; }
+  initialized(n: string): boolean { const rt = this.classes.get(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
   vslots(n: string): string[] {
     let s = this.vslotCache.get(n); if (s) return s;
@@ -223,25 +268,24 @@ export class World {
   }
 
   // ---------- slots
-  private reserveSlots(n: number): number {
+  reserveSlots(n: number): number {
     const base = this.slots.length;
     this.slots.length += n;
     const have = this.table.length;
     if (this.slots.length > have) this.table.grow(Math.max(this.slots.length - have, have));
     return base;
   }
-  slotOf(m: MethodInfo): number {
-    const rt = this.link(m.cls), i = rt.methodSlots.get(m.key);
-    if (i === undefined) throw new Error("method not in its class: " + m.cls + "." + m.key);
-    return i;
-  }
+  slotOf(m: MethodInfo): number { return this.link(m.cls).slotBase + m.index; }
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
   /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called */
   synthSlot(name: string, d: Synth): number {
+    this.aot?.touched("!" + name);
     let slot = this.synth.get(name);
-    if (slot !== undefined) return slot;
-    this.synth.set(name, slot = this.reserveSlots(1));
+    if (slot === undefined) { this.synth.set(name, slot = this.reserveSlots(1)); this.aot?.reserved(name); }
+    if (this.stubbed.has(slot)) return slot;
+    this.stubbed.add(slot);
     this.slots[slot] = { k: "synth", name, d, done: false };
+    if (this.aot?.building) return slot;
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
     const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
@@ -249,6 +293,11 @@ export class World {
     mb.addElemActive(0, slot, [mb.addFunc(sig, this.stubBody(slot, sig, params, link), "stub:" + name)]);
     this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host });
     return slot;
+  }
+  /** the synthetic function `name` a precompiled module calls, which its numbering has reserved but whose stub may not exist yet */
+  ensureSynth(name: string): void {
+    const m = /^abstract:([ILJ]*)>([ILJV])$/.exec(name);
+    this.synthSlot(name, m ? { params: [...m[1]] as Kind[], ret: m[2] as Kind | "V", body: (cx, c) => { cx.callThrower(c, "ame"); } } : rtfns.get(name)!);
   }
   /** a stub for a method the class does not implement: AbstractMethodError, with the signature of the vtable entry it fills */
   private abstractSlot(key: string): number {
@@ -258,12 +307,26 @@ export class World {
   }
 
   // ---------- runtime and class modules
-  private instantiate(bytes: Uint8Array, imports: WebAssembly.Imports): WebAssembly.Instance {
-    const t0 = performance.now(), mod = new WebAssembly.Module(bytes as BufferSource, { builtins: ["js-string"] } as never), t1 = performance.now();
-    const inst = new WebAssembly.Instance(mod, imports);
-    this.stats.moduleMs += t1 - t0; this.stats.instantiateMs += performance.now() - t1;
-    this.stats.bytes += bytes.length;
+  compile(bytes: Uint8Array): WebAssembly.Module {
+    const t0 = performance.now(), mod = new WebAssembly.Module(bytes as BufferSource, COMPILE_OPTIONS as never);
+    this.stats.moduleMs += performance.now() - t0; this.stats.bytes += bytes.length;
+    return mod;
+  }
+  instantiate(mod: Uint8Array | WebAssembly.Module, imports: WebAssembly.Imports): WebAssembly.Instance {
+    const m = mod instanceof WebAssembly.Module ? mod : this.compile(mod), t0 = performance.now();
+    const inst = new WebAssembly.Instance(m, imports);
+    this.stats.instantiateMs += performance.now() - t0;
     return inst;
+  }
+  /** a lazy-link stub for method `m` in `slot`, to put back where precompiled code was removed */
+  restoreStub(slot: number, m: MethodInfo): Function {
+    const mb = new ModuleBuilder(), b = declareBase(mb);
+    mb.importTable("rt", "table", T.funcref, 0);
+    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
+    const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
+    mb.export("f", "func", mb.addFunc(sig, this.stubBody(slot, sig, params, link), "stub"));
+    return this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports.f as Function;
   }
   private stubBody(slot: number, sig: number, params: VT[], link: number): number[] {
     const c = new Code(params.length);
@@ -297,62 +360,81 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, thr: x.thr, intr: x.intr, classId: x.classId };
   }
 
-  private rtImports() { const { tag, alloc, hash, ctab, tid, thr, intr } = this.rt; return { table: this.table, strs: this.strs, nm: this.nm, tag, alloc, hash, ctab, tid, thr, intr, mem: this.mem, sp: this.sp }; }
+  rtImports() { const { tag, alloc, hash, ctab, tid, thr, intr } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, tid, thr, intr, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
+    this.aot?.touched(name);
     let rt = this.classes.get(name);
     if (rt) return rt;
+    const aot = this.aot?.linkClass(name);
+    if (aot) { this.classes.set(name, aot); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
-    const slotBase = this.reserveSlots(methods.length + 1);
-    rt = { name, id, mod: "c" + id, slotBase, methodSlots: new Map(methods.map((m, i) => [m.key, slotBase + i])), nMethods: methods.length, exports: {} };
+    let slotBase = this.aot?.reservedBase(name);
+    if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.aot?.reserved([name, methods.length + 1]); }
+    rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} };
     this.classes.set(name, rt);
-    methods.forEach((m, i) => { this.slots[slotBase + i] = { k: "method", m, done: false }; });
-    this.slots[slotBase + methods.length] = { k: "ensure" };
-    rt.exports = this.instantiate(this.classModule(rt, jc), { rt: this.rtImports(), host: this.host }).exports;
+    if (this.aot?.building) return rt;
+    const bytes = this.classModule([rt]);
+    this.stats.phase.classBuild += performance.now() - t0;
+    rt.exports = this.instantiate(bytes, { rt: this.rtImports(), host: this.host }).exports;
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
     return rt;
   }
-  /** The bytes of a class module: what a build-time mode would store beside the unit modules of Compiler.buildUnit, and instantiate in
-   *  the same order (importing the same table), instead of this linker doing both on demand. */
-  classModule(rt: ClassRt, jc: JClass | undefined): Uint8Array {
-    const { name, id, slotBase } = rt, methods = jc?.methods ?? [];
+  /** The bytes of a module that defines classes `rts`: what a build-time mode stores beside the unit modules of Compiler.buildUnit, and instantiates
+   *  in the same order (importing the same table), instead of this linker doing both on demand. */
+  classModule(rts: ClassRt[]): Uint8Array {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
-    mb.importTable("rt", "strs", T.externref, 0);
     const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
     const tid = mb.importGlobal("rt", "tid", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
+    // the String constants of the static values are imported before the module defines a global of its own
+    const consts = new Map<string, number>();
+    let fromChars = -1;
+    for (const { name } of rts) {
+      const jc = this.prog.get(name);
+      if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
+        if (typeof v !== "string" || consts.has(v)) continue;
+        // a constant with a lone surrogate cannot be an import name: its units come from a data segment
+        if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(-17), false));
+        else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(-17)]));
+      }
+    }
     const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
     const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
-    const isArray = name[0] === "[";
-    const vtG = isArray || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
-    if (vtG >= 0) mb.export("vt", "global", vtG);
-    const initG = mb.addGlobal(T.i32, true, [0x41, 0]);
-    mb.export("init", "global", initG);
-    const statics = new Map<string, number>();
-    for (const f of jc?.fields ?? []) if (f.isStatic) {
-      const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name + ":" + f.desc, g); mb.export("s:" + f.name + ":" + f.desc, "global", g);
+    const vts: number[][] = [];
+    for (const rt of rts) {
+      const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [];
+      const vtG = name[0] === "[" || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
+      if (vtG >= 0) mb.export(id + ":vt", "global", vtG);
+      const initG = mb.addGlobal(T.i32, true, [0x41, 0]);
+      mb.export(id + ":init", "global", initG);
+      const statics = new Map<string, number>();
+      for (const f of jc?.fields ?? []) if (f.isStatic) {
+        const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name + ":" + f.desc, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
+      }
+      const stubs = methods.map((m, i) => {
+        const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
+        const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
+        return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link));
+      });
+      if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc, initG, statics, consts, fromChars, rt, tid, tag)));
+      else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
+      if (vtG >= 0) {
+        const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
+        vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).b);
+      }
+      if (stubs.length) mb.addElemActive(0, slotBase, stubs);
     }
-    const stubs = methods.map((m, i) => {
-      const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
-      const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-      return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link), "stub:" + name + "." + m.name);
-    });
-    if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc, initG, statics, rt, tid, tag), "ensure:" + name));
-    else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "ensure:" + name));
-    if (vtG >= 0) {
-      const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
-      mb.start = mb.addFunc(mb.addFuncType([], []), new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).finish(), "$vt");
-    }
-    if (stubs.length) mb.addElemActive(0, slotBase, stubs);
+    if (vts.length) mb.start = mb.addFunc(mb.addFuncType([], []), [0, ...vts.flat(), 0x0b], "$vt");
     return mb.build();
   }
   /** ensure(): class initialization (JLS 12.4.2). The init word says who is initializing the class: a request from that thread returns at
    *  once (re-entry and cycles see the half-initialized class), one from another waits in initWait (the scheduler's hook). Superclass and
    *  default-method superinterfaces first, then the dex's static values and <clinit>. A throw marks the class failed and goes to initFail
    *  (an Error propagates, anything else becomes ExceptionInInitializerError); later requests throw NoClassDefFoundError. */
-  private ensureBody(mb: ModuleBuilder, b: ReturnType<typeof declareBase>, jc: JClass, initG: number, statics: Map<string, number>, rt: ClassRt, tid: number, tag: number): number[] {
+  private ensureBody(mb: ModuleBuilder, b: ReturnType<typeof declareBase>, jc: JClass, initG: number, statics: Map<string, number>, consts: Map<string, number>, fromChars: number, rt: ClassRt, tid: number, tag: number): number[] {
     const c = new Code(0), voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
     const call = (slot: number, sig = voidSig) => c.i32(slot).callIndirect(sig);
     const rtfn = (name: string) => this.synthSlot(name, rtfns.get(name)!);
@@ -377,11 +459,14 @@ export class World {
           else if (fi.desc === "J") c.i64(BigInt(v as number)); else c.i32(Number(v));
           c.gset(g);
         } else if (typeof v === "bigint") { c.i64(fi.desc === "D" ? f64bits(Number(v)) : v); c.gset(g); }
-        else if (typeof v === "string") { c.i32(this.stringId(v)).tableGet(1).anyConvertExtern().gset(g); }
+        else if (typeof v === "string") {
+          if (v.isWellFormed()) c.gget(consts.get(v)!); else c.i32(0).i32(v.length).arrayNewData(b.tData.i16, mb.addDataPassive(Uint8Array.from({ length: 2 * v.length }, (_, k) => (v.charCodeAt(k >> 1) >> (8 * (k & 1))) & 255))).i32(0).i32(v.length).call(fromChars);
+          c.anyConvertExtern().gset(g);
+        }
       });
     }
     const ci = jc.byKey.get("<clinit>()V");
-    if (ci) call(rt.methodSlots.get(ci.key)!);
+    if (ci) call(rt.slotBase + ci.index);
     c.i32(INIT_DONE).gset(initG).br(2);
     c.end().unreachable().end();                                // the thrown Throwable is on the stack
     c.lset(e).i32(INIT_FAILED).gset(initG).lget(e); call(rtfn("initFail"), b.tTagFn);
@@ -392,8 +477,9 @@ export class World {
   /** host.link: compile what `slot` stands for and put it in the table. A method is compiled alone, cheaply, and counts its calls and loop
    *  iterations; `upgrade` recompiles the hot ones with their small callees. */
   private linkSlot(slot: number): void {
-    const s = this.slots[slot];
+    const s = this.slotAt(slot);
     if (!s || s.k === "ensure" || s.done) return;
+    if (s.k === "method" && this.aot?.install(slot) && s.done) return;
     const t0 = performance.now(), cx = new Compiler(this);
     const built = s.k === "method" ? cx.buildUnit([s.m]) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
@@ -402,7 +488,7 @@ export class World {
   }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
-    const s = this.slots[slot];
+    const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
     const t0 = performance.now(), cx = new Compiler(this), { installed, copies } = this.group(s.m);
     const built = cx.buildUnit(installed, copies, true);
@@ -411,18 +497,18 @@ export class World {
   }
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
   private install(group: number[], hot: boolean, cx: Compiler, built: { bytes: Uint8Array; traces: FnTrace[] }, slot: number, t0: number): void {
-    const s = this.slots[slot]!;
+    const s = this.slotAt(slot)!;
     this.stats.compileMs += performance.now() - t0;
     let exports: Record<string, any>;
     try { exports = this.instantiate(built.bytes, this.unitImports(cx)).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
     const set = (at: number, name: string) => {
-      const sl = this.slots[at] as Exclude<Slot, { k: "ensure" }>;
+      const sl = this.slotAt(at) as Exclude<Slot, { k: "ensure" }>;
       if (!sl.done) sl.stub = this.table.get(at) as Function;
       sl.done = true;
       this.table.set(at, exports[name]);
     };
     if (s.k === "method") {
-      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slots[x] as { hot?: boolean }).hot = hot; }
+      for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) new Int32Array(this.mem.buffer, COUNT_BASE + 4 * x, 1)[0] = 0; }
     } else set(slot, "m");
     for (const t of built.traces) this.traces.set(t.name, t);
     for (const [decl, name, desc, target, owner] of cx.assumptions) {
@@ -434,17 +520,20 @@ export class World {
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
-      n: this.natives.imports(this.hostContext(), cx.nativeImports.keys()) };
+      n: this.nativeImports(cx.nativeImports.keys()) };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
-    imports.cnt = Object.fromEntries([...cx.counted].map((slot) => {
-      const g = new WebAssembly.Global({ value: "i32", mutable: true }, HOT_BUDGET);
-      this.counters.set(slot, g);
-      return [slot, g];
-    }));
     return imports;
   }
+  /** the natives `ids` as the "n" import module; one closure per native serves every module */
+  nativeImports(ids: Iterable<string>): Record<string, Function> {
+    const out: Record<string, Function> = {}, miss: string[] = [];
+    for (const id of ids) { const f = this.nativeFns.get(id); if (f) out[id] = f; else miss.push(id); }
+    if (miss.length) for (const [id, f] of Object.entries(this.natives.imports(this.hostContext(), miss))) this.nativeFns.set(id, out[id] = f);
+    return out;
+  }
+  private nativeFns = new Map<string, Function>();
   private hostCtx?: HostContext;
-  private hostContext(): HostContext {
+  hostContext(): HostContext {
     return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => new (WebAssembly as any).Exception(this.rt.tag, [e]) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
@@ -475,33 +564,32 @@ export class World {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
       // the callees that have run, busiest first: code the first tier never saw run is not worth compiling into the unit
-      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slots[this.slotOf(t)]?.k === "method" && this.ran(t) > 0);
+      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) > 0);
       callees.sort((a, b) => this.ran(b) - this.ran(a));
       for (const t of callees) {
         if (out.length >= MAX_GROUP) break;
         if (out.some((o) => mid(o) === mid(t))) continue;
         out.push(t);
-        (this.slots[this.slotOf(t)] as { done: boolean }).done ? copies.push(t) : installed.push(t);
+        (this.slotAt(this.slotOf(t)) as { done: boolean }).done ? copies.push(t) : installed.push(t);
       }
     }
     return { installed, copies };
   }
   /** calls and loop iterations counted for `t` so far: methods compiled by the second tier count as busy, the Wasm-written intrinsics always run */
   private ran(t: MethodInfo): number {
-    const sl = this.slots[this.slotOf(t)] as { done: boolean; hot?: boolean };
+    const sl = this.slotAt(this.slotOf(t)) as { done: boolean; hot?: boolean };
     if (this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
     if (sl.hot) return HOT_BUDGET;
-    const g = this.counters.get(this.slotOf(t));
-    return sl.done && g ? HOT_BUDGET - g.value : 0;
+    return sl.done ? this.count(this.slotOf(t)) : 0;
   }
   /** classes some compiled code allocates: the ones a virtual call is likely to find */
   allocated = new Set<string>();
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
   plan = new Map<string, MethodInfo[]>();
-  private groupOf = new Map<number, number[]>();
+  groupOf = new Map<number, number[]>();
   private callees = new Map<MethodInfo, MethodInfo[]>();
-  /** the first tier's budget counter of each compiled method, by slot */
-  private counters = new Map<number, WebAssembly.Global>();
+  /** calls and loop iterations counted so far for the method in `slot` */
+  count(slot: number): number { return slot < COUNT_SLOTS ? new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] : 0; }
   /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
   private smallCallees(m: MethodInfo): MethodInfo[] {
     let out = this.callees.get(m);
@@ -571,20 +659,53 @@ export class World {
   addDexes(dexes: DexFile[]): string[] {
     const added = this.prog.add(dexes);
     this.cha.index(added);
+    // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
+    const now = this.noteLate(added);
     for (const [key, a] of this.assumptions) {
-      const t = this.cha.targets(a.decl, a.name, a.desc);
-      if (t.length === (a.target ? 1 : 0) && t[0] === a.target) continue;
+      const by = now.get(a.decl);
+      if (!by || this.holds(a, by)) continue;
       for (const slot of a.slots) this.invalidate(slot);
       this.assumptions.delete(key);
     }
     return added;
   }
+  /** the concrete classes added since compiled code was made, by each of their supertypes (themselves included) */
+  late = new Map<string, string[]>();
+  /** records the concrete classes among `added` and returns them by supertype */
+  noteLate(added: string[]): Map<string, string[]> {
+    const now = new Map<string, string[]>(), up = new Map<string, string[]>();
+    const supers = (n: string): string[] => {
+      let s = up.get(n);
+      if (!s) {
+        const c = this.prog.get(n), out = new Set([n]);
+        if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of supers(p)) out.add(x);
+        up.set(n, s = [...out]);
+      }
+      return s;
+    };
+    for (const n of added) {
+      const c = this.prog.get(n);
+      if (!c || c.isInterface || c.flags & ACC.ABSTRACT) continue;
+      for (const s of supers(n)) {
+        let a = now.get(s); if (!a) now.set(s, a = []); a.push(n);
+        let b = this.late.get(s); if (!b) this.late.set(s, b = []); b.push(n);
+      }
+    }
+    return now;
+  }
+  /** whether the implementation code relied on for decl.name+desc (`target`, none if undefined) stands once the concrete classes `by`, all subtypes of decl, exist */
+  holds(a: { decl: string; name: string; desc: string; target?: MethodInfo }, by: string[]): boolean {
+    for (const n of by) { const m = this.prog.implFor(n, a.name, a.desc); if (m && m !== a.target) return false; }
+    return true;
+  }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
-  private invalidate(slot: number): void {
+  invalidate(slot: number): void {
     for (const x of this.groupOf.get(slot) ?? [slot]) {
-      const s = this.slots[x];
-      if (s?.k === "ensure" || !s?.done || !s.stub) continue;
-      this.table.set(x, s.stub); s.done = false; s.hot = false; this.stats.invalidated++;
+      const s = this.slotAt(x);
+      if (s?.k === "ensure" || !s?.done) continue;
+      const stub = s.stub ?? this.aot?.stub(x);
+      if (!stub) continue;
+      this.table.set(x, stub); s.done = false; s.hot = false; this.stats.invalidated++;
       this.groupOf.delete(x);
     }
   }
@@ -620,7 +741,7 @@ export class World {
   stackTrace(state: object): JavaFrame[] {
     const err = this.stacks.get(state);
     if (!err) return [];
-    const frames = javaFrames(err.stack ?? "", this.traces);
+    const frames = javaFrames(err.stack ?? "", this.frameTraces);
     let skip = 0;
     while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace)$|^<init>$/.test(frames[skip].method) && (frames[skip].method !== "<init>" || this.prog.isSubclass(frames[skip].cls.replace(/\./g, "/"), "java/lang/Throwable"))) skip++;
     return frames.slice(skip);

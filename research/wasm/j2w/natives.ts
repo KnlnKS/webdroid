@@ -100,6 +100,8 @@ export class Natives {
     this.plans.set(id, p ||= { id, fn: fn!, recv, initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, retArray, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
     return p;
   }
+  /** makes the host import of native `m` available, as compiling a method that calls it does (a precompiled module imports it by id); whether it has one */
+  prepare(m: MethodInfo): boolean { return typeof this.plan(m, true) !== "string"; }
   binds(m: MethodInfo): boolean { return typeof this.plan(m) !== "string"; }
   /** why `m` has no host binding */
   reason(m: MethodInfo): string { const p = this.plan(m); return typeof p === "string" ? `native: ${p}` : "native/abstract"; }

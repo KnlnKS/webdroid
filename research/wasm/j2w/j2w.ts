@@ -7,7 +7,7 @@ import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "./exc";
 import { JsStrings, stringCtor, stringHelper, type StringRepr } from "./strings";
 import type { Natives } from "./natives";
 
@@ -40,16 +40,18 @@ export class Compiler implements Base {
   imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; pin: number; hot: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
-  /** methods this module defines, by id: calls between them are direct, every other call goes through the table */
+  /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
+   *  whose methods the second tier replaces one by one) */
   fn = new Map<string, number>();
+  private direct = true;
   /** class modules this module imports from */
   deps = new Map<string, ClassRt>();
   /** CHA decisions this module's code relies on: decl, name, desc, the only target, the method that relies on it */
   assumptions: [string, string, string, MethodInfo | undefined, MethodInfo | undefined][] = [];
   /** whether methods count their calls and loop iterations and ask the host to recompile them once they are hot (the first tier, see World.upgrade) */
   counting = true;
-  /** the slots whose budget globals this module imports */
-  counted = new Set<number>();
+  /** the classes this module allocates */
+  allocs = new Set<string>();
   /** the method being compiled */
   private owner?: MethodInfo;
   /** the installed method of the unit being compiled, which the CHA decisions of every method in it count against */
@@ -67,7 +69,6 @@ export class Compiler implements Base {
     Object.assign(this, declareBase(mb));
     this.classStruct.set("java/lang/Object", this.tObj);
     mb.importTable("rt", "table", T.funcref, 0);
-    mb.importTable("rt", "strs", T.externref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
     this.str = new JsStrings(this);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
@@ -134,8 +135,10 @@ export class Compiler implements Base {
   }
   private classGlobal(cls: string, name: string, t: VT): number {
     const rt = this.w.link(cls); this.deps.set(rt.mod, rt);
-    return this.global(rt.mod, name, t, true);
+    return this.global(rt.mod, rt.id + ":" + name, t, true);
   }
+  /** the immutable global holding String constant `s`, which the engine fills in at instantiation (WebAssembly.Module's importedStringConstants) */
+  stringConst(s: string): number { return this.global("#", s, ref(-17), false); }
   vtGlobal(cls: string): number { return this.classGlobal(cls, "vt", refNull(this.tVT)); }
   /** the global holding static field `name` of type `desc` of `owner`, which must declare it (a dex may declare one name with several types, so callers that know the type pass it) */
   staticGlobal(owner: string, name: string, desc?: string): number {
@@ -145,7 +148,7 @@ export class Compiler implements Base {
   }
   /** calls `m`: directly when this module defines it, else through its table slot (a lazy-link stub until it is compiled) */
   callMethod(c: Code, m: MethodInfo): void {
-    const f = this.fn.get(mid(m));
+    const f = this.direct ? this.fn.get(mid(m)) : undefined;
     if (f !== undefined) c.call(f); else c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m));
   }
   /** the only implementation of decl.name+desc among all loaded classes, "none" without one (a call then finds an abstract method), "many" otherwise */
@@ -159,11 +162,14 @@ export class Compiler implements Base {
   guards(decl: string, name: string, desc: string): MethodInfo[] {
     return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.fn.has(mid(m)));
   }
-  /** counts down `m`'s budget by one and asks the host to upgrade the method when it reaches zero */
+  /** counts `m`'s calls and loop iterations in its word of the scratch memory and asks the host to upgrade the method when they reach the budget */
   emitCount(c: Code, m: MethodInfo): void {
-    const slot = this.w.slotOf(m), g = this.global("cnt", String(slot), T.i32, true);
-    this.counted.add(slot);
-    c.gget(g).i32(1).raw(OP.i32_sub).gset(g).gget(g).raw(OP.i32_eqz).if_().i32(slot).call(this.imp.hot).end();
+    const slot = this.w.slotOf(m);
+    if (slot >= COUNT_SLOTS) return;
+    this.scratch();
+    const addr = COUNT_BASE + 4 * slot, n = c.scratch();
+    c.i32(addr).i32(addr).mem(OP.i32_load, 2).i32(1).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
+    c.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq).if_().i32(slot).call(this.imp.hot).end();
   }
   /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
    *  never goes back), is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun), or is in `known`,
@@ -217,7 +223,7 @@ export class Compiler implements Base {
   }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
-    this.w.allocated.add(cls);
+    this.w.allocated.add(cls); this.allocs.add(cls);
     c.call(this.local("new:" + cls, [], "L", (n) => {
       const lay = this.prog.layout(cls);
       this.allocBytes(n, () => n.i32(8 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
@@ -372,16 +378,31 @@ export class Compiler implements Base {
   // ---------- units
   /** compile `methods` into this module (the first is the one a lazy-link stub asks for); each is exported as "m<slot>". `copies` are compiled
    *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
-   *  unit is the second tier: its methods do not count. */
-  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false): { bytes: Uint8Array; traces: FnTrace[] } {
+   *  unit is the second tier: its methods do not count. With `install` the module puts its functions in the table itself, when it is instantiated,
+   *  instead of exporting them (a precompiled module, aot.ts). */
+  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install = false): { bytes: Uint8Array; traces: FnTrace[] } {
     const { mb, w } = this, all = methods.concat(copies);
     this.counting = !hot;
     this.natives.declare(this, all);
     // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
     const label = (m: MethodInfo, i: number) => (hot || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
     all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
-    const codes = all.map((m) => { this.owner = m; this.assumer = methods[0]; return compileMethod(this, m); });
-    all.forEach((m, i) => { const f = this.fn.get(mid(m))!; mb.setBody(f, codes[i].finish()); if (i < methods.length) mb.export("m" + w.slotOf(m), "func", f); });
+    const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
+    this.direct = !install;
+    const codes = all.map((m) => { this.owner = m; this.assumer = install ? m : methods[0]; return compileMethod(this, m); });
+    phase.emit += performance.now() - t0 - (phase.prepare + phase.flow + phase.infer + phase.facts - analysed);
+    const at: [number, number][] = [];
+    all.forEach((m, i) => {
+      const f = this.fn.get(mid(m))!; mb.setBody(f, codes[i].finish());
+      if (i >= methods.length) return;
+      if (install) at.push([w.slotOf(m), f]); else mb.export("m" + w.slotOf(m), "func", f);
+    });
+    // consecutive slots are one segment
+    at.sort((a, b) => a[0] - b[0]);
+    for (let i = 0, j = 0; i < at.length; i = j) {
+      while (++j < at.length && at[j][0] === at[j - 1][0] + 1);
+      mb.addElemActive(0, at[i][0], at.slice(i, j).map((x) => x[1]));
+    }
     return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
@@ -396,7 +417,8 @@ export class Compiler implements Base {
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
     this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), [0, 0x0b], "$start");
-    const bytes = this.mb.build();
+    const t0 = performance.now(), bytes = this.mb.build();
+    this.w.stats.phase.encode += performance.now() - t0;
     return { bytes, traces: fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;
       return { name, m, offsets: Int32Array.from({ length: code.marks.length / 2 }, (_, i) => start + code.marks[2 * i]), pcs: Int32Array.from({ length: code.marks.length / 2 }, (_, i) => code.marks[2 * i + 1]) };

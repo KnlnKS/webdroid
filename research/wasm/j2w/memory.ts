@@ -8,7 +8,7 @@ import type { Code } from "./code";
 import type { Compiler, Intrinsic } from "./j2w";
 
 /** the pinned arrays' address space, above the external mappings' (jmemory.ts EXTERNAL..EXTERNAL * 2) */
-const NM_BASE = 1n << 50n, NM_TABLE = 2;
+const NM_BASE = 1n << 50n, NM_TABLE = 1;
 const MEMORY = "libcore/io/Memory.";
 export const memoryIntrinsics = new Map<string, Intrinsic>();
 

@@ -11,8 +11,6 @@ import type { Compiler, Intrinsic } from "./j2w";
 /** abstract heap types as ref.test/ref.cast immediates */
 export const HT = { extern: -17, any: -18, eq: -19 } as const;
 const STRING = "java/lang/String";
-/** the imported table (after the function table) holding the String constants, shared by all modules */
-const STR_TABLE = 1;
 
 export interface StringRepr {
   /** imports the string builtins; before any function of the module is defined */
@@ -37,7 +35,12 @@ export class JsStrings implements StringRepr {
   constructor(private cx: Compiler) {}
 
   isString(cls: string): boolean { return cls === STRING; }
-  literal(c: Code, s: string): void { c.i32(this.cx.w.stringId(s)).tableGet(STR_TABLE).anyConvertExtern(); }
+  literal(c: Code, s: string): void {
+    if (s.isWellFormed()) { c.gget(this.cx.stringConst(s)).anyConvertExtern(); return; }
+    // a name in an import section is UTF-8, which cannot hold a lone surrogate: the UTF-16 units come from a data segment
+    const units = new Uint8Array(s.length * 2).map((_, i) => (s.charCodeAt(i >> 1) >> (8 * (i & 1))) & 255);
+    c.i32(0).i32(s.length).arrayNewData(this.cx.tData.i16, this.cx.mb.addDataPassive(units)).i32(0).i32(s.length).call(this.b.fromCharCodeArray).anyConvertExtern();
+  }
   vtab(c: Code, decl: string): void {
     if (this.cx.prog.isSubclass(STRING, decl)) c.call(this.cx.helper("vtab")); else c.refCast(this.cx.tObj).structGet(this.cx.tObj, 0);
   }

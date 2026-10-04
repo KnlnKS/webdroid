@@ -9,6 +9,8 @@ export const HEAP_LIMIT = 512 * 1024 * 1024;
 export const MAX_ARRAY_BYTES = HEAP_LIMIT;
 /** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */
 export const HOT_BUDGET = 5000;
+/** The counters of first-tier methods are words of the scratch memory, one per table slot from COUNT_BASE; slots beyond COUNT_SLOTS are not counted. Scratch for natives starts after them. */
+export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
 /** bytes allocated between two heap checks; allocation counts up to zero from -ALLOC_WINDOW */
 export const ALLOC_WINDOW = 8 << 20;
 
