@@ -222,21 +222,7 @@ export class MC {
     }
   }
   /** pushes i32: obj (pushed by `obj`) is an instance of class/interface/array `name` (null -> 0) */
-  emitInstanceOfTest(name: string, obj: () => void) {
-    const cx = this.cx, c = this.code, id = cx.idOf(name);
-    if (name === "java/lang/Object") { obj(); c.refIsNull().raw(OP.i32_eqz); return; }
-    if (name[0] === "[") {
-      const ek = elemKindOf(name);
-      if (ek === "ref") { obj(); c.i32(id); cx.callRt(c, "instArr"); }
-      else { obj(); c.i32(id).i32(1).call(cx.helper("iof")); }
-      return;
-    }
-    const jc = cx.prog.get(name);
-    obj();
-    if (jc?.isInterface) c.i32(id).call(cx.helper("implements"));
-    else if (cx.prog.chain(name).length > H.MAXD) c.i32(id).call(cx.helper("implements"));
-    else c.i32(id).i32(cx.prog.chain(name).length - 1).call(cx.helper("iof"));
-  }
+  emitInstanceOfTest(name: string, obj: () => void) { obj(); this.code.call(this.cx.instanceOfFn(name)); }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
     const c = this.code, cx = this.cx;
@@ -326,19 +312,11 @@ export class MC {
       case "monitor-enter": case "monitor-exit": this.nonNull(a); c.drop(); return;
       case "check-cast": {
         const name = descToName(dex.type(b));
-        if (name !== "java/lang/Object") {
-          this.get("L", a); c.refIsNull().raw(OP.i32_eqz).if_();
-          this.emitInstanceOfTest(name, () => this.get("L", a)); c.raw(OP.i32_eqz).if_();
-          this.get("L", a); c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).i32(cx.idOf(name)); cx.callThrower(c, "cce"); c.end().end();
-        }
         // the cast value is a definition of its own: a web other than the operand's needs the reference copied in
-        if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); }
-        return;
+        if (name === "java/lang/Object") { if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); } return; }
+        this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
       }
-      case "instance-of": {
-        this.get("L", ins.b); c.refIsNull().if_(T.i32).i32(0).else_();
-        this.emitInstanceOfTest(descToName(dex.type(ins.c)), () => this.get("L", ins.b)); c.end(); this.set("I"); return;
-      }
+      case "instance-of": this.get("L", ins.b); c.call(cx.instanceOfFn(descToName(dex.type(ins.c)))); this.set("I"); return;
       case "array-length": {
         // any array wrapper has the data array in field 2; use the ref wrapper type check-free via per-kind unknown -> test kinds
         this.arrayLength(b); this.set("I"); return;

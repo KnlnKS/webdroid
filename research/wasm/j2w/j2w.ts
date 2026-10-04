@@ -204,20 +204,56 @@ export class Compiler implements Base {
     const g = this.global("rt", "alloc", T.i32, true);
     c.gget(g); add(); c.raw(OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
   }
+  /** a function of this module with the given body: a call is much shorter than the sequence, which keeps the callers small for the engine's inliner */
+  private local(key: string, params: Kind[], ret: Kind | "V", body: (c: Code) => void, result?: VT): number {
+    return this.memo(key, () => {
+      const type = result ? this.mb.addFuncType(params.map((k) => this.vtOf(k)), [result]) : this.sig(params, ret);
+      const f = this.mb.reserveFunc(type, "$" + key), c = new Code(params.length);
+      body(c);
+      this.mb.setBody(f, c.finish());
+      return f;
+    });
+  }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
     this.w.allocated.add(cls);
-    const lay = this.prog.layout(cls);
-    this.allocBytes(c, () => c.i32(8 + lay.reduce((n, f) => n + (f.kind === "J" ? 8 : 4), 0)));
-    c.gget(this.vtGlobal(cls)).refAsNonNull().i32(0);
-    for (const f of lay) { if (f.kind === "I") c.i32(0); else if (f.kind === "J") c.i64(0n); else c.anyNull(); }
-    c.structNew(this.structFor(cls));
+    c.call(this.local("new:" + cls, [], "L", (n) => {
+      const lay = this.prog.layout(cls);
+      this.allocBytes(n, () => n.i32(8 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
+      n.gget(this.vtGlobal(cls)).refAsNonNull().i32(0);
+      for (const f of lay) { if (f.kind === "I") n.i32(0); else if (f.kind === "J") n.i64(0n); else n.anyNull(); }
+      n.structNew(this.structFor(cls));
+    }, ref(this.structFor(cls))));
   }
   /** push a new array of class `desc` whose length `pushLen` pushes; negative or oversized lengths throw */
   emitNewArray(c: Code, desc: string, pushLen: () => void): void {
     const ek = elemKindOf(desc), shift = { i8: 0, i16: 1, i32: 2, i64: 3, ref: 2 }[ek];
-    c.gget(this.vtGlobal(desc)).refAsNonNull().i32(0);
-    pushLen(); c.i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
+    pushLen();
+    c.call(this.local("newarray:" + desc, ["I"], "L", (n) => {
+      n.gget(this.vtGlobal(desc)).refAsNonNull().i32(0).lget(0).i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
+    }, ref(this.tArr[ek])));
+  }
+  /** a function of this module: is its (anyref) argument an instance of class, interface or array `name`? null is not */
+  instanceOfFn(name: string): number {
+    return this.local("instanceof:" + name, ["L"], "I", (c) => {
+      const id = this.idOf(name);
+      if (name === "java/lang/Object") { c.lget(0).refIsNull().raw(OP.i32_eqz); return; }
+      if (name[0] === "[") {
+        if (elemKindOf(name) === "ref") { c.lget(0).i32(id); this.callRt(c, "instArr"); } else c.lget(0).i32(id).i32(1).call(this.helper("iof"));
+        return;
+      }
+      c.lget(0);
+      if (this.prog.get(name)?.isInterface || this.prog.chain(name).length > H.MAXD) c.i32(id).call(this.helper("implements"));
+      else c.i32(id).i32(this.prog.chain(name).length - 1).call(this.helper("iof"));
+    });
+  }
+  /** a function of this module that returns its argument if it can be cast to `name` (null can) and throws ClassCastException otherwise */
+  castFn(name: string): number {
+    return this.local("cast:" + name, ["L"], "L", (c) => {
+      c.lget(0).refIsNull().raw(OP.i32_eqz).if_().lget(0).call(this.instanceOfFn(name)).raw(OP.i32_eqz).if_();
+      c.lget(0).call(this.helper("vtab")).i32(H.ID).arrayGet(this.tVT).i32(this.idOf(name)); this.callThrower(c, "cce");
+      c.end().end().lget(0);
+    });
   }
 
   // ---------- module-local helpers, defined on first use
