@@ -209,4 +209,41 @@ public class C {
     return (c.getClass() == A[].class ? 1000 : 0) + c.length * 10000;
   }
   public static int classLoader(int n) { return (A.class.getClassLoader() != null ? 1 : 0) + (A[].class.getClassLoader() != null ? 4 : 0); }
+
+  public static int multiArray(int n) {
+    A[][] a = (A[][]) java.lang.reflect.Array.newInstance(A.class, new int[] {2, 3});
+    int[][][] z = (int[][][]) java.lang.reflect.Array.newInstance(int[].class, new int[] {2, 2});
+    int[][] p = (int[][]) java.lang.reflect.Array.newInstance(int.class, new int[] {2, 3});
+    return p[1].length * 1000000 + a.length + a[1].length * 10 + (a.getClass() == A[][].class ? 100 : 0) + (a[0].getClass() == A[].class ? 1000 : 0) + z[1].length * 10000 + (z.getClass() == int[][][].class ? 100000 : 0);
+  }
+  public static int jsWrong_reflectMethods(int n) throws Exception {
+    java.lang.reflect.Method m = A.class.getMethod("g");
+    java.lang.reflect.Method f = I.class.getMethod("f");
+    java.lang.reflect.Constructor<?> k = A.class.getDeclaredConstructor();
+    Object o = k.newInstance();
+    int r = (Integer) m.invoke(o) + (Integer) f.invoke(new B()) * 10 + (m.getReturnType() == int.class ? 100 : 0) + m.getParameterTypes().length * 1000;
+    try { A.class.getMethod("nope"); } catch (NoSuchMethodException e) { r += 10000; }
+    return r + (o instanceof A ? 100000 : 0) + (m.getDeclaringClass() == A.class ? 1000000 : 0) + I.class.getMethod("g").getName().length() * 10000000;
+  }
+  enum Color { RED, GREEN, BLUE }
+  public static int enums(int n) { return Color.values().length + Color.valueOf("GREEN").ordinal() * 10 + java.util.EnumSet.allOf(Color.class).size() * 100 + java.util.EnumSet.of(Color.RED, Color.BLUE).size() * 1000; }
+
+  public static int names(int n) {
+    return (C.class.getName().equals("C") ? 1 : 0) + (A.class.getName().equals("C$A") ? 10 : 0) + (int[].class.getName().equals("[I") ? 100 : 0) + (A[].class.getName().equals("[LC$A;") ? 1000 : 0)
+      + (int.class.getName().equals("int") ? 10000 : 0) + (Object.class.getName().equals("java.lang.Object") ? 100000 : 0) + (void.class.getName().equals("void") ? 1000000 : 0);
+  }
+  public static int fieldByName(int n) throws Exception {
+    java.lang.reflect.Field f = S.class.getDeclaredField("j"), g = S.class.getDeclaredField("o");
+    int r = (f.getName().equals("j") ? 1 : 0) + (g.getType() == Object.class ? 10 : 0) + (f.getType().isPrimitive() ? 100 : 0) + (f.getDeclaringClass() == S.class ? 1000 : 0);
+    try { S.class.getDeclaredField("nope"); } catch (NoSuchFieldException e) { r += 10000; }
+    return r;
+  }
+  static class F2 { static int v = 1 / z(); static void touch() { } }
+  public static int initMessages(int n) {
+    Throwable t1 = null, t2 = null;
+    try { F2.touch(); } catch (Throwable t) { t1 = t; }
+    try { F2.touch(); } catch (Throwable t) { t2 = t; }
+    return (t1 instanceof ExceptionInInitializerError && t1.getCause() instanceof ArithmeticException && t1.getCause().getMessage() != null ? 1 : 0)
+      + (t2 instanceof NoClassDefFoundError && t2.getMessage().contains("C$F2") ? 10 : 0);
+  }
 }

@@ -30,7 +30,7 @@ export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, Al
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
 export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number {
   const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);
-  if (kind === UInfo.ComponentScale) return name.length === 1 ? WIDTH[name as Ty] : 4;
+  if (kind === UInfo.ComponentScale) return name[0] === "#" ? WIDTH[name[1] as Ty] : 4;
   if (kind === UInfo.AllocInstance) {
     const jc = w.prog.get(name);
     return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } });

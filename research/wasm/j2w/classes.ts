@@ -21,12 +21,14 @@ import { hostReflect, RInfo } from "./reflect";
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
 /** primitive descriptor -> [ART Primitive::Type, log2 size, Java name] */
-const PRIM: Record<string, [number, number, string]> = { Z: [1, 0, "boolean"], B: [2, 0, "byte"], C: [3, 1, "char"], S: [4, 1, "short"], I: [5, 2, "int"],
+const PRIMS: Record<string, [number, number, string]> = { Z: [1, 0, "boolean"], B: [2, 0, "byte"], C: [3, 1, "char"], S: [4, 1, "short"], I: [5, 2, "int"],
   J: [6, 3, "long"], F: [7, 2, "float"], D: [8, 3, "double"], V: [9, 0, "void"] };
+/** primitive classes are keyed "#I" and so on, apart from the classes named like a descriptor letter (a default-package class C) */
+export const PRIM = Object.fromEntries(Object.entries(PRIMS).map(([k, v]) => ["#" + k, v]));
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const isPrim = (n: string) => n in PRIM;
-const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d;
-const descOf = (name: string) => isPrim(name) || name[0] === "[" ? name : `L${name};`;
+export const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d.length === 1 ? "#" + d : d;
+const descOf = (name: string) => isPrim(name) ? name.slice(1) : name[0] === "[" ? name : `L${name};`;
 const javaName = (n: string) => isPrim(n) ? PRIM[n][2] : n.replace(/\//g, ".");
 /** access flags in a class's dalvik.annotation.InnerClass annotation, -1 for a class without one */
 const innerFlags = (jc: JClass | undefined): number => {
@@ -35,7 +37,7 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot }
+const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf }
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
@@ -83,6 +85,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
         c.lget(o);
       } });
     }
+    case Info.ArrayOf: return b ? w.idOf("[".repeat(b) + descOf(name)) : a;      // the class of the b-fold array of a
     case Info.ArraySlot: {           // a = the component class: the array allocator for it
       const arrName = "[" + descOf(name);
       return w.synthSlot("newarray:" + arrName, { params: ["I"], ret: "L", body: (cx, c) => cx.emitNewArray(c, arrName, () => c.lget(0)) });
@@ -283,12 +286,29 @@ def("java/lang/Class.newInstance()Ljava/lang/Object;", (cx, c) => {
   c.lget(s).callIndirect(cx.sig([], "L"));
 });
 
-// Array.createObjectArray(componentType, length)
-def("java/lang/reflect/Array.createObjectArray(Ljava/lang/Class;I)Ljava/lang/Object;", (cx, c) => {
+// Array.createObjectArray(componentType, length), and VMRuntime's array allocators, which take any component class
+const newArrayOf = (cls: number, len: number) => (cx: Compiler, c: Code) => {
   const s = c.newLocal(T.i32);
-  c.lget(0); idOfClass(cx, c); c.lset(s);
-  c.lget(1); cx.info(c, Info.ArraySlot, () => c.lget(s)); c.callIndirect(cx.sig(["I"], "L"));
+  c.lget(cls); idOfClass(cx, c); c.lset(s);
+  c.lget(len); cx.info(c, Info.ArraySlot, () => c.lget(s)); c.callIndirect(cx.sig(["I"], "L"));
+};
+def("java/lang/reflect/Array.createObjectArray(Ljava/lang/Class;I)Ljava/lang/Object;", newArrayOf(0, 1));
+for (const n of ["newNonMovableArray", "newUnpaddedArray"]) def(`dalvik/system/VMRuntime.${n}(Ljava/lang/Class;I)Ljava/lang/Object;`, newArrayOf(1, 2));
+// Array.createMultiArray(componentType, dimensions): nested arrays, the innermost of the component class
+rt("newMulti", ["I", "L", "I"], "L", (cx, c) => {
+  const n = c.newLocal(T.i32), len = c.newLocal(T.i32), w = c.newLocal(refNull(cx.tArr.ref)), data = c.newLocal(refNull(cx.tData.ref)), j = c.newLocal(T.i32), dims = c.newLocal(refNull(cx.tData.i32)), all = c.newLocal(T.anyref);
+  c.lget(1).refCast(cx.tArr.i32).structGet(cx.tArr.i32, 2).lset(dims).lget(dims).refAsNonNull().arrayLen().lset(n);
+  c.lget(dims).refAsNonNull().lget(2).arrayGet(cx.tData.i32).lset(len);
+  // the array of this level: its component is the (remaining dimensions - 1)-fold array of the class
+  c.lget(len); cx.info(c, Info.ArraySlot, () => cx.info(c, Info.ArrayOf, () => c.lget(0), () => c.lget(n).lget(2).raw(OP.i32_sub).i32(1).raw(OP.i32_sub))); c.callIndirect(cx.sig(["I"], "L"));
+  c.lset(all);
+  c.lget(2).i32(1).raw(OP.i32_add).lget(n).raw(OP.i32_eq).if_().lget(all).ret().end();
+  c.lget(all).refCast(cx.tArr.ref).lset(w).lget(w).structGet(cx.tArr.ref, 2).lset(data);
+  c.block().loop().lget(j).lget(len).raw(OP.i32_ge_s).brIf(1);
+  c.lget(data).refAsNonNull().lget(j).lget(0).lget(1).lget(2).i32(1).raw(OP.i32_add); cx.callRt(c, "newMulti"); c.arraySet(cx.tData.ref);
+  c.lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end().lget(w);
 });
+def("java/lang/reflect/Array.createMultiArray(Ljava/lang/Class;[I)Ljava/lang/Object;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.lget(1).i32(0); cx.callRt(c, "newMulti"); });
 
 // Object.internalClone(): a shallow copy; Object.clone has checked Cloneable
 def("java/lang/Object.internalClone()Ljava/lang/Object;", (cx, c) => {

@@ -8,7 +8,7 @@ import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 import { OP } from "./code";
 import { loadDexes, program, world } from "./build";
 import { intrinsics } from "./intrinsics";
-import { jsTier } from "./oracle";
+import { jsTier, natives } from "./oracle";
 
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-c-"));
 const sh = (cmd: string[], input?: string) => {
@@ -49,7 +49,7 @@ const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `C.${c.m.name} 0`).
 let bad = 0, pinned = 0;
 const hit: number[] = [];
 for (const [i, c] of cases.entries()) {
-  const w = world(prog); w.onGap = (id) => hit.push(id);
+  const w = world(prog, { natives }); w.onGap = (id) => hit.push(id);
   const exp = jdk[i], name = `C.${c.m.name}`, wrong = c.m.name.startsWith("jsWrong_");
   const got = async (f: () => unknown) => { try { return String(await f()); } catch (e) { if (process.env.J2W_V) console.log(name, e); return "throw"; } };
   const wasm = await got(() => w.entry(c.m.cls, c.m.name, c.m.desc)(0)), tier = await got(() => js(c.m.cls, c.m.name, c.m.desc, [0]));

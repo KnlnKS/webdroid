@@ -7,7 +7,7 @@ import { OP } from "./code";
 import { T, refNull } from "./wasmbin";
 import { ACC, kindOf, type MethodInfo } from "./program";
 import { H } from "./consts";
-import { emitString, idOfClass, classMethod } from "./classes";
+import { emitString, idOfClass, classMethod, typeName } from "./classes";
 import { rt } from "./rtfns";
 import type { Code } from "./code";
 import type { Compiler, Intrinsic } from "./j2w";
@@ -24,7 +24,6 @@ const BOX: Record<string, [string, string, string]> = {
   S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
   F: ["java/lang/Float", "floatValue", "()F"], D: ["java/lang/Double", "doubleValue", "()D"],
 };
-const typeName = (d: string) => d[0] === "L" ? d.slice(1, -1) : d;
 
 export function hostReflect(w: World, kind: RInfo, a: number, b: number): number {
   const jc = w.prog.get(w.nameOf(a));

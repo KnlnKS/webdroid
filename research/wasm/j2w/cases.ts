@@ -44,7 +44,7 @@ export async function compare(cases: Case[], run: (m: MethodInfo) => (...a: any[
     const ref = jdk ? (jdk[i] === "throw" ? "throw" : fmt(rk, BigInt(jdk[i]))) : undefined;
     let wasm: string, tier: string;
     const seen = gapHits.length;
-    try { wasm = result(m, run(m)(...args.map((a, j) => (paramsOf(m)[j] === "J" || paramsOf(m)[j] === "D" || typeof a !== "bigint" ? a : Number(a)))), (v) => BigInt(v as bigint)); } catch (e) { if (process.env.J2W_V) console.log(e); wasm = "throw"; }
+    try { wasm = result(m, run(m)(...args.map((a, j) => (paramsOf(m)[j] === "J" || paramsOf(m)[j] === "D" || typeof a !== "bigint" ? a : Number(a)))), (v) => BigInt(v as bigint)); } catch { wasm = "throw"; }
     try { tier = result(m, await js(m.cls, m.name, m.desc, args.map((a, j) => typeof a === "bigint" ? unbits(paramsOf(m)[j], a) : a), !m.isStatic), (v) => bitsOf(m.ret, v)); } catch (e) {
       // Bun's JSC words a negative typed-array length differently from V8, which runtime.ts maps to NegativeArraySizeException
       tier = /InternalError: length cannot be negative/.test(String(e)) && wasm !== "throw" ? (explained++, wasm) : "throw";
