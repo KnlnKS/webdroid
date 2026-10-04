@@ -266,13 +266,13 @@ export function frameOf(line: string): [string, string, number] | null {
 }
 
 let hashCounter = 1;
-/** System.identityHashCode: a string's String.hashCode, else a hash an object keeps for life in an own `$ih` slot */
+/** System.identityHashCode: a string's String.hashCode, else a hash an object keeps for life in a hidden own slot, like its `$mon` */
 export function idHash(o: unknown): number {
   if (o === null || o === undefined) return 0;
   if (typeof o === "string") return stringHash(o);
   if (typeof o !== "object" && typeof o !== "function") return stringHash(String(o));
   let h = (o as { $ih?: number }).$ih;
-  if (h === undefined) { h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff); (o as { $ih?: number }).$ih = h; }
+  if (h === undefined) Object.defineProperty(o, "$ih", { value: h = (hashCounter = (hashCounter * 1103515245 + 12345) & 0x7fffffff) });
   return h;
 }
 /** String.hashCode */
