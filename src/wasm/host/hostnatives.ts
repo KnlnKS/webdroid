@@ -38,7 +38,7 @@ export const hostNatives = new Map<string, HostFn>([
   // Looper.loop waits here: the main thread's strand is suspended until a message, a callback or the timeout, which is a Suspending import
   ["android/os/MessageQueue.nativePollOnce(JI)V", async (ptr: bigint, timeout: number) => { await deref<NativeLooper>(ptr).pollOnce(timeout); }],
   // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (bridge.ts)
-  ["dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", Object.assign((_runtime: unknown, array: object) => handle(array), { javaValues: true })],
+  ["dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true })],
   // the archives of the boot class path, which BootClassLoader looks resources up in
   ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS], "Ljava/lang/String;")],
   [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, (d: object | null, buffer: IoBuffer, offset: number, count: number) =>
