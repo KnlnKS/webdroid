@@ -14,6 +14,7 @@ import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { HostBridge, HostContext, HostNet, NativeBinder } from "./hostapi";
+import { Sched, defaultLoop, ROOT, type HostLoop } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, typeName } from "./classes";
 import { mhInvoke } from "./mhandles";
@@ -27,7 +28,7 @@ import { decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
-import { compileModule } from "./module";
+import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, type AotBuild, type AotStore } from "./aot";
 
 export interface WorldOptions {
@@ -44,6 +45,8 @@ export interface WorldOptions {
   aot?: AotStore;
   /** a build of that code: classes, slots and selectors are numbered but nothing is instantiated */
   build?: AotBuild;
+  /** timers and event loop turns for threads that wait (sched.ts); the host's own where there is one */
+  loop?: HostLoop;
   /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
   dexes?: (path: string) => DexFile[] | undefined;
@@ -100,7 +103,9 @@ export class World {
   natives: NativeBinder;
   bridge: HostBridge;
   host: Record<string, Function>;
-  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; classId: (o: object) => number };
+  /** the threads: strands, monitors, waits (sched.ts) */
+  sched!: Sched;
   private synth = new Map<string, number>();
   /** the synthetic functions whose stub module exists */
   private stubbed = new Set<number>();
@@ -121,6 +126,11 @@ export class World {
       fmod: (a: number, b: number) => a % b,
       gap: (id: number) => this.onGap(id),
       link: (slot: number) => this.linkSlot(slot),
+      sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
+      // without JSPI (Bun) nothing can wait, which the first attempt says
+      block: hasJspi() ? suspending((op: number, obj: object | null, a: number, b: number) => {
+        try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
+      }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
@@ -150,6 +160,7 @@ export class World {
     };
     this.slots.length = FIRST_FREE_SLOT;
     this.startRuntime();
+    this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
   }
 
@@ -235,6 +246,8 @@ export class World {
     if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
+  /** the init word of the class with id `id` (0 before its module is built) */
+  initWord(id: number): number { const rt = this.classes.get(this.names[id]); return rt ? (rt.exports[id + ":init"] as WebAssembly.Global).value as number : 0; }
   /** whether class initialization has finished, for a class whose module is already built */
   initialized(n: string): boolean { const rt = this.classes.get(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
@@ -377,9 +390,10 @@ export class World {
     mb.export("hash", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     // the Class objects by class id (grown by classOf) and the id of the running Java thread, which init words record
     mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
-    mb.export("tid", "global", mb.addGlobal(T.i32, true, i32Init(1)));
+    mb.export("sid", "global", mb.addGlobal(T.i32, true, i32Init(ROOT)));
     mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
-    mb.export("intr", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    mb.export("depth", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    mb.export("iw", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
@@ -389,10 +403,10 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, tid: x.tid, thr: x.thr, intr: x.intr, classId: x.classId };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, tid, thr, intr } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, tid, thr, intr, mem: this.mem, sp: this.sp }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -420,7 +434,7 @@ export class World {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
     const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
-    const tid = mb.importGlobal("rt", "tid", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
+    const sid = mb.importGlobal("rt", "sid", T.i32, true), iw = mb.importGlobal("rt", "iw", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
     // the String constants of the static values are imported before the module defines a global of its own
     const consts = new Map<string, number>();
     let fromChars = -1;
@@ -451,7 +465,7 @@ export class World {
         const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
         return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link));
       });
-      if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc, initG, statics, consts, fromChars, rt, tid, tag)));
+      if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc, initG, statics, consts, fromChars, rt, sid, iw, tag)));
       else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
       if (vtG >= 0) {
         const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
@@ -466,7 +480,7 @@ export class World {
    *  once (re-entry and cycles see the half-initialized class), one from another waits in initWait (the scheduler's hook). Superclass and
    *  default-method superinterfaces first, then the dex's static values and <clinit>. A throw marks the class failed and goes to initFail
    *  (an Error propagates, anything else becomes ExceptionInInitializerError); later requests throw NoClassDefFoundError. */
-  private ensureBody(mb: ModuleBuilder, b: ReturnType<typeof declareBase>, jc: JClass, initG: number, statics: Map<string, number>, consts: Map<string, number>, fromChars: number, rt: ClassRt, tid: number, tag: number): number[] {
+  private ensureBody(mb: ModuleBuilder, b: ReturnType<typeof declareBase>, jc: JClass, initG: number, statics: Map<string, number>, consts: Map<string, number>, fromChars: number, rt: ClassRt, sid: number, iw: number, tag: number): number[] {
     const c = new Code(0), voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
     const call = (slot: number, sig = voidSig) => c.i32(slot).callIndirect(sig);
     const rtfn = (name: string) => this.synthSlot(name, rtfns.get(name)!);
@@ -474,10 +488,10 @@ export class World {
     c.gget(initG).i32(INIT_DONE).raw(OP.i32_eq).brIf(2);
     c.gget(initG).i32(INIT_FAILED).raw(OP.i32_eq).if_(); c.i32(rt.id); call(rtfn("initErroneous"), mb.addFuncType([T.i32], [])); c.end();
     c.gget(initG).raw(OP.i32_eqz).brIf(1);
-    c.gget(initG).i32(2).raw(OP.i32_shr_u).gget(tid).raw(OP.i32_eq).brIf(2);
-    c.i32(rt.id); call(rtfn("initWait"), mb.addFuncType([T.i32], [])); c.br(0);
+    c.gget(initG).i32(2).raw(OP.i32_shr_u).gget(sid).raw(OP.i32_eq).brIf(2);
+    c.i32(rt.id); call(rtfn("initWait"), mb.addFuncType([T.i32], [T.i32])); c.brIf(2).br(0);
     c.end().end();
-    c.gget(tid).i32(2).raw(OP.i32_shl).i32(1).raw(OP.i32_or).gset(initG);
+    c.gget(sid).i32(2).raw(OP.i32_shl).i32(1).raw(OP.i32_or).gset(initG);
     c.block(T.anyref).tryTable(null, [[0, tag, 0]]);
     if (jc.sup && this.needsInit(jc.sup)) call(this.ensureSlot(jc.sup));
     for (const i of this.prog.defaultIfaces(jc.name)) if (this.needsInit(i)) call(this.ensureSlot(i));
@@ -499,9 +513,10 @@ export class World {
     }
     const ci = jc.byKey.get("<clinit>()V");
     if (ci) call(rt.slotBase + ci.index);
-    c.i32(INIT_DONE).gset(initG).br(2);
+    const wake = () => { c.gget(iw).if_().i32(rt.id); call(rtfn("initWake"), mb.addFuncType([T.i32], [])); c.end(); };
+    c.i32(INIT_DONE).gset(initG); wake(); c.br(2);
     c.end().unreachable().end();                                // the thrown Throwable is on the stack
-    c.lset(e).i32(INIT_FAILED).gset(initG).lget(e); call(rtfn("initFail"), b.tTagFn);
+    c.lset(e).i32(INIT_FAILED).gset(initG); wake(); c.lget(e); call(rtfn("initFail"), b.tTagFn);
     return c.end().finish();
   }
 
@@ -578,7 +593,7 @@ export class World {
   private nativeFns = new Map<string, Function>();
   private hostCtx?: HostContext;
   hostContext(): HostContext {
-    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
+    return this.hostCtx ??= { mem: this.mem, sp: this.sp, bridge: this.bridge, gap: (what) => this.onGap(this.gapId(what)), sched: this.sched, throwable: (cls, msg) => this.makeThrowable(cls, msg), raise: (e) => this.exception(e) };
   }
   private throwMakers = new Map<string, (msg: string | null) => object>();
   /** a Java throwable of class `cls` with `msg`, built by a synthetic Wasm function: the way a native raises what the production runtime raised */
@@ -782,11 +797,27 @@ export class World {
     if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
     const slot = this.slotOf(m);
     return (...args) => {
+      // an exception leaves the frames it unwound counted
+      const depth = this.rt.depth.value;
       try {
         if (m.isStatic && this.needsInit(m.cls)) (this.table.get(this.ensureSlot(m.cls)) as Function)();
         const r = (this.table.get(slot) as Function)(...args.map((a) => typeof a === "string" ? this.javaString(a) : a));
         return typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
-      } catch (e) { throw this.boundary(e); }
+      } catch (e) { throw this.boundary(e); } finally { this.rt.depth.value = depth; }
+    };
+  }
+  /** `entry` for a call that may block: it runs on a stack of its own, as a new strand of the main thread, and answers a Promise */
+  entryAsync(cls: string, name: string, desc: string): (...args: unknown[]) => Promise<unknown> {
+    const m = this.prog.resolve(cls, name, desc);
+    if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
+    const slot = this.slotOf(m);
+    return async (...args) => {
+      const s = this.sched.strand();
+      try {
+        if (m.isStatic && this.needsInit(m.cls)) await s.call(this.table.get(this.ensureSlot(m.cls)) as Function);
+        const r = await s.call(this.table.get(slot) as Function, ...args.map((a) => typeof a === "string" ? this.javaString(a) : a));
+        return typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
+      } catch (e) { throw this.boundary(e); } finally { s.end(); }
     };
   }
   /** the Java throwable a call from JS threw, if `e` is one */
@@ -801,7 +832,8 @@ export class World {
    *  becomes the StackOverflowError a handler above this call would have received */
   boundary(e: unknown): unknown {
     if (!isStackOverflow(e)) return e;
-    try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; }
+    const depth = this.rt.depth.value;
+    try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; } finally { this.rt.depth.value = depth; }
     return e;
   }
   /** the Java frames Throwable.nativeFillInStackTrace recorded under `state`, innermost first, without the frames of the throwable's own construction */

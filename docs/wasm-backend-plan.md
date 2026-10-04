@@ -820,6 +820,39 @@ given one, the app's own PathClassLoader object as the default namespace's `getC
 `bun run wasm loaders`: two DexClassLoaders over dex files defining `Shared` (and `Boom`): distinct Class objects, statics, instances, array classes, signatures naming the loader's own class, exceptions thrown and caught inside
 a loader and seen from outside, `Class.forName`, `loadClass`, `getClassLoader`, `instanceof`/casts across loaders and through the app's `Tag`.
 
+### 4.12 S3: strands, monitors and the waits (C1 and C2, 2026-10-04, `knlnks/wasm-tc`)
+
+**Substrate** (`link/sched.ts`, `link/monitor.ts`, `host/suspend.ts`). A Java thread is a strand, a JSPI stack: `Strand.call(f)` runs a table function through `WebAssembly.promising`, `World.entryAsync` is the entry
+that may block (a new strand of the main thread). Compiled code reaches the scheduler through two imports: `host.sync(op, obj, a)` answers at once, `host.block(op, obj, a, b)` is Suspending and answers a status the Wasm
+side turns into the exception (`blockStatus`: InterruptedException, IllegalMonitorStateException, IllegalArgumentException for a timeout, and an IllegalStateException when the stack cannot suspend). There is no
+scheduler loop: the strand that resumes is the one whose promise a waker resolved. `sid` (strand id), `thr` (the Thread) and `depth` are globals the running strand owns; a blocking call keeps them in locals and sets them
+again after it (`emitSave`), and every Suspending wrapper puts them back to the host's top level when its function returns, so host code at the top level always sees strand 1 (the root, which cannot suspend).
+Measured (platform-status.md): a Suspending import answering a plain value still suspends and costs 52 ns against 4 for a plain import, so only natives that can wait get one; `entryAsync` costs 1.4 us against 0.9 for `entry`.
+Natives: async functions are Suspending only; generator natives (`$g`) and `MAY_SUSPEND` ones (conscrypt's `EVP_DigestFinal_ex`, which answers a Promise only for a message of 64 KB or more) have a plain import and a
+Suspending one (`id#s`), and the stub calls the Suspending one on a strand's stack and the plain one at the top level. A plain import that answers a Promise is reported (`wasmNativeSuspended`, `suspendedNatives`),
+a call the engine refuses to suspend (a JS frame between the strand's entry and the import) is counted (`wasmSuspendErrors`). The Bridge scope of a Suspending native is set aside while it waits (`hold`), and its arrays are
+private copies written to the scratch region on resume (H2). The harness workaround for the digest is gone: `sha256` steady 3.8 ms -> 0.9 ms (JS tier 0.44), through `entryAsync`.
+**Monitors.** The header word of every object is an i64: identity hash in the low half, the lock in the high half (0 free; strand id << 8 | count for a thin lock, count up to 255; INFLATED | index for a host
+monitor). `monitor-enter/exit` are the module-local helpers `menter`/`mexit` (thin fast path), `menterSlow`/`mexitSlow` otherwise. Inflation happens on contention, a count past 255 and the first `wait`; an idle
+monitor deflates. Ownership is by strand, a thread's root strand shares with its other strands (as the JS tier's `owns`), a lock whose owner strand has ended is free. `wait/notify/notifyAll`, `Thread.sleep(lock, ms, ns)`
+(a timed wait on `Thread.lock`), `Thread.nativeCreate` (the body is a strand: `run`, `dispatchUncaughtException`, `exit`, peer cleared, joiners notified), `interrupt0`/`interrupted`, `holdsLock`, `Unsafe.park/unpark`
+(both Unsafe classes), `Thread.getState` are intrinsics over those imports; the real libcore `Thread`, `LockSupport` and `java.util.concurrent` run unchanged.
+**Class initialization.** The init word holds `strand << 2 | 1`; the same strand proceeds, another waits in `initWait` (Suspending; woken by `initWake` when the initializer finishes or fails), a request the initializer
+waits on through classes or locks (`waitsOn`) proceeds with the statics as they are, as clinit.ts does.
+**Fuel and depth.** A loop whose body calls, locks or reads a field counts its iterations in a local of its activation and every 4,096 yields (`yieldNow`: a macrotask once the turn has held the thread 8 ms, else a
+microtask hop, so strands whose promises resolved run); the check is skipped for loops of arithmetic and array elements, where it cost 40 to 150% (the `call` in the loop is the cost, not the counter). Methods that
+call something count their frame weight (4 + Wasm locals) in `depth` against `MAX_DEPTH` 56,000 (about half what node's stack holds: 8,700 frames of weight 11 or 2,030 of weight 53) and throw StackOverflowError themselves,
+so a Java `catch (StackOverflowError)` works mid-stack on the host's stack and on strands'; an overflow that still reaches the engine is converted at the boundary as before. The depth is restored on return and at handlers.
+**Results.** `bun run wasm threads`: 38 Java cases (monitors, wait/notify ping-pong, contention, sleep order, interrupts, join, uncaught handlers, thread states, park/unpark, ExecutorService, ConcurrentHashMap under
+contention, CountDownLatch, ReentrantLock/Condition, BlockingQueue, Semaphore, FutureTask, ScheduledExecutor, CompletableFuture, 100 threads, class-init race, cycle, failure, a deadlock the JVM has) agree with the JDK;
+the JS tier differs on the two stack-overflow cases (its handler throws an InternalError). Direct checks: async, generator and nested promising natives, 1,000 stacks suspended in a native (5 ms), a plain native answering
+a Promise, a native waiting under a JS frame (SuspendError, counted), overflow on both kinds of stack. G1 node, steady ms base -> branch (JS tier): monitors 0.096 -> 0.162 (0.24), sha256 3.8 -> 0.9 (0.44), kernels
+(intLoop, longLoop, doubleLoop, sieve, matrix, arraySum, fieldLoop) unchanged within noise, virtualMono 0.033 -> 0.074, allocLoop 0.012 -> 0.026, mapInt 0.087 -> 0.11, listAddGet 0.032 -> 0.045, random 0.069 -> 0.09
+(loops with a call pay the fuel check; the i64 header costs allocation-heavy rows part of it). Load average 4 to 5, so +-10%.
+**Open.** A native that calls Java through a plain call and expects it to block gets SuspendError (entry.ts must call through strands); the depth limit is conservative and Chrome's JSPI stack size is unmeasured;
+`Thread.getState` of a thread blocked in `initWait`/`monitor enter` reports BLOCKED, `synchronized` on a `Class` or String works but `Thread.holdsLock(null)` is not checked; `Thread.priority`, `stop` and daemon exit
+are not modelled; the AOT build key changes (header layout, imports).
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.

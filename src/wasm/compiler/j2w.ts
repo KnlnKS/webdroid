@@ -8,7 +8,8 @@ import { compileMethod } from "./method";
 import type { ClassRt, World } from "../link/world";
 import { rtfns } from "./rtfns";
 import type { LinkFailure } from "./linkage";
-import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
+import { FUEL } from "../link/sched";
+import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
 import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
 import type { NativeBinder } from "../link/hostapi";
 
@@ -22,15 +23,15 @@ export function intrinsicFor(intrinsics: Map<string, Intrinsic>, natives: Native
 export interface Base { tVT: number; tObj: number; tStr: number; tTagFn: number; tData: Record<ElemKind, number>; tArr: Record<ElemKind, number> }
 export function declareBase(mb: ModuleBuilder): Base {
   const tVT = mb.addType({ k: "array", elem: { t: T.i32, mut: true } });
-  const tObj = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i32, mut: true }], final: false });
+  const tObj = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }], final: false });
   const dataElem: Record<ElemKind, VT> = { i8: T.i8, i16: T.i16, i32: T.i32, i64: T.i64, ref: T.anyref };
   const tData = {} as Record<ElemKind, number>, tArr = {} as Record<ElemKind, number>;
   for (const k of ["i8", "i16", "i32", "i64", "ref"] as ElemKind[]) {
     tData[k] = mb.addType({ k: "array", elem: { t: dataElem[k], mut: true } });
-    tArr[k] = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i32, mut: true }, { t: ref(tData[k]), mut: false }], sup: tObj, final: false });
+    tArr[k] = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData[k]), mut: false }], sup: tObj, final: false });
   }
   // a String when it is a struct (structstrings.ts): the Object header, the chars, the cached hash code and the JS string the host has seen
-  const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i32, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
+  const tStr = mb.addType({ k: "struct", fields: [{ t: ref(tVT), mut: false }, { t: T.i64, mut: true }, { t: ref(tData.i16), mut: false }, { t: T.i32, mut: true }, { t: T.externref, mut: true }], sup: tObj, final: true });
   return { tVT, tObj, tStr, tData, tArr, tTagFn: mb.addFuncType([T.anyref], []) };
 }
 /** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
@@ -40,7 +41,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; dexOpen: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; watch: number; intern: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; dexOpen: number; pin: number; hot: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; watch: number; intern: number; sync: number; block: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
@@ -85,7 +86,8 @@ export class Compiler implements Base {
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
       info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), pin: f("pin", [T.externref], [T.i32]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
-      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), intern: f("intern", [T.externref, T.externref], [T.externref]) };
+      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
+      sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     this.str.importBuiltins();
   }
   get natives() { return this.w.natives; }
@@ -123,7 +125,7 @@ export class Compiler implements Base {
     const own = this.prog.layout(cls);
     // a class with no own fields shares its super's struct type
     if (own.length === (c.sup ? this.prog.layout(c.sup).length : 0)) { this.classStruct.set(cls, sup); return sup; }
-    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i32 as VT, mut: true }, ...own.map((f) => ({ t: this.vtOf(f.kind), mut: true }))];
+    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...own.map((f) => ({ t: this.vtOf(f.kind), mut: true }))];
     t = this.mb.addType({ k: "struct", fields, sup, final: false });
     this.classStruct.set(cls, t); return t;
   }
@@ -180,6 +182,28 @@ export class Compiler implements Base {
     const addr = COUNT_BASE + 4 * slot, n = c.scratch();
     c.i32(addr).i32(addr).mem(OP.i32_load, 2).i32(1).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
     c.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq).if_().i32(slot).call(this.imp.hot).end();
+  }
+  /** a method that calls something counts its frame (exc.ts MAX_DEPTH): `entry` takes the depth before it, which is restored on return and at a handler */
+  emitEnter(c: Code, entry: number): number[] {
+    const g = this.global("rt", "depth", T.i32, true);
+    c.gget(g).ltee(entry).i32(MAX_DEPTH).raw(OP.i32_ge_s).if_(); this.callThrower(c, "soe"); c.end();
+    c.lget(entry);
+    const weight = c.i32Patched();
+    c.raw(OP.i32_add).gset(g);
+    return [weight];
+  }
+  /** sets the depth to what it was before the frame (`frame` false) or with the frame counted (the weight, patched in at the end of the method) */
+  emitLeave(c: Code, entry: number, frame: boolean): number[] {
+    c.lget(entry);
+    const weight = frame ? [c.i32Patched()] : [];
+    if (frame) c.raw(OP.i32_add);
+    c.gset(this.global("rt", "depth", T.i32, true));
+    return weight;
+  }
+  /** the fuel check of a loop head: every FUEL iterations of its activation (`count`, a local the method started at 0) the strand gives other strands and the
+   *  event loop a turn (sched.ts). The count is a local because a global written on every iteration cost tight loops up to 2x */
+  emitFuel(c: Code, count: number): void {
+    c.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(FUEL - 1).raw(OP.i32_and).raw(OP.i32_eqz).if_(); this.callRt(c, "yieldFuel"); c.end();
   }
   /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
    *  never goes back), is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun), or is in `known`,
@@ -243,8 +267,8 @@ export class Compiler implements Base {
     this.w.allocated.add(cls); this.allocs.add(cls);
     c.call(this.local("new:" + cls, [], "L", (n) => {
       const lay = this.prog.layout(cls);
-      this.allocBytes(n, () => n.i32(8 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
-      n.gget(this.vtGlobal(cls)).refAsNonNull().i32(0);
+      this.allocBytes(n, () => n.i32(12 + lay.reduce((b, f) => b + (f.kind === "J" ? 8 : 4), 0)));
+      n.gget(this.vtGlobal(cls)).refAsNonNull().i64(0n);
       for (const f of lay) { if (f.kind === "I") n.i32(0); else if (f.kind === "J") n.i64(0n); else n.anyNull(); }
       n.structNew(this.structFor(cls));
     }, ref(this.structFor(cls))));
@@ -254,7 +278,7 @@ export class Compiler implements Base {
     const ek = elemKindOf(desc), shift = { i8: 0, i16: 1, i32: 2, i64: 3, ref: 2 }[ek];
     pushLen();
     c.call(this.local("newarray:" + desc, ["I"], "L", (n) => {
-      n.gget(this.vtGlobal(desc)).refAsNonNull().i32(0).lget(0).i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
+      n.gget(this.vtGlobal(desc)).refAsNonNull().i64(0n).lget(0).i32(shift).call(this.helper("newLen")).arrayNewDefault(this.tData[ek]).structNew(this.tArr[ek]);
     }, ref(this.tArr[ek])));
   }
   /** a function of this module: is its (anyref) argument an instance of class, interface or array `name`? null is not */
@@ -364,13 +388,43 @@ export class Compiler implements Base {
         c.lget(0).refAsNonNull().lget(p).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_add).arraySet(tVT).end();
         return c.lget(slot).finish();
       }];
+      // the header word: the identity hash in its low half, the monitor (thin lock owner and count, or an inflated monitor's index) in its high half
       case "hash": return [t([L], [T.i32]), () => {
-        const c = new Code(1), hv = c.newLocal(T.i32), g = this.global("rt", "hash", T.i32, true);
+        const c = new Code(1), w = c.newLocal(T.i64), hv = c.newLocal(T.i32), g = this.global("rt", "hash", T.i32, true);
         c.lget(0).refTest(tObj).raw(OP.i32_eqz).if_().lget(0).call(this.helper("shash")).ret().end();
-        c.lget(0).refCast(tObj).structGet(tObj, 1).ltee(hv).raw(OP.i32_eqz).if_()
-          .gget(g).i32(0x3c6ef372 | 0).raw(OP.i32_add).ltee(hv).gset(g).lget(0).refCast(tObj).lget(hv).structSet(tObj, 1).end();
+        c.lget(0).refCast(tObj).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64).ltee(hv).raw(OP.i32_eqz).if_()
+          .gget(g).i32(0x3c6ef372 | 0).raw(OP.i32_add).ltee(hv).gset(g)
+          .lget(0).refCast(tObj).lget(w).i64(0xffffffff00000000n).raw(OP.i64_and).lget(hv).raw(OP.i64_extend_i32_u, OP.i64_or).structSet(tObj, 1).end();
         return c.lget(hv).finish();
       }];
+      // menter(obj), mexit(obj): the thin lock of the header word's high half (monitor.ts): the owning strand's id << 8 | count; anything else is the host's
+      case "menter": case "mexit": {
+        const enter = name === "menter";
+        return [t([L], []), () => {
+          const c = new Code(1), o = c.newLocal(refNull(tObj)), w = c.newLocal(T.i64), l = c.newLocal(T.i32), s = c.newLocal(T.i32);
+          c.gget(this.global("rt", "sid", T.i32, true)).lset(s);
+          c.lget(0).refCast(tObj).ltee(o).structGet(tObj, 1).ltee(w).i64(32n).raw(OP.i64_shr_u, OP.i32_wrap_i64).lset(l);
+          const store = (v: () => void) => { c.lget(o).refAsNonNull(); v(); c.structSet(tObj, 1); };
+          const ours = () => c.lget(l).i32(8).raw(OP.i32_shr_u).lget(s).raw(OP.i32_eq);
+          if (enter) {
+            c.lget(l).raw(OP.i32_eqz).if_();
+            store(() => c.lget(w).lget(s).i32(8).raw(OP.i32_shl).i32(1).raw(OP.i32_or).raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl, OP.i64_or));
+            c.ret().end();
+            ours().lget(l).i32(255).raw(OP.i32_and).i32(255).raw(OP.i32_ne).raw(OP.i32_and).if_();
+            store(() => c.lget(w).i64(1n << 32n).raw(OP.i64_add));
+            c.ret().end();
+          } else {
+            ours().if_();
+            c.lget(l).i32(255).raw(OP.i32_and).i32(1).raw(OP.i32_eq).if_();
+            store(() => c.lget(w).i64(0xffffffffn).raw(OP.i64_and));
+            c.else_();
+            store(() => c.lget(w).i64(1n << 32n).raw(OP.i64_sub));
+            c.end().ret().end();
+          }
+          c.lget(0); this.callRt(c, enter ? "menterSlow" : "mexitSlow");
+          return c.finish();
+        }];
+      }
       // newLen(len, shift): the length itself once it is a legal array length and the allocation fits the budget
       case "newLen": return [t([T.i32, T.i32], [T.i32]), () => {
         const c = new Code(2), bytes = c.newLocal(T.i64), g = this.global("rt", "alloc", T.i32, true);

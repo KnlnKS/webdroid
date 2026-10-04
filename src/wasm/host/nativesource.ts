@@ -5,14 +5,14 @@ import { mangleMethod, splitSig } from "../../jvm/abi";
 import type { HostFn, NativeSource } from "../link/hostapi";
 import { Natives } from "./natives";
 import { refOf } from "./bridge";
-import { hostNatives, syncVariants } from "./hostnatives";
+import { hostNatives } from "./hostnatives";
 
 /** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
 export const lookup = (cls: string, key: string, isStatic: boolean) => {
   const spec = rt.natives.get(cls)?.methods?.[(isStatic ? "static " : "") + key];
   const production = (typeof spec === "function" ? spec : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined, id = cls + "." + key;
-  return hostNatives.get(id) ?? (production && syncVariants.get(id)?.(production)) ?? production;
+  return hostNatives.get(id) ?? production;
 };
 /** the values of natives that read the ICU data asynchronously, resolved once before they run (a native cannot suspend yet) */
 export const settled = new Map<string, unknown>();

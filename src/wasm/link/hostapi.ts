@@ -4,6 +4,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
+import type { Sched } from "./sched";
 
 export type HostFn = (...a: any[]) => unknown;
 
@@ -28,6 +29,8 @@ export interface HostBridge {
   offsetIn(host: unknown, offset: number): number;
   toJava(v: unknown, desc: string): unknown;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
+  /** sets the scope of the call in progress aside while its strand waits, and answers the function that takes it up again */
+  hold(): () => void;
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }
@@ -39,6 +42,8 @@ export interface HostContext {
   throwable(cls: string, msg: string | null): object;
   raise(throwable: object): unknown;
   bridge: HostBridge;
+  /** the strands: a Suspending import is made by `sched.suspending`, and `sched.running` is the strand a native that calls back into Java runs it as */
+  sched: Sched;
   /** records that compiled code ran into something it cannot do (World.onGap) */
   gap(what: string): void;
 }

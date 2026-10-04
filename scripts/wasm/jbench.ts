@@ -47,7 +47,7 @@ for (const name of todo) {
   try { processState(w); } catch { /* the workload reports what blocks even this */ }
   try { want = String(await js("Bench", `w_${name}`, "()I", [])); } catch (e) { want = "throw"; }
   const t0 = performance.now();
-  try { got = String(w.entry("Bench", `w_${name}`, "()I")()); } catch (e) {
+  try { got = String(await w.entryAsync("Bench", `w_${name}`, "()I")()); } catch (e) {
     got = "trap";
     const t = w.throwable(e);
     if (verbose && !hit.length) console.log("   ", t ? "uncaught " + w.classNameOf(t) : String(e).slice(0, 200));

@@ -11,6 +11,7 @@
 //   entry        host code calls Java through jentry on the JS tier, over a World and (entrytier) through ?tier=wasm: the same answers and exceptions
 //   fuzz         random verifiable methods as Wasm, on the JS tier and on the JDK (seeds 1 to 6 unless arguments are given)
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
+//   threads      threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK and the JS tier)
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
 //   g1           the jbench workloads timed in node and headless Chrome (not part of `all`)
 //   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
@@ -27,7 +28,7 @@ interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  sweep: { node: false, all: true }, aottest: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  threads: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];

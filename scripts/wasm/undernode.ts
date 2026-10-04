@@ -1,4 +1,5 @@
 // Runs a harness under node: Reflection.getCallerClass and stack symbolisation read V8's wasm frames, which Bun's JavaScriptCore lacks.
+// node 24 (V8 13.6) has JSPI only behind --experimental-wasm-jspi; Chrome has it on.
 // `import.meta.dir/url` keep naming the original source files, so the bundle can live in a temp directory.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,6 @@ export async function runUnderNode(entry: string, args: string[], env: Record<st
     } }],
   });
   if (!built.success) throw new Error(built.logs.join("\n"));
-  const r = Bun.spawnSync(["node", join(import.meta.dir, "nodeshim.mjs"), built.outputs[0].path, ...args], { stdio: ["inherit", "inherit", "inherit"], env });
+  const r = Bun.spawnSync(["node", "--experimental-wasm-jspi", join(import.meta.dir, "nodeshim.mjs"), built.outputs[0].path, ...args], { stdio: ["inherit", "inherit", "inherit"], env });
   return r.exitCode ?? 1;
 }
