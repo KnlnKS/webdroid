@@ -16,19 +16,22 @@ const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); retu
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", ""), refPath = flag("--ref", ""), v8Flags = flag("--v8-flags", "");
 const only = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && !v[i - 1]?.startsWith("--"));
 
-// ---- Bench.java with each workload cut into its own static method (as jbench.ts does)
-const out = join(tmpdir(), "g1"), src = join(root, "scripts/jbench/Bench.java");
+// ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
+const out = join(tmpdir(), "g1"), sources = [["Bench", join(root, "scripts/jbench/Bench.java")], ["G1", join(here, "java/G1.java")]];
 mkdirSync(out, { recursive: true });
 const sh = (cmd: string[]) => { const r = Bun.spawnSync(cmd, { cwd: out }); if (r.exitCode) throw new Error(`${cmd[0]}: ${r.stderr}`); };
-const names: string[] = [], text = readFileSync(src, "utf8");
-const methods = text.split("\n").flatMap((l) => {
-  const m = /^\s*((?:case "\w+": )+)(.*)$/.exec(l); if (!m) return [];
-  return [...m[1].matchAll(/"(\w+)"/g)].map((x) => (names.push(x[1]), `static int w_${x[1]}() throws Exception { String w = "${x[1]}"; ${m[2]} }`));
+const names: string[] = [], classOf = new Map<string, string>(), cut = sources.map(([cls, file]) => {
+  const text = readFileSync(file, "utf8");
+  const methods = text.split("\n").flatMap((l) => {
+    const m = /^\s*((?:case "\w+": )+)(.*)$/.exec(l); if (!m) return [];
+    return [...m[1].matchAll(/"(\w+)"/g)].map((x) => (names.push(x[1]), classOf.set(x[1], cls), `static int w_${x[1]}() throws Exception { String w = "${x[1]}"; ${m[2]} }`));
+  });
+  return { cls, file, text: text.replace(/}\s*$/, methods.join("\n") + "\n}\n") };
 });
 const dex = join(out, "classes.dex");
-if (!existsSync(dex) || statSync(dex).mtimeMs < statSync(src).mtimeMs) {
-  writeFileSync(join(out, "Bench.java"), text.replace(/}\s*$/, methods.join("\n") + "\n}\n"));
-  sh(["javac", "--release", "11", "-cp", `${androidPlatform(35)}/android.jar`, "-d", out, "Bench.java"]);
+if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file).mtimeMs)) {
+  for (const c of cut) writeFileSync(join(out, `${c.cls}.java`), c.text);
+  sh(["javac", "--release", "11", "-cp", `${androidPlatform(35)}/android.jar`, "-d", out, ...cut.map((c) => `${c.cls}.java`)]);
   sh([androidTool("d8"), "--min-api", "26", "--output", out, ...readdirSync(out).filter((f) => f.endsWith(".class")).map((f) => join(out, f))]);
 }
 const todo = names.filter((n) => !only.length || only.includes(n));
@@ -100,7 +103,7 @@ for (const engine of engines) {
       const entry = got.get(w)!;
       if (ref && mode === "js") continue;
       if (entry.blocked && (mode === "wasm" || i > 0)) continue;
-      const r = sample(await run({ mode, workload: w, reps, dex, root }));
+      const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root }));
       entry[mode].push(r);
       if (mode === "wasm" && i === 0 && (r.error || r.result !== entry.js[0].result)) entry.blocked = true;
     }

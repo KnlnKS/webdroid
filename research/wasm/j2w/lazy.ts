@@ -422,7 +422,10 @@ export class World {
     const out = [m], installed = [m], copies: MethodInfo[] = [];
     this.plan = new Map();
     if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
+    this.noteAllocations(m);
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
+      if (!out[i].codeOff || this.intrinsic(out[i])) continue;
+      if (i) this.noteAllocations(out[i]);
       for (const t of this.smallCallees(out[i]).concat(this.guarded(out[i]))) {
         const sl = this.slots[this.slotOf(t)];
         if (out.length >= MAX_GROUP || out.includes(t) || sl?.k !== "method") continue;
@@ -451,10 +454,18 @@ export class World {
       if (decl[0] === "[" || kind === "invoke-super") continue;
       const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
         : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
-      if (t && t !== m && t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE && !out.includes(t)) out.push(t);
+      if (t && t !== m && this.inlinable(t) && !out.includes(t)) out.push(t);
     }
     this.callees.set(m, out);
     return out;
+  }
+  /** the classes `m` allocates join the allocated set before its virtual calls are planned: it is about to run */
+  private noteAllocations(m: MethodInfo): void {
+    for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
+      if (ins.op !== 0x22) continue;
+      const name = descToName(m.dex.type(ins.b));
+      if (this.prog.get(name)) this.allocated.add(name);
+    }
   }
   /** the implementations of `m`'s virtual calls that are worth a guarded direct call, recorded in `plan` for the emitter */
   private guarded(m: MethodInfo): MethodInfo[] {
@@ -479,8 +490,12 @@ export class World {
       if (t) count.set(t, (count.get(t) ?? 0) + 1);
     }
     if (count.size > MAX_GUARDS) return [];
-    const small = (t: MethodInfo) => t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE;
-    return [...count].filter(([t]) => small(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    return [...count].filter(([t]) => this.inlinable(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  }
+  /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
+  private inlinable(t: MethodInfo): boolean {
+    if (this.opts.intrinsics.has(mid(t))) return true;
+    return !!t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE;
   }
   /** the gaps compiling `m` runs into, without installing it (a static check, and the unit a build-time mode would emit) */
   gapsOf(m: MethodInfo): string[] {

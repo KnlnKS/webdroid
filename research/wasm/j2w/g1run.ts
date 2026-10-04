@@ -4,7 +4,7 @@ import { loadDexes, program, world } from "./build";
 import { jsTier, natives } from "./oracle";
 import { PLATFORM_JARS } from "../../../src/jvm/provenance";
 
-export interface G1Config { mode: "wasm" | "js"; workload: string; reps: number; dex: string; root: string }
+export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
 export interface G1Result { workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; error?: string }
 
 export async function g1run(cfg: G1Config): Promise<G1Result> {
@@ -16,7 +16,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   if (w) w.onGap = () => hit++;
   const name = `w_${cfg.workload}`;
   const t0 = performance.now();
-  const call = w ? w.entry("Bench", name, "()I") : () => js("Bench", name, "()I", []);
+  const call = w ? w.entry(cfg.cls, name, "()I") : () => js(cfg.cls, name, "()I", []);
   try {
     // the first call includes linking and compiling everything the workload reaches
     out.result = String(await call());
