@@ -6,3 +6,5 @@ import type { Compiler } from "./j2w";
 
 export interface Synth { params: Kind[]; ret: Kind | "V"; body: (cx: Compiler, c: Code) => void }
 export const rtfns = new Map<string, Synth>();
+/** registers the runtime function `name` */
+export const rt = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void) => rtfns.set(name, { params, ret, body });

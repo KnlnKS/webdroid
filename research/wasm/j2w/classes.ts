@@ -11,10 +11,12 @@ import { OP } from "./code";
 import { T, refNull } from "./wasmbin";
 import { H, type ElemKind } from "./consts";
 import { ACC, type JClass } from "./program";
-import { rtfns } from "./rtfns";
+import { rt } from "./rtfns";
 import type { Code } from "./code";
 import type { Compiler, Intrinsic } from "./j2w";
 import type { World } from "./lazy";
+import { hostUnsafe, UInfo } from "./unsafe";
+import { hostReflect, RInfo } from "./reflect";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -46,6 +48,8 @@ function interfaces(w: World, name: string): string[] {
   return l;
 }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
+  if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);
+  if (kind >= UInfo.FieldGet) return hostUnsafe(w, kind, a, b);
   const name = w.nameOf(a), jc = w.prog.get(name), arr = name[0] === "[", fields = jc?.def ? jc.fields : [];
   switch (kind as Info) {
     case Info.Flags: return isPrim(name) || arr ? ACC.PUBLIC | ACC.FINAL | ACC.ABSTRACT : jc?.flags ?? ACC.PUBLIC;
@@ -99,9 +103,8 @@ export function emitRefCopy(cx: Compiler, c: Code): void {
   c.if_().lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, "acopy"); c.ret().end();
 }
 
-const rt = (name: string, params: ("I" | "L")[], ret: "I" | "L" | "V", body: (cx: Compiler, c: Code) => void) => rtfns.set(name, { params, ret, body });
 const isAssignableFrom = (cx: Compiler, c: Code) => cx.callMethod(c, cx.prog.resolve(CLASS, "isAssignableFrom", "(Ljava/lang/Class;)Z")!);
-const classMethod = (cx: Compiler, c: Code, cls: string, name: string, desc: string) => cx.callMethod(c, cx.prog.resolve(cls, name, desc)!);
+export const classMethod = (cx: Compiler, c: Code, cls: string, name: string, desc: string) => cx.callMethod(c, cx.prog.resolve(cls, name, desc)!);
 /** the class id of the (anyref) object on the stack: a String has no header, the helper answers for it */
 const vtId = (cx: Compiler, c: Code) => c.call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT);
 const field = (cx: Compiler, name: string, d: string) => cx.fieldIndex(CLASS, { owner: CLASS, name, desc: d });
@@ -234,9 +237,9 @@ rt("nameEq", ["I", "I", "L", "I"], "I", (cx, c) => {
 /** the intrinsics of this file, added to the table by intrinsics.ts */
 export const classIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => classIntrinsics.set(key, (cx, m, c) => f(cx, c));
-const idOfClass = (cx: Compiler, c: Code) => { const cs = cx.structFor(CLASS); c.refCast(cs).structGet(cs, field(cx, "dexTypeIndex", "I")); };
+export const idOfClass = (cx: Compiler, c: Code) => { const cs = cx.structFor(CLASS); c.refCast(cs).structGet(cs, field(cx, "dexTypeIndex", "I")); };
 /** a char[] of `len` characters, `char(j)` pushing character j, handed to StringFactory.newStringFromChars */
-function emitString(cx: Compiler, c: Code, len: () => void, char: (j: number) => void): void {
+export function emitString(cx: Compiler, c: Code, len: () => void, char: (j: number) => void): void {
   const w = c.newLocal(refNull(cx.tArr.i16)), data = c.newLocal(refNull(cx.tData.i16)), n = c.newLocal(T.i32), j = c.newLocal(T.i32);
   len(); c.lset(n);
   cx.emitNewArray(c, "[C", () => c.lget(n)); c.lset(w).lget(w).structGet(cx.tArr.i16, 2).lset(data);
