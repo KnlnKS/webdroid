@@ -61,6 +61,12 @@ const rangesOf = (m: MethodInfo): Map<number, [number, number]> => {
   return out;
 };
 
+/** whether a native that answers a Promise where it was not expected to may still wait: its call site settles the Promise with a Suspending import. Not one with arrays,
+ *  whose views are scratch memory other strands reuse while this one waits; a Suspending native keeps private copies of them */
+const parkable = (p: Plan): boolean => !p.suspends && !p.always && !p.retArray && !p.args.some(isPrimArray);
+/** the import that settles a Promise answered by a native whose import returns `ret` */
+const settleKey = (p: Plan): string => "settle:" + (p.ret === null ? "v" : p.ret === T.externref ? "x" : p.ret === T.i64 ? "j" : p.ret === T.f32 ? "f" : p.ret === T.f64 ? "d" : "i");
+
 interface Plan {
   id: string; fn: HostFn; recv: boolean;
   /** whether it may answer a Promise: it then has a Suspending import beside its plain one (`id#s`), which a strand's stack calls, since the plain one cannot wait */
@@ -112,7 +118,7 @@ export class Natives implements NativeBinder {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn), always: !!fn && waitsAlways(fn), initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, suspends: !!fn && suspends(id, fn, args.some(isPrimArray) || isPrimArray(rd)), always: !!fn && waitsAlways(fn), initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, ranges: rangesOf(m), retArray, retString: rd === STRING, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
     this.byMethod.set(m, p);
     return p;
   }
@@ -130,6 +136,7 @@ export class Natives implements NativeBinder {
       for (const key of p.suspends && !p.always ? [p.id, p.id + "#s"] : [p.id]) {
         if (!cx.nativeImports.has(key)) cx.nativeImports.set(key, cx.mb.importFunc("n", key, cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])));
       }
+      if (parkable(p) && !cx.nativeImports.has(settleKey(p))) cx.nativeImports.set(settleKey(p), cx.mb.importFunc("n", settleKey(p), cx.mb.addFuncType([], p.ret === null ? [] : [p.ret])));
     };
     const string = cx.prog.get(STRING_CLASS);
     for (const m of methods) {
@@ -172,7 +179,20 @@ export class Natives implements NativeBinder {
       c.lget(i);
       if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (d === STRING) cx.str.toHost(c); else if (t === T.externref) c.externConvertAny();
     });
-    if (!restore) c.call(imp);
+    if (!restore) {
+      c.call(imp);
+      // the native answered a Promise: this strand settles it, waiting on its own stack, and takes its value in place of the placeholder the import answered
+      if (parkable(p)) {
+        const settle = cx.nativeImports.get(settleKey(p))!, wait = cx.global("rt", "wait", T.i32, true);
+        c.gget(wait);
+        if (p.ret === null) c.if_(); else c.ifType(cx.mb.addFuncType([p.ret], [p.ret]));
+        if (p.ret !== null) c.drop();
+        const save = emitSave(cx, c);
+        c.i32(0).gset(wait).call(settle);
+        save();
+        c.end();
+      }
+    }
     else if (p.always) { c.call(imp); restore(); }
     else {
       // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
@@ -255,6 +275,7 @@ export class Natives implements NativeBinder {
       give: (list) => { for (const [ptr, copy] of list) new Uint8Array(ctx.mem.buffer, ptr, copy.byteLength).set(new Uint8Array(copy.buffer, copy.byteOffset, copy.byteLength)); },
     };
     for (const key of ids) {
+      if (key.startsWith("settle:")) { out[key] = ctx.sched.settle() as HostFn; continue; }
       const waits = key.endsWith("#s"), id = waits ? key.slice(0, -2) : key, p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
       const suspending = waits || p.always, cache = waits ? (p.waiting ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
@@ -263,7 +284,7 @@ export class Natives implements NativeBinder {
         reportSuspended(id);
         ctx.gap(`${id}: native suspended (answers a Promise)`);
         return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` });
-      }, view, put, ctx.bridge, aux, suspending);
+      }, view, put, ctx.bridge, parkable(p) ? { ...aux, canWait: () => ctx.sched.canWait(), park: (promise) => { reportSuspended(id); ctx.sched.parkNative(promise); } } : aux, suspending);
       cache.set(ctx, out[key] = adaptImport(planned, ctx, suspending));
     }
     return out;
@@ -274,6 +295,9 @@ interface Aux {
   sp(): number; setSp(v: number): void;
   own(list: [number, View][], kind: string, ptr: number, len: number): View | null;
   give(list: [number, View][]): void;
+  /** a plain native answered a Promise: whether this stack can wait for it, and handing it to the call site to settle */
+  canWait?(): boolean;
+  park?(promise: Promise<unknown>): void;
 }
 type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: View | null) => number,
   B: HostBridge, D: string[], RD: string | null, CLS: string | null, X: Aux, S: (e: unknown) => void) => HostFn;
@@ -284,8 +308,8 @@ const makers = new Map<string, Maker>();
  *  A Suspending native is the same in an async function: it works on private copies of its arrays, and the Bridge scope it opened is set
  *  aside while it waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
-  const objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp;
+  const parked = parkable(p), objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null) + JSON.stringify([...p.ranges]) + susp + parked + (p.ret ?? "v");
   let make = makers.get(key);
   if (!make) {
     const at: number[] = [];
@@ -303,7 +327,10 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
     const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
     // the arrays and the scratch top as they were when the call began, set again after the wait
-    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp);X.give(own)}` : "if(r instanceof Promise)return suspended();";
+    // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
+    const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}return r}catch(e){return raise(e)}finally{${scope[1]}}`;
+    const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
+    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp)}X.give(own);` : parked ? park : "if(r instanceof Promise)return suspended();";
     make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
 try{${wait}${toJava}}catch(e){return raise(e)}finally{${scope[1]}}
 ${result}}`) as Maker;

@@ -7,6 +7,7 @@ import type { HostFn, HostSpec, NativeSource } from "../link/hostapi";
 import { Natives } from "./natives";
 import { refOf } from "./bridge";
 import { hostNatives } from "./hostnatives";
+import { mayWait } from "./suspend";
 
 /** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
@@ -38,3 +39,13 @@ export const nativeSource: NativeSource = {
   },
 };
 export const natives = new Natives(nativeSource);
+
+/** the ids (class.name+descriptor) of the registered natives that can answer a Promise (suspend.ts `mayWait`), for the platform build to hand to pages */
+export function waitingNatives(): string[] {
+  const ids = new Set<string>();
+  const add = (id: string, fn: unknown) => { if (typeof fn === "function" && mayWait(fn as HostFn)) ids.add(id); };
+  for (const [key, fn] of rt.jni) add(key.replace("|", "."), fn);
+  for (const [cls, spec] of rt.natives) for (const [key, impl] of Object.entries(spec.methods ?? {})) add(`${cls}.${key.replace(/^static /, "")}`, typeof impl === "string" ? spec.ctor.prototype[impl] : impl);
+  for (const [id, fn] of hostNatives) add(id, fn);
+  return [...ids].sort();
+}

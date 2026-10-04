@@ -4,7 +4,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
-import type { Sched } from "./sched";
+import type { Sched, Strand } from "./sched";
 
 export type HostFn = (...a: any[]) => unknown;
 
@@ -50,6 +50,8 @@ export interface HostBridge {
   hold(): () => void;
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
+  /** `invoke` on strand `s`, whose stack can wait: a Promise of the host value when the call waited */
+  invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }
 
 /** what the host side needs from the World */

@@ -11,6 +11,7 @@ import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { Compiler } from "../compiler/j2w";
 import type { World } from "../link/world";
+import type { Strand } from "../link/sched";
 import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
 import { count } from "./stats";
@@ -159,6 +160,7 @@ export class Bridge implements HostBridge {
     const proxy = new Proxy(Object.create(throwable ? JThrowable.prototype : Object.prototype), {
       get(t, p) {
         if (p === REF) return o;
+        if (p === "jframes" && throwable) return bridge.frames(o);
         const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
         if (!f) {
           if (typeof p === "string" && p.startsWith("m$")) return bridge.method(o, name, p);
@@ -177,6 +179,12 @@ export class Bridge implements HostBridge {
     });
     this.facades.set(o, proxy); this.owners.set(proxy, o);
     return proxy;
+  }
+
+  /** the Java frames the throwable `o` recorded, for the report of an exception nothing caught */
+  private frames(o: object): string[] | undefined {
+    const f = this.fieldsOf(THROWABLE).get(mangleField(THROWABLE, "backtrace")), state = f && this.accessor("get", f)(o);
+    return state ? this.w.stackTrace(state).map((x) => `${x.cls}.${x.method}:${x.line}`) : undefined;
   }
 
   // ---------- host objects (hostclass.ts)
@@ -252,6 +260,24 @@ export class Bridge implements HostBridge {
     } finally { if (!nested) this.end(mark); }
   }
 
+  /** `invoke` on strand `s`, whose stack can wait: the host value, or a Promise of it when the call waited. The call itself has no scope: the natives it reaches open their own,
+   *  and one scope that outlived them would hand a native the copy of an array an earlier native reached */
+  invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
+    const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
+    const call = this.w.callFn(`c:${m.cls}.${m.key}`, kinds, rk, (cx, c, arg) => {
+      if (m.isStatic) cx.emitEnsure(c, m.cls);
+      kinds.forEach((_, i) => arg(i));
+      cx.callMethod(c, m);
+    });
+    const given = this.scoped(() => args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i])));
+    const finish = (r: unknown) => this.scoped(() => {
+      args.forEach((a, i) => { if (ArrayBuffer.isView(a) && given[i] && !this.owners.has(a)) this.readBack(given[i] as object, a); });
+      return rk === "V" ? undefined : rk === "L" ? this.toHost(r, m.ret) : fromBits(r as number | bigint, m.ret);
+    });
+    const r = call(s, ...(m.isStatic ? [] : [recv]), ...given);
+    return r instanceof Promise ? r.then(finish) : finish(r);
+  }
+
   // ---------- host to Java
   toJava(v: unknown, desc: string): unknown {
     if (v === null || v === undefined) return null;
@@ -264,7 +290,7 @@ export class Bridge implements HostBridge {
     if (java) return java;
     const cls = this.src?.classOf?.(o);
     if (cls) return this.copyObject(o as Record<string, unknown>, cls);
-    throw new Error(`a native returned a host value of no Java class where ${desc} was expected`);
+    throw new Error(`a native returned a host value of no Java class (${(o as { constructor?: { name?: string } }).constructor?.name}) where ${desc} was expected`);
   }
   private readBack(j: object, host: ArrayBufferView): void {
     const bytes = host.byteLength, at = this.region(bytes);

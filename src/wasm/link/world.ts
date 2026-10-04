@@ -14,7 +14,7 @@ import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { Sched, defaultLoop, ROOT, type HostLoop } from "./sched";
+import { Sched, defaultLoop, ROOT, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, typeName } from "./classes";
 import { HostClasses } from "./hostclass";
@@ -108,7 +108,7 @@ export class World {
   /** the classes the host implements (hostclass.ts) */
   hosts = new HostClasses(this);
   host: Record<string, Function>;
-  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; classId: (o: object) => number };
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
   private synth = new Map<string, number>();
@@ -400,6 +400,7 @@ export class World {
     mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
     mb.export("depth", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     mb.export("iw", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    mb.export("wait", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
@@ -409,10 +410,10 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, classId: x.classId };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, mem: this.mem, sp: this.sp }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -876,6 +877,40 @@ export class World {
       this.hostFns.set(name, f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m);
     }
     return f as never;
+  }
+  private callFns = new Map<string, (s: Strand, ...a: any[]) => unknown>();
+  /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
+   *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
+   *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
+  callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void): (s: Strand, ...a: any[]) => unknown {
+    let f = this.callFns.get(name);
+    if (f) return f;
+    const cx = new Compiler(this), vt = ret === "V" ? T.i32 : kindVT(cx.tObj, ret);
+    const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "anyref", mutable: true } as never, null);
+    const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "anyref" : "i32", mutable: true } as never, ret === "J" ? 0n : ret === "L" ? null : 0);
+    const { bytes } = cx.buildSynthetic(name, ["I", ...params], (c) => {
+      const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.anyref, true);
+      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(vt);
+      c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
+      body(cx, c, (i) => { c.lget(i + 1); });
+      if (res >= 0) c.lset(res).lget(res).gset(value);
+      c.lget(0).gset(done);
+      if (res >= 0) c.lget(res);
+      c.ret().end().unreachable().end();
+      c.lset(e).lget(e).gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
+    }, ret);
+    const fn = (this.instantiate(bytes, { ...this.unitImports(cx), call: { d, v, x: thr } }).exports as Record<string, any>).m as Function;
+    let token = 0;
+    this.callFns.set(name, f = (s, ...args) => {
+      token = token % 0x3fffffff + 1;
+      const mine = token, p = s.call(fn, mine, ...args) as Promise<unknown>;
+      const state = d.value as number;
+      if (state !== mine && state !== -mine) return p;
+      p.catch(() => {});
+      if (state < 0) throw this.exception(thr.value as object);
+      return ret === "V" ? undefined : v.value;
+    });
+    return f;
   }
   /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
   fieldReader<T = unknown>(cls: string, name: string, desc: string): (obj: object) => T {
