@@ -446,6 +446,13 @@ ${profileEnd}
     out.push(quiet ? `R.quiet.types=${JSON.stringify(quiet)};${assignTo}=${expr};R.quiet.types=null;${this.suspend(assignTo)}` : `${assignTo}=${expr};${this.suspend(assignTo)}`);
   }
 
+  /** a cache read whose miss resolves through `slow`: a hit is a constructor or function, so only a
+   *  miss tests for a Promise (instanceof walks a hit's whole prototype chain) */
+  private guardMiss(fast: string, slow: string, out: string[], assignTo = this.u) {
+    if (this.cold) { this.guard(`${fast}??${slow}`, out, assignTo); return; }
+    out.push(`${assignTo}=${fast};${this.suspend(assignTo, `${assignTo}===undefined&&(${assignTo}=${slow}) instanceof Promise`)}`);
+  }
+
   /** The classes a hot call's throwables skip their stack capture for (discard.ts): its try item's
    *  handlers discard them, and the call returns nothing that could be one. */
   private quietTypes(i: Ins): string | undefined {
@@ -459,13 +466,13 @@ ${profileEnd}
     return types;
   }
 
-  private suspend(value: string): string {
+  private suspend(value: string, pending = `${value} instanceof Promise`): string {
     if (this.cold) {
       // A cold handler returns the Promise it waits on. Only a call result resumes past the
       // handler (F.$w); a class-init or resolution wait reruns it once its cache is filled.
       return `if(${value} instanceof Promise){F.$w=${value === this.t ? 1 : 0};return ${value};}`;
     }
-    const resume = ++this.resumes, save = `if(${value} instanceof Promise){$r=${resume};break $d}`;
+    const resume = ++this.resumes, save = `if(${pending}){$r=${resume};break $d}`;
     return this.resuming ? `${save}case -${resume}:if($r){$r=0;if($F.e)throw $F.x;${value}=$F.val;}` : save;
   }
 
@@ -532,7 +539,7 @@ ${profileEnd}
         const tname = descToName(dex.type(i.b));
         if (tname === "java/lang/String") { out.push(`${this.reg(i.a)}="";`); break; }
         if (tname === this.info.name) out.push(`${this.u}=D.cl[${this.literal(i.b)}]??D.link(${this.literal(i.b)});`);
-        else this.guard(`D.ic[${this.literal(i.b)}]??D.init(${this.literal(i.b)}${this.fromArg})`, out, this.u);
+        else this.guardMiss(`D.ic[${this.literal(i.b)}]`, `D.init(${this.literal(i.b)}${this.fromArg})`, out, this.u);
         out.push(`${this.reg(i.a)}=new ${this.u}();`);
         break;
       }
@@ -648,9 +655,9 @@ ${profileEnd}
     if (typeIdx >= 0 && descToName(this.dex.type(typeIdx)) === this.info.name && !this.info.isInterface) {
       out.push(`${this.u}=D.cl[${this.literal(typeIdx)}]??D.link(${this.literal(typeIdx)});`);
     } else if (typeIdx >= 0) {
-      this.guard(`D.ic[${this.literal(typeIdx)}]??D.init(${this.literal(typeIdx)}${this.fromArg})`, out, this.u);
+      this.guardMiss(`D.ic[${this.literal(typeIdx)}]`, `D.init(${this.literal(typeIdx)}${this.fromArg})`, out, this.u);
     } else {
-      this.guard(`D.fs[${this.literal(i.b)}]??D.rsf(${this.literal(i.b)}${this.fromArg})`, out, this.u);
+      this.guardMiss(`D.fs[${this.literal(i.b)}]`, `D.rsf(${this.literal(i.b)}${this.fromArg})`, out, this.u);
     }
     out.push(isGet ? `${this.reg(i.a)}=${this.u}${this.prop(prop)};` : `${this.u}${this.prop(prop)}=${isRef(this.dex.type(this.dex.field(i.b).type)) ? this.ref(i.a) : this.reg(i.a)};`);
   }
@@ -726,7 +733,7 @@ ${profileEnd}
         // private method is on no implementor's prototype chain.
         if (this.cold || this.info.native || clsName === "java/lang/String" || (this.R.classDefOf(clsName)?.def.flags ?? 0) & ACC.INTERFACE) {
           if (own) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
-          else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
+          else this.guardMiss(`D.dp[${this.literal(i.b)}]`, `D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
           this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out, this.t, quiet);
           break;
         }
@@ -734,14 +741,14 @@ ${profileEnd}
         // through Function.prototype.call records no target, so V8 never inlined one)
         const k = this.ics++;
         if (own) out.push(`$ic[${k}]??D.rdc0($ic,${k},${i.b});`);
-        else this.guard(`$ic[${k}]??D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
+        else this.guardMiss(`$ic[${k}]`, `D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
         this.guard(`${recv}.${directName(clsName, mangled)}(${argStr})`, out, this.t, quiet);
         break;
       }
       case "invoke-static": {
         const own = clsName === this.info.name;
         if (own && this.cold) out.push(`${this.u}=D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)});`);
-        else if (!own) this.guard(`D.ic[${this.literal(mref.cls)}]??D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
+        else if (!own) this.guardMiss(`D.ic[${this.literal(mref.cls)}]`, `D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
         const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
         this.guard(`${own && !this.cold ? "C" : this.u}${this.prop(mangled)}(${args})`, out, this.t, quiet);
         break;
