@@ -5,8 +5,7 @@ import { emitRefCopy, classIntrinsics } from "./classes";
 import { unsafeIntrinsics } from "./unsafe";
 import { reflectIntrinsics } from "./reflect";
 import { H, type ElemKind } from "./consts";
-import { stringIntrinsics, structStrings } from "./strings";
-import { structIntrinsics } from "./structstrings";
+import { stringIntrinsics } from "./strings";
 import { charIntrinsics } from "./chars";
 import { threadIntrinsics } from "./threads";
 import { refIntrinsics } from "./refs";
@@ -17,7 +16,7 @@ import { inetIntrinsics } from "./inet";
 import { proxyIntrinsics } from "./proxy";
 import { annotationIntrinsics } from "./annotations";
 
-export const intrinsics = new Map<string, Intrinsic>([...(structStrings ? structIntrinsics : stringIntrinsics), ...charIntrinsics]);
+export const intrinsics = new Map<string, Intrinsic>([...stringIntrinsics, ...charIntrinsics]);
 export const externs: string[] = [];             // statics of classes the program may lack (d8 also emits Double.isNaN calls)
 const def = (key: string, f: Intrinsic, extern = false) => { intrinsics.set(key, f); if (extern) externs.push(key); };
 

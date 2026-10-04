@@ -9,8 +9,7 @@ import type { ClassRt, World } from "./lazy";
 import { rtfns } from "./rtfns";
 import type { LinkFailure } from "./linkage";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, HOT_BUDGET, type Thrower } from "./exc";
-import { JsStrings, stringCtor, structStrings, type StringRepr } from "./strings";
-import { StructStrings } from "./structstrings";
+import { StructStrings, stringCtor, type StringRepr } from "./strings";
 import type { Natives } from "./natives";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -77,8 +76,8 @@ export class Compiler implements Base {
     mb.importTable("rt", "table", T.funcref, 0);
     mb.importTable("rt", "strs", T.externref, 0);
     mb.importTable("rt", "nm", T.externref, 0);
-    this.str = structStrings ? new StructStrings(this) : new JsStrings(this);
-    if (structStrings) this.classStruct.set("java/lang/String", this.tStr);
+    this.str = new StructStrings(this);
+    this.classStruct.set("java/lang/String", this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
     const f = (name: string, p: VT[], r: VT[]) => mb.importFunc("host", name, mb.addFuncType(p, r));
     this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
