@@ -37,6 +37,7 @@ public class W {
   public static double farith(double a, double b) { return a * b - a / b + a % b + -a; }
   public static float farithf(float a, float b) { return a * b - a / b + a % b + -a; }
   public static int sparse(int x) { switch (x) { case -5: return 1; case 1000: return 2; case 65536: return 3; case Integer.MAX_VALUE: return 4; default: return 0; } }
+  public static int sparse9(int x) { int r = 0; for (int i = 0; i < 3; i++) { switch (x * 7 + i * 1000) { case -90000: r += 1; break; case -1000: r += 2; break; case 0: r += 3; continue; case 1000: r += 4; case 2000: r += 5; break; case 7000: r += 6; break; case 9000: r += 7; break; case 40000: r += 8; break; case 1 << 30: r += 9; break; case Integer.MIN_VALUE: r += 10; break; default: r -= 1; } } return r; }
   public static int dense(int x) { int r = 0; for (int i = 0; i < 2; i++) { switch (x + i) { case -2: r += 1; break; case -1: r += 2; break; case 0: r += 3; continue; case 1: r += 4; break; case 3: r += 6; break; case 4: r += 7; break; case 6: r += 9; break; case 7: r += 10; break; default: r -= 1; } r *= 3; } return r; }
   public static int packed(int x) { switch (x) { case 3: return 30; case 4: return 40; case 5: return 50; case 7: return 70; default: return -3; } }
   public static int tryDiv(int a, int b) { try { return a / b; } catch (ArithmeticException e) { return -1; } }

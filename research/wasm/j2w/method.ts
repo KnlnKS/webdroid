@@ -521,9 +521,19 @@ export class MC {
       this.pop(); c.end();
       return;
     }
-    for (const [key, target] of cases) {
-      this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(target, false); this.pop(); c.end();
-    }
+    // sparse keys: a binary search down to runs of at most three compares
+    const sorted = [...cases].sort((x, y) => x[0] - y[0]);
+    const search = (from: number, to: number) => {
+      if (to - from > 3) {
+        const mid = (from + to + 1) >> 1;
+        this.get("I", ins.a); c.i32(sorted[mid][0]).raw(OP.i32_lt_s).if_(); this.push("if"); search(from, mid - 1); this.pop(); c.else_(); this.push("if"); search(mid, to); this.pop(); c.end();
+        return;
+      }
+      for (const [key, target] of sorted.slice(from, to + 1)) {
+        this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(target, false); this.pop(); c.end();
+      }
+    };
+    search(0, sorted.length - 1);
   }
   finishResult(ins: Ins, kind: Kind | "V") {
     // fold a following move-result into the producer
