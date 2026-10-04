@@ -3,8 +3,8 @@
 //   bun run wasm conform <suite|quick> [class-substring | --test name-substring] [--no-js] [--jobs n]
 // A test that passes in the baseline and fails on the Wasm tier is a regression. A test the two tiers answer differently is a divergence: it must be pinned in
 // tests/conformance/wasm-pins.json with its mechanism (the JS tier is wrong, or a limit the Wasm tier has), or the run fails it as unexplained, and a pin that
-// no longer diverges is stale. A pin is a class regex, a test-name regex and a `why`; with `skipped` (a regex) it covers only the tests of methods the Wasm
-// tier's runner skipped for a reason that matches. A `flaky` pin names tests whose result depends on timing and varies from run to run on both tiers: it is never stale.
+// no longer diverges is stale. A pin is a class regex, a test-name regex and a `why`; with `because` (a regex) it covers only the tests whose Wasm result has a reason that matches:
+// the test's own failure, the reason its runner gave for skipping the method, or the failure of the whole class. A `flaky` pin names tests whose result depends on timing and varies from run to run on both tiers: it is never stale.
 import { existsSync } from "node:fs";
 import { prepare } from "../conform/prepare";
 import { hash, parseLines, type Outcome } from "../conform/results";
@@ -18,7 +18,7 @@ const QUICK: [suite: string, classMatch: string][] = [
 ];
 const PINS_PATH = "tests/conformance/wasm-pins.json";
 const CLASS_TIMEOUT_MS = Number(process.env.CONFORM_TIMEOUT ?? 600_000);
-type Pins = Record<string, { class: string; test: string; skipped?: string; flaky?: boolean; why: string }[]>;
+type Pins = Record<string, { class: string; test: string; because?: string; flaky?: boolean; why: string }[]>;
 
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
@@ -79,15 +79,15 @@ for (const [suiteName, classMatch] of plan) {
     console.log(`  ${tier.padEnd(4)} ${cls}: ${pass} pass, ${r.tests.size - pass} fail${note} (${r.seconds.toFixed(1)}s)${r.tests.has(cls) ? ` class failed: ${r.tests.get(cls)!.message}` : ""}`);
   });
 
-  const rules = (pins[suiteName] ?? []).map((p) => ({ ...p, cls: new RegExp(p.class), test: new RegExp(p.test), skipped: p.skipped ? new RegExp(p.skipped) : null, hits: 0 }));
-  let wasmPass = 0, jsPass = 0, tests = 0, before = 0;
+  const rules = (pins[suiteName] ?? []).map((p) => ({ ...p, cls: new RegExp(p.class), test: new RegExp(p.test), because: p.because ? new RegExp(p.because) : null, hits: 0 }));
+  let wasmPass = 0, jsPass = 0, tests = 0, before = 0, drift = 0;
   const regressions: string[] = [], unexplained: string[] = [];
   for (const cls of selected) {
     const w = wasm.get(cls)!, j = js.get(cls), passed = new Set(baseline[cls] ?? []), explained = new Set<string>(), skips = skipped.get(cls)!;
-    // a pin names a mechanism; one that is a skip applies to the tests of the methods the Wasm tier skipped for that reason
+    // a pin names a mechanism; one with `because` applies to the tests of the methods the Wasm tier skipped for that reason, or of a class it failed as a whole
     const pinOf = (name: string) => {
-      const stem = name.slice(0, name.search(/[[(]/)), reason = [...skips].find(([n]) => n.slice(0, n.search(/[[(]/)) === stem)?.[1];
-      return rules.find((r) => r.cls.test(cls) && r.test.test(name) && (!r.skipped || (reason !== undefined && r.skipped.test(reason))));
+      const stem = name.slice(0, name.search(/[[(]/)), reasons = [[...skips].find(([n]) => n.slice(0, n.search(/[[(]/)) === stem)?.[1], w.get(cls)?.message, w.get(name)?.message, w.size && [...w.values()].every((o) => !o.ok) ? [...w.values()][0].message : undefined];
+      return rules.find((r) => r.cls.test(cls) && r.test.test(name) && (!r.because || reasons.some((reason) => reason !== undefined && r.because!.test(reason))));
     };
     before += passed.size;
     for (const o of w.values()) { tests++; if (o.ok) wasmPass++; }
@@ -104,12 +104,12 @@ for (const [suiteName, classMatch] of plan) {
     }
     // a baseline test the JS tier no longer runs either is the baseline's drift
     const ran = new Set([...w.keys(), ...(j?.keys() ?? [])].map(hash)), vanished = [...passed].filter((h) => !ran.has(h) && !explained.has(h)).length;
-    if (vanished && !testFilter) regressions.push(`${cls}: ${vanished} passing tests no longer ran`);
+    if (vanished && !testFilter) { if (j) drift += vanished; else regressions.push(`${cls}: ${vanished} passing tests no longer ran`); }
   }
   for (const r of rules) if (!r.hits && !r.flaky && !classMatch && !testFilter && withJs) unexplained.push(`pin ${r.class} ${r.test}  matches no divergence any more`);
   totals.wasm += wasmPass; totals.js += jsPass; totals.tests += tests; totals.baseline += before;
   const pinned = rules.reduce((n, r) => n + r.hits, 0);
-  console.log(`${suiteName}: wasm ${wasmPass}/${tests}${withJs ? `, js ${jsPass}` : ""}, baseline ${before}; ${regressions.length} regressions, ${pinned} pinned divergences, ` +
+  console.log(`${suiteName}: wasm ${wasmPass}/${tests}${withJs ? `, js ${jsPass}` : ""}, baseline ${before}; ${regressions.length} regressions, ${pinned} pinned divergences${drift ? `, ${drift} baseline tests neither tier runs` : ""}, ` +
     `${unexplained.length} unexplained (${((performance.now() - started) / 1000).toFixed(0)}s wall, ${seconds.wasm.toFixed(0)}s wasm${withJs ? ` ${seconds.js.toFixed(0)}s js` : ""})`);
   for (const r of grouped(regressions)) console.log(`  regressed ${r}`);
   for (const r of grouped(unexplained)) console.log(`  diverges ${r}`);

@@ -34,6 +34,9 @@ export const nativeSource: NativeSource = {
   thrown: (e) => {
     const java = refOf(e);
     if (java) return { cls: "", msg: null, java };
+    // a JS error escaping a native is the Java throwable the JS tier makes of it (rt.jx): a TypeError on null is a NullPointerException, a typed array too long an OutOfMemoryError.
+    // A suspension the engine refused is the harness's to see
+    if (e instanceof Error && e.name !== "SuspendError") e = rt.jx(e);
     return e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg, obj: e } : undefined;
   },
 };

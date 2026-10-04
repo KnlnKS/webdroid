@@ -24,7 +24,7 @@ export const ROOT = 1;
 /** operations that answer at once (`host.sync`) */
 export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, BindMain, Plain }
 /** operations that may wait (`host.block`, Suspending) */
-export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init }
+export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
 const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
 const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
@@ -299,6 +299,7 @@ export class Sched {
       // b: a turn of the timer queue rather than of the yield channel, which the engine runs its finalizers between
       case Block.Yield: return b ? new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); }) : this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : Promise.resolve(St.Ok);
       case Block.Init: return this.initWait(s, a);
+      case Block.Net: return (this.w.opts.net?.wait?.(this.w) ?? Promise.resolve()).then(() => St.Ok);
     }
   }
   /** LockSupport.park: returns on a permit, the deadline or an interrupt (which stays set) */

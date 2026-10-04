@@ -408,7 +408,7 @@ const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
 const headerMap = driven(function* (groups: Iterable<[string | null, string[]]>): Gen<JObj> {
-  const m = rt.make("java/util/HashMap");
+  const m: JObj = yield newObj("java/util/HashMap");
   for (const [k, v] of groups) yield vcall(m, "put", PUT, k, newArrayList(v));
   return m;
 });

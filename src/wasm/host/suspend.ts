@@ -29,6 +29,9 @@ const MAY_SUSPEND = new Set<string>([
   "android/text/AndroidCharacter.getMirror(C)C",
   "android/text/AndroidCharacter.getDirectionalities([C[BI)V",
   "android/text/AndroidCharacter.getEastAsianWidths([CII[B)V",
+  "java/net/SocketInputStream.socketRead0(Ljava/io/FileDescriptor;[BIII)I",
+  "libcore/io/Linux.connect(Ljava/io/FileDescriptor;Ljava/net/InetAddress;I)V",
+  "libcore/io/Linux.recvfromBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;IIILjava/net/InetSocketAddress;)I",
 ]);
 /** natives found answering a Promise from a plain import: the report in run.json (`nativeSuspended`), and imported as Suspending in modules built afterwards */
 export const suspendedNatives = new Set<string>();

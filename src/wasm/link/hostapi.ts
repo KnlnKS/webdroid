@@ -86,4 +86,8 @@ export interface NativeBinder {
 }
 
 /** answers `host.net` for libcore's getaddrinfo (inet.ts): an address count or minus an EAI code for a lookup, a byte of a found address */
-export type HostNet = (w: World, op: number, node: string, a: number, b: number) => number;
+export interface HostNet {
+  (w: World, op: number, node: string, a: number, b: number): number;
+  /** settles the lookup the last Resolve answered ASYNC for, after which the same Resolve answers it */
+  wait?(w: World): Promise<void>;
+}

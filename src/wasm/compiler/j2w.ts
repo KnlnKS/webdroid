@@ -264,6 +264,8 @@ export class Compiler implements Base {
   }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
+    // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
+    if (cls === "java/lang/String") { this.str.literal(c, ""); return; }
     this.w.allocated.add(cls); this.allocs.add(cls);
     c.call(this.local("new:" + cls, [], "L", (n) => {
       const lay = this.prog.layout(cls);

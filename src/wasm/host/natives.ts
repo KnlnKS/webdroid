@@ -173,12 +173,19 @@ export class Natives implements NativeBinder {
       if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (d === STRING) cx.str.toHost(c); else if (t === T.externref) c.externConvertAny();
     });
     if (!restore) c.call(imp);
-    else if (p.always) { c.call(imp); restore(); }
     else {
-      // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
-      c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).ifType(cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])).call(imp).else_().call(cx.nativeImports.get(p.id + "#s")!);
-      restore();
+      // a throw out of the call finds the globals as another strand left them: they are set again before it goes on
+      const results = p.ret === null ? [] : [p.ret], run = cx.mb.addFuncType(p.params, results), thrown = cx.mb.addFuncType(p.params, [T.exnref]);
+      c.blockType(run).blockType(thrown).tryTableType(run, [[3, 0, 0]]);
+      if (p.always) c.call(imp);
+      else {
+        // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
+        c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).ifType(run).call(imp).else_().call(cx.nativeImports.get(p.id + "#s")!).end();
+      }
+      c.end().br(1).end();
+      restore(); c.throwRef();
       c.end();
+      restore();
     }
     if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) { if (p.retString) cx.str.fromHost(c); else c.anyConvertExtern(); }
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
@@ -309,7 +316,7 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
     const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
     // the arrays and the scratch top as they were when the call began, set again after the wait
-    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp);X.give(own)}else X.give(own);` : "if(r instanceof Promise)return suspended();";
+    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp);X.give(own)}else X.give(own);` : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
     make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
 try{${wait}${toJava}}catch(e){return raise(e)}finally{${scope[1]}}
 ${result}}`) as Maker;
