@@ -22,7 +22,7 @@ for (const f of frames.slice(0, 3)) {
 check("lines follow the source", frames[0].line < frames[1].line && frames[1].line < frames[2].line, true);
 // the same after the three methods have run enough to be recompiled with each other copied in (the frames of a copy carry the same names)
 const callA = w.entry("Ex", "a", "(I)Ljava/lang/Throwable;");
-for (let i = 0; i < 6000; i++) callA(0);
+for (let i = 0; i < 6000 || (!w.stats.upgrades && i < 1e6); i++) callA(0); // the second tier waits until the program has been hot for a few ms
 check("methods were recompiled", w.stats.upgrades > 0, true);
 const hot = w.stackTrace(w.fieldReader("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(callA(1) as object) as object);
 check("frames after the second tier", hot.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" "), frames.slice(0, 3).map((f) => `${f.cls}.${f.method}:${f.pc}:${f.line}`).join(" "));

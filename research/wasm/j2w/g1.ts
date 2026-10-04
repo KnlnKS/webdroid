@@ -62,7 +62,7 @@ async function chromeRun() {
   const iso = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
   const server = Bun.serve({ port: 0, fetch(req) {
     const u = new URL(req.url), p = u.pathname;
-    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(root)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const t0=performance.now();globalThis.G1_MODULES={};await Promise.all(${JSON.stringify(startup.map((f) => join(aotDir!, f)))}.map(async(p)=>G1_MODULES[p]=${process.env.G1_STREAM ? 'await WebAssembly.compileStreaming(fetch("/m?p="+encodeURIComponent(p)),{builtins:["js-string"],importedStringConstants:"#"})' : 'await WebAssembly.compile(await (await fetch("/m?p="+encodeURIComponent(p))).arrayBuffer(),{builtins:["js-string"],importedStringConstants:"#"})'}}));globalThis.G1_AHEAD=performance.now()-t0;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(root)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const t0=performance.now();globalThis.G1_MODULES={};await Promise.all(${JSON.stringify(startup.map((f) => join(aotDir!, f)))}.map(async(p)=>G1_MODULES[p]=${process.env.G1_STREAM ? 'await WebAssembly.compileStreaming(fetch("/m?p="+encodeURIComponent(p)),{builtins:["js-string"],importedStringConstants:"#"})' : 'await WebAssembly.compile(await (await fetch("/m?p="+encodeURIComponent(p))).arrayBuffer(),{builtins:["js-string"],importedStringConstants:"#"})'}));globalThis.G1_AHEAD=performance.now()-t0;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
     if (p === "/m") return new Response(Bun.file(u.searchParams.get("p")!), { headers: { "content-type": "application/wasm", ...iso } });
     if (p === "/g1.js") return new Response(Bun.file(bundlePath), { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(root, p) : null;
@@ -72,6 +72,7 @@ async function chromeRun() {
   const version = browser.version();
   return { version, run: async (cfg: G1Config): Promise<G1Result> => {
     const page = await (await browser.newContext()).newPage();
+    page.on("pageerror", (e) => console.log("PAGEERR", String(e).slice(0, 500)));
     await page.goto(`http://localhost:${server.port}/`);
     await page.waitForFunction("window.ready === true", null, { timeout: 120000 });
     const r = await page.evaluate((c) => (globalThis as unknown as { g1run: (c: unknown) => Promise<unknown> }).g1run(c), cfg) as G1Result;

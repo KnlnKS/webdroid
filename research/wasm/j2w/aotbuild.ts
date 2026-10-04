@@ -1,6 +1,6 @@
 // Builds the ahead-of-time assets (aot.ts) of the first platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun aotbuild.ts [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate]
+//   bun aotbuild.ts [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate] [--app app.dex]
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the first N jars (or the named ones) are numbered and compiled.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,9 +36,11 @@ export function keyOf(mode: string, name: string): string {
 const jarNames = flag("--only", "").split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < nJars));
 const dexes = PLATFORM_JARS.map((j) => loadDexes(join(root, "vendor/aosp", j)));
-const prog = new Program(dexes.flat()); prog.addExterns(externs);
+// an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
+const appDexes = flag("--app", "") ? loadDexes(flag("--app", "")) : [];
+const prog = new Program([...dexes.flat(), ...appDexes]); prog.addExterns(externs);
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: { dGroup: (n) => keyOf(dMode, n), cGroup: (n) => keyOf(cMode, n), dexes: new Set(dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat()) } });
+const w = world(prog, { natives, build: { dGroup: (n) => keyOf(dMode, n), cGroup: (n) => keyOf(cMode, n), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
 const aot = w.aot!;
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0;
@@ -126,7 +128,7 @@ const t2 = performance.now();
 const index = aot.finish();
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
-console.log(`${aot.nSeeded} classes of ${jars.length} jars (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), index ${kb(JSON.stringify(index).length)}`);
+console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
 if (skipped.length) console.log(`${skipped.length} methods left to the on-demand compiler:\n  ${skipped.join("\n  ")}`);
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
