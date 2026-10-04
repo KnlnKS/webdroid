@@ -46,7 +46,7 @@ export function bodyAt(url: string, line: number): BodyAt | null {
   if (own >= 0) return bodyOf(url.slice(own + 1), line - SCRIPT_HEADER_LINES - 1);
   const chunk = chunks.get(url);
   if (!chunk) return null;
-  const starts = chunk.starts ??= codeText(Object.entries(chunk.bodies).map(([key, factory]) => [key, factory.toString()])).starts;
+  const starts = chunk.starts ??= startsOf(Object.entries(chunk.bodies).map(([key, factory]) => [key, factory.toString()]));
   for (let i = starts.length - 1; i >= 0; i--) if (starts[i][1] <= line) return bodyOf(starts[i][0], line - starts[i][1]);
   return null;
 }
@@ -100,26 +100,47 @@ function record(key: string, source: string, form: Form): void {
 /** The first call determines the persisted phase, even if compilation happens after startup. */
 export function recordUse(key: string): void { if (!firstUse.has(key)) firstUse.set(key, phase); }
 
-/** install persisted bodies: what loadCode imports from codeText's modules */
+/** install persisted bodies: what loadCode imports from codeModule's chunks */
 export function useCode(bodies: Record<string, Factory>): void { loaded = bodies; }
 
-/** `bodies` (the pending ones by default) as an object literal, and the line each starts on: a
- *  chunk puts the literal after a prefix on its first line. Each factory is parenthesized so V8
- *  compiles it with the script, off the launch's critical calls, rather than preparsing it there
- *  and compiling it again when the method is first called. */
-export function codeText(bodies: Iterable<[string, string]> = [...pending].map(([key, { source }]) => [key, source])): { text: string; starts: Starts } {
-  let text = "{\n", line = 2;
+const pendingSources = (): [string, string][] => [...pending].map(([key, { source }]) => [key, source]);
+/** `bodies` as the parts of an object literal. Each factory is parenthesized so V8 compiles it
+ *  with the script, off the launch's critical calls, rather than preparsing it there and compiling
+ *  it again when the method is first called. */
+export function literalParts(bodies: Iterable<[string, string]>): string[] {
+  const parts = ["{\n"];
+  for (const [key, source] of bodies) parts.push(JSON.stringify(key), ":(", source, "),\n");
+  parts.push("}");
+  return parts;
+}
+/** the line each body of literalParts starts on, when the literal follows a one-line prefix */
+function startsOf(bodies: Iterable<[string, string]>): Starts {
   const starts: Starts = [];
+  let line = 2;
   for (const [key, source] of bodies) {
     starts.push([key, line]);
-    text += `${JSON.stringify(key)}:(${source}),\n`;
     for (let i = source.indexOf("\n"); i >= 0; i = source.indexOf("\n", i + 1)) line++;
     line++;
   }
-  return { text: text + "}", starts };
+  return starts;
 }
-/** a chunk module whose default export is `bodies` */
-export const codeModule = (bodies?: Iterable<[string, string]>): string => `export default ${codeText(bodies).text};\n`;
+/** UTF-8 encoding a store's worth of source takes hundreds of milliseconds on a slow host, so an
+ *  idle save encodes it a few parts per idle period rather than in one task that holds frames */
+async function idleBlob(parts: string[]): Promise<Blob> {
+  const blobs: Blob[] = [];
+  for (let i = 0; i < parts.length;) {
+    const deadline = await new Promise<IdleDeadline>((resolve) => requestIdleCallback(resolve));
+    const from = i;
+    do i = Math.min(parts.length, i + 64); while (i < parts.length && deadline.timeRemaining() > 2);
+    blobs.push(new Blob(parts.slice(from, i)));
+  }
+  return new Blob(blobs);
+}
+/** a chunk module whose default export is `bodies` (the pending ones by default) */
+export function codeModule(bodies: Iterable<[string, string]> = pendingSources(), idle = false): Blob | Promise<Blob> {
+  const parts = ["export default ", ...literalParts(bodies), ";\n"];
+  return idle ? idleBlob(parts) : new Blob(parts, { type: "text/javascript" });
+}
 
 /** the source the page was built from, which decides every emitted body (scripts/build-id.ts) */
 async function fetchBuildId(): Promise<string | null> {
@@ -202,14 +223,14 @@ function idle(): void {
       return;
     }
     idling = false;
-    void saveCode();
+    void saveCode(true);
   }, { timeout: 60_000 });
 }
 
 let saving: Promise<void> = Promise.resolve(), lastSave = 0;
 /** append the pending bodies as a startup and a later chunk; a load that found too many chunks
- *  rewrites them all, once the later ones have loaded */
-function saveCode(): Promise<void> {
+ *  rewrites them all, once the later ones have loaded. Only an idle save may take more than one task. */
+function saveCode(idle = false): Promise<void> {
   return saving = saving.then(async () => {
     const rewrite = compact && !later;
     if (!dir || !(pending.size || rewrite) || typeof caches === "undefined") return;
@@ -225,10 +246,11 @@ function saveCode(): Promise<void> {
     const batch = [...pending];
     for (const [key, { source, phase }] of batch) add(key, phase, source);
     lastSave = performance.now();
+    const modules = await Promise.all([...chunks].map(async ([name, bodies]) => [name, await codeModule(bodies, idle)] as const));
     const cache = await caches.open(CACHE), old = rewrite ? await cache.keys() : [], stamp = Date.now().toString(36);
     // all at once: a pagehide save gets no time for a second write after the first
-    await Promise.all([...chunks].map(([name, bodies]) =>
-      cache.put(`${name}-${stamp}.js`, new Response(codeModule(bodies), { headers: { "content-type": "text/javascript" } }))));
+    await Promise.all(modules.map(([name, blob]) =>
+      cache.put(`${name}-${stamp}.js`, new Response(blob, { headers: { "content-type": "text/javascript" } }))));
     // Keep failed writes queued, and leave bodies recorded during this save for the next one.
     for (const [key, body] of batch) if (pending.get(key) === body) pending.delete(key);
     if (rewrite) for (const request of old) {

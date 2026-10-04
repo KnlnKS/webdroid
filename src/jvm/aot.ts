@@ -1,7 +1,7 @@
 // Compile-ahead on a launch without persisted code (docs/bytecode-first-plan.md §4.4): a compile
 // worker (compileworker.ts) emits the methods the app is likely to run, and the page offers each
 // chunk of bodies to the methods that reach them. A body persists only once a method uses it.
-import { adoptBody, codeStats, codeText, hasBody, noteChunk, type Factory } from "./codecache";
+import { adoptBody, codeStats, hasBody, literalParts, noteChunk, type Factory } from "./codecache";
 import type { CompileRequest } from "./compileworker";
 import { jvmCoverage } from "./coverage";
 import { jvmProfiler } from "./profile";
@@ -84,10 +84,9 @@ async function importOffers(): Promise<void> {
     const needed = bodies.filter(([key]) => fresh(key));
     if (!needed.length) continue;
     const id = ++scripts;
-    const { text, starts } = codeText(needed);
-    const url = URL.createObjectURL(new Blob([`${OFFER}(${id},${text});\n`], { type: "text/javascript" }));
+    const url = URL.createObjectURL(new Blob([`${OFFER}(${id},`, ...literalParts(needed), ");\n"], { type: "text/javascript" }));
     try {
-      const factories = noteChunk(url, await runScript(url, id), starts);
+      const factories = noteChunk(url, await runScript(url, id));
       for (const key in factories) if (fresh(key)) offered.set(key, factories);
       lastClaim = performance.now();
       sweepOffered();
