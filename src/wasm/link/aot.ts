@@ -155,7 +155,7 @@ export class AotRuntime {
     // the first `index.classes` classes with bytecode must come from exactly the dexes of the build
     const seen: string[] = [], rest: string[] = [];
     let n = 0;
-    for (const c of w.prog.classes.values()) {
+    for (const c of w.prog.all()) {
       if (!c.dex) continue;
       if (n++ >= index.programClasses) { rest.push(c.name); continue; }
       if (seen[seen.length - 1] !== dexSig(c.dex)) seen.push(dexSig(c.dex));
@@ -337,7 +337,7 @@ export class AotRuntime {
   /** the index of a finished build */
   finish(): AotIndex {
     const w = this.w;
-    const withCode = [...w.prog.classes.values()].filter((c) => c.dex);
+    const withCode = [...w.prog.all()].filter((c) => c.dex);
     return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
       extraNames: w.names.slice(this.nSeeded + 1), tail: this.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, linkMessages: w.linkMessages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()] };
   }

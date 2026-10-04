@@ -9,7 +9,7 @@
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, type Kind, type JClass, type MethodInfo } from "../compiler/program";
+import { Program, ACC, kindOf, methodCount, type Kind, type JClass, type MethodInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
@@ -155,10 +155,10 @@ export class World {
   /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
   seedPlatform(accept: (dex: DexFile) => boolean): number {
     let n = 0;
-    for (const c of this.prog.classes.values()) {
+    for (const c of this.prog.all()) {
       if (!c.dex || !accept(c.dex)) continue;
       if (this.idOf(c.name) !== n + 1) throw new Error("platform classes must be numbered first");
-      this.addBlock(c.name, c.methods.length + 1); n++;
+      this.addBlock(c.name, methodCount(c) + 1); n++;
     }
     return n;
   }

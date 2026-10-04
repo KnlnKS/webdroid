@@ -174,14 +174,18 @@ export class DexFile {
     return s;
   }
 
+  /** how a class loader sees the classes this file names (the Wasm tier's loaders, program.ts): `type` answers the descriptor it maps the file's to. Set before the file is used. */
+  resolveType?: (descriptor: string) => string;
   /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
   type(i: number): string {
     let s = this.typeCache[i];
     if (s === undefined) {
-      s = this.typeCache[i] = this.string(this.view.getUint32(this.typeIdsOff + i * 4, true));
+      s = this.typeCache[i] = this.resolveType ? this.resolveType(this.rawType(i)) : this.rawType(i);
     }
     return s;
   }
+  /** the descriptor as the file spells it */
+  rawType(i: number): string { return this.string(this.view.getUint32(this.typeIdsOff + i * 4, true)); }
 
   proto(i: number): ProtoRef {
     let p = this.protoCache[i];
@@ -248,8 +252,8 @@ export class DexFile {
   private descCache: (string | undefined)[] = [];
   private paramTypeCache: (string[] | undefined)[] = [];
   /** full descriptor "(params)ret" of method index i */
-  methodDesc(i: number): string {
-    const pi = this.method(i).proto;
+  methodDesc(i: number): string { return this.protoDesc(this.method(i).proto); }
+  private protoDesc(pi: number): string {
     let d = this.descCache[pi];
     if (d === undefined) {
       const p = this.proto(pi);
@@ -257,23 +261,41 @@ export class DexFile {
     }
     return d;
   }
+  /** name and descriptor of method index i, without keeping a record of the method */
+  methodKey(i: number): string {
+    const off = this.methodIdsOff + i * 8;
+    return this.string(this.view.getUint32(off + 4, true)) + this.protoDesc(this.view.getUint16(off + 2, true));
+  }
   protoParamTypes(i: number): string[] {
     return this.paramTypeCache[i] ??= this.proto(i).params.map((t) => this.type(t));
   }
 
-  classDef(i: number): ClassDef {
+  /** the class_def's header: what the class is, without its members */
+  classHeader(i: number): { typeIdx: number; flags: number; superIdx: number; interfaces: number[] } {
     const off = this.classDefsOff + i * 32;
     const v = this.view;
-    const typeIdx = v.getUint32(off, true);
-    const flags = v.getUint32(off + 4, true);
-    const superIdx = v.getUint32(off + 8, true);
     const interfacesOff = v.getUint32(off + 12, true);
-    const classDataOff = v.getUint32(off + 24, true);
     const interfaces: number[] = [];
     if (interfacesOff) {
       const n = v.getUint32(interfacesOff, true);
       for (let j = 0; j < n; j++) interfaces.push(v.getUint16(interfacesOff + 4 + j * 2, true));
     }
+    return { typeIdx: v.getUint32(off, true), flags: v.getUint32(off + 4, true), superIdx: v.getUint32(off + 8, true), interfaces };
+  }
+  /** how many methods class_def i declares */
+  declaredMethodCount(i: number): number {
+    const classDataOff = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
+    if (!classDataOff) return 0;
+    const r = new Reader(this.bytes, classDataOff);
+    r.uleb(); r.uleb();
+    return r.uleb() + r.uleb();
+  }
+
+  classDef(i: number): ClassDef {
+    const off = this.classDefsOff + i * 32;
+    const v = this.view;
+    const { typeIdx, flags, superIdx, interfaces } = this.classHeader(i);
+    const classDataOff = v.getUint32(off + 24, true);
     const def: ClassDef = {
       typeIdx, flags, superIdx, interfaces,
       staticFields: [], instanceFields: [], directMethods: [], virtualMethods: [],
