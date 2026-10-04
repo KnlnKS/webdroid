@@ -23,7 +23,7 @@ export const compileModule = (bytes: Uint8Array) => WebAssembly.compile(bytes, {
 export async function instantiate(module: WebAssembly.Module, cx: Compiler, gap: (id: number) => void = () => {}) {
   const ctx: HostContext = {}, instance = await WebAssembly.instantiate(module, hostImports(cx, ctx, gap) as never);
   const ex = instance.exports as Record<string, any>;
-  ctx.tag = ex.jex; ctx.mkthrow = ex.mkthrow;
+  ctx.tag = ex.jex; ctx.mkthrow = ex.mkthrow; ctx.mem = ex.mem; ctx.sp = ex.sp;
   cx.str.pool.forEach((s, i) => ex.strs.set(i, s));
   return instance;
 }

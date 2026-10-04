@@ -12,11 +12,13 @@ import { reach } from "./reach";
 const CLASSES = ["java/lang/Integer", "java/lang/Long", "java/lang/Short", "java/lang/Byte", "java/lang/Character", "java/lang/Boolean", "java/lang/Float", "java/lang/Double",
   "java/lang/Math", "java/lang/StrictMath", "libcore/util/FP16", "java/util/Objects", "java/util/Arrays", "java/lang/StringUTF16", "java/lang/StringLatin1", "java/lang/String", "java/lang/Long$LongCache"];
 const MAX_REACH = 1000;
+/** the JS tier's override clamps the offset as JS does ("abc".startsWith("", 7) is true); Java answers false, as the bytecode run here does */
+const JS_DEVIATES = ["java/lang/String.startsWith(Ljava/lang/String;I)Z"];
 const jars = PLATFORM_JARS.slice(0, 2).map((j) => join(import.meta.dir, "../../../vendor/aosp", j));
 const prog = program(jars), js = await jsTier(jars.flatMap(loadDexes));
 const prim = /^([IJFDZBSC]|Ljava\/lang\/String;)$/, only = process.argv.slice(2);
 const cand = CLASSES.filter((c) => !only.length || only.some((p) => c.startsWith(p))).flatMap((c) => prog.get(c)?.methods ?? [])
-  .filter((m) => m.isStatic && m.codeOff && !m.isCtor && m.name !== "<clinit>" && m.params.every((p) => prim.test(p)) && prim.test(m.ret));
+  .filter((m) => (m.isStatic || m.cls === "java/lang/String") && m.codeOff && !m.isCtor && m.name !== "<clinit>" && !JS_DEVIATES.includes(m.cls + "." + m.key) && m.params.every((p) => prim.test(p)) && prim.test(m.ret));
 const isIntr = isIntrinsic(natives);
 const closures = new Map(cand.map((m) => [m, reach(prog, [m], SEEDS, isIntr)] as const));
 const small = cand.filter((m) => closures.get(m)!.methods.size <= MAX_REACH);

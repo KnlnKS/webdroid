@@ -14,8 +14,6 @@ const STRING = "java/lang/String";
 const STR_TABLE = 1;
 
 export interface StringRepr {
-  /** array classes the intrinsics allocate */
-  arrays: string[];
   importBuiltins(): void;
   declare(add: (name: string, params: VT[], results: VT[]) => void): void;
   emit(): void;
@@ -37,7 +35,6 @@ const BUILTINS = ["length", "charCodeAt", "concat", "substring", "equals", "test
 type Builtin = (typeof BUILTINS)[number];
 
 export class JsStrings implements StringRepr {
-  arrays = ["[C", "[B"];
   private consts = new Map<string, number>();
   b = {} as Record<Builtin, number>;
   constructor(private cx: Compiler) {}
@@ -88,7 +85,7 @@ export class JsStrings implements StringRepr {
         c.arraySet(cx.tData.i16).lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
         c.lget(out).refAsNonNull().i32(0).lget(n).call(b.fromCharCodeArray).anyOfExtern(); break;
       }
-      default: return undefined;
+      default: { const ctor = cx.prog.get(STRING)?.byKey.get("<init>" + desc); return ctor && cx.natives.factory(cx, ctor); }
     }
     return cx.mb.addFunc(cx.sig(params.map(kindOf), "L"), c.finish(), `String.<init>${desc}`);
   }

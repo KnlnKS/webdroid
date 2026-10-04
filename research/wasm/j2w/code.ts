@@ -52,6 +52,10 @@ export class Code {
   /** a JS value (a string) into a reference slot, and back for the js-string builtins */
   anyOfExtern(): this { return this.gc(0x1a); }
   externOfAny(): this { return this.gc(0x1b); }
+  /** a linear-memory access: opcode, log2 alignment, offset */
+  mem(op: number, align: number, offset = 0): this { this.b.push(op); uleb(align, this.b); uleb(offset, this.b); return this; }
+  memorySize(): this { this.b.push(0x3f, 0); return this; }
+  memoryGrow(): this { this.b.push(0x40, 0); return this; }
   refIsNull(): this { this.b.push(0xd1); return this; }
   refEq(): this { this.b.push(0xd3); return this; }
   refAsNonNull(): this { this.b.push(0xd4); return this; }
@@ -93,6 +97,7 @@ export class Code {
   }
 }
 export const OP = {
+  i32_load: 0x28, i64_load: 0x29, i32_load8_u: 0x2d, i32_load16_u: 0x2f, i32_store: 0x36, i64_store: 0x37, i32_store8: 0x3a, i32_store16: 0x3b,
   i32_eqz: 0x45, i32_eq: 0x46, i32_ne: 0x47, i32_lt_s: 0x48, i32_lt_u: 0x49, i32_gt_s: 0x4a, i32_gt_u: 0x4b, i32_le_s: 0x4c, i32_le_u: 0x4d, i32_ge_s: 0x4e, i32_ge_u: 0x4f,
   i64_eqz: 0x50, i64_eq: 0x51, i64_ne: 0x52, i64_lt_s: 0x53, i64_gt_s: 0x55, i64_le_s: 0x57, i64_ge_s: 0x59,
   f32_eq: 0x5b, f32_ne: 0x5c, f32_lt: 0x5d, f32_gt: 0x5e, f32_le: 0x5f, f32_ge: 0x60, f64_eq: 0x61, f64_ne: 0x62, f64_lt: 0x63, f64_gt: 0x64, f64_le: 0x65, f64_ge: 0x66,

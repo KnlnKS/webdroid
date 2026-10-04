@@ -11,7 +11,7 @@ import type { DexFile } from "../../../src/jvm/dex";
 import { H, f32bits, f64bits, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import { JsStrings, stringCtor, type StringRepr } from "./strings";
-import { HOST_THROWABLES, Natives } from "./natives";
+import { HOST_THROWABLES, Natives, PRIM_ARRAYS } from "./natives";
 import { sleb } from "./wasmbin";
 
 /** the name a built module exports an entry under */
@@ -112,7 +112,7 @@ export class Compiler {
     this.hostImports.fmod = mb.importFunc("host", "fmod", mb.addFuncType([T.f64, T.f64], [T.f64]));
     this.hostImports.gap = mb.importFunc("host", "gap", mb.addFuncType([T.i32], []));
     this.str.importBuiltins();
-    this.natives.importHelpers(this);
+    this.natives.prepare(this);
     this.tag = mb.addTag(this.tTagFn); mb.export("jex", "tag", this.tag);
 
     const roots = entries.map(([c, n, d]) => { const m = prog.resolve(c, n, d); if (!m) throw new Error(`entry ${c}.${n}${d} not found`); return m; });
@@ -126,7 +126,7 @@ export class Compiler {
     for (const n of order) this.classId.set(n, this.classId.size + 1);
     // array descriptors: ensure the primitive arrays used by new-array exist; object arrays by descriptor
     const arrayTypes = new Set(r.arrayTypes);
-    for (const a of this.str.arrays) arrayTypes.add(a);
+    for (const a of PRIM_ARRAYS) arrayTypes.add(a);
     for (const a of arrayTypes) this.classId.set(a, this.classId.size + 1);
     // globals: vt per class, init state per class with init work, statics
     for (const [n] of this.classId) this.vtGlobal.set(n, mb.addGlobal(refNull(this.tVT), true, [0xd0, ...this.nullHt(this.tVT)]));
