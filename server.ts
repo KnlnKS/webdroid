@@ -92,12 +92,13 @@ async function buildIdResponse(): Promise<Response> {
   return new Response(await build.id, { headers: { "content-type": "text/plain", "cache-control": "no-cache" } });
 }
 
-/** src/jvm/compileworker.ts bundled for the page, rebuilt when a source file has changed since */
-let workerBuild: { stamp: number; code: Promise<string> } | null = null;
-async function compileWorker(): Promise<Response> {
+/** a compile worker (src/jvm/compileworker.ts, src/wasm/host/compile-worker.ts) bundled for the page, rebuilt when a source file has changed since */
+const workerBuilds = new Map<string, { stamp: number; code: Promise<string> }>();
+async function compileWorker(entry: string): Promise<Response> {
   const stamp = stampOf("src/**/*.ts");
-  if (workerBuild?.stamp !== stamp) workerBuild = { stamp, code: Bun.build({ entrypoints: ["src/jvm/compileworker.ts"], target: "browser" }).then((r) => r.outputs[0].text()) };
-  return new Response(await workerBuild.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
+  let build = workerBuilds.get(entry);
+  if (build?.stamp !== stamp) workerBuilds.set(entry, build = { stamp, code: Bun.build({ entrypoints: [entry], target: "browser" }).then((r) => r.outputs[0].text()) });
+  return new Response(await build.code, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
 }
 
 /** scripts/link-table.ts for a bytecode switch, rerun when a source file or platform jar has changed */
@@ -128,7 +129,8 @@ const server: Bun.Server<SocketData> = Bun.serve({
       // a browser resolves every *.localhost name to this loopback server, each its own site
       return Response.json(`${url.protocol}//*.localhost:${url.port}`);
     },
-    "/compile-worker.js": () => compileWorker(),
+    "/compile-worker.js": () => compileWorker("src/jvm/compileworker.ts"),
+    "/wasm-compile-worker.js": () => compileWorker("src/wasm/host/compile-worker.ts"),
     "/link-table.json": linkTable,
     "/build-id": buildIdResponse,
     "/font-index.json": async () => new Response(await (fontIndex ??= new Response(Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" }).stdout).text()),

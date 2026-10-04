@@ -8,7 +8,9 @@ export class FetchStore implements AotStore {
   private files = new Map<string, WebAssembly.Module | Uint8Array>();
   /** the files that could not be fetched or compiled */
   failed: string[] = [];
-  constructor(private base: string) {}
+  constructor(readonly base: string) {}
+  /** the build's key: its directory's name */
+  get key(): string { return this.base.split("/").filter(Boolean).pop()!; }
   /** fetches `files` and compiles them as modules; a file that fails is left out, as if the build lacked it */
   async prefetch(files: string[]): Promise<void> {
     await Promise.all(files.filter((f) => !this.files.has(f)).map(async (f) => {

@@ -109,9 +109,9 @@ cGroups.forEach((blocks, k) => {
   let cx: Compiler, built: ReturnType<Compiler["buildUnit"]>, touch: Set<string>;
   for (;;) {
     cx = new Compiler(w);
-    aot.beginTouch();
+    w.beginTouch();
     built = cx.buildUnit(methods.filter((m) => !skip.has(mid(m))), [], false, true);
-    touch = aot.endTouch();
+    touch = w.endTouch();
     const bad = check(built.bytes);
     if (!bad) break;
     const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";
@@ -139,9 +139,9 @@ const t1 = performance.now();
 const dGroups = aot.dKeys.map((_, k) => classesOf(aot.dGroupOf, k));
 dGroups.forEach((blocks, k) => {
   const names = blocks.map((b) => w.blockClass[b]);
-  aot.beginTouch();
+  w.beginTouch();
   const bytes = w.classModule(names.map((n) => w.link(n)));
-  const touch = aot.endTouch();
+  const touch = w.endTouch();
   const header: DHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch) };
   const bad = check(bytes);
   if (bad) throw new Error(`D ${k}: ${bad.message}`);
@@ -150,14 +150,14 @@ dGroups.forEach((blocks, k) => {
   dBytes += file.length;
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module; building it can reserve more
-const extraNames = () => aot.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
+const extraNames = () => w.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
 let extras: number, xbytes: Uint8Array, xtouch: Set<string>;
 do {
   const names = extraNames();
   extras = names.length;
-  aot.beginTouch();
+  w.beginTouch();
   xbytes = w.classModule(names.map((n) => w.link(n)));
-  xtouch = aot.endTouch();
+  xtouch = w.endTouch();
 } while (extraNames().length !== extras);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);

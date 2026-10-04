@@ -10,7 +10,7 @@ import { Program } from "../compiler/program";
 import { fetchPlatformJars, jarDexes } from "../../android/framework";
 import { PLATFORM_JARS } from "../../jvm/provenance";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop } from "../../jvm/yield";
-import { World } from "../link/world";
+import { World, type WorldOptions } from "../link/world";
 import type { HostLoop } from "../link/sched";
 import { externs, intrinsics } from "../link/intrinsics";
 import { hostNet } from "./inet";
@@ -29,9 +29,9 @@ const hostLoop: HostLoop = {
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
 };
 
-/** a World over `prog`, with the registered natives and the host's resolver */
-export function createWorld(prog: Program, aot?: FetchStore): World {
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, aot, claim: (owner, handle) => rt.claimHandle?.(owner, handle) });
+/** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
+export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
+  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
   return w;
@@ -41,7 +41,7 @@ export function createWorld(prog: Program, aot?: FetchStore): World {
 export async function bootWasmTier(): Promise<TierBackend> {
   const [store, jars] = await Promise.all([openAot(), fetchPlatformJars()]);
   const platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
-  const world = createWorld(new Program([], platform), store);
+  const world = createWorld(new Program([], platform), { aot: store });
   useEntry(wasmEntry(world));
   fieldNames.find = fieldNamesOf(world);
   rt.mkThrowable = hostThrowable;

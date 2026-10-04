@@ -875,6 +875,49 @@ a Promise, a native waiting under a JS frame (SuspendError, counted), overflow o
 **Open.** A native that calls Java through a plain call and expects it to block gets SuspendError (entry.ts must call through strands); the depth limit is conservative and Chrome's JSPI stack size is unmeasured;
 `Thread.getState` of a thread blocked in `initWait`/`monitor enter` reports BLOCKED, `synchronized` on a `Class` or String works but `Thread.holdsLock(null)` is not checked; `Thread.priority`, `stop` and daemon exit
 are not modelled; the AOT build key changes (header layout, imports).
+### 4.13 Track A3: app compile off the main thread, and persisted app code (2026-10-04, `knlnks/wasm-ta3`)
+
+**What the worker can and cannot share.** Compiled code names classes, selectors, table slots, gaps and link messages by number, and the numbers are whatever the World handed out in the order the program asked, so a unit
+made by another World is the page's only if that World numbered the same things in the same order. Two mechanisms, one idea (`World.numbering/since/adopt/rollback`, `aot.ts` `Marks`/`Numbering`; the platform build's `tail`
+log is now kept by every World):
+- *Second-tier units.* The worker holds a compile-only World (`WorldOptions.compileOnly`: classes are numbered and linked by name, nothing is instantiated) over a copy of the app's dex files and the platform's, attached to the
+  same platform index. The page sends the numbering it has done since the worker last heard (`sync`) with each job (`World.upgradeJob`: the group `group()` chose, the guarded-call plan, the classes initialized since); the
+  worker numbers whatever its unit needs beyond that and returns it with the unit (`link/unit.ts`). `World.adoptUnit` takes the unit if no dex file was added since the job (`epoch`), its natives are bound and the page has
+  numbered nothing since it sent the job (a unit that needed no new number is taken whatever the page did meanwhile); the numbering is then replayed in the page and the worker keeps its own, else the worker rolls its
+  numbering back to the page's before the next job. A hot method keeps running its first-tier code until the unit arrives and does not ask again meanwhile (`pending`); a refused unit lets it ask again after another budget. The
+  unit's `WebAssembly.Module` is compiled and validated in the worker and posted whole. A loader of its own, `addClass`, or repeated worker failures retire the worker and the page compiles inline as before.
+- *App builds.* `link/apps.ts` compiles the methods an app is likely to run (the baseline profile's, the launch classes', the manifest's components', then `callClosure`, the selection `compileworker.ts` uses) into code modules
+  `a<k>.wasm` of at most about 1 MiB (estimated) and records the numbering they rely on as an `AppIndex`. It continues the numbering of the World right after the platform build is attached, so it is used only by a World
+  that numbered nothing since (`AotRuntime.extend`, called from the World's constructor with `WorldOptions.app`) and whose Program starts with the same dex files (a signature check; later dex files are allowed). Its modules load
+  the way the platform's code modules do (`loadC`, one module on the first call of one of its methods), import the class globals they use by class id from whatever module the page made for the class
+  (`World.classImports`), and record their class-hierarchy decisions in the same header; a decision about a class added after the build is checked at load against `World.late` without the app's own classes and the method
+  is put back to a lazy-link stub if it fails, and later `addDexes` undo them through the ordinary assumption table.
+
+**Persistence** (`host/persist.ts`, `host/appcode.ts`). The files of a build are kept in OPFS (Cache Storage where OPFS is unavailable) under a key of the app's dex files (`DexFile.id`), the platform build key and the build
+format; an entry is listed once all its files are written, checked for size on load (a damaged one is removed), limited to 64 MiB, and the least recently used entries go when the total passes 256 MiB. `prepareApp` loads the
+saved build and compiles its modules (asynchronously, before the World exists); without one, a worker of its own builds it while the launch goes on and the page keeps it for the next launch (nothing is attached
+mid-launch: the numbering would no longer match). `bootWasmTier` is not wired to it: the tier's boot still makes the World from the first dex it is given, and where the app's dex files and the platform Program arrive is Track C3's.
+
+**Tests.** `bun run wasm persist` (node, the protocol over a `MessageChannel`): the numbering handshake (a unit that numbered something is not taken after the page did, the worker follows the page after a refusal, a stale epoch is
+refused), second-tier units adopted from the worker with the answers unchanged, the worker retired by a loader of its own, the app build attached with its answers equal, fewer methods compiled on demand, a CHA decision of the
+build undone by a dex added later and by a dex present from the start behind the app's, builds that do not match (other dex files, base, format) not used, a missing module compiled on demand, and the store's limits,
+eviction, damage and replacement. `aottest` is unchanged. `bun run wasm boot-probe` now also runs the Pst fixture in Chrome with a real Worker and OPFS: the first load has no saved build, a Worker builds and the page
+keeps it, a hot loop's second tier comes from the Worker; the iframe, a second load of the same dex, finds the build (13 ms to read and compile it), attaches it, loads its module and compiles 22 methods on demand instead of 35. The probe
+no longer runs under `?tier=wasm`: the merge of Tracks A and B left it failing there (the oracle's natives link JS-runtime classes, which the tier refuses) and the page runs the Wasm host libraries directly.
+
+**Numbers** (node 24.19 on an idle M-series laptop; FitNotes, the Application, launcher and manifest components with the call closure, no baseline profile). Building the app: 3,492 methods in 2 modules, 0.68 s in the
+worker (0.20 ms per method as one module per group) against 1.18 s for the main thread to compile the same methods as first calls do (0.34 ms per method: compiler 0.88 s, Module 0.17 s, Instance 0.10 s). Loading the saved build:
+2 ms to read and compile its modules, 0.36 to 0.40 s from the first call to all of its 3,492 methods installed (60 ms of it Instance; the rest links the classes they use, which the on-demand path pays too and is in its 1.18 s). The main thread
+no longer pays the compile on a launch with a saved build (about 3x less), nor on the first launch once the worker finishes. Second tier: the main thread's compile time for the hot methods of four jbench workloads, one call
+at a time with the event loop turning in between, was 114 ms (sha256), 44 (jsonParse), 138 (scanTokens), 28 (mapStr) inline and 1, 3, 5, 1 ms adopting the worker's units (110 to 141 ms of worker time, no unit
+refused); run times after the first call are the same within spread. A single long synchronous call gets nothing from the worker (its units arrive after the call; the inline path replaces the table entry for the next call
+as well, not for the running frames).
+
+**Not done / open.** The `lat` gate (FitNotes, Calculator M, Mihon cold and warm, no gated tap above 150 ms) needs the framework to boot under `?tier=wasm` (Track C3); nothing here is measured at a tap. Class modules (D) of the
+app's classes are not persisted: the page makes them on first use (0.2 ms each), as for any class the platform build lacks. The build covers the launch's likely methods only; later runs do not add to it (the JS tier's code cache
+does). A build is not attached to a World that has already numbered something, nor to loaders other than the default namespace; a DexClassLoader's dex files and a plugin's code compile on demand. The worker keeps a
+second copy of the app's dex bytes and its own platform Program (about 24 MB plus the parse of the dex files it touches). The numbering handshake refuses a unit when the page numbered meanwhile; no unit was refused in the
+runs above, but an app that links classes continuously while it is hot would see more refusals (they cost the worker's time only).
 
 ### 4.4 Do not trust
 
