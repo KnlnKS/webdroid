@@ -1,7 +1,11 @@
 # Plan: compile DEX to WebAssembly
 
 Branch `knlnks/bytecode-wasm` (worktree `../webdroid-wasm`), from `knlnks/bytecode` at `5ad1d22a`.
-Research only: no production code changed. Everything new is under `research/wasm/` and this file.
+Research only when written: no production code changed. The prototype has since moved (work package P0): it was `research/wasm/j2w/`, it is now `src/wasm/{compiler,link,host}`
+with its suites in `scripts/wasm/` (`bun run wasm <suite>`) and its Java fixtures in `tests/fixtures/wasm/java/`. Sections below keep the file names of their time; the map is in
+[wasm-s2-breakdown.md](wasm-s2-breakdown.md) section 1.1 and `lazy.ts` is `link/world.ts`, `threads.ts` `link/sched.ts`, `handles.ts` `link/mhandles.ts`, `oracle.ts` split into
+`host/nativesource.ts` and `scripts/wasm/oracle.ts`, `build.ts` `scripts/wasm/lib.ts`, `aotbuild.ts`/`aotstartup.ts` `scripts/wasm/aot-build.ts`/`aot-startup.ts`, `reach.ts` `scripts/wasm/reach.ts`
+(its `mid` is `compiler/ids.ts`). `floatbench.ts`, `lazybench.ts` and the j2w `dis.ts` were deleted.
 This is a report plus a staged plan for a different coding agent to execute.
 
 ## 0. How to read this
@@ -24,7 +28,7 @@ Research artifacts:
 | `research/wasm/native-survey.md` | how the ~75k lines of TS touch Java values (counts per category and per file) |
 | `research/wasm/runtime-inventory.md` | ~40 runtime facilities: JS mechanism, Wasm need, essential vs artefact |
 | `research/wasm/platform-status.md` | Wasm feature status by browser (partly unverified, see section 5) |
-| `research/wasm/j2w/` | DEX to Wasm-GC prototype compiler (incomplete, see section 4.4) |
+| `src/wasm/`, `scripts/wasm/` | DEX to Wasm-GC prototype compiler (incomplete, see section 4.4); was `research/wasm/j2w/` |
 
 ## 1. Findings that drive the design
 
@@ -153,7 +157,7 @@ alternative with explicit triggers for switching.
 - Header: `vt: (ref $VT)` (immutable), `hash: i32` (identity hash, lazily assigned; monitor word added when needed).
   `$VT` is an `i32` array holding class id, depth, a fixed display of ancestor ids, interface-method-table
   (selector, function index) pairs, a slow-path region, an implemented-interface list, and the virtual slots, all as
-  function-table indices. This is what `research/wasm/j2w` implements.
+  function-table indices. This is what `src/wasm/compiler` implements.
 - One Wasm struct type per distinct field layout, declared as a subtype of its superclass layout; classes with equal
   layouts share the type. Reference fields are typed `(ref null $Obj)`. Primitive kinds: `i32` (int, short, byte,
   char, boolean, float bits), `i64` (long, double bits).
@@ -177,7 +181,7 @@ alternative with explicit triggers for switching.
   null/bounds/divide/cast checks, `trunc_sat` for float to int, guard for `INT_MIN / -1`.
 - Fuel/preemption check on back edges (suspend via a `Suspending` import when budget runs out). Reuse it as the
   tier-up trigger (G4).
-- Emit binary directly with a small encoder (`research/wasm/j2w/wasmbin.ts`, `code.ts`); no binaryen at runtime.
+- Emit binary directly with a small encoder (`src/wasm/compiler/wasmbin.ts`, `code.ts`); no binaryen at runtime.
 
 ### 3.3 Linking, tiering and code delivery
 
@@ -244,7 +248,7 @@ cross-origin isolation required for threads; strings must be copied at every hos
 
 ## 4. Current state of the prototype
 
-### 4.1 What exists (`research/wasm/j2w/`)
+### 4.1 What exists (`src/wasm/`, then `research/wasm/j2w/`)
 
 `wasmbin.ts` (binary module builder with GC rec/sub types, imports, tags, tables, passive data), `code.ts`
 (instruction emitter), `program.ts` (class model, open-world `add`), `cha.ts` (class-hierarchy analysis over all loaded classes),
@@ -262,7 +266,7 @@ produced the same results as the JDK. Module size 2.9 KB, compile 7.6 ms in Bun.
 
 ### 4.3 What is wrong or untested
 
-Status after the S0 differential work (`research/wasm/j2w/`; the first two need javac, d8 and java on PATH):
+Status after the S0 differential work (the suites run as `bun run wasm <suite>`; the first two need javac, d8 and java on PATH):
 
 | Harness | Subject | Oracles | Result |
 |---|---|---|---|
@@ -300,9 +304,9 @@ real DEX (cold-start numbers can now be taken, see 4.5, but every jbench workloa
 
 All three run from the repository root and re-execute themselves bundled under node (`undernode.ts`; V8 frames are needed for caller-sensitive natives):
 
-- `bun research/wasm/j2w/jbench.ts`: one fresh `World` per workload, table of Wasm result, JS-tier result and MATCH/DIFF/BLOCKED(first gap). On the merged tree: 41 MATCH, 0 DIFF, 1 BLOCKED (`inetCached`, `Linux.android_getaddrinfo` answers a Promise). The earlier "hang" of 11 workloads was the harness: the JS tier's yield port is unref'd, so node exited with the workload suspended.
-- `bun research/wasm/j2w/fuzz.ts [--seed N --methods N --depth N --debug --file F.java]`: random Java (int/long/float/double/narrow casts, arrays, 2-D arrays, fields, virtual/interface calls, instanceof/casts, labelled loops, switches, try/catch/finally, custom exceptions, synchronized, calls) compiled with javac and d8, run on Wasm, the JS tier and the JDK. 70 seeds x 3,600 cases: Wasm and the JDK never differ. It found two bugs, below.
-- `bun research/wasm/j2w/sweep.ts [jar|apk ...]`: compiles every method alone and groups failures by cause. framework.jar: 219,874 methods, 18 fail (15 `invoke-custom`, 3 `MethodHandle.invoke`). FitNotes 7 (calls into optional or newer platform APIs). Mihon 190 (171 irreducible flow, Kotlin coroutine state machines; 19 absent platform APIs). Zero unexplained.
+- `bun run wasm jbench`: one fresh `World` per workload, table of Wasm result, JS-tier result and MATCH/DIFF/BLOCKED(first gap). On the merged tree: 41 MATCH, 0 DIFF, 1 BLOCKED (`inetCached`, `Linux.android_getaddrinfo` answers a Promise). The earlier "hang" of 11 workloads was the harness: the JS tier's yield port is unref'd, so node exited with the workload suspended.
+- `bun run wasm fuzz [--seed N --methods N --depth N --debug --file F.java]`: random Java (int/long/float/double/narrow casts, arrays, 2-D arrays, fields, virtual/interface calls, instanceof/casts, labelled loops, switches, try/catch/finally, custom exceptions, synchronized, calls) compiled with javac and d8, run on Wasm, the JS tier and the JDK. 70 seeds x 3,600 cases: Wasm and the JDK never differ. It found two bugs, below.
+- `bun run wasm sweep [jar|apk ...]`: compiles every method alone and groups failures by cause. framework.jar: 219,874 methods, 18 fail (15 `invoke-custom`, 3 `MethodHandle.invoke`). FitNotes 7 (calls into optional or newer platform APIs). Mihon 190 (171 irreducible flow, Kotlin coroutine state machines; 19 absent platform APIs). Zero unexplained.
 
 Bugs found: (1) the class module exported static fields by name only, so a dex that declares one name with two types (R8 output) produced a duplicate export or an ill-typed global; they are now keyed by name and type. (2) Production JS tier, `src/jvm/prepared.ts`: a handler's reaching definitions came from the state at the end of every block in the try range, so an int constant assigned after the last throwing instruction (d8 shares the register with a float the handler reads) was typed float (`const 32` became 4.5e-44). Handler edges now carry the state before each instruction that can throw (`tests/float-handler.test.ts`; 20 of the fuzzer's failing methods, one cause). Also: `Flow` limits scope nesting to 256 for the JS parser; Wasm bodies are no longer limited (8 AIDL `onTransact`/`getDefaultTransactionName` methods compile). Both open items (irreducible flow, unresolved references) are closed in 4.8.
 
@@ -395,8 +399,8 @@ for the scheduler; `Class.getSimpleNameNative`, the annotation natives, `getDecl
 
 ### 4.7 S1-F: generated-code performance and the G1 timing (2026-10-04, `knlnks/wasm-f`)
 
-**Harness.** `bun g1.ts [workload ...] [--runs 5] [--reps 100] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "..."]`
-(`g1run.ts`, `g1platform.ts`, `g1fs.ts`). A workload is a `case` line of `scripts/jbench/Bench.java` or `research/wasm/j2w/java/G1.java`
+**Harness.** `bun run wasm g1 [workload ...] [--runs 5] [--reps 100] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "..."]`
+(`g1run.ts`, `g1platform.ts`, `g1fs.ts`). A workload is a `case` line of `scripts/jbench/Bench.java` or `tests/fixtures/wasm/java/G1.java`
 (strings, arithmetic loops, field/array/virtual/interface/switch kernels, the G4 loop pair, same format); it joins the table as soon as its
 Wasm result equals the JS tier's, so unblocking a workload is a change to the compiler or natives and nothing here. Every measurement is a fresh
 engine: a node process or a new headless Chrome context (cross-origin isolated, so `performance.now()` has 5 us resolution instead of 100 us);
@@ -723,7 +727,7 @@ Not built: a snapshot-and-compare copy-back to skip writing unchanged elements o
 
 **Where cold time went** (`g1.ts --phases`, node 24 and Chrome 153, shared host). A workload compiles 40 to 3,000 methods; per method the compiler spent 0.07 ms warm and 0.2 to 0.4 ms cold: emit 55%, infer 20%, encode 12%, flow and facts 10%; V8 `Module` + `Instance` of each unit 55 us; a class module (build + link) 0.2 ms. `sha256` (1,413 methods, 330 class modules): compile 275 ms, Module/Instance 72 ms, class modules 62 ms of a 565 ms first call (the rest is the natives bridge, `$copy:i8`). Process start (`processState`) compiles 411 methods and links 178 classes: about 330 ms. The jbench run compiled 35,992 methods in 7.2 s.
 
-**Design** (`aot.ts`, `aotbuild.ts`, `aotstore.ts`, `aotstartup.ts`; `WEBDROID_AOT=<dir>` runs every harness over a build). `bun aotbuild.ts --only <jars> [--d|--c class|outer|pkg|pkgN|all]` compiles the platform jars at build time through the same `Compiler.buildUnit` / `World.classModule`. Nothing in the generated code depends on what ran first: `World.seedPlatform` numbers the classes of the chosen dexes (ids, one block of table slots per class, `MethodInfo.index` is the offset in it) in definition order, and the index carries the rest (array and other extra ids, the slots reserved after them, selectors, gaps, link messages). The Program must start with the same dexes (a signature check; otherwise the build is not attached and everything compiles on demand). Class (D) modules hold the vtable, init word, statics, lazy-link stubs and `ensure` of a group of classes and import nothing from other modules; code (C) modules hold the methods of a group, install them in the table when instantiated, and import the D globals they name. Loading a C module first loads the D modules of the classes it touches (and their superclass closure), so a table slot it can call is never empty. String constants are imported (`importedStringConstants`), which removes the shared string table; first-tier counters are words of the scratch memory (no imported global per method); module headers and stack-trace maps are custom sections (`aot`, `aottrace`), so a `WebAssembly.Module` compiled ahead carries everything. Methods of a precompiled module call each other through the table, like on-demand units, so the second tier (still dynamic: `World.upgrade`) replaces them one at a time.
+**Design** (`aot.ts`, `aotbuild.ts`, `aotstore.ts`, `aotstartup.ts`; `WEBDROID_AOT=<dir>` runs every harness over a build). `bun run aot --only <jars> [--d|--c class|outer|pkg|pkgN|all]` compiles the platform jars at build time through the same `Compiler.buildUnit` / `World.classModule`. Nothing in the generated code depends on what ran first: `World.seedPlatform` numbers the classes of the chosen dexes (ids, one block of table slots per class, `MethodInfo.index` is the offset in it) in definition order, and the index carries the rest (array and other extra ids, the slots reserved after them, selectors, gaps, link messages). The Program must start with the same dexes (a signature check; otherwise the build is not attached and everything compiles on demand). Class (D) modules hold the vtable, init word, statics, lazy-link stubs and `ensure` of a group of classes and import nothing from other modules; code (C) modules hold the methods of a group, install them in the table when instantiated, and import the D globals they name. Loading a C module first loads the D modules of the classes it touches (and their superclass closure), so a table slot it can call is never empty. String constants are imported (`importedStringConstants`), which removes the shared string table; first-tier counters are words of the scratch memory (no imported global per method); module headers and stack-trace maps are custom sections (`aot`, `aottrace`), so a `WebAssembly.Module` compiled ahead carries everything. Methods of a precompiled module call each other through the table, like on-demand units, so the second tier (still dynamic: `World.upgrade`) replaces them one at a time.
 
 **Soundness.** A C module records its class-hierarchy decisions per method; at load, those about a class that gained concrete subtypes since the build (`World.late`) are checked and the methods that fail are put back to lazy-link stubs; later `addDexes`/`addClass` undo them through the ordinary assumption table. `World.holds` now asks only whether an added subtype has a different implementation. Sites that failed on a class missing at the build are undone the same way. A module whose natives are not bound in the World (other `Natives`) is not used; a method this World replaces by an intrinsic the build did not have (or the reverse) is put back too. `aottest.ts` checks both orders with `ArrayList.contains`/`indexOf`. Invalid code the compiler emits for a method (one found: `FinalizerReference.makeCircularListIfUnenqueued`, "expected 0 elements on the stack") is found by validating every module at build and leaves that method to the on-demand compiler.
 
@@ -759,7 +763,7 @@ constants work through `compileStreaming` in Chrome 153). `FRAME` now accepts bo
 
 **Where the first call went.** With the AOT platform (4.9) the first call of a small workload was still 6 to 13 ms in Chrome, and `--phases` showed why: 3 to 10 ms of it was the *second tier*. A loop that spends its budget (5,000) asks `World.upgrade`, which compiled the method and its small callees at once, with a cold compiler (about 0.5 ms per method; `UPGRADE_FREE_MS` allowed the first 10 ms for free). With upgrades switched off, `listAddGet` node first call went 14.7 -> 3.5 ms. The upgrade now waits until the program has been hot long enough to pay for it: a request is refused (and renewed after another budget) while `upgradeMs + expected cost > 0.3 x (time since the first request)`; the expected cost is 1 ms until a compile has been measured, then the mean. A loop that stays hot for about 3 ms upgrades as before; a first call that is short never pays. `lazytest` and `trace` ran their hot loop for 40,000 iterations and asserted an upgrade; they now call until one has happened.
 
-**App compiled at build time.** `aotbuild.ts --app <dex>` numbers and compiles an app dex after the platform's, as an install would (`AotRuntime.attach` already accepts a Program of the platform dexes plus more; the build records the app's dex signature, so a different app does not attach). In the harness, `bun aotbuild.ts --app $TMPDIR/g1/classes.dex` (the dex `g1.ts` builds; copy `startup.json` from a build without it, the boot does not touch the app). The first call of `intLoop` in Chrome 4.7 -> 2.4 ms (it compiled its method and a second unit on demand, 3 ms), `listAddGet` 6.1 -> 3.4, `hashSet` 4.9 -> 2.7. Every workload of the harness is in that one dex, so its C module is the size of a package of a real app.
+**App compiled at build time.** `bun run aot --app <dex>` numbers and compiles an app dex after the platform's, as an install would (`AotRuntime.attach` already accepts a Program of the platform dexes plus more; the build records the app's dex signature, so a different app does not attach). In the harness, `bun aotbuild.ts --app $TMPDIR/g1/classes.dex` (the dex `g1.ts` builds; copy `startup.json` from a build without it, the boot does not touch the app). The first call of `intLoop` in Chrome 4.7 -> 2.4 ms (it compiled its method and a second unit on demand, 3 ms), `listAddGet` 6.1 -> 3.4, `hashSet` 4.9 -> 2.7. Every workload of the harness is in that one dex, so its C module is the size of a package of a real app.
 
 **Sparse `switch` and the array peek/poke natives.** Keys that are not dense enough for `br_table` are searched in halves down to runs of three compares (`switchSparse` node 0.98 -> 1.09, Chrome 1.00 -> 1.21; `W.sparse9` joins `diff`). `Memory.peek/poke<Kind>Array` test the byte order once (two loops instead of an xor per byte), step a position instead of recomputing `i * w`, and byte kinds are one `array.copy`: `fbLoop` Chrome 0.84 -> 0.94..1.10, `fbBulk` unchanged.
 
@@ -843,7 +847,7 @@ Follow AGENTS.md verification at each stage (`typecheck`, `test`, `smoke` with z
 `e2e`, `lat`).
 
 ### S0. Baseline and instrumentation
-- Move the prototype's shared pieces into a real module location behind a flag; keep `research/wasm/` as history.
+- Move the prototype's shared pieces into a real module location behind a flag (done in P0: `src/wasm`, `?tier=wasm`); keep `research/wasm/` as history.
 - Add counters to `lat`/`run.json`: host crossings per tap, wasm vs js time, module count, baseline-compiled functions.
 - Record JS-tier baselines for jbench, `lat` (cold/warm), launch profiles and heap size per app.
 - Fix the `mandel`/`collatz` mismatches and add a differential test harness (JS tier vs Wasm tier per method,

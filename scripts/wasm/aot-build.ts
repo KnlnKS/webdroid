@@ -1,6 +1,6 @@
 // Builds the ahead-of-time assets (aot.ts) of the first platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun run aot -- [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate] [--app app.dex]
+//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--no-validate] [--app app.dex]
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the first N jars (or the named ones) are numbered and compiled.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

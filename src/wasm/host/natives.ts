@@ -13,6 +13,7 @@ import { mid } from "../compiler/ids";
 import { decodeInstructions } from "../../jvm/prepared";
 import { descToName } from "../../jvm/abi";
 import { Bridge } from "./bridge";
+import { adaptImport } from "./suspend";
 import type { HostBridge, HostContext, HostFn, NativeBinder, NativeSource } from "../link/hostapi";
 import type { World } from "../link/world";
 import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
@@ -227,7 +228,7 @@ export class Natives implements NativeBinder {
     for (const id of ids) {
       const p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
-      out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, wrapper(p, p.fn, raise, () => { ctx.gap(`${id}: native suspended (answers a Promise)`); return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }); }, view, put, ctx.bridge)), p.wrapped.get(ctx)!);
+      out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, adaptImport(p, wrapper(p, p.fn, raise, () => { ctx.gap(`${id}: native suspended (answers a Promise)`); return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }); }, view, put, ctx.bridge))), p.wrapped.get(ctx)!);
     }
     return out;
   }
