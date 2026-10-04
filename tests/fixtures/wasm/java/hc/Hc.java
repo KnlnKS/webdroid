@@ -1,0 +1,108 @@
+import java.net.HttpURLConnection;
+import java.net.ProtocolException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.IntSupplier;
+import wdtest.Counter;
+import wdtest.HostList;
+
+/** Java that uses classes the host implements: the cases in scripts/wasm/hostcases.ts call these and the host objects directly. */
+public class Hc {
+  static final List<Object> KEPT = new ArrayList<>();
+
+  static class Sub extends Counter {
+    @Override public int get() { return super.get() + 1000; }
+  }
+  static class Mine extends HostList {
+    @Override public Object get(int i) { return "<" + super.get(i) + ">"; }
+  }
+  static class Conn extends HttpURLConnection {
+    Conn(URL url) { super(url); }
+    @Override public void connect() { connected = true; }
+    @Override public void disconnect() {}
+    @Override public boolean usingProxy() { return false; }
+    String method() { return method; }
+    void method(String m) { method = m; }
+    String lengths() { return fixedContentLength + "/" + fixedContentLengthLong + "/" + chunkLength; }
+  }
+
+  /** a native handle in a long field: the object that frees it in finalize() owns it, one that does not free it does not */
+  static class Own { long h; @Override protected void finalize() {} }
+  static class Plain { long h; }
+  public static Object own(long h) { Own o = new Own(); o.h = h; return o; }
+  public static Object plain(long h) { Plain o = new Plain(); o.h = h; return o; }
+  public static Object newSub() { return new Sub(); }
+  public static Object newConn(URL url) { return new Conn(url); }
+  public static Object keep(Object o) { KEPT.add(o); return o; }
+  public static Object kept(int i) { return KEPT.get(i); }
+  public static void forget() { KEPT.clear(); }
+
+  public static String runnable() {
+    Counter c = new Counter();
+    Runnable r = c;
+    r.run();
+    r.run();
+    return c.get() + ":" + (r == c) + ":" + c.equals(r) + ":" + c.inc() + ":" + ((IntSupplier) c).getAsInt();
+  }
+
+  public static String identity() {
+    Counter c = new Counter(), d = new Counter();
+    Set<Object> set = new HashSet<>();
+    set.add(c); set.add(c.self()); set.add(d);
+    List<Object> list = new ArrayList<>(Arrays.asList(c, d));
+    Counter m = Counter.make(5);
+    return (c.self() == c) + ":" + c.same(c) + ":" + c.same(d) + ":" + (c.hashCode() == c.self().hashCode()) + ":" + c.equals(c.self()) + ":" + c.equals(d)
+      + ":" + set.size() + ":" + list.indexOf(d) + ":" + list.contains(c) + ":" + m.get() + ":" + (m.self() == m) + ":" + (Counter.make(5) == m);
+  }
+
+  public static String tags() {
+    Counter c = new Counter();
+    String before = c.getTag();
+    c.setTag("t" + 1);
+    return before + ":" + c.getTag();
+  }
+
+  public static int sub() {
+    Sub s = new Sub();
+    s.inc(); s.inc();
+    return s.twice() * 10000 + s.get();
+  }
+
+  public static String fail() {
+    try { new Counter().fail(); return "no"; } catch (IllegalStateException e) { return e.getMessage(); }
+  }
+
+  public static String list() {
+    Mine m = new Mine();
+    m.add("a"); m.add("b"); m.add(1);
+    return m + ":" + m.size() + ":" + m.contains("<b>") + ":" + m.indexOf("<1>") + ":" + m.equals(Arrays.asList("<a>", "<b>", "<1>")) + ":" + m.hashCode()
+      + ":" + new ArrayList<>(m) + ":" + m.subList(1, 3);
+  }
+
+  public static String http() throws Exception {
+    Conn c = new Conn(new URL("http://example.com/p?q=1"));
+    StringBuilder b = new StringBuilder();
+    b.append(c.getURL().getHost()).append(',').append(c.getRequestMethod()).append(',').append(c.method()).append(',').append(c.getInstanceFollowRedirects());
+    c.setRequestMethod("PUT");
+    b.append(',').append(c.getRequestMethod()).append(',').append(c.method());
+    c.method("DELETE");
+    b.append(',').append(c.getRequestMethod());
+    c.setFixedLengthStreamingMode(7);
+    b.append(',').append(c.lengths());
+    c.setChunkedStreamingMode(0);
+    b.append(',').append(c.lengths());
+    c.setRequestProperty("A", "b");
+    c.addRequestProperty("c", "d");
+    b.append(',').append(c.getRequestProperty("a")).append(',').append(c.getRequestProperty("C")).append(',').append(c.getRequestProperty("none"));
+    try { c.setRequestMethod("BOGUS"); } catch (ProtocolException e) { b.append(',').append(e.getMessage()); }
+    c.connect();
+    try { c.setRequestMethod("GET"); } catch (ProtocolException e) { b.append(',').append(e.getMessage()); }
+    try { c.setRequestProperty("x", "y"); } catch (IllegalStateException e) { b.append(',').append(e.getMessage()); }
+    b.append(',').append(c.usingProxy()).append(',').append(c.getDoInput()).append(',').append(c.getConnectTimeout());
+    return b.toString();
+  }
+}

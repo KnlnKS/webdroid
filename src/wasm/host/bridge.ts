@@ -11,7 +11,7 @@ import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { Compiler } from "../compiler/j2w";
 import type { World } from "../link/world";
-import type { HostBridge, NativeSource } from "../link/hostapi";
+import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
 import { count } from "./stats";
 
@@ -104,11 +104,14 @@ export class Bridge implements HostBridge {
   /** `range` is the (offset, length) the native's contract names inside a primitive array, when it does (natives.ts RANGES): only those elements cross */
   toHost(v: unknown, _desc?: string, range?: [number, number]): unknown {
     if (v === null || v === undefined || typeof v === "string") return v ?? null;
-    const o = v as object, hit = this.live.get(o) ?? this.facades.get(o);
+    const o = v as object, hit = this.live.get(o) ?? this.facades.get(o) ?? this.w.hosts.hostOf(o);
     if (hit) return hit;
     const name = this.w.classNameOf(o);
     if (name === "java/lang/String") return this.op.js(o);
-    if (name[0] !== "[") return this.facade(o, name);
+    if (name[0] !== "[") {
+      const spec = this.w.hosts.specOf(name);
+      return spec ? this.attach(o, name, spec) : this.facade(o, name);
+    }
     return name.length === 2 ? this.primArray(o, name, range) : this.refArray(o, name);
   }
   private primArray(o: object, name: string, range?: [number, number]): unknown {
@@ -170,6 +173,56 @@ export class Bridge implements HostBridge {
     return proxy;
   }
 
+  // ---------- host objects (hostclass.ts)
+  /** the host object of Java object `o` of class `name`, which `spec` implements: made now, with the fields it shares with Java */
+  private attach(o: object, name: string, spec: HostSpec): object {
+    const host = new spec.ctor();
+    this.w.hosts.bind(o, host);
+    this.share(host, o, name);
+    return host;
+  }
+  /** the Java object of host object `host`, which a host-made object has none of until it crosses: an instance of its spec's class */
+  private shellOf(host: object): object | undefined {
+    const known = this.w.hosts.shellOf(host);
+    if (known) return known;
+    const spec = this.w.hosts.specOfHost(host);
+    if (!spec || !this.w.prog.get(spec.name)) return undefined;
+    const java = this.w.hostFn("e:new:" + spec.name, [], "L", (cx, c) => { cx.emitEnsure(c, spec.name); cx.emitNew(c, spec.name); })() as object;
+    this.w.hosts.bind(java, host);
+    this.share(host, java, spec.name);
+    return java;
+  }
+  private properties = new Map<string, Map<string, FieldInfo>>();
+  /** the host properties that stand for fields of Java class `name`: each field under its mangled name, and the fields the specs name under their host property */
+  private propertiesOf(name: string): Map<string, FieldInfo> {
+    let props = this.properties.get(name);
+    if (!props) {
+      props = new Map(this.fieldsOf(name));
+      const layout = this.w.prog.layout(name);
+      for (const [java, prop] of this.w.hosts.fieldsOf(name)) {
+        const f = layout.filter((x) => x.name === java).pop();
+        if (f) props.set(prop, f);
+      }
+      this.properties.set(name, props);
+    }
+    return props;
+  }
+  /** makes the fields of `java`, an instance of `name`, the properties of `host` that stand for them. What the host object holds in such a property when it is made (its defaults) is
+   *  stored into the field, unless Java has written the field already. */
+  private share(host: object, java: object, name: string): void {
+    for (const [prop, f] of this.propertiesOf(name)) {
+      let get: Fn | undefined, set: Fn | undefined;
+      const read = () => (get ??= this.accessor("get", f)), write = () => (set ??= this.accessor("set", f));
+      const own = Object.getOwnPropertyDescriptor(host, prop);
+      if (own && "value" in own && own.value !== undefined && !this.written(read()(java), f)) write()(java, f.kind === "L" ? this.toJava(own.value, f.desc) : toBits(own.value, f.desc));
+      Object.defineProperty(host, prop, { configurable: true,
+        get: () => { const raw = read()(java); return f.kind !== "L" ? fromBits(raw, f.desc) : raw === null || typeof raw === "string" ? raw : this.scoped(() => this.toHost(raw, f.desc)); },
+        set: (v: unknown) => write()(java, f.kind === "L" ? this.toJava(v, f.desc) : toBits(v, f.desc)) });
+    }
+  }
+  private written(raw: unknown, f: FieldInfo): boolean { return f.kind === "L" ? raw !== null : f.kind === "J" ? raw !== 0n : raw !== 0; }
+  private scoped<T>(f: () => T): T { const mark = this.begin(); try { return f(); } finally { this.end(mark); } }
+
   /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
   private method(o: object, cls: string, mangled: string): Fn | undefined {
     const nd = demangle(mangled), impl = nd && this.w.prog.implFor(cls, nd[0], nd[1]);
@@ -201,6 +254,8 @@ export class Bridge implements HostBridge {
     if (known) return known;
     if (ArrayBuffer.isView(o)) return this.newPrimArray(o as ArrayBufferView & { length: number });
     if (Array.isArray(o)) return this.newRefArray(o as unknown[] & { $t?: string }, desc);
+    const java = this.shellOf(o);
+    if (java) return java;
     const cls = this.src?.classOf?.(o);
     if (cls) return this.copyObject(o as Record<string, unknown>, cls);
     throw new Error(`a native returned a host value of no Java class where ${desc} was expected`);

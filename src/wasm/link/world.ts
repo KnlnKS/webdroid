@@ -9,13 +9,14 @@
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo } from "../compiler/program";
+import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
-import type { HostBridge, HostContext, HostNet, NativeBinder } from "./hostapi";
+import type { HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, typeName } from "./classes";
+import { HostClasses } from "./hostclass";
 import { mhInvoke } from "./mhandles";
 import { hostText } from "./members";
 import { ASYNC } from "./inet";
@@ -38,6 +39,8 @@ export interface WorldOptions {
   heapUsed: () => number;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;
+  /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
+  claim?: (owner: object, handle: bigint) => void;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
   stackTraceLimit?: number;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
@@ -99,6 +102,8 @@ export class World {
   sp = new WebAssembly.Global({ value: "i32", mutable: true }, COUNT_BASE + 4 * COUNT_SLOTS);
   natives: NativeBinder;
   bridge: HostBridge;
+  /** the classes the host implements (hostclass.ts) */
+  hosts = new HostClasses(this);
   host: Record<string, Function>;
   private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; tid: WebAssembly.Global; thr: WebAssembly.Global; intr: WebAssembly.Global; classId: (o: object) => number };
   private synth = new Map<string, number>();
@@ -132,6 +137,7 @@ export class World {
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
       pin: (object: object) => this.pin(object),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
+      claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string, scope: unknown, mode: number) => classByName(this, this.hostString(name) as string, scope, mode),
       dexOpen: (path: unknown, loader: object | null) => dexOpen(this, path, loader),
@@ -705,6 +711,14 @@ export class World {
     this.loaded(added);
     return added;
   }
+  private claimers = new Map<string, boolean>();
+  /** whether a store into instance field `f` hands its owner a native handle: a long field of a class that frees it in finalize() */
+  claims(f: FieldInfo): boolean {
+    if (f.kind !== "J" || f.isStatic) return false;
+    let yes = this.claimers.get(f.owner);
+    if (yes === undefined) this.claimers.set(f.owner, yes = !!this.prog.get(f.owner)?.byKey.get("finalize()V")?.codeOff);
+    return yes;
+  }
   /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
   pin(object: object): number {
     let i = this.pinned.get(object);
@@ -715,6 +729,8 @@ export class World {
     }
     return i;
   }
+  /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
+  addHostClass(spec: HostSpec): void { this.hosts.add(spec); }
   /** adds a class that no dex defines, with the body of each of its methods */
   addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>): void {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
@@ -733,6 +749,7 @@ export class World {
     }
     for (const name of added) for (const slot of this.absent.get(name) ?? []) this.invalidate(slot);
     for (const name of added) this.absent.delete(name);
+    this.hosts.loaded();
   }
   /** the concrete classes added since compiled code was made, by each of their supertypes (themselves included) */
   late = new Map<string, string[]>();

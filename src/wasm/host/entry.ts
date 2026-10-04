@@ -27,7 +27,7 @@ export function wasmEntry(w: World): Entry {
   const scoped = <T>(f: () => T): T => { const mark = bridge.begin(); try { return f(); } finally { bridge.end(mark); } };
   const receiver = (obj: unknown, what: string): object => {
     if (obj === null || obj === undefined) throw new TypeError(`Cannot read properties of ${obj} (reading '${what}')`);
-    if (obj instanceof JObj && !refOf(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
+    if (obj instanceof JObj && !refOf(obj) && !w.hosts.specOfHost(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
     return bridge.toJava(obj, OBJECT) as object;
   };
   const alloc = (cls: string) => w.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
@@ -79,8 +79,8 @@ export function wasmEntry(w: World): Entry {
   }
   /** a Java object's class: of a Java object the facade's, of an object the host made (a throwable a native raised) its own */
   const classNameOf = (o: unknown): string | undefined => {
-    const java = refOf(o);
-    return java ? w.classNameOf(java) : o instanceof JObj ? (o.constructor as { $i?: { name: string } }).$i?.name : undefined;
+    const java = refOf(o) ?? (typeof o === "object" && o !== null ? w.hosts.shellOf(o) : undefined);
+    return java ? w.classNameOf(java) : o instanceof JObj ? w.hosts.specOfHost(o)?.name ?? (o.constructor as { $i?: { name: string } }).$i?.name : undefined;
   };
 
   return {

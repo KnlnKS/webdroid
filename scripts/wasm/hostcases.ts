@@ -1,0 +1,103 @@
+// The classes the host implements (B2), as the cases of the hostclass suite use them: TS classes registered as specs for classes no dex defines (wdtest/*) beside the
+// registered specs of the platform's own boundary (java/net/HttpURLConnection), the Java fixture Hc that uses them, and the calls host code makes on both. The suite runs
+// the cases on the JS tier, where the host object is the Java object, and on a World, where the two are an object each; the lines must be the same.
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getDeclared, JObj, rt } from "../../src/jvm/runtime";
+import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry";
+import { androidPlatform, androidTool } from "../android-sdk";
+import { JAVA } from "./paths";
+import { filesIn, shellIn } from "./tools";
+
+export class JCounter extends JObj {
+  n = 0; tag: string | null = null;
+  asInt(): number { return this.n; }
+}
+rt.register({
+  name: "wdtest/Counter", ctor: JCounter, ifaces: ["java/lang/Runnable", "java/util/function/IntSupplier"],
+  methods: {
+    "inc()I": function (this: JCounter) { return ++this.n; },
+    "get()I": function (this: JCounter) { return this.n; },
+    "getAsInt()I": "asInt",
+    "run()V": function (this: JCounter) { this.n += 100; },
+    "self()Lwdtest/Counter;": function (this: JCounter) { return this; },
+    "same(Lwdtest/Counter;)Z": function (this: JCounter, other: JCounter | null) { return +(this === other); },
+    "setTag(Ljava/lang/String;)V": function (this: JCounter, tag: string) { this.tag = tag; },
+    "getTag()Ljava/lang/String;": function (this: JCounter) { return this.tag; },
+    // the host calls Java on its own receiver: a subclass's override answers
+    "twice()I": function (this: JCounter) { return 2 * (vcall(this, "get", "()I") as number); },
+    "fail()V": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "from the host"); },
+    "static make(I)Lwdtest/Counter;": (n: number) => { const c = new JCounter(); c.n = n; return c; },
+  },
+});
+class JHostList extends JObj { items: unknown[] = []; }
+rt.register({
+  name: "wdtest/HostList", ctor: JHostList, sup: "java/util/AbstractList",
+  methods: {
+    "get(I)Ljava/lang/Object;": function (this: JHostList, i: number) {
+      if (i < 0 || i >= this.items.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `Index: ${i}`);
+      return this.items[i];
+    },
+    "size()I": function (this: JHostList) { return this.items.length; },
+    "add(ILjava/lang/Object;)V": function (this: JHostList, i: number, e: unknown) { this.items.splice(i, 0, e); },
+  },
+});
+
+/** the fixture Hc and the classes it declares, as a dex; the classes the host implements are compiled against, not dexed */
+export function hostDex(): string {
+  const out = mkdtempSync(join(tmpdir(), "wasm-hostclass-")), sh = shellIn(out), api = `${androidPlatform(35)}/android.jar`, dir = join(JAVA, "hc");
+  const stubs = join(out, "stubs"), classes = join(out, "classes");
+  mkdirSync(stubs); mkdirSync(classes);
+  sh(["javac", "--release", "11", "-cp", api, "-d", stubs, join(dir, "stubs/wdtest/Counter.java"), join(dir, "stubs/wdtest/HostList.java")]);
+  sh(["javac", "--release", "11", "-cp", `${api}:${stubs}`, "-d", classes, join(dir, "Hc.java")]);
+  sh([androidTool("d8"), "--min-api", "26", "--classpath", stubs, "--output", out, ...filesIn(classes, /\.class$/)]);
+  return join(out, "classes.dex");
+}
+
+const OBJ = "Ljava/lang/Object;", STR = "Ljava/lang/String;";
+function show(v: unknown): string {
+  if (v === null || v === undefined || typeof v !== "object") return typeof v === "bigint" ? v + "n" : String(v);
+  return Array.isArray(v) ? `[${v.map(show)}]` : `<${classNameOf(v)}>`;
+}
+async function run(f: () => unknown): Promise<string> {
+  try { return "ok " + show(await f()); } catch (e) {
+    const t = e as { msg?: unknown };
+    return `threw ${classNameOf(e)} ${JSON.stringify(t.msg)}`;
+  }
+}
+
+export async function hostCases(): Promise<string[]> {
+  const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
+  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" ? "I" : STR}`));
+
+  const c = await newObj("wdtest/Counter");
+  await line("new", () => c);
+  await line("class", () => classNameOf(c));
+  await line("instance of", () => [iof(c, "wdtest/Counter"), iof(c, "java/lang/Runnable"), iof(c, "java/util/function/IntSupplier"), iof(c, "java/lang/Object"), iof(c, STR)]);
+  await line("inc inc", () => [vcall(c, "inc", "()I"), vcall(c, "inc", "()I")]);
+  await line("a host field", () => (c as JCounter).n);
+  await line("through the alias", () => vcall(c, "getAsInt", "()I"));
+  await line("self is the receiver", () => vcall(c, "self", "()Lwdtest/Counter;") === c);
+  await line("kept is the object", () => scall("Hc", "keep", `(${OBJ})${OBJ}`, c) === c && scall("Hc", "kept", `(I)${OBJ}`, 0) === c);
+  await line("static make", () => { const m = scall("wdtest/Counter", "make", "(I)Lwdtest/Counter;", 9) as JCounter; return [m instanceof JCounter, m.n, vcall(m, "get", "()I"), m === c]; });
+
+  const made = new JCounter();
+  made.n = 4;
+  await line("a host-made object in Java", () => [scall("Hc", "keep", `(${OBJ})${OBJ}`, made) === made, vcall(made, "inc", "()I"), made.n, classNameOf(made), iof(made, "java/lang/Runnable")]);
+  await line("both ways", () => scall("Hc", "kept", `(I)${OBJ}`, 1) === made);
+  await line("equal", () => [vcall(c, "equals", `(${OBJ})Z`, c), vcall(c, "equals", `(${OBJ})Z`, made), vcall(made, "hashCode", "()I") === vcall(made, "hashCode", "()I")]);
+
+  const sub = await scall("Hc", "newSub", `()${OBJ}`) as JCounter;
+  await line("Java-made subclass", () => [classNameOf(sub), sub instanceof JCounter, iof(sub, "wdtest/Counter"), vcall(sub, "inc", "()I"), vcall(sub, "twice", "()I"), sub.n]);
+  await line("its host object", () => scall("Hc", "keep", `(${OBJ})${OBJ}`, sub) === sub && scall("Hc", "kept", `(I)${OBJ}`, 2) === sub);
+  await scall("Hc", "forget", "()V");
+
+  const url = await newObj("java/net/URL", `(${STR})V`, "http://example.org/x");
+  const conn = await newObj("Hc$Conn", "(Ljava/net/URL;)V", url) as Record<string, unknown>;
+  await line("connection fields", () => [conn.method, conn.responseCode, conn.follow, conn.chunkLength, conn.fixedContentLengthLong, getDeclared(conn, "java/net/URLConnection", "connected"),
+    getDeclared(conn, "java/net/HttpURLConnection", "method")]);
+  await line("a field Java writes", () => { vcall(conn, "method", `(${STR})V`, "POST"); return [conn.method, vcall(conn, "getRequestMethod", `()${STR}`)]; });
+  await line("a field the host writes", () => { conn.method = "HEAD"; return vcall(conn, "method", `()${STR}`); });
+  return out;
+}

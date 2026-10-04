@@ -820,6 +820,30 @@ given one, the app's own PathClassLoader object as the default namespace's `getC
 `bun run wasm loaders`: two DexClassLoaders over dex files defining `Shared` (and `Boom`): distinct Class objects, statics, instances, array classes, signatures naming the loader's own class, exceptions thrown and caught inside
 a loader and seen from outside, `Class.forName`, `loadClass`, `getClassLoader`, `instanceof`/casts across loaders and through the app's `Tag`.
 
+### 4.13 B2: classes the host implements (2026-10-04, `knlnks/wasm-tb2`)
+
+The registered specs (`rt.register`) outside the VM's own classes (`TS_SPECS` "vm:", and the "intrinsic:" ones, which stand in for bytecode for speed) are the **host classes**: 147 of the 194 specs, `webdroid/*` services and helpers, the WebView
+provider, the TLS and HTTP boundary (`java/net/HttpURLConnection`, `javax/net/ssl/*`, `com/android/okhttp/Http{,s}Handler`) and the GL/EGL implementations; over the 40 boot jars all 147 are defined (124 classes of natives, 23 over dex classes). `World.addHostClass(spec)` (`link/hostclass.ts`; `nativeSource.hostSpecs()` lists them) makes each a Java class
+once its superclass and interfaces exist (a spec waiting for one is retried as dexes arrive):
+ - A spec whose class no dex defines becomes a class of natives (`World.addClass`): every method key a native with the spec's function behind its host import, the spec's `ifaces`, and the constructor Java finds when the spec declares none (`<init>()V` calling the superclass's), so `newObj`, a bytecode subclass's
+   `super()` and `Class.newInstance` work on it.
+ - A spec whose class a dex defines (the boundary) takes over the methods that class declares (their bodies are dropped, an abstract one becomes concrete, the AOT build's code for them is not used: `AotRuntime.override`). A method the spec implements that a superclass declares (`connect()` of URLConnection,
+   implemented for HttpURLConnection) cannot be added to the class without changing the numbering of its slots, so it is a native of a class of its own (`name$$host`) that the class's `byKey` resolves it in; `implFor`, `resolve`, `invoke-super` and the vtable find it there, reflection does not list it.
+
+**Identity.** A Java object whose class chain reaches a host class has a host object (an instance of the spec's TS class) beside it; the natives of the spec take it as `this`, and every other place a native or a host call sees that Java object (arguments, results, fields, arrays, `vcall`
+receivers, `classNameOf`) sees the same host object, never a facade. A host object that crosses to Java is the Java object it was made with, allocated when it first crosses (`Bridge.shellOf`). `self() === receiver` holds both ways, `equals`/`hashCode`/`HashSet`/`indexOf` in Java agree with `===` in TS (`hostclass`).
+A Java object Java allocated (a bytecode subclass of a host class, `HttpURLConnectionImpl`) gets its host object at its first host call, which is its constructor.
+**Lifetime.** The two are linked by two `WeakMap`s (Java object to host object, host object to Java object) and nothing else: each keeps the other alive exactly as long as it lives itself, an ephemeron cycle the collector frees when neither is reachable from elsewhere, and there is no table to leak from or to
+clean (`hostclass` collects both ways under `--expose-gc`, and checks that a Java object that Java holds keeps its host object).
+**Fields.** The host object reaches the fields of its Java object as properties: every instance field of the class's layout under its mangled name (so `declaredField`, `getDeclared`, and a spec such as HttpURLConnection reading `URLConnection.connected` by name work on a host object), and the fields `fields:` names under their
+host property (HttpURLConnection's `method`, `responseCode`, ...). What the host object holds in such a property when it is made is stored into the field (a field Java wrote first keeps its value). A property of a class that has no Java field of that name stays an ordinary property. **Hooks.** `claimOnStore` is a store hook: a store into a long
+field of a class with a `finalize()` calls `host.claim(owner, handle)` (`rt.claimHandle`), whose `FinalizationRegistry` frees the handle with the owner.
+**Deviation from the breakdown (2.3):** no `$host` field. A field added to a platform class changes the struct type of its subclasses and so the layout the AOT build was compiled against, and a class made at run time needs the same table for the classes of the boundary, so one pair of weak tables serves both; the cost is a `WeakMap` get where `this` is bound.
+**Not done:** `statics:`, `clinit` and `platformClinit` of a spec (no host class uses them: the boundary's constants come from the dex), `callerSensitive`, JS-prototype checks inside a spec (HttpURLConnection's `getResponseCode` asks whether `getInputStream` is overridden by comparing prototype properties, which a host object has none of),
+natives that answer a Promise (Track C), methods of a spec that no supertype declares (Java cannot call them), an overlay of a class in a sealed shared base Program (the abstractness a spec changes is in `MethodInfo`s the Programs of several processes share), and the CHA of a wide hierarchy for the methods in `name$$host` (the walk of a small one finds them).
+`bun run wasm hostclass`: 24 cases on the JS tier and on a World (a `Counter` spec with interfaces, an alias, `self()`, a host-made object passed to Java and kept there, a Java-made subclass whose `twice()` virtual call from the host reaches the override, an `AbstractList` spec with a bytecode subclass calling `super.get`, an HttpURLConnection subclass whose Java and host sides read and write
+each other's fields, and the exceptions each way), the lifetime checks and the handle claims.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.

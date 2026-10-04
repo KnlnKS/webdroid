@@ -468,6 +468,7 @@ export class MC {
     const { decl, f } = r, st = cx.structFor(decl);
     cx.str.noFields(decl, f.name);
     this.refTo(ins.b, st); this.get(f.kind, ins.a); c.structSet(st, cx.fieldIndex(decl, f));
+    if (cx.w.claims(f)) { this.refTo(ins.b, st); c.externConvertAny(); this.get("J", ins.a); c.call(cx.imp.claim); }
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), r = this.fieldOf(ins.b, true);

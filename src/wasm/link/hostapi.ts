@@ -7,6 +7,21 @@ import type { World } from "./world";
 
 export type HostFn = (...a: any[]) => unknown;
 
+/** a Java class a registered spec implements in the host (rt.register outside the VM's own classes): its Java objects have a host object of `ctor` beside them, which its natives take as `this` */
+export interface HostSpec {
+  name: string;
+  sup: string | null;
+  ifaces: string[];
+  /** the methods the spec implements, by name+descriptor, with "static " for a static one */
+  methods: string[];
+  /** the Java-visible instance fields and the host properties that hold them */
+  fields: [javaName: string, prop: string][];
+  ctor: new () => object;
+}
+/** the class that holds, beside an existing class, the methods of its spec that a superclass declares (hostclass.ts); the natives are found under the class's own name */
+export const HOSTED = "$$host";
+export const specClass = (cls: string): string => (cls.endsWith(HOSTED) ? cls.slice(0, -HOSTED.length) : cls);
+
 export interface NativeSource {
   /** the registered implementation of `cls`.`key` (name+descriptor); an instance method's `this` is its receiver. A String
    *  constructor's key is `<init>desc` and its implementation answers the String */
@@ -17,6 +32,8 @@ export interface NativeSource {
   classOf?(v: unknown): string | undefined;
   /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" */
   stores?(cls: string, run: () => void): Record<string, unknown>;
+  /** the classes the host implements */
+  hostSpecs?(): HostSpec[];
 }
 
 /** how Java objects cross to a native and back */

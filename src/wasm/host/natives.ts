@@ -14,7 +14,7 @@ import { decodeInstructions } from "../../jvm/prepared";
 import { descToName } from "../../jvm/abi";
 import { Bridge } from "./bridge";
 import { adaptImport } from "./suspend";
-import type { HostBridge, HostContext, HostFn, NativeBinder, NativeSource } from "../link/hostapi";
+import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi";
 import type { World } from "../link/world";
 import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
 
@@ -96,7 +96,7 @@ export class Natives implements NativeBinder {
     const ctor = m.isCtor && m.cls === STRING_CLASS, recv = !m.isStatic && !ctor;
     // a String is not an object: bytecode that reads its representation (count, hash) is replaced by the production methods
     if (m.codeOff && !ctor && !override && (m.cls !== STRING_CLASS || !overridden(m))) { this.plans.set(id, p = "bytecode"); return p; }
-    const fn = this.src?.find(m.cls, m.key, m.isStatic, m.codeOff !== 0);
+    const fn = this.src?.find(specClass(m.cls), m.key, m.isStatic, m.codeOff !== 0);
     const args = recv ? [m.cls === STRING_CLASS ? STRING : `L${m.cls};`, ...m.params] : m.params, params: VT[] = [];
     p = !fn ? "unregistered" : "";
     for (const d of p ? [] : args) {
