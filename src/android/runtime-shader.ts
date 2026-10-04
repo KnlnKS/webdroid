@@ -2,6 +2,7 @@ import { rt } from "../jvm/runtime";
 import { NativeShader, fillWithShader } from "./graphics";
 import type { Affine } from "./matrix";
 import type { Ctx2D } from "./recording";
+import { device } from "../shell/config";
 type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
 type Uniform = { location: WebGLUniformLocation | null; format: UniformType; color: boolean; values: number[] };
 const vector = (size: 1 | 2 | 3 | 4, integer = false): UniformType => ({ size, integer,
@@ -17,9 +18,11 @@ const uniformTypes = new Map<string, UniformType>([
 ]);
 let surface: OffscreenCanvas | null = null;
 let context: WebGL2RenderingContext | null = null;
+/** created at the display's size: resizing a WebGL canvas after its context exists reallocated the
+ *  drawing buffer, a 150-300 ms stall on the first ripple of each launch */
 function graphics(): WebGL2RenderingContext {
   if (context) return context;
-  surface = new OffscreenCanvas(1, 1);
+  surface = new OffscreenCanvas(device.width, device.height);
   context = surface.getContext("webgl2", { alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!context) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "RuntimeShader requires WebGL2");
   return context;
