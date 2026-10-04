@@ -4,9 +4,9 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object the production runtime made (a Struct*) is copied field by field.
-import { mangleField } from "../../../src/jvm/abi";
+import { demangle, mangleField, parseMethodDesc } from "../../../src/jvm/abi";
 import { elemKindOf, type ElemKind } from "./consts";
-import type { FieldInfo, Kind } from "./program";
+import { kindOf, type FieldInfo, type Kind } from "./program";
 import type { Compiler } from "./j2w";
 import type { World } from "./lazy";
 import type { NativeSource } from "./natives";
@@ -75,6 +75,17 @@ export class Bridge {
     return at;
   }
 
+  // ---------- static initializer natives
+  /** runs a `static ()V` native of `cls` and stores the static fields it filled in into the Wasm class */
+  initialize(cls: string, run: () => unknown): void {
+    const stored = this.src?.stores?.(cls, () => { run(); }) ?? (run(), {});
+    for (const [key, v] of Object.entries(stored)) {
+      const [name, desc] = key.split(":"), f = this.w.prog.get(cls)?.fields.find((x) => x.isStatic && x.name === name && x.desc === desc);
+      if (!f) continue;
+      this.w.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name)); })(f.kind === "L" ? this.toJava(v, desc) : toBits(v, desc));
+    }
+  }
+
   // ---------- Java to host
   toHost(v: unknown, _desc?: string): unknown {
     if (v === null || v === undefined || typeof v === "string") return v ?? null;
@@ -119,7 +130,7 @@ export class Bridge {
       get(_t, p) {
         if (p === REF) return o;
         const f = typeof p === "string" ? fields.get(p) : undefined;
-        if (!f) return undefined;
+        if (!f) return typeof p === "string" && p.startsWith("m$") ? bridge.method(o, name, p) : undefined;
         const raw = bridge.accessor("get", f)(o);
         return f.kind === "L" ? bridge.toHost(raw, f.desc) : fromBits(raw, f.desc);
       },
@@ -132,6 +143,18 @@ export class Bridge {
     });
     this.facades.set(o, proxy); this.owners.set(proxy, o);
     return proxy;
+  }
+
+  /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
+  private method(o: object, cls: string, mangled: string): Fn | undefined {
+    const nd = demangle(mangled), impl = nd && this.w.prog.implFor(cls, nd[0], nd[1]);
+    if (!impl) return undefined;
+    const { params, ret } = parseMethodDesc(impl.desc), kinds: Kind[] = ["L", ...params.map(kindOf)], rk = ret === "V" ? "V" : kindOf(ret);
+    const call = this.w.hostFn(`b:call:${impl.cls}.${impl.key}`, kinds, rk, (cx, c) => { kinds.forEach((_, i) => c.lget(i)); cx.callMethod(c, impl); });
+    return (...args: unknown[]) => {
+      const r = call(o, ...args.map((a, i) => kinds[i + 1] === "L" ? this.toJava(a, params[i]) : toBits(a, params[i])));
+      return rk === "V" ? undefined : rk === "L" ? this.toHost(r, ret) : fromBits(r, ret);
+    };
   }
 
   // ---------- host to Java
@@ -163,10 +186,15 @@ export class Bridge {
   /** an object the production runtime made, copied into the Wasm heap with its fields (not its identity) */
   private copyObject(o: Record<string, unknown>, cls: string): object {
     const j = this.w.hostFn("b:alloc:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })();
+    this.copyFields(o, j, cls);
+    return j;
+  }
+  /** the fields the production object holds under the names of the classes below Throwable, set on the Java object of the same class */
+  copyFields(o: Record<string, unknown>, j: object, cls: string): void {
     for (const f of this.fieldsOf(cls).values()) {
       const v = o[mangleField(f.owner, f.name)];
+      if (process.env.TRACE) console.error("COPY", cls, f.name, v);
       if (v !== undefined) this.accessor("set", f)(j, f.kind === "L" ? this.toJava(v, f.desc) : toBits(v, f.desc));
     }
-    return j;
   }
 }

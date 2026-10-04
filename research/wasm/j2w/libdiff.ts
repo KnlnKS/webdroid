@@ -17,7 +17,7 @@ const CONDITIONAL = /beyond ASCII/;
 /** the JS tier's overrides clamp an offset as JS does ("abc".startsWith("", 7) is true, "a".lastIndexOf("a", -1) is 0); Java answers false and -1,
  *  as the bytecode run here does */
 const JS_DEVIATES = ["java/lang/String.startsWith(Ljava/lang/String;I)Z", "java/lang/String.lastIndexOf(Ljava/lang/String;I)I"];
-const jars = PLATFORM_JARS.slice(0, 2).map((j) => join(import.meta.dir, "../../../vendor/aosp", j));
+const jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(import.meta.dir, "../../../vendor/aosp", j));
 const prog = program(jars), js = await jsTier(jars.flatMap(loadDexes));
 const prim = /^([IJFDZBSC]|Ljava\/lang\/String;)$/, only = process.argv.slice(2);
 const cand = CLASSES.filter((c) => !only.length || only.some((p) => c.startsWith(p))).flatMap((c) => prog.get(c)?.methods ?? [])

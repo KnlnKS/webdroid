@@ -20,9 +20,11 @@ export interface NativeSource {
    *  constructor's key is `<init>desc` and its implementation answers the String */
   find(cls: string, key: string, isStatic: boolean, hasBody: boolean): HostFn | undefined;
   /** a Java throwable raised by a native, by class and message */
-  thrown(e: unknown): { cls: string; msg: string | null } | undefined;
+  thrown(e: unknown): { cls: string; msg: string | null; obj?: object } | undefined;
   /** the Java class name of an object the production runtime made, if `v` is one: a native result the Bridge copies into the Wasm heap */
   classOf?(v: unknown): string | undefined;
+  /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" */
+  stores?(cls: string, run: () => void): Record<string, unknown>;
 }
 /** what the host side needs from the World */
 export interface HostContext {
@@ -56,6 +58,8 @@ function overridden(m: MethodInfo): boolean {
 
 interface Plan {
   id: string; fn: HostFn; recv: boolean;
+  /** the class whose statics a `static ()V` native fills in, which the Bridge copies into the Wasm class */
+  initializes: string | null;
   /** the import's parameters, with an array as two (pointer, length) */
   params: VT[]; ret: VT | null;
   /** the Java-level parameters in order, receiver first, as descriptors */
@@ -91,7 +95,7 @@ export class Natives {
       if (t !== undefined) params.push(t); else params.push(T.i32, T.i32);
     }
     const rd = ctor ? STRING : m.ret, ret = rd === "V" ? null : abi(rd) ?? null, retArray = isPrimArray(rd) ? rd : null;
-    this.plans.set(id, p ||= { id, fn: fn!, recv, params, ret: retArray ? T.i32 : ret, args, retArray, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
+    this.plans.set(id, p ||= { id, fn: fn!, recv, initializes: m.isStatic && !m.params.length && m.ret === "V" ? m.cls : null, params, ret: retArray ? T.i32 : ret, args, retArray, retRef: isRef(rd) && rd !== STRING && !retArray ? rd : null });
     return p;
   }
   binds(m: MethodInfo): boolean { return typeof this.plan(m) !== "string"; }
@@ -185,7 +189,12 @@ export class Natives {
   /** the "n" import module for `ids`: each native with its exception and suspension handling, and its arrays viewed in memory */
   imports(ctx: HostContext, ids: Iterable<string>): Record<string, HostFn> {
     const out: Record<string, HostFn> = {};
-    const throwJava = (t: { cls: string; msg: string | null }): never => { if (process.env.DBG) console.error("THROW", t); throw ctx.raise(ctx.throwable(t.cls, t.msg)); };
+    const throwJava = (t: { cls: string; msg: string | null; obj?: object }): never => {
+      if (process.env.DBG) console.error("THROW", t.cls, t.msg);
+      const j = ctx.throwable(t.cls, t.msg);
+      if (t.obj) ctx.bridge.copyFields(t.obj as Record<string, unknown>, j, t.cls);
+      throw ctx.raise(j);
+    };
     const raise = (e: unknown): never => {
       const t = this.src?.thrown(e);
       if (!t) throw e;
@@ -203,6 +212,7 @@ export class Natives {
     for (const id of ids) {
       const p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
+      if (process.env.TRACE) { const g = p.fn; p.fn = function (this: unknown, ...a: unknown[]) { let r: unknown; try { r = g.apply(this, a); return r; } finally { if (process.env.TRACE === "stack") console.error(new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:")).slice(0, 12).map((l) => l.replace(/ \(wasm.*/, "")).join("\n")); console.error("N", id, a.map((x) => typeof x === "string" || typeof x === "number" ? JSON.stringify(x) : typeof x === "bigint" ? x + "n" : x && (x as {length?: number}).length !== undefined ? `[${(x as {length: number}).length}]` : typeof x), "=>", typeof r === "string" ? JSON.stringify(r) : typeof r); } }; }
       out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }), view, put, ctx.bridge)), p.wrapped.get(ctx)!);
     }
     return out;
@@ -230,14 +240,14 @@ export function copyFn(cx: Compiler, ek: ElemKind, toMem: boolean): number {
 }
 
 type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: View | null) => number,
-  B: Bridge, D: string[], RD: string | null) => HostFn;
+  B: Bridge, D: string[], RD: string | null, CLS: string | null) => HostFn;
 const makers = new Map<string, Maker>();
 /** one function per shape: a native runs under try/catch so a Java throwable it raises becomes a Wasm exception, and a native that
  *  suspends (answers a Promise) is reported, not mistaken for a value; array parameters become views, an array result is stored, and
  *  other references are turned into host values for the call and back into Java values after it (bridge.ts) */
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: Bridge): HostFn {
-  const objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null;
-  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged;
+  const objects = p.args.map((d) => isRef(d) && d !== STRING && !isPrimArray(d)), bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null;
+  const key = p.args.map((d, i) => isPrimArray(d) ? d : objects[i] ? "r" : "v").join() + p.recv + p.retArray + (p.retRef !== null) + bridged + (p.initializes !== null);
   let make = makers.get(key);
   if (!make) {
     let n = 0;
@@ -246,12 +256,12 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
       names.push("a" + n, "a" + (n + 1)); n += 2;
       return `view(${JSON.stringify(d[1])},a${n - 2},a${n - 1})`;
     });
-    const call = p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
+    const call = p.initializes !== null ? "B.initialize(CLS,f)" : p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", `"use strict";return function(${names.join(",")}){${scope[0]};let r;try{r=${call}}catch(e){${scope[1]};return raise(e)}
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", `"use strict";return function(${names.join(",")}){${scope[0]};let r;try{r=${call}}catch(e){${scope[1]};return raise(e)}
 try{if(r instanceof Promise)return suspended();${p.retRef !== null ? "r=B.toJava(r,RD);" : ""}}catch(e){return raise(e)}finally{${scope[1]}}
 return ${p.retArray ? "put(r)" : "r"}}`) as Maker;
     makers.set(key, make);
   }
-  return make(f, raise, suspended, view, put, B, p.args, p.retRef);
+  return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes);
 }

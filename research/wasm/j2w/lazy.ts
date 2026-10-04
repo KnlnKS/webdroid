@@ -90,9 +90,14 @@ export class World {
       heapCheck: () => ((opts.heapUsed ?? heapUsed)() > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
-      stackClass: (n: number) => { const f = javaFrames(new Error().stack ?? "", this.traces)[n + 1]; return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0; },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names)),
-      capture: (exn: object) => { this.stacks.set(exn, new Error()); },
+      stackClass: (n: number) => {
+        const frames = javaFrames(new Error().stack ?? "", this.traces), f = frames[n + 1];
+        // JavaScriptCore's stack has no Wasm frame names: that is a missing capability, not a stack that is not n frames deep
+        if (!frames.length) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
+        return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
+      },
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => { if (process.env.TRACE) console.error("EXC", kind, excMessage(kind, a, b, c, d, e, names), new Error().stack?.split("\n").filter((l) => l.includes("wasm") && !l.includes("stub:")).slice(0, 6).map((l) => l.replace(/ \(wasm.*/, "").trim()).join(" < ")); return (this.lastMessage = excMessage(kind, a, b, c, d, e, names)); },
+      capture: (exn: object) => { const e = new Error(); this.stacks.set(exn, e); if (process.env.TRACE) console.error("THROWABLE", javaFrames(e.stack ?? "", this.traces).slice(0, 10).map((f) => f.cls + "." + f.method).join(" < ")); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : this.frames[i].cls),
       stLine: (i: number) => this.frames[i].line,

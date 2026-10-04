@@ -8,6 +8,9 @@ import type { DexFile } from "../../../src/jvm/dex";
 import { JThrowable } from "../../../src/jvm/natives/jthrowable";
 import { mangleMethod, splitSig } from "../../../src/jvm/abi";
 import { Natives, type HostFn } from "./natives";
+import { PLATFORM_DATA } from "../../../src/jvm/bootclasspath";
+import { isResident, mapExternal, pagesIn, unmapExternal } from "../../../src/jvm/natives/jmemory";
+import { vfs } from "../../../src/shell/vfs";
 
 /** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
@@ -28,7 +31,14 @@ export const natives = new Natives({
     return settled.has(cls + "." + key) ? () => settled.get(cls + "." + key) : lookup(cls, key, isStatic);
   },
   classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
-  thrown: (e) => e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg } : undefined,
+  // every static is unset while the native runs, so what it stores is what it wrote
+  stores: (cls, run) => {
+    const info = rt.link(cls), unset = Symbol(), saved = [...info.staticFieldTable].map(([key, prop]) => [key, prop, info.ctor[prop]] as const);
+    for (const [, prop] of saved) info.ctor[prop] = unset;
+    try { run(); return Object.fromEntries(saved.filter(([, prop]) => info.ctor[prop] !== unset).map(([key, prop]) => [key, info.ctor[prop]])); }
+    finally { for (const [, prop, v] of saved) info.ctor[prop] = v; }
+  },
+  thrown: (e) => e instanceof JThrowable ? { cls: (e.constructor as unknown as { $i: { name: string } }).$i.name, msg: e.msg, obj: e } : undefined,
 });
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
@@ -46,6 +56,16 @@ export const fmt = (k: string, v: bigint) => {
 export async function jsTier(dexes: DexFile[]) {
   for (const d of dexes) rt.loadDex(d);
   rt.linkNatives();
+  // A mapped file faults its pages in asynchronously, which a native in the Wasm tier cannot wait for: the ICU data files are read first into
+  // the pages every mapping of them shares, as a warm page cache would hold them. Outside a page each mapping keeps its own pages (pageShared),
+  // so the harness gives the realm the page it lacks.
+  (globalThis as { window?: object }).window ??= {};
+  for (const path of Object.keys(PLATFORM_DATA).filter((p) => /\.(dat|res)$/.test(p))) {
+    const file = vfs.source(path)!, at = mapExternal(file, 0, file.size);
+    await pagesIn(at, file.size);
+    if (!isResident(at, file.size)) throw new Error(`${path} is not resident`);
+    unmapExternal(at);
+  }
   for (const [cls, key] of ICU_VERSIONS) { const f = lookup(cls, key, true) ?? lookup(cls, key, false); if (f) settled.set(cls + "." + key, await f.call(null)); }
   // the process state ActivityThread.main leaves, as scripts/jbench/runner.ts sets it
   await scall("dalvik/system/CloseGuard", "setEnabled", "(Z)V", 0);
