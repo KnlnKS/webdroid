@@ -12,13 +12,26 @@ let posted = false;
 const post = (): void => { if (!posted) { posted = true; chan!.port2.postMessage(0); } };
 if (chan) {
   chan.port1.onmessage = () => {
-    posted = false; yieldStats.fires++;
+    posted = false; yieldStats.fires++; turnArmed = false;
     for (const f of woken.splice(0)) f();
     waiters.shift()?.();
     if (waiters.length) post();
   };
   // an open port keeps a bun/node process alive after its work is done (tests, scripts)
   (chan.port1 as unknown as { unref?: () => void }).unref?.();
+}
+/** How long the current macrotask has held the JS thread, from the first time this turn asked: a
+ *  turn ends at its own message, or when the yield channel starts the next. */
+let turnStart = 0, turnArmed = false;
+const turnChannel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
+if (turnChannel) {
+  turnChannel.port1.onmessage = () => { turnArmed = false; };
+  (turnChannel.port1 as unknown as { unref?: () => void }).unref?.();
+}
+export function turnElapsed(): number {
+  const now = performance.now();
+  if (!turnArmed && turnChannel) { turnArmed = true; turnStart = now; turnChannel.port2.postMessage(0); }
+  return now - turnStart;
 }
 /** Input the page is answering: background work (native budget slices, compiled-code imports)
  *  stands aside until this long after the latest event. */

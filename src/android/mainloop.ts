@@ -13,7 +13,7 @@ import { processExited } from "../process-exit";
 import { handle, deref, release } from "./handles";
 import { clearGuestTimeout, setGuestTimeout, uptimeMillis } from "../guest-clock";
 import { perf } from "../perf";
-import { wakeSoon, yieldToLoop } from "../jvm/yield";
+import { turnElapsed, wakeSoon, yieldToLoop } from "../jvm/yield";
 
 /** depth: the main thread is outside nativePollOnce (dispatching), so a job it awaits must run
  *  inline */
@@ -22,18 +22,6 @@ export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued
 /** A thread may hold the JS thread this long between macrotask turns before its looper yields, so
  *  a message that keeps reposting itself cannot starve input, rendering or other realms. */
 const SLICE_MS = 16;
-let turnStart = 0, turnArmed = false;
-const turnChannel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
-if (turnChannel) {
-  turnChannel.port1.onmessage = () => { turnArmed = false; };
-  (turnChannel.port1 as unknown as { unref?: () => void }).unref?.();
-}
-/** has the current macrotask held the JS thread past its slice? */
-function sliceOver(): boolean {
-  const now = performance.now();
-  if (!turnArmed && turnChannel) { turnArmed = true; turnStart = now; turnChannel.port2.postMessage(0); }
-  return now - turnStart > SLICE_MS;
-}
 
 export class NativeLooper {
   private callbacks: (() => unknown)[] = [];
@@ -50,7 +38,7 @@ export class NativeLooper {
    *  main thread (a device runs them on other cores); the main looper's own yield goes ahead of
    *  theirs, as its core would keep it going. */
   pollOnce(timeout: number): void | Promise<void> {
-    if (!this.callbacks.length && !this.woken && timeout === 0 && this === mainLooper && !sliceOver()) return;
+    if (!this.callbacks.length && !this.woken && timeout === 0 && this === mainLooper && turnElapsed() <= SLICE_MS) return;
     return this.poll(timeout);
   }
   private async poll(timeout: number): Promise<void> {

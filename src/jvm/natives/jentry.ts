@@ -122,6 +122,7 @@ export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
 rt.cur = mainThread.root;
+rt.main = mainThread;
 rt.st = resumeAs;
 rt.su = releaseThread;
 export const threadSwitch = { hook: null as ((t: JThread) => void) | null };

@@ -5,7 +5,7 @@
 // may suspend). Instances only exist after init, so prototype methods are always present
 // when virtual dispatch happens.
 
-import { yieldToLoop } from "./yield";
+import { turnElapsed, wakeSoon, yieldToLoop } from "./yield";
 import { Strand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
@@ -973,19 +973,15 @@ export class Runtime {
   readonly shifts: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt(i));
   /** `1L << n` for every n: the bit-mask idiom then allocates nothing */
   readonly bits: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt.asIntN(64, 1n << BigInt(i)));
-  private lastYield = 0;
-  /** ms between back-edge yields. The frame loop stretches it while a draw pass is in flight:
-   *  a yield there only costs a macrotask, since nothing is presented until the pass ends. */
-  yieldGap = 8;
-  /** Back-edge fuel check target. fuel is a GLOBAL counter shared by every loop, so it trips
-   *  far more often than any one loop would; only actually yield to the event loop if we have
-   *  not yielded recently, otherwise just refill and keep going. */
+  /** the process's main thread, whose back-edge yields resume ahead of other threads' */
+  main: unknown = null;
+  /** Back-edge fuel check target: refill, and yield to the event loop once the current turn has
+   *  held the thread for 8 ms. The main thread resumes ahead of the threads that only yielded, as
+   *  its core would keep running; behind them, a tap waited out every runnable thread's slice. */
   refuel(): Promise<void> | null {
     this.fuel = 4096;   // a loop of native calls costs tens of µs an iteration: check the clock often enough to yield within ~10 ms
-    const now = performance.now();
-    if (now - this.lastYield < this.yieldGap) return null;
-    this.lastYield = now;
-    return yieldToLoop();
+    if (turnElapsed() < 8) return null;
+    return this.cur.thread === this.main ? wakeSoon() : yieldToLoop();
   }
   /** java.lang.Class for the type at dex typeIdx (compiled const-class) */
   classForIdx(D: DexLink, typeIdx: number): unknown {
