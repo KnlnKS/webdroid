@@ -4,6 +4,7 @@ import { JObj, rt, type Runtime, driven, type Gen } from "../runtime";
 import { zipTree } from "./jzip";
 import { pathOf } from "./jio";
 import { dexesIn } from "../dex";
+import { loadDex } from "../tier";
 import { JClassLoader } from "./jlang";
 import { vfs } from "../../shell/vfs";
 import { packedArchives } from "../../shell/packedarchive";
@@ -40,7 +41,7 @@ async function addDexPath(loader: JClassLoader, path: string): Promise<void> {
       files = bytes[0] === 0x64 && bytes[1] === 0x65 && bytes[2] === 0x78 ? { "classes.dex": bytes } : zipTree(bytes);
     }
     for (const name of Object.keys(files).filter((n) => /^classes(?:[2-9]|[1-9][0-9]+)?\.dex$/.test(n)).sort((a, b) => a.length - b.length || a.localeCompare(b)))
-      for (const dex of dexesIn(files[name], entry + "!/" + name)) loader.runtime.loadDex(dex);
+      for (const dex of dexesIn(files[name], entry + "!/" + name)) loadDex(loader.runtime, dex);
     for (const name of Object.keys(files)) if (!Object.hasOwn(loader.runtime.classpath, name)) {
       Object.defineProperty(loader.runtime.classpath, name, { enumerable: true, configurable: true, get: () => files[name] });
       loader.runtime.classpathLocations.set(name, entry);
@@ -125,7 +126,7 @@ function initMemory(this: JClassLoader, buffers: JBuffer[], parent: JClassLoader
     initRuntime(this, parent);
     for (const [index, buffer] of buffers.entries()) {
       const bytes = remainingBytes(buffer).slice();
-      for (const dex of dexesIn(bytes, `memory:${index}`)) this.runtime.loadDex(dex);
+      for (const dex of dexesIn(bytes, `memory:${index}`)) loadDex(this.runtime, dex);
     }
   };
   const waits = buffers.map(resident).filter((wait) => wait !== null);

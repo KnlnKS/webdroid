@@ -18,6 +18,7 @@ import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
 import { initialize } from "./clinit";
 import { isBytecode, isStageD } from "./provenance";
 import { perf } from "../perf";
+import { tier } from "./tier";
 import { jvmCoverage } from "./coverage";
 import { Monitors, owns, type Monitor } from "./monitor";
 
@@ -529,6 +530,7 @@ export class Runtime {
   link(name: string): ClassInfo {
     let info = this.classes.get(name);
     if (info) return info;
+    if (tier === "wasm" && !this.natives.has(name) && name[0] !== "[") throw new Error(`?tier=wasm: ${name} is Java code, which the Wasm tier runs: enter it through jentry`);
     const library = this.libraries && this.libraryDefining(name);
     if (library) return library.link(name);
     if (this.parent && (this.natives.has(name) || !this.dexIndex.has(name) && (!this.platformParent || this.platformClasses.has(name)))) return this.parent.link(name);
@@ -1125,9 +1127,11 @@ const declaredFields = new Map<string, string>();
 export function declaredField(cls: string, name: string): string {
   const key = cls + "." + name;
   let prop = declaredFields.get(key);
-  if (prop === undefined) declaredFields.set(key, prop = instanceFieldOf(rt.link(cls), name) ?? "");
+  if (prop === undefined) declaredFields.set(key, prop = (fieldNames.find ? fieldNames.find(cls, name) : instanceFieldOf(rt.link(cls), name)) ?? "");
   return prop;
 }
+/** how the Wasm tier names an instance field, which a facade of the object answers under that name */
+export const fieldNames = { find: null as ((cls: string, name: string) => string | undefined) | null };
 function fieldOf(cls: string, name: string): string {
   const prop = declaredField(cls, name);
   if (!prop) throw new Error(`${cls} has no field ${name}`);

@@ -1,7 +1,8 @@
 // Which engine runs Java: the JS tier (`?tier=js`, the default) or the Wasm tier (`?tier=wasm`; headless tools: WEBDROID_TIER). The Wasm tier's
 // code is loaded by a dynamic import only when selected, so the default bundle carries none of it. `JavaClass` is what host code holds of a loaded
 // class instead of the JS tier's `ClassInfo.ctor`, with an implementation for each tier.
-import type { ClassInfo } from "./runtime";
+import type { ClassInfo, Runtime } from "./runtime";
+import type { DexFile } from "./dex";
 import { lateMethod, mangleMethod, mangleStaticField } from "./abi";
 
 export type Tier = "js" | "wasm";
@@ -15,9 +16,21 @@ export function parseTier(value: string | null | undefined): Tier {
 export const tier: Tier = parseTier(typeof location !== "undefined" ? new URLSearchParams(location.search).get("tier")
   : typeof process !== "undefined" ? process.env.WEBDROID_TIER : undefined);
 
+/** what the Wasm tier's host provides the places that load code */
+export interface TierBackend {
+  loadDex(dex: DexFile, platform: boolean): void;
+}
+let backend: TierBackend | undefined;
 /** loads the Wasm tier's host; only under `tier === "wasm"` */
 export async function loadTier(): Promise<void> {
-  await (await import("../wasm/host/boot")).bootWasmTier();
+  backend = await (await import("../wasm/host/boot")).bootWasmTier();
+}
+
+/** `dex` made known to the Java that runs: to `runtime` on the JS tier, to the one Wasm World on the Wasm tier, whose loaders share a namespace */
+export function loadDex(runtime: Runtime, dex: DexFile, platform = false): void {
+  if (tier !== "wasm") return runtime.loadDex(dex, platform);
+  if (!backend) throw new Error("?tier=wasm: loadTier() has not run");
+  backend.loadDex(dex, platform);
 }
 
 export interface JavaClass {

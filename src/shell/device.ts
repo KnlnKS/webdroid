@@ -3,6 +3,7 @@
 
 import { dexesIn, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
+import { loadDex, tier } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
@@ -104,7 +105,7 @@ export function startZygote(): Promise<void> {
     // persisted platform bodies first: zygoteInit runs platform code, as a device's runs its boot image
     await Promise.all([loadFramework(), loadPlatformDex(), loadPlatformCode()]);
     useLinkTable(await table, rt.linkFingerprint());
-    await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+    if (tier === "js") await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await processBitness;
@@ -146,7 +147,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // The app's dex goes in after the boot class path, which loadDex's first-wins keeps ahead: an
   // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
   for (const name of Object.keys(zip)) {
-    if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
+    if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
   }
   await code;
   // the Application, then the launcher Activity a launch instantiates first

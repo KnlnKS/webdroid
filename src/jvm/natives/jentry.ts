@@ -31,7 +31,7 @@ export function implement<T extends object>(obj: T, name: string, desc: string, 
   return obj;
 }
 /** Dynamic virtual call from native code: the result, or a Promise when the callee suspends. */
-export function vcall(obj: any, name: string, desc: string, ...args: unknown[]): any {
+function jsVcall(obj: any, name: string, desc: string, ...args: unknown[]): any {
   if (!owned) unowned(`vcall ${name}${desc}`);
   return findMethod(obj, name, desc).apply(obj, args);
 }
@@ -44,7 +44,7 @@ export function vcallOn(thread: JThread, obj: unknown, name: string, desc: strin
 }
 /** `call` on `thread`, which owns the turn while it runs, as a chain of its own: the running chain
  *  need not wait for an entry, and must not run on as it while the entry suspends */
-export function callOn<T>(thread: JThread, call: () => T): T {
+function jsCallOn<T>(thread: JThread, call: () => T): T {
   if (processExited()) return never() as T;
   const previous = rt.cur, was = owned;
   resumeAs(new Strand(thread));
@@ -52,7 +52,7 @@ export function callOn<T>(thread: JThread, call: () => T): T {
 }
 /** `f` of `r`, now or once it settles; settled later, `f` continues the thread and chain that
  *  asked as a suspended frame does (if a thread owned the turn that asked) */
-export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
+function jsAfter<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T> {
   if (!(r instanceof Promise)) return f(r);
   if (!owned) return r.then(f);
   const strand = rt.cur;
@@ -65,39 +65,64 @@ export function after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T |
 function describe(o: unknown): string {
   return typeof o === "string" ? "String" : (classNameOf(o) ?? String(o));
 }
-/** the class named `cls`, linked only: its fields and methods exist, `<clinit>` has not run */
-export const linkClass = (cls: string): JavaClass => jsClass(rt.link(cls));
-/** run `cls`'s <clinit> if it has not, linking it first; null when it was ready */
-export const initClass = (cls: string): Promise<void> | null => rt.initClass(rt.link(cls));
-/** is `o` an instance of the class named `cls` */
-export const iof = (o: unknown, cls: string): boolean => !!rt.iof(o, cls);
-/** the name of the class of the Java object `o` */
-export function classNameOf(o: unknown): string | undefined {
+const jsLinkClass = (cls: string): JavaClass => jsClass(rt.link(cls));
+const jsInitClass = (cls: string): Promise<void> | null => rt.initClass(rt.link(cls));
+const jsIof = (o: unknown, cls: string): boolean => !!rt.iof(o, cls);
+function jsClassNameOf(o: unknown): string | undefined {
   return (o as { constructor?: { $i?: ClassInfo } } | null | undefined)?.constructor?.$i?.name;
 }
 function initialized(cls: string): ClassInfo | Promise<ClassInfo> {
   if (!owned) unowned(`initialize ${cls}`);
   const info = rt.link(cls);
-  return after(rt.initClass(info), () => info);
+  return jsAfter(rt.initClass(info), () => info);
 }
-/** link + run <clinit>: the class is ready to be instantiated or have its statics read */
-export function linkInit(cls: string): JavaClass | Promise<JavaClass> {
-  return after(initialized(cls), jsClass);
+const jsLinkInit = (cls: string): JavaClass | Promise<JavaClass> => jsAfter(initialized(cls), jsClass);
+const jsStaticField = <T = unknown>(cls: string, field: string): T | Promise<T> =>
+  jsAfter(initialized(cls), (info) => jsClass(info).static(field) as T);
+function jsScall(cls: string, name: string, desc: string, ...args: unknown[]): any {
+  return jsAfter(initialized(cls), (info) => vcall(info.ctor, name, desc, ...args));
 }
-/** a static field's value, once the class has initialized */
-export const staticField = <T = unknown>(cls: string, field: string): T | Promise<T> =>
-  after(initialized(cls), (info) => jsClass(info).static(field) as T);
-/** A static Java call from native code, once the class has initialized, on the calling thread */
-export function scall(cls: string, name: string, desc: string, ...args: unknown[]): any {
-  return after(initialized(cls), (info) => vcall(info.ctor, name, desc, ...args));
-}
-/** `new cls(args)` from native code: initialize the class, then run the Java constructor `desc`;
- *  synchronous unless initialization or the constructor suspends */
-export function newObj(cls: string, desc = "()V", ...args: unknown[]): JObj | Promise<any> {
-  return after(initialized(cls), (info) => {
+function jsNewObj(cls: string, desc = "()V", ...args: unknown[]): JObj | Promise<any> {
+  return jsAfter(initialized(cls), (info) => {
     const o = jsClass(info).new() as JObj;
-    return after(vcall(o, "<init>", desc, ...args), () => o);
+    return jsAfter(vcall(o, "<init>", desc, ...args), () => o);
   });
+}
+
+/** How host code enters Java, for the tier that runs it: the JS tier's below, the Wasm tier's in src/wasm/host/entry.ts, selected by `useEntry`
+ *  (the names this module exports are bindings that follow it). */
+export interface Entry {
+  /** Dynamic virtual call from native code: the result, or a Promise when the callee suspends. */
+  vcall(obj: any, name: string, desc: string, ...args: unknown[]): any;
+  /** A static Java call from native code, once the class has initialized, on the calling thread */
+  scall(cls: string, name: string, desc: string, ...args: unknown[]): any;
+  /** `new cls(args)` from native code: initialize the class, then run the Java constructor `desc`; synchronous unless initialization or the constructor suspends */
+  newObj(cls: string, desc?: string, ...args: unknown[]): any;
+  /** a static field's value, once the class has initialized */
+  staticField<T = unknown>(cls: string, field: string): T | Promise<T>;
+  /** link + run <clinit>: the class is ready to be instantiated or have its statics read */
+  linkInit(cls: string): JavaClass | Promise<JavaClass>;
+  /** the class named `cls`, linked only: its fields and methods exist, `<clinit>` has not run */
+  linkClass(cls: string): JavaClass;
+  /** run `cls`'s <clinit> if it has not, linking it first; null when it was ready */
+  initClass(cls: string): Promise<void> | null;
+  /** is `o` an instance of the class named `cls` */
+  iof(o: unknown, cls: string): boolean;
+  /** the name of the class of the Java object `o` */
+  classNameOf(o: unknown): string | undefined;
+  /** `call` on `thread`, which owns the turn while it runs, as a chain of its own */
+  callOn<T>(thread: JThread, call: () => T): T;
+  /** `f` of `r`, now or once it settles */
+  after<R, T>(r: R | Promise<R>, f: (v: R) => T | Promise<T>): T | Promise<T>;
+}
+export const jsEntry: Entry = {
+  vcall: jsVcall, scall: jsScall, newObj: jsNewObj, staticField: jsStaticField, linkInit: jsLinkInit, linkClass: jsLinkClass, initClass: jsInitClass,
+  iof: jsIof, classNameOf: jsClassNameOf, callOn: jsCallOn, after: jsAfter,
+};
+export let { vcall, scall, newObj, staticField, linkInit, linkClass, initClass, iof, classNameOf, callOn, after } = jsEntry;
+/** from here host code enters Java through `entry` */
+export function useEntry(entry: Entry): void {
+  ({ vcall, scall, newObj, staticField, linkInit, linkClass, initClass, iof, classNameOf, callOn, after } = entry);
 }
 
 /** the threads started and not yet ended */
