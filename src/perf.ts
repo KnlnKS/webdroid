@@ -2,6 +2,8 @@
 // beyond the three performance.now() pairs the frame loop already needs.
 export const perf = {
   frames: 0, completedFrames: 0, presentations: 0, frameMs: 0,
+  // wall time from a buffer's queueBuffer to the composite that shows it
+  presentLagMs: 0,
   draws: 0, drawMs: 0,
   measureText: 0, measureTextMiss: 0,
   rnRecord: 0, rnReplay: 0,

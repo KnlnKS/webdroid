@@ -4,9 +4,9 @@
 // thread wakes its fd there.
 import { rt, type JObj } from "../jvm/runtime";
 import { mangleField } from "../jvm/abi";
-import { vcall, newObj } from "../jvm/natives/jentry";
+import { vcall, newObj, after } from "../jvm/natives/jentry";
 import { handle, deref, FINALIZER } from "./handles";
-import { type NativeLooper, mainLooper } from "./mainloop";
+import { type NativeLooper, mainLooper, postMain } from "./mainloop";
 import { perf } from "../perf";
 import { device } from "../shell/config";
 import { uptimeMillis } from "../guest-clock";
@@ -73,19 +73,27 @@ export function frameDrawn(): void {
 export function deliverVsync(): void {
   latest = { nanos: BigInt(Math.floor(uptimeMillis() * 1e6)), frame: ++frame };
   const { nanos, frame: count } = latest;
+  let hooks: (() => void)[] | null = vsyncHooks;
+  vsyncHooks = [];
   for (const r of scheduled) {
+    if (r.looper !== mainLooper) { r.looper.post(() => { fill(r.data as never); return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count); }); continue; }
+    const behind = hooks;
+    hooks = null;
     r.looper.post(() => {
       fill(r.data as never);
-      // the main thread's frame is the Choreographer.doFrame this vsync starts; it completes when
-      // the renderer draws it
-      if (r.looper === mainLooper) { perf.frames++; frameStart ??= performance.now(); }
-      return vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count);
+      // the main thread's frame is the Choreographer.doFrame this vsync starts, as a message the
+      // receiver queues; it completes when the renderer draws it. Behind that message the frame
+      // closes even when it drew nothing, and the renderer's own draws yield to the one it made.
+      perf.frames++;
+      const opened = frameStart = performance.now();
+      return after(vcall(r.receiver, "dispatchVsync", "(JJI)V", nanos, 0n, count), () => postMain(() => {
+        if (frameStart === opened) frameStart = null;
+        for (const fn of behind ?? []) fn();
+      }));
     });
   }
   scheduled.clear();
-  const hooks = vsyncHooks;
-  vsyncHooks = [];
-  for (const fn of hooks) fn();
+  for (const fn of hooks ?? []) fn();
   flushVsyncWaiters();
 }
 

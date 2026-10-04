@@ -24,7 +24,7 @@ const PIXEL_COPY_SUCCESS = 0, PIXEL_COPY_SOURCE_NO_DATA = 3;
 const SYNC_OK = 0, SYNC_LOST_SURFACE_REWARD_IF_FOUND = 2, SYNC_CONTEXT_IS_STOPPED = 4;
 interface Proxy {
   root: NativeRenderNode; surface: ReturnType<typeof nativeSurface>; opaque: boolean; stopped: boolean; frame: bigint;
-  drawCallback: JObj | null; commitCallback: JObj | null; completeCallback: JObj | null; animating: boolean;
+  drawCallback: JObj | null; commitCallback: JObj | null; completeCallback: JObj | null; animating: boolean; running: boolean;
 }
 const proxy = (h: bigint) => deref<Proxy>(h);
 
@@ -58,11 +58,19 @@ const drawFrame = driven(function* (p: Proxy): Gen<number> {
 const renderThread = Object.assign(new JThread(), { jname: "RenderThread" });
 /** render-thread animators step at the frame's time, and while any runs the next vsync draws again */
 function animate(p: Proxy): void {
-  if (!animateRenderThread(uptimeMillis()) || p.animating) return;
+  p.running = animateRenderThread(uptimeMillis());
+  if (p.running) armAnimation(p);
+}
+/** draw at the next vsync unless a draw came first: the main thread's, sharing the vsync, has
+ *  already stepped the animators */
+function armAnimation(p: Proxy): void {
+  if (p.animating) return;
   p.animating = true;
+  const drawn = p.frame;
   onNextVsync(() => {
     p.animating = false;
-    detached(() => callOn(renderThread, () => drawFrame(p)));
+    if (p.frame === drawn) detached(() => callOn(renderThread, () => drawFrame(p)));
+    else if (p.running) armAnimation(p);
   });
 }
 
@@ -82,7 +90,7 @@ rt.registerJnis("android/graphics/HardwareRenderer", {
   "nCreateRootRenderNode()J": () => handle(new NativeRenderNode("RootRenderNode")),
   "nCreateProxy(ZJ)J": (translucent: number, root: bigint) => handle({
     root: deref<NativeRenderNode>(root), surface: null, opaque: !translucent, stopped: false, frame: 0n,
-    drawCallback: null, commitCallback: null, completeCallback: null, animating: false,
+    drawCallback: null, commitCallback: null, completeCallback: null, animating: false, running: false,
   } satisfies Proxy),
   "nDeleteProxy(J)V": (h: bigint) => release(h),
   "nSetSurface(JLandroid/view/Surface;Z)V": (h: bigint, surface: JObj | null) => { proxy(h).surface = nativeSurface(surface); },

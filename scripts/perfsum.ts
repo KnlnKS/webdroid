@@ -2,7 +2,7 @@
 // on cost as well as on pixels.  bun scripts/perfsum.ts [dir=tests/e2e/actual] [baseline.json]
 import { readdirSync, existsSync } from "node:fs";
 
-const KEYS = ["bootMs", "compileMs", "classesCompiled", "drawMs", "draws", "frameMs", "frames", "inputMs", "measureText", "nativeInstr", "nativeMs", "nativeHostCalls", "jitRegions", "jitMs"] as const;
+const KEYS = ["bootMs", "compileMs", "classesCompiled", "drawMs", "draws", "frameMs", "frames", "presentLagMs", "inputMs", "measureText", "nativeInstr", "nativeMs", "nativeHostCalls", "jitRegions", "jitMs"] as const;
 
 async function rollup(dir: string) {
   const out: Record<string, Record<string, number>> = {};

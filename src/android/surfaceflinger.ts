@@ -75,10 +75,12 @@ export function scheduleComposite(): void {
   composing = true;
   queueMicrotask(composite);
 }
+let queuedAt: number | null = null;
 function composite(): void {
   composing = false;
   if (!target) return;
   const { ctx } = target, t0 = performance.now();
+  if (queuedAt !== null) { perf.presentLagMs += t0 - queuedAt; queuedAt = null; }
   ctx.save();
   // a process's frame stacks over the processes below it (processes.ts), which show through
   // wherever its windows draw nothing; the bottom one shows black there, as a display does
@@ -315,6 +317,7 @@ export function queueBuffer(s: Surface, buffer: Frame | null = s.queue?.canvas ?
   const q = s.queue, layer = q?.control?.layer;
   if (!q || !layer) { if (buffer !== q?.canvas) releaseFrame(buffer); return; }
   q.frame++;
+  queuedAt ??= performance.now();
   const latch: Transaction = { ops: q.pending.flatMap((t) => t.ops.splice(0)) };
   q.pending.length = 0;
   latch.ops.push(() => {
