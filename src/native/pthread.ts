@@ -270,7 +270,7 @@ export function cloneThread(parent: Cpu, flags: number, stack: bigint, ptid: num
   if (flags & CLONE_SETTLS) { cpu.tlsVa = tls; cpu.libc = "guest"; }
   if (flags & CLONE_PARENT_SETTID) mem.st32(ptid, cpu.osTid);
   if (flags & CLONE_CHILD_CLEARTID) cpu.clearChildTid = BigInt(mem.va(ctid));
-  void launch(cpu, () => cpu.run(), () => {
+  void launch(cpu, async () => cpu.run(), () => {
     // what pthread_join waits on, unless set_tid_address withdrew it
     if (cpu.clearChildTid) { const at = guestAt(cpu.clearChildTid); mem.st32(at, 0); futex(cpu, at, 1, 0x7fffffff, 0); }
     cpu.dispose();

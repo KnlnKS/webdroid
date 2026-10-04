@@ -438,14 +438,17 @@ export class Cpu {
   frames: Frame[] = [];
   private savePool: Uint8Array[] = [];
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
-  call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> { return this.enter(fn, args, { label }); }
+  call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> { return Promise.resolve(this.enter(fn, args, { label })); }
+  /** call(), but a number when the guest returns within its first slice without parking: a Java
+   *  caller then keeps its frames instead of suspending every one of them */
+  callSync(fn: number, args: CallArg[] = [], label = "call"): number | Promise<number> { return this.enter(fn, args, { label }); }
   /** `fn` as `frame`: a signal handler's on `stackTop` (its alternate stack) when given */
-  private async enter(fn: number, args: CallArg[], frame: Frame, stackTop?: bigint): Promise<number> {
+  private enter(fn: number, args: CallArg[], frame: Frame, stackTop?: bigint, strand = rt.cur): number | Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
-    const strand = rt.cur;
-    if (!frame.handler) while (this.frames.at(-1)?.handler) await new Promise<void>((r) => this.idle.push(r));
+    if (!frame.handler && this.frames.at(-1)?.handler)
+      return new Promise<void>((r) => this.idle.push(r)).then(() => this.enter(fn, args, frame, stackTop, strand));
     this.frames.push(frame);
     this.ensureStack();
     const w = this.w;
@@ -500,15 +503,15 @@ export class Cpu {
     this.pending = null;
     this.depth++;
     let returned = false;
-    try {
-      await this.run(strand);
+    const finish = (): number => {
       returned = true;
       if (frame.handler && this.spVa !== stackVa) this.escapeHandler(frame.handler);
       this.ret1 = this.a64 ? w[1] : w[2];
       this.retFp0 = this.a64 ? this.si[0] : w[0];
       this.retFp1 = this.a64 ? this.si[1] : w[2];
       return w[0];
-    } finally {
+    };
+    const leave = () => {
       this.depth--;
       this.frames.pop();
       this.bytes.set(saved);
@@ -518,7 +521,11 @@ export class Cpu {
       frame.handler?.resume(returned);
       if (this.idle.length) for (const w2 of this.idle.splice(0)) w2();
       this.pump();                                                          // a signal that arrived while this frame owned the register file reaches the frame below now
-    }
+    };
+    let ran: void | Promise<void>;
+    try { ran = this.run(strand); } catch (e) { leave(); throw e; }
+    if (!ran) { try { return finish(); } finally { leave(); } }
+    return ran.then(finish).finally(leave);
   }
 
   /** the float/double a call() just returned, wherever the ABI put it */
@@ -528,37 +535,65 @@ export class Cpu {
   /** the guest libc's teardown of this thread, once its Java thread has ended */
   endThread(): Promise<void> { return this.libc === "host" && threadHooks ? threadHooks.end(this) : Promise.resolve(); }
 
-  /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes */
-  async run(strand = rt.cur): Promise<void> {
-    if (this.libc === "none" && threadHooks) await threadHooks.start(this);
+  /** the slice driver: run until the frame returns (pc = RET_SENTINEL) or the thread finishes;
+   *  synchronous when it returns within its first slice */
+  run(strand = rt.cur): void | Promise<void> {
+    if (this.libc === "none" && threadHooks) return threadHooks.start(this).then(() => this.runLoop(strand));
+    return this.runLoop(strand);
+  }
+  private runLoop(strand: Strand): void | Promise<void> {
     this.loops++;
     // the caller's strand when it is this thread's (a JNI call), else the thread as no chain (its own start)
-    const sync = { on: true }, loop = this.loop(sync, strand.thread === this.jthread ? strand : this.jthread.root);
+    const sync = { on: true };
+    let loop: void | Promise<void>;
+    try { loop = this.loop(sync, strand.thread === this.jthread ? strand : this.jthread.root); }
+    catch (e) { this.loops--; throw e; }
     sync.on = false;
-    try { await loop; } finally { this.loops--; }
+    if (!loop) { this.loops--; return; }
+    return loop.finally(() => { this.loops--; });
   }
-  /** `sync.on` while the caller is still on the stack: a frame that never parked leaves it its thread */
-  private async loop(sync: { on: boolean }, strand: Strand): Promise<void> {
-    const caller = rt.cur, myDepth = this.depth;
+  /** The first slice runs before any await, so a guest function that returns within it (most JNI
+   *  natives) completes on the caller's stack. `sync.on` while the caller is still on the stack: a
+   *  frame that never parked leaves it its thread. */
+  private loop(sync: { on: boolean }, strand: Strand): void | Promise<void> {
+    const caller = rt.cur;
     // each turn the loop resumes in runs as the strand that entered it
     const turn: LoopTurn = { own: () => resumeAs(strand), release: releaseThread };
+    turn.own();
+    if (processExited() || this.deliverable()) return this.drive(sync, caller, turn);
+    let ex: SliceExit;
+    try { ex = this.timedSlice(); } catch (e) { if (sync.on) resumeAs(caller); else turn.release(); throw e; }
+    if (ex !== SliceExit.Exit) return this.drive(sync, caller, turn, ex);
+    if (sync.on) resumeAs(caller); else turn.release();
+  }
+  /** one budgeted slice, accounted */
+  private timedSlice(): SliceExit {
+    const t0 = performance.now(), ic0 = this.ic;
+    this.state = "slice";
+    try { return this.runSlice(sliceBudget()); }
+    finally {
+      const dt = performance.now() - t0;
+      this.lastSliceMs = dt;
+      perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
+      if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
+    }
+  }
+  private lastSliceMs = 0;
+  /** the run loop past its first slice (`first`, already run when given) */
+  private async drive(sync: { on: boolean }, caller: Strand, turn: LoopTurn, first?: SliceExit): Promise<void> {
+    const myDepth = this.depth;
     let budgetStreak = 0;
     try {
       for (;;) {
-        turn.own();
-        if (processExited()) { turn.release(); await never(); }
-        for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(turn, sig);
-        const t0 = performance.now(), ic0 = this.ic;
-        let sliceMs = 0;
         let ex: SliceExit;
-        this.state = "slice";
-        try { ex = this.runSlice(sliceBudget()); }
-        finally {
-          const dt = performance.now() - t0;
-          sliceMs = dt;
-          perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
-          if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
+        if (first !== undefined) { ex = first; first = undefined; }
+        else {
+          turn.own();
+          if (processExited()) { turn.release(); await never(); }
+          for (let sig; (sig = this.takeSignal());) await this.deliverFromLoop(turn, sig);
+          ex = this.timedSlice();
         }
+        const sliceMs = this.lastSliceMs;
         if (ex === SliceExit.Exit) return;
         if (ex === SliceExit.Suspend) {
           budgetStreak = 0;

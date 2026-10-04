@@ -240,7 +240,7 @@ function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[
     if (jniTrace.on) console.log("[jni] →", r.cls, r.name, r.sig);
     let r0: number, r1: number;
     try {
-      r0 = yield cpu.call(r.fn, list, r.label);
+      r0 = yield cpu.callSync(r.fn, list, r.label);
       r1 = cpu.ret1;
     } finally { cur = cpu; }
     let out: unknown;
