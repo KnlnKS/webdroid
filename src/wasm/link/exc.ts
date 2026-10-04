@@ -20,9 +20,9 @@ export const MAX_DEPTH = 56000, SOE_HEADROOM = 2000;
 export const ALLOC_WINDOW = 8 << 20;
 
 /** Table slots that hold the throwers, bound once the runtime starts; each is a lazy-link stub until first used. */
-export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, sioobe: 9, copy: 10, ase: 11, ame: 12, asx: 13, inste: 14, nsfe: 15, ncdfe: 16, recv: 17, iacc: 18, ftm: 19, fin: 20, ncdfr: 21, nsme: 22, nsfer: 23, icce: 24, ie: 25, imse: 26, nbs: 27, iaet: 28 } as const;
+export const SLOT = { npe: 1, aioobe: 2, arith: 3, cce: 4, nase: 5, oom: 6, ule: 7, soe: 8, sioobe: 9, copy: 10, ase: 11, ame: 12, asx: 13, inste: 14, nsfe: 15, ncdfe: 16, recv: 17, iacc: 18, ftm: 19, fin: 20, ncdfr: 21, nsme: 22, nsfer: 23, icce: 24, ie: 25, imse: 26, nbs: 27, iaet: 28, iarg: 29, iarity: 30 } as const;
 export type Thrower = keyof typeof SLOT;
-export const FIRST_FREE_SLOT = 29;
+export const FIRST_FREE_SLOT = 31;
 /** a class's init word: 0 not started, (strand << 2 | 1) running on that strand, then done or failed (JLS 12.4.2) */
 export const INIT_DONE = 2, INIT_FAILED = 3;
 const L = "java/lang/";
@@ -55,6 +55,8 @@ export const THROWERS: Record<Thrower, { cls: string; params: Kind[] }> = {
   imse: { cls: L + "IllegalMonitorStateException", params: [] },
   nbs: { cls: L + "IllegalStateException", params: [] },                         // a blocking operation on a stack that cannot suspend (a plain entry from the host)
   iaet: { cls: L + "IllegalArgumentException", params: ["I"] },                  // a timeout: 0 negative, 1 nanoseconds out of range
+  iarg: { cls: L + "IllegalArgumentException", params: ["I", "I", "I"] },        // Method.invoke: argument index, class id of the parameter type, class id of the value (-1: null)
+  iarity: { cls: L + "IllegalArgumentException", params: ["I", "I"] },           // Method.invoke: parameters expected, arguments given
 };
 
 const dotted = (n: string) => n.replace(/\//g, ".");
@@ -75,6 +77,8 @@ export function excMessage(kind: number, a: number, b: number, c: number, d: num
     case SLOT.ncdfe: return `Could not initialize class ${dotted(className(a))}`;
     case SLOT.ncdfr: case SLOT.nsme: case SLOT.nsfer: case SLOT.icce: return linkMessage(a);
     case SLOT.nbs: return "blocking operation on a stack that cannot suspend";
+    case SLOT.iarg: return `argument ${a + 1} should have type ${pretty(className(b))}, got ${c < 0 ? "null" : pretty(className(c))}`;
+    case SLOT.iarity: return `Wrong number of arguments; expected ${a}, got ${b}`;
     case SLOT.iaet: return a ? "nanosecond timeout value out of range" : "timeout value is negative";
     case SLOT.sioobe: return `offset ${a}, count ${b}, length ${c}`;
     case SLOT.copy: return `src.length=${a} srcPos=${b} dst.length=${c} dstPos=${d} length=${e}`;

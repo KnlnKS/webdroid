@@ -101,8 +101,13 @@ rt("uput", ["L", "I", "I", "J"], "V", (cx, c) => {
 });
 
 export const unsafeIntrinsics = new Map<string, Intrinsic>();
-const U = "jdk/internal/misc/Unsafe.";
-const def = (key: string, f: (cx: Compiler, c: Code) => void) => unsafeIntrinsics.set(U + key, (cx, m, c) => f(cx, c));
+/** the internal class and the one apps know (sun.misc.Unsafe, whose accessors are natives of the same shapes under older names) */
+const UNSAFES = ["jdk/internal/misc/Unsafe", "sun/misc/Unsafe"];
+const def = (key: string, f: (cx: Compiler, c: Code) => void) => {
+  // the newer names (Reference, compareAndSet) are the internal class's only, and its getObject and putObject are bytecode over them
+  const only = /Reference|compareAndSet/.test(key) ? 0 : /^(get|put)Object/.test(key) ? 1 : -1;
+  UNSAFES.forEach((u, i) => { if (only < 0 || only === i) unsafeIntrinsics.set(`${u}.${key}`, (cx, m, c) => f(cx, c)); });
+};
 /** locals: 0 = this, 1 = object, 2 = offset (long), then the operation's values */
 const OBJ = 1, OFF = 2;
 
@@ -178,9 +183,9 @@ function emitCas(cx: Compiler, c: Code, t: "I" | "J" | "L"): void {
 
 for (const t of TYPES) {
   const n = NAME[t], d = desc(t);
-  const names = t === "L" ? ["Reference", "ReferenceVolatile"] : t === "I" || t === "J" ? [n, n + "Volatile"] : [n];
+  const names = t === "L" ? ["Reference", "ReferenceVolatile", "Object", "ObjectVolatile"] : t === "I" || t === "J" ? [n, n + "Volatile"] : [n];
   for (const g of names) def(`get${g}(Ljava/lang/Object;J)${d}`, (cx, c) => emitGet(cx, c, t));
-  const puts = t === "L" ? ["Reference", "ReferenceVolatile", "OrderedObject"] : t === "I" || t === "J" ? [n, n + "Volatile", "Ordered" + n] : [n];
+  const puts = t === "L" ? ["Reference", "ReferenceVolatile", "Object", "ObjectVolatile", "OrderedObject"] : t === "I" || t === "J" ? [n, n + "Volatile", "Ordered" + n] : [n];
   for (const p of puts) def(`put${p}(Ljava/lang/Object;J${d})V`, (cx, c) => emitPut(cx, c, t));
 }
 for (const [t, names] of [["I", ["compareAndSetInt", "compareAndSwapInt"]], ["J", ["compareAndSetLong", "compareAndSwapLong"]], ["L", ["compareAndSetReference", "compareAndSwapObject"]]] as const) {

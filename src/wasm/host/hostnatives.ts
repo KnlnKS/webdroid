@@ -17,9 +17,12 @@ function readResident(fd: number, target: Uint8Array): number | Promise<number> 
   return n;
 }
 
+/** archives the host adds to the boot class path after the platform's, for the resources of classes it runs on it (conformance suites) */
+export const extraBootEntries: string[] = [];
+
 export const hostNatives = new Map<string, HostFn>([
   // the archives of the boot class path, which BootClassLoader looks resources up in
-  ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS], "Ljava/lang/String;")],
+  ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS, ...extraBootEntries], "Ljava/lang/String;")],
   [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, (d: object | null, buffer: IoBuffer, offset: number, count: number) =>
     readBytes("read", buffer, offset, count, (target) => readResident(fdInt(d as never), target))],
 ]);

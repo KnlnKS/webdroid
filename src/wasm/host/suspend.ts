@@ -13,6 +13,22 @@ type Native = HostFn & { $g?: (...a: unknown[]) => Generator<unknown, unknown, u
  *  survey's flag C: `after(...)` and `awaited(...)` results returned as they are) */
 const MAY_SUSPEND = new Set<string>([
   "com/android/org/conscrypt/NativeCrypto.EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I",
+  "android/graphics/Typeface.nativeWarmUpCache(Ljava/lang/String;)V",
+  "libcore/io/Linux.readBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;II)I",
+  "libcore/io/Linux.preadBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;IIJ)I",
+  "libcore/io/Linux.getpwuid(I)Landroid/system/StructPasswd;",
+  "libcore/io/Linux.poll([Landroid/system/StructPollfd;I)I",
+  "java/io/FileDescriptor.sync()V",
+  "sun/nio/ch/FileDispatcherImpl.force0(Ljava/io/FileDescriptor;Z)I",
+  "sun/nio/ch/FileChannelImpl.map0(IJJ)J",
+  "java/net/HttpURLConnection$$host.getInputStream()Ljava/io/InputStream;",
+  "libcore/io/Memory.peekIntNative(J)I",
+  "android/graphics/BitmapFactory.nativeDecodeByteArray([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
+  "android/text/AndroidCharacter.getEastAsianWidth(C)I",
+  "sun/nio/fs/UnixNativeDispatcher.init()I",
+  "android/text/AndroidCharacter.getMirror(C)C",
+  "android/text/AndroidCharacter.getDirectionalities([C[BI)V",
+  "android/text/AndroidCharacter.getEastAsianWidths([CII[B)V",
 ]);
 /** natives found answering a Promise from a plain import: the report in run.json (`nativeSuspended`), and imported as Suspending in modules built afterwards */
 export const suspendedNatives = new Set<string>();

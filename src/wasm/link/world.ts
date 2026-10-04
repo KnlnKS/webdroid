@@ -38,6 +38,8 @@ export interface WorldOptions {
   natives: NativeBinder;
   /** bytes in use on the heap; what it has grown by since the World was made is compared with the heap limit each time a window of allocation is used up */
   heapUsed: () => number;
+  /** a collection of the host heap, when it has a way to ask for one: the limit applies to live data, and `heapUsed` counts the garbage not yet swept */
+  collect?: () => void;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;
   /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
@@ -138,7 +140,7 @@ export class World {
       }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
-      heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
+      heapCheck: () => (heap() - heapBase > HEAP_LIMIT && (opts.collect?.(), heap() - heapBase > HEAP_LIMIT) ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
       obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),

@@ -1,0 +1,14 @@
+{
+  "Font, FontFamily, FontFileUtil (device values)": "A native reads a font file's bytes through a pinned array's address (VMRuntime.addressOf of a direct buffer's byte[], memory.ts NM_BASE) that only Memory.peek and poke understand: the production natives know native-heap addresses (B3, jnio and jmemory).",
+  "Paint, TextPaint, PathEffects, MaskFilters (device values)": "PathIterator.nNext writes into the float[8] whose address is the handle VMRuntime.addressOf gave; the handle is a copy of the array, not the array, so Java reads zeros (B3).",
+  "Path, PathMeasure, PathIterator (device values)": "As for Paint: PathIterator.nNext writes to a copy of the pinned float[8] (B3).",
+  "Region, RegionIterator (device values)": "Region.getBoundaryPath reads its verbs through PathIterator, whose points array is a copy (B3).",
+  "SurfaceTexture: states, errors and frame delivery without a context (device values)": "The frame reaches the listener through the main thread's Handler, which needs the main looper running; the loop on a strand is Track C3's.",
+  "ImageDecoder: headers, targets, allocators, partial input, drawables (device values)": "The exercise implements OnHeaderDecodedListener with a host object (harness listener: implement on a made Object); a host object of no registered class is no Java object, so the interface method is abstract to the framework (B2).",
+  "SpannableStringBuilder, SpannableString, SpannedString, Selection (device values)": "The exercise implements SpanWatcher and TextWatcher with host objects (harness listener); as for ImageDecoder (B2).",
+  "ApkAssets + AssetManager.Builder + Resources": "Reports a facade read of BootClassLoader.runtime: the DexFile spec (jdex.ts) reads rt.classLoader.runtime, the JS tier's loader object, which a Java class loader is not (B2).",
+  "Theme.obtainStyledAttributes (ApplyStyle over the theme)": "ApplyStyle writes its results through TypedArray's native address (VMRuntime.addressOf of an int[]), the handle of a copy, so Java reads the defaults (B3).",
+  "Resources.getColorStateList (inflated from XML by ColorStateList)": "Attributes arrive through TypedArray's native address as above (B3).",
+  "VectorDrawable: inflated tree, node properties, mutate, AnimatedVectorDrawable run (device values)": "Attributes arrive through TypedArray's native address as above, so the drawable's resource id reads as 0x1 (B3).",
+  "InputProbe: MotionEvent, VelocityTracker, KeyEvent, KeyCharacterMap, InputDevice (device values)": "Host code constructs webdroid/InputManagerService, a class the host implements, with a constructor argument; entry newObj knows only bytecode constructors (B2)."
+}

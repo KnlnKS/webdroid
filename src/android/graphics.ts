@@ -18,13 +18,11 @@ export function cssColor(argb: number): string {
 
 /** a box with Rect's edges; Java Rects and RectFs keep theirs in AOSP's fields (edges, setEdges) */
 export type Box = { left: number; top: number; right: number; bottom: number };
-const edgeProps = new Map<Function, string[]>();
+const edgeProps = new Map<string, string[]>();
 function edgesOf(r: object): string[] {
-  let props = edgeProps.get(r.constructor);
-  if (!props) {
-    const cls = classNameOf(r)!;
-    edgeProps.set(r.constructor, props = ["left", "top", "right", "bottom"].map((e) => declaredField(cls, e)));
-  }
+  const cls = classNameOf(r)!;
+  let props = edgeProps.get(cls);
+  if (!props) edgeProps.set(cls, props = ["left", "top", "right", "bottom"].map((e) => declaredField(cls, e)));
   return props;
 }
 /** a Java Rect's or RectF's edges */
