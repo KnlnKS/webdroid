@@ -9,6 +9,7 @@ import { structure, Go, type Flow } from "../../../src/jvm/structure";
 import { mid } from "./reach";
 import { constClass, emitStoreCheck } from "./classes";
 import { emitPolymorphic } from "./poly";
+import { analyze, cloneFacts, step, type Facts } from "./facts";
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
@@ -40,6 +41,9 @@ export class MC {
   consumed = new Set<number>();            // move-result pcs folded into their invoke
   tries: boolean;
   regionOfPc = new Map<number, number>();
+  /** what holds on every path to the start of each block, and at the instruction being emitted (facts.ts) */
+  entryFacts: Facts[] = [];
+  facts: Facts = { nonNull: new Set(), inited: new Set() };
   constructor(public cx: Compiler, public m: MethodInfo) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
@@ -106,6 +110,7 @@ export class MC {
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
+    this.entryFacts = analyze(this);
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
     // a parameter's web uses the parameter's local, unless floats live in float locals: then it is copied in once
@@ -170,7 +175,8 @@ export class MC {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
     this.block = b;
     if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
-    for (const ins of inss) this.emit(ins);
+    this.facts = cloneFacts(this.entryFacts[b]);
+    for (const ins of inss) { this.emit(ins); step(this, ins, this.facts); }
     const last = inss[inss.length - 1];
     if (!endsBlock(last.op)) {
       const taken = last.op >= 0x32 && last.op <= 0x3d ? flow.blockAt[ifTarget(last)] : -1;
@@ -224,7 +230,33 @@ export class MC {
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
     const c = this.code, cx = this.cx;
+    if (this.facts.nonNull.has(this.useWeb(reg))) { this.get("L", reg); return; }
     this.get("L", reg); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); this.get("L", reg);
+  }
+  /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
+  ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
+  /** the class whose initialization `ins` requests, as its translation does */
+  ensureTarget(ins: Ins): string | undefined {
+    const n = ins.name;
+    if (n === "new-instance") { const name = descToName(this.dex.type(ins.b)); return this.cx.str.isString(name) ? undefined : name; }
+    if (n.startsWith("sget") || n.startsWith("sput")) return this.fieldOf(ins.b).f.owner;
+    if (n === "invoke-static" || n === "invoke-static/range") {
+      const mr = this.dex.method(ins.b), decl = descToName(this.dex.type(mr.cls));
+      return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
+    }
+    return undefined;
+  }
+  isStringInit(ins: Ins): boolean {
+    const mr = this.dex.method(ins.b);
+    return mr.name === "<init>" && this.cx.str.isString(descToName(this.dex.type(mr.cls)));
+  }
+  /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
+  definesNonNull(ins: Ins, f: Facts): boolean {
+    const n = ins.name;
+    if (n === "new-instance") return !this.cx.str.isString(descToName(this.dex.type(ins.b)));
+    if (n === "const-string" || n === "const-string/jumbo" || n === "const-class" || n === "new-array" || n === "move-exception") return true;
+    if (n.startsWith("move-object") || n === "check-cast") { const w = this.typing.use(ins.pc, n === "check-cast" ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
+    return false;
   }
   refTo(reg: number, struct: number) { this.nonNull(reg); this.code.refCast(struct); }
 
@@ -280,7 +312,7 @@ export class MC {
       case "new-instance": {
         const name = descToName(dex.type(b));
         // a String is made by the constructor call, which assigns its register
-        if (cx.str.isString(name)) c.anyNull(); else { cx.emitEnsure(c, name); cx.emitNew(c, name); }
+        if (cx.str.isString(name)) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
       }
       case "new-array": {
@@ -405,7 +437,7 @@ export class MC {
   }
   emitStatic(ins: Ins) {
     const cx = this.cx, c = this.code, put = ins.name.startsWith("sput"), { f } = this.fieldOf(ins.b);
-    cx.emitEnsure(c, f.owner);
+    this.ensure(f.owner);
     const g = cx.staticGlobal(f.owner, f.name);
     if (put) { this.get(f.kind, ins.a); c.gset(g); } else { c.gget(g); this.set(f.kind); }
   }
@@ -476,7 +508,7 @@ export class MC {
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     if (isStatic) {
       const t = prog.resolve(decl, mr.name, desc); if (!t) throw new Error("unresolved static " + decl + "." + key);
-      cx.emitEnsure(c, t.cls); pushArgs(); cx.callMethod(c, t);
+      this.ensure(t.cls); pushArgs(); cx.callMethod(c, t);
     } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
