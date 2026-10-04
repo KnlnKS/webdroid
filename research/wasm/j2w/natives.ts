@@ -56,7 +56,8 @@ interface Plan {
   args: string[];
   /** the array class a result is, if any */
   retArray: string | null;
-  wrapped?: HostFn;
+  /** the import of each World (they differ in memory and exceptions) */
+  wrapped?: WeakMap<HostContext, HostFn>;
 }
 
 export class Natives {
@@ -212,7 +213,7 @@ export class Natives {
     for (const id of ids) {
       const p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
-      out[id] = p.wrapped ??= wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }), view, put);
+      out[id] = (p.wrapped ??= new WeakMap()).get(ctx) ?? (p.wrapped.set(ctx, wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` }), view, put)), p.wrapped.get(ctx)!);
     }
     return out;
   }

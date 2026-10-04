@@ -60,4 +60,10 @@ public class S {
     for (int i = 0; i < b.length; i++) r = r * 17 + b[i] + c[b.length - 1 - i];
     return r + new String(b, "UTF-8").hashCode() + new String(c, 0, c.length / 2).length();
   }
+  public static int cat(int n) { int r = 0; for (int i = 0; i < n; i++) { String k = "key_" + i + "_" + (i * 31); r = r * 31 + k.hashCode() + k.length(); } return r; }
+  public static int mapKeys(int n) {
+    String[] keys = new String[n]; for (int i = 0; i < n; i++) keys[i] = "key_" + i + "_" + (i * 31);
+    java.util.HashMap<String, Integer> m = new java.util.HashMap<>(); for (int i = 0; i < n; i++) m.put(keys[i], i);
+    int s = m.size() * 1000003; for (int r = 0; r < 2; r++) for (String k : keys) s += m.get(k); return s;
+  }
 }
