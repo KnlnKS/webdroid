@@ -23,7 +23,8 @@ export interface NativeSource {
 /** classes natives raise: each gets a (String) constructor in every module so the host can build the throwable */
 export const HOST_THROWABLES = ["java/lang/StringIndexOutOfBoundsException", "java/lang/IndexOutOfBoundsException", "java/lang/IllegalArgumentException",
   "java/lang/IllegalStateException", "java/lang/UnsupportedOperationException", "java/lang/NumberFormatException", "java/lang/NegativeArraySizeException",
-  "java/lang/ArrayIndexOutOfBoundsException", "java/lang/NullPointerException", "java/lang/ArithmeticException", "java/lang/ClassCastException"];
+  "java/lang/ArrayIndexOutOfBoundsException", "java/lang/NullPointerException", "java/lang/ArithmeticException", "java/lang/ClassCastException",
+  "java/lang/ArrayStoreException", "java/lang/UnsatisfiedLinkError"];
 /** the primitive array classes every module has, which marshalled natives and string intrinsics allocate */
 export const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
 
@@ -94,11 +95,12 @@ export class Natives {
   private reserve = -1;
   private copies = new Map<string, number>();
   /** helper imports the intrinsics call to raise what Java raises; each throws */
-  helper = {} as Record<"charsBounds", number>;
+  helper = {} as Record<"charsBounds" | "copyBounds" | "arrayStore", number>;
   /** imports and state every module has; before any function of the module is defined */
   prepare(cx: Compiler): void {
     const { mb } = cx;
-    this.helper.charsBounds = mb.importFunc("h", "charsBounds", mb.addFuncType([T.i32, T.i32, T.i32], []));
+    const raise = (name: keyof Natives["helper"], n: number) => this.helper[name] = mb.importFunc("h", name, mb.addFuncType(Array(n).fill(T.i32), []));
+    raise("charsBounds", 3); raise("copyBounds", 5); raise("arrayStore", 0);
     mb.export("mem", "memory", mb.addMemory(1));
     this.sp = mb.addGlobal(T.i32, true, [0x41, 8]);
     mb.export("sp", "global", this.sp);
@@ -226,10 +228,16 @@ export class Natives {
     };
     for (const p of this.plans.values()) {
       if (typeof p === "string" || p.idx < 0) continue;
-      out[p.id] = wrapper(p, p.fn, raise, () => { throw new Error(`${p.id}: native suspended`); }, view, put);
+      out[p.id] = wrapper(p, p.fn, raise, () => throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${p.id}: native suspended` }), view, put);
     }
-    // String(char[], int, int) with a bad range: the message runtime.ts strChars gives
-    const h = { charsBounds: (off: number, n: number, len: number) => throwJava({ cls: "java/lang/StringIndexOutOfBoundsException", msg: `offset ${off}, count ${n}, length ${len}` }) };
+    // String(char[], int, int) with a bad range has the message runtime.ts strChars gives
+    const h = {
+      charsBounds: (off: number, n: number, len: number) => throwJava({ cls: "java/lang/StringIndexOutOfBoundsException", msg: `offset ${off}, count ${n}, length ${len}` }),
+      // jlang.ts arraycopy's message
+      copyBounds: (srcLen: number, sp: number, dstLen: number, dp: number, n: number) =>
+        throwJava({ cls: "java/lang/ArrayIndexOutOfBoundsException", msg: `src.length=${srcLen} srcPos=${sp} dst.length=${dstLen} dstPos=${dp} length=${n}` }),
+      arrayStore: () => throwJava({ cls: "java/lang/ArrayStoreException", msg: null }),
+    };
     return { n: out, h };
   }
 }

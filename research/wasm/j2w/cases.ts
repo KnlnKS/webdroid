@@ -3,7 +3,7 @@ import { kindOf, type MethodInfo } from "./program";
 import { bitsOf, db, fb, fmt, unbits } from "./oracle";
 
 const pool: Record<string, bigint[]> = {
-  I: [0, 1, -1, 2, 3, 5, 7, 31, 32, 33, 63, 64, 100, 255, 65536, 123456789, 0x7fffffff, -0x80000000].map(BigInt),
+  I: [0, 1, -1, 2, 3, 5, 7, 9, 10, 16, 31, 32, 33, 36, 48, 57, 63, 64, 65, 90, 97, 100, 122, 255, 65536, 123456789, 0x7fffffff, -0x80000000].map(BigInt),
   J: [0n, 1n, -1n, 3n, 0x7fffffffn, -0x80000000n, 123456789012345n, (1n << 63n) - 1n, -(1n << 63n)],
   F: [0, -0, 1, -1, 0.5, 3.5, 1e10, -1e10, NaN, Infinity, -Infinity, 3e9, -3e9, 40000.7].map(fb),
   D: [0, -0, 1, -1, 0.5, 3.5, 1e10, -1e10, 1e300, NaN, Infinity, -Infinity, 3e9, -3e9, 40000.7].map(db),
