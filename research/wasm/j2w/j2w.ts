@@ -150,6 +150,10 @@ export class Compiler implements Base {
     this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0] ?? "none";
   }
+  /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
+  guards(decl: string, name: string, desc: string): MethodInfo[] {
+    return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.fn.has(mid(m)));
+  }
   /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
    *  never goes back), is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun), or is in `known`,
    *  the classes every path to here has already requested */
@@ -182,6 +186,7 @@ export class Compiler implements Base {
   }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
+    this.w.allocated.add(cls);
     const lay = this.prog.layout(cls);
     this.allocBytes(c, () => c.i32(8 + lay.reduce((n, f) => n + (f.kind === "J" ? 8 : 4), 0)));
     c.gget(this.vtGlobal(cls)).refAsNonNull().i32(0);

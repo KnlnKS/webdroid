@@ -35,7 +35,7 @@ export interface ClassRt { name: string; id: number; mod: string; slotBase: numb
 type Slot = { k: "method"; m: MethodInfo; done: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
 /** methods compiled into one module: a method and its small callees, in code units of the callee, up to MAX_GROUP together */
-const MAX_GROUP = 16, SMALL_CALLEE = 100;
+const MAX_GROUP = 16, SMALL_CALLEE = 100, MAX_GUARDS = 2;
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
 export class World {
@@ -420,9 +420,10 @@ export class World {
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
   private group(m: MethodInfo): { installed: MethodInfo[]; copies: MethodInfo[] } {
     const out = [m], installed = [m], copies: MethodInfo[] = [];
+    this.plan = new Map();
     if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
-      for (const t of this.smallCallees(out[i])) {
+      for (const t of this.smallCallees(out[i]).concat(this.guarded(out[i]))) {
         const sl = this.slots[this.slotOf(t)];
         if (out.length >= MAX_GROUP || out.includes(t) || sl?.k !== "method") continue;
         out.push(t);
@@ -431,6 +432,10 @@ export class World {
     }
     return { installed, copies };
   }
+  /** classes some compiled code allocates: the ones a virtual call is likely to find */
+  allocated = new Set<string>();
+  /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
+  plan = new Map<string, MethodInfo[]>();
   private groupOf = new Map<number, number[]>();
   private callees = new Map<MethodInfo, MethodInfo[]>();
   /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
@@ -450,6 +455,32 @@ export class World {
     }
     this.callees.set(m, out);
     return out;
+  }
+  /** the implementations of `m`'s virtual calls that are worth a guarded direct call, recorded in `plan` for the emitter */
+  private guarded(m: MethodInfo): MethodInfo[] {
+    const out: MethodInfo[] = [], dex = m.dex;
+    for (const ins of decodeInstructions(dex.code(m.codeOff).insns)) {
+      const op = ins.op;
+      if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78) continue;
+      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), key = `${decl}.${mr.name}${desc}`;
+      if (decl[0] === "[") continue;
+      let t = this.plan.get(key);
+      if (!t) this.plan.set(key, t = this.cha.targets(decl, mr.name, desc).length > 1 ? this.likely(decl, mr.name, desc) : []);
+      for (const x of t) if (!out.includes(x)) out.push(x);
+    }
+    return out;
+  }
+  /** the small implementations of decl.name+desc among the allocated subclasses, most common first, unless there are more kinds than guards to test */
+  private likely(decl: string, name: string, desc: string): MethodInfo[] {
+    const count = new Map<MethodInfo, number>();
+    for (const cls of this.allocated) {
+      if (cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
+      const t = this.prog.implFor(cls, name, desc);
+      if (t) count.set(t, (count.get(t) ?? 0) + 1);
+    }
+    if (count.size > MAX_GUARDS) return [];
+    const small = (t: MethodInfo) => t.codeOff && !(t.flags & ACC.NATIVE) && !this.intrinsic(t) && t.dex.code(t.codeOff).insns.length <= SMALL_CALLEE;
+    return [...count].filter(([t]) => small(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
   }
   /** the gaps compiling `m` runs into, without installing it (a static check, and the unit a build-time mode would emit) */
   gapsOf(m: MethodInfo): string[] {

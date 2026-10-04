@@ -523,8 +523,10 @@ export class MC {
       if (only === "none") { this.nonNull(ins.regs[0]); c.drop(); cx.callThrower(c, "ame"); this.finishResult(ins, retK); return; }
       if (only !== "many") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
       else {
+        // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
+        const guards = cx.guards(decl, mr.name, desc), recv = () => { c.lget(this.tmpL); pushArgsFrom(this, ins, p.params); };
         this.nonNull(ins.regs[0]); c.lset(this.tmpL);
-        c.lget(this.tmpL); pushArgsFrom(this, ins, p.params);
+        if (!guards.length) recv();
         c.lget(this.tmpL); cx.str.vtab(c, decl);
         if (declC && !declC.isInterface) {
           c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
@@ -539,11 +541,20 @@ export class MC {
             .lget(vtl).refAsNonNull().i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
             .lget(vtl).refAsNonNull().i32(sel).call(cx.helper("imtslow")).end();
         }
-        c.callIndirect(sigIdx());
+        if (guards.length) {
+          const bt = retK === "V" ? null : cx.vtOf(retK), slot = this.slotLocal();
+          c.lset(slot);
+          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).if_(bt); recv(); c.call(cx.fn.get(mid(g))!).else_(); }
+          recv(); c.lget(slot);
+          c.callIndirect(sigIdx());
+          for (const _ of guards) c.end();
+        } else c.callIndirect(sigIdx());
       }
     }
     this.finishResult(ins, retK);
   }
+  slotl = -1;
+  slotLocal() { if (this.slotl < 0) this.slotl = this.code.newLocal(T.i32); return this.slotl; }
   vtl = -1;
   vtLocal() { if (this.vtl < 0) this.vtl = this.code.newLocal(refNull(this.cx.tVT)); return this.vtl; }
 
