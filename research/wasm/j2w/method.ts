@@ -470,8 +470,21 @@ export class MC {
     this.pop(); c.end();
   }
   emitSwitch(ins: Ins) {
-    const c = this.code, cases = switchCases(this.item, ins);
-    // compare chain (br_table is a later optimisation)
+    const c = this.code, cases = switchCases(this.item, ins), flow = this.flow;
+    const lo = Math.min(...cases.map(([k]) => k)), hi = Math.max(...cases.map(([k]) => k));
+    // keys dense enough make a jump table, when every target is a label (a hole and the fall-through go to the end of the block)
+    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, flow.blockAt[t], false); return g === Go.Break || g === Go.Continue; });
+    if (cases.length >= 4 && hi - lo < 4 * cases.length && labelled) {
+      const target = new Map(cases);
+      this.push("$sw"); c.block();
+      this.get("I", ins.a); c.i32(lo).raw(OP.i32_sub);
+      c.brTable(Array.from({ length: hi - lo + 1 }, (_, i) => {
+        const t = target.get(lo + i);
+        return t === undefined ? 0 : this.depth((flow.go(this.block, flow.blockAt[t], false) === Go.Break ? "B" : "L") + t);
+      }), 0);
+      this.pop(); c.end();
+      return;
+    }
     for (const [key, target] of cases) {
       this.get("I", ins.a); c.i32(key).raw(OP.i32_eq).if_(); this.push("if"); this.jump(target, false); this.pop(); c.end();
     }

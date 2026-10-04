@@ -109,7 +109,7 @@ for (const engine of engines) {
     }
     loads.push(loadavg()[0]);
   }
-  const rows = [], ratios = { first: [] as number[], steady: [] as number[] };
+  const rows = [], ratios = { first: [] as number[], steady: [] as number[] }, byClass = new Map<string, { first: number[]; steady: number[] }>();
   console.log(`\n${label}: ${runs} runs x ${reps} reps; medians, [min-max] over runs; ms`);
   console.log("workload".padEnd(11), "js first".padStart(9), "wasm first".padStart(11), "x".padStart(6), "js steady".padStart(11), "wasm steady".padStart(12), "x".padStart(6), " wasm warm(2-11)  compile");
   for (const [w, e] of got) {
@@ -118,10 +118,12 @@ for (const engine of engines) {
     const rng = (a: number[]) => `${med(a).toFixed(a[0] < 1 ? 3 : 1)} [${Math.min(...a).toFixed(a[0] < 1 ? 3 : 1)}-${Math.max(...a).toFixed(a[0] < 1 ? 3 : 1)}]`;
     const xf = med(f(e.js, "first")) / med(f(e.wasm, "first")), xs = med(f(e.js, "steady")) / med(f(e.wasm, "steady"));
     ratios.first.push(xf); ratios.steady.push(xs);
+    const bc = byClass.get(classOf.get(w)!) ?? (byClass.set(classOf.get(w)!, { first: [], steady: [] }), byClass.get(classOf.get(w)!)!);
+    bc.first.push(xf); bc.steady.push(xs);
     rows.push({ w, result: e.js[0].result, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
     console.log(w.padEnd(11), rng(f(e.js, "first")).padStart(9), rng(f(e.wasm, "first")).padStart(11), xf.toFixed(2).padStart(6), rng(f(e.js, "steady")).padStart(11), rng(f(e.wasm, "steady")).padStart(12), xs.toFixed(2).padStart(6), "  ", med(f(e.wasm, "warm")).toFixed(3), " ", med(e.wasm.map((x) => x.compileMs ?? 0)).toFixed(0));
   }
-  if (ratios.steady.length) console.log(`geometric-mean speedup (js/wasm) over ${ratios.steady.length} matching workloads: first call ${geo(ratios.first).toFixed(2)}x, steady state ${geo(ratios.steady).toFixed(2)}x`);
+  for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over ${r.steady.length} matching ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
   (report.engines as Record<string, unknown>)[engine] = { label, rows, geoFirst: ratios.first.length ? geo(ratios.first) : null, geoSteady: ratios.steady.length ? geo(ratios.steady) : null };
   await close();
 }

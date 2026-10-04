@@ -35,7 +35,7 @@ export interface ClassRt { name: string; id: number; mod: string; slotBase: numb
 type Slot = { k: "method"; m: MethodInfo; done: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
 /** methods compiled into one module: a method and its small callees, in code units of the callee, up to MAX_GROUP together */
-const MAX_GROUP = 16, SMALL_CALLEE = 100, MAX_GUARDS = 2;
+const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
 interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
 
 export class World {

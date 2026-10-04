@@ -13,8 +13,20 @@ public class G1 {
   static String[] WORDS = new String[200];
   static { for (int i = 0; i < WORDS.length; i++) WORDS[i] = "word" + (i * 7919 % 1000) + (i % 3 == 0 ? "Alpha" : "beta"); }
 
+  // G4: a kernel loop in one long call (no OSR for Wasm: the activation stays in baseline code), and the same loop re-entered in chunks
+  static int kernel(int s, int from, int to) { for (int i = from; i < to; i++) { s += i * 31 ^ (s >>> 3); s ^= i; } return s; }
+  static int chunked(int total, int chunk) { int s = 0; for (int i = 0; i < total; i += chunk) s = kernel(s, i, Math.min(total, i + chunk)); return s; }
+
   static int run(String w) throws Exception {
     switch (w) {
+      case "loopOnce": return kernel(0, 0, 8000000);
+      case "loopChunk": return chunked(8000000, 16384);
+      case "divLoop": { int s = 7; for (int i = 1; i < 100000; i++) { int d = (i & 15) + 1; s += (s / d) ^ (s % d) + i / 3; } return s; }
+      case "longDiv": { long s = 1234567890123L; for (int i = 1; i < 50000; i++) { long d = (i & 255) + 1; s += s / d + s % d; } return (int) s; }
+      case "switchDense": { int s = 0; for (int i = 0; i < 100000; i++) { switch (i & 15) { case 0: s += 1; break; case 1: s += 3; break; case 2: s ^= 5; break; case 3: s += 7; break; case 4: s -= 2; break; case 5: s += 11; break; case 6: s ^= 13; break; case 7: s += 17; break; case 8: s += 19; break; case 9: s -= 23; break; case 10: s += 29; break; case 11: s ^= 31; break; case 12: s += 37; break; case 13: s += 41; break; case 14: s -= 43; break; default: s += 47; } } return s; }
+      case "switchSparse": { int s = 0; for (int i = 0; i < 100000; i++) { switch ((i & 7) * 1000) { case 0: s += 1; break; case 1000: s += 3; break; case 2000: s ^= 5; break; case 3000: s += 7; break; case 4000: s -= 2; break; case 5000: s += 11; break; case 7000: s += 17; break; default: s += 47; } } return s; }
+      case "refArray": { Object[] a = new Object[256]; String[] b = new String[256]; for (int r = 0; r < 200; r++) for (int i = 0; i < 256; i++) { a[i] = WORDS[i % 200]; b[i] = WORDS[(i + r) % 200]; } return a.length + b.length + a[5].hashCode() % 3; }
+      case "matrix": { int[][] m = new int[64][64]; for (int r = 0; r < 20; r++) for (int i = 0; i < 64; i++) for (int j = 0; j < 64; j++) m[i][j] += i * j + r; int s = 0; for (int[] row : m) for (int v : row) s += v; return s; }
       case "sieve": { boolean[] c = new boolean[100000]; int n = 0; for (int i = 2; i < c.length; i++) { if (!c[i]) { n++; for (int j = i * 2; j < c.length; j += i) c[j] = true; } } return n; }
       case "intLoop": { int s = 0; for (int i = 0; i < 200000; i++) { s += i * 31 ^ (s >>> 3); s ^= i; } return s; }
       case "longLoop": { long s = 1; for (int i = 0; i < 100000; i++) { s = s * 6364136223846793005L + 1442695040888963407L; s ^= s >>> 17; } return (int) s; }
