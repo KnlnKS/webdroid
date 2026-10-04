@@ -28,6 +28,7 @@ w.onGap = (id) => hit.push(w.gapList[id]);
 // S and N run String, StringBuilder and the natives over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
 const methods = ["W", ...(namesWasmFrames() ? ["S", "N"] : [])].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
 const js = await jsTier(loadDexes(dex));
+(globalThis as any).__dbgw = w;
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const small: Record<string, number[]> = {
   fib: [0, 1, 2, 10, 20], sieve: [0, 1, 2, 10, 1000, 100000], xorshift: [0, 1, 10, 1000], mandel: [0, 1, 5, 24], swsum: [0, 1, 7, 100, 1000],
@@ -35,7 +36,7 @@ const small: Record<string, number[]> = {
   copy: [0, 1, 3, 8], fieldsInt: [0, 1, 5, 100], fieldsLong: [0, 1, 5], fieldsFloat: [0, 1, 5], fieldsFloatShort: [0, 5], fieldsFloatLong: [0], fieldsDouble: [0, 1, 5], fieldsOther: [0, 1, 5, 100], errWiden: [0], errType: [0], errNull: [0], errReceiver: [0], errRefType: [0], errNullBox: [0], errNarrow: [0], errFinal: [0], forName: [0], direct: [0, 1, 5, 40], thread: [0, 3], unicode: [0, 1, 4, 30], refs: [0, 3], cat: [0, 1, 12, 120], mapKeys: [0, 1, 5, 40, 1000], enc: [0, 1, 5, 20], statics: [0, 5], dispatch: [0, 1, 2, 9], map: [0, 1, 5, 40], err: [-1, 0, 2, 3, 4], err2: [-1, 0, 4, 5], err3: [-1, 0, 2, 3, 5],
   floats: [0, 1, 10, 1000, 100000], collatz: [1, 2, 3, 27, 1000], nested: [0, 1, 5, 12, 30], mix: [0, 1, 10, 1000], arrays: [0, 1, 5, 100], objs: [0, 1, 5, 100], tryNeg: [-1, 0, 5, -100],
 };
-const cases = genCases(methods.filter((m) => !process.argv[2] || m.name.includes(process.argv[2])), small);
+const cases = genCases(methods.filter((m) => !process.argv[2] || process.argv[2].split(",").some((f) => m.name.includes(f))), small);
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
 // the production reflection skips Field's type and receiver checks (getBoolean of an int field answers a number): its results for these are not an oracle
 const UNCHECKED = new Set(["inner", "members", "annots", "errType", "errReceiver", "errRefType", "errNullBox", "errNarrow"]), isUnchecked = (i: number) => UNCHECKED.has(cases[i].m.name);
@@ -48,4 +49,5 @@ const bad = r1.bad + r2.bad, explained = r1.explained + r2.explained, blocked = 
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
+if (process.env.J2W_V) { const t: string[] = []; for (let i = 0; i < w.strs.length; i++) { const v = w.strs.get(i); if (v === null || typeof v === "string") t.push(i + ":" + String(v).slice(0, 30)); } console.log("bad table entries", t.length, t.slice(0, 5)); }
 process.exit(bad ? 1 : 0);

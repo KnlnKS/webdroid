@@ -86,7 +86,7 @@ const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).
 export function mhInvoke(w: World, mh: object | null, args: object, siteId: number, exact: number): object | null {
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw new (WebAssembly as any).Exception(w.rt.tag, [w.makeThrowable(cls, msg)]); };
-  const site = /^\((.*)\)(.*)$/.exec(w.strs.get(siteId) as string)!, sp = parseDescs(site[1]), sr = site[2];
+  const site = /^\((.*)\)(.*)$/.exec(w.hostString(w.strs.get(siteId)) as string)!, sp = parseDescs(site[1]), sr = site[2];
   const nominal = s.typeOf(mh!), pt = s.ptypes(nominal), np = Array.from({ length: s.alen(pt) }, (_, i) => descOfName(w.nameOf(s.classId(s.aget(pt, i))))), nr = descOfName(w.nameOf(s.classId(s.rtype(nominal))));
   const wrong = () => fail("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
   const same = np.length === sp.length && np.every((d, i) => d === sp[i]) && nr === sr;

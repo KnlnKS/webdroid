@@ -284,7 +284,9 @@ export function emitString(cx: Compiler, c: Code, len: () => void, char: (j: num
   cx.emitNewArray(c, "[C", () => c.lget(n)); c.lset(w).lget(w).structGet(cx.tArr.i16, 2).lset(data);
   c.block().loop().lget(j).lget(n).raw(OP.i32_ge_s).brIf(1);
   c.lget(data).refAsNonNull().lget(j); char(j); c.arraySet(cx.tData.i16).lget(j).i32(1).raw(OP.i32_add).lset(j).br(0).end().end();
+  // ART interns the names of classes and members, which Method.equals compares by identity
   c.lget(w); classMethod(cx, c, "java/lang/StringFactory", "newStringFromChars", "([C)Ljava/lang/String;");
+  classMethod(cx, c, "java/lang/String", "intern", "()Ljava/lang/String;");
 }
 
 def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); vtId(cx, c); cx.callRt(c, "classOf"); });

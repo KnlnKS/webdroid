@@ -105,11 +105,11 @@ export class World {
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => (heap() - heapBase > HEAP_LIMIT ? 1 : 0),
       info: (kind: number, a: number, b: number) => hostInfo(this, kind, a, b),
-      text: (kind: number, a: number) => hostText(this, kind, a),
-      obj: (kind: number, a: number, b: number, filter: object | null) => hostObject(this, kind, a, b, filter),
-      proxy: (name: string, interfaces: object, methods: object, exceptions: object) => generateProxy(this, name, interfaces, methods, exceptions),
-      net: (op: number, node: string, a: number, b: number) => hostNet(this, op, node, a, b),
-      mhInvoke: (mh: object, args: object, site: number, exact: number) => mhInvoke(this, mh, args, site, exact),
+      text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
+      obj: (kind: number, a: number, b: number, filter: object | null) => this.javaValue(hostObject(this, kind, a, b, filter)),
+      proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
+      net: (op: number, node: unknown, a: number, b: number) => hostNet(this, op, this.hostString(node) as string, a, b),
+      mhInvoke: (mh: object, args: object, site: number, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
       // Class.forName's binary name ("a.B$C", "[La.B;") as a class id; 0 for a name no loaded dex defines
       pin: (object: object) => this.pin(object),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
@@ -171,12 +171,22 @@ export class World {
   private canonical(s: string): object {
     let o = this.interned.get(s);
     // the constants of the classes String needs to be made are the JS strings until the String class exists
-    if (!o && !this.stringClass) { this.pendingStrings.push(s); return s as never; }
+    if (!o && !this.stringClass) {
+      this.pendingStrings.push(s);
+      if (!this.classes.has("java/lang/String")) this.link("java/lang/String");
+      return this.interned.get(s) ?? (s as never);
+    }
     if (!o) this.interned.set(s, o = this.javaString(s) as object);
     return o;
   }
   private stringClass = false;
   private pendingStrings: string[] = [];
+  /** a value a host function answers, as a Java value: a JS string becomes a String */
+  javaValue<V>(v: V): V | unknown { return structStrings && typeof v === "string" ? this.javaString(v) : v; }
+  /** a String a host function is given, as the JS string it works with */
+  hostString(v: unknown): unknown {
+    return structStrings && typeof v === "object" && v !== null && this.classNameOf(v) === "java/lang/String" ? this.bridge.toHost(v) : v;
+  }
   private fromJs?: (s: string) => unknown;
   /** the Java String of a JS string (a JS string itself when Strings are JS strings) */
   javaString(s: string): unknown {

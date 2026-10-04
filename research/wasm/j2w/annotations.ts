@@ -82,15 +82,16 @@ function valueOf(w: World, s: ReturnType<typeof make>, dex: EncAnnotation["dex"]
     if (elem.length === 1) return w.bridge.toJava(VIEWS[elem].from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
     return arrayOf(w, s, elem, items.map((x) => valueOf(w, s, dex, x, elem)));
   }
-  if (v === null || typeof v === "string") return v;
+  if (v === null) return v;
+  if (typeof v === "string") return w.javaString(v);
   const ref = v as { kind: string; idx: number; anno?: EncAnnotation };
   if (ref.kind === "type") {
     const name = typeName(dex.type(ref.idx));
-    return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : s.typeNotPresent(name.replace(/\//g, "."), null);
+    return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : s.typeNotPresent(w.javaString(name.replace(/\//g, ".")), null);
   }
   if (ref.kind === "enum") {
     const fr = dex.field(ref.idx), cls = descToName(dex.type(fr.cls)), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);
-    return f ? s.enumConstant(cls, f.name, f.desc)() : s.enumNotPresent(s.classOf(w.idOf(cls)), fr.name);
+    return f ? s.enumConstant(cls, f.name, f.desc)() : s.enumNotPresent(s.classOf(w.idOf(cls)), w.javaString(fr.name));
   }
   if (ref.kind === "annotation") return annotation(w, s, ref.anno!);
   throw new Error(`annotation value of kind ${ref.kind}`);
@@ -101,7 +102,7 @@ function annotation(w: World, s: ReturnType<typeof make>, a: EncAnnotation): obj
   const type = w.prog.get(a.type)!, members = Object.entries(a.elements).flatMap(([name, value]) => {
     const index = type.methods.findIndex((m) => m.name === name && !m.params.length), m = type.methods[index];
     if (!m) return [];                                       // an element the annotation class no longer declares
-    return [s.member(name, valueOf(w, s, a.dex, value, m.ret), s.classOf(w.idOf(typeName(m.ret))), s.mkExec(w.idOf(type.name), index, 0))];
+    return [s.member(w.javaString(name), valueOf(w, s, a.dex, value, m.ret), s.classOf(w.idOf(typeName(m.ret))), s.mkExec(w.idOf(type.name), index, 0))];
   });
   return s.create(s.classOf(w.idOf(a.type)), arrayOf(w, s, `L${MEMBER};`, members));
 }
@@ -112,7 +113,7 @@ export function hostObject(w: World, kind: Ann, a: number, b: number, filter: ob
   const classId = w.fieldReader("java/lang/Class", "dexTypeIndex", "I") as (c: object) => number;
   if (kind === Ann.SignatureOfClass || kind === Ann.SignatureOfExecutable || kind === Ann.SignatureOfField) {
     const { set } = elementOf(w, kind, a), sig = ofKind(set, SYSTEM).find((x) => x.type === SIGNATURE)?.elements.value;
-    return Array.isArray(sig) ? arrayOf(w, s, "Ljava/lang/String;", sig as string[]) : null;
+    return Array.isArray(sig) ? arrayOf(w, s, "Ljava/lang/String;", (sig as string[]).map((x) => w.javaString(x))) : null;
   }
   if (kind === Ann.DefaultValue) {
     // the AnnotationDefault of the method's annotation class holds a nested annotation whose elements are the defaults

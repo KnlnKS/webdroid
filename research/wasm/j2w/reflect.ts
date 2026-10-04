@@ -108,7 +108,7 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
   if (ctor) c.lget(recv);
   else if (m.ret === "V") c.anyNull();
   else if (BOX[m.ret]) {
-    const [boxCls] = BOX[m.ret]; classMethod(cx, c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
+    const [boxCls] = BOX[m.ret]; cx.emitEnsure(c, boxCls); classMethod(cx, c, boxCls, "valueOf", `(${m.ret})L${boxCls};`);
   }
   if (!wrap) return;
   c.br(2).end().unreachable().end();
