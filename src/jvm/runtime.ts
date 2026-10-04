@@ -9,7 +9,7 @@ import { yieldToLoop } from "./yield";
 import { Strand, suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36 } from "./abi";
+import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36, idHash } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, type LazyMethod } from "./compiler";
 import type { CompiledCtor, ResumeBody } from "./tiering";
 import { DexLink, instanceFieldOf, findStaticOwner } from "./link";
@@ -1001,8 +1001,8 @@ export class Runtime {
   readonly newStr = {
     "()V": () => "",
     "(Ljava/lang/String;)V": (s: string) => s,
-    "(Ljava/lang/StringBuilder;)V": (sb: object) => String(sb),
-    "(Ljava/lang/StringBuffer;)V": (sb: object) => String(sb),
+    "(Ljava/lang/StringBuilder;)V": (sb: { s: string } | null) => (sb ?? this.npe()).s,
+    "(Ljava/lang/StringBuffer;)V": (sb: { s: string } | null) => (sb ?? this.npe()).s,
     "([C)V": (chars: Uint16Array) => charsToString(chars, 0, chars.length),
     "([CII)V": (chars: Uint16Array, off: number, n: number) => this.strChars(chars, off, n),
     // String(byte[] value, byte coder): the compact form StringLatin1 and StringUTF16 build
@@ -1041,17 +1041,17 @@ export class Runtime {
       throw this.mkThrowable("java/lang/StringIndexOutOfBoundsException", `offset ${off}, count ${count}, length ${bytes.length}`);
     return off;
   }
-  /** virtual call on an array receiver (clone etc.) */
-  arrCall(a: any, name: string): unknown {
+  /** virtual call on an array receiver: Object's methods, with an array's own clone */
+  arrCall(a: any, name: string, other?: unknown): unknown {
     switch (name) {
       case "clone": {
         if (Array.isArray(a)) { const c: unknown[] = a.slice(); (c as any).$t = (a as any).$t; return c; }
         return a.slice();
       }
       case "getClass": return this.classFor(arrayDesc(a));
-      case "hashCode": return 1;
-      case "toString": return arrayDesc(a) + "@1";
-      case "equals": return 0;
+      case "hashCode": return idHash(a);
+      case "toString": return dotName(arrayDesc(a)) + "@" + idHash(a).toString(16);
+      case "equals": return a === other ? 1 : 0;
       default: throw this.unimplemented("array." + name);
     }
   }

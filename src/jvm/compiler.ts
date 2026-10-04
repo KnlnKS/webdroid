@@ -693,7 +693,7 @@ ${profileEnd}
 
     if (clsName[0] === "[") {
       // methods on array types (clone/getClass/…)
-      out.push(`${this.t}=R.arrCall(${recv},${this.literal(mref.name)});`);
+      out.push(`${this.t}=R.arrCall(${recv},${this.literal(mref.name)}${argStr && "," + argStr});`);
       return;
     }
     switch (kind) {

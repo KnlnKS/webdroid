@@ -356,7 +356,7 @@ for (const proto of [Array.prototype, ...Object.values(PRIM_ARRAYS).map((c) => c
     ["toString()Ljava/lang/String;", "toString"], ["equals(Ljava/lang/Object;)Z", "equals"],
     ["clone()Ljava/lang/Object;", "clone"]] as [string, string][]) {
     Object.defineProperty(proto, mangleMethod(...splitSig(sig)), {
-      value: function (this: unknown, other?: unknown) { return name === "equals" ? (this === other ? 1 : 0) : rt.arrCall(this, name); },
+      value: function (this: unknown, other?: unknown) { return rt.arrCall(this, name, other); },
       writable: true, configurable: true, enumerable: false,
     });
   }
