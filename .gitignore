@@ -26,4 +26,3 @@ src/shell/webpage.gen.ts
 dist/
 .wrangler/
 worker-configuration.d.ts
-scripts/libc-ab/libbench.so
