@@ -1,0 +1,129 @@
+// Instruction-sequence fuzzer: random verifiable int/long/float/double/array/field/branch/switch/try code is generated as Java, compiled with
+// javac and d8 (so the DEX is what d8 emits for it), and every generated method runs as Wasm, on the production JS tier and on the JDK; results must be bit-identical.
+// Run from the repository root: bun research/wasm/j2w/fuzz.ts [--seed N] [--methods N] [--cases N] [--depth N] [--debug] [--file F.java]   (--debug: d8 without --release; --file: run an edited copy of a reported source, e.g. while reducing a mismatch)
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PLATFORM_JARS } from "../../../src/jvm/provenance";
+import { loadDexes, world } from "./build";
+import { compare, genCases } from "./cases";
+import { jsTier, natives } from "./oracle";
+import { ACC } from "./program";
+import { underNode } from "./undernode";
+
+await underNode(import.meta.path);
+
+const arg = (k: string, d: number) => { const i = process.argv.indexOf(k); return i < 0 ? d : Number(process.argv[i + 1]); };
+const seed = arg("--seed", 1), count = arg("--methods", 200), perMethod = arg("--cases", 12), depth = arg("--depth", 3);
+let state = seed >>> 0 || 1;
+const rnd = (n: number) => { state ^= state << 13; state >>>= 0; state ^= state >>> 17; state ^= state << 5; state >>>= 0; return state % n; };
+const pick = <T>(a: T[]) => a[rnd(a.length)];
+
+type T = "I" | "J" | "F" | "D";
+const locals: Record<T, string[]> = { I: ["i0", "i1", "i2", "i3"], J: ["l0", "l1", "l2"], F: ["f0", "f1"], D: ["d0", "d1"] };
+const consts: Record<T, string[]> = {
+  I: ["0", "1", "-1", "2", "7", "31", "32", "255", "65535", "100000", "Integer.MAX_VALUE", "Integer.MIN_VALUE", "0x5bd1e995"],
+  J: ["0L", "1L", "-1L", "3L", "4294967296L", "123456789012345L", "Long.MAX_VALUE", "Long.MIN_VALUE"],
+  F: ["0f", "-0f", "1f", "-1f", "0.5f", "3.5f", "1e10f", "-2.5e9f", "Float.NaN", "Float.MAX_VALUE", "Float.MIN_VALUE", "Float.POSITIVE_INFINITY"],
+  D: ["0.0", "-0.0", "1.0", "-1.0", "0.1", "3.5", "1e10", "-3e9", "1e300", "Double.NaN", "Double.MIN_VALUE", "Double.NEGATIVE_INFINITY"],
+};
+const castTo: Record<T, string> = { I: "int", J: "long", F: "float", D: "double" };
+const arrays = { ia: ["I", 8], la: ["J", 4], fa: ["F", 4], da: ["D", 4], ba: ["I", 8], ca: ["I", 8] } as const;
+const arrayOf = (t: T) => pick(Object.keys(arrays).filter((a) => arrays[a as keyof typeof arrays][0] === t));
+const index = (a: string) => { const n = arrays[a as keyof typeof arrays][1]; return `(${expr("I", 1)} & ${rnd(10) ? n - 1 : 2 * n - 1})`; };
+
+function expr(t: T, d: number): string {
+  if (d <= 0 || !rnd(4)) return pick([...locals[t], ...locals[t], ...consts[t]]);
+  const a = () => expr(t, d - 1), sub = (u: T) => expr(u, d - 1);
+  const ops = t === "I" || t === "J" ? ["+", "-", "*", "&", "|", "^"] : ["+", "-", "*", "/", "%"];
+  switch (rnd(t === "I" ? 11 : 9)) {
+    case 0: case 1: case 2: return `(${a()} ${pick(ops)} ${a()})`;
+    case 3: return t === "I" || t === "J" ? `(${a()} ${pick(["<<", ">>", ">>>"])} ${sub("I")})` : `(- ${a()})`;
+    case 4: return t === "I" || t === "J" ? `(${a()} ${pick(["/", "%"])} ${rnd(3) ? `(${a()} | 1)` : a()})` : `(${castTo[t]}) ${sub(pick<T>(["I", "J", "F", "D"]))}`;
+    case 5: return `(${castTo[t]}) ${sub(pick<T>(["I", "J", "F", "D"]))}`;
+    case 6: return `(${cond(d - 1)} ? ${a()} : ${a()})`;
+    case 7: { const arr = arrayOf(t); return `${arr}[${index(arr)}]`; }
+    case 8: return t === "I" ? "ia.length" : t === "J" ? "(sl ^ p.y)" : t === "F" ? "sf" : "(sd + p.z)";
+    case 9: return `p.mix(${sub("I")})`;
+    default: return t === "I" ? `(${pick(["si", "p.x"])} ${pick(ops)} ${a()})` : a();
+  }
+}
+function cond(d: number): string {
+  const t = pick<T>(["I", "I", "J", "F", "D"]);
+  if (d > 0 && !rnd(4)) return `(${cond(d - 1)} ${pick(["&&", "||"])} ${cond(d - 1)})`;
+  return `(${expr(t, d)} ${pick(["<", "<=", ">", ">=", "==", "!="])} ${expr(t, d)})`;
+}
+const lval = (t: T) => rnd(3) ? pick(locals[t]) : rnd(2) ? ((a) => `${a}[${index(a)}]`)(arrayOf(t)) : ({ I: "si", J: "sl", F: "sf", D: "sd" })[t];
+
+let loopVar = 0;
+function stmt(d: number): string {
+  const t = pick<T>(["I", "I", "J", "F", "D"]);
+  const k = rnd(d > 0 ? 12 : 6);
+  switch (k) {
+    case 0: case 1: { const l = lval(t), narrow = l.startsWith("ba") ? "(byte) " : l.startsWith("ca") ? "(char) " : ""; return `${l} = ${narrow}${expr(t, 3)};`; }
+    case 2: return `${lval(t)} ${pick(["+=", "-=", "*=", "/=", "%="])} ${expr(pick<T>(["I", "J", "F", "D"]), 2)};`;
+    case 3: return `${pick(locals[t === "F" || t === "D" ? "I" : t])}${pick(["++", "--"])};`;
+    case 4: { const it = pick<T>(["I", "J"]); return `${lval(it)} ${pick(["<<=", ">>=", ">>>=", "&=", "|=", "^="])} ${expr("I", 2)};`; }
+    case 5: return `p.mix(${expr("I", 2)});`;
+    case 6: return `if ${cond(2)} { ${block(d - 1)} }${rnd(2) ? ` else { ${block(d - 1)} }` : ""}`;
+    case 7: { const v = `k${loopVar++}`; return `for (int ${v} = 0; ${v} < ${1 + rnd(5)}; ${v}++) { ${block(d - 1)}${rnd(3) ? "" : ` if ${cond(1)} ${pick(["break", "continue"])};`} }`; }
+    case 8: { const v = `k${loopVar++}`; return `int ${v} = ${rnd(4)}; while (${v} < 5) { ${v} += ${1 + rnd(2)}; ${block(d - 1)} }`; }
+    case 9: {
+      const dense = rnd(2), keys = dense ? [0, 1, 2, 3] : [3, 70, 1000, -5, 99999];
+      const arms = keys.filter(() => rnd(4)).map((c) => `case ${c}: ${block(d - 1)} ${rnd(3) ? "break;" : ""}`);
+      return `switch (${dense ? `${expr("I", 2)} & 3` : `0 + ${expr("I", 2)}`}) { ${arms.join(" ")} default: ${block(d - 1)} }`;
+    }
+    case 10: return `try { ${block(d - 1)} } catch (RuntimeException ex) { ${pick(locals.I)} += ${1 + rnd(99)}; }${rnd(3) ? "" : ` finally { ${pick(locals.I)} ^= ${1 + rnd(99)}; }`}`;
+    default: { const v = `k${loopVar++}`; return `int ${v} = 0; do { ${block(d - 1)} } while (${v}++ < ${rnd(4)} && ${cond(1)});`; }
+  }
+}
+const block = (d: number) => Array.from({ length: 1 + rnd(3) }, () => stmt(d)).join(" ");
+
+/** a fixed (int, long, float, double) signature keeps every generated method callable with the shared argument pools */
+function method(n: number) {
+  const ret = pick<T>(["I", "J", "F", "D"]);
+  const fold: Record<T, string> = {
+    I: "i0 ^ (i1 * 31) ^ (i2 + i3) ^ (int) l0 ^ (int) (l1 >> 3) ^ (int) f0 ^ (int) d0 ^ ia[3] ^ ba[2] ^ ca[5] ^ si ^ p.x",
+    J: "l0 ^ (l1 * 31L) ^ l2 ^ (long) f0 ^ (long) d1 ^ la[1] ^ sl ^ p.y ^ i0",
+    F: "f0 + f1 * (float) d0 + fa[2] + sf + (float) i1",
+    D: "d0 + d1 * f1 + da[1] + sd + p.z + l0",
+  };
+  return `static ${castTo[ret]} m${n}(int a, long b, float c, double x) {
+  int i0 = a, i1 = a ^ 5, i2 = 3, i3 = -a; long l0 = b, l1 = b + a, l2 = 7; float f0 = c, f1 = 0.5f; double d0 = x, d1 = c;
+  int[] ia = new int[8]; long[] la = new long[4]; float[] fa = new float[4]; double[] da = new double[4]; byte[] ba = new byte[8]; char[] ca = new char[8];
+  si = a; sl = b; sf = c; sd = x; P p = new P(a);
+  ${block(depth)} ${block(depth)}
+  return ${fold[ret]};
+}`;
+}
+
+const generated = `public class F {
+  static int si; static long sl; static float sf; static double sd;
+  static final class P { int x; long y; double z; P(int a) { x = a; y = a * 3L; z = a / 2.0; } int mix(int a) { x += a; y += a * 3L; z += a * 0.5; return x ^ a; } }
+  ${Array.from({ length: count }, (_, i) => method(i)).join("\n  ")}
+}\n`;
+
+const out = mkdtempSync(join(tmpdir(), "j2w-fuzz-"));
+const sh = (cmd: string[], input?: string) => {
+  const r = Bun.spawnSync(cmd, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), cwd: out });
+  if (r.exitCode) throw new Error(`${cmd[0]} failed: ${r.stderr}`);
+  return r.stdout.toString();
+};
+const fi = process.argv.indexOf("--file");
+writeFileSync(join(out, "F.java"), fi < 0 ? generated : readFileSync(process.argv[fi + 1], "utf8"));
+sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, "F.java", join(import.meta.dir, "java/Ref.java")]);
+sh(["d8", ...(process.argv.includes("--debug") ? [] : ["--release"]), "--output", out, join(out, "F.class"), join(out, "F$P.class")]);
+
+const dex = join(out, "classes.dex"), hit: string[] = [];
+const w = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(import.meta.dir, "../../../vendor/aosp", j))], { natives });
+w.onGap = (id) => hit.push(w.gapList[id]);
+const methods = w.prog.require("F").methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC || m.isStatic && m.name.startsWith("m") && m.codeOff);
+const js = await jsTier(loadDexes(dex));
+const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
+const cases = genCases(methods, {}, perMethod);
+const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
+const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, js, jdk, hit);
+console.log(`seed ${seed}: ${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} generated methods (wasm, js tier, jdk); ${threw} threw; compiled ${w.stats.methods} methods, ${w.stats.units} modules`);
+if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
+if (bad || blocked) console.log(`source: ${join(out, "F.java")}`);
+process.exit(bad || blocked ? 1 : 0);

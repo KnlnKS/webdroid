@@ -8,3 +8,5 @@ globalThis.Bun ??= {
   file(u) { const buf = () => { const b = readFileSync(u); return b.buffer.slice(b.byteOffset, b.byteOffset + b.length); }; return { arrayBuffer: async () => buf(), slice: (a, b) => ({ arrayBuffer: async () => buf().slice(a, b) }) }; },
   Glob: class { constructor(p) { this.re = new RegExp("^" + p.replace(/\*/g, ".*") + "$"); } scanSync(d) { return { toArray: () => readdirSync(d).filter((f) => this.re.test(f)) }; } },
 };
+// the JS tier's yield channel is unref'd, so without a live handle node would exit while a workload is suspended; harnesses end with process.exit
+setInterval(() => {}, 1 << 30);

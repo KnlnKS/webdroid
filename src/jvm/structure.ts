@@ -9,7 +9,7 @@ import { branchTargets, endsBlock, ifTarget, type PreparedMethod } from "./prepa
 /** How a branch reaches its target block. */
 export const enum Go { Next, Break, Continue, Dispatch }
 
-/** labelled scopes nest this deep at most, bounding the parser's recursion */
+/** labelled scopes nest this deep at most in JavaScript, bounding the parser's recursion; a Wasm body has no such bound (see `maxDepth`) */
 const MAX_DEPTH = 256;
 
 interface Scope { open: number; close: number; label: string; loop: boolean }
@@ -27,7 +27,7 @@ export class Flow {
   private readonly rpo: Int32Array;
   private readonly loopCloses: Set<number>[] = [];
 
-  constructor(prepared: PreparedMethod, code: CodeItem) {
+  constructor(prepared: PreparedMethod, code: CodeItem, maxDepth = MAX_DEPTH) {
     const { instructions, leaders } = prepared, last: PreparedMethod["instructions"][number][] = [];
     this.blockAt = new Int32Array(code.insns.length + 1).fill(-1);
     for (const ins of instructions) {
@@ -184,7 +184,7 @@ export class Flow {
       for (const s of r.scopes) {
         while (nest.length && nest[nest.length - 1].close <= s.open) nest.pop();
         if (nest.length && nest[nest.length - 1].close < s.close) throw new Error("crossing scopes");
-        if (nest.push(s) > MAX_DEPTH) throw new Error("too deep");
+        if (nest.push(s) > maxDepth) throw new Error("too deep");
       }
     }
   }

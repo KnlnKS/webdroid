@@ -31,7 +31,6 @@ writeFileSync(join(out, "Bench.java"), text.replace(/}\s*$/, methods.join("\n") 
 sh(["javac", "--release", "11", "-cp", `${androidPlatform(35)}/android.jar`, "-d", out, "Bench.java"]);
 sh([androidTool("d8"), "--min-api", "26", "--output", out, ...readdirSync(out).filter((f) => f.endsWith(".class")).map((f) => join(out, f))]);
 
-const keep = setInterval(() => {}, 1 << 30); // the JS tier's yield channel is unref'd, so under node a suspended workload would let the process exit
 const dex = join(out, "classes.dex"), prog = program([dex, ...PLATFORM_JARS.map((j) => join(root, "vendor/aosp", j))]), js = await jsTier(loadDexes(dex));
 const todo = names.filter((n) => !only.length || only.includes(n));
 const isIntr = isIntrinsic(natives);
@@ -70,4 +69,4 @@ for (const name of todo) {
 }
 console.log(`${tally.MATCH} MATCH, ${tally.DIFF} DIFF, ${tally.BLOCKED} BLOCKED of ${todo.length}`);
 console.log(`total: ${total.methods} methods compiled in ${total.compileMs.toFixed(0)} ms (instantiate ${total.instantiateMs.toFixed(0)} ms), ${total.classes} class modules (${total.classMs.toFixed(0)} ms)`);
-clearInterval(keep);
+process.exit();
