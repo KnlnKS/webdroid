@@ -2,7 +2,7 @@ import type { Runtime } from "./runtime";
 import { perf } from "../perf";
 import { descToName } from "./abi";
 import { jvmProfiler } from "./profile";
-import { suspendWith, type Strand } from "./suspend";
+import { SUSPENDED, suspendWith, type Strand } from "./suspend";
 
 /** Field names match a hot frame's (see Runtime.dfr), so a hot body can resume one (OSR). */
 export interface ColdFrame {
@@ -60,8 +60,10 @@ function noteFrame(e: unknown, name: string): void {
   const frames = t.jframes ??= [];
   if (frames.length < 48) frames.push(name);
 }
-/** Runs synchronously until an instruction suspends; only then does the call return a Promise. */
-export function runCold(method: ColdMethod, receiver: unknown, args: unknown[]): unknown {
+/** Runs synchronously until an instruction suspends; only then does the call return a Promise,
+ *  or, called as a Java-ABI entry (`entry`), throw SUSPENDED with it. Calls stay in tail position
+ *  so a JS stack carries no frame of their own (a stack class or trace reads the frames above). */
+export function runCold(method: ColdMethod, receiver: unknown, args: unknown[], entry = false): unknown {
   perf.coldCalls++;
   const { R, D, S } = method;
   const f: ColdFrame = { R, D, S, method, v: new Array(method.regs), next: 0, r: 0, done: false, value: undefined,
@@ -69,15 +71,16 @@ export function runCold(method: ColdMethod, receiver: unknown, args: unknown[]):
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }
-  return step(method, f, receiver, -1, undefined);
+  return step(method, f, receiver, -1, undefined, entry);
 }
 
+const suspendEntry = (p: Promise<unknown>): never => { SUSPENDED.p = p; throw SUSPENDED; };
 /** Run from f.next; `thrownAt` >= 0 first raises `thrown` from the instruction there. */
-function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: number, thrown: unknown): unknown {
+function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: number, thrown: unknown, entry = false): unknown {
   const { R, D } = method;
   const profiled = jvmProfiler.enabled;
   const started = profiled ? performance.now() : 0;
-  let suspended = false;
+  let suspended = false, waiting: Promise<unknown> | undefined;
   const depth = coldStack.push(f);
   try {
     while (!f.done) {
@@ -86,8 +89,14 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
         if (thrownAt >= 0) { thrownAt = -1; throw thrown; }
         f.next = op.next;
         const pending = op.run(f, op.constants);
-        if (pending !== undefined) { suspended = true; return suspend(method, f, receiver, pc, pending); }
+        if (pending !== undefined) { suspended = true; waiting = suspend(method, f, receiver, pc, pending); break; }
       } catch (error) {
+        // a callee's suspension (only calls throw one): the frame waits on it for the call's result
+        if (error === SUSPENDED) {
+          f.$w = 1; suspended = true;
+          const p = suspend(method, f, receiver, pc, SUSPENDED.p);
+          return entry ? suspendEntry(p) : p;
+        }
         R.st(f.$th);
         if (error instanceof TypeError) {
           const key = /\[K\[(\d+)\]\] is not a function/.exec(error.message)?.[1];
@@ -116,11 +125,13 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
         if (method.hotness >= jvmProfiler.hotThreshold && method.promote) {
           coldStack.pop(); // the hot body continues this frame under its own name
           const handoff = method.promote(f, receiver);
-          if (handoff) { suspended = true; return handoff.value; }
+          if (handoff) { suspended = true; return entry && handoff.value instanceof Promise ? suspendEntry(handoff.value) : handoff.value; }
           coldStack.push(f);
         }
       }
     }
+    // thrown here, past the instruction's catch, which takes a suspension for its callee's
+    if (waiting) return entry ? suspendEntry(waiting) : waiting;
     return f.value;
   } finally {
     coldStack.length = depth - 1;

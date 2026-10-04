@@ -2,9 +2,9 @@
 // StringBuilder and StringBuffer over a JS string.
 
 import { awaited, rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { mangleMethod, jmethod, charsToString, utf8, splitSig, stringHash } from "../abi";
+import { mangleMethod, jmethod, charsToString, utf8, splitSig, stringHash, parseMethodDesc } from "../abi";
 import { encodeString } from "../charset";
-import { once } from "../suspend";
+import { definePublic, once } from "../suspend";
 import { csText } from "./jchars";
 import { boxObject } from "./jbox";
 import { stringMatches, stringReplace, stringSplit } from "./jregex";
@@ -28,9 +28,8 @@ const joinIterable = driven(function* (separator: unknown, parts: unknown): Gen<
 
 // ── String (patch JS String.prototype with mangled methods)
 function sm(sig: string, fn: (this: string, ...a: any[]) => unknown) {
-  Object.defineProperty(String.prototype, mangleMethod(...splitSig(sig)), {
-    value: fn, writable: true, configurable: true, enumerable: false,
-  });
+  const [name, desc] = splitSig(sig);
+  definePublic(String.prototype, mangleMethod(name, desc), fn, parseMethodDesc(desc).params.length);
 }
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);

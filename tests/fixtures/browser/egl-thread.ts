@@ -1,7 +1,7 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit } from "../../../src/jvm/natives/jentry";
+import { mangleStaticField } from "../../../src/jvm/abi";
+import { JThread, setCurThread, mainThread, vcall, vcallOn, newObj, linkInit, implement } from "../../../src/jvm/natives/jentry";
 import { gl, tables, put } from "../../../src/android/gl";
 import { glSurfaces } from "../../../src/native/egl-current";
 import { EglContext, presentSurface, surfaceTextureOf, type GlSurface } from "../../../src/android/glsurface";
@@ -267,7 +267,7 @@ async function probe() {
   rt.su();
   const mainEmpty = gl === null;
   const callback = rt.make("java/lang/Object");
-  Object.assign(callback, { [mangleMethod("run", "()V")]: () => gl === firstGL });
+  implement(callback, "run", "()V", () => gl === firstGL);
   const callbackRestored = vcallOn(first, callback, "run", "()V");
   setCurThread(mainThread);
   return { bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,

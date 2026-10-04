@@ -7,6 +7,7 @@ import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime, type Gen } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem, lateMethod, decodeModifiedUtf8, encodeModifiedUtf8 } from "../jvm/abi";
 import { after, curThread } from "../jvm/natives/jentry";
+import { setPublic } from "../jvm/suspend";
 import { stackTraceText } from "../jvm/natives/jthrowable";
 import { JClass } from "../jvm/natives/jlang";
 import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
@@ -582,7 +583,7 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
   // the compiled stub memoised a miss before JNI_OnLoad ran: re-point it (see compiler emitNativeStub)
   const mangled = mangleMethod(name, sig);
   const target = isStatic ? info.ctor : info.ctor.prototype;
-  if (target && Object.prototype.hasOwnProperty.call(target, mangled)) target[mangled] = entry;
+  if (target && Object.prototype.hasOwnProperty.call(target, mangled)) setPublic(target, mangled, entry, params.length);
 }
 
 /** natives with no RegisterNatives entry resolve by the JNI short-name export `Java_pkg_Cls_method` */

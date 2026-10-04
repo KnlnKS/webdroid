@@ -1,7 +1,8 @@
 // Per-DEX resolution caches used by compiled methods; each defining runtime owns its links.
 import type { ClassInfo, Runtime } from "./runtime";
 import type { DexFile } from "./dex";
-import { descToName, directName, mangleMethod, mangleStaticField } from "./abi";
+import { descToName, directName, mangleMethod, mangleStaticField, parseMethodDesc } from "./abi";
+import { javaFace, xname } from "./suspend";
 import { addCell, type Cells } from "./tiering";
 
 function siteCache(c: unknown[], k: number, fn: Cells): unknown {
@@ -50,9 +51,10 @@ export class DexLink {
     const dex = this.dex, R = this.runtime, m = dex.method(i), info = this.linfo(m.cls);
     if (info.stub) throw R.ncdfe(info.name);
     R.ensureCompiled(info);
-    const proto = info.ctor.prototype, mangled = mangleMethod(m.name, dex.methodDesc(i));
-    const fn: Cells | undefined = proto[mangled];
-    if (!fn) throw R.unimplemented(`${info.name}.${m.name}${dex.methodDesc(i)} (direct)`);
+    const desc = dex.methodDesc(i), proto = info.ctor.prototype, mangled = mangleMethod(m.name, desc);
+    // the Java-ABI function; a host function installed without one gets its face here
+    const fn: Cells | undefined = proto[xname(mangled)] ?? (typeof proto[mangled] === "function" ? javaFace(proto[mangled], parseMethodDesc(desc).params.length) : undefined);
+    if (!fn) throw R.unimplemented(`${info.name}.${m.name}${desc} (direct)`);
     addCell(fn, this.dp, i);
     const direct = directName(info.name, mangled);
     if (!Object.hasOwn(proto, direct)) { proto[direct] = fn; addCell(fn, proto, direct); }

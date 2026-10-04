@@ -2,7 +2,7 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mangleStaticField, mangleMethod, jarray, doubleToLongBits, longBitsToDouble } from "../src/jvm/abi";
 import type { DexFile, EncAnnotation } from "../src/jvm/dex";
-import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, curThread, JThread } from "../src/jvm/natives/jentry";
+import { vcall, newObj, vcallAsync, vcallOn, callOn, mainThread, curThread, JThread, implement } from "../src/jvm/natives/jentry";
 import { park } from "../src/jvm/natives/jthread";
 import { type JClassLoader } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
@@ -310,7 +310,7 @@ describe("reflection-field", () => {
   test("proxy creation shares classes without crossing interface sets", async () => {
     const names = ["test/ConcurrentProxyA", "test/ConcurrentProxyB"];
     rt.markers(...names);
-    const handler = { [mangleMethod("invoke", "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;")]: () => null };
+    const handler = implement({}, "invoke", "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;", () => null);
     const create = (name: string) => vcall(rt.link("java/lang/reflect/Proxy").ctor, "newProxyInstance",
       "(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;", null, [rt.classFor(name)], handler);
     const [first, repeated, other] = await Promise.all([create(names[0]), create(names[0]), create(names[1])]);
@@ -752,4 +752,13 @@ describe("dex-class-loaders", () => {
     expect(await vcall(cls, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
     expect([await vcall(buffer, "position", "()I"), await vcall(buffer, "limit", "()I")]).toEqual([8, 8 + bytes.length]);
   });
+});
+
+// compiled code calls a method's Java-ABI name (suspend.ts): whatever installs the public name
+// must install that one beside it, or a host override is skipped for an inherited body
+test("every linked class carries both calling conventions of its methods", () => {
+  const missing: string[] = [];
+  for (const [name, info] of rt.classes) for (const o of info.ctor ? [info.ctor, info.ctor.prototype] : [])
+    for (const k of Object.getOwnPropertyNames(o)) if (/^(m\$|i\$|\$clinit$)/.test(k) && typeof o[k] === "function" && !Object.hasOwn(o, "x" + k)) missing.push(`${name}.${k}`);
+  expect(missing).toEqual([]);
 });

@@ -6,10 +6,10 @@
 // when virtual dispatch happens.
 
 import { turnElapsed, wakeSoon, yieldToLoop } from "./yield";
-import { Strand, suspendWith } from "./suspend";
+import { Strand, SUSPENDED, javaFace, publicFace, setPublic, suspendWith, xname } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
-import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36, idHash } from "./abi";
+import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36, idHash, parseMethodDesc } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, type LazyMethod } from "./compiler";
 import type { CompiledCtor, ResumeBody } from "./tiering";
 import { DexLink, instanceFieldOf, findStaticOwner } from "./link";
@@ -86,6 +86,9 @@ export function without(methods: NativeSpec["methods"], ...keys: string[][]): No
   for (const key of keys.flat()) delete out[key];
   return out;
 }
+
+/** an object V8 stores properties into as a hash table: adding one is then no map transition */
+function dictionaryMode(o: object): void { (o as { $d?: number }).$d = 0; delete (o as { $d?: number }).$d; }
 
 export class ClassInfo {
   staticFieldTable = new Map<string, string>();
@@ -250,6 +253,10 @@ export class Runtime {
     });
   }
   fuel = 4096;
+  /** what compiled code reaches the calling conventions through (suspend.ts) */
+  readonly S = SUSPENDED;
+  readonly pub = publicFace;
+  readonly jf = javaFace;
   /** the classes whose throwables skip their stack capture while a call their handlers discard
    *  runs (discard.ts); one object, which forked realms share */
   quiet = { types: null as string | null };
@@ -578,6 +585,9 @@ export class Runtime {
     }
     info.ctor = info.isInterface ? class {}
       : new Function("S", fieldsInit ? `return class extends S {constructor(){super();${fieldsInit}}}` : "return class extends S {}")(info.superInfo?.ctor ?? JObj);
+    // every method goes on under two names (suspend.ts): as a dictionary, the prototype takes them
+    // without a hidden-class transition each, and V8 makes it fast again once it serves lookups
+    dictionaryMode(info.ctor.prototype);
     info.ctor.$i = info;
     if (this.platformClasses.has(name) && def.virtualMethods.some((m) => m.codeOff && dex.method(m.methodIdx).name === "finalize" && dex.methodDesc(m.methodIdx) === "()V"))
       this.claimOnStore(info, def, dex);
@@ -648,9 +658,11 @@ export class Runtime {
       const target: Record<string, unknown> = isStatic ? ctorAny : proto;
       const fn = typeof impl === "string" ? proto[impl] : impl;
       if (typeof fn !== "function") throw new Error(`bad native impl ${spec.name}.${key}`);
-      target[mangled] = this.trackPlaceholder(`${spec.name}.${k}`, fn, (f) => { if (target[mangled] === f) target[mangled] = fn; });
+      // a caller-sensitive static also takes its caller's runtime
+      const arity = parseMethodDesc(desc).params.length + (isStatic && spec.callerSensitive?.includes(k) ? 1 : 0);
+      setPublic(target, mangled, this.trackPlaceholder(`${spec.name}.${k}`, fn, (f) => { if (target[mangled] === f) setPublic(target, mangled, fn, arity); }), arity);
       if (!isStatic) info.ownMethods.push(mangled);
-      if (mname === "<init>") proto[directName(spec.name, mangled)] = target[mangled];
+      if (mname === "<init>") proto[directName(spec.name, mangled)] = target[xname(mangled)];
     }
     // A static written as a getter is resolved on first READ, not here: link order is
     // registration order, so a static whose value is an instance of another class would
@@ -703,19 +715,21 @@ export class Runtime {
     }
     const fill = ([list, index, mangled, kind]: Gap) => {
       const m = lists[list][index], isStatic = (m.flags & ACC.STATIC) !== 0, target = isStatic ? info.ctor : proto;
-      if (kind === 2) { target[mangled] = info.superInfo!.ctor.prototype[mangled]; return; }
+      const superProto = info.superInfo?.ctor.prototype;
+      if (kind === 2) { target[mangled] = superProto[mangled]; target[xname(mangled)] = superProto[xname(mangled)]; return; }
       if (!isStatic) info.ownMethods.push(mangled);
       if (kind === 0) { installLazy(this, dex, info, m, true, mangled); return; }
       // resolved on first call, and kept: a call site that captured this stub keeps calling it
       let fn: ((...a: never[]) => unknown) | null = null;
-      target[mangled] = function (this: unknown, ...args: unknown[]) {
+      const arity = parseMethodDesc(methodKey(dex, m.methodIdx).desc).params.length;
+      setPublic(target, mangled, function (this: unknown, ...args: unknown[]) {
         if (!fn) {
           const { name, desc } = methodKey(dex, m.methodIdx);
           if (!(fn = R.jniFn(cls, name + desc))) throw R.ulink(cls, name, desc);
-          target[mangled] = fn;
+          setPublic(target, mangled, fn, arity);
         }
         return fn.apply(this, args as never[]);
-      };
+      }, arity);
     };
     const known = gapsOf(cls);
     if (known) { known.forEach(fill); return; }
@@ -801,7 +815,7 @@ export class Runtime {
         if (seen.has(iface)) continue;
         seen.add(iface);
         this.ensureCompiled(iface);
-        if (iface.ownMethods.includes(mangled)) return iface.ctor.prototype[mangled];
+        if (iface.ownMethods.includes(mangled)) return iface.ctor.prototype[xname(mangled)];
         const body = walk(iface);
         if (body) return body;
       }
@@ -820,7 +834,10 @@ export class Runtime {
         seen.add(iface);
         this.ensureCompiled(iface);
         for (const m of iface.ownMethods) {
-          if (!(m in info.ctor.prototype)) info.ctor.prototype[m] = iface.ctor.prototype[m];
+          if (!(m in info.ctor.prototype)) {
+            info.ctor.prototype[m] = iface.ctor.prototype[m];
+            info.ctor.prototype[xname(m)] = iface.ctor.prototype[xname(m)];
+          }
         }
         walk(iface);
       }
@@ -861,6 +878,9 @@ export class Runtime {
   /** normalize a thrown JS value to a Java throwable */
   jx(e: unknown): any {
     if (e instanceof JObj) return e;
+    // a suspension is never an exception: something between a Java-ABI call and its compiled
+    // caller handled it as one
+    if (e === SUSPENDED) { console.error("[webdroid] a suspension reached an exception handler"); return this.mkThrowable("java/lang/InternalError", "suspension escaped"); }
     if (typeof e === "object" && e !== null && (e as any).$javaClass) return e;
     if (e instanceof TypeError) {
       const m = e.message;
@@ -869,7 +889,9 @@ export class Runtime {
         return this.mkThrowable("java/lang/NullPointerException", m);
       }
       if (/is not a function/.test(m)) {
-        const nd = demangle(/\.(\S+) is not a function/.exec(m)?.[1] ?? "");
+        // a host function installed under its mangled name alone: compiled code calls the Java-ABI name
+        if (/\.x(m|i)\$\S* is not a function/.test(m)) console.error("[webdroid] no Java-ABI method:", m);
+        const nd = demangle(/\.x?(\S+) is not a function/.exec(m)?.[1] ?? "");
         this.noteMissing(nd ? `${nd[0]}${nd[1]} is not a function` : m);
         return this.mkThrowable("java/lang/NoSuchMethodError", m);
       }

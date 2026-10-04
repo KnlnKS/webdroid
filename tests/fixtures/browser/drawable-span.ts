@@ -1,7 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { mangleMethod } from "../../../src/jvm/abi";
-import { newObj, vcall } from "../../../src/jvm/natives/jentry";
+import { implement, newObj, vcall } from "../../../src/jvm/natives/jentry";
 import { newPaint, setFontMetrics } from "../../../src/android/paint";
 import { declaredField } from "../../../src/jvm/runtime";
 import { canvasOver, canvasOf, type JavaCanvas } from "../../../src/android/canvas";
@@ -19,10 +18,10 @@ async function probe() {
     await vcall(drawable, "setBounds", "(IIII)V", 2, 3, 14, 17);
     const span = await newObj("android/text/style/ImageSpan", "(Landroid/graphics/drawable/Drawable;I)V", drawable, alignment);
     let loads = 0, draws = 0;
-    Object.assign(span, { [mangleMethod("getDrawable", "()Landroid/graphics/drawable/Drawable;")]: async () => { loads++; await Promise.resolve(); return drawable; } });
-    Object.assign(drawable, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JavaCanvas) => {
+    implement(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;", async () => { loads++; await Promise.resolve(); return drawable; });
+    implement(drawable, "draw", "(Landroid/graphics/Canvas;)V", async (canvas: JavaCanvas) => {
       await Promise.resolve(); draws++; canvasOf(canvas).ctx.fillStyle = "#00ff00"; canvasOf(canvas).ctx.fillRect(2, 3, 12, 14);
-    } });
+    });
     const metrics = await newObj("android/graphics/Paint$FontMetricsInt", "()V");
     setFontMetrics(metrics, true, 0, 0, 0, 0, 0);
     const width = await vcall(span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", paint, "x", 0, 1, metrics);

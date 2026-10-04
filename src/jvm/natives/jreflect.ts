@@ -8,6 +8,7 @@ import { fieldOffset } from "./junsafe";
 import { box, boxObject, unbox, type BoxDesc } from "./jbox";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 import { unsafeFallthrough } from "../compiler";
+import { setPublic, xname } from "../suspend";
 
 // ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
@@ -418,7 +419,7 @@ export function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] 
   return (c[declaredOnly ? 1 : 0] ??= collectMethods(info, declaredOnly)).slice();
 }
 /** a platform body a native class could not run is not a method it has */
-const runnable = (ci: ClassInfo, fn: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !unsafeFallthrough(rt, ci, fn);
+const runnable = (ci: ClassInfo, fn: unknown, java: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !unsafeFallthrough(rt, ci, java);
 function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   rt.ensureCompiled(info);
   const out: JMethod[] = [];
@@ -441,9 +442,9 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       const name = k.slice(0, k.length - desc.length);
       if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
       const mangled = mangleMethod(name, desc);
-      const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled];
-      if (runnable(ci, fn)) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
-      else if (runnable(ci, sfn)) { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
+      const fn = ci.ctor.prototype[mangled], sfn = ci.ctor[mangled], x = xname(mangled);
+      if (runnable(ci, fn, ci.ctor.prototype[x])) { seen.add(k); out.push(mkMethod(ci, name, desc, false, fn)); }
+      else if (runnable(ci, sfn, ci.ctor[x])) { seen.add(k); out.push(mkMethod(ci, name, desc, true, sfn)); }
     }
   };
   const collect = (ci: ClassInfo) => {
@@ -694,10 +695,10 @@ function installElements(target: object, info: ClassInfo, anno: EncAnnotation, r
     const type = parseMethodDesc(desc).ret;
     const key = mangleMethod(name, desc);
     let resolved: unknown, ready = false;
-    Reflect.set(target, key, () => {
+    setPublic(target as Record<string, unknown>, key, () => {
       if (!ready) { resolved = resolveEncVal(val, anno.dex, runtime, type); ready = true; }
       return resolved;
-    });
+    }, 0);
   }
 }
 function buildAnnoProto(type: string, info: ClassInfo): object {
@@ -706,8 +707,8 @@ function buildAnnoProto(type: string, info: ClassInfo): object {
   // proto whose constructor.$i is the annotation interface, so R.iof / casts resolve
   const p: object = Object.create(JAnnotation.prototype);
   (p as any).constructor = { $i: info };
-  (p as any)[mangleMethod("annotationType", "()Ljava/lang/Class;")] = () => (info.owner ?? rt).classFor(type);
-  (p as any)[mangleMethod("toString", "()Ljava/lang/String;")] = () => "@" + dotName(type);
+  setPublic(p as Record<string, unknown>, mangleMethod("annotationType", "()Ljava/lang/Class;"), () => (info.owner ?? rt).classFor(type), 0);
+  setPublic(p as Record<string, unknown>, mangleMethod("toString", "()Ljava/lang/String;"), () => "@" + dotName(type), 0);
   // elements a use site omits answer the type's declared defaults: dalvik/annotation/AnnotationDefault
   // on the annotation interface carries, as `value`, an annotation with one element per default.
   // On the shared proto so instances only override what they name.
@@ -790,8 +791,9 @@ function installForName(classCtor: unknown) {
     return after(initialize ? rt.initClass(rt.link(name)) : null, () => rt.classFor(name) as JClass);
   };
   const c = classCtor as Record<string, unknown>;
-  c[mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;")] = (name: string, caller: Runtime = rt) => forName(name, 1, caller.classLoader);
-  c[mangleMethod("forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")] = forName;
+  // forName(String) is caller-sensitive: compiled code passes its runtime after the name
+  setPublic(c, mangleMethod("forName", "(Ljava/lang/String;)Ljava/lang/Class;"), (name: string, caller: Runtime = rt) => forName(name, 1, caller.classLoader), 2);
+  setPublic(c, mangleMethod("forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;"), forName, 3);
 }
 
 // Class's reflective members, generic types and annotations, over real Method/Field/Constructor objects
@@ -935,7 +937,8 @@ function installClassReflection() {
   };
   // attach with proper mangled keys onto the live prototype
   for (const [sig, fn] of Object.entries(M)) {
-    proto[mangleMethod(...splitSig(sig))] = fn;
+    const [name, desc] = splitSig(sig);
+    setPublic(proto, mangleMethod(name, desc), fn, parseMethodDesc(desc).params.length);
   }
 }
 // link Method and Constructor now so their prototypes carry the native methods
@@ -977,7 +980,7 @@ function proxyMethod(info: ClassInfo, owner: ClassInfo, n: string, desc: string,
     const r = await vcall(this.h, "invoke", D_INVOKE, this, method, jarray(args.map((a, i) => boxReturn(params[i], a)), "Ljava/lang/Object;"));
     return ret === "V" ? undefined : ret[0] === "L" || ret[0] === "[" ? r : unboxArg(r);
   };
-  info.ctor.prototype[mangleMethod(n, desc)] = fn;
+  setPublic(info.ctor.prototype, mangleMethod(n, desc), fn, params.length);
   return fn;
 }
 const proxyIfaces = new WeakMap<ClassInfo, ClassInfo[]>();

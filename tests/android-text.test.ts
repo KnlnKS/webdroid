@@ -2,8 +2,7 @@ import { expect, test, describe, beforeAll } from "bun:test";
 import { loadLibcore, loadSystemFonts, fakeStyles, scall } from "./java";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
-import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
-import { mangleMethod } from "../src/jvm/abi";
+import { implement, newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { newPaint, paintOf, paintTypeface, setPaintTypeface } from "../src/android/paint";
 import { NativeTheme, resolveAttributes, STYLE_NUM_ENTRIES } from "../src/android/res";
 import { TV } from "../src/android/axml";
@@ -148,9 +147,9 @@ describe("text-appearance-span", () => {
     expect(paintOf(paint).textSize).toBe(28);
     expect(await vcall(paint, "getColor", "()I")).not.toBe(0xff123456 | 0);
     let calls = 0;
-    Object.assign(span, { [mangleMethod("updateMeasureState", "(Landroid/text/TextPaint;)V")]: async (p: object) => {
+    implement(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", async (p: object) => {
       await Promise.resolve(); calls++; paintOf(p).textSize = 36;
-    } });
+    });
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);
     expect(calls).toBe(1);
     expect(paintOf(paint).textSize).toBe(36);
@@ -167,7 +166,7 @@ describe("text-appearance-span", () => {
     const paint = newPaint("android/text/TextPaint");
     (paint as unknown as Record<string, number>)[declaredField("android/text/TextPaint", "baselineShift")] = 3;
     paintOf(paint).textSize = 24;
-    Object.assign(paint, { [mangleMethod("ascent", "()F")]: async () => { await Promise.resolve(); return -15; } });
+    implement(paint, "ascent", "()F", async () => { await Promise.resolve(); return -15; });
     await vcall(span, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
     expect(textPaintField(paint, "baselineShift")).toBe(-4);
     await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", paint);

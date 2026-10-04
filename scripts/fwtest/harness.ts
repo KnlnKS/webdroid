@@ -1,8 +1,7 @@
 // What every fwtest exercise shares: the runner that reports what the real bytecode reached, and
 // the comparisons against values the reference AVD printed for the same calls.
 import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { vcall, linkInit } from "../../src/jvm/natives/jentry";
-import { mangleMethod } from "../../src/jvm/abi";
+import { vcall, linkInit, implement } from "../../src/jvm/natives/jentry";
 
 const reached: string[] = [];
 rt.onMissing = (w) => { reached.push(w); };
@@ -38,7 +37,7 @@ export async function thrown(f: () => unknown): Promise<string> {
 /** a class's statics, initialized: they live on the constructor, mangled */
 export const statics = async (cls: string) => (await linkInit(cls)).ctor as Record<string, any>;
 /** a listener object answering `name` with `fn` */
-export const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => Object.assign(rt.make("java/lang/Object") as JObj, { [mangleMethod(name, desc)]: fn });
+export const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => implement(rt.make("java/lang/Object") as JObj, name, desc, fn);
 /** a Java Paint.FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */
 export const fontMetrics = (fm: object, cls = "FontMetrics") =>
   ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);

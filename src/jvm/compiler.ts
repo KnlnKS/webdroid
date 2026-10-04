@@ -1,7 +1,7 @@
 // DEX bytecode → shared cold handlers and specialized hot methods.
 // Control flow: `for(;;) switch(pc)` over basic blocks; DEX try ranges → JS catch with
-// pc-range dispatch. Every method runs synchronously: a call returns its value, or a Promise
-// when the callee suspended, and only then does the caller save its frame (Runtime.dfr).
+// pc-range dispatch. Every method runs synchronously: a call returns its value, or its callee
+// throws SUSPENDED (suspend.ts), and only then does the caller save its frame (Runtime.dfr).
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { mangleMethod, directName, frameName, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, varHandleValues, type PrimElem } from "./abi";
@@ -12,6 +12,7 @@ import { jvmProfiler } from "./profile";
 import { coverageProbeSource } from "./coverage";
 import { codeKey, type Form } from "./codecache";
 import { addCell, retarget, compileTieredMethod, type Cells, type CompiledCtor, type JvmFunction } from "./tiering";
+import { javaFace, publicFace, setJava, setPublic, xname } from "./suspend";
 import { type Flow, Go, structure } from "./structure";
 import { discardedTypes, holdsNoThrowable, transparentCall } from "./discard";
 import {
@@ -97,28 +98,31 @@ export function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: Encode
   mangled = methodKey(dex, m.methodIdx).mangled): void {
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   const i = (info.lazy ??= []).length;
-  const C: CompiledCtor = info.ctor;
+  const C: CompiledCtor = info.ctor, arity = parseMethodDesc(methodKey(dex, m.methodIdx).desc).params.length;
   let entry: JvmFunction | undefined;
   const stub: JvmFunction & Cells = function (this: unknown, ...args: unknown[]) {
     entry ??= R.lz(C, i);
     return entry.apply(this, args);
   };
   stub.$c = null;
-  // an intrinsic stands in for the body wherever it is reached; the stub stays its AOSP fallback
-  const intrinsic = fallthrough ? undefined : R.intrinsics.get(info.name)?.get(mangled)?.(stub, C);
+  // an intrinsic stands in for the body wherever it is reached; the stub stays its AOSP fallback,
+  // which it calls as host code does
+  const intrinsic = fallthrough ? undefined : R.intrinsics.get(info.name)?.get(mangled)?.(publicFace(stub, arity), C);
   info.lazy.push(new LazyMethod(dex, m, mangled, isStatic, stub, fallthrough, intrinsic));
-  (isStatic ? C : C.prototype)[mangled] = intrinsic ?? stub;
+  if (intrinsic) setPublic(isStatic ? C : C.prototype, mangled, intrinsic, arity);
+  else setJava(isStatic ? C : C.prototype, mangled, stub, arity);
   // a constructor or private method also goes under its direct name now: added once a class has
-  // instances, it would change their prototype's shape under code already running
+  // instances, it would change their prototype's shape under code already running. Only compiled
+  // code calls a direct name, so it holds the Java-ABI function.
   if (!isStatic && (mangled.startsWith("i$") || m.flags & ACC.PRIVATE)) {
     const direct = directName(info.name, mangled);
-    C.prototype[direct] = intrinsic ?? stub;
+    C.prototype[direct] = intrinsic ? javaFace(intrinsic, arity) : stub;
     if (!intrinsic) addCell(stub, C.prototype, direct);
   }
 }
 
-/** Does `fn`, as `info` reaches it, stand for a platform body that reads fields its native class
- *  lacks? Such a body is not a method the class has. */
+/** Does `fn` (a Java-ABI function), as `info` reaches it, stand for a platform body that reads
+ *  fields its native class lacks? Such a body is not a method the class has. */
 export function unsafeFallthrough(R: Runtime, info: ClassInfo, fn: unknown): boolean {
   if ((fn as Cells).$unsafe) return true;
   for (let i: ClassInfo | null = info; i; i = i.superInfo) {
@@ -131,15 +135,16 @@ export function unsafeFallthrough(R: Runtime, info: ClassInfo, fn: unknown): boo
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
   const info = C.$i, rec = info.lazy![i], dex = rec.dex;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
-  const target = rec.isStatic ? C : C.prototype;
+  const target = rec.isStatic ? C : C.prototype, arity = parseMethodDesc(rec.desc).params.length;
   if (rec.fallthrough) {
     const absent = R.absentFields(dex, rec.m);
     // a body that cannot run on this object yields to an interface default, or to Object's
     const fallback = absent.length && !rec.isStatic
-      ? (R.interfaceDefault(info, rec.mangled) ?? JObj.prototype[rec.mangled as never]) as JvmFunction | undefined : undefined;
+      ? (R.interfaceDefault(info, rec.mangled) ?? JObj.prototype[xname(rec.mangled) as never]) as JvmFunction | undefined : undefined;
     if (fallback) {
       retarget(rec.stub, fallback);
-      return target[rec.mangled] = fallback;
+      setJava(target, rec.mangled, fallback, arity);
+      return fallback;
     }
     if (absent.length) {
       const what = `unsafe-fallthrough ${profileName} ${absent.join(",")}`;
@@ -149,7 +154,8 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
       };
       fail.$unsafe = true;
       retarget(rec.stub, fail);
-      return target[rec.mangled] = fail;
+      setJava(target, rec.mangled, fail, arity);
+      return fail;
     }
   }
   const code = dex.code(rec.m.codeOff);
@@ -197,11 +203,11 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const target = holder((m.flags & ACC.STATIC) !== 0);
   const cls = JSON.stringify(info.name), v = `$n${m.methodIdx}`;
-  const ps = paramList(desc);
+  const ps = paramList(desc), arity = parseMethodDesc(desc).params.length;
   return `let ${v};${target}.${mangled}=function(${ps}){` +
     `if(!${v}&&!(${v}=${target}.${mangled}=R.jniFn(${cls},${JSON.stringify(name + desc)})))` +
     `throw R.ulink(${cls},${JSON.stringify(name)},${JSON.stringify(desc)});` +
-    `return ${v}.call(this${ps ? "," + ps : ""})};`;
+    `return ${v}.call(this${ps ? "," + ps : ""})};${target}.${xname(mangled)}=R.jf(${target}.${mangled},${arity});`;
 }
 
 /** A hot entry. A frame that suspends hands itself to `$R()`, the method's resumable body.
@@ -212,7 +218,9 @@ function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod,
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
     const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), isStatic, desc, name, "hot", m.methodIdx, marked).compile(prepared, count, "entry");
-    return `{const $ic=[];${holder(isStatic)}.${mangled}=(${body});}`;
+    const h = holder(isStatic), x = `${h}.${xname(mangled)}`;
+    // a leaf never suspends, so host code may call its entry as it is
+    return `{const $ic=[];${x}=(${body});${h}.${mangled}=${prepared.sync ? x : `R.pub(${x},${parseMethodDesc(desc).params.length})`};}`;
   } catch (error) { return unimplementedMethod(info, m, dex, error); }
 }
 
@@ -221,7 +229,8 @@ function unimplementedMethod(info: ClassInfo, m: EncodedMethod, dex: DexFile, er
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const message = `compile error ${info.name}.${name}${desc}: ${error}`;
   console.warn(message);
-  return `${holder((m.flags & ACC.STATIC) !== 0)}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(message)}); };`;
+  const h = holder((m.flags & ACC.STATIC) !== 0);
+  return `${h}.${xname(mangled)}=${h}.${mangled}=function(){ throw R.unimplemented(${JSON.stringify(message)}); };`;
 }
 
 /** An expression evaluating to the method's resumable body. */
@@ -387,8 +396,8 @@ class MethodEmitter {
     // var, not let: a let without an initializer costs bytecode to set it, which counts against
     // V8's inlining budget
     const init = this.sync ? `var ${[...locals, "$t", "$u", "$ex", "pc=0"].join(",")};`
-      : !this.resuming ? `var ${[...locals, "$t", "$u", "$ex", "$fu", "$r=0", "pc=0"].join(",")};const $th=R.cur;`
-      : `var ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "pc=$F.next", "$r=$F.r"].join(",")};` +
+      : !this.resuming ? `var ${[...locals, "$t", "$u", "$ex", "$fu", "$q", "$r=0", "pc=0"].join(",")};const $th=R.cur;`
+      : `var ${[...allRegs.map((r, i) => `${r}=$F.v[${i}]`), "$t=$F.$t", "$u=$F.$u", "$ex=$F.$ex", "$fu", "$q", "pc=$F.next", "$r=$F.r"].join(",")};` +
         `const $th=$F.$th,$s=$F.$s;R.st($th);`;
 
     const catchBody = this.hasTries ? (this.quietCalls ? "R.quiet.types=null;" : "") + "$e=R.jx($e);\n" + this.emitCatch() : this.leave() + "throw R.jx($e);";
@@ -400,11 +409,17 @@ class MethodEmitter {
     const regions = flow?.assemble((b) => blocks[b]);
     const dispatch = regions?.length === 1 ? `{${regions[0]}}`
       : `switch(${this.resuming ? "$r?-$r:pc" : "pc"}){\n${regions ? regions.map((r, i) => `case ${flow!.starts[flow!.regions[i].entry]}:{${r}}`).join("\n") : blocks.join("\n")}\ndefault:R.badPc(pc);\n}`;
-    const body = `try{${this.sync ? "" : "$d:"}${dispatch}
-${this.sync ? "" : this.saveFrame()}
+    // a callee's suspension (SUSPENDED) leaves the catch for the save point with the site it
+    // recorded, as a helper's Promise does by breaking out of $d
+    const suspended = `if($e===R.S){$r=$q;$t=R.S.p;${this.quietCalls ? "R.quiet.types=null;" : ""}}else{`;
+    const body = this.sync ? `try{${dispatch}
 }catch($e){
+${catchBody}
+}` : `try{$d:${dispatch}
+}catch($e){${suspended}
 ${this.resuming ? "R.st($th);$r=0;" : ""}${catchBody}
-}`;
+}}
+${this.saveFrame()}`;
     const source = `function ${frameName(this.info.name, this.mname, this.methodIdx)}(${this.resuming ? "$F" : jsParams.join(",")}){
 ${this.resuming ? "" : coverageProbeSource(profileName)}
 ${profileStart}
@@ -416,13 +431,15 @@ ${profileEnd}
     return source;
   }
 
-  /** One save point per method: suspension sites set `$r` (0 for a back-edge yield) and `pc`, then
-   *  break to it. R.dfr takes the Promise they tested: a suspended value is replaced by its result
-   *  on resume, so `$t` and `$u` never hold a stale one. It is kept short because its bytecode
-   *  counts against inlining the method into its callers. */
+  /** One save point per method: a helper's suspension sets `$r` (0 for a back-edge yield) and `pc`
+   *  and breaks to it, a callee's comes from the catch. R.dfr takes the Promise: a suspended value
+   *  is replaced by its result on resume, so `$t` and `$u` never hold a stale one. An entry throws
+   *  its own suspension to its caller; a resumable body, which only continuations call, returns it.
+   *  It is kept short because its bytecode counts against inlining the method into its callers. */
   private saveFrame(): string {
     const profiled = jvmProfiler.enabled ? `P.suspension($pn);` : "";
-    return `${profiled}${this.resuming ? "if($s)R.su();" : ""}return R.dfr($R,this,$r,pc,$th,$t,$u,$ex,$fu,${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")});`;
+    const save = `R.dfr($R,this,$r,pc,$th,$t,$u,$ex,$fu,${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")})`;
+    return `${profiled}${this.resuming ? `if($s)R.su();return ${save};` : `R.S.p=${save};throw R.S;`}`;
   }
 
   /** A resumed frame finishing hands the main looper back its thread: its caller re-pins its own
@@ -452,8 +469,27 @@ ${profileEnd}
 
   /** A call or class initialization: its value, or a suspension when it is a Promise. A body
    *  holding any of these instructions never compiles as a leaf. */
+  /** a runtime helper that returns a Promise when it must wait (class initialization, resolution,
+   *  a contended monitor, a host call site) */
   private guard(expr: string, out: string[], assignTo = this.t, quiet?: string) {
     out.push(quiet ? `R.quiet.types=${JSON.stringify(quiet)};${assignTo}=${expr};R.quiet.types=null;${this.suspend(assignTo)}` : `${assignTo}=${expr};${this.suspend(assignTo)}`);
+  }
+
+  /** Whether a call to `cls.mangled` most likely reaches a host function (a native spec's method, an
+   *  intrinsic): it then goes through the public name and tests for a Promise, cheaper than the
+   *  Java-ABI adapter around a host function (suspend.ts). Either name is correct for any target.
+   *  Object's methods are mostly overridden in bytecode. */
+  private hostCall(cls: string, mangled: string): boolean {
+    return cls !== "java/lang/Object" && (this.R.natives.has(cls) || !!this.R.intrinsics.get(cls)?.has(mangled));
+  }
+  /** A call through a Java-ABI name: a callee that suspends throws SUSPENDED, so the site only
+   *  records itself in `$q` for the catch that saves the frame, and a cold handler's runner takes
+   *  the suspension as the call's (cold.ts). */
+  private call(expr: string, out: string[], quiet?: string) {
+    if (this.cold) { out.push(`${this.t}=${expr};`); return; }
+    const site = ++this.resumes;
+    out.push(quiet ? `$q=${site};R.quiet.types=${JSON.stringify(quiet)};$t=${expr};R.quiet.types=null;` : `$q=${site};$t=${expr};`);
+    if (this.resuming) out.push(this.resumeCase(site, "$t"));
   }
 
   /** a cache read whose miss resolves through `slow`: a hit is a constructor or function, so only a
@@ -483,8 +519,10 @@ ${profileEnd}
       return `if(${value} instanceof Promise){F.$w=${value === this.t ? 1 : 0};return ${value};}`;
     }
     const resume = ++this.resumes, save = `if(${pending}){$r=${resume};break $d}`;
-    return this.resuming ? `${save}case -${resume}:if($r){$r=0;if($F.e)throw $F.x;${value}=$F.val;}` : save;
+    return this.resuming ? save + this.resumeCase(resume, value) : save;
   }
+  /** where a resumed frame re-enters at `site`, taking the result into `value` */
+  private resumeCase(site: number, value: string): string { return `case -${site}:if($r){$r=0;if($F.e)throw $F.x;${value}=$F.val;}`; }
 
   private fieldProp(fieldIdx: number): string {
     return this.R.resolveInstanceField(this.dex, fieldIdx);
@@ -715,18 +753,18 @@ ${profileEnd}
     }
     switch (kind) {
       case "invoke-virtual": case "invoke-interface": {
-        const call = `${recv}${this.prop(mangled)}(${argStr})`;
-        if (!i.signOnly) { this.guard(call, out, this.t, quiet); break; }
+        const host = this.hostCall(clsName, mangled), call = `${recv}${this.prop(host ? mangled : xname(mangled))}(${argStr})`;
         // a String's order is its UTF-16 units', as JS compares strings
         const [r, o] = i.regs.map((x) => this.reg(x));
-        this.guard(`typeof ${r}==="string"&&typeof ${o}==="string"?${r}===${o}?0:${r}<${o}?-1:1:${call}`, out, this.t, quiet);
+        const expr = i.signOnly ? `typeof ${r}==="string"&&typeof ${o}==="string"?${r}===${o}?0:${r}<${o}?-1:1:${call}` : call;
+        if (host) this.guard(expr, out, this.t, quiet); else this.call(expr, out, quiet);
         break;
       }
       case "invoke-super": {
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
-        out.push(`${this.t}=(S.prototype${this.prop(mangled)}??(D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)})).prototype${this.prop(mangled)}??R.nsm(${this.literal(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        out.push(this.suspend(this.t));
+        const x = this.prop(xname(mangled));
+        this.call(`(S.prototype${x}??(D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)})).prototype${x}??R.nsm(${this.literal(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""})`, out);
         break;
       }
       case "invoke-direct": {
@@ -744,7 +782,7 @@ ${profileEnd}
         if (this.cold || this.info.native || clsName === "java/lang/String" || (this.R.classDefOf(clsName)?.def.flags ?? 0) & ACC.INTERFACE) {
           if (own) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
           else this.guardMiss(`D.dp[${this.literal(i.b)}]`, `D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
-          this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out, this.t, quiet);
+          this.call(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out, quiet);
           break;
         }
         // resolution installs the target under its direct name, reached as a method call (a call
@@ -752,7 +790,7 @@ ${profileEnd}
         const k = this.ics++;
         if (own) out.push(`$ic[${k}]??D.rdc0($ic,${k},${i.b});`);
         else this.guardMiss(`$ic[${k}]`, `D.rdc($ic,${k},${i.b}${this.fromArg})`, out, this.u);
-        this.guard(`${recv}.${directName(clsName, mangled)}(${argStr})`, out, this.t, quiet);
+        this.call(`${recv}.${directName(clsName, mangled)}(${argStr})`, out, quiet);
         break;
       }
       case "invoke-static": {
@@ -760,7 +798,9 @@ ${profileEnd}
         if (own && this.cold) out.push(`${this.u}=D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)});`);
         else if (!own) this.guardMiss(`D.ic[${this.literal(mref.cls)}]`, `D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
         const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
-        this.guard(`${own && !this.cold ? "C" : this.u}${this.prop(mangled)}(${args})`, out, this.t, quiet);
+        const target = `${own && !this.cold ? "C" : this.u}`;
+        if (this.hostCall(clsName, mangled)) this.guard(`${target}${this.prop(mangled)}(${args})`, out, this.t, quiet);
+        else this.call(`${target}${this.prop(xname(mangled))}(${args})`, out, quiet);
         break;
       }
       default: out.push(this.unsupported(`${kind} ${clsName}.${mref.name}${desc}`));

@@ -3,12 +3,12 @@
 // host code's calls into Java are jentry.ts's. Java booleans are 0/1 numbers, longs are BigInt.
 
 import { awaited, rt, JObj, HEAP_LIMIT, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
-import { mangleMethod, mangleField, mangleStaticField, descToName, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, PRIM_ARRAYS, i8, splitSig, idHash } from "../abi";
+import { mangleMethod, mangleField, mangleStaticField, descToName, jarray, PRIM_NAME, PRIM_DESC, dotName, slashName, PRIM_ARRAYS, i8, splitSig, idHash, parseMethodDesc } from "../abi";
 import { uptimeMillis, wallMillis } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
 import { after, curThread, newObj, scall, vcall, type JThread } from "./jentry";
-import { shareable } from "../suspend";
+import { definePublic, shareable } from "../suspend";
 import { JThrowable } from "./jthrowable";
 import { park } from "./jthread";
 // String and its builders, java.lang's natives with these
@@ -54,13 +54,12 @@ rt.register({
     ...monitorMethods,
   },
 });
-Object.defineProperty(Object.prototype, mangleMethod("getClass", "()Ljava/lang/Class;"), {
-  value: function (this: unknown) { return rt.classFor(jclsName(this)); },
-  writable: true, configurable: true, enumerable: false,
-});
+definePublic(Object.prototype, mangleMethod("getClass", "()Ljava/lang/Class;"), function (this: unknown) { return rt.classFor(jclsName(this)); }, 0);
 // the strings and arrays that stand for Java objects inherit these from here too
-for (const [sig, fn] of Object.entries(monitorMethods))
-  Object.defineProperty(Object.prototype, mangleMethod(...splitSig(sig)), { value: fn, writable: true, configurable: true, enumerable: false });
+for (const [sig, fn] of Object.entries(monitorMethods)) {
+  const [name, desc] = splitSig(sig);
+  definePublic(Object.prototype, mangleMethod(name, desc), fn, parseMethodDesc(desc).params.length);
+}
 
 function monWait(obj: object | string, ms: number): Promise<void> {
   if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
@@ -357,10 +356,8 @@ for (const proto of [Array.prototype, ...Object.values(PRIM_ARRAYS).map((c) => c
   for (const [sig, name] of [["getClass()Ljava/lang/Class;", "getClass"], ["hashCode()I", "hashCode"],
     ["toString()Ljava/lang/String;", "toString"], ["equals(Ljava/lang/Object;)Z", "equals"],
     ["clone()Ljava/lang/Object;", "clone"]] as [string, string][]) {
-    Object.defineProperty(proto, mangleMethod(...splitSig(sig)), {
-      value: function (this: unknown, other?: unknown) { return rt.arrCall(this, name, other); },
-      writable: true, configurable: true, enumerable: false,
-    });
+    const [mname, desc] = splitSig(sig);
+    definePublic(proto, mangleMethod(mname, desc), function (this: unknown, other?: unknown) { return rt.arrCall(this, name, other); }, parseMethodDesc(desc).params.length);
   }
 }
 

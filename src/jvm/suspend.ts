@@ -92,3 +92,50 @@ export function once<T>(make: () => T | Promise<T>): () => T | Promise<T> {
     }) as Promise<T>;
   };
 }
+
+// ── calling conventions
+// Compiled code calls a method under its Java-ABI name (`x` + the mangled name), whose function
+// suspends by throwing SUSPENDED with the Promise of its result: call sites test nothing, and the
+// frame's own catch saves it (MethodEmitter). Host code calls the mangled name, whose function
+// returns that Promise instead, as every native and vcall expects. Whatever installs one name
+// installs the other (setJava, setPublic).
+
+/** the token a Java-ABI function throws when it suspends; `p` is the Promise of its result */
+export const SUSPENDED: { p: Promise<unknown> } = { p: Promise.resolve() };
+const xnames = new Map<string, string>();
+/** the Java-ABI name of a method's mangled name */
+export function xname(mangled: string): string {
+  let x = xnames.get(mangled);
+  if (x === undefined) xnames.set(mangled, x = "x" + mangled);
+  return x;
+}
+type Fn = (this: unknown, ...args: never[]) => unknown;
+const params = (n: number) => Array.from({ length: n }, (_, i) => "a" + i).join(",");
+// every linked method gets an adapter at link time, so making one is a bare closure
+const makers = (body: (args: string) => string) => {
+  const made: ((f: Fn, S: typeof SUSPENDED) => Fn)[] = [];
+  // strict, as the natives are: a sloppy function would box a string receiver
+  return (n: number) => made[n] ??= new Function("f", "S", `"use strict";return function(${params(n)}){${body(params(n))}}`) as (f: Fn, S: typeof SUSPENDED) => Fn;
+};
+const toPublic = makers((a) => `try{return f.call(this${a && "," + a})}catch(e){if(e===S)return S.p;throw e}`);
+const toJava = makers((a) => `const r=f.call(this${a && "," + a});if(r instanceof Promise){S.p=r;throw S}return r`);
+/** a Java-ABI function as host code calls it: a suspension becomes its returned Promise */
+export const publicFace = <F>(fn: F, arity: number): F => toPublic(arity)(fn as Fn, SUSPENDED) as F;
+/** a host function (a native) as compiled code calls it: a returned Promise becomes a suspension */
+export const javaFace = <F>(fn: F, arity: number): F => toJava(arity)(fn as Fn, SUSPENDED) as F;
+type Holder = Record<string, unknown>;
+/** install a Java-ABI function: compiled code calls it, host code its public face */
+export function setJava(target: Holder, mangled: string, fn: unknown, arity: number): void {
+  target[xname(mangled)] = fn;
+  target[mangled] = publicFace(fn, arity);
+}
+/** install a host function: host code calls it, compiled code its Java-ABI face */
+export function setPublic(target: Holder, mangled: string, fn: unknown, arity: number): void {
+  target[mangled] = fn;
+  target[xname(mangled)] = javaFace(fn, arity);
+}
+/** setPublic as properties no enumeration sees: methods on a shared prototype (Object, String, arrays) */
+export function definePublic(target: object, mangled: string, fn: unknown, arity: number): void {
+  for (const [key, value] of [[mangled, fn], [xname(mangled), javaFace(fn, arity)]] as const)
+    Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: false });
+}

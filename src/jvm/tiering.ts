@@ -9,6 +9,8 @@ import { claimOffered } from "./aot";
 import { jvmProfiler } from "./profile";
 import { jvmCoverage } from "./coverage";
 import { perf } from "../perf";
+import { setJava, setPublic, xname } from "./suspend";
+import { parseMethodDesc } from "./abi";
 
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 export type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
@@ -90,7 +92,7 @@ const stored = (key: string): Factory | undefined => persistedBody(key) ?? claim
 /** a body's parameters: what compileTieredMethod binds a factory with (see Factory) */
 const PARAMS = ["C", "D", "R", "S", "P"], ENTRY_PARAMS = [...PARAMS, "$R"];
 export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod, emit: MethodEmitter): JvmFunction {
-  const info = C.$i, dex = rec.dex, target = rec.isStatic ? C : C.prototype;
+  const info = C.$i, dex = rec.dex, target = rec.isStatic ? C : C.prototype, arity = parseMethodDesc(rec.desc).params.length;
   const label = `${info.name}.${rec.name}`, profileName = label + rec.desc;
   const persist = !jvmProfiler.enabled && !jvmCoverage.enabled;
   const entryKey = codeKey(dex.id, rec.m.methodIdx, "e"), resumeKey = codeKey(dex.id, rec.m.methodIdx, "r");
@@ -113,9 +115,9 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     return resumable = fn;
   }
   const installed = (): JvmFunction => {
-    const fn = target[rec.mangled];
+    const fn = target[xname(rec.mangled)];
     if (typeof fn !== "function") throw new Error("invalid compiled method");
-    if (rec.intrinsic) target[rec.mangled] = rec.intrinsic;
+    if (rec.intrinsic) setPublic(target, rec.mangled, rec.intrinsic, arity);
     return fn as JvmFunction;
   };
   const compile = (src: string): JvmFunction => {
@@ -191,18 +193,19 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     if (hot) return hot.apply(this, args);
     if (++calls < 32 || jvmProfiler.tier === "cold") {
       if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
-      return runCold(cold!, this, args);
+      return runCold(cold!, this, args, true);
     }
     const compiled = promoteWithinBudget(promote, idle);
     if (compiled) return compiled.apply(this, args);
     if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
-    return runCold(cold!, this, args);
+    return runCold(cold!, this, args, true);
   };
   invoke.$c = null;
   if (rec.intrinsic) return install(invoke);
-  if (!jvmCoverage.enabled) return install(target[rec.mangled] = invoke);
-  return install(target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
+  const entry = jvmCoverage.enabled ? function(this: unknown, ...args: unknown[]) {
     jvmCoverage.hit(profileName);
     return invoke.apply(this, args);
-  });
+  } : invoke;
+  setJava(target, rec.mangled, entry, arity);
+  return install(entry);
 }

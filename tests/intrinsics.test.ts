@@ -5,7 +5,8 @@ import { rt } from "../src/jvm/runtime";
 import { newObj, scall, vcall } from "../src/jvm/natives/jentry";
 import { boxDesc, boxInt } from "../src/jvm/natives/jbox";
 import { bufferBytes, limit, position } from "../src/jvm/natives/jnio";
-import { jarray, mangleField, mangleMethod, splitSig } from "../src/jvm/abi";
+import { jarray, mangleField, mangleMethod, parseMethodDesc, splitSig } from "../src/jvm/abi";
+import { publicFace } from "../src/jvm/suspend";
 import { loadLibcore, mountApexData } from "./java";
 
 rt.linkNatives();
@@ -19,7 +20,7 @@ async function pair(cls: string, sig: string): Promise<[Function, Function]> {
   const mangled = mangleMethod(...splitSig(sig.replace(/^static /, "")));
   const rec = info.lazy!.find((r) => r.mangled === mangled)!;
   expect(rec?.intrinsic).toBeFunction();
-  return [rec.intrinsic!, rec.stub];
+  return [rec.intrinsic!, publicFace(rec.stub, parseMethodDesc(rec.desc).params.length)];
 }
 /** a call's value, or the class and message of what it threw */
 async function outcome(fn: Function, self: unknown, args: unknown[]): Promise<unknown> {

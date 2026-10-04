@@ -1,7 +1,6 @@
 import "../../../src/natives";
 import { rt } from "../../../src/jvm/runtime";
-import { mangleMethod } from "../../../src/jvm/abi";
-import { vcall, scall } from "../../../src/jvm/natives/jentry";
+import { vcall, scall, implement } from "../../../src/jvm/natives/jentry";
 import { canvasOver } from "../../../src/android/canvas";
 import { loadPlatformDex } from "../../../src/android/framework";
 import { mountPlatformData } from "../../../src/shell/apex";
@@ -13,7 +12,7 @@ const pixels = async (b: unknown) => {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out.push(await vcall(b, "getPixel", "(II)I", x, y) >>> 0);
   return out;
 };
-const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => Object.assign(rt.make("java/lang/Object"), { [mangleMethod(name, desc)]: fn });
+const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => implement(rt.make("java/lang/Object"), name, desc, fn);
 
 /** Decoded pixels, ImageDecoder's post-processing and an animated GIF's frames, which need the browser's decoders */
 async function probe() {

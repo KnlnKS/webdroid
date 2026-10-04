@@ -3,8 +3,8 @@
 // scall, newObj, callOn, after).
 
 import { rt, JObj, type ClassInfo } from "../runtime";
-import { mangleMethod, mangleStaticField, lateMethod, idHash } from "../abi";
-import { Strand, suspendWith } from "../suspend";
+import { mangleMethod, mangleStaticField, lateMethod, idHash, parseMethodDesc } from "../abi";
+import { Strand, setPublic, suspendWith } from "../suspend";
 import { never, processExited } from "../../process-exit";
 
 /** Does a Java thread own this event-loop turn? A resumed activation takes its thread (rt.st) and
@@ -23,6 +23,11 @@ function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => 
   const fn = obj[mangleMethod(name, desc)] ?? lateMethod.find?.(obj, name, desc);
   if (typeof fn !== "function") throw rt.unimplemented(`vcall ${describe(obj)}.${name}${desc}`);
   return fn;
+}
+/** `obj` answering Java method `name``desc` with host function `fn` (both calling conventions) */
+export function implement<T extends object>(obj: T, name: string, desc: string, fn: (...a: any[]) => unknown): T {
+  setPublic(obj as Record<string, unknown>, mangleMethod(name, desc), fn, parseMethodDesc(desc).params.length);
+  return obj;
 }
 /** Dynamic virtual call from native code: the result, or a Promise when the callee suspends. */
 export function vcall(obj: any, name: string, desc: string, ...args: unknown[]): any {
