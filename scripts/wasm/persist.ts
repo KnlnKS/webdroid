@@ -45,10 +45,9 @@ const platform = new Program(platformDexes); platform.addExterns(externs);
 const aotStore: AotStore = { get: (file) => new Uint8Array(readFileSync(join(AOT, file))) };
 const BASE = "aot://platform/";
 const world = (dexes: DexFile[], opts: Partial<WorldOptions> = {}) => new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, aot: aotStore, ...opts });
-/** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts). Their overlays change the platform's classes, so the World has a platform Program of its own. */
+/** a World as the tab makes one: the classes the host implements are added after the constructor (host/boot.ts) */
 function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
-  const own = new Program(platformDexes); own.addExterns(externs);
-  const w = new World(new Program(dexes, own), { intrinsics, natives, heapUsed, aot: aotStore, ...opts });
+  const w = world(dexes, opts);
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
   return w;
 }
