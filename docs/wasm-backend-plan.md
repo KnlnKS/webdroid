@@ -25,7 +25,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 
 S0–S3 have substantial implementations and harness coverage. S4 has AOT delivery and worker compilation, but the Wasm cold interpreter and hot-loop re-entry deliverables still need an explicit audit. S5's process-per-Worker conversion and S6's default switch/removal are unfinished. Optional and open-ended work follows completion of the main stages and gates.
 
-Y1's recovered stabilization work is merged: per-call native array results, exceptional copyback, loop fuel, retryable stack-exhausted compilation and deterministic worker startup. G4 continuation work is active. Y2's reviewed host-class/JNI milestone is recorded in section 4.19; navigation and SQLite logging follow-up work is active. The TestNG runner and its shared cache fix are merged, with full conformance verification active.
+Y1 stabilization, Y2 host-class/JNI dispatch and the TestNG runner/shared cache recovery are merged. Section 4.19 records Y2's bounded app verification. G4 continuation, full conformance and the unresolved standalone Mihon navigation path remain active work.
 
 ## 0. How to read this
 
