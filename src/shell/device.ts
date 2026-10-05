@@ -3,7 +3,7 @@
 
 import { dexesIn, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
-import { loadDex, tier } from "../jvm/tier";
+import { appCodeReady, loadAppCode, loadDex, tier } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
@@ -28,7 +28,7 @@ import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain, postMain } from "../android/mainloop";
 import { after, mainThread } from "../jvm/natives/jentry";
 import { deliverVsync } from "../android/vsync";
-import { perf } from "../perf";
+import { mark, perf } from "../perf";
 import { uptimeMillis } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { restoreRoots } from "./hostfs";
@@ -58,7 +58,7 @@ export const firstPresented = new Promise<void>((resolve) => { firstFrame = reso
 function present(): void {
   if (!screen) return;
   screen.transferFromImageBitmap(fb.transferToImageBitmap());
-  if (!perf.presentations++) { startupDone(); firstFrame(); }
+  if (!perf.presentations++) { mark("firstPresented"); startupDone(); firstFrame(); }
   notePresent();
 }
 
@@ -109,6 +109,7 @@ export function startZygote(): Promise<void> {
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await processBitness;
+    if (tier === "wasm") await appCodeReady;
     await zygoteInit();
   })();
 }
@@ -117,13 +118,31 @@ export function startZygote(): Promise<void> {
 export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<string> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
-  onStatus("Reading package…");
+  mark("bootApk"); onStatus("Reading package…");
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
   const appNode = manifest.children.find((c) => c.name === "application");
   const launcher = appNode?.children.find((node) => (node.name === "activity" || node.name === "activity-alias") && isLauncher(node));
   if (!launcher && !processName) throw new Error("no launcher activity found");
+  // the Application, then the launcher Activity a launch instantiates first
+  const launch = [appNode && attrStr(appNode, "name"), !processName && launcher && (attrStr(launcher, "targetActivity") ?? attrStr(launcher, "name"))]
+    .flatMap((name) => name ? [componentClass(pkg, name)] : []);
+  // The app's dex goes in after the boot class path, which loadDex's first-wins keeps ahead: an
+  // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
+  const loadAppDexes = async () => {
+    await inflateTree(zip, isDexEntry);
+    for (const name of Object.keys(zip)) {
+      if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
+    }
+    mark("dexLoaded");
+  };
+  // The Wasm tier's World numbers what it runs from the first Java this realm runs, and the app code a previous launch saved is attached only to a World that has numbered
+  // nothing yet (host/appcode.ts): the app's dex files and its code come before any Java, and the zygote waits for them
+  if (tier === "wasm") {
+    await loadAppDexes();
+    await loadAppCode({ profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
+  }
   applicationNightOverride = nightOverride(getPrefs(pkg, "__system_uimode").map.get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
   deviceNightMode(device.night);
@@ -142,18 +161,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
     else vfs.mount(apkPath(sp.name), sp.source);
   }
-  onStatus("Loading app code…");
-  await inflateTree(zip, isDexEntry);
-  // The app's dex goes in after the boot class path, which loadDex's first-wins keeps ahead: an
-  // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
-  for (const name of Object.keys(zip)) {
-    if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
-  }
+  mark("startZygote"); onStatus("Loading app code…");
+  if (tier === "js") await loadAppDexes();
   await code;
-  // the Application, then the launcher Activity a launch instantiates first
-  const launch = [appNode && attrStr(appNode, "name"), !processName && launcher && (attrStr(launcher, "targetActivity") ?? attrStr(launcher, "name"))]
-    .flatMap((name) => name ? [componentClass(pkg, name)] : []);
-  // the JS tier's compile worker emits JS; the Wasm tier's compiles Wasm (host/appcode.ts)
   if (tier === "js") compileAhead({ dexes: Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]),
     profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   // the archives LoadedApk's class loader reads
@@ -166,7 +176,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   writePrefsFiles(pkg);
   const labelAttr = appNode?.attrs.find((a) => a.name === "label");
 
-  onStatus("Loading resources…");
+  mark("dataReady"); onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
   registerApk(apkPath(), new Resources(arsc, zip, install.lazyEntries));
@@ -196,7 +206,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   hostWindowManager();
   setDisplayTarget(frame, present);
   displayHooks.requestOrientation = applyOrientationRequest;
-  onStatus("Starting app…");
+  mark("resourcesReady"); onStatus("Starting app…");
   await onMain(() => startActivityThread(!processName));
   return label;
 }

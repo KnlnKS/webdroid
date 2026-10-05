@@ -295,6 +295,19 @@ export class Bridge implements HostBridge {
     const r = this.w.unwound(() => call(...(m.isStatic ? [] : [recv]), ...given));
     return rk === "V" ? undefined : rk === "L" ? r : fromBits(r, m.ret);
   }
+  /** `call` on strand `s`, whose stack can wait: the Java value, or a Promise of it when the call waited */
+  callOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
+    const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
+    const call = this.w.callFn(`c:${m.cls}.${m.key}`, kinds, rk, (cx, c, arg) => {
+      if (m.isStatic) cx.emitEnsure(c, m.cls);
+      kinds.forEach((_, i) => arg(i));
+      cx.callMethod(c, m);
+    });
+    const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? a : toBits(a, m.params[i]));
+    const finish = (r: unknown) => rk === "V" ? undefined : rk === "L" ? r : fromBits(r as number | bigint, m.ret);
+    const r = call(s, ...(m.isStatic ? [] : [recv]), ...given);
+    return r instanceof Promise ? r.then(finish) : finish(r);
+  }
   /** field `f` of `o`, or of its class when static, as a Java value; the class of a static field is initialized by whoever found the field */
   read(f: FieldInfo, o: object | null): unknown {
     const raw = f.isStatic ? this.staticAccessor("get", f)() : this.accessor("get", f)(o);

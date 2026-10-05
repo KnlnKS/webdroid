@@ -13,6 +13,7 @@
 //   hostclass    classes the host implements: Java objects and their host objects are one object, a bytecode subclass of one, the JS tier's answers
 //   fuzz         random verifiable methods as Wasm, on the JS tier and on the JDK (seeds 1 to 6 unless arguments are given)
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
+//   nested       natives that enter Java, a thousand times in one entry (the engine's stacks)
 //   threads      threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK and the JS tier)
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
 //   conform      the scripts/conform suites on the Wasm tier against their baselines, the JS tier beside it: conform <suite|quick> [class]; conform-quick (a few classes of each kind) is in `all`
@@ -22,7 +23,8 @@
 //   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
 //                (not part of `all`; needs a build from `bun run aot`)
 // Tools: watdump prints the code generated for a method; `aot` (bun run aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process
-// loads (aot-build, then aot-startup), and makes that build the one the server offers.
+// loads (aot-build, then aot-startup), and makes that build the one the server offers. `aot-profile --classes`, `bun run aot`, `aot-profile` (in this order, with the server
+// running) regroup the build by what launches of apps use and write its startup list.
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,8 +35,8 @@ interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  threads: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
-  "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
+  threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, "aot-profile": { node: false, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
 

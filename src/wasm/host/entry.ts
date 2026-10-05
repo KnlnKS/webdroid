@@ -12,7 +12,7 @@ import type { Entry } from "../../jvm/natives/jentry";
 import type { JavaClass } from "../../jvm/tier";
 import type { FieldInfo, MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
-import { ThreadRec, type Strand } from "../link/sched";
+import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
 import type { Kind } from "../compiler/program";
@@ -20,6 +20,12 @@ import { fromBits, refOf, toBits } from "./bridge";
 import { count } from "./stats";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
+
+/** `f` as a call into Java made by whatever is running (a native, a JNI callback of a native's guest code), on a new strand of its thread: the result, or a Promise of it when it waited */
+const nested = new WeakMap<World, { onStrand<T>(f: (s: Strand) => T): T; thread(): ThreadRec }>();
+export const onNestedStrand = <T>(w: World, f: (s: Strand) => T): T => nested.get(w)!.onStrand(f);
+/** the Java thread whatever is running enters Java as */
+export const runningThread = (w: World): ThreadRec => nested.get(w)!.thread();
 
 export function wasmEntry(w: World): Entry {
   const { bridge, prog, sched } = w;
@@ -31,19 +37,21 @@ export function wasmEntry(w: World): Entry {
     if (!t) { t = new JThread(); jthreads.set(rec, t); recs.set(t, rec); }
     return t;
   };
-  /** the thread record of a JThread: a thread the host made enters Java as a thread of its own, with the Java Thread made when it first asks for it */
+  /** the Java thread a host thread (a binder thread, a native thread that attached, the JThread of a test) runs Java as: its own, made the first time it enters */
   const recOf = (t: JThread): ThreadRec => {
     if (t === mainThread) return sched.mainRec;
     let rec = recs.get(t);
-    if (!rec) { rec = new ThreadRec(null); rec.name = t.jname; recs.set(t, rec); jthreads.set(rec, t); }
+    if (!rec) { rec = sched.hostThread(); recs.set(t, rec); jthreads.set(rec, t); }
     return rec;
   };
-  sched.onThread = (rec) => setCurThread(jthreadOf(rec));
+  // what the host had as its current thread when it last entered Java from the top level, which it has again when no strand runs
+  let hostCurrent = curThread;
+  sched.onThread = (rec, idle) => setCurThread(idle ? hostCurrent : jthreadOf(rec));
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
   const nativeOf = (): Strand | null => { const s = sched.current(); return s.root ? sched.running?.root ? null : sched.running : s; };
   /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
   let entering: ThreadRec | null = null;
-  const threadNow = (): ThreadRec => entering ?? nativeOf()?.thread ?? sched.mainRec;
+  const threadNow = (): ThreadRec => entering ?? nativeOf()?.thread ?? recOf(curThread);
   const asThread = <T>(rec: ThreadRec, f: () => T): T => {
     const was = entering, prev = curThread;
     entering = rec; setCurThread(jthreadOf(rec));
@@ -51,12 +59,14 @@ export function wasmEntry(w: World): Entry {
   };
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
+    if (sched.current().root && !sched.running) hostCurrent = curThread;
     const s = sched.strand(threadNow(), nativeOf());
     let r: T;
     try { r = f(s); } catch (e) { s.end(); throw e; }
     if (r instanceof Promise) void r.then(() => s.end(), () => s.end()); else s.end();
     return r;
   };
+  nested.set(w, { onStrand, thread: threadNow });
   /** `f` as a call into Java: an exception that leaves it reaches the host as its throwable's facade */
   const enter = <T>(f: () => T): T => {
     count("wasmEntries");

@@ -30,9 +30,12 @@ export class Code {
   gget(i: number): this { this.b.push(0x23); uleb(i, this.b); return this; }
   gset(i: number): this { this.b.push(0x24); uleb(i, this.b); return this; }
   private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
-  call(f: number): this { this.mark(); this.b.push(0x10); uleb(f, this.b); return this; }
-  callIndirect(type: number, table = 0): this { this.mark(); this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
-  callRef(type: number): this { this.b.push(0x14); uleb(type, this.b); return this; }
+  /** the functions called directly, and the number of calls through a table or a reference: what a body may run besides its own instructions */
+  targets: number[] = [];
+  indirect = 0;
+  call(f: number): this { this.mark(); this.targets.push(f); this.b.push(0x10); uleb(f, this.b); return this; }
+  callIndirect(type: number, table = 0): this { this.mark(); this.indirect++; this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
+  callRef(type: number): this { this.indirect++; this.b.push(0x14); uleb(type, this.b); return this; }
   block(bt: number | VT | null = null): this { this.b.push(0x02); this.bt(bt); return this; }
   loop(bt: number | VT | null = null): this { this.b.push(0x03); this.bt(bt); return this; }
   if_(bt: number | VT | null = null): this { this.b.push(0x04); this.bt(bt); return this; }

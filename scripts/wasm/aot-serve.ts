@@ -1,8 +1,9 @@
 // The platform build's two routes, for the dev server and for scripts/wasm/boot-probe.ts:
 //   /aot/current.json    the build `bun run aot` made last, if it was made from these sources (a stale one would run code the compiler no longer produces)
 //   /aot/<key>/<file>    a file of that build, which never changes under its key
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { brotliCompressSync, constants } from "node:zlib";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { AOT_ROOT, sourceKey, type AotManifest } from "./aot-key";
 import { AOSP, ROOT } from "./paths";
@@ -25,9 +26,23 @@ export function aotManifest(): Response {
   return Response.json(manifest, { headers: { "cache-control": "no-cache" } });
 }
 
-export function aotFile(key: string, file: string): Response {
+const compressed = new Map<string, Uint8Array<ArrayBuffer>>();
+/** the production host compresses application/wasm for the browsers that accept it; so does the dev server, so that a page here transfers what it would there */
+function brotli(path: string): Uint8Array<ArrayBuffer> {
+  const key = path + statSync(path).mtimeMs;
+  let out = compressed.get(key);
+  if (!out) {
+    const bytes = readFileSync(path);
+    compressed.set(key, out = brotliCompressSync(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: 5, [constants.BROTLI_PARAM_SIZE_HINT]: bytes.length } }));
+  }
+  return out;
+}
+
+export function aotFile(key: string, file: string, acceptEncoding = ""): Response {
   if (!/^[0-9a-f]+$/.test(key) || !/^[\w.]+$/.test(file)) return new Response("nope", { status: 400 });
   const path = join(AOT_ROOT, key, file);
   if (!existsSync(path)) return new Response("not found", { status: 404 });
-  return new Response(Bun.file(path), { headers: { "content-type": file.endsWith(".wasm") ? "application/wasm" : "application/json", "cache-control": "public, max-age=31536000, immutable" } });
+  const headers: Record<string, string> = { "content-type": file.endsWith(".wasm") ? "application/wasm" : "application/json", "cache-control": "public, max-age=31536000, immutable", vary: "accept-encoding" };
+  if (!/\bbr\b/.test(acceptEncoding)) return new Response(Bun.file(path), { headers });
+  return new Response(brotli(path), { headers: { ...headers, "content-encoding": "br" } });
 }

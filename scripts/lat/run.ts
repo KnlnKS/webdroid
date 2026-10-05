@@ -1,7 +1,7 @@
 // Tap latency gate (docs/bytecode-first-plan.md §4.8): pointerup to the first presented frame
 // that shows the app's response, for every gated tap of a scenario.
 //
-//   bun run lat [scenario ...] [--gpu] [--warm] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
+//   bun run lat [scenario ...] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -28,17 +28,19 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
-const gpu = flag("--gpu"), warm = flag("--warm"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile");
+const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
 const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "methodsReached", "methodsCold", "coldCalls", "drawMs", "frameMs", "presentations", "presentLagMs",
   // populated under ?jvmProfile=1 only
+  // the Wasm tier
+  "wasmMethods", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
 type Tap = { m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number> };
 /** navigation to the first presented frame, and to the launch going idle, with the counters at the first frame */
-type Launch = { firstFrame: number; idle: number; perf: Record<string, number> };
+type Launch = { firstFrame: number; idle: number; perf: Record<string, number>; marks: string[] };
 
 const inPage = (steps: unknown, counters: string[]) => `(${async function run(steps: any[], counters: string[]) {
   const w = globalThis as any;
@@ -60,7 +62,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
   const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd?.perf[k] ?? 0]));
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   while (!(w.wd && w.wd.perf.draws > 0)) await sleep(5);
-  const firstFrame = Math.round(performance.now()), launchPerf = snapshot();
+  const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(snapshot()).filter(([, v]) => v));
   const idle = async (maxMs = 8000) => {
     const until = performance.now() + maxMs;
     let quiet = 0, draws = w.wd.perf.draws;
@@ -73,7 +75,11 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     }
   };
   await idle();
-  const launch = { firstFrame, idle: Math.round(performance.now()), perf: launchPerf };
+  // the launch timeline: the marks (src/perf.ts) of this realm and of the frames in it, in ms since this navigation
+  const marksOf = (win: Window, realm: string) => win.performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:"))
+    .map((e) => `${realm}:${e.name.slice(3)}:${Math.round(win.performance.timeOrigin + e.startTime - performance.timeOrigin)}`);
+  const marks = [...marksOf(window, "page"), ...[...document.querySelectorAll("iframe")].flatMap((f, i) => f.contentWindow ? marksOf(f.contentWindow, "frame" + i) : [])];
+  const launch = { firstFrame, idle: Math.round(performance.now()), perf: launchPerf, marks };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
   const ev = (type: string, x: number, y: number) => {
     const c = screen(), r = c.getBoundingClientRect();
@@ -131,7 +137,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     const au = changes.find((f) => f.t >= tu), after = au?.perf ?? snapshot();
     out.push({ m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
       settled: changes.length ? Math.round(changes.at(-1)!.t - t0) : null, frames: got.length,
-      perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10])) });
+      perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) });
     await idle();
   }
   document.title = "DONE:" + JSON.stringify({ launch, taps: out });
@@ -212,6 +218,7 @@ for (const name of names) {
     report.push({ scenario: name, launch: started, taps });
     const counters = Object.entries(started.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${Math.round(v)}`).join(" ");
     console.log(`     ${name.padEnd(12)} ${"launch".padEnd(14)} ${String(started.firstFrame).padStart(5)} ms  idle=${started.idle} ${counters}`);
+    if (timeline) for (const [realm, name, ms] of started.marks.map((m) => m.split(":")).sort((a, b) => +a[2] - +b[2])) console.log(`       ${ms.padStart(6)} ms  ${realm.padEnd(7)} ${name}`);
     for (const t of taps) {
       const over = t.afterUp === null || t.afterUp > LIMIT_MS;
       failed ||= over;

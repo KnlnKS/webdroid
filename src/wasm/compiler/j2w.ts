@@ -64,6 +64,10 @@ export class Compiler implements Base {
   private owner?: MethodInfo;
   /** the installed method of the unit being compiled, which the CHA decisions of every method in it count against */
   private assumer?: MethodInfo;
+  private install = false;
+  private codes = new Map<string, Code | null>();
+  /** the frame weight of the methods of this unit that count no depth, with everything they call (a leaf, or a method that calls only such methods) */
+  bound = new Map<string, number>();
   str: StringRepr;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
@@ -90,6 +94,15 @@ export class Compiler implements Base {
       proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), claim: f("claim", [T.externref, T.i64], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     this.str.importBuiltins();
+    // the imports that cannot run Java code
+    const { mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block } = this.imp, runsJava = new Set([mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block]);
+    this.hostSafe = new Set(Array.from({ length: mb.nImportedFuncs }, (_, i) => i).filter((i) => !runsJava.has(i)));
+  }
+  private hostSafe: Set<number>;
+  /** whether the body `c` can run Java code beyond itself: it calls through a table, an import that may, or a method of this unit */
+  runsJava(c: Code): boolean {
+    const methods = new Set(this.fn.values());
+    return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? !this.hostSafe.has(f) : methods.has(f)));
   }
   get natives() { return this.w.natives; }
   intrinsic(m: MethodInfo): Intrinsic | undefined { return this.w.intrinsic(m); }
@@ -167,6 +180,26 @@ export class Compiler implements Base {
     if (!f) throw new Error(`static ${owner}.${name} not found`);
     return this.classGlobal(owner, "s:" + name + ":" + f.desc, this.vtOf(f.kind));
   }
+  /** the frame weight of `m` and what it calls, if it is a direct call of this unit and counts no depth. A method is compiled before its first caller finishes
+   *  its prologue; a method that is being compiled (a cycle) has no bound */
+  boundOf(m: MethodInfo): number | undefined {
+    if (!this.direct || !this.fn.has(mid(m))) return undefined;
+    this.compiled(m);
+    return this.bound.get(mid(m));
+  }
+  /** compiles `m` once, with the unit's state for it */
+  compiled(m: MethodInfo): Code | undefined {
+    const id = mid(m);
+    if (this.codes.has(id)) return this.codes.get(id) ?? undefined;
+    const owner = this.owner, assumer = this.assumer;
+    this.codes.set(id, null);
+    this.owner = m; this.assumer = this.install ? m : this.head;
+    const code = compileMethod(this, m);
+    this.owner = owner; this.assumer = assumer;
+    this.codes.set(id, code);
+    return code;
+  }
+  private head?: MethodInfo;
   /** calls `m`: directly when this module defines it, else through its table slot (a lazy-link stub until it is compiled) */
   callMethod(c: Code, m: MethodInfo): void {
     const f = this.direct ? this.fn.get(mid(m)) : undefined;
@@ -227,6 +260,7 @@ export class Compiler implements Base {
   callRt(c: Code, name: string): void {
     const d = rtfns.get(name)!;
     c.i32(this.w.synthSlot(name, d)).callIndirect(this.sig(d.params, d.ret));
+    if (d.pure) c.indirect--;
   }
   /** host.info(kind, a, b): what the host knows about classes, see World.info */
   info(c: Code, kind: number, a: () => void, b: () => void = () => c.i32(0)): Code { c.i32(kind); a(); b(); return c.call(this.imp.info); }
@@ -400,38 +434,36 @@ export class Compiler implements Base {
         c.lget(0).refAsNonNull().lget(p).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_add).arraySet(tVT).end();
         return c.lget(slot).finish();
       }];
-      // the header word: the identity hash in its low half, the monitor (thin lock owner and count, or an inflated monitor's index) in its high half
+      // the header word: the monitor (thin lock owner and count, or an inflated monitor's index) in its low half, the identity hash in its high half
       case "hash": return [t([L], [T.i32]), () => {
         const c = new Code(1), w = c.newLocal(T.i64), hv = c.newLocal(T.i32), g = this.global("rt", "hash", T.i32, true);
         c.lget(0).refTest(tObj).raw(OP.i32_eqz).if_().lget(0).call(this.helper("shash")).ret().end();
-        c.lget(0).refCast(tObj).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64).ltee(hv).raw(OP.i32_eqz).if_()
+        c.lget(0).refCast(tObj).structGet(tObj, 1).ltee(w).i64(32n).raw(OP.i64_shr_u, OP.i32_wrap_i64).ltee(hv).raw(OP.i32_eqz).if_()
           .gget(g).i32(0x3c6ef372 | 0).raw(OP.i32_add).ltee(hv).gset(g)
-          .lget(0).refCast(tObj).lget(w).i64(0xffffffff00000000n).raw(OP.i64_and).lget(hv).raw(OP.i64_extend_i32_u, OP.i64_or).structSet(tObj, 1).end();
+          .lget(0).refCast(tObj).lget(w).lget(hv).raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl, OP.i64_or).structSet(tObj, 1).end();
         return c.lget(hv).finish();
       }];
-      // menter(obj), mexit(obj): the thin lock of the header word's high half (monitor.ts): the owning strand's id << 8 | count; anything else is the host's
+      // menter(obj), mexit(obj): the thin lock in the header word's low half (monitor.ts): the owning strand's id << 8 | count. `lock ^ id << 8` is the count when the
+      // strand holds the lock, so one unsigned compare tells that from free, another strand's and inflated (negative); anything but those cases is the host's
       case "menter": case "mexit": {
         const enter = name === "menter";
         return [t([L], []), () => {
-          const c = new Code(1), o = c.newLocal(refNull(tObj)), w = c.newLocal(T.i64), l = c.newLocal(T.i32), s = c.newLocal(T.i32);
-          c.gget(this.global("rt", "sid", T.i32, true)).lset(s);
-          c.lget(0).refCast(tObj).ltee(o).structGet(tObj, 1).ltee(w).i64(32n).raw(OP.i64_shr_u, OP.i32_wrap_i64).lset(l);
-          const store = (v: () => void) => { c.lget(o).refAsNonNull(); v(); c.structSet(tObj, 1); };
-          const ours = () => c.lget(l).i32(8).raw(OP.i32_shr_u).lget(s).raw(OP.i32_eq);
+          const c = new Code(1), o = c.newLocal(ref(tObj)), w = c.newLocal(T.i64), l = c.newLocal(T.i32), s8 = c.newLocal(T.i32);
+          c.gget(this.global("rt", "sid", T.i32, true)).i32(8).raw(OP.i32_shl).lset(s8);
+          c.lget(0).refCast(tObj).ltee(o).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64).lset(l);
+          const store = (v: () => void) => { c.lget(o).lget(w); v(); c.raw(enter ? OP.i64_add : OP.i64_sub).structSet(tObj, 1); };
           if (enter) {
             c.lget(l).raw(OP.i32_eqz).if_();
-            store(() => c.lget(w).lget(s).i32(8).raw(OP.i32_shl).i32(1).raw(OP.i32_or).raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl, OP.i64_or));
+            store(() => c.lget(s8).i32(1).raw(OP.i32_or, OP.i64_extend_i32_u));
             c.ret().end();
-            ours().lget(l).i32(255).raw(OP.i32_and).i32(255).raw(OP.i32_ne).raw(OP.i32_and).if_();
-            store(() => c.lget(w).i64(1n << 32n).raw(OP.i64_add));
+            c.lget(l).lget(s8).raw(OP.i32_xor).i32(255).raw(OP.i32_lt_u).if_();
+            store(() => c.i64(1n));
             c.ret().end();
           } else {
-            ours().if_();
-            c.lget(l).i32(255).raw(OP.i32_and).i32(1).raw(OP.i32_eq).if_();
-            store(() => c.lget(w).i64(0xffffffffn).raw(OP.i64_and));
-            c.else_();
-            store(() => c.lget(w).i64(1n << 32n).raw(OP.i64_sub));
-            c.end().ret().end();
+            c.lget(l).lget(s8).raw(OP.i32_xor).lset(s8);
+            c.lget(s8).i32(256).raw(OP.i32_lt_u).if_();
+            store(() => c.lget(l).raw(OP.i64_extend_i32_u).i64(1n).lget(s8).i32(1).raw(OP.i32_eq).select());
+            c.ret().end();
           }
           c.lget(0); this.callRt(c, enter ? "menterSlow" : "mexitSlow");
           return c.finish();
@@ -475,8 +507,8 @@ export class Compiler implements Base {
     const label = (m: MethodInfo, i: number) => (hot || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
     all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
-    this.direct = !install;
-    const codes = all.map((m) => { this.owner = m; this.assumer = install ? m : methods[0]; return compileMethod(this, m); });
+    this.direct = !install; this.install = install; this.head = methods[0];
+    const codes = all.map((m) => this.compiled(m)!);
     phase.emit += performance.now() - t0 - (phase.prepare + phase.flow + phase.infer + phase.facts - analysed);
     const at: [number, number][] = [];
     all.forEach((m, i) => {

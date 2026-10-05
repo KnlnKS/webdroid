@@ -4,7 +4,7 @@ import type { Code } from "./code";
 import type { Kind } from "./program";
 import type { Compiler } from "./j2w";
 
-export interface Synth { params: Kind[]; ret: Kind | "V"; body: (cx: Compiler, c: Code) => void }
+export interface Synth { params: Kind[]; ret: Kind | "V"; body: (cx: Compiler, c: Code) => void; pure?: boolean }
 export const rtfns = new Map<string, Synth>();
-/** registers the runtime function `name` */
-export const rt = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void) => rtfns.set(name, { params, ret, body });
+/** registers the runtime function `name`; a pure one runs no Java code, which the compiler counts on to leave frames that call only such functions out of the depth */
+export const rt = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, pure = false) => rtfns.set(name, { params, ret, body, pure });

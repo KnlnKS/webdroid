@@ -84,7 +84,7 @@ rt("uget", ["L", "I", "I"], "J", (cx, c) => {
     c.lget(res).ret().end();
   }
   cx.gap(c, "Unsafe: a read of this array"); c.i64(0n);
-});
+}, true);
 // uput(array, byte offset, width, value): the low `width` bytes of value into the array from that offset
 rt("uput", ["L", "I", "I", "J"], "V", (cx, c) => {
   const k = c.newLocal(T.i32), at = c.newLocal(T.i32), shift = c.newLocal(T.i32);
@@ -102,7 +102,7 @@ rt("uput", ["L", "I", "I", "J"], "V", (cx, c) => {
     c.lget(k).i32(1).raw(OP.i32_add).lset(k).br(0).end().end().ret().end();
   }
   cx.gap(c, "Unsafe: a write of this array");
-});
+}, true);
 
 export const unsafeIntrinsics = new Map<string, Intrinsic>();
 /** the internal class and the one apps know (sun.misc.Unsafe, whose accessors are natives of the same shapes under older names) */

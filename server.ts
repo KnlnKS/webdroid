@@ -156,7 +156,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
     "/aot/current.json": aotManifest,
-    "/aot/:key/:file": (req) => aotFile(req.params.key, req.params.file),
+    "/aot/:key/:file": (req) => aotFile(req.params.key, req.params.file, req.headers.get("accept-encoding") ?? ""),
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
     "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
     "/harfbuzz.wasm": () => serveFile("node_modules/harfbuzzjs/dist", "harfbuzz.wasm"),

@@ -12,6 +12,11 @@ import { emitPolymorphic } from "./poly";
 import { emitCustom } from "./custom";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
+import { countedLoops } from "./loops";
+import { MAX_UNCOUNTED } from "../link/exc";
+
+/** the calls of a method that may count its frame around themselves instead of in a prologue */
+const MAX_SITES = 2;
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
@@ -20,15 +25,16 @@ const FLOAT_LOCALS = true;
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
+  const leaf = (c: Code) => { if (!cx.runsJava(c)) cx.bound.set(mid(m), 4 + nparams + c.localTypes.length); return c; };
   const intr = cx.intrinsic(m);
-  if (intr) { const c = new Code(nparams); intr(cx, m, c); return c; }
-  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return c; }
+  if (intr) { const c = new Code(nparams); intr(cx, m, c); return leaf(c); }
+  if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return leaf(c); }
   try {
     const mc = new MC(cx, m);
     mc.run();
     return mc.weigh();
   } catch (e) {
-    const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return c;
+    const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return leaf(c);
   }
 }
 
@@ -141,7 +147,7 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    if (prepared.instructions.some((i) => i.name.startsWith("invoke"))) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -152,15 +158,22 @@ export class MC {
     }
     this.regionLocal = c.newLocal(T.i32);
     if (!this.tries) this.excLocal = c.newLocal(T.anyref);
-    this.push("$disp"); c.loop(); this.fuel();
+    this.push("$disp"); c.loop();
     if (this.tries) {
       this.push("$caught"); c.block(T.anyref);
       c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
     }
+    // the method's own entry is region 0 and falls into it; only a jump from a handler or another region chooses by region (and gives other strands a turn)
     const n = regions.length;
-    for (let k = n - 1; k >= 0; k--) { this.push("$R" + k); c.block(); }
-    c.lget(this.regionLocal).brTable(Array.from({ length: n }, (_, k) => k), n - 1);
-    for (let k = 0; k < n; k++) { this.pop(); c.end(); this.emitRegion(k); c.unreachable(); }
+    for (let k = n - 1; k >= 1; k--) { this.push("$R" + k); c.block(); }
+    if (n > 1) {
+      c.lget(this.regionLocal).if_(); this.push("if");
+      this.fuel();
+      c.lget(this.regionLocal).brTable(Array.from({ length: n }, (_, k) => Math.max(k, 1)), n - 1);
+      this.pop(); c.end();
+    }
+    this.emitRegion(0); c.unreachable();
+    for (let k = 1; k < n; k++) { this.pop(); c.end(); this.emitRegion(k); c.unreachable(); }
     if (this.tries) {
       this.pop(); c.end();                          // try_table
       c.unreachable();
@@ -180,9 +193,9 @@ export class MC {
    *  elements only (the kernels) has no fuel check, which cost them 40 to 150%; it ends by itself or is a hang in any VM */
   private waiting = new Set<number>();
   private findWaiting(): void {
-    const ins = this.prepared.instructions;
+    const ins = this.prepared.instructions, counted = countedLoops(this.prepared, this.item, this.typing);
     for (const b of ins) for (const t of branchTargets(this.item, b)) {
-      if (t > b.pc || this.waiting.has(t)) continue;
+      if (t > b.pc || this.waiting.has(t) || counted.has(t)) continue;
       if (ins.some((x) => x.pc >= t && x.pc <= b.pc && /^(invoke|monitor|[is]get)/.test(x.name))) this.waiting.add(t);
     }
   }
@@ -191,7 +204,74 @@ export class MC {
   private weights: number[] = [];
   private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
   /** gives the frame the weight of its parameters and locals */
-  weigh(): Code { for (const at of this.weights) this.code.patch(at, 4 + this.code.nparams + this.code.localTypes.length); return this.code; }
+  weigh(): Code {
+    const own = 4 + this.code.nparams + this.code.localTypes.length;
+    for (const at of this.weights) this.code.patch(at, own);
+    if (this.entryDepth < 0 && this.boundable) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
+    return this.code;
+  }
+  /** the weight of the heaviest method this one calls, once it counts no depth */
+  private calleeWeight = 0;
+  /** the calls that count the frame around themselves (planDepth) */
+  private sites = new Set<string>();
+  /** whether the calls that count their own frame are all on paths that throw, so a caller need not count its frame for the method */
+  private boundable = true;
+  private siteLocal = -1;
+  private enterSite() { if (this.siteLocal < 0) this.siteLocal = this.code.newLocal(T.i32); this.weights.push(...this.cx.emitEnter(this.code, this.siteLocal)); }
+  private leaveSite() { this.cx.emitLeave(this.code, this.siteLocal, false); }
+  /** how the method counts its frame against the depth limit (exc.ts MAX_DEPTH): not at all when it calls only methods of its unit that count none and is small with
+   *  them, since the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones; around the one or two calls that are
+   *  not such methods (a slow path, a recursion); else for the whole frame. Answers whether it is for the whole frame, which a handler must restore */
+  private planDepth(): boolean {
+    const calls = this.prepared.instructions.filter((i) => i.name.startsWith("invoke"));
+    if (!calls.length) return false;
+    if (this.tries) return true;
+    const open: string[] = [], cold: string[] = [], ends = new Map<number, string>(this.blockIns.flatMap((b) => b.map((i) => [i.pc, b[b.length - 1].name] as const))), throws = (ins: Ins) => ends.get(ins.pc) === "throw";
+    const bounded = (m: MethodInfo | "dynamic") => { const w = m === "dynamic" ? undefined : this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
+    for (const ins of calls) {
+      const t = this.callee(ins), key = String(ins.pc), virtual = this.virtuals.get(ins.pc);
+      if (t === null) continue;
+      if (/custom|polymorphic/.test(ins.name)) return true;
+      // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
+      if (virtual && this.cx.guards(...virtual).length) {
+        for (const g of this.cx.guards(...virtual)) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
+        cold.push(key + ":f");
+      } else if (!bounded(t)) {
+        // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
+        (throws(ins) ? cold : open).push(key);
+      }
+    }
+    // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue
+    const loops = this.prepared.instructions.flatMap((b) => branchTargets(this.item, b).filter((t) => t <= b.pc).map((t) => [t, b.pc]));
+    if (open.some((k) => loops.some(([from, to]) => +k.split(":")[0] >= from && +k.split(":")[0] <= to))) return true;
+    if (this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
+    this.sites = new Set([...open, ...cold]);
+    this.boundable = open.length === 0;
+    return false;
+  }
+  private callees = new Map<number, MethodInfo | null | "dynamic">();
+  /** the declaration of each virtual call whose target is not unique */
+  private virtuals = new Map<number, [string, string, string]>();
+  /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
+  callee(ins: Ins): MethodInfo | null | "dynamic" {
+    let r = this.callees.get(ins.pc);
+    if (r === undefined) this.callees.set(ins.pc, r = this.resolveCallee(ins));
+    return r;
+  }
+  private resolveCallee(ins: Ins): MethodInfo | null | "dynamic" {
+    const cx = this.cx, dex = this.dex, kind = ins.name.replace("/range", "");
+    if (kind === "invoke-custom" || kind === "invoke-polymorphic") return "dynamic";
+    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = descToName(dex.type(mr.cls)), decl = declared[0] === "[" ? "java/lang/Object" : declared;
+    if (declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;") return null;
+    const target = resolveInvoke(cx.prog, kind, declared, mr.name, desc, this.m.cls);
+    if (failed(target)) return null;
+    if (kind === "invoke-static") return target;
+    if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") return "dynamic";
+    if (kind === "invoke-direct" || kind === "invoke-super") return target;
+    const only = cx.devirt(decl, mr.name, desc);
+    if (only === "many") this.virtuals.set(ins.pc, [decl, mr.name, desc]);
+    return only === "many" ? "dynamic" : only;
+  }
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
   depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
@@ -355,7 +435,7 @@ export class MC {
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
       case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
-      case "monitor-enter": case "monitor-exit": this.nonNull(a); c.call(cx.helper(ins.name === "monitor-enter" ? "menter" : "mexit")); return;
+      case "monitor-enter": case "monitor-exit": this.nonNull(a); this.monitor(ins.name === "monitor-enter"); return;
       case "check-cast": {
         if (this.unresolved(dex.type(b))) return;
         const name = descToName(dex.type(b));
@@ -414,6 +494,19 @@ export class MC {
     if (n.startsWith("sget") || n.startsWith("sput")) return this.emitStatic(ins);
     if (n.startsWith("invoke")) return this.emitInvoke(ins);
     this.emitArith(ins);
+  }
+  private monObj = -1; private monHdr = -1;
+  /** monitor-enter or -exit of the object on the stack: the uncontended lock of a free object, and the release of a lock held once, inline; the rest is the helper's (j2w.ts menter) */
+  private monitor(enter: boolean) {
+    const c = this.code, cx = this.cx, tObj = cx.tObj;
+    if (this.monObj < 0) { this.monObj = c.newLocal(ref(tObj)); this.monHdr = c.newLocal(T.i64); }
+    const o = this.monObj, w = this.monHdr, tok = () => c.gget(cx.global("rt", "sid", T.i32, true)).i32(8).raw(OP.i32_shl).i32(1).raw(OP.i32_or);
+    c.lset(this.tmpL).lget(this.tmpL).refCast(tObj).lset(o).lget(o).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64);
+    if (enter) c.raw(OP.i32_eqz); else { tok(); c.raw(OP.i32_eq); }
+    c.if_();
+    c.lget(o).lget(w);
+    if (enter) tok().raw(OP.i64_extend_i32_u, OP.i64_add); else c.lget(w).raw(OP.i32_wrap_i64, OP.i64_extend_i32_u, OP.i64_sub);
+    c.structSet(tObj, 1).else_().lget(this.tmpL).call(cx.helper(enter ? "menter" : "mexit")).end();
   }
   /** a 32-bit constant: an int, float bits, or (zero) null, as its web's kind says */
   constNarrow(v: number) {
@@ -598,20 +691,23 @@ export class MC {
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     const target = resolveInvoke(prog, kind, declared, mr.name, desc, this.m.cls);
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
+    const site = this.sites.has(String(ins.pc));
+    if (site) this.enterSite();
+    const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
     if (isStatic) {
       const t = target;
       this.ensure(t.cls); pushArgs(); cx.callMethod(c, t);
     } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
-      pushArgsFrom(this, ins, p.params); c.call(make); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
+      pushArgsFrom(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
       const t = target;
       this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, t);
     } else {
       // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
-      const only = cx.devirt(decl, mr.name, desc), declC = prog.get(decl);
-      if (only !== "many") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
+      const only = this.callee(ins) as MethodInfo | "dynamic", declC = prog.get(decl);
+      if (only !== "dynamic") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
       else {
         // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
         const guards = cx.guards(decl, mr.name, desc), recv = () => { c.lget(this.tmpL); pushArgsFrom(this, ins, p.params); };
@@ -635,12 +731,13 @@ export class MC {
         if (guards.length) {
           const slot = this.slotLocal(), type = sigIdx();
           c.lset(slot);
-          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type).call(cx.fn.get(mid(g))!).else_(); }
-          c.lget(slot).callIndirect(type);
+          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => c.call(cx.fn.get(mid(g))!)); c.else_(); }
+          c.lget(slot); wrap("f", () => c.callIndirect(type));
           for (const _ of guards) c.end();
         } else c.callIndirect(sigIdx());
       }
     }
+    if (site) this.leaveSite();
     this.finishResult(ins, retK);
   }
   slotl = -1;

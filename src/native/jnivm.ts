@@ -14,8 +14,8 @@ export interface JniMethod { cls: JniClass; name: string; desc: string; isStatic
 
 export interface JniVm {
   // ---------- classes
-  /** FindClass: the class `name` of the library's loader (`owner`), linked but not initialized; null when there is none */
-  find(name: string, owner: Runtime | null): JniClass | null;
+  /** FindClass: the class `name` of the library's loader (`owner`), or of the loader of `from`, the class of the native method that asks, linked but not initialized; null when there is none */
+  find(name: string, owner: Runtime | null, from?: JniClass | null): JniClass | null;
   /** the runtime a class was loaded by, when it is not the default one */
   owner(c: JniClass): Runtime | null;
   /** the java.lang.Class of a class */

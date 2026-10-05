@@ -1,10 +1,34 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex) or on the production JS tier,
 // timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AotStore } from "../../src/wasm/link/aot";
+import { FetchStore } from "../../src/wasm/link/aotstore";
+import { compileBytes } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { jsTier, natives, processState } from "./oracle";
 import { HEAP_LIMIT } from "../../src/wasm/link/exc";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
+
+/** the build is opened the way the app opens it: the index and the modules a start loads are compiled before the World runs. A page fetches them (and a module it lacks is a miss);
+ *  node reads them, and reads any other module when it is wanted. */
+const inPage = !!(globalThis as { document?: unknown }).document;
+const aotDir = (globalThis as { G1_AOT?: string }).G1_AOT ?? (inPage ? undefined : process.env.WEBDROID_AOT);
+if (aotDir) {
+  const t0 = performance.now();
+  if (inPage) {
+    const store = new FetchStore(`/aot/${aotDir.split("/").pop()}/`);
+    await store.fetchBytes("index.json");
+    await store.prefetch(JSON.parse(new TextDecoder().decode(await store.fetchBytes("startup.json"))) as string[]);
+    (globalThis as { G1_STORE?: AotStore }).G1_STORE = store;
+  } else {
+    const ahead = new Map<string, WebAssembly.Module>(), file = (f: string) => new Uint8Array(readFileSync(join(aotDir, f)));
+    await Promise.all((JSON.parse(readFileSync(join(aotDir, "startup.json"), "utf8")) as string[]).map(async (f) => ahead.set(f, await compileBytes(file(f)))));
+    (globalThis as { G1_STORE?: AotStore }).G1_STORE = { get: (f) => ahead.get(f) ?? file(f) };
+  }
+  (globalThis as { G1_AHEAD?: number }).G1_AHEAD = performance.now() - t0;
+}
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
 export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }

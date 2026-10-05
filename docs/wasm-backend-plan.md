@@ -1022,6 +1022,296 @@ main looper running (C3), and four implement a Java interface with a host object
 JS tier's own count. The exercises need host code that waits (a font file, a decode), so the harness enters Java on strands (`scripts/wasm/strandentry.ts`, outside natives only; Track C3's entry replaces it).
 **Open.** The pinned divergences above; `desccheck` and `conform-quick` are in `all`, the full suites (25 minutes) and `fwtest` are not.
 
+### 4.16 W3: generated-code speed after the locks, fuel and depth of C (2026-10-04, `knlnks/wasm-w3`)
+
+Load average was 4 to 20 on 14 cores while this was measured (other agents), so single rows move by 5 to 15% between runs; every A/B below alternated the two builds
+(`/tmp`-side scripts over two worktrees) and took medians of 3 to 5. Node 24.19 and Chrome 153.
+
+**Where the C regressions came from** (node steady ms, `NOFUEL`/`NODEPTH` switches in the emitter): `virtualMono` 0.078 with both checks, 0.035 without fuel, 0.075 without depth; `allocLoop` 0.029 / 0.020 / 0.019, both off 0.013 (pre-C 0.012);
+`listAddGet` 0.047 / 0.044 / 0.038, both off 0.033; `mapInt` 0.116 / 0.111 / 0.094, both off 0.088; `random` 0.095 / 0.090 / 0.077, both off 0.067. So fuel and depth are all of the
+tight-loop loss; **the i64 header is not**: with fuel and depth off, `allocLoop` is within 0.001 ms of pre-C, so allocation does not pay for the 64-bit word (the two layouts, `[vt, i64]` and `[vt, i32, i32]`, are the same 8 bytes) and the layout was left alone.
+Only `monitors` has a real cost left (0.096 -> 0.135 with both off), the lock itself.
+
+**What changed**
+- *Fuel only where a loop can wait* (`compiler/loops.ts`). A loop whose exit test compares an int that every iteration steps by a constant toward the bound, tested in the head's block (or by the only back edge), ends by itself in at most 2^32 iterations and gets no check;
+  a counter that moves only when something else decides (`while (i < 3) { if (flag) i++; }`) or a test reached only then (`Th.spinStep`, `Th.spinTest`) keeps it, and both hang without it. `virtualMono` 0.078 -> 0.036 (node), `allocLoop` 0.029 -> 0.019, `linkedNodes` 0.130 -> 0.068, `fieldLoop` 0.093 -> 0.076.
+  Chrome 153 is the other way for the smallest kernels: `virtualMono` 0.085 -> 0.120..0.135, `fieldLoop` 0.060 -> 0.075, `syncBlock` 0.125 -> 0.230 are faster *with* the check in the loop (the same loop with the check kept gives the old numbers), and `--no-wasm-loop-unrolling` takes `fieldLoop` to 0.050; no flag moves `virtualMono`. The loops that gained in Chrome:
+  `linkedNodes` 0.145 -> 0.075, `hashSet` 0.130 -> 0.095, `listAddGet` 0.045 -> 0.035, `virtualBi` 0.170 -> 0.135. Kept: net positive in both engines.
+- *The dispatch loop of methods with handlers* falls into region 0 and tests the region only on a re-dispatch, where the fuel check now is (it ran on every call before). Neutral on time, smaller code.
+- *Depth by weight, not by default* (`method.ts planDepth`). A method that calls only methods of its unit that count nothing, and weighs at most `MAX_UNCOUNTED` (512) with them, counts nothing; one with one or two other calls counts around those calls, not in a prologue; the dispatch behind a guarded virtual call and the constructor of an exception thrown right after are cold and counted around themselves
+  without making the caller count; a call in a loop, a method with handlers and more than two such calls keep the prologue. A leaf is a function that runs no Java (`Compiler.runsJava`: no table call, no import that can enter Java, no method of the unit; `rt()` functions marked `pure`, the `libcore.io.Memory` natives). The soundness argument: the engine's stack holds the limit twice over, and the uncounted frames
+  on top of counted ones weigh at most 512; a recursion cannot pass only through uncounted frames except by throwing, so **the throwers now add 512 to the depth** (an exception whose construction throws would otherwise recurse without a counted frame: the first version of this overflowed the engine at boot through a missing native, which is how it was found).
+  Steady ms (node, before -> after): `mapInt` 0.113 -> 0.099, `listAddGet` 0.045 -> 0.039, `random` 0.092 -> 0.085, `allocLoop` 0.028 -> 0.020, `dbInts` 0.167 -> 0.115, `bbInts` 0.325 -> 0.229 in the good mode (below), `strBuild` 0.150 -> 0.137.
+- *Thin locks* are 4 bytes of identity hash in the high half and the lock in the low half of the header word (`lock ^ id << 8` is the count when the strand holds it: one unsigned compare), and `monitor-enter`/`-exit` do the free-object lock and the release of a lock held once inline, calling `menter`/`mexit` for the rest. `syncCall` 0.394 -> 0.246 against the first version of the depth work; `monitors` 0.163 -> 0.151.
+- *Harness*: `/tmp/g1` is per checkout now (`G1_DIR`), `watdump` runs under node on a booted process, new workloads `syncCall`, `syncBlock`, `plainCall`, `tryCall`, `idHash`.
+
+**The tables** (all 74 workloads that match; the geometric means are over everything):
+
+**node v24.19.0 (V8 13.6), no platform build (compiled on demand)**, 3 runs x 100 reps, medians in ms; before = `eeb222b3`, after = this branch (before the loop-site fix of the last commit: `sort`, `bbInts`, `dbInts` in Chrome moved by it, see the text). First call: Wasm first call, before / after.
+
+| workload | JS steady | before | after | js/wasm before | js/wasm after | first before | first after |
+|---|---|---|---|---|---|---|---|
+| sha256 | 0.447 | 0.908 | 0.899 | 0.49x | 0.50x | 445.8 | 456.4 |
+| ecdsaVerify | 0.351 | 0.350 | 0.350 | 1.00x | 1.00x | 468.5 | 479.1 |
+| certParse | 0.154 | 0.131 | 0.129 | 1.18x | 1.19x | 838.6 | 897.0 |
+| listAddGet | 0.079 | 0.045 | 0.039 | 1.74x | 2.04x | 39.2 | 35.2 |
+| listIter | 0.110 | 0.082 | 0.079 | 1.34x | 1.40x | 47.7 | 41.5 |
+| listRemove | 1.927 | 0.667 | 0.655 | 2.89x | 2.94x | 34.6 | 20.9 |
+| mapStr | 0.223 | 0.106 | 0.107 | 2.10x | 2.09x | 30.6 | 7.2 |
+| mapInt | 0.163 | 0.113 | 0.099 | 1.45x | 1.64x | 34.0 | 7.4 |
+| mapWalk | 0.298 | 0.154 | 0.163 | 1.94x | 1.83x | 36.3 | 40.3 |
+| linkedMap | 0.218 | 0.108 | 0.102 | 2.01x | 2.13x | 45.3 | 17.1 |
+| hashSet | 0.205 | 0.093 | 0.095 | 2.20x | 2.15x | 37.6 | 10.7 |
+| smallAlloc | 0.109 | 0.041 | 0.043 | 2.65x | 2.55x | 7.2 | 7.5 |
+| deque | 0.116 | 0.061 | 0.049 | 1.89x | 2.36x | 46.4 | 43.1 |
+| treeMap | 0.404 | 0.216 | 0.207 | 1.87x | 1.96x | 37.5 | 39.1 |
+| sort | 0.299 | 0.244 | 0.278 | 1.22x | 1.08x | 44.0 | 59.3 |
+| mix | 1.315 | 0.679 | 0.621 | 1.94x | 2.12x | 64.0 | 42.1 |
+| linkedList | 0.081 | 0.045 | 0.037 | 1.78x | 2.22x | 33.5 | 18.4 |
+| b64java | 0.861 | 0.696 | 0.684 | 1.24x | 1.26x | 49.5 | 33.6 |
+| b64android | 0.649 | 0.571 | 0.568 | 1.14x | 1.14x | 37.5 | 59.0 |
+| jsonParse | 3.425 | 2.185 | 2.097 | 1.57x | 1.63x | 107.5 | 136.9 |
+| jsonWrite | 7.762 | 5.030 | 4.906 | 1.54x | 1.58x | 144.7 | 185.2 |
+| scanTokens | 9.487 | 15.215 | 14.814 | 0.62x | 0.64x | 1003.7 | 1067.9 |
+| scanLines | 3.855 | 6.019 | 6.036 | 0.64x | 0.64x | 996.2 | 1042.3 |
+| format | 2.319 | 1.373 | 1.342 | 1.69x | 1.73x | 94.8 | 140.0 |
+| dtoa | 1.296 | 0.449 | 0.445 | 2.89x | 2.91x | 49.7 | 88.6 |
+| parseFail | 8.125 | 2.409 | 2.433 | 3.37x | 3.34x | 15.7 | 20.6 |
+| parseFailMixed | 6.977 | 2.296 | 2.230 | 3.04x | 3.13x | 42.4 | 22.4 |
+| fbLoop | 0.133 | 0.218 | 0.202 | 0.61x | 0.66x | 66.2 | 27.5 |
+| fbBulk | 0.040 | 0.074 | 0.070 | 0.54x | 0.57x | 38.5 | 18.6 |
+| bbInts | 0.187 | 0.321 | 0.376 | 0.58x | 0.50x | 65.2 | 62.2 |
+| dbInts | 0.357 | 0.167 | 0.115 | 2.13x | 3.11x | 63.0 | 40.3 |
+| casts | 2.370 | 0.336 | 0.325 | 7.05x | 7.30x | 50.8 | 19.8 |
+| monitors | 0.220 | 0.163 | 0.151 | 1.35x | 1.46x | 39.4 | 29.6 |
+| random | 0.594 | 0.092 | 0.085 | 6.45x | 6.98x | 55.0 | 19.0 |
+| strConcat | 0.027 | 0.067 | 0.064 | 0.40x | 0.42x | 21.3 | 15.3 |
+| zipOpen | 0.489 | 0.448 | 0.584 | 1.09x | 0.84x | 504.3 | 490.9 |
+| inetCached | 12.252 | 2.749 | 2.912 | 4.46x | 4.21x | 32.1 | 79.5 |
+| ssbAppend | 0.333 | 0.190 | 0.188 | 1.75x | 1.77x | 40.6 | 59.9 |
+| ssbEdit | 0.333 | 0.110 | 0.108 | 3.04x | 3.07x | 60.0 | 58.1 |
+| ssbGetSpans | 0.904 | 0.709 | 0.702 | 1.28x | 1.29x | 53.7 | 41.6 |
+| spannedCopy | 0.250 | 0.139 | 0.140 | 1.79x | 1.79x | 19.4 | 26.5 |
+| linkify | 0.033 | 0.025 | 0.024 | 1.31x | 1.38x | 78.1 | 76.8 |
+| loopOnce | 43.959 | 8.224 | 7.798 | 5.35x | 5.64x | 42.3 | 40.5 |
+| loopChunk | 8.237 | 8.247 | 7.787 | 1.00x | 1.06x | 14.8 | 34.9 |
+| divLoop | 4.680 | 0.428 | 0.413 | 10.93x | 11.34x | 16.0 | 11.5 |
+| longDiv | 0.362 | 0.217 | 0.213 | 1.67x | 1.70x | 15.7 | 14.7 |
+| switchDense | 0.071 | 0.076 | 0.076 | 0.93x | 0.93x | 17.8 | 7.8 |
+| switchSparse | 0.071 | 0.075 | 0.072 | 0.94x | 0.98x | 17.1 | 19.7 |
+| refArray | 0.198 | 0.177 | 0.165 | 1.12x | 1.20x | 50.2 | 14.6 |
+| matrix | 0.204 | 0.070 | 0.070 | 2.94x | 2.92x | 18.4 | 28.3 |
+| sieve | 0.268 | 0.207 | 0.205 | 1.30x | 1.31x | 5.9 | 11.4 |
+| intLoop | 1.102 | 0.218 | 0.216 | 5.06x | 5.10x | 14.3 | 25.3 |
+| longLoop | 0.442 | 0.153 | 0.155 | 2.89x | 2.86x | 17.6 | 5.4 |
+| doubleLoop | 0.723 | 0.088 | 0.083 | 8.25x | 8.75x | 48.8 | 7.0 |
+| arraySum | 0.123 | 0.063 | 0.063 | 1.94x | 1.96x | 4.8 | 5.4 |
+| fieldLoop | 0.141 | 0.093 | 0.076 | 1.51x | 1.86x | 31.3 | 6.9 |
+| allocLoop | 0.171 | 0.028 | 0.020 | 6.16x | 8.73x | 40.6 | 36.2 |
+| syncCall | 0.230 | 0.110 | 0.241 | 2.08x | 0.95x | 26.5 | 9.7 |
+| plainCall | 0.081 | 0.054 | 0.050 | 1.50x | 1.61x | 49.0 | 13.4 |
+| tryCall | 0.129 | 0.089 | 0.094 | 1.45x | 1.38x | 25.2 | 26.0 |
+| syncBlock | 0.250 | 0.115 | 0.179 | 2.18x | 1.40x | 45.2 | 14.5 |
+| idHash | 0.721 | 0.540 | 0.547 | 1.33x | 1.32x | 43.2 | 27.3 |
+| virtualMono | 0.144 | 0.075 | 0.038 | 1.92x | 3.83x | 49.1 | 24.2 |
+| virtualBi | 0.559 | 0.157 | 0.129 | 3.56x | 4.32x | 33.0 | 14.9 |
+| interfaceBi | 0.560 | 0.259 | 0.244 | 2.16x | 2.29x | 33.0 | 12.9 |
+| linkedNodes | 0.282 | 0.130 | 0.068 | 2.17x | 4.17x | 26.0 | 37.3 |
+| strChars | 0.256 | 0.248 | 0.263 | 1.03x | 0.97x | 25.7 | 19.7 |
+| strEquals | 0.099 | 0.061 | 0.067 | 1.62x | 1.47x | 11.5 | 19.1 |
+| strIndex | 0.243 | 0.231 | 0.236 | 1.05x | 1.03x | 35.7 | 28.2 |
+| strBuild | 0.103 | 0.143 | 0.135 | 0.72x | 0.76x | 32.7 | 7.5 |
+| strSubstr | 0.256 | 0.526 | 0.560 | 0.49x | 0.46x | 33.9 | 34.5 |
+| strCompare | 0.034 | 0.023 | 0.022 | 1.44x | 1.52x | 11.2 | 5.2 |
+| parseInts | 0.059 | 0.053 | 0.054 | 1.10x | 1.10x | 43.2 | 20.4 |
+| exceptions | 3.421 | 1.147 | 1.224 | 2.98x | 2.80x | 42.6 | 29.4 |
+
+Geometric mean js/wasm over 74 workloads: steady 1.71x -> 1.77x, first call 0.48x -> 0.65x.
+
+**Chrome 153.0.8010.53, over a platform build of the 7 libcore jars (`aot-build --only`)**, 3 runs x 100 reps, medians in ms; before = `eeb222b3`, after = this branch (before the loop-site fix of the last commit: `sort`, `bbInts`, `dbInts` in Chrome moved by it, see the text). First call: Wasm first call, before / after.
+
+| workload | JS steady | before | after | js/wasm before | js/wasm after | first before | first after |
+|---|---|---|---|---|---|---|---|
+| sha256 | 0.495 | 0.905 | 0.900 | 0.55x | 0.55x | 298.3 | 308.9 |
+| ecdsaVerify | 0.295 | 0.295 | 0.295 | 1.00x | 1.00x | 306.0 | 320.1 |
+| certParse | 0.140 | 0.120 | 0.120 | 1.17x | 1.17x | 461.1 | 489.2 |
+| listAddGet | 0.085 | 0.045 | 0.035 | 1.89x | 2.43x | 15.5 | 11.7 |
+| listIter | 0.105 | 0.105 | 0.090 | 1.00x | 1.17x | 16.7 | 16.9 |
+| listRemove | 1.550 | 0.650 | 0.630 | 2.38x | 2.46x | 16.1 | 13.0 |
+| mapStr | 0.535 | 0.115 | 0.105 | 4.65x | 5.10x | 13.4 | 7.8 |
+| mapInt | 0.145 | 0.115 | 0.105 | 1.26x | 1.38x | 14.6 | 11.0 |
+| mapWalk | 0.375 | 0.195 | 0.185 | 1.92x | 2.03x | 16.9 | 15.3 |
+| linkedMap | 0.435 | 0.145 | 0.110 | 3.00x | 3.95x | 17.5 | 8.6 |
+| hashSet | 0.535 | 0.130 | 0.095 | 4.12x | 5.63x | 11.2 | 6.8 |
+| smallAlloc | 0.100 | 0.060 | 0.070 | 1.67x | 1.43x | 9.8 | 7.0 |
+| deque | 0.115 | 0.055 | 0.065 | 2.09x | 1.77x | 14.7 | 14.8 |
+| treeMap | 0.370 | 0.200 | 0.215 | 1.85x | 1.72x | 14.0 | 13.4 |
+| sort | 0.360 | 0.275 | 0.310 | 1.31x | 1.16x | 17.1 | 16.7 |
+| mix | 2.225 | 0.650 | 0.610 | 3.42x | 3.65x | 20.0 | 19.7 |
+| linkedList | 0.085 | 0.050 | 0.050 | 1.70x | 1.70x | 15.0 | 7.7 |
+| b64java | 0.935 | 0.555 | 0.545 | 1.68x | 1.72x | 13.6 | 17.0 |
+| b64android | 0.765 | 0.520 | 0.520 | 1.47x | 1.47x | 23.3 | 20.6 |
+| jsonParse | 3.470 | 2.205 | 2.070 | 1.57x | 1.68x | 78.1 | 92.2 |
+| jsonWrite | 7.775 | 5.860 | 5.635 | 1.33x | 1.38x | 100.9 | 125.0 |
+| scanTokens | 14.325 | 13.500 | 12.675 | 1.06x | 1.13x | 541.4 | 513.9 |
+| scanLines | 5.325 | 6.390 | 6.030 | 0.83x | 0.88x | 489.1 | 496.9 |
+| format | 2.630 | 1.515 | 1.445 | 1.74x | 1.82x | 76.0 | 99.6 |
+| dtoa | 3.300 | 0.485 | 0.460 | 6.80x | 7.17x | 35.1 | 52.0 |
+| parseFail | 12.445 | 2.570 | 2.605 | 4.84x | 4.78x | 18.6 | 19.2 |
+| parseFailMixed | 10.510 | 2.420 | 2.410 | 4.34x | 4.36x | 22.0 | 22.2 |
+| fbLoop | 0.155 | 0.270 | 0.245 | 0.57x | 0.63x | 20.3 | 21.6 |
+| fbBulk | 0.040 | 0.070 | 0.070 | 0.57x | 0.57x | 15.5 | 15.9 |
+| bbInts | 0.220 | 0.380 | 0.225 | 0.58x | 0.98x | 22.1 | 19.9 |
+| dbInts | 0.360 | 0.200 | 0.120 | 1.80x | 3.00x | 20.9 | 21.0 |
+| casts | 2.035 | 0.430 | 0.420 | 4.73x | 4.85x | 16.9 | 15.2 |
+| monitors | 0.200 | 0.170 | 0.170 | 1.18x | 1.18x | 15.0 | 14.4 |
+| random | 0.590 | 0.155 | 0.170 | 3.81x | 3.47x | 9.8 | 10.6 |
+| strConcat | 0.035 | 0.070 | 0.065 | 0.50x | 0.54x | 7.4 | 11.6 |
+| zipOpen | 0.655 | 0.405 | 0.410 | 1.62x | 1.60x | 393.2 | 401.3 |
+| inetCached | 10.345 | 3.185 | 3.305 | 3.25x | 3.13x | 39.7 | 56.4 |
+| ssbAppend | 0.290 | 0.200 | 0.195 | 1.45x | 1.49x | 45.8 | 46.6 |
+| ssbEdit | 0.265 | 0.130 | 0.115 | 2.04x | 2.30x | 43.1 | 41.3 |
+| ssbGetSpans | 0.830 | 0.710 | 0.720 | 1.17x | 1.15x | 45.7 | 45.5 |
+| spannedCopy | 0.205 | 0.120 | 0.135 | 1.71x | 1.52x | 24.6 | 23.6 |
+| linkify | 0.035 | 0.025 | 0.025 | 1.40x | 1.40x | 43.1 | 40.2 |
+| loopOnce | 42.810 | 8.325 | 8.070 | 5.14x | 5.30x | 26.2 | 27.1 |
+| loopChunk | 42.725 | 8.055 | 7.995 | 5.30x | 5.34x | 14.1 | 14.3 |
+| divLoop | 1.190 | 0.425 | 0.430 | 2.80x | 2.77x | 5.6 | 8.0 |
+| longDiv | 0.290 | 0.215 | 0.215 | 1.35x | 1.35x | 6.5 | 5.8 |
+| switchDense | 0.080 | 0.075 | 0.080 | 1.07x | 1.00x | 9.3 | 9.1 |
+| switchSparse | 0.075 | 0.070 | 0.070 | 1.07x | 1.07x | 5.2 | 10.1 |
+| refArray | 0.205 | 0.175 | 0.165 | 1.17x | 1.24x | 8.5 | 6.5 |
+| matrix | 0.220 | 0.075 | 0.075 | 2.93x | 2.93x | 6.8 | 6.8 |
+| sieve | 0.230 | 0.145 | 0.145 | 1.59x | 1.59x | 6.7 | 6.8 |
+| intLoop | 1.115 | 0.215 | 0.215 | 5.19x | 5.19x | 5.2 | 5.5 |
+| longLoop | 0.500 | 0.155 | 0.155 | 3.23x | 3.23x | 5.3 | 5.6 |
+| doubleLoop | 0.615 | 0.095 | 0.080 | 6.47x | 7.69x | 10.0 | 10.3 |
+| arraySum | 0.075 | 0.065 | 0.060 | 1.15x | 1.25x | 5.6 | 5.5 |
+| fieldLoop | 0.795 | 0.060 | 0.075 | 13.25x | 10.60x | 6.8 | 10.1 |
+| allocLoop | 0.135 | 0.040 | 0.040 | 3.37x | 3.38x | 7.0 | 7.0 |
+| syncCall | 0.450 | 0.165 | 0.280 | 2.73x | 1.61x | 9.3 | 9.9 |
+| plainCall | 0.085 | 0.060 | 0.050 | 1.42x | 1.70x | 10.8 | 6.9 |
+| tryCall | 0.180 | 0.085 | 0.145 | 2.12x | 1.24x | 10.8 | 9.9 |
+| syncBlock | 0.245 | 0.125 | 0.230 | 1.96x | 1.07x | 7.1 | 6.4 |
+| idHash | 0.765 | 0.625 | 0.565 | 1.22x | 1.35x | 11.4 | 11.4 |
+| virtualMono | 0.155 | 0.085 | 0.120 | 1.82x | 1.29x | 7.6 | 10.2 |
+| virtualBi | 0.510 | 0.170 | 0.130 | 3.00x | 3.92x | 13.1 | 8.1 |
+| interfaceBi | 0.510 | 0.260 | 0.270 | 1.96x | 1.89x | 9.5 | 7.7 |
+| linkedNodes | 0.240 | 0.145 | 0.075 | 1.66x | 3.20x | 9.3 | 12.0 |
+| strChars | 0.475 | 0.245 | 0.285 | 1.94x | 1.67x | 7.9 | 6.9 |
+| strEquals | 0.300 | 0.060 | 0.065 | 5.00x | 4.62x | 6.0 | 6.3 |
+| strIndex | 0.170 | 0.230 | 0.210 | 0.74x | 0.81x | 8.3 | 12.0 |
+| strBuild | 0.110 | 0.160 | 0.150 | 0.69x | 0.73x | 8.5 | 11.5 |
+| strSubstr | 0.310 | 0.540 | 0.565 | 0.57x | 0.55x | 12.2 | 13.5 |
+| strCompare | 0.030 | 0.025 | 0.020 | 1.20x | 1.50x | 5.5 | 9.0 |
+| parseInts | 0.055 | 0.055 | 0.055 | 1.00x | 1.00x | 6.6 | 9.7 |
+| exceptions | 2.740 | 1.275 | 1.275 | 2.15x | 2.15x | 12.1 | 12.6 |
+
+Geometric mean js/wasm over 74 workloads: steady 1.83x -> 1.87x, first call 0.31x -> 0.31x.
+
+**Open and rejected**
+- **V8's inlining budget is five times the root function's size, so a smaller root inlines less.** `syncCall` (a loop calling a synchronized method) was 0.110 in the base and is 0.241 here in the table, although the code is smaller: the base root carried a depth prologue and a fuel check and so could afford to inline `menter`, `mexit` and the callee; the loop of `w_syncCall` now is 63 nodes, a budget of 315, and the callee (196) leaves nothing for the helpers (`--trace-wasm-inlining`: "not enough inlining budget"). Making the lock inline moved it from 0.394 to 0.246; the rest needs a smaller body for methods with handlers (their pc stores and region dispatch are most of the 196). `syncBlock` 0.115 -> 0.179, `tryCall` and, in Chrome, `virtualMono` are the same effect or its cousin; `sort` 0.244 -> 0.278 (node) and 0.275 -> 0.305 (Chrome) moved with the depth change and without a cause found.
+- `bbInts` is bimodal in node (0.23 or 0.40 ms from run to run, the same build): the budget is spent on four copies of `_put` and the shape V8 settles on depends on the call counts at the moment it tiers up. Chrome measured 0.225 in the table. The code that does the work is the 348-byte `Bits.putIntB`; only shorter bodies help.
+- The fuel check outlined (`loop F { block S { loop L { br_if S } } yield; br F }`, no call in the loop): `virtualMono` 0.078 -> 0.049 but `allocLoop` 0.029 -> 0.052, `random` +22%; rejected. A global counter instead of the local: measured in C (2x on tight loops).
+- A `[vt, hash, lock]` header (three fields, 60 sites index the data array at 2): not built, see above; the lock in the low half cost nothing at the places that read the hash.
+- Skipping the depth of every call that precedes a throw outright (no wrap): overflows the engine at boot (above). Treating `Iterator.hasNext` loops as counted: not built, the compiler does not know library names.
+- `fbLoop` in Chrome (0.63x): a cross-instance call costs 1.5 ns (`call_indirect` into another module's function 1.7, a direct imported call 1.45, an inline store 0.2; micro-benchmark in the Chrome of this table), so the per-element `gst32` call is not the cost; 12 ns per `put` is the Java layers (`put`, `nextPutIndex`, `put(int,float)`, `checkIndex`, `putFloatUnchecked`, `putFloat`, `Memory.pokeInt`), each of which now inlines where V8's budget allows. Putting the guest memory in every module is multi-memory (Chrome only) or moving the counters and the scratch region into the core's memory; not built. `fbBulk` is 0.57x in both (the copy itself, 0.075 ms for 16 KB).
+- `strConcat`, `strSubstr`, `strBuild`, `strIndex`: unchanged (0.42x, 0.46x, 0.76x, 1.03x); the two allocations per String and the byte-array builder of libcore remain; sharing the parent's chars was costed in 4.10 and not built again. `ecdsaVerify` is 1.00x in node and Chrome (BigInteger, nothing missing in a profile: the time is in unnamed optimized code).
+- First call: not moved (0.48x -> 0.65x in node, 0.31x -> 0.31x in Chrome over a build of the 7 libcore jars; node's rows are on-demand compiles whose noise is +-15 ms). The compile phases are unchanged (the sweep of bouncycastle takes 4 s in both), the per-module cost of the larger import list is not visible next to V8's compile of the multi-MB package modules (4.11).
+
+### 4.16 W2: launch time (G3), Mihon's launch and JNI on strands (2026-10-04, `knlnks/wasm-w2`)
+
+**Instrumentation.** `wd.perf` has the World's work (`wasmMethods wasmCompileMs wasmModules wasmModuleMs wasmBytes wasmAotLoaded wasmAotMissed wasmAotMs wasmClasses wasmSuspensions wasmCrossings`, bound to `World.stats` by `host/stats.ts`, reset by `perfReset`),
+`src/perf.ts mark()` writes launch milestones (`boot tierLoaded installOpened bootApk dexLoaded appCodeSaved|appCode worldMade startZygote dataReady resourcesReady firstPresented`, and the build's `aotIndex aotOpened platformReady`) as
+performance marks of the realm that makes them, and `bun run lat <scenario> --timeline` prints them for the page and its process frames (`--query tier=wasm`; `scripts/lat/profsum.ts from= until=` windows a `--cpuprofile`).
+**Where a 7.9 s FitNotes launch went** (cold, Chrome, load average 14; the app runs in the page, the framework's processes in frames): 3.4 s of the 5.5 s from `startActivityThread` to the first frame was on-demand compile
+(14,449 methods, 18,695 modules instantiated: 2.5 s compiler, 0.9 s Module/Instance) because (1) the startup list (`startup.json`, from a probe of one process, 188 files) missed 293 modules the framework's start wants, and a missed module is compiled on demand
+for good, (2) a precompiled code module imports Suspending natives as `id#s`, which `World.nativeBound` did not know, so 25 modules were dead and compiled on demand, (3) no saved app build was attached (`bootWasmTier` made the World before the app's dex files
+existed, and the zygote's Java ran before them), (4) 62 more modules died because a class module they import was a miss.
+**Changes.** `bun run wasm aot-profile [apk ...]` launches the apps in headless Chrome twice (no saved build, then with one), takes every file `FetchStore.wanted` saw (all realms of the tab) and writes the build's `startup.json`
+(about 530 modules, 120 MB of the 215 MB build, plus every class module: 39 MB; run it after `bun run aot`, which still writes the one-process probe). The tab's build opens while the package downloads. `bootApk` loads the app's dex files and
+calls `loadAppCode` (tier.ts, `host/boot.ts appCode`, `host/appcode.ts prepareApp`) before any other Java; the World is made lazily at the first Java the realm runs over `new Program(appDexes, platform)`, so a build a previous launch saved (OPFS directory
+`wd-wasm-apps`, kept by `wd.reset`) attaches (`appCodeSaved`), a launch without one has a worker build it for the next, and the second-tier compile worker is the one `prepareApp` made. The zygote waits for the app's code (`appCodeReady`).
+`nativeBound` strips `#s`; a precompiled module's class-hierarchy decision is checked against the app's classes once (`Assumption.stands`), not once per module (298 ms of `Program.implFor` building the members of 4,000 app classes);
+`newlyInitialized` scans the classes whose initialization was not reported, not all of them (it ran for every worker job: 120 ms).
+**Result** (`lat fitnotes`, the same machine busy with other agents: load average 14; ranges of 3 runs; the JS tier's baselines from docs/wasm-baselines.md):
+
+| App | Launch to first frame, cold | warm | JS tier cold / warm | on-demand methods (cold / warm) | gated taps |
+|---|---|---|---|---|---|
+| FitNotes | 7.9 s -> 4.2 to 5.6 s | 7.7 s -> 3.8 to 4.0 s | 1.76 / 1.24 s | 14,449 -> 2,900 / 2,200 | 8 to 24 ms but the first tap 84 to 178 ms (24 methods, 85 ms of CHA `reaches`/`isSubclass`; limit 150) |
+| Calculator M | not measured by lat (uiTree, W1) | | 1.69 / 1.22 s | 5.6 s cold, 4.1 s warm by `wd.perf.presentations` | |
+| Mihon | never presented (below) | | 7.39 / 6.71 s | | |
+
+G3's warm target (at most the JS tier's) is not met: the floor is the framework's own start run as Wasm (the zygote's Java 1.3 s, `startActivityThread` to the first frame 2.0 s) with what is still compiled or linked on demand: 2,200 methods
+(0.5 s compile, 0.5 s Module/Instance), 1,365 class modules of the app's classes built on demand (0.3 s: the app build does not persist class modules), 300 precompiled methods undone by the app's classes (CHA) and recompiled, 700 platform class
+modules instantiated (0.3 s), and the build's 620 ms open (a tier open is on the critical path beside the package download). Next: persist the methods a launch compiled on demand and the app's class modules in the app build, and cache the compiled
+modules (IndexedDB takes a `WebAssembly.Module`).
+**Mihon** never presented because its process died: (1) `Thread.getStackTrace` is `VMStack.getThreadStackTrace`, a JS-tier native that links `StackTraceElement` through the runtime (`App.getPackageName` calls it) -> an intrinsic over the frames the host records;
+(2) `ActivityManager.getMemoryInfo` wrote `totalMem` by its Java name -> `setDeclared`; (3) the app's classes answered the boot loader for `getClassLoader` (the open item of A3), so kotlinx.coroutines found no Main dispatcher -> the loader that opened the app's dex
+files is the default namespace's loader for the classes the app defines; (4) the host implements `javax.microedition.khronos` whole, but the Wasm tier ran the dex `EGLContext.<clinit>` (EGLImpl natives) -> `hostWhole` classes drop their initializers.
+Next failure: a host spec over a dex *interface* (`EGL10`/`EGL11`, `GL10`) has no class an instance can be made of (`Bridge.shellOf` allocates the interface); the same classes need a concrete class of natives (hostclass.ts, B2). Also seen: an `Unsafe` accessor gap, `AttributionSource should be unparceled` (microG process).
+**Strands.** The engine frees the JSPI stacks of calls made on a stack of its own only when that stack waits and refuses a new one past about 1,400 (reproduced with 30 lines of Wasm: 1,485 nested `promising` calls in one outer stack; none from the top level, and a Suspending import in the loop frees them).
+A native that enters Java (File.list0 asks the File for its path) 1,000 times in one entry therefore ended in StackOverflowError. A strand that made 200 nested entries returns its next plain native through the settle import (`Sched.owes`), which waits once. `bun run wasm nested`; the FileTest and CharsetTest pins are gone.
+**JNI.** A JNI call into Java (`vm.invoke/construct/init/monitor`) runs on a strand of the calling thread (`host/entry.ts onNestedStrand`, `Bridge.callOn`) and answers a Promise when it waited. A JThread the host made (binder, native, test) is a Java thread of its own (`recOf`, `Sched.hostThread`; its
+Thread object is named `Thread-host` and bound to its record by `Sync.Bind`) and has its own Cpu; the host's current thread is what it was before it entered Java (`hostCurrent`). JNI monitors belong to the thread's root strand (`Sched.nativeMonitor`), so they outlive the call that took them and a contended
+MonitorEnter waits (a Promise, no stack). FindClass resolves in the loader of the class declaring the running native method (`Cpu.nativeClass`; `JniVm.find(name, owner, from)`; checked by reading, not by a test: `jni.test.ts` has one loader). `WEBDROID_TIER=wasm bun test src/native/jni.test.ts` runs all 26 (the 4 skipped
+ones now use Java fixtures: `JniSlowInit`, `JniCallback`). Open: the doodlejump flow's JNI part cannot be reached on the Wasm tier until `RamLogger.Append` compiles (move-result gap, W1).
+
+### 4.17 X2: the full platform build in a page (2026-10-04, `knlnks/wasm-x2`)
+
+**Why the build "could not be fetched".** Chrome fails a request with `net::ERR_INSUFFICIENT_RESOURCES` once about 1,600 are pending at once: 2,143 concurrent `fetch`es of the build's files gave 1,616 answers and 527 failures
+(`TypeError: Failed to fetch`), with or without keeping the bytes, with `compile` or `compileStreaming`. With 6 to 16 in flight the same 222 MB (largest module 3.9 MB, no sync XHR) is fetched in 0.46 s from localhost,
+compiled in 0.58 s (`compile`) or 1.0 s (`compileStreaming`) and held in memory without trouble, so size, memory and ordering are not the limit; the count in flight is. G1's page preloaded every file with one `Promise.all`
+(the page never became ready), and `FetchStore.prefetch` of W2's 1,280-file profile list was within a few hundred requests of the same limit.
+
+**Loading.** `FetchStore` keeps 16 requests in flight (`WIDTH`) over a queue, in the order of `startup.json`; the page still waits for that list before the World runs. A module the code wants that nobody asked for yet is a miss for
+that realm (its code compiles on demand, as before, and `AotRuntime.missed` keeps the answer, so a module that arrives later is never mixed with code compiled without it) and goes to the *front* of the queue, so the realms that
+ask later (the framework's processes are frames of the tab, sharing the store) find it. A synchronous or `Suspending` wait for the module was not built: a miss costs the 0.2 ms per method the compiler needs, 289 misses of the
+old startup list were 3.0 s of compiling, while waiting for the same files one by one costs a round trip each (289 x 30 ms = 8.7 s on a 30 ms link) on a strand that also holds the main queue; the stub that asks is a plain
+table entry and cannot suspend without making every lazy-link stub a `Suspending` import. Modules are compiled with `compileStreaming` (the frame-naming issue of 4.9 is solved) in the tab's realm and used by the frames directly
+(same origin, same thread): `boot-probe` shows the frame fetching and compiling nothing.
+
+**Grouping by use.** `aot-profile --classes` launches FitNotes and Calculator M with the code modules withheld (every method that runs is compiled on demand) and writes `vendor/wasm-aot/hot.json`: the classes with a method called
+(5,209 of 41,247), most shared first. `bun run aot` puts them into code modules of their own (`--max-hot`, 1 MiB estimated), in that order, and puts the classes whose class modules a launch loads (`linked`, recorded by
+`aot-profile` on a build where the code modules are there: 43,000, because compiled code links every class it names, so a launch loads nearly every D module, 29 MB) into class modules of their own; the rest are grouped by package as
+before. Numbering is by definition order and does not depend on the grouping. `aot-profile` then writes `startup.json` from `FetchStore.wanted` of a launch with every module available (a launch with misses wants different modules,
+and a module whose class module missed is dead for good), instead of W2's list, which also added all class modules. Order: `aot-profile --classes`, `bun run aot`, `aot-profile` (twice for `linked` to settle).
+A launch of FitNotes wants 41 to 58 files, 63 MB raw (34 MB code, 29 MB class modules), against 1,280 files and 133 MB.
+
+**FitNotes launch** (`?tier=wasm`, Chrome 153 headless, navigation to the first presented frame, 2 runs, load average 9 to 15 so +-1 s; transfer is brotli q5 from the dev server, which now compresses `/aot/` as the edge does;
+warm = second launch in the profile, HTTP cache and saved app build):
+
+| layout / startup list | cold | warm | methods compiled on demand (cold / warm) | requests, MB transferred cold |
+|---|---|---|---|---|
+| package, probe list (188 files, before) | 7.1 to 8.4 s | 6.3 to 6.9 s | 15,200 / 14,200 | 514 (misses fetched behind), 22.8 |
+| package, profile list (1,280 files, W2) | 4.8 to 6.2 s | 4.1 to 4.5 s | 3,400 / 2,600 | 1,284, 25.9 |
+| hot 1 MiB, profile list (58 files) | 4.5 to 4.9 s | 3.3 to 3.6 s | 3,400 / 2,600 | 65, 12.7 |
+| hot 3 MiB (21 files) / 512 KiB (114 files) | 5.0 to 5.3 / 4.2 to 4.4 s | 3.7 to 4.4 / 3.5 to 3.7 s | same | 32 / 122, 12.9 / 13.0 |
+
+Warm transfers 0 bytes (the files come from the HTTP cache, still one cache read and one compile each). `aotOpened` (startup list fetched and compiled, on the critical path beside the package download) 0.6 to 1.3 s for 63 MB raw.
+Brotli q5 is 0.18 of the raw size, gzip -6 0.22 (sample of 108 modules): a launch is about 12 MB, the whole build about 40 MB. The edge compresses `application/wasm` (Cloudflare docs, read 2026-10-04; the algorithm
+depends on the plan; not checked against a deployment); the largest file is 3.9 MB against 25 MiB and the build has 2,163 files against 20,000.
+
+**G1 first call, geometric mean js/wasm over the 14 rows that run framework or non-7-jar code** (ssbAppend ssbEdit ssbGetSpans spannedCopy linkify b64android dtoa dbInts sha256 ecdsaVerify certParse scanTokens scanLines zipOpen;
+3 runs x 30 reps, load average 9 to 15, indicative; the harness now opens the build as the app does, so these are not comparable with the earlier tables):
+
+| build | Chrome | node |
+|---|---|---|
+| 7 jars (before) | 0.13 | 0.34 |
+| full, package, probe list | 0.15 | 0.36 to 0.40 |
+| full, package, profile list (133 MB, `ahead` 650 ms) | 0.23 | not applicable |
+| full, hot 1 MiB, profile list (63 MB, `ahead` 270 ms) | 0.21 | 0.23 to 0.31 |
+| full, hot, every module fetched before the call | 0.20 (3 MiB: 0.19) | |
+
+What helps the first call is having the module before the call (sha256 429 -> 217 ms, certParse 739 -> 362, scanTokens 923 -> 429 in Chrome), not the build's size or the layout; fetching all 2,143 modules first adds nothing more.
+The ssb\*, spannedCopy and linkify rows stay at 100 to 160 ms in Chrome with every module present: their first call is 19 methods compiled on demand in 100 ms of which the phases are 14 (the Program's class model and
+class-hierarchy index are built for the harness's Program on the first query; in a tab they are shared, A2), not modules. In node the hot layout is 10 to 40% slower than package modules on single-feature rows (its modules are
+larger and a call pulls the whole one); the page does not pay for that, since modules are compiled off the main thread.
+
+**Left.** Compiled code links every class it names, so a launch loads 29 MB of class modules for 5,000 classes that run: stubs created on the first use of a slot would cut the largest remaining cost. Warm launches still read and
+compile 58 files; V8's cache of `compileStreaming` results (Chrome's code cache for HTTP-cached responses) was not measured. The first-call floor of the framework rows is the Program/CHA cost above (X1's area). Profiles use FitNotes and
+Calculator M (Mihon does not present on this tier); classes only another app runs are misses and compile on demand.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.

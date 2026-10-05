@@ -36,8 +36,14 @@ export const perf = {
   // constructs the compiler has no translation for, which compiled code reached, natives that answered a Promise from a plain import (nativeSuspended: each
   // is a native to classify as suspending, suspend.ts), calls the engine refused to suspend
   wasmEntries: 0, wasmFacadeMisses: 0, wasmGaps: 0, wasmNativeSuspended: 0, wasmSuspendErrors: 0,
+  // the World's work (host/stats.ts bindWorld): methods compiled on demand and the time that took (compiler), modules built and instantiated and their time, platform and
+  // app build modules loaded and missed, classes linked, stack switches, and natives called (Java to host)
+  wasmMethods: 0, wasmCompileMs: 0, wasmModules: 0, wasmModuleMs: 0, wasmBytes: 0, wasmAotLoaded: 0, wasmAotMissed: 0, wasmAotMs: 0, wasmClasses: 0, wasmSuspensions: 0, wasmCrossings: 0,
   bootMs: 0,
 };
 export function perfReset() {
   for (const k of Object.keys(perf) as (keyof typeof perf)[]) if (k !== "bootMs") perf[k] = 0;
 }
+
+/** a point on the launch timeline: a performance mark "wd:<name>" in the realm that made it (scripts/wasm/timeline.ts reads them from every realm) */
+export const mark = (name: string): void => { performance.mark("wd:" + name); };

@@ -353,7 +353,10 @@ export class AotRuntime {
       e.slots.add(owner);
       // the classes of an app build are the ones its code was made with
       const by = app ? w.late.get(decl)?.filter((n) => !this.appClasses.has(n)) : w.late.get(decl);
-      if (by?.length && !w.holds(e, by)) { w.invalidate(owner); w.stats.aot.dead++; }
+      // the answer for the classes added so far is the same for every module that relies on the decision (later classes are checked as they arrive, World.addDexes)
+      const known = !app && e.target === target ? e.stands : undefined, stands = !by?.length || (known ?? w.holds(e, by));
+      if (!app && e.target === target) e.stands = stands;
+      if (!stands) { w.invalidate(owner); w.stats.aot.dead++; }
     }
     for (const cls of head.allocs) w.allocated.add(cls);
     // a site that fails because a class was not there is undone if it is now

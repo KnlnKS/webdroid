@@ -64,3 +64,27 @@ public class JniProbe {
     public static int viaHandle() { int[] a = { 1, 2, 3 }; poke(handleOf(a)); return a[1]; }
     public static native int measure(String s, byte[] b, Object[] o);
 }
+
+/** A class whose initializer waits, so that a JNI callback that initializes it waits too. */
+class JniSlowInit {
+    static final int value;
+    static {
+        waitFor(30);
+        value = 1;
+    }
+    static int value() { return value; }
+    static void waitFor(long ms) {
+        Object lock = new Object();
+        synchronized (lock) { try { lock.wait(ms); } catch (InterruptedException e) { throw new IllegalStateException("interrupted"); } }
+    }
+}
+
+/** A callback that answers at once, waits, or throws, as `mode` says. */
+class JniCallback {
+    public static int mode;
+    public static int value() {
+        if (mode == 1 || mode == 3) JniSlowInit.waitFor(20);
+        if (mode == 2 || mode == 3) throw new IllegalStateException("callback failed");
+        return mode == 1 ? 73 : 42;
+    }
+}
