@@ -9,7 +9,13 @@
 import { rt } from "../jvm/runtime";
 
 const objs: (object | undefined)[] = [undefined];
-const byObj = new WeakMap<object, bigint>();
+/** the handle of each object. A Wasm GC object (a Java array of the Wasm tier) cannot be a weak key, so the handle of one keeps it. */
+const weak = new WeakMap<object, bigint>(), strong = new Map<object, bigint>();
+const byObj = {
+  get: (o: object): bigint | undefined => weak.get(o) ?? strong.get(o),
+  set: (o: object, h: bigint): void => { try { weak.set(o, h); } catch { strong.set(o, h); } },
+  delete: (o: object): void => { weak.delete(o); strong.delete(o); },
+};
 /** Released slots, reused so a native object recreated every frame does not grow the table —
  *  oldest first, and only once QUARANTINE later releases have queued behind them. Framework Java
  *  tells a replaced native instance by its long (Paint.getNativeInstance re-sends a shader, and
@@ -57,10 +63,13 @@ export function weakHandle(o: object): bigint {
   return h;
 }
 
+/** how the tier that holds Java arrays apart from the host's gives natives the arrays whose handles it handed out (the Wasm tier: a view the native's writes are stored back from) */
+export const handleViews = { of: null as ((o: object) => unknown) | null };
+
 /** the object behind a long, or undefined for the null handle */
 export function deref<T>(h: bigint): T {
-  const n = Number(h), o = objs[n];
-  return (o === WEAK ? refs[n]!.deref() : o) as T;
+  const n = Number(h), o = objs[n], v = o === WEAK ? refs[n]!.deref() : o;
+  return (handleViews.of !== null && typeof v === "object" && v !== null && Object.getPrototypeOf(v) === null ? handleViews.of(v) : v) as T;
 }
 
 export function release(h: bigint): void {

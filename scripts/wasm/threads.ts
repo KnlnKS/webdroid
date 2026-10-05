@@ -86,8 +86,8 @@ if (substrate) {
   { const t0 = performance.now(), r = await Promise.all(Array.from({ length: 1000 }, (_, i) => w.entryAsync("Th", "trap", "(I)I")(i))); const ms = performance.now() - t0;
     expect("1,000 suspended stacks", r.reduce((a: number, b) => a + (b as number), 0), 1000 * 999 / 2 + 1000);
     console.log(`1,000 stacks suspended in a native and resumed: ${ms.toFixed(0)} ms`); }
-  // a plain native that answers a Promise: reported as an adaptive gap, not mistaken for a value
-  expect("plain native answering a Promise", await show(() => w.entryAsync("Th", "flagged", "(I)I")(1)), "java java/lang/UnsatisfiedLinkError");
+  // a plain native that answers a Promise on a strand: reported, and its call site waits for the value
+  expect("plain native answering a Promise", await show(() => w.entryAsync("Th", "flagged", "(I)I")(1)), 1);
   expect("nativeSuspended reported", [...suspendedNatives].join(), "Th.flagged(I)I");
   expect("nativeSuspended in the stats", perf.wasmNativeSuspended, 1);
   // JS frames between the strand's entry and the import that waits: the engine refuses, and it is counted

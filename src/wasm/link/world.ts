@@ -13,8 +13,8 @@ import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, ty
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
-import type { HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { Sched, defaultLoop, ROOT, type HostLoop } from "./sched";
+import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
+import { Sched, defaultLoop, ROOT, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, typeName } from "./classes";
 import { HostClasses } from "./hostclass";
@@ -27,10 +27,11 @@ import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, type JavaFrame, type Thrower } from "./exc";
 import { decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
-import { mid } from "../compiler/ids";
+import { mid, methodOf } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
-import { AotRuntime, type AotBuild, type AotStore } from "./aot";
+import { AotRuntime, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
+import type { UnitResult, UpgradeJob } from "./unit";
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -40,10 +41,12 @@ export interface WorldOptions {
   heapUsed: () => number;
   /** a collection of the host heap, when it has a way to ask for one: the limit applies to live data, and `heapUsed` counts the garbage not yet swept */
   collect?: () => void;
-  /** the heap limit in bytes (ART's 512 MB unless the host says otherwise) */
+  /** how much the heap may grow before an allocation fails, where the heap is shared with other realms (a tab's processes): ART's limit, a process's own, by default */
   heapLimit?: number;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;
+  /** the native core's memory, which direct buffers are allocated in; a World that only builds code needs none */
+  guest?: GuestMemory;
   /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
   claim?: (owner: object, handle: bigint) => void;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
@@ -57,10 +60,16 @@ export interface WorldOptions {
   /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
   dexes?: (path: string) => DexFile[] | undefined;
+  /** an app compiled ahead on top of `aot` (apps.ts): used when this World is where it starts, the platform build attached and nothing numbered since */
+  app?: { index: AppIndex; store: AotStore };
+  /** compiles second-tier units elsewhere (a worker); without it, or when it declines, they are compiled here */
+  compiler?: CompileService;
+  /** a World that compiles for another (a worker's): classes are numbered and linked by name only, nothing is instantiated, and no code runs */
+  compileOnly?: boolean;
 }
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
-type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
+type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d: Synth; done: boolean; stub?: Function } | { k: "ensure" };
 /** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
@@ -101,7 +110,7 @@ export class World {
   absent = new Map<string, Set<number>>();
   /** the messages of the link errors (linkage.ts) compiled code throws, by index */
   linkMessages: string[] = [];
-  /** the byte[]s whose addresses VMRuntime.addressOf has given out (memory.ts), by the index the address holds */
+  /** the Method objects of proxy classes, which their compiled code reads by index (proxy.ts) */
   private nm = new WebAssembly.Table({ element: "externref", initial: 16 });
   private pinned = new Map<object, number>();
   /** scratch linear memory natives copy arrays through, and its allocation top */
@@ -112,13 +121,24 @@ export class World {
   /** the classes the host implements (hostclass.ts) */
   hosts = new HostClasses(this);
   host: Record<string, Function>;
-  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; classId: (o: object) => number };
+  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; classId: (o: object) => number };
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
   private synth = new Map<string, number>();
   /** the synthetic functions whose stub module exists */
   private stubbed = new Set<number>();
   aot?: AotRuntime;
+  /** what the World had numbered when its constructor returned: where a compile worker's numbering starts */
+  base!: Marks;
+  /** the slot reservations after the platform classes, in order */
+  tail: Tail[] = [];
+  /** the blocks of classes a replayed numbering (`adopt`) gave slots before their modules were made */
+  preassigned = new Map<string, number>();
+  /** the classes a worker is told are initialized (the World that compiles for another never runs them) */
+  preInitialized = new Set<string>();
+  /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
+  epoch = 0;
+  private touching: Set<string> | null = null;
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
 
@@ -149,7 +169,7 @@ export class World {
       proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
-      pin: (object: object) => this.pin(object),
+      galloc: (owner: object, n: number) => this.allocGuest(owner, n),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
@@ -172,7 +192,57 @@ export class World {
     this.startRuntime();
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
+    this.appAttached = !!opts.app && !!this.aot?.extend(opts.app.index, opts.app.store);
+    this.base = this.numbering();
   }
+  /** whether the app build given in the options is in use */
+  readonly appAttached: boolean;
+
+  // ---------- numbering
+  /** the sizes of everything numbered so far */
+  numbering(): Marks { return { names: this.names.length, tail: this.tail.length, selectors: this.selKeys.length, gaps: this.gaps.size, links: this.linkMessages.length }; }
+  /** what was numbered after `m` */
+  since(m: Marks): Numbering {
+    return { from: m, names: this.names.slice(m.names), tail: this.tail.slice(m.tail), selectors: this.selKeys.slice(m.selectors), gaps: [...this.gaps.keys()].slice(m.gaps), links: this.linkMessages.slice(m.links) };
+  }
+  /** numbers what `n` numbered, in its order; false, and nothing changed, unless this World has numbered exactly what `n` started from */
+  adopt(n: Numbering): boolean {
+    if (!sameMarks(this.numbering(), n.from)) return false;
+    for (const name of n.names) this.idOf(name);
+    for (const t of n.tail) {
+      if (typeof t === "string") this.reserveSynth(t); else this.preassigned.set(t[0], this.addBlock(t[0], t[1]));
+      this.tail.push(t);
+    }
+    n.selectors.forEach((k) => this.selectorId(k));
+    n.gaps.forEach((g) => this.gapId(g));
+    n.links.forEach((m) => this.linkId(m));
+    return true;
+  }
+  /** forgets what was numbered after `m` (a compile worker drops the numbering of a unit its caller did not take) */
+  rollback(m: Marks): void {
+    for (let i = this.names.length - 1; i >= m.names; i--) { this.ids.delete(this.names[i]); this.classes.delete(this.names[i]); }
+    this.names.length = m.names;
+    for (let i = this.selKeys.length - 1; i >= m.selectors; i--) this.selectors.delete(this.selKeys[i]);
+    this.selKeys.length = m.selectors;
+    [...this.gaps.keys()].slice(m.gaps).forEach((g) => this.gaps.delete(g));
+    this.gapList.length = Math.min(this.gapList.length, m.gaps);
+    this.linkMessages.length = m.links;
+    let top = this.slots.length;
+    while (this.tail.length > m.tail) {
+      const t = this.tail.pop()!;
+      if (typeof t === "string") {
+        top = this.synth.get(t)!;
+        this.synth.delete(t); this.stubbed.delete(top);
+      } else {
+        top = this.blockBase.pop()!; this.blockSize.pop(); this.blockClass.pop();
+        this.preassigned.delete(t[0]); this.classes.delete(t[0]);
+      }
+    }
+    this.slots.length = top;
+  }
+  /** the classes (and, as "!name", runtime functions) whose slots code made between `beginTouch` and `endTouch` names: they need their stubs before the code runs */
+  beginTouch(): void { this.touching = new Set(); }
+  endTouch(): Set<string> { const t = this.touching!; this.touching = null; return t; }
 
   /** gives every platform class (the Program's classes of the dexes `accept`s, in definition order) its id and its block of table slots, so that numbers do not depend on what runs first (aot.ts) */
   seedPlatform(accept: (dex: DexFile) => boolean): number {
@@ -259,7 +329,7 @@ export class World {
   /** the init word of the class with id `id` (0 before its module is built) */
   initWord(id: number): number { const rt = this.classes.get(this.names[id]); return rt ? (rt.exports[id + ":init"] as WebAssembly.Global).value as number : 0; }
   /** whether class initialization has finished, for a class whose module is already built */
-  initialized(n: string): boolean { const rt = this.classes.get(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
+  initialized(n: string): boolean { if (this.preInitialized.has(n)) return true; const rt = this.classes.get(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
   vslots(n: string): string[] {
     let s = this.vslotCache.get(n); if (s) return s;
@@ -334,13 +404,13 @@ export class World {
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
   /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called */
   synthSlot(name: string, d: Synth): number {
-    this.aot?.touched("!" + name);
+    this.touching?.add("!" + name);
     let slot = this.synth.get(name);
-    if (slot === undefined) { this.synth.set(name, slot = this.reserveSlots(1)); this.aot?.reserved(name); }
+    if (slot === undefined) { this.synth.set(name, slot = this.reserveSlots(1)); this.tail.push(name); }
     if (this.stubbed.has(slot)) return slot;
     this.stubbed.add(slot);
     this.slots[slot] = { k: "synth", name, d, done: false };
-    if (this.aot?.building) return slot;
+    if (this.aot?.building || this.opts.compileOnly) return slot;
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
     const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
@@ -404,6 +474,7 @@ export class World {
     mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
     mb.export("depth", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     mb.export("iw", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    mb.export("wait", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
@@ -413,25 +484,25 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, classId: x.classId };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, mem: this.mem, sp: this.sp }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
-    this.aot?.touched(name);
+    this.touching?.add(name);
     let rt = this.classes.get(name);
     if (rt) return rt;
     const aot = this.aot?.linkClass(name);
     if (aot) { this.classes.set(name, aot); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
-    let slotBase = this.aot?.reservedBase(name);
-    if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.aot?.reserved([name, methods.length + 1]); }
+    let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
+    if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.tail.push([name, methods.length + 1]); }
     rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} };
     this.classes.set(name, rt);
-    if (this.aot?.building) return rt;
+    if (this.aot?.building || this.opts.compileOnly) return rt;
     const bytes = this.classModule([rt]);
     this.stats.phase.classBuild += performance.now() - t0;
     rt.exports = this.instantiate(bytes, { rt: this.rtImports(), host: this.host }).exports;
@@ -541,31 +612,74 @@ export class World {
     const built = s.k === "method" ? cx.buildUnit([s.m]) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d.params, (c) => s.d.body(cx, c), s.d.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.units++; this.stats.methods += 1;
-    this.install(s.k === "method" ? [slot] : [], false, cx, built, slot, t0);
+    this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, t0);
   }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
+    // a compile worker takes the job when there is one: the method keeps running its first-tier code until the unit arrives, and asks again if the unit is not taken
+    const reset = () => { new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] = 0; };
+    if (s.pending) { reset(); return; }
+    if (this.opts.compiler?.submit(this, slot)) { s.pending = true; reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it, and a method that asks too soon asks again after another budget
     const t0 = performance.now();
     this.hotSince ??= t0;
     const expect = this.stats.upgrades ? this.upgradeMs / this.stats.upgrades : UPGRADE_FIRST_MS;
-    if (this.upgradeMs + expect > UPGRADE_SHARE * (t0 - this.hotSince)) { new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] = 0; return; }
+    if (this.upgradeMs + expect > UPGRADE_SHARE * (t0 - this.hotSince)) { reset(); return; }
     const cx = new Compiler(this), { installed, copies } = this.group(s.m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
-    this.install(installed.map((m) => this.slotOf(m)), true, cx, built, slot, t0);
+    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, slot, t0);
     this.upgradeMs += performance.now() - t0;
+  }
+  /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
+  upgradeJob(slot: number): UpgradeJob | undefined {
+    const s = this.slotAt(slot);
+    if (s?.k !== "method" || !s.done || s.hot) return undefined;
+    const { installed, copies } = this.group(s.m);
+    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), initialized: this.newlyInitialized() };
+  }
+  private reportedInit = new Set<string>();
+  /** the classes whose initialization finished since the last job */
+  newlyInitialized(): string[] {
+    const out: string[] = [];
+    for (const [name, rt] of this.classes) if (!this.reportedInit.has(name) && (rt.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE) { this.reportedInit.add(name); out.push(name); }
+    return out;
+  }
+  /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
+  release(slot: number): void { const s = this.slotAt(slot); if (s?.k === "method") s.pending = false; }
+  /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here: nothing was added to the Program since `epoch`, and the numbering its code relies on
+   *  is this World's (it was numbered from `result.numbering.from`) */
+  adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
+    const s = this.slotAt(slot), head = result.header, t0 = performance.now();
+    this.release(slot);
+    if (epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
+    const n = result.numbering;
+    if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
+    for (const id of head.touch) this.link(this.names[id]);
+    for (const name of head.synth) this.ensureSynth(name);
+    const method = (id: string) => methodOf(this.prog, id);
+    const target = (cls: string, key: string) => (cls ? this.prog.get(cls)?.byKey.get(key) : undefined);
+    const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
+    const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
+      absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]) };
+    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives) };
+    this.classImports(mod, imports);
+    const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
+    for (const c of head.allocs) this.allocated.add(c);
+    this.stats.methods += job.installed.length + job.copies.length; this.stats.upgrades++;
+    this.install(job.installed.map((id) => this.slotOf(method(id)!)), true, unit, imports, { bytes: mod, traces }, slot, t0);
+    return true;
   }
   private hotSince?: number;
   private upgradeMs = 0;
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  private install(group: number[], hot: boolean, cx: Compiler, built: { bytes: Uint8Array; traces: FnTrace[] }, slot: number, t0: number): void {
+  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, t0: number): void {
     const s = this.slotAt(slot)!;
     this.stats.compileMs += performance.now() - t0;
     let exports: Record<string, any>;
-    try { exports = this.instantiate(built.bytes, this.unitImports(cx)).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
+    try { exports = this.instantiate(built.bytes, imports).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
     const set = (at: number, name: string) => {
       const sl = this.slotAt(at) as Exclude<Slot, { k: "ensure" }>;
       if (!sl.done) sl.stub = this.table.get(at) as Function;
@@ -586,6 +700,21 @@ export class World {
       const slots = this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!;
       slots.add(owner ? this.slotOf(owner) : slot);
     }
+  }
+  /** the class globals module `mod` imports from modules the caller has not named: each comes from the module of the class whose id starts its name (code made by another World,
+   *  an app build's or a worker's, names classes only by id) */
+  classImports(mod: WebAssembly.Module, imports: Record<string, Record<string, unknown>>): void {
+    const given = new Set(Object.keys(imports));
+    for (const { module, name } of WebAssembly.Module.imports(mod)) {
+      if (given.has(module)) continue;
+      (imports[module] ??= {})[name] = this.link(this.names[+name.slice(0, name.indexOf(":"))]).exports[name];
+    }
+  }
+  /** whether native method `id` ("class.name+descriptor") has a host binding here, making its import available */
+  nativeBound(id: string): boolean {
+    if (id.startsWith("settle:")) return true;
+    const m = methodOf(this.prog, id);
+    return !!m && this.natives.prepare(m);
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
@@ -727,6 +856,8 @@ export class World {
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
   addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {
     const added = this.prog.add(dexes, loader);
+    this.epoch++;
+    this.opts.compiler?.added(loader === this.prog.root ? dexes : null);
     this.loaded(added);
     return added;
   }
@@ -739,6 +870,7 @@ export class World {
     return yes;
   }
   /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
+  /** keeps a Java object in the table compiled code reads by index (the Method objects of a proxy class) */
   pin(object: object): number {
     let i = this.pinned.get(object);
     if (i === undefined) {
@@ -748,12 +880,30 @@ export class World {
     }
     return i;
   }
+  /** the native blocks of the direct buffers, freed when the object that owns each is collected */
+  private blocks = new FinalizationRegistry<bigint>((address) => this.opts.guest!.free(address));
+  /** a zeroed native block of `n` bytes that lives as long as `owner`, a MemoryRef (memory.ts); its address, or 0 */
+  private allocGuest(owner: object, n: number): bigint {
+    const guest = this.opts.guest;
+    if (!guest) throw new Error("this World has no guest memory");
+    const address = guest.alloc(n);
+    if (address) this.blocks.register(owner, address);
+    return address;
+  }
+  /** whether the guest memory is shared, which a module that imports it must declare */
+  get guestShared(): boolean { return !!this.opts.guest && !(this.opts.guest.memory.buffer instanceof ArrayBuffer); }
   /** makes the class a registered spec implements in the host a Java class, now or once its superclass is defined (hostclass.ts) */
-  addHostClass(spec: HostSpec): void { this.hosts.add(spec); }
+  addHostClass(spec: HostSpec): void { this.hosts.add(spec); this.opts.compiler?.added(null); }
+  /** the classes this World made without a dex (the host's, their hidden halves, proxies): a compile worker applies the same specs and must end with the same ones */
+  hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
+  private settlingHosts = false;
   /** adds a class that no dex defines, with the body of each of its methods */
   addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>): void {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
     this.prog.addClass(jc);
+    this.epoch++;
+    // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
+    if (!this.settlingHosts) this.opts.compiler?.added(null);
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
@@ -768,7 +918,8 @@ export class World {
     }
     for (const name of added) for (const slot of this.absent.get(name) ?? []) this.invalidate(slot);
     for (const name of added) this.absent.delete(name);
-    this.hosts.loaded();
+    this.settlingHosts = true;
+    try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
   }
   /** the concrete classes added since compiled code was made, by each of their supertypes (themselves included) */
   late = new Map<string, string[]>();
@@ -841,6 +992,11 @@ export class World {
       } catch (e) { throw this.boundary(e); } finally { s.end(); }
     };
   }
+  /** runs `f`, a call into Java, leaving the frame depth as it was when a Java exception unwinds it */
+  unwound<T>(f: () => T): T {
+    const depth = this.rt.depth.value;
+    try { return f(); } catch (e) { this.rt.depth.value = depth; throw e; }
+  }
   /** the Java throwable a call from JS threw, if `e` is one */
   throwable(e: unknown): object | undefined {
     return e instanceof WebAssembly.Exception && e.is(this.rt.tag) ? e.getArg(this.rt.tag, 0) as object : undefined;
@@ -880,6 +1036,43 @@ export class World {
       this.hostFns.set(name, f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m);
     }
     return f as never;
+  }
+  private callFns = new Map<string, (s: Strand, ...a: any[]) => unknown>();
+  /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
+   *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
+   *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
+  callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void): (s: Strand, ...a: any[]) => unknown {
+    let f = this.callFns.get(name);
+    if (f) return f;
+    const cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
+    const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "externref", mutable: true }, null);
+    const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
+    const { bytes } = cx.buildSynthetic(name, ["I", ...params], (c) => {
+      const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.externref, true);
+      const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(cx.tObj, ret));
+      c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
+      body(cx, c, (i) => { c.lget(i + 1); });
+      if (res >= 0) { c.lset(res).lget(res); if (ret === "L") c.externConvertAny(); c.gset(value); }
+      c.lget(0).gset(done);
+      if (res >= 0) c.lget(res);
+      c.ret().end().unreachable().end();
+      c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
+    }, ret);
+    const fn = (this.instantiate(bytes, { ...this.unitImports(cx), call: { d, v, x: thr } }).exports as Record<string, any>).m as Function;
+    let token = 0;
+    this.callFns.set(name, f = (s, ...args) => {
+      token = token % 0x3fffffff + 1;
+      const mine = token, p = s.call(fn, mine, ...args) as Promise<unknown>;
+      const state = d.value as number;
+      if (state !== mine && state !== -mine) return p;
+      p.catch(() => {});
+      // the globals are not to keep the last result alive
+      if (state < 0) { const t = thr.value as object; thr.value = null; throw this.exception(t); }
+      const result = ret === "V" ? undefined : v.value;
+      if (ret === "L") v.value = null;
+      return result;
+    });
+    return f;
   }
   /** a JS function reading instance field `name` of `cls` from a Java object that crossed to JS (a reference field gives an opaque object) */
   fieldReader<T = unknown>(cls: string, name: string, desc: string): (obj: object) => T {

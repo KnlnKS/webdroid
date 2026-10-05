@@ -4095,3 +4095,7 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   pinned JS-tier divergences from Java: no `ArrayStoreException`, the most-specific default method, default
   interfaces not initialised with the implementor, `Field` type/receiver/final checks and widening,
   `String.startsWith(prefix, offset)` / `lastIndexOf(s, negative)` and null arguments.
+
+- B3 (2026-10-04, `knlnks/wasm-tb3`; plan 4.15). Failure mechanism: the Wasm tier made every `VMRuntime.addressOf` byte[] a table entry and map key for good, and a direct buffer's address
+  (bit 50 plus a table index) was meaningless to native code and to the production natives (`FileChannel`, `Memory.memmove` between buffers). Direct buffers now live in the core's memory.
+  JNI weak globals were strong globals; they are `WeakRef`s now. Evidence limits: the G1 rows were measured at load 11 to 20; a native that makes its own JNI calls was tested on the JS tier only.

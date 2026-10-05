@@ -7,6 +7,7 @@ import type { HostFn, HostSpec, NativeSource } from "../link/hostapi";
 import { Natives } from "./natives";
 import { refOf } from "./bridge";
 import { hostNatives } from "./hostnatives";
+import { mayWait } from "./suspend";
 
 /** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
@@ -29,6 +30,11 @@ export const nativeSource: NativeSource = {
     if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
     return settled.has(cls + "." + key) ? () => settled.get(cls + "." + key) : lookup(cls, key, isStatic);
   },
+  late: (cls, key) => Object.assign(function (this: unknown, ...args: unknown[]) {
+    const bound = rt.jniFn(cls, key) as HostFn | null;
+    if (!bound) throw rt.ulink(cls, ...splitSig(key));
+    return bound.apply(this, args);
+  }, { javaValues: true }),
   classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
   // a Java exception the host caught from a call into Java and rethrows is thrown as it is, never copied
   thrown: (e) => {
@@ -41,3 +47,13 @@ export const nativeSource: NativeSource = {
   },
 };
 export const natives = new Natives(nativeSource);
+
+/** the ids (class.name+descriptor) of the registered natives that can answer a Promise (suspend.ts `mayWait`), for the platform build to hand to pages */
+export function waitingNatives(): string[] {
+  const ids = new Set<string>();
+  const add = (id: string, fn: unknown) => { if (typeof fn === "function" && mayWait(fn as HostFn)) ids.add(id); };
+  for (const [key, fn] of rt.jni) add(key.replace("|", "."), fn);
+  for (const [cls, spec] of rt.natives) for (const [key, impl] of Object.entries(spec.methods ?? {})) add(`${cls}.${key.replace(/^static /, "")}`, typeof impl === "string" ? spec.ctor.prototype[impl] : impl);
+  for (const [id, fn] of hostNatives) add(id, fn);
+  return [...ids].sort();
+}

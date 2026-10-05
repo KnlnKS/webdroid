@@ -12,6 +12,7 @@ import { intrinsicFor } from "../../src/wasm/compiler/j2w";
 import type { NativeBinder } from "../../src/wasm/link/hostapi";
 import { Natives } from "../../src/wasm/host/natives";
 import { hostNet } from "../../src/wasm/host/inet";
+import { guestMemory } from "../../src/wasm/host/guest";
 import { heapUsed } from "../../src/wasm/host/stats";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 
@@ -46,5 +47,5 @@ function vfsDexes(path: string): DexFile[] | undefined {
   return names.length ? names.flatMap((n) => dexesIn(zip[n], n)) : undefined;
 }
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, ...(AOT && { aot: aotStore(AOT) }), ...opts });
+  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts });
 }

@@ -14,6 +14,8 @@ import { externs } from "../../src/wasm/link/intrinsics";
 import { natives } from "./oracle";
 import { rt } from "../../src/jvm/runtime";
 import { hostNatives } from "../../src/wasm/host/hostnatives";
+import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
+import { waitingNatives } from "../../src/wasm/host/nativesource";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { packModule, type CHeader, type DHeader } from "../../src/wasm/link/aot";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
@@ -32,7 +34,7 @@ const appPath = flag("--app", "");
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
-  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys()].sort();
+  const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
   const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, appPath && readFileSync(appPath).toString("base64")]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
@@ -107,9 +109,9 @@ cGroups.forEach((blocks, k) => {
   let cx: Compiler, built: ReturnType<Compiler["buildUnit"]>, touch: Set<string>;
   for (;;) {
     cx = new Compiler(w);
-    aot.beginTouch();
+    w.beginTouch();
     built = cx.buildUnit(methods.filter((m) => !skip.has(mid(m))), [], false, true);
-    touch = aot.endTouch();
+    touch = w.endTouch();
     const bad = check(built.bytes);
     if (!bad) break;
     const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";
@@ -137,9 +139,9 @@ const t1 = performance.now();
 const dGroups = aot.dKeys.map((_, k) => classesOf(aot.dGroupOf, k));
 dGroups.forEach((blocks, k) => {
   const names = blocks.map((b) => w.blockClass[b]);
-  aot.beginTouch();
+  w.beginTouch();
   const bytes = w.classModule(names.map((n) => w.link(n)));
-  const touch = aot.endTouch();
+  const touch = w.endTouch();
   const header: DHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch) };
   const bad = check(bytes);
   if (bad) throw new Error(`D ${k}: ${bad.message}`);
@@ -148,14 +150,14 @@ dGroups.forEach((blocks, k) => {
   dBytes += file.length;
 });
 // the classes the code reserved slots for beyond the platform's (arrays, ...) share one module; building it can reserve more
-const extraNames = () => aot.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
+const extraNames = () => w.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
 let extras: number, xbytes: Uint8Array, xtouch: Set<string>;
 do {
   const names = extraNames();
   extras = names.length;
-  aot.beginTouch();
+  w.beginTouch();
   xbytes = w.classModule(names.map((n) => w.link(n)));
-  xtouch = aot.endTouch();
+  xtouch = w.endTouch();
 } while (extraNames().length !== extras);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);
@@ -164,6 +166,7 @@ const t2 = performance.now();
 
 const index = aot.finish();
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
+writeFileSync(join(out, "waiting.json"), JSON.stringify(waitingNatives()));
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);

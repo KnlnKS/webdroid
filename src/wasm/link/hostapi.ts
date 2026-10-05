@@ -4,9 +4,11 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
-import type { Sched } from "./sched";
+import type { DexFile } from "../../jvm/dex";
+import type { Sched, Strand } from "./sched";
 
-export type HostFn = (...a: any[]) => unknown;
+/** a native; one marked `javaValues` is given and answers Java values as the tier holds them (references as they are: no String is converted, no array copied, no object wrapped) */
+export type HostFn = ((...a: any[]) => unknown) & { javaValues?: boolean };
 
 /** a Java class a registered spec implements in the host (rt.register outside the VM's own classes): its Java objects have a host object of `ctor` beside them, which its natives take as `this` */
 export interface HostSpec {
@@ -27,6 +29,8 @@ export interface NativeSource {
   /** the registered implementation of `cls`.`key` (name+descriptor); an instance method's `this` is its receiver. A String
    *  constructor's key is `<init>desc` and its implementation answers the String */
   find(cls: string, key: string, isStatic: boolean, hasBody: boolean): HostFn | undefined;
+  /** a stand-in for native `cls`.`key` that has no implementation yet: it finds one when it is called, as a JNI library registers its natives when it is loaded */
+  late?(cls: string, key: string): HostFn;
   /** a Java throwable raised by a native, by class and message */
   thrown(e: unknown): { cls: string; msg: string | null; obj?: object; java?: object } | undefined;
   /** the Java class name of an object the production runtime made, if `v` is one: a native result the Bridge copies into the Wasm heap */
@@ -35,6 +39,14 @@ export interface NativeSource {
   stores?(cls: string, run: () => void): Record<string, unknown>;
   /** the classes the host implements */
   hostSpecs?(): HostSpec[];
+}
+
+/** the native core's linear memory, where direct buffers live and native code reads them: a block is addressed by the 64-bit address the guest knows it by */
+export interface GuestMemory {
+  readonly memory: WebAssembly.Memory;
+  /** zeroed memory of `n` bytes, or 0n */
+  alloc(n: number): bigint;
+  free(address: bigint): void;
 }
 
 /** how Java objects cross to a native and back */
@@ -50,6 +62,8 @@ export interface HostBridge {
   hold(): () => void;
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value */
   invoke(m: MethodInfo, recv: object | null, args: unknown[]): unknown;
+  /** `invoke` on strand `s`, whose stack can wait: a Promise of the host value when the call waited */
+  invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown;
 }
 
 /** what the host side needs from the World */
@@ -90,4 +104,12 @@ export interface HostNet {
   (w: World, op: number, node: string, a: number, b: number): number;
   /** settles the lookup the last Resolve answered ASYNC for, after which the same Resolve answers it */
   wait?(w: World): Promise<void>;
+}
+
+/** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `World.adoptUnit`; it may decline, and then the World compiles inline. */
+export interface CompileService {
+  /** takes the second-tier compile of the method in `slot` (`World.upgradeJob` describes it); false if it cannot */
+  submit(w: World, slot: number): boolean;
+  /** dex files were added to the Program's default namespace, or (null) something the service cannot follow was: it stops serving */
+  added(dexes: DexFile[] | null): void;
 }

@@ -1,37 +1,85 @@
 // How host code enters Java on the Wasm tier: the Entry that src/jvm/natives/jentry.ts selects with `useEntry`, over one World. A Java object
 // is a facade (bridge.ts) to host code, one per object; a Java exception that leaves a call is thrown as the facade of the throwable, which
-// stands where the JS tier's JThrowable does. Nothing here suspends yet: a call that would wait for another thread is Track C's.
+// stands where the JS tier's JThrowable does. A call from host code that no Java frame is under (an event, a Suspending native after its first wait) runs on a new
+// strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise, as on the JS tier. A native that a
+// Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
 import { rt, JObj } from "../../jvm/runtime";
+import { JThread, curThread, mainThread, setCurThread } from "../../jvm/natives/jentry";
+import { processExited, never } from "../../process-exit";
 import { mangleField } from "../../jvm/abi";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import type { Entry } from "../../jvm/natives/jentry";
 import type { JavaClass } from "../../jvm/tier";
-import type { FieldInfo } from "../compiler/program";
+import type { FieldInfo, MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
+import type { Strand, ThreadRec } from "../link/sched";
+import type { Compiler } from "../compiler/j2w";
+import type { Code } from "../compiler/code";
+import type { Kind } from "../compiler/program";
 import { fromBits, refOf, toBits } from "./bridge";
 import { count } from "./stats";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
 
 export function wasmEntry(w: World): Entry {
-  const { bridge, prog } = w;
+  const { bridge, prog, sched } = w;
   const missing = (what: string): Error => rt.unimplemented(what);
+  const jthreads = new WeakMap<ThreadRec, JThread>(), recs = new WeakMap<JThread, ThreadRec>();
+  const jthreadOf = (rec: ThreadRec): JThread => {
+    if (rec === sched.mainRec) return mainThread;
+    let t = jthreads.get(rec);
+    if (!t) { t = new JThread(); jthreads.set(rec, t); recs.set(t, rec); }
+    return t;
+  };
+  sched.onThread = (rec) => setCurThread(jthreadOf(rec));
+  /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
+  const nativeOf = (): Strand | null => { const s = sched.current(); return s.root ? sched.running?.root ? null : sched.running : s; };
+  /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
+  let entering: ThreadRec | null = null;
+  const threadNow = (): ThreadRec => entering ?? nativeOf()?.thread ?? sched.mainRec;
+  const asThread = <T>(rec: ThreadRec, f: () => T): T => {
+    const was = entering, prev = curThread;
+    entering = rec; setCurThread(jthreadOf(rec));
+    try { return f(); } finally { entering = was; setCurThread(prev); }
+  };
+  /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
+  const onStrand = <T>(f: (s: Strand) => T): T => {
+    const s = sched.strand(threadNow(), nativeOf());
+    let r: T;
+    try { r = f(s); } catch (e) { s.end(); throw e; }
+    if (r instanceof Promise) void r.then(() => s.end(), () => s.end()); else s.end();
+    return r;
+  };
   /** `f` as a call into Java: an exception that leaves it reaches the host as its throwable's facade */
   const enter = <T>(f: () => T): T => {
     count("wasmEntries");
-    try { return f(); } catch (e) {
-      const java = w.throwable(w.boundary(e));
-      throw java ? bridge.toHost(java) : e;
-    }
+    const fail = (e: unknown) => { const java = w.throwable(w.boundary(e)); return java ? bridge.toHost(java) : e; };
+    try {
+      const r = f();
+      return r instanceof Promise ? r.catch((e) => { throw fail(e); }) as T : r;
+    } catch (e) { throw fail(e); }
   };
+  const chain = <A, B>(r: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => r instanceof Promise ? r.then(f) : f(r);
+  /** Java method `m` with host arguments */
+  const invoke = (m: MethodInfo, recv: object | null, args: unknown[]): unknown => onStrand((s) => bridge.invokeOn(s, m, recv, args));
+  /** a call made of `body` */
+  const call = (key: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, ...args: unknown[]): unknown =>
+    onStrand((s) => w.callFn(key, params, ret, body)(s, ...args));
   const scoped = <T>(f: () => T): T => { const mark = bridge.begin(); try { return f(); } finally { bridge.end(mark); } };
+  /** a JThread (what host code holds of a thread) is the Java Thread of its strands: the main thread's is made by its first Thread.currentThread() */
+  const threadObject = (t: JThread): object => {
+    const rec = t === mainThread ? sched.mainRec : recs.get(t) ?? sched.mainRec;
+    if (!rec.obj) asThread(rec, () => enter(() => invoke(prog.resolve("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;")!, null, [])));
+    return rec.obj!;
+  };
   const receiver = (obj: unknown, what: string): object => {
+    if (obj instanceof JThread) return threadObject(obj);
     if (obj === null || obj === undefined) throw new TypeError(`Cannot read properties of ${obj} (reading '${what}')`);
-    if (obj instanceof JObj && !refOf(obj) && !w.hosts.specOfHost(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
+    if (obj instanceof JObj && !(obj instanceof JThrowable) && !refOf(obj) && !w.hosts.specOfHost(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
     return bridge.toJava(obj, OBJECT) as object;
   };
-  const alloc = (cls: string) => w.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
-  const init = (cls: string) => enter(() => w.hostFn("e:init:" + cls, [], "V", (cx, c) => { cx.emitEnsure(c, cls); })());
+  const alloc = (cls: string) => call("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); }) as object | Promise<object>;
+  const init = (cls: string) => enter(() => call("e:init:" + cls, [], "V", (cx, c) => { cx.emitEnsure(c, cls); })) as void | Promise<void>;
 
   /** the static field `name` (of type `desc`, when given) that `cls` declares or inherits */
   const staticOf = (cls: string, name: string, desc?: string): FieldInfo | undefined => {
@@ -71,8 +119,8 @@ export function wasmEntry(w: World): Entry {
         return true;
       },
       has: (mname, desc) => { const m = prog.resolve(name, mname, desc); return !!m && !m.isStatic; },
-      call: (mname, desc) => { const m = method(mname, desc, true); return (...args) => enter(() => bridge.invoke(m, null, args)); },
-      special: (mname, desc) => { const m = method(mname, desc, false); return (self, ...args) => enter(() => bridge.invoke(m, receiver(self, mname), args)); },
+      call: (mname, desc) => { const m = method(mname, desc, true); return (...args) => enter(() => invoke(m, null, args)); },
+      special: (mname, desc) => { const m = method(mname, desc, false); return (self, ...args) => enter(() => invoke(m, receiver(self, mname), args)); },
     };
     classes.set(name, cls);
     return cls;
@@ -87,34 +135,31 @@ export function wasmEntry(w: World): Entry {
     vcall(obj, name, desc, ...args) {
       const recv = receiver(obj, name), cls = w.classNameOf(recv), m = prog.implFor(cls, name, desc);
       if (!m) throw missing(`vcall ${cls}.${name}${desc}`);
-      return enter(() => bridge.invoke(m, recv, args));
+      return enter(() => invoke(m, recv, args));
     },
     scall(cls, name, desc, ...args) {
       const m = prog.resolve(cls, name, desc);
       if (!m?.isStatic) throw missing(`scall ${cls}.${name}${desc}`);
-      return enter(() => bridge.invoke(m, null, args));
+      return enter(() => invoke(m, null, args));
     },
     newObj(cls, desc = "()V", ...args) {
-      const ctor = prog.get(cls)?.byKey.get("<init>" + desc);
+      // a class of natives takes the constructors of its superclass, as the JS tier's object does through its prototype
+      const c = prog.get(cls), ctor = c?.byKey.get("<init>" + desc) ?? (c && !c.dex ? prog.resolve(cls, "<init>", desc) : undefined);
       if (!ctor) throw missing(`newObj ${cls}.<init>${desc}`);
-      return enter(() => {
-        const o = alloc(cls);
-        bridge.invoke(ctor, o, args);
-        return bridge.toHost(o);
-      });
+      return enter(() => chain(alloc(cls), (o) => chain(invoke(ctor, o, args), () => scoped(() => bridge.toHost(o)))));
     },
-    staticField<T>(cls: string, field: string) { init(cls); return linkClass(cls).static(field) as T; },
-    linkInit(cls) { const c = linkClass(cls); init(cls); return c; },
+    staticField<T>(cls: string, field: string) { return chain(init(cls), () => linkClass(cls).static(field) as T); },
+    linkInit(cls) { const c = linkClass(cls); return chain(init(cls), () => c); },
     linkClass,
-    initClass(cls) { linkClass(cls); init(cls); return null; },
+    initClass(cls) { linkClass(cls); const r = init(cls); return r instanceof Promise ? r.then(() => {}) : null; },
     iof(o, cls) {
       const name = classNameOf(o);
       if (name === undefined) return false;
       return name[0] === "[" ? name === cls || ARRAY_SUPERS.has(cls) : prog.isSubclass(name, cls);
     },
     classNameOf,
-    callOn: (_thread, call) => call(),
-    after: (r, f) => r instanceof Promise ? r.then(f) : f(r),
+    callOn: (thread, run) => processExited() ? never() as never : asThread(thread === mainThread ? sched.mainRec : recs.get(thread) ?? sched.mainRec, run),
+    after: (r, f) => { if (!(r instanceof Promise)) return f(r); const rec = threadNow(); return r.then((v) => asThread(rec, () => f(v))); },
   };
 }
 

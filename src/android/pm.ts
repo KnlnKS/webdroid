@@ -34,8 +34,6 @@ const PKG = "android/content/pm/";
 const COMPONENT = PKG + "ComponentInfo", APP = PKG + "ApplicationInfo", ACTIVITY = PKG + "ActivityInfo";
 const SERVICE = PKG + "ServiceInfo", PROVIDER = PKG + "ProviderInfo", PACKAGE = PKG + "PackageInfo", RESOLVE = PKG + "ResolveInfo";
 
-/** a copy for a caller that may mutate it, as each binder reply is (Object.clone's) */
-const copy = <T extends object>(o: T): T => Object.assign(Object.create(Object.getPrototypeOf(o)), o);
 
 // PackageManager flags, as IPackageManager receives them
 const GET_ACTIVITIES = 1, GET_RECEIVERS = 2, GET_SERVICES = 4, GET_PROVIDERS = 8, GET_INSTRUMENTATION = 16, GET_SIGNATURES = 64;
@@ -210,7 +208,7 @@ function applicationInfoOf(record: PackageRecord, flags: number): JObj | Promise
   return info();
 }
 function* applicationInfo$(record: PackageRecord, flags: number): Gen<JObj> {
-  return copy(yield* awaited(applicationInfoOf(record, flags)));
+  return yield newObj("android/content/pm/ApplicationInfo", "(Landroid/content/pm/ApplicationInfo;)V", yield* awaited(applicationInfoOf(record, flags)));
 }
 
 // ── components

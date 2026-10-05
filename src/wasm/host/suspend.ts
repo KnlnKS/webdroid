@@ -11,7 +11,7 @@ type Native = HostFn & { $g?: (...a: unknown[]) => Generator<unknown, unknown, u
 
 /** natives whose production implementation answers a Promise for some arguments without being written as a generator or an async function (the
  *  survey's flag C: `after(...)` and `awaited(...)` results returned as they are) */
-const MAY_SUSPEND = new Set<string>([
+export const MAY_SUSPEND = new Set<string>([
   "com/android/org/conscrypt/NativeCrypto.EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I",
   "android/graphics/Typeface.nativeWarmUpCache(Ljava/lang/String;)V",
   "libcore/io/Linux.readBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;II)I",
@@ -33,6 +33,14 @@ const MAY_SUSPEND = new Set<string>([
   "libcore/io/Linux.connect(Ljava/io/FileDescriptor;Ljava/net/InetAddress;I)V",
   "libcore/io/Linux.recvfromBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;IIILjava/net/InetSocketAddress;)I",
 ]);
+/** what a native that can answer a Promise has in its body: it waits for something (`await`, a Promise, `after`, `awaited`), reads memory that pages in (`external`, `pagesIn`, `memoryAt`,
+ *  `guestAddress`), or hands on the result of a call into Java, which is a Promise when that call waits. The build lists the natives this holds for (`waitingNatives`), as the page
+ *  cannot read it from minified code. A native with arrays needs it: it cannot be settled where it was called (natives.ts `parkable`). */
+const WAITS = /\b(after|awaited|pagesIn|external|memoryAt|guestAddress|Promise|await)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
+export const mayWait = (fn: HostFn): boolean => (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || WAITS.test(Function.prototype.toString.call(fn));
+/** the natives the platform build was made for as Suspending, when the page has it */
+let declared: Set<string> | null = null;
+export const declareWaiting = (ids: string[]): void => { declared = new Set(ids); };
 /** natives found answering a Promise from a plain import: the report in run.json (`nativeSuspended`), and imported as Suspending in modules built afterwards */
 export const suspendedNatives = new Set<string>();
 
@@ -63,9 +71,11 @@ async function drive(it: Generator<unknown, unknown, unknown>, ctx: HostContext 
   return step.value;
 }
 
+/** the services the host implements behind binder: what they call may wait, and they take arrays (out parameters) */
+export const SERVICES = "webdroid/";
 /** whether native `id` is imported as Suspending */
-export function suspends(id: string, fn: HostFn): boolean {
-  return (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || MAY_SUSPEND.has(id) || suspendedNatives.has(id);
+export function suspends(id: string, fn: HostFn, arrays: boolean): boolean {
+  return (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || MAY_SUSPEND.has(id) || suspendedNatives.has(id) || (arrays && (id.startsWith(SERVICES) || (declared ? declared.has(id) : mayWait(fn))));
 }
 
 /** a plain import answered a Promise: nothing can wait there. It is reported, and the next module that imports it gets it as Suspending */
