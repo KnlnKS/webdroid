@@ -72,6 +72,7 @@ const resultKind = (p: Plan): string => (p.ret === null ? "v" : p.ret === T.exte
 
 const settleKey = (p: Plan): string => "settle:" + resultKind(p);
 const landingKey = (p: Plan): string => "land:" + resultKind(p);
+const importKey = (p: Plan): string => p.id + (p.suspends ? p.always ? "#s" : "#p" : "");
 interface Landing { own: [number, View][]; result: View | null; value: unknown; error?: unknown }
 
 interface Plan {
@@ -99,6 +100,7 @@ interface Plan {
   /** the import of each World (they differ in memory and exceptions) */
   wrapped?: WeakMap<HostContext, HostFn>;
   waiting?: WeakMap<HostContext, HostFn>;
+  plainLanding?: WeakMap<HostContext, HostFn>;
 }
 
 export class Natives implements NativeBinder {
@@ -144,7 +146,7 @@ export class Natives implements NativeBinder {
     const add = (m: MethodInfo, override: boolean) => {
       const p = this.plan(m, override);
       if (typeof p === "string") return;
-      for (const key of p.suspends && !p.always ? [p.id, p.id + "#s"] : [p.id]) {
+      for (const key of p.suspends && !p.always ? [p.id + "#p", p.id + "#s"] : [importKey(p)]) {
         if (!cx.nativeImports.has(key)) cx.nativeImports.set(key, cx.mb.importFunc("n", key, cx.mb.addFuncType(p.params, lands(p) ? [T.externref] : p.ret === null ? [] : [p.ret])));
       }
       if (parkable(p) && !cx.nativeImports.has(settleKey(p))) cx.nativeImports.set(settleKey(p), cx.mb.importFunc("n", settleKey(p), cx.mb.addFuncType([], p.ret === null ? [] : [p.ret])));
@@ -172,7 +174,7 @@ export class Natives implements NativeBinder {
   /** the function making a String the way constructor `m` does, over the production implementation */
   factory(cx: Compiler, m: MethodInfo): number | undefined {
     const p = this.plan(m);
-    if (typeof p === "string" || !cx.nativeImports.has(p.id)) return undefined;
+    if (typeof p === "string" || !cx.nativeImports.has(importKey(p))) return undefined;
     return cx.memo("factory:" + p.id, () => {
       const c = new Code(p.args.length);
       this.call(cx, c, m);
@@ -182,10 +184,11 @@ export class Natives implements NativeBinder {
 
   /** emits `m` over its own parameter locals: converts them to the import's types, calls it, converts the result */
   call(cx: Compiler, c: Code, m: MethodInfo): void {
-    const p = this.plan(m, true), imp = typeof p === "string" ? undefined : cx.nativeImports.get(p.id);
+    const p = this.plan(m, true), imp = typeof p === "string" ? undefined : cx.nativeImports.get(importKey(p));
     if (typeof p === "string" || imp === undefined) { cx.gap(c, `${mid(m)}: ${typeof p === "string" ? "native: " + p : "no host import"}`); return; }
     // other strands run while this one waits: it keeps who it is in locals and sets the globals again after the call
     const restore = p.suspends ? emitSave(cx, c) : null;
+    const parkedRestore = parkable(p) ? emitSave(cx, c) : null;
     const arrays: ReturnType<Natives["copyIn"]>[] = [];
     const scratch = p.args.some(isPrimArray) || p.retArray ? cx.scratch() : -1, sp0 = scratch >= 0 ? c.newLocal(T.i32) : -1;
     const top = scratch >= 0 && parkable(p) ? c.newLocal(T.i32) : -1, back = lands(p) ? c.newLocal(T.i32) : -1, landed = lands(p) ? c.newLocal(T.externref) : -1;
@@ -205,9 +208,8 @@ export class Natives implements NativeBinder {
         c.gget(wait);
         if (p.ret === null) c.if_(); else c.ifType(cx.mb.addFuncType([p.ret], [p.ret]));
         if (p.ret !== null) c.drop();
-        const save = emitSave(cx, c);
         c.i32(0).gset(wait).call(settle);
-        save();
+        parkedRestore!();
         c.end();
       }
     }
@@ -340,15 +342,18 @@ export class Natives implements NativeBinder {
       if (key === "land:check") { out[key] = ((rec: Landing) => { if ("error" in rec) throw rec.error; }) as HostFn; continue; }
       if (key.startsWith("land:")) { out[key] = ((rec: Landing) => rec.value) as HostFn; continue; }
       if (key === "land") { out[key] = land as HostFn; continue; }
-      const waits = key.endsWith("#s"), id = waits ? key.slice(0, -2) : key, p = this.plans.get(id);
+      const waits = key.endsWith("#s"), landing = key.endsWith("#p"), id = waits || landing ? key.slice(0, -2) : key, p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
-      const suspending = waits || p.always, cache = waits ? (p.waiting ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
+      const suspending = waits, cache = waits ? (p.waiting ??= new WeakMap()) : landing ? (p.plainLanding ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
+      // The module's import name fixes its suspension/landing ABI, even when a
+      // native bound after the build is now known to answer Promises.
+      const abiPlan = { ...p, suspends: waits || landing, always: waits && p.always };
       if (cached) { out[key] = cached; continue; }
-      const planned = (suspending: boolean) => wrapper(p, suspending ? hostForm(p.fn) : p.fn, raise, () => {
+      const planned = (suspending: boolean) => wrapper(abiPlan, landing ? p.fn : hostForm(p.fn), raise, () => {
         reportSuspended(id);
         ctx.gap(`${id}: native suspended (answers a Promise)`);
         return throwJava({ cls: "java/lang/UnsatisfiedLinkError", msg: `${id}: native suspended` });
-      }, view, put, ctx.bridge, parkable(p) ? { ...aux, canWait: () => ctx.sched.canWait(), park: (promise) => { reportSuspended(id); ctx.sched.parkNative(promise); }, owes: () => ctx.sched.owes(), yield: (promise) => ctx.sched.parkNative(promise) } : aux, suspending);
+      }, view, put, ctx.bridge, parkable(abiPlan) ? { ...aux, canWait: () => ctx.sched.canWait(), park: (promise) => { reportSuspended(id); ctx.sched.parkNative(promise); }, owes: () => ctx.sched.owes(), yield: (promise) => ctx.sched.parkNative(promise) } : aux, suspending);
       cache.set(ctx, out[key] = adaptImport(planned, ctx, suspending));
     }
     return out;

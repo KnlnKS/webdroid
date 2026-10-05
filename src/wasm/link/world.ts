@@ -901,7 +901,7 @@ export class World {
   /** whether native method `id` ("class.name+descriptor") has a host binding here, making its import available */
   nativeBound(id: string): boolean {
     if (id.startsWith("settle:") || id === "land" || id.startsWith("land:")) return true;
-    const m = methodOf(this.prog, id.endsWith("#s") ? id.slice(0, -2) : id);
+    const m = methodOf(this.prog, /#(?:s|p)$/.test(id) ? id.slice(0, -2) : id);
     return !!m && this.natives.prepare(m);
   }
   private unitImports(cx: Compiler): Record<string, any> {
