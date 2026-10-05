@@ -13,7 +13,16 @@ export class Code {
   private scratchI32 = -1;
   /** an i32 local for values that live within one expression */
   scratch(): number { return this.scratchI32 < 0 ? (this.scratchI32 = this.newLocal(T.i32)) : this.scratchI32; }
-  newLocal(t: VT): number { this.localTypes.push(t); return this.nparams + this.localTypes.length - 1; }
+  locals = new Set<number>();
+  localOffset = 0;
+  /** Snapshotting includes dead reference temporaries; live reads still require their original non-null type. */
+  nullableLocals = false;
+  nonNullLocals = new Set<number>();
+  newLocal(t: VT): number {
+    const i = this.nparams + this.localTypes.length;
+    if (this.nullableLocals && typeof t !== "number" && !t.nullable) { this.nonNullLocals.add(i); t = { ...t, nullable: true }; }
+    this.localTypes.push(t); return i;
+  }
   raw(...x: number[]): this { for (const v of x) this.b.push(v); return this; }
   u(n: number): this { uleb(n, this.b); return this; }
   s(n: number | bigint): this { sleb(n, this.b); return this; }
@@ -24,9 +33,9 @@ export class Code {
   i64(n: bigint): this { this.b.push(0x42); sleb(BigInt.asIntN(64, n), this.b); return this; }
   f32const(bits: number): this { this.b.push(0x43); for (let i = 0; i < 4; i++) this.b.push((bits >>> (8 * i)) & 255); return this; }
   f64const(bits: bigint): this { this.b.push(0x44); for (let i = 0n; i < 8n; i++) this.b.push(Number((bits >> (8n * i)) & 255n)); return this; }
-  lget(i: number): this { this.b.push(0x20); uleb(i, this.b); return this; }
-  lset(i: number): this { this.b.push(0x21); uleb(i, this.b); return this; }
-  ltee(i: number): this { this.b.push(0x22); uleb(i, this.b); return this; }
+  lget(i: number, nonNull = true): this { if (this.nullableLocals) this.locals.add(i); this.b.push(0x20); uleb(i + this.localOffset, this.b); if (nonNull && this.nonNullLocals.has(i)) this.refAsNonNull(); return this; }
+  lset(i: number): this { if (this.nullableLocals) this.locals.add(i); this.b.push(0x21); uleb(i + this.localOffset, this.b); return this; }
+  ltee(i: number): this { if (this.nullableLocals) this.locals.add(i); this.b.push(0x22); uleb(i + this.localOffset, this.b); if (this.nonNullLocals.has(i)) this.refAsNonNull(); return this; }
   gget(i: number): this { this.b.push(0x23); uleb(i, this.b); return this; }
   gset(i: number): this { this.b.push(0x24); uleb(i, this.b); return this; }
   private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
@@ -107,7 +116,27 @@ export class Code {
   refCast(ht: number, nullable = false): this { this.b.push(0xfb); uleb(nullable ? 23 : 22, this.b); sleb(ht, this.b); return this; }
   externConvertAny(): this { return this.gc(27); }
   satTrunc(k: number): this { this.b.push(0xfc); uleb(k, this.b); return this; }
+  private deferred: { at: number; emit: (c: Code) => void }[] = [];
+  /** Insert code once the enclosing method's complete local layout is known. */
+  defer(emit: (c: Code) => void): void { this.deferred.push({ at: this.b.length, emit }); }
+  materialize(): void {
+    if (!this.deferred.length) return;
+    const old = this.b, marks = this.marks;
+    this.b = []; this.marks = [];
+    let from = 0, mi = 0;
+    for (const { at, emit } of this.deferred) {
+      const offset = this.b.length - from;
+      while (mi < marks.length && marks[mi] < at) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
+      for (let i = from; i < at; i++) this.b.push(old[i]);
+      emit(this); from = at;
+    }
+    const offset = this.b.length - from;
+    while (mi < marks.length) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
+    for (let i = from; i < old.length; i++) this.b.push(old[i]);
+    this.deferred = [];
+  }
   finish(): number[] {
+    this.materialize();
     // locals: run-length encode consecutive identical types
     const out: number[] = [];
     const groups: [number, VT][] = [];

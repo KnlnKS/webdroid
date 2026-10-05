@@ -58,9 +58,18 @@ export class MC {
   /** "web:struct" of the field accesses that share a cast, and the local holding it */
   shadowKeys = new Set<string>();
   shadows = new Map<string, number>();
+  private root!: Code;
+  private chunk?: { code: Code; label: string; count: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number };
+  private chunks: NonNullable<MC["chunk"]>[] = [];
+  private resultLocal = -1;
+  private controlLocal = -1;
+  private stateType = -1;
+  private stateLocal = -1;
+  private chunkDepth = 0;
+  private maxChunkDepth = 0;
   constructor(public cx: Compiler, public m: MethodInfo) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
-    this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
+    this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
     this.tries = this.item.tries.length > 0;
   }
 
@@ -148,7 +157,14 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    if (this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    const hasLoops = flow.regions.some((r) => r.scopes.some((s) => s.loop));
+    if (hasLoops) {
+      c.nullableLocals = true;
+      this.controlLocal = c.newLocal(T.i32);
+      if (m.ret !== "V") this.resultLocal = c.newLocal(cx.vtOf(kindOf(m.ret)));
+      if (!this.tries) this.excLocal = c.newLocal(T.anyref);
+    }
+    if (hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -203,10 +219,33 @@ export class MC {
   private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
   /** gives the frame the weight of its parameters and locals */
   weigh(): Code {
-    const own = 4 + this.code.nparams + this.code.localTypes.length;
+    const types = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => this.cx.vtOf(kindOf(p))), ...this.root.localTypes];
+    if (this.chunks.length) {
+      this.stateType = this.cx.mb.addType({ k: "struct", fields: types.map((t) => ({ t, mut: true })) });
+      this.stateLocal = this.root.newLocal(refNull(this.stateType));
+    }
+    const own = this.chunks.length ? (5 + types.length) * (1 + this.maxChunkDepth) + 8 * this.maxChunkDepth : 4 + types.length;
+    for (const ch of this.chunks) {
+      ch.locals = [...ch.code.locals].sort((a, b) => a - b);
+      const owner = this.cx.mb.funcNames[this.cx.fn.get(mid(this.m))! - this.cx.mb.nImportedFuncs];
+      const name = `${owner}#loop${ch.label.slice(1)}`;
+      ch.f = this.cx.mb.reserveFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), name);
+      this.cx.outlines.push({ name, f: ch.f, code: ch.code, m: this.m });
+      const d = new Code(1), count = d.newLocal(T.i32), status = d.newLocal(T.i32);
+      d.loop().lget(0).i32(0).structSet(this.stateType, ch.count);
+      d.lget(0).call(ch.f).ltee(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
+      d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end().i32(1).ret();
+      ch.dispatch = this.cx.mb.addFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), d.finish(), "$dispatch:" + name);
+    }
     for (const at of this.weights) this.code.patch(at, own);
     if (this.entryDepth < 0 && this.boundable) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
-    return this.code;
+    for (const ch of this.chunks) {
+      ch.code.materialize();
+      ch.code.nparams = 1; ch.code.localTypes = [...types, refNull(this.stateType)];
+      this.cx.mb.setBody(ch.f, ch.code.finish());
+    }
+    this.root.materialize();
+    return this.root;
   }
   /** the weight of the heaviest method this one calls, once it counts no depth */
   private calleeWeight = 0;
@@ -278,7 +317,13 @@ export class MC {
     if (!loop) { this.code.block(bt); return; }
     this.code.loop(bt);
     if (label[0] === "L") {
-      if (this.cx.counting) this.cx.emitCount(this.code, this.m);
+      if (this.chunk?.label === label) {
+        const ch = this.chunk, c = this.code;
+        c.lget(ch.count).i32(1024).raw(OP.i32_eq).if_(); this.push("if");
+        this.chunkReturn(1); this.pop(); c.end();
+        c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
+      }
+      if (this.cx.counting && !this.chunk) this.cx.emitCount(this.code, this.m);
       if (this.waiting.has(+label.slice(1))) this.fuel();
     }
   }
@@ -286,12 +331,87 @@ export class MC {
 
   emitRegion(k: number) {
     const r = this.flow.regions[k];
-    const open: { close: number }[] = []; let next = 0;
-    for (let p = 0; p <= r.order.length; p++) {
+    this.emitSpan(r, 0, r.order.length, r.scopes);
+  }
+  private emitSpan(r: Flow["regions"][number], start: number, end: number, scopes: Flow["regions"][number]["scopes"]) {
+    const open: { close: number }[] = []; let next = 0, p = start;
+    while (p <= end) {
       while (open.length && open[open.length - 1].close === p) { open.pop(); this.endBlk(); }
-      for (; next < r.scopes.length && r.scopes[next].open === p; next++) { const s = r.scopes[next]; open.push(s); this.blk(s.label, s.loop); }
-      if (p < r.order.length) this.emitBlock(r.order[p]);
+      let outlined = false;
+      for (; next < scopes.length && scopes[next].open === p; next++) {
+        const s = scopes[next];
+        if (s.loop) {
+          let last = next + 1;
+          while (last < scopes.length && scopes[last].open < s.close) last++;
+          this.outline(r, s, scopes.slice(next + 1, last));
+          next = last; p = s.close; outlined = true;
+          break;
+        }
+        open.push(s); this.blk(s.label, false);
+      }
+      if (outlined) continue;
+      if (p < end) this.emitBlock(r.order[p]);
+      p++;
     }
+  }
+  private chunkReturn(status: number): void {
+    this.code.i32(status).br(this.depth("$chunkReturn"));
+  }
+  private outline(r: Flow["regions"][number], scope: Flow["regions"][number]["scopes"][number], scopes: Flow["regions"][number]["scopes"]) {
+    const parent = this.code, nest = this.nest, outer = this.chunk;
+    const body = new Code(this.root.nparams); body.localTypes = this.root.localTypes; body.nullableLocals = true; body.nonNullLocals = this.root.nonNullLocals; body.localOffset = 1;
+    body.defer((c) => {
+      c.raw(0x20, 0).lset(this.stateLocal);
+      this.loadState(c, ch.locals);
+    });
+    const ch = { code: body, label: scope.label, count: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1 };
+    this.chunks.push(ch); this.code = body; this.nest = []; this.chunk = ch;
+    this.maxChunkDepth = Math.max(this.maxChunkDepth, ++this.chunkDepth);
+    this.push("$chunkReturn"); body.block(T.i32);
+    this.push("$chunkCaught"); body.block(T.anyref);
+    this.push("$chunkTry"); body.tryTable(null, [[0, this.cx.tag, 0]]);
+    this.blk(scope.label, true);
+    this.emitSpan(r, scope.open, scope.close, scopes);
+    this.endBlk(); this.chunkReturn(0);
+    this.pop(); body.end().unreachable();
+    this.pop(); body.end().lset(this.excLocal); this.chunkReturn(3);
+    this.pop(); body.end();
+    if (this.cx.counting) this.cx.emitCount(body, this.m, ch.count);
+    body.defer((c) => { this.saveState(c, ch.locals); c.ret(); });
+    for (const l of body.locals) parent.locals.add(l);
+    this.chunkDepth--; this.code = parent; this.nest = nest; this.chunk = outer;
+    const c = parent;
+    this.push("$chunkCall"); c.loop();
+    c.i32(0).lset(ch.count);
+    c.defer((c) => {
+      c.lget(this.stateLocal).refIsNull().if_().gc(1, this.stateType).lset(this.stateLocal).end();
+      this.saveState(c, ch.locals);
+      c.lget(this.stateLocal).refAsNonNull().call(ch.dispatch).lset(this.controlLocal);
+      this.loadState(c, ch.locals);
+    });
+    c.lget(this.controlLocal).i32(1).raw(OP.i32_eq).brIf(0);
+    c.lget(this.controlLocal).i32(2).raw(OP.i32_eq).if_(); this.push("if");
+    if (this.resultLocal >= 0) c.lget(this.resultLocal);
+    this.methodReturn(); this.pop(); c.end();
+    c.lget(this.controlLocal).i32(3).raw(OP.i32_eq).if_().lget(this.excLocal).throw_(this.cx.tag).end();
+    for (let i = 0; i < ch.exits.length; i++) {
+      c.lget(this.controlLocal).i32(4 + i).raw(OP.i32_eq).if_(); this.push("if");
+      const saved = this.block, exit = ch.exits[i]; this.block = exit.block;
+      this.jump(exit.pc, exit.final); this.block = saved; this.pop(); c.end();
+    }
+    this.pop(); c.end();
+  }
+  private saveState(c: Code, locals: number[]): void {
+    for (const i of locals) c.lget(this.stateLocal).refAsNonNull().lget(i, false).structSet(this.stateType, i);
+  }
+  private loadState(c: Code, locals: number[]): void {
+    for (const i of locals) if (i !== this.controlLocal) c.lget(this.stateLocal).refAsNonNull().structGet(this.stateType, i).lset(i);
+  }
+  private methodReturn(): void {
+    if (this.chunk) {
+      if (this.resultLocal >= 0) this.code.lset(this.resultLocal);
+      this.chunkReturn(2);
+    } else { this.leave(); this.code.ret(); }
   }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
@@ -308,7 +428,14 @@ export class MC {
   }
   jump(targetPc: number, final: boolean) {
     const flow = this.flow, c = this.code, v = flow.blockAt[targetPc];
-    switch (flow.go(this.block, v, final)) {
+    const go = flow.go(this.block, v, final);
+    const label = go === Go.Continue ? "L" + targetPc : go === Go.Break ? "B" + targetPc : "$disp";
+    if (this.chunk && go !== Go.Next && !this.nest.includes(label)) {
+      let i = this.chunk.exits.findIndex((e) => e.pc === targetPc && e.block === this.block && e.final === final);
+      if (i < 0) { i = this.chunk.exits.length; this.chunk.exits.push({ pc: targetPc, block: this.block, final }); }
+      this.chunkReturn(4 + i); return;
+    }
+    switch (go) {
       case Go.Next: return;
       case Go.Break: c.br(this.depth("B" + targetPc)); return;
       case Go.Continue: c.br(this.depth("L" + targetPc)); return;
@@ -420,10 +547,10 @@ export class MC {
       }
       case "move-result": case "move-result-wide": case "move-result-object": throw new Error("move-result without invoke at " + ins.pc);
       case "move-exception": c.lget(this.excLocal); this.set("L"); return;
-      case "return-void": this.leave(); c.ret(); return;
-      case "return": this.get("I", a); this.leave(); c.ret(); return;
-      case "return-wide": this.get("J", a); this.leave(); c.ret(); return;
-      case "return-object": this.get("L", a); this.leave(); c.ret(); return;
+      case "return-void": this.methodReturn(); return;
+      case "return": this.get("I", a); this.methodReturn(); return;
+      case "return-wide": this.get("J", a); this.methodReturn(); return;
+      case "return-object": this.get("L", a); this.methodReturn(); return;
       case "const/4": case "const/16": case "const": this.constNarrow(b); return;
       case "const/high16": this.constNarrow(b << 16); return;
       case "const-wide/16": case "const-wide/32": this.constWide(BigInt(b)); return;
@@ -635,7 +762,7 @@ export class MC {
     const c = this.code, cases = switchCases(this.item, ins), flow = this.flow;
     const lo = Math.min(...cases.map(([k]) => k)), hi = Math.max(...cases.map(([k]) => k));
     // keys dense enough make a jump table, when every target is a label (a hole and the fall-through go to the end of the block)
-    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, flow.blockAt[t], false); return g === Go.Break || g === Go.Continue; });
+    const labelled = cases.every(([, t]) => { const g = flow.go(this.block, flow.blockAt[t], false); return g === Go.Break ? this.nest.includes("B" + t) : g === Go.Continue && this.nest.includes("L" + t); });
     if (cases.length >= 4 && hi - lo < 4 * cases.length && labelled) {
       const target = new Map(cases);
       this.push("$sw"); c.block();
