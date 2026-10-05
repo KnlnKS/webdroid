@@ -261,10 +261,10 @@ export function redraw(): void { scheduleComposite(); }
 let touchDown = 0n;
 /** a pointer event to the window under it, as InputDispatcher delivers it; charged to
  *  perf.inputMs, since the wall time a tap costs is otherwise in no counter at all */
-export function dispatchPointer(action: number, x: number, y: number): Promise<void> {
+export function dispatchPointer(action: number, x: number, y: number, eventTime = uptimeMillis()): Promise<void> {
   const t0 = performance.now();
   noteInput();
-  const now = BigInt(Math.floor(uptimeMillis()));
+  const now = BigInt(Math.floor(eventTime));
   if (action === 0) touchDown = now;
   return dispatchTouch(action, x, y, touchDown, now).then(() => {}, toThread(mainThread)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
