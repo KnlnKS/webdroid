@@ -12,7 +12,7 @@ import type { Entry } from "../../jvm/natives/jentry";
 import type { JavaClass } from "../../jvm/tier";
 import type { FieldInfo, MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
-import type { Strand, ThreadRec } from "../link/sched";
+import { ThreadRec, type Strand } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
 import type { Kind } from "../compiler/program";
@@ -30,6 +30,13 @@ export function wasmEntry(w: World): Entry {
     let t = jthreads.get(rec);
     if (!t) { t = new JThread(); jthreads.set(rec, t); recs.set(t, rec); }
     return t;
+  };
+  /** the thread record of a JThread: a thread the host made enters Java as a thread of its own, with the Java Thread made when it first asks for it */
+  const recOf = (t: JThread): ThreadRec => {
+    if (t === mainThread) return sched.mainRec;
+    let rec = recs.get(t);
+    if (!rec) { rec = new ThreadRec(null); rec.name = t.jname; recs.set(t, rec); jthreads.set(rec, t); }
+    return rec;
   };
   sched.onThread = (rec) => setCurThread(jthreadOf(rec));
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
@@ -68,7 +75,7 @@ export function wasmEntry(w: World): Entry {
   const scoped = <T>(f: () => T): T => { const mark = bridge.begin(); try { return f(); } finally { bridge.end(mark); } };
   /** a JThread (what host code holds of a thread) is the Java Thread of its strands: the main thread's is made by its first Thread.currentThread() */
   const threadObject = (t: JThread): object => {
-    const rec = t === mainThread ? sched.mainRec : recs.get(t) ?? sched.mainRec;
+    const rec = recOf(t);
     if (!rec.obj) asThread(rec, () => enter(() => invoke(prog.resolve("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;")!, null, [])));
     return rec.obj!;
   };
@@ -158,7 +165,7 @@ export function wasmEntry(w: World): Entry {
       return name[0] === "[" ? name === cls || ARRAY_SUPERS.has(cls) : prog.isSubclass(name, cls);
     },
     classNameOf,
-    callOn: (thread, run) => processExited() ? never() as never : asThread(thread === mainThread ? sched.mainRec : recs.get(thread) ?? sched.mainRec, run),
+    callOn: (thread, run) => processExited() ? never() as never : asThread(recOf(thread), run),
     after: (r, f) => { if (!(r instanceof Promise)) return f(r); const rec = threadNow(); return r.then((v) => asThread(rec, () => f(v))); },
   };
 }

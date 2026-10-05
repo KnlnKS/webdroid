@@ -4,11 +4,12 @@
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
 import type { Intrinsic } from "../compiler/j2w";
+import { Block, ROOT, emitBlock } from "./sched";
 
 const STRUCT = "android/system/StructAddrinfo", INET = "java/net/InetAddress", GAI = "android/system/GaiException";
 /** the answer of op 0 for a lookup that cannot finish synchronously */
 export const ASYNC = -0x80000000;
-export const enum NetOp { Resolve, Byte }
+export const enum NetOp { Resolve, Byte, Wait }
 
 export const inetIntrinsics = new Map<string, Intrinsic>();
 inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landroid/system/StructAddrinfo;I)[Ljava/net/InetAddress;", (cx, m, c) => {
@@ -17,7 +18,11 @@ inetIntrinsics.set("libcore/io/Linux.android_getaddrinfo(Ljava/lang/String;Landr
   const byte = (a: () => void, b: () => void) => { c.i32(NetOp.Byte).lget(1).externConvertAny(); a(); b(); c.call(cx.imp.net); };
   for (const l of [1, 2]) { c.lget(l).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); }
   c.i32(NetOp.Resolve).lget(1).externConvertAny().lget(2).refCast(hints).structGet(hints, field("ai_family")).lget(2).refCast(hints).structGet(hints, field("ai_flags")).call(cx.imp.net).lset(n);
-  c.lget(n).i32(ASYNC).raw(OP.i32_eq).if_(); cx.gap(c, "android_getaddrinfo: the relay resolves this name asynchronously"); c.end();
+  // a name the relay must look up: this strand waits for the answer, if it has a stack of its own to wait on
+  c.lget(n).i32(ASYNC).raw(OP.i32_eq).if_();
+  c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).if_(); cx.gap(c, "android_getaddrinfo: the relay resolves this name asynchronously"); c.end();
+  emitBlock(cx, c, Block.Resolve, () => c.lget(1), () => c.lget(2).refCast(hints).structGet(hints, field("ai_family")).raw(OP.f64_convert_i32_s), () => c.lget(2).refCast(hints).structGet(hints, field("ai_flags"))); c.lset(n);
+  c.end();
   c.lget(n).i32(0).raw(OP.i32_lt_s).if_();
   const ctor = cx.prog.resolve(GAI, "<init>", "(Ljava/lang/String;I)V")!;
   cx.emitEnsure(c, GAI); cx.emitNew(c, GAI); c.lset(ex).lget(ex); cx.str.literal(c, "android_getaddrinfo"); c.i32(0).lget(n).raw(OP.i32_sub); cx.callMethod(c, ctor);

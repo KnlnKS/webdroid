@@ -20,7 +20,7 @@ import { hostInfo, typeName } from "./classes";
 import { HostClasses } from "./hostclass";
 import { mhInvoke } from "./mhandles";
 import { hostText } from "./members";
-import { ASYNC } from "./inet";
+import { ASYNC, NetOp } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
@@ -994,6 +994,10 @@ export class World {
   unwound<T>(f: () => T): T {
     const depth = this.rt.depth.value;
     try { return f(); } catch (e) { this.rt.depth.value = depth; throw e; }
+  }
+  /** the addresses of host name `node` for a strand that waits for the relay's answer (inet.ts): their number, or minus an EAI code */
+  resolveName(node: unknown, family: number, flags: number): Promise<number> | number {
+    return this.opts.net!(this, NetOp.Wait, this.hostString(node) as string, family, flags);
   }
   /** the Java throwable a call from JS threw, if `e` is one */
   throwable(e: unknown): object | undefined {

@@ -11,6 +11,7 @@ import { rt } from "../compiler/rtfns";
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
 import { Monitors, St, type Header } from "./monitor";
+import { TextKind } from "./members";
 import { promising, suspending } from "./module";
 import type { World } from "./world";
 
@@ -22,9 +23,9 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, BindMain, Plain, Resume }
+export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume }
 /** operations that may wait (`host.block`, Suspending) */
-export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init }
+export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Resolve }
 
 const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
 const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
@@ -92,18 +93,18 @@ rt("initWait", ["I"], "I", (cx, c) => {
 });
 rt("initWake", ["I"], "V", (cx, c) => { emitSync(cx, c, Sync.InitDone, null, () => c.lget(0).raw(OP.f64_convert_i32_s)); c.drop(); });
 
-// curThread(): the running thread, made on first use as ART's Thread::CreatePeer does for the main thread
+// curThread(): the running thread, made on first use as ART's Thread::CreatePeer does for the main thread (any other the host enters Java as is named by its host record)
 rt("curThread", [], "L", (cx, c) => {
   const g = thrOf(cx), ctor = cx.prog.resolve(THREAD, "<init>", `(L${GROUP};Ljava/lang/String;IZ)V`);
   if (!ctor) { cx.gap(c, "Thread.<init>(ThreadGroup, String, int, boolean)"); return; }
   c.gget(g).refIsNull().if_();
   cx.emitEnsure(c, THREAD); cx.emitNew(c, THREAD); c.gset(g);
-  c.gget(g); cx.emitEnsure(c, GROUP); c.gget(cx.staticGlobal(GROUP, "mainThreadGroup")); cx.str.literal(c, "main"); c.i32(NORM_PRIORITY).i32(0);
+  c.gget(g); cx.emitEnsure(c, GROUP); c.gget(cx.staticGlobal(GROUP, "mainThreadGroup")); c.i32(TextKind.ThreadName).i32(0).call(cx.imp.text).anyConvertExtern(); c.i32(NORM_PRIORITY).i32(0);
   cx.callMethod(c, ctor);
   // ART records the native thread in the peer, which is what Thread.isAlive reads
   const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
   c.gget(g).refCast(st).i64(1n).structSet(st, peer);
-  emitSync(cx, c, Sync.BindMain, () => c.gget(g)); c.drop();
+  emitSync(cx, c, Sync.Bind, () => c.gget(g)); c.drop();
   c.end().gget(g);
 });
 
@@ -160,6 +161,8 @@ export const defaultLoop: HostLoop = {
 
 /** what the host knows of a Java Thread */
 export class ThreadRec {
+  /** the name of the Thread made for it on first use */
+  name = "main";
   interrupted = false;
   permit = false;
   /** wakes the thread out of a wait or sleep, for an interrupt */
@@ -283,7 +286,7 @@ export class Sched {
       case Sync.Exit: return this.monitors.exit(obj!, s);
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
       case Sync.Holds: return +this.monitors.holds(obj!, s);
-      case Sync.BindMain: this.main.obj = obj; this.threads.set(obj!, this.main); return 0;
+      case Sync.Bind: s.thread.obj = obj; this.threads.set(obj!, s.thread); return 0;
       case Sync.Create: return this.create(obj!);
       case Sync.Interrupt: { const r = this.rec(obj!); if (r?.alive) { r.interrupted = true; r.wake?.(); r.parked?.(); } return 0; }
       case Sync.IsInterrupted: return +(this.rec(obj!)?.interrupted ?? false);
@@ -313,6 +316,7 @@ export class Sched {
       case Block.Park: return this.park(s, a, b !== 0);
       case Block.Yield: return this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : Promise.resolve(St.Ok);
       case Block.Init: return this.initWait(s, a);
+      case Block.Resolve: return this.w.resolveName(obj, a, b);
     }
   }
   /** LockSupport.park: returns on a permit, the deadline or an interrupt (which stays set) */
