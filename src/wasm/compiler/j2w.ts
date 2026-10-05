@@ -260,6 +260,7 @@ export class Compiler implements Base {
   callRt(c: Code, name: string): void {
     const d = rtfns.get(name)!;
     c.i32(this.w.synthSlot(name, d)).callIndirect(this.sig(d.params, d.ret));
+    if (d.pure) c.indirect--;
   }
   /** host.info(kind, a, b): what the host knows about classes, see World.info */
   info(c: Code, kind: number, a: () => void, b: () => void = () => c.i32(0)): Code { c.i32(kind); a(); b(); return c.call(this.imp.info); }

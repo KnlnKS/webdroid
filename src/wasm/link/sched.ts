@@ -59,7 +59,7 @@ const millis = (c: Code, ms: number, ns: number) => c.lget(ms).raw(OP.f64_conver
 rt("blockStatus", ["I"], "V", (cx, c) => {
   for (const [st, thrower] of [[St.Interrupted, "ie"], [St.Imse, "imse"], [St.Nbs, "nbs"]] as const) { c.lget(0).i32(st).raw(OP.i32_eq).if_(); cx.callThrower(c, thrower); c.end(); }
   for (const [st, code] of [[St.Neg, 0], [St.Nanos, 1]] as const) { c.lget(0).i32(st).raw(OP.i32_eq).if_().i32(code); cx.callThrower(c, "iaet"); c.end(); }
-});
+}, true);
 /** throws what the status on the stack stands for, if it is not Ok */
 const check = (cx: Compiler, c: Code) => { const st = c.newLocal(T.i32); c.lset(st).lget(st).if_().lget(st); cx.callRt(c, "blockStatus"); c.end(); };
 
@@ -71,8 +71,8 @@ rt("menterSlow", ["L"], "V", (cx, c) => {
   emitBlock(cx, c, Block.Enter, () => c.lget(0)); c.lset(st);
   c.end();
   c.lget(st).if_().lget(st); cx.callRt(c, "blockStatus"); c.end();
-});
-rt("mexitSlow", ["L"], "V", (cx, c) => { emitSync(cx, c, Sync.Exit, () => c.lget(0)); check(cx, c); });
+}, true);
+rt("mexitSlow", ["L"], "V", (cx, c) => { emitSync(cx, c, Sync.Exit, () => c.lget(0)); check(cx, c); }, true);
 // yieldNow(): a chance for other strands and the event loop. A stack with JS frames on it cannot suspend (the engine says so by throwing), and
 // a yield that cannot happen is not an error
 rt("yieldNow", [], "V", (cx, c) => {
@@ -80,8 +80,8 @@ rt("yieldNow", [], "V", (cx, c) => {
   c.block().tryTable(null, [[2, 0, 0]]);
   emitBlock(cx, c, Block.Yield); c.drop();
   c.end().end().end();
-});
-rt("yieldFuel", [], "V", (cx, c) => { cx.callRt(c, "yieldNow"); });
+}, true);
+rt("yieldFuel", [], "V", (cx, c) => { cx.callRt(c, "yieldNow"); }, true);
 // initWait(class id): 1 when the request proceeds with the statics as they are (a cycle), 0 once the initialization it waited for is over
 rt("initWait", ["I"], "I", (cx, c) => {
   const st = c.newLocal(T.i32);

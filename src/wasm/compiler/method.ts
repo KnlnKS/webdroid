@@ -432,7 +432,7 @@ export class MC {
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
       case "const-method-handle": case "const-method-type":
         cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
-      case "monitor-enter": case "monitor-exit": this.nonNull(a); c.call(cx.helper(ins.name === "monitor-enter" ? "menter" : "mexit")); return;
+      case "monitor-enter": case "monitor-exit": this.nonNull(a); this.monitor(ins.name === "monitor-enter"); return;
       case "check-cast": {
         if (this.unresolved(dex.type(b))) return;
         const name = descToName(dex.type(b));
@@ -491,6 +491,19 @@ export class MC {
     if (n.startsWith("sget") || n.startsWith("sput")) return this.emitStatic(ins);
     if (n.startsWith("invoke")) return this.emitInvoke(ins);
     this.emitArith(ins);
+  }
+  private monObj = -1; private monHdr = -1;
+  /** monitor-enter or -exit of the object on the stack: the uncontended lock of a free object, and the release of a lock held once, inline; the rest is the helper's (j2w.ts menter) */
+  private monitor(enter: boolean) {
+    const c = this.code, cx = this.cx, tObj = cx.tObj;
+    if (this.monObj < 0) { this.monObj = c.newLocal(ref(tObj)); this.monHdr = c.newLocal(T.i64); }
+    const o = this.monObj, w = this.monHdr, tok = () => c.gget(cx.global("rt", "sid", T.i32, true)).i32(8).raw(OP.i32_shl).i32(1).raw(OP.i32_or);
+    c.lset(this.tmpL).lget(this.tmpL).refCast(tObj).lset(o).lget(o).structGet(tObj, 1).ltee(w).raw(OP.i32_wrap_i64);
+    if (enter) c.raw(OP.i32_eqz); else { tok(); c.raw(OP.i32_eq); }
+    c.if_();
+    c.lget(o).lget(w);
+    if (enter) tok().raw(OP.i64_extend_i32_u, OP.i64_add); else c.lget(w).raw(OP.i32_wrap_i64, OP.i64_extend_i32_u, OP.i64_sub);
+    c.structSet(tObj, 1).else_().lget(this.tmpL).call(cx.helper(enter ? "menter" : "mexit")).end();
   }
   /** a 32-bit constant: an int, float bits, or (zero) null, as its web's kind says */
   constNarrow(v: number) {

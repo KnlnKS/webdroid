@@ -6,12 +6,15 @@
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
 import type { Code } from "../compiler/code";
-import type { Intrinsic } from "../compiler/j2w";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
+import type { MethodInfo } from "../compiler/program";
 import "./guest";
 
 /** the guest's first mapped address (src/native/abi.ts LOW) */
 const LOW = 0x1_0000n;
 const MEMORY = "libcore/io/Memory.", MEMORY_REF = "java/nio/DirectByteBuffer$MemoryRef";
+/** the production native for an address the runtime functions do not reach: it only reads or writes memory, so it runs no Java code */
+const leaf = (cx: Compiler, c: Code, m: MethodInfo) => { const n = c.targets.length; cx.natives.call(cx, c, m); c.targets.length = n; };
 export const memoryIntrinsics = new Map<string, Intrinsic>();
 
 /** leaves 1 when the address in local `a` (a long) is one the runtime functions reach */
@@ -22,11 +25,11 @@ const SCALARS: [peek: string, poke: string, bits: 8 | 16 | 32 | 64][] = [["peekB
 for (const [peek, poke, bits] of SCALARS) {
   memoryIntrinsics.set(MEMORY + peek, (cx, m, c) => {
     guest(c, 0).if_(bits === 64 ? T.i64 : T.i32).lget(0).raw(OP.i32_wrap_i64); cx.callRt(c, `gld${bits}`);
-    c.else_(); cx.natives.call(cx, c, m); c.end();
+    c.else_(); leaf(cx, c, m); c.end();
   });
   memoryIntrinsics.set(MEMORY + poke, (cx, m, c) => {
     guest(c, 0).if_().lget(0).raw(OP.i32_wrap_i64).lget(1); cx.callRt(c, `gst${bits}`);
-    c.else_(); cx.natives.call(cx, c, m); c.end();
+    c.else_(); leaf(cx, c, m); c.end();
   });
 }
 
@@ -47,7 +50,7 @@ for (const [kind, ek, swaps] of ARRAYS) for (const peek of [true, false]) {
     c.lget(ARR).lget(INDEX).lget(COUNT).lget(0).raw(OP.i32_wrap_i64);
     if (swaps) c.lget(SWAP); else c.i32(0);
     cx.callRt(c, `${peek ? "gget" : "gput"}_${ek}`);
-    c.else_(); cx.natives.call(cx, c, m); c.end();
+    c.else_(); leaf(cx, c, m); c.end();
   });
 }
 

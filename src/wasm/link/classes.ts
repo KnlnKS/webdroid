@@ -172,7 +172,7 @@ rt("instArr", ["L", "I"], "I", (cx, c) => {
   c.lget(0).refAsNonNull(); vtId(cx, c); c.lset(s);
   c.lget(s).lget(1).raw(OP.i32_eq).lget(1).i32(cx.idOf(OBJ_ARRAY)).raw(OP.i32_eq).raw(OP.i32_or).if_().i32(1).ret().end();
   c.lget(1); cx.callRt(c, "classOf"); c.lget(s); cx.callRt(c, "classOf"); isAssignableFrom(cx, c);
-});
+}, true);
 // astore(array, value): ArrayStoreException unless value's class is assignable to the array's component class
 rt("astore", ["L", "L"], "V", (cx, c) => {
   const { tVT, tArr } = cx, avt = c.newLocal(refNull(tVT)), vvt = c.newLocal(refNull(tVT)), e = c.newLocal(T.i32), k = c.newLocal(T.i32);
@@ -193,7 +193,7 @@ rt("astore", ["L", "L"], "V", (cx, c) => {
   // an array component: Class.isAssignableFrom decides
   c.lget(e); cx.callRt(c, "classOf"); word(vvt, H.ID); cx.callRt(c, "classOf"); isAssignableFrom(cx, c);
   c.raw(OP.i32_eqz).if_(); fail(); c.end();
-});
+}, true);
 // acopy(src, sp, dst, dp, n): element-wise copy between reference arrays of different classes; an element dst cannot hold throws
 // ArrayStoreException after the elements before it have been copied (System.arraycopy)
 rt("acopy", ["L", "I", "L", "I", "I"], "V", (cx, c) => {
@@ -204,7 +204,7 @@ rt("acopy", ["L", "I", "L", "I", "I"], "V", (cx, c) => {
   c.lget(2).lget(v); cx.callRt(c, "astore");
   c.lget(dd).refAsNonNull().lget(3).lget(i).raw(OP.i32_add).lget(v).arraySet(tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end();
-});
+}, true);
 // aclone(obj): a copy of an array with the same class, null for anything else
 rt("aclone", ["L"], "L", (cx, c) => {
   for (const k of KINDS) {
@@ -215,7 +215,7 @@ rt("aclone", ["L"], "L", (cx, c) => {
     c.lget(a).structGet(t, 0).i64(0n).lget(dst).refAsNonNull().structNew(t).ret().end();
   }
   c.anyNull();
-});
+}, true);
 
 // cnfe(name): ClassNotFoundException with the requested name as its message
 rt("cnfe", ["L"], "V", (cx, c) => {
