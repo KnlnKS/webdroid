@@ -1257,6 +1257,61 @@ Thread object is named `Thread-host` and bound to its record by `Sync.Bind`) and
 MonitorEnter waits (a Promise, no stack). FindClass resolves in the loader of the class declaring the running native method (`Cpu.nativeClass`; `JniVm.find(name, owner, from)`; checked by reading, not by a test: `jni.test.ts` has one loader). `WEBDROID_TIER=wasm bun test src/native/jni.test.ts` runs all 26 (the 4 skipped
 ones now use Java fixtures: `JniSlowInit`, `JniCallback`). Open: the doodlejump flow's JNI part cannot be reached on the Wasm tier until `RamLogger.Append` compiles (move-result gap, W1).
 
+### 4.17 X2: the full platform build in a page (2026-10-04, `knlnks/wasm-x2`)
+
+**Why the build "could not be fetched".** Chrome fails a request with `net::ERR_INSUFFICIENT_RESOURCES` once about 1,600 are pending at once: 2,143 concurrent `fetch`es of the build's files gave 1,616 answers and 527 failures
+(`TypeError: Failed to fetch`), with or without keeping the bytes, with `compile` or `compileStreaming`. With 6 to 16 in flight the same 222 MB (largest module 3.9 MB, no sync XHR) is fetched in 0.46 s from localhost,
+compiled in 0.58 s (`compile`) or 1.0 s (`compileStreaming`) and held in memory without trouble, so size, memory and ordering are not the limit; the count in flight is. G1's page preloaded every file with one `Promise.all`
+(the page never became ready), and `FetchStore.prefetch` of W2's 1,280-file profile list was within a few hundred requests of the same limit.
+
+**Loading.** `FetchStore` keeps 16 requests in flight (`WIDTH`) over a queue, in the order of `startup.json`; the page still waits for that list before the World runs. A module the code wants that nobody asked for yet is a miss for
+that realm (its code compiles on demand, as before, and `AotRuntime.missed` keeps the answer, so a module that arrives later is never mixed with code compiled without it) and goes to the *front* of the queue, so the realms that
+ask later (the framework's processes are frames of the tab, sharing the store) find it. A synchronous or `Suspending` wait for the module was not built: a miss costs the 0.2 ms per method the compiler needs, 289 misses of the
+old startup list were 3.0 s of compiling, while waiting for the same files one by one costs a round trip each (289 x 30 ms = 8.7 s on a 30 ms link) on a strand that also holds the main queue; the stub that asks is a plain
+table entry and cannot suspend without making every lazy-link stub a `Suspending` import. Modules are compiled with `compileStreaming` (the frame-naming issue of 4.9 is solved) in the tab's realm and used by the frames directly
+(same origin, same thread): `boot-probe` shows the frame fetching and compiling nothing.
+
+**Grouping by use.** `aot-profile --classes` launches FitNotes and Calculator M with the code modules withheld (every method that runs is compiled on demand) and writes `vendor/wasm-aot/hot.json`: the classes with a method called
+(5,209 of 41,247), most shared first. `bun run aot` puts them into code modules of their own (`--max-hot`, 1 MiB estimated), in that order, and puts the classes whose class modules a launch loads (`linked`, recorded by
+`aot-profile` on a build where the code modules are there: 43,000, because compiled code links every class it names, so a launch loads nearly every D module, 29 MB) into class modules of their own; the rest are grouped by package as
+before. Numbering is by definition order and does not depend on the grouping. `aot-profile` then writes `startup.json` from `FetchStore.wanted` of a launch with every module available (a launch with misses wants different modules,
+and a module whose class module missed is dead for good), instead of W2's list, which also added all class modules. Order: `aot-profile --classes`, `bun run aot`, `aot-profile` (twice for `linked` to settle).
+A launch of FitNotes wants 41 to 58 files, 63 MB raw (34 MB code, 29 MB class modules), against 1,280 files and 133 MB.
+
+**FitNotes launch** (`?tier=wasm`, Chrome 153 headless, navigation to the first presented frame, 2 runs, load average 9 to 15 so +-1 s; transfer is brotli q5 from the dev server, which now compresses `/aot/` as the edge does;
+warm = second launch in the profile, HTTP cache and saved app build):
+
+| layout / startup list | cold | warm | methods compiled on demand (cold / warm) | requests, MB transferred cold |
+|---|---|---|---|---|
+| package, probe list (188 files, before) | 7.1 to 8.4 s | 6.3 to 6.9 s | 15,200 / 14,200 | 514 (misses fetched behind), 22.8 |
+| package, profile list (1,280 files, W2) | 4.8 to 6.2 s | 4.1 to 4.5 s | 3,400 / 2,600 | 1,284, 25.9 |
+| hot 1 MiB, profile list (58 files) | 4.5 to 4.9 s | 3.3 to 3.6 s | 3,400 / 2,600 | 65, 12.7 |
+| hot 3 MiB (21 files) / 512 KiB (114 files) | 5.0 to 5.3 / 4.2 to 4.4 s | 3.7 to 4.4 / 3.5 to 3.7 s | same | 32 / 122, 12.9 / 13.0 |
+
+Warm transfers 0 bytes (the files come from the HTTP cache, still one cache read and one compile each). `aotOpened` (startup list fetched and compiled, on the critical path beside the package download) 0.6 to 1.3 s for 63 MB raw.
+Brotli q5 is 0.18 of the raw size, gzip -6 0.22 (sample of 108 modules): a launch is about 12 MB, the whole build about 40 MB. The edge compresses `application/wasm` (Cloudflare docs, read 2026-10-04; the algorithm
+depends on the plan; not checked against a deployment); the largest file is 3.9 MB against 25 MiB and the build has 2,163 files against 20,000.
+
+**G1 first call, geometric mean js/wasm over the 14 rows that run framework or non-7-jar code** (ssbAppend ssbEdit ssbGetSpans spannedCopy linkify b64android dtoa dbInts sha256 ecdsaVerify certParse scanTokens scanLines zipOpen;
+3 runs x 30 reps, load average 9 to 15, indicative; the harness now opens the build as the app does, so these are not comparable with the earlier tables):
+
+| build | Chrome | node |
+|---|---|---|
+| 7 jars (before) | 0.13 | 0.34 |
+| full, package, probe list | 0.15 | 0.36 to 0.40 |
+| full, package, profile list (133 MB, `ahead` 650 ms) | 0.23 | not applicable |
+| full, hot 1 MiB, profile list (63 MB, `ahead` 270 ms) | 0.21 | 0.23 to 0.31 |
+| full, hot, every module fetched before the call | 0.20 (3 MiB: 0.19) | |
+
+What helps the first call is having the module before the call (sha256 429 -> 217 ms, certParse 739 -> 362, scanTokens 923 -> 429 in Chrome), not the build's size or the layout; fetching all 2,143 modules first adds nothing more.
+The ssb\*, spannedCopy and linkify rows stay at 100 to 160 ms in Chrome with every module present: their first call is 19 methods compiled on demand in 100 ms of which the phases are 14 (the Program's class model and
+class-hierarchy index are built for the harness's Program on the first query; in a tab they are shared, A2), not modules. In node the hot layout is 10 to 40% slower than package modules on single-feature rows (its modules are
+larger and a call pulls the whole one); the page does not pay for that, since modules are compiled off the main thread.
+
+**Left.** Compiled code links every class it names, so a launch loads 29 MB of class modules for 5,000 classes that run: stubs created on the first use of a slot would cut the largest remaining cost. Warm launches still read and
+compile 58 files; V8's cache of `compileStreaming` results (Chrome's code cache for HTTP-cached responses) was not measured. The first-call floor of the framework rows is the Program/CHA cost above (X1's area). Profiles use FitNotes and
+Calculator M (Mihon does not present on this tier); classes only another app runs are misses and compile on demand.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
