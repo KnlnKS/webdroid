@@ -273,7 +273,10 @@ export class ColdSlowOps {
     const call = () => adapter.call(strand, state.sync, depth, peer, ...args);
     const invoke = () => caller && !strand.root && !state.sync ? this.w.withBridgeCaller(caller, call) : call();
     try {
-      const pending = !state.sync && this.w.sched.current() === strand && this.w.sched.owes()
+      // Ready async natives release engine stacks but only resume microtasks.
+      // Slow operations also split numeric fuel slices, so honor the canonical
+      // turn deadline here even when no stack quota or numeric slice expires.
+      const pending = strand.canSuspend && !state.sync && this.w.sched.current() === strand && (this.w.sched.owes() || this.w.sched.turnDue())
         ? Promise.resolve(this.w.callFn("cold:slow:yield", [], "V", (cx, c) => cx.callRt(c, "yieldFuel"))(strand)).then(invoke)
         : invoke();
       if (pending instanceof Promise) { this.w.stats.coldSlowWaits++; return pending.then(success, failure).finally(() => this.busy.delete(state)); }

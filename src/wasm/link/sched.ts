@@ -241,6 +241,8 @@ export class Sched {
   /** The engine frees the stacks of calls made on a stack of its own only when that stack waits, and refuses a new one after about 1,400 are held (`File.list()` makes an entry for
    *  each call, and a thousand of them in one entry would end in StackOverflowError): whether the strand running has made enough entries that a native should return by waiting once */
   owes(): boolean { const s = this.current(); return !s.root && s.nested >= NESTED_LIMIT; }
+  /** whether this turn has used its cooperative time slice */
+  turnDue(): boolean { return this.loop.due(); }
   /** whether the code running now is on a stack of its own, which can wait for a Promise (the host's top level is not) */
   canWait(): boolean { return !this.current().root; }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
