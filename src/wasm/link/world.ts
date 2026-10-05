@@ -1319,7 +1319,14 @@ export class World {
       let p: Promise<unknown>;
       try { p = this.freshStack(() => enter(s, mine, ...args)); } catch (error) { leave(); throw error; }
       const state = d.value as number;
-      if (state !== mine && state !== -mine) { p.then(leave, leave); return p; }
+      if (state !== mine && state !== -mine) {
+        const complete = () => {
+          if (d.value === mine && ret === "L") v.value = null;
+          else if (d.value === -mine) thr.value = null;
+          leave();
+        };
+        p.then(complete, complete); return p;
+      }
       leave();
       p.catch(() => {});
       // the globals are not to keep the last result alive

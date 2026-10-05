@@ -10,9 +10,10 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { fieldNamesOf, hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { Program } from "../../src/wasm/compiler/program";
 import { Compiler } from "../../src/wasm/compiler/j2w";
+import { Block, emitBlock } from "../../src/wasm/link/sched";
 import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
-import { jsTier, natives } from "./oracle";
+import { jsTier, natives, processStateAsync } from "./oracle";
 import { AOSP } from "./paths";
 import { deref, ownedHandle } from "../../src/android/handles";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases";
@@ -54,6 +55,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
   if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
   for (const x of [worlds[0], worlds[1], worlds[0]]) {
     useEntry(wasmEntry(x)); fieldNames.find = fieldNamesOf(x);
+    await processStateAsync(x);
     for (const m of ["runnable", "list", "http"]) {
       const got = String(x.entry("Hc", m, "()Ljava/lang/String;")()), want = js.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
       if (got !== want) fail(`a World over a shared platform Program answers Hc.${m} ${got}, not ${want}`);
@@ -84,6 +86,24 @@ async function madeByJava(): Promise<WeakRef<object>[]> {
 await turn();
 if (!await collected(await made())) fail("a host-made object and its Java object outlive their last reference");
 if (!await collected(await madeByJava())) fail("a Java-made object and its host object outlive their last reference");
+// The pending callFn path must release its result/throw globals after completion.
+async function madeByPendingBridge(thrown: boolean): Promise<WeakRef<object>[]> {
+  const java = thrown ? w.makeThrowable("java/lang/IllegalStateException", "lifetime") : w.bridge.toJava(new JCounter(), "Lwdtest/Counter;") as object;
+  const later = w.callFn("lifetime:" + thrown, ["L"], thrown ? "V" : "L", (cx, c, arg) => {
+    emitBlock(cx, c, Block.Yield, null, null, () => c.i32(1)); c.drop(); arg(0);
+    if (thrown) c.throw_(cx.tag);
+  });
+  const strand = w.sched.strand();
+  try {
+    const pending = later(strand, java);
+    if (!(pending instanceof Promise)) fail("lifetime bridge did not suspend");
+    try { const result = await pending; if (thrown || result !== java) fail("pending bridge result identity"); }
+    catch (e) { if (!thrown || w.throwable(e) !== java) fail("pending bridge throwable identity"); }
+  } finally { strand.end(); }
+  return [new WeakRef(java)];
+}
+if (!await collected(await madeByPendingBridge(false))) fail("pending bridge retains its last reference result");
+if (!await collected(await madeByPendingBridge(true))) fail("pending bridge retains its last throwable");
 // Java holds the object: the host object it stands for is the same one when the host asks again, however long it was not referenced
 const kept = await (async () => { const h = new JCounter(); h.n = 3; scall("Hc", "keep", "(Ljava/lang/Object;)Ljava/lang/Object;", h); return new WeakRef(h); })();
 await turn(); gc(); await turn(); gc();
