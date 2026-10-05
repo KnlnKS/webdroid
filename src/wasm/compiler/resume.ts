@@ -45,7 +45,7 @@ export function takeResume(method: MethodInfo, pc: number, registers: readonly {
     if (state.method !== method || state.pc !== pc || !state.activation || typeof state.activation !== "object") throw new Error("resume activation identity mismatch");
     if (transferred.has(state.activation)) throw new Error("cold activation already transferred");
     validateColdSnapshot(state);
-    if (!state.uninitialized || state.uninitialized.length || !state.monitors || method.flags & (ACC.SYNCHRONIZED | ACC.DECLARED_SYNCHRONIZED)) throw new Error("unsupported active resume state");
+    if (!state.uninitialized || state.uninitialized.length || !state.monitors || method.flags & ACC.SYNCHRONIZED) throw new Error("unsupported active resume state");
     if (state.monitors.length && (!ownership || !state.owner)) throw new Error("resume needs monitor ownership validation");
     const validated: unknown = ownership?.validate(state);
     if (validated !== undefined) throw new Error("resume ownership validation must be synchronous");
