@@ -24,8 +24,7 @@ export const natives = new Natives({
   },
 });
 
-/** natives that read the ICU data asynchronously and take no arguments: a native cannot suspend in the Wasm tier, so their value is
- *  resolved once, from the same production implementation, before it runs */
+/** Resolve ICU metadata for harnesses that intentionally use synchronous entries. */
 const ICU_VERSIONS = ["libcore/icu/ICU", "com/android/icu/util/Icu4cMetadata"].flatMap((cls) =>
   ["getUnicodeVersion", "getCldrVersion", "getIcuVersion", "getTzdbVersion"].map((name) => [cls, `${name}()Ljava/lang/String;`] as const));
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
@@ -44,6 +43,12 @@ export const fmt = (k: string, v: bigint) => {
 export function processState(w: World): void {
   w.entry("dalvik/system/CloseGuard", "setEnabled", "(Z)V")(0);
   w.entry("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")("java.io.tmpdir", "/data/local/tmp");
+}
+
+/** AOT imports keep their emitted suspension ABI even after ICU values settle. */
+export async function processStateAsync(w: World): Promise<void> {
+  await w.entryAsync("dalvik/system/CloseGuard", "setEnabled", "(Z)V")(0);
+  await w.entryAsync("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")("java.io.tmpdir", "/data/local/tmp");
 }
 
 export async function jsTier(dexes: DexFile[]) {

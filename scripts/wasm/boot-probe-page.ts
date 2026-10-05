@@ -12,7 +12,7 @@ import { intrinsics } from "../../src/wasm/link/intrinsics";
 import { hostNet } from "../../src/wasm/host/inet";
 import { guestMemory } from "../../src/wasm/host/guest";
 import { heapUsed } from "../../src/wasm/host/stats";
-import { jsTier, natives, processState } from "./oracle";
+import { jsTier, natives, processStateAsync } from "./oracle";
 
 export interface ProbeResult {
   tier: string;
@@ -64,7 +64,7 @@ async function probe(): Promise<ProbeResult> {
    const p0 = performance.now();
   const code = await prepareApp({ dexes, aot: store!, persist, spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }), roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } });
   const prepareMs = performance.now() - p0, b0 = performance.now(), w = new World(new Program(dexes, platform), { intrinsics, natives, heapUsed, net: hostNet, guest: guestMemory, aot: store, ...code.options });
-  code.start(w);  processState(w);  const bootMs = performance.now() - b0, s = w.stats;
+  code.start(w);  await processStateAsync(w);  const bootMs = performance.now() - b0, s = w.stats;
   // the app: a loop hot enough to ask for the second tier, and the entry points whose answers every load must agree on
   const hot = w.entry("Pst", "hot", "(I)I");
   // the worker takes a few seconds to load the platform's dex files; until it is ready a hot method is compiled inline

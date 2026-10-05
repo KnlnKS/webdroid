@@ -8,7 +8,7 @@ import { VERSION } from "../../src/wasm/link/aot";
 import { AOSP, ROOT } from "./paths";
 
 // Host registrations outside Wasm determine class layouts and suspension imports too.
-const SOURCES = ["src", "scripts/wasm/aot-build.ts", "scripts/wasm/aot-key.ts"];
+const SOURCES = ["src", "scripts/wasm/aot-build.ts", "scripts/wasm/aot-key.ts", "scripts/wasm/aot-startup.ts", "scripts/wasm/oracle.ts"];
 
 export const AOT_ROOT = join(ROOT, "vendor/wasm-aot");
 
