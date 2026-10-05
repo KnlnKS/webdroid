@@ -129,8 +129,9 @@ export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = 
   for (const line of stack.split("\n")) {
     if (out.length >= count) break;
     const m = FRAME.exec(line);
-    const name = m?.[1], loop = name?.indexOf("#loop") ?? -1;
-    const t = name ? traces.get(loop < 0 ? name : name.slice(0, loop)) : undefined;
+    const name = m?.[1], exact = name ? traces.get(name) : undefined;
+    const loop = exact ? -1 : name?.lastIndexOf("#loop") ?? -1;
+    const t = exact ?? (name && loop >= 0 ? traces.get(name.slice(0, loop)) : undefined);
     if (!t?.m) continue;                                  // host code, throwers and stubs are not Java frames
     const id = t.m.cls + "." + t.m.key;
     // An outlined loop and its callers are one Java activation; keep the innermost PC.

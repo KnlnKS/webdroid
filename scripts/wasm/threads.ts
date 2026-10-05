@@ -18,6 +18,7 @@ import { perf } from "../../src/perf";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { hasJspi } from "../../src/wasm/link/module";
+import { javaFrames } from "../../src/wasm/link/exc";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 
@@ -57,6 +58,15 @@ const expect = (what: string, got: unknown, want: unknown) => { checks++; if (St
 
 // ---------- the Java cases against the JDK and the JS tier
 const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
+if (!only || only.includes("loopTrace")) {
+  const m = { ...w.prog.resolve("Th", "loopTrace", "(I)I")!, cls: "legal/Owner#loop", name: "method#loop", key: "method#loop(I)I" };
+  const name = "legal/Owner#loop.method#loop(I)I", traces = new Map([[name, { name, m, offsets: new Int32Array([16, 32]), pcs: new Int32Array([0, 8500]) }]]);
+  const root = `at ${name} (wasm://wasm/a:wasm-function[1]:0x10)`;
+  expect("legal #loop name has an exact Java trace", javaFrames(root, traces, Infinity, false)[0]?.method, "method#loop");
+  const frames = javaFrames(`at ${name}#loop12 (wasm://wasm/a:wasm-function[2]:0x20)\n${root}\n${root}`, traces, Infinity, false);
+  expect("only the generated suffix coalesces its root", frames.length, 2);
+  expect("the chunk retains its owner's innermost PC", frames[0]?.pc, 8500);
+}
 const CASES: [string, number][] = [
   ["reentrant", 5], ["deepLock", 300], ["deepLock", 10], ["imse", 0], ["contend", 200], ["pingPong", 30], ["notifyOne", 0], ["timedWait", 0],
   ["startJoin", 100], ["names", 3], ["names", 4], ["sleepOrder", 0], ["interruptSleep", 0], ["interruptWait", 0], ["interruptFlag", 0], ["joinTimeout", 0], ["uncaught", 4],
