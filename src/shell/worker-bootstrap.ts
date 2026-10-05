@@ -21,3 +21,17 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     throw error;
   }
 }
+
+
+/** Publish only after package/JVM boot; transfer the peer port to the page's readyPort owner. */
+export async function serveWorkerEndpoint(port: MessagePort): Promise<() => void> {
+  try {
+    const { createProcessEndpoint } = await import("./process-endpoint");
+    const { serveProcess } = await import("./process-port");
+    return serveProcess(port, createProcessEndpoint());
+  } catch (error) {
+    try { port.postMessage({kind:"close"}); } catch { /* startup may have detached the unpublished port */ }
+    port.close();
+    throw error;
+  }
+}

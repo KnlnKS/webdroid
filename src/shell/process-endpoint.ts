@@ -143,6 +143,11 @@ export function connectProcess(): ProcessEndpoint {
   serviceTransport.peek = driven(function* (owner, process, intent) {
     return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
   });
+  return createProcessEndpoint(requests);
+}
+
+/** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
+export function createProcessEndpoint(requests = new Map<number, ResultDelivery["deliver"]>()): ProcessEndpoint {
   return {
     clipboardChanged: async () => clipboardChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),

@@ -206,12 +206,14 @@ export async function clockBootstrapOwnership() {
   const path = `/data/app/${pkg}/base.apk`;
   packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
-  broker.connect(pkg, pkg, pid);
+  const entry = broker.connect(pkg, pkg, pid);
   const data = await broker.bootstrap(pid, true), start = guestClockControl.now(), wall = wallMillis();
   const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout} from ${JSON.stringify(location.origin + "/guest-clock.js")};
     self.onmessage = async ({data}) => {
-      const {attachWorkerBootstrap} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
+      const {attachWorkerBootstrap,serveWorkerEndpoint} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
       const broker = await attachWorkerBootstrap(data);
+      const endpoint = new MessageChannel();
+      await serveWorkerEndpoint(endpoint.port1);
       const {PROCESS_PID,PROCESS_UID,PROCESS_NAME} = await import(${JSON.stringify(location.origin + "/os.js")});
       const {RemoteFile} = await import(${JSON.stringify(location.origin + "/file.js")});
       const file = new RemoteFile(data.registry.find(record=>record.pkg===data.pkg).source);
@@ -222,18 +224,21 @@ export async function clockBootstrapOwnership() {
         setGuestTimeout(()=>self.postMessage({tick:'dead'}),5);
       },10);
       self.postMessage({ready:true,archive,controlled:guestClockControl.controlled,bootTime,
-        identity:[PROCESS_PID,PROCESS_UID,PROCESS_NAME],commands:{cookies:await broker.cookieHas(),clipboard:await broker.clipboardGet()}});
+        identity:[PROCESS_PID,PROCESS_UID,PROCESS_NAME],commands:{cookies:await broker.cookieHas(),clipboard:await broker.clipboardGet()},endpoint:endpoint.port2},[endpoint.port2]);
     };`;
   const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"});
   const ticks: {tick:string;now:number;wall?:number}[] = [];
   try {
     const ready = await new Promise<{archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
       worker.onerror = event => reject(new Error(event.message));
-      worker.onmessage = ({data}) => { if(data.ready) resolve(data); else ticks.push(data); };
+      worker.onmessage = ({data}) => { if(data.ready) {broker.readyPort(pid,data.endpoint);resolve(data);} else ticks.push(data); };
       worker.postMessage(data, bootstrapTransfers(data));
     });
     let brokerTimer = 0;
     setSystemTimeout(()=>brokerTimer++,20);
+    const incoming = await entry.ready;
+    await incoming.settingsChanged("global","worker_endpoint_probe");
+    await incoming.packageRemoved("worker.endpoint.absent.package");
     const advanced = await guestClockControl.advanceBy(10), pendingBeforeDeath = guestClockControl.pending();
     worker.terminate(); broker.fail(pid, "terminated Worker fixture", NOT_CRASHED);
     const pendingAfterDeath = guestClockControl.pending();
