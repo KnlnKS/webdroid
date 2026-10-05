@@ -12,6 +12,7 @@ import { ACC, type JClass, type MethodInfo } from "../compiler/program";
 import type { Intrinsic } from "../compiler/j2w";
 import { parseMethodDesc } from "../../jvm/abi";
 import { HOSTED, type HostSpec } from "./hostapi";
+import { hostWhole } from "../../jvm/provenance";
 import type { World } from "./world";
 
 const OBJECT = "java/lang/Object", STATIC = "static ";
@@ -96,7 +97,10 @@ export class HostClasses {
       m.cls = hosted.name; m.index = hosted.methods.length;
       hosted.methods.push(m); over.byKey.set(m.key, m);
     }
-    this.w.addClass(over, new Map());
+    // a class the JS tier never loads from the platform (the host implements it whole) does not run its initializer either
+    const bodies = new Map<MethodInfo, Intrinsic>(), init = over.byKey.get("<clinit>()V");
+    if (init && hostWhole(jc.name)) { bodies.set(init, () => {}); taken.push(init); }
+    this.w.addClass(over, bodies);
     for (const m of taken) this.w.aot?.override(m);
     if (hosted.methods.length) this.w.addClass(hosted, new Map());
   }

@@ -1,6 +1,6 @@
-import { OP } from "../compiler/code";
+import { OP, type Code } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
-import type { Intrinsic } from "../compiler/j2w";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
 import { emitRefCopy, classIntrinsics } from "./classes";
 import { unsafeIntrinsics } from "./unsafe";
 import { reflectIntrinsics } from "./reflect";
@@ -28,12 +28,12 @@ def("java/lang/Throwable.nativeFillInStackTrace()Ljava/lang/Object;", (cx, m, c)
   const state = c.newLocal(refNull(cx.tObj));
   cx.emitNew(c, "java/lang/Object"); c.lset(state).lget(state).externConvertAny().call(cx.imp.capture).lget(state);
 });
-// Throwable.nativeGetStackTrace(state): the frames the host recorded for the state, as StackTraceElement(class, method, file, line)
-def("java/lang/Throwable.nativeGetStackTrace(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;", (cx, m, c) => {
+/** leaves the StackTraceElement[] of the frames the host recorded for the stack state in local `state` (null: none) */
+function emitFrames(cx: Compiler, c: Code, state: number): void {
   const STE = "java/lang/StackTraceElement", ctor = cx.prog.resolve(STE, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
   const n = c.newLocal(T.i32), i = c.newLocal(T.i32), arr = c.newLocal(T.anyref), e = c.newLocal(T.anyref);
   if (!ctor) { cx.gap(c, "StackTraceElement.<init>"); return; }
-  c.lget(0).externConvertAny().call(cx.imp.stFrames).lset(n);
+  c.lget(state).externConvertAny().call(cx.imp.stFrames).lset(n);
   cx.emitNewArray(c, "[L" + STE + ";", () => c.lget(n)); c.lset(arr);
   c.block().loop().lget(i).lget(n).raw(OP.i32_ge_s).brIf(1);
   cx.emitEnsure(c, STE); cx.emitNew(c, STE); c.lset(e);
@@ -41,6 +41,15 @@ def("java/lang/Throwable.nativeGetStackTrace(Ljava/lang/Object;)[Ljava/lang/Stac
   cx.callMethod(c, ctor);
   c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i).lget(e).arraySet(cx.tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().lget(arr);
+}
+// Throwable.nativeGetStackTrace(state): the frames the host recorded for the state, as StackTraceElement(class, method, file, line)
+def("java/lang/Throwable.nativeGetStackTrace(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;", (cx, m, c) => { emitFrames(cx, c, 0); });
+// VMStack.getThreadStackTrace(thread): the running thread's frames from here (another thread's stack is not on this one: none, as for a thread not running)
+def("dalvik/system/VMStack.getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;", (cx, m, c) => {
+  const state = c.newLocal(T.anyref);
+  cx.emitNew(c, "java/lang/Object"); c.lset(state).lget(state).externConvertAny().call(cx.imp.capture);
+  c.lget(0).refCast(cx.tObj, true); cx.callRt(c, "curThread"); c.refCast(cx.tObj, true).refEq().raw(OP.i32_eqz).if_().anyNull().lset(state).end();
+  emitFrames(cx, c, state);
 });
 def("java/lang/Float.floatToRawIntBits(F)I", (cx, m, c) => { c.lget(0); });
 def("java/lang/Float.intBitsToFloat(I)F", (cx, m, c) => { c.lget(0); });
