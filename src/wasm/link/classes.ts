@@ -15,7 +15,7 @@ import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
-import { hostUnsafe, UInfo } from "./unsafe";
+import { hostUnsafe, UInfo, OBJECT_BASE } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";
 import { Lookup, LOADER_OF_CLASS } from "./loaders";
@@ -39,7 +39,7 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-export const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot, FieldDesc, CanAccess, HasClinit }
+export const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot, FieldDesc, CanAccess, HasClinit, FieldOffset }
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
@@ -75,6 +75,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.Inner: return innerFlags(jc);
     // ObjectStreamClass.hasStaticInitializer: a <clinit> of the class, or with b set of a superclass
     case Info.HasClinit: { for (let k = jc; k; k = b && k.sup ? w.prog.get(k.sup) : undefined) if (k.byKey.has("<clinit>()V")) return 1; return 0; }
+    case Info.FieldOffset: { const f = fields[b]; return f.isStatic ? a << 12 | b : OBJECT_BASE + 4 * w.prog.layout(name).findIndex((x) => x.owner === name && x.name === f.name && x.desc === f.desc); }
     case Info.NameLen: return javaName(name).length;
     case Info.NameChar: return javaName(name).charCodeAt(b);
     case Info.NFields: return fields.length;
@@ -249,7 +250,7 @@ rt("mkField", ["I", "I"], "L", (cx, c) => {
   c.lget(o).lget(0); cx.callRt(c, "classOf"); c.structSet(fs, fi("declaringClass", "Ljava/lang/Class;"));
   c.lget(o); info(Info.FieldType); cx.callRt(c, "classOf"); c.structSet(fs, fi("type", "Ljava/lang/Class;"));
   c.lget(o); info(Info.FieldFlags); c.structSet(fs, fi("accessFlags", "I"));
-  c.lget(o).lget(id).structSet(fs, fi("artFieldIndex", "I")).lget(o).lget(id).structSet(fs, fi("offset", "I"));
+  c.lget(o).lget(id).structSet(fs, fi("artFieldIndex", "I")).lget(o); info(Info.FieldOffset); c.structSet(fs, fi("offset", "I"));
   c.lget(f);
 });
 // declFields(cid, publicOnly): Field[] of the class's declared fields
