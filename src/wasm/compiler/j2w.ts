@@ -550,16 +550,17 @@ export class Compiler implements Base {
     const name = `${mid(m)}#resume${pc}`, ret = m.ret === "V" ? "V" : kindOf(m.ret);
     const bits = this.mb.importFunc("resume", "bits", this.mb.addFuncType([T.externref, T.i32], [T.i64]));
     const reference = this.mb.importFunc("resume", "reference", this.mb.addFuncType([T.externref, T.i32], [T.externref]));
+    const mc = new MC(this, m, { pc, bits, reference });
     const f = this.mb.reserveFunc(this.mb.addFuncType([T.externref], ret === "V" ? [] : [this.vtOf(ret)]), name);
     this.fn.set(mid(m), f); this.direct = false; this.owner = this.head = this.assumer = m; this.counting = false;
-    const mc = new MC(this, m, { pc, bits, reference }); mc.run();
+    mc.run();
     const code = mc.weigh(); this.mb.setBody(f, code.finish()); this.mb.export("resume", "func", f);
     const built = this.finishModule([{ name, f, code, m }]);
     return { ...built, registers: mc.resumeRegisters };
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
-  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m"): { bytes: Uint8Array; traces: FnTrace[] } {
-    const f = this.mb.reserveFunc(this.sig(params, ret), "$" + name), c = new Code(params.length);
+  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m", abiParams?: VT[]): { bytes: Uint8Array; traces: FnTrace[] } {
+    const f = this.mb.reserveFunc(abiParams ? this.mb.addFuncType(abiParams, ret === "V" ? [] : [this.vtOf(ret)]) : this.sig(params, ret), "$" + name), c = new Code(params.length);
     body(c);
     this.mb.setBody(f, c.finish());
     this.mb.export(exportName, "func", f);

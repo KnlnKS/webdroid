@@ -67,10 +67,20 @@ export class MC {
   private controlLocal = -1;
   private stateType = -1;
   private stateLocal = -1;
+  private deopt?: { version: number; last: number; blocked: number; allocation: number; monitor: number; snapshot: number; bits: number; reference: number; target: number; epoch: number; sig: number };
+  private activationLocal = -1;
+  private versionLocal = -1;
+  private executedLocal = -1;
+  private deoptState = -1;
+  private deoptTarget = -1;
   constructor(public cx: Compiler, public m: MethodInfo, private resume?: { pc: number; bits: number; reference: number }) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
     if (resume) this.root.localOffset = 1;
+    if (resume && cx.w.opts.cold) {
+      const imp = (name: string, params: VT[], results: VT[]) => cx.mb.importFunc("deopt", name, cx.mb.addFuncType(params, results));
+      this.deopt = { version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), snapshot: imp("snapshot", [T.externref, T.i32, T.i32, T.i32], [T.externref]), bits: imp("bits", [T.externref, T.i32, T.i64], []), reference: imp("reference", [T.externref, T.i32, T.externref], []), target: imp("target", [T.externref], [T.funcref]), epoch: cx.global("rt", "deoptEpoch", T.i32, true), sig: cx.mb.addFuncType([T.externref], m.ret === "V" ? [] : [cx.vtOf(kindOf(m.ret))]) };
+    }
     this.tries = this.item.tries.length > 0;
   }
 
@@ -204,6 +214,11 @@ export class MC {
       if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     }
     if (this.resume || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (this.deopt) {
+      this.activationLocal = c.newLocal(T.externref); this.versionLocal = c.newLocal(T.i32); this.executedLocal = c.newLocal(T.i32); this.deoptState = c.newLocal(T.externref); this.deoptTarget = c.newLocal(T.funcref);
+      c.raw(0x20, 0).ltee(this.activationLocal).call(this.deopt.version).lset(this.versionLocal);
+      c.lget(this.activationLocal).call(this.deopt.last).lset(this.executedLocal);
+    }
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -505,6 +520,7 @@ export class MC {
       this.cx.emitLeave(c, ch.entry, false);
       this.loadState(c, ch.locals);
     });
+    if (this.deopt) { c.lget(this.controlLocal).i32(-1).raw(OP.i32_eq).if_(); this.push("deoptChunk"); this.transferDeopt(); this.pop(); c.end(); }
     c.lget(this.controlLocal).i32(1).raw(OP.i32_eq).brIf(0);
     c.lget(this.controlLocal).i32(2).raw(OP.i32_eq).if_(); this.push("if");
     if (this.resultLocal >= 0) c.lget(this.resultLocal);
@@ -529,12 +545,52 @@ export class MC {
       this.chunkReturn(2);
     } else { this.leave(); this.code.ret(); }
   }
+  private transferDeopt(): void {
+    if (this.chunk) this.chunkReturn(-1);
+    else this.code.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(this.deopt!.sig).returnCallRef(this.deopt!.sig);
+  }
+  private deoptAt(ins: Ins): void {
+    const d = this.deopt, c = this.code;
+    if (!d || !this.typing.reached(ins.pc) || ins.op >= 0x0a && ins.op <= 0x0d) return;
+    c.pc = ins.pc;
+    c.gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne).if_(); this.push("deoptChanged");
+    c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe");
+    c.lget(this.activationLocal).i32(ins.pc).lget(this.executedLocal).lget(this.entryDepth).call(d.snapshot).lset(this.deoptState);
+    this.typing.before(ins.pc).forEach((web, register) => {
+      if (web < 0) return;
+      const kind = this.typing.kind[web];
+      c.lget(this.deoptState).i32(register).lget(this.local(web), false);
+      if (kind === KR) c.externConvertAny().call(d.reference);
+      else {
+        if (FLOAT_LOCALS && kind === KF) c.raw(OP.i32_reinterpret_f32);
+        if (FLOAT_LOCALS && kind === KD) c.raw(OP.i64_reinterpret_f64);
+        if (kind !== KJ && kind !== KD) c.raw(OP.i64_extend_i32_s);
+        c.call(d.bits);
+      }
+    });
+    c.lget(this.deoptState).call(d.target).lset(this.deoptTarget); this.transferDeopt();
+    this.pop(); c.end(); this.pop(); c.end();
+  }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
     this.block = b;
     if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
     this.facts = cloneFacts(this.entryFacts[b]);
-    for (const ins of inss) { this.emit(ins); step(this, ins, this.facts); }
+    for (const ins of inss) {
+      if (!this.consumed.has(ins.pc) && (ins === inss[0] || ins.name.startsWith("invoke"))) this.deoptAt(ins);
+      this.emit(ins);
+      if (this.deopt && !this.consumed.has(ins.pc) && this.typing.reached(ins.pc)) {
+        const d = this.deopt; this.cur = ins;
+        if (ins.name === "monitor-enter" || ins.name === "monitor-exit") {
+          c.lget(this.activationLocal); this.get("L", ins.a); c.externConvertAny().i32(+(ins.name === "monitor-enter")).call(d.monitor);
+        }
+        const allocation = ins.name === "new-instance" && descToName(this.dex.type(ins.b)) === "java/lang/String";
+        const constructor = ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && descToName(this.dex.type(this.dex.method(ins.b).cls)) === "java/lang/String";
+        if (allocation || constructor) c.lget(this.activationLocal).i32(allocation ? 1 : -1).call(d.allocation);
+        c.i32(this.consumed.has(ins.pc + ins.len) ? ins.pc + ins.len : ins.pc).lset(this.executedLocal);
+      }
+      step(this, ins, this.facts);
+    }
     const last = inss[inss.length - 1];
     if (!endsBlock(last.op)) {
       const taken = last.op >= 0x32 && last.op <= 0x3d ? flow.blockAt[ifTarget(last)] : -1;

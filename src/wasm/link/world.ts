@@ -103,7 +103,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -155,6 +155,7 @@ export class World {
   preInitialized = new Set<string>();
   /** how many times the default namespace was extended or something a compile worker cannot follow was added: results made before are not adopted */
   epoch = 0;
+  private deoptEpoch = new WebAssembly.Global({ value: "i32", mutable: true }, 0);
   private touching: Set<string> | null = null;
   private imtCache = new Map<number, number>();
   private compiled = new Map<MethodInfo, string[]>();
@@ -531,7 +532,7 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -708,7 +709,60 @@ export class World {
       if (!entries) this.coldResumes.set(m, entries = new Map());
       entries.set(state.pc, entry); this.stats.coldResumeEntries++; this.stats.units++; this.stats.methods++;
     }
-    return { fn: entry.fn, state: entry.take(state) };
+    const loaded = entry.take(state);
+    this.deoptFrames.set(loaded, { version: Number(this.deoptEpoch.value), blocked: 0, claimed: false, monitors: loaded.monitors.map(m => ({ ...m })) });
+    return { fn: entry.fn, state: loaded };
+  }
+  private deoptFrames = new WeakMap<object, { version: number; blocked: number; claimed: boolean; monitors: ColdSnapshot["monitors"] }>();
+  private deoptCaptures = new WeakMap<object, { source: ResumeState; entered: boolean }>();
+  private coldDeoptEntries = new Map<MethodInfo, Function>();
+  private deoptFrame(state: ResumeState) {
+    const frame = this.deoptFrames.get(state);
+    if (!frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
+    return frame;
+  }
+  private deoptImports = {
+    version: (s: ResumeState) => this.deoptFrame(s).version,
+    last: (s: ResumeState) => s.executedPc,
+    blocked: (s: ResumeState) => this.deoptFrame(s).blocked,
+    allocation: (s: ResumeState, delta: number) => { this.deoptFrame(s).blocked += delta; },
+    monitor: (s: ResumeState, object: object, enter: number) => {
+      const monitors = this.deoptFrame(s).monitors, index = monitors.findIndex(m => m.object === object);
+      if (enter) { if (index < 0) monitors.push({ object, count: 1 }); else monitors[index].count++; }
+      else { if (index < 0) throw new Error("compiled monitor ownership mismatch"); if (!--monitors[index].count) monitors.splice(index, 1); }
+    },
+    snapshot: (s: ResumeState, pc: number, executedPc: number, depth: number): ColdSnapshot => {
+      const frame = this.deoptFrame(s);
+      if (frame.blocked) throw new Error("unsafe compiled String aliases");
+      const state: ColdSnapshot = { ...s, pc, executedPc, depth, bits: new BigInt64Array(s.item.regs), references: Array(s.item.regs).fill(null), kinds: new Uint8Array(s.item.regs), result: undefined, exception: undefined, uninitialized: [], monitors: frame.monitors.map(m => ({ ...m })) };
+      this.deoptCaptures.set(state, { source: s, entered: false }); this.stats.coldSnapshotRegisters += s.item.regs;
+      return state;
+    },
+    bits: (s: ColdSnapshot, r: number, value: bigint) => { s.bits[r] = value; },
+    reference: (s: ColdSnapshot, r: number, value: object | null) => { s.references[r] = value; s.kinds[r] = 1; },
+    target: (s: ColdSnapshot): Function => {
+      const capture = this.deoptCaptures.get(s);
+      if (!capture || capture.entered || !s.method || !s.owner) throw new Error("foreign deoptimization snapshot");
+      const frame = this.deoptFrame(capture.source);
+      this.validateColdSnapshot(s, this.sched.current());
+      let fn = this.coldDeoptEntries.get(s.method);
+      if (!fn) {
+        const unit = coldUnit(this, s.method, this.cold!, true);
+        fn = this.instantiate(unit.built.bytes, { ...this.unitImports(unit.cx), ...unit.imports }).exports.resume as Function;
+        this.recordUnit(unit.cx, unit.built.traces, this.slotOf(s.method));
+        this.coldDeoptEntries.set(s.method, fn); this.stats.units++;
+      }
+      this.validateColdSnapshot(s, this.sched.current()); frame.claimed = true;
+      return fn;
+    },
+  };
+  enterColdDeopt(state: ColdSnapshot, cold: ColdInterpreter): object {
+    const capture = this.deoptCaptures.get(state);
+    if (cold !== this.cold || !capture || capture.entered || !this.deoptFrames.get(capture.source)?.claimed) throw new Error("deoptimization already entered or foreign");
+    this.validateColdSnapshot(state, this.sched.current());
+    capture.entered = true;
+    const frame = cold.restore(state.item, state); this.rt.depth.value = state.depth; this.stats.coldDeopts++; this.stats.coldCalls++;
+    return frame;
   }
   private installCold(slot: number, m: MethodInfo, t0: number): boolean {
     if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
@@ -839,7 +893,7 @@ export class World {
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
-      n: this.nativeImports(cx.nativeImports.keys()) };
+      n: this.nativeImports(cx.nativeImports.keys()), deopt: this.deoptImports };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
   }
@@ -1075,6 +1129,7 @@ export class World {
   }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   invalidate(slot: number): void {
+    this.deoptEpoch.value = Number(this.deoptEpoch.value) + 1;
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       const s = this.slotAt(x);
       if (s?.k === "method") this.coldResumes.delete(s.m);

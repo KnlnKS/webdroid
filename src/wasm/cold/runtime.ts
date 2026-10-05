@@ -1,3 +1,4 @@
+import type { ColdSnapshot } from "./state";
 import { decodeInstructions } from "../../jvm/prepared";
 import { OP } from "../compiler/code";
 import { Compiler } from "../compiler/j2w";
@@ -21,7 +22,7 @@ export function supportsColdBody(m: MethodInfo): boolean {
   return decodeInstructions(item.insns).every(ins => !slow.has(ins.pc) || ColdSlowOps.supports(ins));
 }
 
-export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
+export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resuming = false) {
   const { item, decoded } = program(m);
   const make = cold.prepare(item, true, decoded);
   const slowOps = new ColdSlowOps(w);
@@ -34,14 +35,14 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
   const target = cx.mb.importFunc("activation", "target", cx.mb.addFuncType([T.externref, T.i32], [T.funcref]));
   const snapshot = cx.mb.importFunc("activation", "snapshot", cx.mb.addFuncType([T.externref], [T.externref]));
   const finish = cx.mb.importFunc("activation", "finish", cx.mb.addFuncType([T.externref], []));
-  const create = cx.mb.importFunc("activation", "make", cx.mb.addFuncType([], [T.externref]));
+  const create = cx.mb.importFunc("activation", "make", cx.mb.addFuncType(resuming ? [T.externref] : [], [T.externref]));
   const bits = imp("bits", [T.externref, T.i32, T.i64], []), object = imp("object", [T.externref, T.i32, T.externref], []);
   const run = imp("run", [T.externref, T.i32], [T.i32]), result = imp("result", [T.externref], [T.i64]), reference = imp("reference", [T.externref], [T.externref]);
   const edges = imp("edges", [T.externref], [T.i32]);
   const ret = m.ret === "V" ? "V" : kindOf(m.ret);
   const resumeSig = cx.mb.addFuncType([T.externref], ret === "V" ? [] : [cx.vtOf(ret)]);
   const handed = new WeakMap<object, NonNullable<ReturnType<World["promoteCold"]>>>();
-  const built = cx.buildSynthetic("cold:" + mid(m), kinds, c => {
+  const built = cx.buildSynthetic((resuming ? "cold-resume:" : "cold:") + mid(m), resuming ? ["L"] : kinds, c => {
     const frame = c.newLocal(T.externref), done = c.newLocal(T.i32), prior = c.newLocal(T.i32), iterations = c.newLocal(T.i32);
     const sid = cx.global("rt", "sid", T.i32, true), thr = cx.global("rt", "thr", T.anyref, true), depth = cx.global("rt", "depth", T.i32, true);
     const savedSid = c.newLocal(T.i32), savedThr = c.newLocal(T.anyref), savedDepth = c.newLocal(T.i32);
@@ -53,9 +54,10 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
       c.lget(savedThr).refIsNull().if_(T.anyref).lget(frame).call(peer).anyConvertExtern().else_().lget(savedThr).end().gset(thr);
       c.lget(savedDepth).gset(depth);
     };
+    if (resuming) c.lget(0);
     c.call(create).lset(frame);
     let reg = item.regs - item.ins;
-    kinds.forEach((kind, i) => {
+    if (!resuming) kinds.forEach((kind, i) => {
       c.lget(frame).i32(reg).lget(i);
       if (kind === "L") c.externConvertAny().call(object);
       else { if (kind === "I") c.raw(OP.i64_extend_i32_s); c.call(bits); }
@@ -79,10 +81,10 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
     c.br(0).end().end();
     c.lget(frame).call(finish); cx.emitLeave(c, entered, false); c.br(2);
     c.end().unreachable().end().lset(thrown); restore(); c.lget(frame).call(finish); cx.emitLeave(c, entered, false); c.lget(thrown).throw_(cx.tag); c.end();
-    for (const at of weights) c.patch(at, 4 + kinds.length + c.localTypes.length);
+    for (const at of weights) c.patch(at, 4 + (resuming ? 1 : kinds.length) + c.localTypes.length);
     if (ret === "L") c.lget(frame).call(reference).anyConvertExtern();
     else if (ret !== "V") { c.lget(frame).call(result); if (ret === "I") c.raw(OP.i32_wrap_i64); }
-  }, ret, "m" + slot);
+  }, ret, resuming ? "resume" : "m" + slot, resuming ? [T.externref] : undefined);
   for (const trace of built.traces) { trace.m = m; trace.currentPcs = () => cold.tracePcs(m, w.sched.current()); }
   const step = (frame: object) => {
     const state = cold.snapshot(frame), owner = state.owner!; w.stats.coldSnapshotRegisters += item.regs;
@@ -103,7 +105,7 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
     synchronous: (frame: object) => +cold.synchronous(frame),
     finish: (frame: object) => cold.finish(frame),
     slow: step, slowAsync: hasJspi() ? suspending(step) : step,
-    make: () => { w.stats.coldCalls++; const frame = make(); cold.context(frame, m, w.sched.current(), w.inSynchronousJava(), Number(w.rtImports().depth.value)); return frame; },
+    make: (state?: ColdSnapshot) => { if (resuming) return w.enterColdDeopt(state!, cold); w.stats.coldCalls++; const frame = make(); cold.context(frame, m, w.sched.current(), w.inSynchronousJava(), Number(w.rtImports().depth.value)); return frame; },
   } };
   return { cx, built, imports };
 }

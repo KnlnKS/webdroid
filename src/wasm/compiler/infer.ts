@@ -37,6 +37,7 @@ interface WebAnalysis {
   /** instructions the fixpoint reached (an unreachable one has no operand webs) */
   reached: Uint8Array;
   entryNodes?: Int32Array;
+  before(pc: number): Int32Array;
 }
 
 /** analysis of the method, or why it was skipped */
@@ -167,12 +168,11 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     }
     for (const s of cfg.succ[b]) joinInto(s, st);
   }
-  let entryNodes: Int32Array | undefined;
-  if (entryPc !== undefined) {
-    const i = cfg.pcToIdx[entryPc];
-    if (i === undefined || i < 0 || !reached[i]) return "invalid-resume-pc";
+  const before = (pc: number): Int32Array => {
+    const i = cfg.pcToIdx[pc];
+    if (i === undefined || i < 0 || !reached[i]) throw new Error("invalid-resume-pc");
     const b = cfg.blockOfIdx[i];
-    entryNodes = Int32Array.from(inState[b]!);
+    const entryNodes = Int32Array.from(inState[b]!);
     for (let j = cfg.firstIdx[b]; j < i; j++) {
       const e = effs[j];
       if (e.d >= 0) { entryNodes[e.d] = defNode[j]; if (e.dm & WIDE) entryNodes[e.d + 1] = defNode[j]; }
@@ -181,8 +181,10 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     for (const successor of cfg.succ[b]) for (let r = 0; r < R_; r++) if (liveIn[successor][r]) tmp[r] = 1;
     for (let j = cfg.lastIdx[b]; j >= i; j--) stepLive(j);
     for (let r = 0; r < R_; r++) if (!tmp[r]) entryNodes[r] = -1;
-  }
-  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useReg, paramNode, links, reached, entryNodes };
+    return entryNodes;
+  };
+  const entryNodes = entryPc === undefined ? undefined : before(entryPc);
+  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useReg, paramNode, links, reached, entryNodes, before };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -212,6 +214,7 @@ export interface Typing {
   kind: number[];
   /** Register webs immediately before the requested resume instruction. */
   entry?: Int32Array;
+  before(pc: number): Int32Array;
   /** whether the instruction at `pc` can execute at all */
   reached(pc: number): boolean;
   /** the web the instruction at `pc` reads register `reg` through, -1 if it does not */
@@ -241,6 +244,7 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   const idxOfPc = new Map(a.ins.map((x, i) => [x.pc, i]));
   return {
     kind, entry: a.entryNodes?.map(web),
+    before(pc) { return a.before(pc).map(web); },
     reached(pc) { return !!a.reached[idxOfPc.get(pc)!]; },
     use(pc, reg) { const i = idxOfPc.get(pc)!, k = a.useReg[i].indexOf(reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
     def(pc) { return web(a.defNode[idxOfPc.get(pc)!]); },

@@ -12,10 +12,11 @@ writeFileSync(join(out, "Osr.java"), `public class Osr {
   public interface I { int f(); }
   public static class Base implements I { public int f(){return 1;} }
   static int effects; static final Object lock=new Object();
-  static native I late(I before); static native int await(int value, boolean fail);
+  static native I late(I before); static native int await(int value, boolean fail); static native void invalidate();
   public static int effects(){return effects;}
   public static Object lock(){return lock;}
   public static int run(int n){effects++; I r=new Base(); int x=0; for(int i=0;i<n;i++)x+=i; return late(r).f()+x;}
+  public static int nested(int n){effects++; synchronized(lock){int x=0; for(int i=0;i<n;i++)for(int j=0;j<3;j++){x++; if(i==n/2 && j==0)invalidate();} return x;}}
   public static int state(int n,boolean fail){synchronized(lock){effects++; int x=0; for(int i=0;i<n;i++)x+=i; try{return await(x,fail)+7;}catch(IllegalArgumentException e){return x+9;}}}
 }`);
 writeFileSync(join(out, "Late.java"), `public class Late extends Osr.Base {public int f(){return 2;} public static Osr.I make(){return new Late();}}`);
@@ -33,16 +34,25 @@ const late=Object.assign(async()=>{
   return await w.entryAsync("Late","make","()LOsr$I;")();
 },{javaValues:true});
 const w=world([join(out,"classes.dex"),...PLATFORM_JARS.slice(0,2).map(j=>join(AOSP,j))],{cold:true,holdUpgrades:()=>true,natives:new Natives({
-  find:(cls,key)=>cls!=="Osr"?undefined:key==="late(LOsr$I;)LOsr$I;"?late:key==="await(IZ)I"?async(value:number,fail:number)=>{
+  find:(cls,key)=>cls!=="Osr"?undefined:key==="late(LOsr$I;)LOsr$I;"?late:key==="invalidate()V"?()=>{w.invalidate(w.slotOf(w.prog.resolve("Osr","nested","(I)I")!));}:key==="await(IZ)I"?async(value:number,fail:number)=>{
     waits++; await Promise.resolve();
     if(fail)throw w.exception(w.makeThrowable("java/lang/IllegalArgumentException","OSR native throw"));
     return value+1;
   }:undefined,
   thrown:e=>{const t=w.throwable(e);return t?{cls:w.classNameOf(t),msg:null,obj:t}:undefined;},
 })});
+const enterCold=w.enterColdDeopt.bind(w);
+let duplicateRejects=0;
+w.enterColdDeopt=(state,cold)=>{
+  const frame=enterCold(state,cold), calls=w.stats.coldCalls;
+  try{enterCold(state,cold);}catch{duplicateRejects++;}
+  check("duplicate deopt cannot execute or allocate another activation",w.stats.coldCalls,calls);
+  return frame;
+};
 const n=50_000, sum=n*(n-1)/2|0;
 check("live interface call sees native-loaded override",await w.entryAsync("Osr","run","(I)I")(n),sum+2);
 check("late class loaded",loaded,true);
+check("running continuation deoptimizes on slot invalidation",w.stats.coldDeopts,1);
 check("prefix effects execute once",w.entry("Osr","effects","()I")(),1);
 check("active transfer with future upgrades held",w.stats.upgrades,0);
 const bytes=w.stats.bytes, before=w.stats.coldResumes;
@@ -55,4 +65,16 @@ check("native suspensions executed once",waits,2);
 const lock=w.entry("Osr","lock","()Ljava/lang/Object;")() as object;
 check("monitor released after normal and exceptional exits",w.sched.monitors.tryEnter(lock,w.sched.root),0);
 w.sched.monitors.exit(lock,w.sched.root);
-console.log(`cold OSR: ${checks} checks; ${w.stats.coldResumes} active transfers / ${w.stats.coldResumeEntries} compiled entries; live interface loading, effects, monitors, native suspension and Java EH`);
+const priorDeopts=w.stats.coldDeopts;
+check("nested chunk handoff result",await w.entryAsync("Osr","nested","(I)I")(20_000),60_000);
+check("nested chunk handoff occurs once",w.stats.coldDeopts,priorDeopts+1);
+check("nested prefix never replay",w.entry("Osr","effects","()I")(),4);
+const depth=w.rtImports().depth, nested=w.prog.resolve("Osr","nested","(I)I")!;
+depth.value=123;
+check("raw nested chunk handoff result",(w.table.get(w.slotOf(nested)) as (n:number)=>number)(20_000),60_000);
+check("raw nested handoff preserves caller depth",depth.value,123);
+depth.value=0;
+check("all handoffs reject duplicate entry",duplicateRejects,w.stats.coldDeopts);
+check("nested handoff releases monitor",w.sched.monitors.tryEnter(lock,w.sched.root),0);
+w.sched.monitors.exit(lock,w.sched.root);
+console.log(`cold OSR: ${checks} checks; ${w.stats.coldDeopts} deoptimizations; ${w.stats.coldResumes} active transfers / ${w.stats.coldResumeEntries} compiled entries; live interface loading, effects, monitors, native suspension and Java EH`);
