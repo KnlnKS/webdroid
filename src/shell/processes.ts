@@ -4,7 +4,8 @@
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
 import { PendingIntents, type PendingOperation } from "./pendingintents";
 import { Alarms } from "./alarms";
-import { AccountStore } from "./accounts";
+import { AccountStore, canonicalAccountCommands, type AccountCalls } from "./accounts";
+import { accountAuthority } from "../android/accounts";
 import { encodeIntent, intentCodec } from "../android/intentipc";
 import type { IntentCodec } from "./pendingintents";
 import { packages } from "../android/packages";
@@ -72,6 +73,7 @@ export type ProcessEndpoint = {
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
+  accountsChanged: () => Promise<void>;
   settingsChanged: (table: SettingsTable, name: string) => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
   packageRemoved: (pkg: string) => Promise<void>;
@@ -79,7 +81,7 @@ export type ProcessEndpoint = {
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = CookieCalls & SettingsCalls & {
+export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & {
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
   processExited: (record: ExitRecord) => void;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
@@ -94,7 +96,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & {
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -153,6 +155,7 @@ class ProcessBroker {
   private bootstrapPorts = new Map<number, (() => void)[]>();
   private endpointPorts = new Map<number, () => void>();
   private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
+  private accountClients = new Map<number, () => void>();
   private settingsClients = new Map<number, () => void>();
   private callerPorts = new Map<number, Set<() => void>>();
   readonly activities: ActivityStack = new ActivityStack({
@@ -241,6 +244,7 @@ class ProcessBroker {
   async bootstrap(pid: number, worker = false): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     this.watchSettings(pid);
+    this.watchAccounts(pid);
     const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
@@ -283,7 +287,17 @@ class ProcessBroker {
     const { port1, port2 } = new MessageChannel();
     let owned = this.callerPorts.get(pid);
     if (!owned) this.callerPorts.set(pid, owned = new Set());
+    const accountCommands = canonicalAccountCommands(this.accounts, () => {
+      const caller = this.entry(pid);
+      return accountAuthority(caller.pkg, caller.uid);
+    });
+    const accounts = () => { this.watchAccounts(pid); return accountCommands; };
     const stop = serveCalls<BrokerCalls>(port1, {
+      accountList: async query => accounts().accountList(query),
+      accountRead: async key => accounts().accountRead(key),
+      accountExists: async key => accounts().accountExists(key),
+      accountCached: async (key, type) => accounts().accountCached(key, type),
+      accountChange: async change => accounts().accountChange(change),
       ...cookieCalls(() => this.cookies(this.entry(pid).pkg), () => { this.entry(pid); }),
       exitRecords: async pkg => {
         const caller = this.entry(pid), owner = packages.get(pkg);
@@ -341,6 +355,15 @@ class ProcessBroker {
       entry.resolve(proxy.endpoint);
     } catch (error) { port.postMessage({ kind: "close" }); port.close(); stop(); throw error; }
   }
+  /** Root uses its local Java watcher; remote processes keep only this owner-side notifier. */
+  watchAccounts(pid: number, local?: () => void): void {
+    const entry = this.entry(pid);
+    if (local) { this.accountClients.get(pid)?.(); this.accountClients.set(pid, local); return; }
+    if (this.accountClients.has(pid)) return;
+    this.accountClients.set(pid, this.accounts.watch(() => {
+      if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.accountsChanged()));
+    }));
+  }
   private watchSettings(pid: number): void {
     const entry = this.entry(pid);
     if (this.settingsClients.has(pid)) return;
@@ -357,6 +380,7 @@ class ProcessBroker {
     entry.dead = true; entry.reject(error);
     this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
     this.settingsClients.get(pid)?.(); this.settingsClients.delete(pid);
+    this.accountClients.get(pid)?.(); this.accountClients.delete(pid);
     this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);
     for (const close of this.callerPorts.get(pid) ?? []) close();
     this.callerPorts.delete(pid);

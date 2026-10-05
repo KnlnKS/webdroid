@@ -1,6 +1,6 @@
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
-import { useAccountStore } from "../android/accounts";
+import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
@@ -36,12 +36,21 @@ const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerM
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
 function connectCommandTransports(): void {
-  if (typeof window === "undefined" || window !== window.top) useSettingsAccess(remoteSettings(brokerCalls));
   sqliteTransport.call = request => brokerCalls().sqlite(request);
   cookieTransport.calls = brokerCalls;
   clipboardTransport.set = data => brokerCalls().clipboardSet(data);
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
+  if (typeof window === "undefined" || window !== window.top) {
+    useSettingsAccess(remoteSettings(brokerCalls));
+    useAccountAccess({
+      accountList: query => brokerCalls().accountList(query),
+      accountRead: key => brokerCalls().accountRead(key),
+      accountExists: key => brokerCalls().accountExists(key),
+      accountCached: (key, type) => brokerCalls().accountCached(key, type),
+      accountChange: change => brokerCalls().accountChange(change),
+    });
+  }
 }
 export function closeProcessBrokerPort(): void {
   calls?.close();
@@ -116,12 +125,12 @@ export function connectProcess(): ProcessEndpoint {
   broker.files.attach(PROCESS_PID, vfs);
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
-  const stopAccounts = useAccountStore(broker.accounts);
   if (typeof window !== "undefined" && window === window.top) {
+    const stopAccounts = useAccountStore(broker.accounts);
+    if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
     const stopSettings = useSettingsStore(broker.settings);
     if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   }
-  if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopAccounts);
   usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
   locationTransport.available = () => broker.location.available;
@@ -173,6 +182,7 @@ export function connectProcess(): ProcessEndpoint {
 /** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
 export function createProcessEndpoint(requests = workerActivityResults): ProcessEndpoint {
   return {
+    accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
     packageRemoved: async pkg => forgetRemoved(pkg),
