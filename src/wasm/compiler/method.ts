@@ -268,8 +268,8 @@ export class MC {
       if (t === null) continue;
       if (/custom|polymorphic/.test(ins.name)) return true;
       // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
-      if (virtual && this.cx.guards(...virtual).length) {
-        for (const g of this.cx.guards(...virtual)) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
+      if (virtual && this.callGuards(ins).length) {
+        for (const g of this.callGuards(ins)) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
         cold.push(key + ":f");
       } else if (!bounded(t)) {
         // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
@@ -285,8 +285,12 @@ export class MC {
     return false;
   }
   private callees = new Map<number, MethodInfo | null | "dynamic">();
-  /** the declaration of each virtual call whose target is not unique */
+  /** the declaration used for virtual dispatch and guards */
   private virtuals = new Map<number, [string, string, string]>();
+  private callGuards(ins: Ins): MethodInfo[] {
+    const target = this.callee(ins), virtual = this.virtuals.get(ins.pc);
+    return target && target !== "dynamic" ? [target] : virtual ? this.cx.guards(...virtual) : [];
+  }
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
   callee(ins: Ins): MethodInfo | null | "dynamic" {
     let r = this.callees.get(ins.pc);
@@ -304,7 +308,7 @@ export class MC {
     if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") return "dynamic";
     if (kind === "invoke-direct" || kind === "invoke-super") return target;
     const only = cx.devirt(decl, mr.name, desc);
-    if (only === "many") this.virtuals.set(ins.pc, [decl, mr.name, desc]);
+    this.virtuals.set(ins.pc, [decl, mr.name, desc]);
     return only === "many" ? "dynamic" : only;
   }
   push(l: string) { this.nest.push(l); }
@@ -839,37 +843,34 @@ export class MC {
       const t = target;
       this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, t);
     } else {
-      // virtual / interface: devirtualise when class-hierarchy analysis finds one implementation
-      const only = this.callee(ins) as MethodInfo | "dynamic", declC = prog.get(decl);
-      if (only !== "dynamic") { this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, only); }
-      else {
-        // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
-        const guards = cx.guards(decl, mr.name, desc), recv = () => { c.lget(this.tmpL); pushArgsFrom(this, ins, p.params); };
-        this.nonNull(ins.regs[0]); c.lset(this.tmpL);
-        recv();
-        c.lget(this.tmpL); cx.str.vtab(c, decl);
-        if (declC && !declC.isInterface) {
-          c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
-        } else if (prog.get("java/lang/Object")!.byKey.has(key)) {
-          c.i32(cx.w.vslot("java/lang/Object", key)).arrayGet(cx.tVT);
-        } else {
-          const sel = cx.w.selectorId(key), s = sel % H.IMT_N;
-          // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
-          const vtl = this.vtLocal();
-          c.lset(vtl);
-          c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
-            .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
-            .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
-        }
-        // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
-        if (guards.length) {
-          const slot = this.slotLocal(), type = sigIdx();
-          c.lset(slot);
-          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => c.call(cx.fn.get(mid(g))!)); c.else_(); }
-          c.lget(slot); wrap("f", () => c.callIndirect(type));
-          for (const _ of guards) c.end();
-        } else c.callIndirect(sigIdx());
+      // A native callback can load an override while this activation is still running.
+      const declC = prog.get(decl);
+      // the slot the receiver's class gives the method; a call that expects one of the likely implementations tests for it first, so the engine can inline it
+      const guards = this.callGuards(ins), recv = () => { c.lget(this.tmpL); pushArgsFrom(this, ins, p.params); };
+      this.nonNull(ins.regs[0]); c.lset(this.tmpL);
+      recv();
+      c.lget(this.tmpL); cx.str.vtab(c, decl);
+      if (declC && !declC.isInterface) {
+        c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
+      } else if (prog.get("java/lang/Object")!.byKey.has(key)) {
+        c.i32(cx.w.vslot("java/lang/Object", key)).arrayGet(cx.tVT);
+      } else {
+        const sel = cx.w.selectorId(key), s = sel % H.IMT_N;
+        // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
+        const vtl = this.vtLocal();
+        c.lset(vtl);
+        c.lget(vtl).i32(H.IMT + 2 * s).arrayGet(cx.tVT).i32(sel).raw(OP.i32_eq).if_(T.i32)
+          .lget(vtl).i32(H.IMT + 2 * s + 1).arrayGet(cx.tVT).else_()
+          .lget(vtl).i32(sel).call(cx.helper("imtslow")).end();
       }
+      // the receiver and arguments stay on the stack under the tests: a guard takes them as block parameters instead of repeating them
+      if (guards.length) {
+        const slot = this.slotLocal(), type = sigIdx();
+        c.lset(slot);
+        for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => cx.callMethod(c, g)); c.else_(); }
+        c.lget(slot); wrap("f", () => c.callIndirect(type));
+        for (const _ of guards) c.end();
+      } else c.callIndirect(sigIdx());
     }
     if (site) this.leaveSite();
     this.finishResult(ins, retK);

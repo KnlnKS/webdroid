@@ -8,6 +8,7 @@ import { loadDexes, world } from "./lib";
 import { HEAP_LIMIT } from "../../src/wasm/link/exc";
 import { AOSP, JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
+import { Natives } from "../../src/wasm/host/natives";
 
 const jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-lz-"));
@@ -33,6 +34,18 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   check("Lz.test after", w.entry("Lz", "test", "()I")(), 11);
 }
 
+{
+  const late = Object.assign(() => {
+    w.addDexes(loadDexes(join(out, "out2/classes.dex")));
+    return w.entry("Lz2", "make", "()LLz$A;")();
+  }, { javaValues: true });
+  const w = world([join(out, "classes.dex"), ...jars], { natives: new Natives({
+    find: (cls, key) => cls === "Lz" && key === "late()LLz$A;" ? late : undefined,
+    thrown: () => undefined,
+  }) });
+  check("active frame sees a native-loaded override", w.entry("Lz", "active", "()I")(), 2);
+}
+
 // ---- tiers: a method that uses up its budget is recompiled (here inside a loop, so the next call is the second tier) and answers the same
 {
   const w = world([join(out, "classes.dex"), ...jars]), call = w.entry("Lz", "sum", "(I)I");
@@ -42,7 +55,8 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   const up = w.stats.upgrades;
   check("hot loop upgraded", up >= 1, true);
   check("second tier answers the same", call(40000), first);
-  check("an upgraded method is not upgraded again", (call(40000), w.stats.upgrades), up);
+  const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!);
+  check("an upgraded method is not queued again", (call(40000), w.upgradeJob(slot)), undefined);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
   check("and the method is compiled afresh", call(1000), 11 * 1000);
