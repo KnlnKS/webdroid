@@ -31,6 +31,10 @@ public class Hc {
     String lengths() { return fixedContentLength + "/" + fixedContentLengthLong + "/" + chunkLength; }
   }
 
+  public interface Face { int area(); }
+  static class Triangle implements Face { public int area() { return 3; } }
+  public static int faces() { Face q = new Triangle(); Face h = (Face) Maker.face(); return q.area() * 100 + h.area(); }
+
   public abstract static class Shape { public abstract int area(); }
   static class Square extends Shape { @Override public int area() { return 4; } }
   /** an instance of an abstract class that the host implements, made while this method runs: the call is to the host's method, not to the one concrete bytecode subclass */

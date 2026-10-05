@@ -53,9 +53,11 @@ rt.register({
   },
 });
 
+class JFace extends JObj {}
+rt.register({ name: "Hc$Face", ctor: JFace, methods: { "area()I": () => 7 } });
 class JShape extends JObj {}
 rt.register({ name: "Hc$Shape", ctor: JShape, methods: { "area()I": () => 7 } });
-rt.register({ name: "wdtest/Maker", ctor: class extends JObj {}, methods: { "static make()Ljava/lang/Object;": () => new JShape() } });
+rt.register({ name: "wdtest/Maker", ctor: class extends JObj {}, methods: { "static make()Ljava/lang/Object;": () => new JShape(), "static face()Ljava/lang/Object;": () => new JFace() } });
 
 /** the fixture Hc and the classes it declares, as a dex; the classes the host implements are compiled against, not dexed */
 export function hostDex(): string {
@@ -83,7 +85,7 @@ async function run(f: () => unknown): Promise<string> {
 /** `blocking` runs the Java that waits: the JS tier's scall, or the World's entryAsync */
 export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown> = async (c, n, d) => scall(c, n, d)): Promise<string[]> {
   const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
-  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "opened", "shapes", "booted"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" || m === "booted" ? "I" : STR}`));
+  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "opened", "shapes", "faces", "booted"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" || m === "faces" || m === "booted" ? "I" : STR}`));
 
   await line("a host method that waits, from a subclass", () => blocking("Hc", "blockSub", "()I"));
   await line("a host method that enters Java that blocks", () => blocking("Hc", "reentered", "()I"));

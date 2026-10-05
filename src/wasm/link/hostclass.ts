@@ -54,7 +54,7 @@ export class HostClasses {
   private define(spec: HostSpec): boolean {
     const prog = this.w.prog, have = prog.get(spec.name);
     if (have?.dex) {
-      if (have.isInterface && !spec.statics) return true;
+      if (have.isInterface && !spec.statics) { this.javaClass(spec); return true; }
       // the methods a superclass declares are found through the whole chain
       for (let c: JClass | undefined = have; c?.sup; c = prog.get(c.sup)) if (!prog.get(c.sup)) return false;
       this.overlay(have, spec);
