@@ -7,16 +7,21 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { VERSION } from "../../src/wasm/link/aot";
 import { AOSP, ROOT } from "./paths";
 
-/** the code a module's bytes depend on: the compiler, the linker and the front end they share with the JS tier */
-const SOURCES = ["src/wasm/compiler", "src/wasm/link", "src/jvm/dex.ts", "src/jvm/prepared.ts", "src/jvm/structure.ts", "src/jvm/opcodes.ts", "src/jvm/abi.ts"];
+// Host natives emit Wasm too; their ABI must invalidate platform and persisted app builds together.
+const SOURCES = ["src/wasm", "scripts/wasm/aot-build.ts", "src/jvm/dex.ts", "src/jvm/prepared.ts", "src/jvm/structure.ts", "src/jvm/opcodes.ts", "src/jvm/abi.ts"];
 
 export const AOT_ROOT = join(ROOT, "vendor/wasm-aot");
+
+export function sourcePaths(): string[] {
+  return SOURCES.flatMap((s) => s.endsWith(".ts") ? [s] : readdirSync(join(ROOT, s), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).sort().map((f) => join(s, f)));
+}
 
 /** a digest of the platform jars, the compiler sources and the build format */
 export function sourceKey(): string {
   const h = createHash("sha256").update(`v${VERSION}\n`);
   for (const jar of PLATFORM_JARS) h.update(jar).update(readFileSync(join(AOSP, jar)));
-  for (const path of SOURCES.flatMap((s) => (s.endsWith(".ts") ? [s] : readdirSync(join(ROOT, s), { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).sort().map((f) => join(s, f))))) {
+  for (const path of sourcePaths()) {
     h.update(path).update(readFileSync(join(ROOT, path)));
   }
   return h.digest("hex");

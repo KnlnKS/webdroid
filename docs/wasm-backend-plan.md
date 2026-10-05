@@ -8,6 +8,25 @@ with its suites in `scripts/wasm/` (`bun run wasm <suite>`) and its Java fixture
 (its `mid` is `compiler/ids.ts`). `floatbench.ts`, `lazybench.ts` and the j2w `dis.ts` were deleted.
 This is a report plus a staged plan for a different coding agent to execute.
 
+## Recovery status (2026-10-05)
+
+Recovered from `1d7fdeea` after the session crash. The gate definitions in section 6 remain the acceptance criteria; historical measurements and a successful compile sweep do not establish full runtime parity.
+
+| Gate | Recovered evidence and work still required |
+|---|---|
+| G1 | Open. Shared-host runs beat the steady-state geometric mean, but some workloads lose more than 10% and Chrome first calls are slower. Repeat on an idle host after correctness stabilizes. |
+| G2 | Open for final acceptance. Differential suites and `fwtest` have passed, but conformance skips about 6,100 TestNG data-provider cases and the browser quick gate is unstable. A compile sweep checks translation, not execution of every method. |
+| G3 | Open. The stated bar is 30% less cold-call compile time and every gated tap at most 150 ms. Record matching cold/warm compile counters for every named app; launch parity is also required by S4/S6. X1's launch timings alone do not settle the compile-time criterion. |
+| G4 | Open. Re-entered loops tier up, but section 4.7 records a single long activation failing the 100 ms criterion. Compilation hints do not close that gap. |
+| G5 | Open. The string representation comparison is measured; the required boundary share below 5% of a heavy tap has not been demonstrated. |
+| G6 | Not implemented. X1 records a measured decision to pursue module-loading reductions instead of a heap image; this is a design decision, not a successful image-loader measurement. |
+| G7 | Measured for Chrome and the WebKit build. Firefox is excluded by the user's instruction. |
+| G8 | Decision pending under `docs/decisions/`. The existing steady-state mean supports continuing Wasm GC, while G1's unresolved criteria must remain visible. |
+
+S0–S3 have substantial implementations and harness coverage. S4 has AOT delivery and worker compilation, but the Wasm cold interpreter and hot-loop re-entry deliverables still need an explicit audit. S5's process-per-Worker conversion and S6's default switch/removal are unfinished. Optional and open-ended work follows completion of the main stages and gates.
+
+The surviving Y1 worktree contains uncommitted stabilization changes. Y2 has unmerged host-class/JNI commits through `47059fe3`. Recovery agents own those slices; a third agent is investigating the TestNG coverage gap.
+
 ## 0. How to read this
 
 - **Measured** = I ran it (Chrome 153 on an M4 Pro, headless, single runs, other agents idle or lightly
