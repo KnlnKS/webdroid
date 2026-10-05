@@ -83,7 +83,7 @@ export class Cha {
   private reaches(decl: string, m: MethodInfo): boolean {
     const p = this.prog, key = m.key;
     // the subtypes that can run m are subtypes of its class; those of decl are the ones that count
-    const [top, filter] = p.isSubclass(m.cls, decl) ? [m.cls, null] : p.isSubclass(decl, m.cls) ? [decl, null] : [decl, m.cls];
+    const [top, filter] = p.isSubclass(m.cls, decl) ? [m.cls, null] : p.isSubclass(decl, m.cls) ? [decl, null] : [m.cls, decl];
     const seen = new Set<string>(), stack = [top];
     while (stack.length) {
       const n = stack.pop()!;
