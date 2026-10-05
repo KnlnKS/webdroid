@@ -15,6 +15,7 @@ import { UnitCompiler } from "../../src/wasm/link/unit";
 import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve";
 import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler";
 import { prepareApp } from "../../src/wasm/host/appcode";
+import { fetchBundle } from "../../src/wasm/host/bundle";
 import { Persist, SavedBuild, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { loadDexes } from "./lib";
@@ -245,8 +246,11 @@ if (saved) {
   const key = await appKey(app, "platform"), origin = new Persist(memoryBackend());
   const made = await prepareApp({ ...request, persist: origin, aot: { base: BASE, key: "platform" } as unknown as FetchStore });
   await made.made!;
-  const files = (await origin.load(key))!, realFetch = globalThis.fetch;
+  const files = (await origin.load(key))!, realFetch = globalThis.fetch, requests: string[] = [];
   globalThis.fetch = (async (url: string) => {
+    requests.push(String(url));
+    if (String(url) === `${request.aot.base}apps.json`) return Response.json([key]);
+    if (String(url) === "https://empty.invalid/apps.json") return Response.json([]);
     const prefix = `${request.aot.base}app.${key}.`, name = String(url).slice(prefix.length);
     if (!String(url).startsWith(prefix)) return new Response("", { status: 404 });
     if (name === "json") return Response.json([...files.keys()]);
@@ -255,10 +259,19 @@ if (saved) {
   try {
     const first = await prepareApp(request);
     check("a first launch finds the build the platform build ships", first.hit, true);
+    check("discovery reads the catalog before app files", requests[0], `${request.aot.base}apps.json`);
     check("and keeps it for the next", (await persist.load(key))?.size, files.size);
+    const next = await prepareApp(request), before = requests.length;
+    check("the next launch reuses the saved shipped build", next.hit, true);
     const none = await prepareApp({ ...request, dexes: late, persist: new Persist(memoryBackend()) });
     check("an app it ships none for has none", none.hit, false);
-    for (const c of [made, first, none]) { c.compiler.close(); c.close(); }
+    check("an unlisted app makes no file probes", requests.length, before);
+    check("the catalog is reused at the same base", requests.filter((url) => url === `${request.aot.base}apps.json`).length, 1);
+    check("an empty catalog ships no build", await fetchBundle("https://empty.invalid/", key), undefined);
+    check("an empty catalog makes no file probes", requests.at(-1), "https://empty.invalid/apps.json");
+    check("a missing catalog ships no build", await fetchBundle("https://missing.invalid/", key), undefined);
+    check("a missing catalog makes no file probes", requests.at(-1), "https://missing.invalid/apps.json");
+    for (const c of [made, first, next, none]) { c.compiler.close(); c.close(); }
   } finally { globalThis.fetch = realFetch; }
 }
 
