@@ -13,6 +13,7 @@
 //   hostclass    classes the host implements: Java objects and their host objects are one object, a bytecode subclass of one, the JS tier's answers
 //   fuzz         random verifiable methods as Wasm, on the JS tier and on the JDK (seeds 1 to 6 unless arguments are given)
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
+//   nested       natives that enter Java, a thousand times in one entry (the engine's stacks)
 //   threads      threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK and the JS tier)
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
 //   conform      the scripts/conform suites on the Wasm tier against their baselines, the JS tier beside it: conform <suite|quick> [class]; conform-quick (a few classes of each kind) is in `all`
@@ -33,7 +34,7 @@ interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  threads: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, "aot-profile": { node: false, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];

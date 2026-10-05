@@ -179,11 +179,16 @@ export class ThreadRec {
   constructor(public obj: object | null) {}
 }
 
+/** entries a strand may make before it waits; the engine's stacks run out at about 1,400 */
+const NESTED_LIMIT = 200;
+
 export class Strand {
   /** the strand this one waits for: the one initializing a class or holding a lock it needs */
   waitsOn: Strand | null = null;
   /** the strand whose native entered Java on this one: the same thread, so it holds what that strand holds */
   parent: Strand | null = null;
+  /** how many stacks the entries made from this strand's natives have taken since this strand last waited */
+  nested = 0;
   constructor(readonly id: number, readonly thread: ThreadRec, readonly root: boolean, private sched: Sched) {}
   /** whether code on this strand runs on a stack of its own, which may suspend (host code at the top level runs on the caller's) */
   get canSuspend(): boolean { return !this.root; }
@@ -207,6 +212,9 @@ export class Sched {
   suspensions = 0;
   /** told whenever the thread whose code runs changes, for the host's notion of the current thread */
   onThread: ((t: ThreadRec) => void) | null = null;
+  /** The engine frees the stacks of calls made on a stack of its own only when that stack waits, and refuses a new one after about 1,400 are held (`File.list()` makes an entry for
+   *  each call, and a thousand of them in one entry would end in StackOverflowError): whether the strand running has made enough entries that a native should return by waiting once */
+  owes(): boolean { const s = this.current(); return !s.root && s.nested >= NESTED_LIMIT; }
   /** whether the code running now is on a stack of its own, which can wait for a Promise (the host's top level is not) */
   canWait(): boolean { return !this.current().root; }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
@@ -242,6 +250,7 @@ export class Sched {
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
     return suspending((...a: A) => {
       this.suspensions++;
+      this.current().nested = 0;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); } finally { this.idle(); }
@@ -274,6 +283,8 @@ export class Sched {
     return p;
   }
   enter(s: Strand, f: Function, args: unknown[]): Promise<unknown> {
+    const caller = this.current();
+    if (!caller.root) caller.nested++;
     const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.running] as const;
     sid.value = s.id; thr.value = s.thread.obj; depth.value = 0; this.running = s; this.onThread?.(s.thread);
     try {

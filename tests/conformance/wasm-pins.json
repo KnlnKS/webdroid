@@ -110,12 +110,6 @@
       "class": "harmony\\.tests\\.java\\.io\\.ObjectStreamClassTest$",
       "test": "^test_specialTypes(\\(|\\[)",
       "why": "The JS tier's compiled code for the test fails with a NullPointerException of its own (null is not an object (evaluating 'F.v[K[0]][K[1]]'))."
-    },
-    {
-      "class": "harmony\\.tests\\.java\\.io\\.FileTest$",
-      "test": ".",
-      "because": "StackOverflowError",
-      "why": "A native that enters Java (File.list0's path, a charset's converter) allocates a JSPI stack for the call, and the stacks of the calls one entry makes live until that entry returns: several hundred of them (a File.list() in a loop of 1,000 inside one test; the same on knlnks/bytecode-wasm at eeb222b3) exhaust the engine's stacks and the class ends with StackOverflowError. Track C3's entries (host/entry.ts onStrand)."
     }
   ],
   "luni-nio-file": [
@@ -123,14 +117,6 @@
       "class": "libcore\\.java\\.nio\\.file\\.\\w+ExceptionTest$",
       "test": "^(test_serialization)(\\(|\\[)",
       "why": "The JS tier's serialized form of a Throwable differs from the golden stream the test compares it with (JUnit: ComparisonFailure on the hex dump); the Wasm tier serializes AOSP's own fields."
-    }
-  ],
-  "luni-nio": [
-    {
-      "class": "harmony\\.tests\\.java\\.nio\\.charset\\.CharsetTest$",
-      "test": ".",
-      "because": "StackOverflowError",
-      "why": "A native that enters Java (File.list0's path, a charset's converter) allocates a JSPI stack for the call, and the stacks of the calls one entry makes live until that entry returns: several hundred of them (a File.list() in a loop of 1,000 inside one test; the same on knlnks/bytecode-wasm at eeb222b3) exhaust the engine's stacks and the class ends with StackOverflowError. Track C3's entries (host/entry.ts onStrand)."
     }
   ],
   "luni-net": [
