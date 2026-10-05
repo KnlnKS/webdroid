@@ -241,6 +241,9 @@ export class MC {
         (throws(ins) ? cold : open).push(key);
       }
     }
+    // a call in a loop counts once per iteration around itself, against once per call of the method in a prologue
+    const loops = this.prepared.instructions.flatMap((b) => branchTargets(this.item, b).filter((t) => t <= b.pc).map((t) => [t, b.pc]));
+    if (open.some((k) => loops.some(([from, to]) => +k.split(":")[0] >= from && +k.split(":")[0] <= to))) return true;
     if (this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
     this.sites = new Set([...open, ...cold]);
     this.boundable = open.length === 0;
