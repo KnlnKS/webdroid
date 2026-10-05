@@ -1312,6 +1312,69 @@ larger and a call pulls the whole one); the page does not pay for that, since mo
 compile 58 files; V8's cache of `compileStreaming` results (Chrome's code cache for HTTP-cached responses) was not measured. The first-call floor of the framework rows is the Program/CHA cost above (X1's area). Profiles use FitNotes and
 Calculator M (Mihon does not present on this tier); classes only another app runs are misses and compile on demand.
 
+### 4.18 X1: launch time, the app build and the boot image (G3, G6; 2026-10-05, `knlnks/wasm-x1`)
+
+**Where a warm FitNotes launch went** (3.5 s from navigation to the first frame at `d0c9a31b`; Chrome 153 headless, load average 4 to 6; a V8 profile of the page plus a `v8.wasm` trace of the tab).
+The page's main thread was busy the whole way, and the Java itself was a small part of it: wasm self time is 165 ms of the 1.8 s that remain once the build is held, 12 ms of the 453 ms of the zygote's Java.
+- *Engine*: 42,131 functions compiled lazily (Liftoff, on first call) cost 800 ms, 11 of them (static initializers with long array literals: ICU's `LocaleIDs.<clinit>` alone 140 ms, a 1.5 MB text function) 293 ms; 5,965
+  runtime-built modules were compiled (209 ms) and 6,683 instantiated (192 ms); the streaming compile of the 130 MB startup list held the main thread (95% in native code from 300 to 800 ms: `OnBytesReceived` 310 ms,
+  `FinishStreaming` 119 ms) while nothing else ran.
+- *What the launch built because no saved code had it* (the saved app build covered the likely methods only): 829 app methods (463 ms), 733 synthetic functions (`uf:` field accessors of Unsafe, allocators, runtime functions: 2,000 modules
+  with their stubs), 1,365 class modules of the app's classes (every code module links all the classes it names), 27 platform methods undone by the app's classes and compiled again (installProvider alone 98 ms, most of it the one-time
+  class-hierarchy index of every platform method key), 1,151 identical `fieldReader` modules (one per host object, an uncached call), 549 modules to set `OsConstants`' constants one by one, inline second-tier compiles 190 ms.
+- *Loading platform modules*: each C/D module made a record for every class it names (37,000 `ClassRt`s, each building the class's member list), built the members of every class to mark its slots, resolved every class-hierarchy
+  decision to a method, and looped over all overridden slots; `stackClass` formatted 128 frames of `Error.stack` per call (104 ms).
+
+**What changed.** An app build now holds everything a launch built on demand (appcode.ts `refine`, apps.ts): the launch records its demand (`World.demand`: the methods compiled at first call, the class modules made, the host questions that
+made synthetic functions, by name), and once the launch has gone quiet (two looks, 2 s apart, after the first frame; at most 3 builds) the worker makes the build again with it (the build worker is kept for that; one that began without the
+host's classes is replaced). The build has *data modules* `e<k>.wasm` for the app's classes and for every class its code modules name (about 128 KB each, a module loads whole), *synthetic modules* `s<k>.wasm` (64 functions each;
+`hostInfo` questions are replayed in the worker by class name, since ids differ; a function whose code relies on a class-hierarchy decision is left out) and *patches*: code for platform methods that the app's classes undo or the
+platform build lacks, in modules loaded right after the platform module they patch, so that they replace its entries. The methods of classes the platform build does not number (the 32 jars outside its set, the host's classes) are
+compiled into the build like the app's. A platform build ships the builds its profile run made (`aot-profile` writes `app.<key>.<file>` beside the modules, 4 to 5 MB for FitNotes; host/bundle.ts), so a first launch of a known app
+finds its code: on a device without one the launch makes it, as before. `APP_VERSION` 2, `VERSION` 3 (traces are read per function).
+
+Cheaper launch work: a platform module loads the module of each class it names but makes a record only for a class something asks for; marks its slots from the block sizes; compares class-hierarchy decisions by names and resolves a target
+only when a class has been added; finds the overridden slots of its own module; `fieldReader` and `OsConstants` as above; `isSubclass` reads one Set of ancestors per class (`Program.ancestors`) and `reaches` stops at a class that
+implements the method itself; a static initializer's `aput` is a call of a helper (`aput:<kind>`: the function is 4 times smaller; `LocaleIDs.<clinit>` 140 ms -> 15 ms); the caller class is looked for in 16 frames first (104 -> 15 ms); the
+inline second tier (`World.holdUpgrades`) waits for the first frame (190 ms: what runs hot while a process starts is run-once code; the worker still takes the jobs); the tier is loaded as the page starts, its World is made
+while the build's modules arrive, and workers fetch and compile them (host/aotload.ts, 4 workers, 8 requests each, the modules cross as they are): the main thread no longer feeds 66 MB to the engine.
+
+**Result** (FitNotes, `lat fitnotes --query tier=wasm [--warm]`, navigation to the first presented frame; 3 to 4 runs each, run alternately against X2's tip `05991197` served on a second port, load average 4 to 9; the JS tier measured
+in the same hour: 1.25 to 1.28 s warm, 1.68 to 1.78 s cold):
+
+| | X2 tip | this branch, no shipped build | this branch, build shipped |
+|---|---|---|---|
+| cold | 3.6 to 4.2 s | 2.9 to 3.0 s | 2.15 to 2.55 s |
+| warm | 2.98 to 3.33 s | 1.74 to 1.87 s | the same (it has its own build) |
+| Calculator M cold / warm (`wd.perf.presentations`, 3 runs) | 5.7 to 5.95 / 4.04 to 4.09 s | | 2.76 to 2.97 / 1.81 to 1.89 s |
+| max gated tap, cold / warm | 27 to 31 / 83 to 99 ms | | 24 to 33 / 19 to 22 ms |
+
+At the start of this work (`d0c9a31b`, load 4 to 6): cold 4.06 s, warm 3.53 s. On-demand work at the first frame, warm: 2,264 methods compiled (519 ms) -> 23 (6 ms); class modules built 1,365 -> 66; modules instantiated 7,746 -> 1,845;
+`wasmAotMs` (platform module loading) 270 -> 70 ms. Cold, no shipped build: 2,222 methods (505 ms) and 512 class modules, as the first launch of an app on a device. Mihon still does not present: it reaches `resourcesReady` at 2.1 s (2.5 s at
+X2's tip), then its process dies (`Unsafe: no accessor for this offset`, then `Bridge.shellOf` allocating the dex interface `EGL10`, as W2 recorded); its builds were not shipped.
+
+**G3** (launch on the Wasm tier at most the JS tier's, cold and warm): *not met*. Warm 1.74 to 1.87 s against 1.25 to 1.28 s, cold 2.15 to 2.55 s (build shipped) or 2.9 to 3.0 s against 1.68 to 1.78 s: the gap is 0.5 s warm and 0.4 to 1.2 s
+cold, from 4.06 s and 3.53 s when the work began. No gated tap is above 150 ms (max 33 ms). What is left of a warm launch is the main thread running the framework as Wasm: 0.45 s from navigation to the World, the zygote 0.45 s (172 ms of it
+loading modules), `startActivityThread` to the first frame 0.85 s (141 ms of it Java).
+
+**G6, the boot image: decided not to build.** Measured first: the Java heap of the page's World at the first frame is 140,139 wasm GC objects in 490 struct and array types, 20.7 MB (a heap snapshot of the tab is 845 MB, 8.2 M nodes, 3.1 M of them
+plain JS objects of the program models and 2 M strings); the zygote's initialization (`System.<clinit>`, `commonInit`, JCA warm-up, fonts, text resources, paint) runs for 450 to 550 ms from the World to `startZygote`, and of those 12 ms are
+wasm execution: 172 ms are loading modules (`linkSlot`: C and D instantiation, their `touch`), the rest the host's natives and JS. A loader that made the 140,000 objects from a data section would take about 10 to 20 ms, but it would not
+make the zygote cheaper: the statics of the classes it restores live in the globals of their D modules, so the loader instantiates the D module of every class in the image (about 500, the 70 ms of `Instance` and the `touch` cascade that
+the launch pays now), and the Java that runs once is 12 ms of the zygote and 141 ms of the 845 ms after it, so a free image saves at most 150 ms of 1.8 s (8%). What it would also have to re-establish is host state that is not in the
+heap: the classes' init words and the thread that initializes, identity hashes and monitors (`Sched`), the interned strings, `hostFns`/`callFns`/`fieldReaders` closures and the table entries of every installed function (instances
+cannot be serialized), `ctab` (Class objects by id), the host classes' shells (`hosts` WeakMaps), the proxies' Method table (`nm`), `pinned`, the natives' own JS-side state (properties, locale, charsets, JNI handles), the native heap (`guest`
+memory and its `FinalizationRegistry`), the file system. Gate G6 asks for a loader under 50 ms and `clinit` time that drops: the loader would pass, `clinit` time is 12 ms, and the cost that dominates is the module loading it cannot remove. The
+cheaper alternative the measurement supports is the one above: do less per module (no record per class a module names, no members built to mark slots), have the module and its code ready before the launch (the app build holds
+classes, synthetic functions and patches; a platform build ships them), and keep the zygote's host work (natives, resources) for X-track profiles.
+
+**Left.** (1) Method-level hot modules: of the 156,011 methods in the 196 platform code modules a FitNotes launch loads, 13,084 (8.4%) run before the first frame (counters of the first tier), and X2's class-level split leaves 37 MB of code to
+fetch and 33 code modules to instantiate for them; a split by method (a patch-like module per platform module) would cut the bytes to a tenth. (2) 21 synthetic functions and 2 methods still compile in a warm launch (runtime functions
+nothing in the build names). (3) The class-hierarchy index of platform method keys (100 ms, built the first time a query outgrows the walk's budget) is avoided by patches but is still built by anything that compiles a method with a
+large hierarchy. (4) Lazy compile of big functions: V8's Liftoff time follows function size (the 11 functions over 2 ms are 293 ms), and compilation hints are not shipping (4.9). (5) Mihon's failure (Bridge.shellOf over an interface) is W1's.
+Evidence limits: headless Chrome with swiftshader on a loaded shared host (load 4 to 9; runs alternated between two builds, spreads +-0.2 s), a profile run of FitNotes and Calculator M (classes only another app runs are misses),
+shipped builds exist for the apps and the framework's processes that the profile run launched.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
@@ -1366,6 +1429,12 @@ with TurboFan at module compile, before the first call; a wrong count is a Compi
 therefore back-edge re-entry (outlined loop bodies called repeatedly) or ahead-of-time choice of which functions get
 eager optimization by other means; hints are not an option until V8 ships them. Gate G4 itself (kernels reaching optimized
 speed within 100 ms) remains to be run with the S1 compiler.
+
+### G3 and G6 result (X1, 2026-10-05; section 4.18)
+
+G3 is not met: FitNotes on the Wasm tier launches in 1.74 to 1.87 s warm and 2.15 to 2.55 s cold (2.9 to 3.0 s when the app's build has to be made on the device) against 1.25 to 1.28 s and 1.68 to 1.78 s on the JS tier, from 3.53 s and 4.06 s;
+Calculator M 1.81 to 1.89 s warm, 2.76 to 2.97 s cold (from 4.1 and 5.6 to 5.95 s); no gated tap above 150 ms (max 33). G6 is not pursued: Java execution is 12 ms of the zygote's 453 ms and 141 ms of the 845 ms after it, a free image saves 8% at
+most and would still instantiate the class module of every class it restores; the cost is module loading, which the image cannot remove.
 
 ## 7. Staged plan
 
