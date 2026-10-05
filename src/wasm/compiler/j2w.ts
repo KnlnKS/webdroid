@@ -543,11 +543,11 @@ export class Compiler implements Base {
     return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
-  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V"): { bytes: Uint8Array; traces: FnTrace[] } {
+  buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m"): { bytes: Uint8Array; traces: FnTrace[] } {
     const f = this.mb.reserveFunc(this.sig(params, ret), "$" + name), c = new Code(params.length);
     body(c);
     this.mb.setBody(f, c.finish());
-    this.mb.export("m", "func", f);
+    this.mb.export(exportName, "func", f);
     return this.finishModule([{ name: "$" + name, f, code: c }]);
   }
   /** one module of several synthetic functions, each put in its table slot when the module is instantiated (a build's, link/apps.ts). A function whose code relies on a class-hierarchy

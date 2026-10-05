@@ -7,6 +7,8 @@
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
+import { ColdInterpreter } from "../cold/interpreter";
+import { coldUnit } from "../cold/runtime";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
@@ -70,6 +72,8 @@ export interface WorldOptions {
   compiler?: CompileService;
   /** a World that compiles for another (a worker's): classes are numbered and linked by name only, nothing is instantiated, and no code runs */
   compileOnly?: boolean;
+  /** Experimental shared opcode loop; unsupported bodies are compiled before execution. */
+  cold?: boolean;
 }
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
@@ -96,7 +100,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -655,12 +659,24 @@ export class World {
     const s = this.slotAt(slot);
     if (!s || s.k === "ensure" || s.done) return;
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
-    const t0 = performance.now(), cx = new Compiler(this);
+    const t0 = performance.now();
+    if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, t0)) return;
+    const cx = new Compiler(this);
     if (s.k === "method") this.demand.methods.add(s.m);
     const built = s.k === "method" ? cx.buildUnit([s.m]) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.units++; this.stats.methods += 1;
     this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, t0);
+  }
+  private cold?: ColdInterpreter;
+  private installCold(slot: number, m: MethodInfo, t0: number): boolean {
+    if (!m.codeOff || this.intrinsic(m) || m.flags & (ACC.SYNCHRONIZED | ACC.DECLARED_SYNCHRONIZED)) return false;
+    const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
+    const unit = coldUnit(this, m, cold);
+    if (!unit) return false;
+    this.install([slot], false, unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, slot, t0);
+    this.demand.methods.add(m); this.stats.coldMethods++; this.stats.methods++; this.stats.units++;
+    return true;
   }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
