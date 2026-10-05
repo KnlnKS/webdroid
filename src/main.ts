@@ -38,7 +38,7 @@ import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { processBroker } from "./shell/processes";
 import { connectProcess, registerForegroundProcess, processPresentation } from "./shell/process-endpoint";
-import { guestNow, guestSleep } from "./guest-clock";
+import { guestNow, guestSleep, uptimeMillis } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
 import { onProcessExit } from "./process-exit";
@@ -215,13 +215,16 @@ const wd = {
     // one move per display frame, as a finger on a panel of this rate reports them
     const steps = Math.max(2, Math.round(ms * device.refreshRate / 1000));
     const t0 = guestNow();
-    void dispatchPointer(0, x1, y1);
+    const eventStart = uptimeMillis();
+    void dispatchPointer(0, x1, y1, eventStart);
     for (let i = 1; i <= steps; i++) {
       const at = t0 + ms * i / steps, t = i / steps;
       await guestSleep(Math.max(0, at - guestNow()));
-      void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
+      // Samples keep the finger's time when host work delays their delivery; catch-up
+      // timers must not turn a constant-speed drag into an accelerating fling.
+      void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, eventStart + ms * t);
     }
-    await dispatchPointer(1, x2, y2);
+    await dispatchPointer(1, x2, y2, eventStart + ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
