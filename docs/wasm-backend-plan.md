@@ -994,15 +994,15 @@ differently with its mechanism recorded; 0 regressions and 0 unexplained in ever
 | suite | tests | Wasm pass | JS pass | baseline | pinned divergences |
 |---|---|---|---|---|---|
 | `guava` | 368,794 | 368,772 | 366,001 | 365,994 | 2,771 |
-| `ojluni-time` | 23,525 | 23,517 | 30,597 | 30,603 | 7,082 |
+| `ojluni-time` | 24,479 | 24,473 | 30,598 | 30,603 | 6,125 |
 | `jsr166` | 3,211 | 3,209 | 3,136 | 3,135 | 73 |
-| `luni-util` | 2,533 | 2,291 | 2,325 | 2,320 | 77 |
-| `luni-io` | 1,430 | 1,298 | 1,418 | 1,417 | 134 |
-| `luni-nio` | 2,815 | 2,667 | 2,712 | 2,712 | 45 |
-| `luni-nio-file` | 195 | 167 | 173 | 173 | 24 |
+| `luni-util` | 2,586 | 2,347 | 2,325 | 2,320 | 22 |
+| `luni-io` | 1,373 | 1,247 | 1,418 | 1,417 | 185 |
+| `luni-nio` | 2,747 | 2,650 | 2,712 | 2,712 | 62 |
+| `luni-nio-file` | 195 | 182 | 173 | 173 | 9 |
 | `luni-net` | 892 | 813 | 812 | 798 | 1 |
-| `luni-security` | 717 | 710 | 715 | 715 | 5 |
-| total | 404,112 | 403,444 | 407,889 | 407,867 | 10,212 |
+| `luni-security` | 721 | 715 | 715 | 715 | 0 |
+| total | 404,792 | 404,403 | 407,891 | 407,867 | 9,248 |
 
 JSR-166 runs on strands (C1 and C2) and passes 3,209 of 3,211 (the two it fails fail on the JS tier too), 73 more than the JS tier's cooperative threads. The ojluni-time pass count is lower than the JS tier's for the two reasons below
 (about 6,100 data-provider rows skipped, about 950 behind the nested-entry limit); the other suites' counts agree to within the pinned tests.
@@ -1017,7 +1017,7 @@ JSR-166 runs on strands (C1 and C2) and passes 3,209 of 3,211 (the two it fails 
   `CurrencyTest`, `LocaleTest`, `StreamTokenizerTest`, `CertificateFactory3Test`): entries on strands, C3. Natives that read a direct buffer through the pinned array's address (`unmapped address 0x4000...`, 60 tests of `luni-nio`, `luni-nio-file`,
   CRC32 and Adler32): B3. A flaky pair (`TestClock_System`) fails on either tier in some runs.
 When C3 or B3 lands these pins go stale and the run says so; delete them then.
-**fwtest.** 19 of the 31 exercises pass over a World (the JS tier: all), the other 12 are pinned: seven read through a native address of a pinned array (`PathIterator`, `TypedArray`'s `ApplyStyle`, a font's bytes: B3), `SurfaceTexture`'s frame needs the
+**fwtest.** All 31 exercises pass over a World after merging B2, B3 and C3 (the pins for pinned-array addresses, host classes and nested entries were deleted); `tests/conformance/wasm-fwtest.json` is empty. Remaining pins in `wasm-pins.json`: the JS tier's own faults, TestNG data providers (libcore's `GenericArrayTypeImpl` is never resolved to a Class, which ART's bytecode does too, so about 6,100 rows are skipped on the Wasm tier), the flaky `TestClock_System`, and `FileTest`/`CharsetTest`, where repeated entries accumulate JSPI stacks until a `StackOverflowError` (upstream repro: `File.list()` about 1,000 times inside one entry, also on eeb222b3).
 main looper running (C3), and four implement a Java interface with a host object or construct a host class with an argument (`ImageDecoder`, `SpannableStringBuilder`, `InputProbe`, the `DexFile` spec: B2). Declared natives with a host binding: 646 of 791, the
 JS tier's own count. The exercises need host code that waits (a font file, a decode), so the harness enters Java on strands (`scripts/wasm/strandentry.ts`, outside natives only; Track C3's entry replaces it).
 **Open.** The pinned divergences above; `desccheck` and `conform-quick` are in `all`, the full suites (25 minutes) and `fwtest` are not.
@@ -1062,8 +1062,8 @@ multi-memory, relaxed SIMD. Do not use those on the default path. Custom descrip
 
 ### G2 result for `fwtest` and the conformance suites (V1, 2026-10-04)
 
-Nine conformance suites (404,112 tests on the Wasm tier) against their baselines and the JS tier: 0 regressions, 0 unexplained differences, 10,212 differences pinned with their mechanisms (about 3,000 where the JS tier is wrong, 6,100
-where TestNG's data providers meet libcore's `GenericArrayTypeImpl`, about 1,000 behind C3's entries on strands, 60 behind B3's pinned-array addresses). `fwtest`: 19 of 31 exercises, 12 pinned (B3, B2, C3), native coverage 646 of 791 as on the JS tier.
+Nine conformance suites (404,112 tests on the Wasm tier) against their baselines and the JS tier: 0 regressions, 0 unexplained differences, 9,248 differences pinned with their mechanisms (about 3,000 where the JS tier is wrong, 6,100
+where TestNG's data providers meet libcore's `GenericArrayTypeImpl`, about 1,000 behind C3's entries on strands, 60 behind B3's pinned-array addresses). `fwtest`: all 31 exercises pass, none pinned (B3, B2, C3), native coverage 646 of 791 as on the JS tier.
 Details and the fixes it took: 4.15. The per-method differentials on framework.jar and the apps are 4.4b's (`sweep`, `libdiff`).
 
 ### G4 hint result
@@ -1116,8 +1116,8 @@ Follow AGENTS.md verification at each stage (`typecheck`, `test`, `smoke` with z
 - Convert natives in the order: primitive-only (1,014), reference-through (759), then the field-touching 711, starting
   with the ten files that hold 858 of the field sites.
 - **Accept:** `fwtest`, `desccheck`, and the conformance suites (`guava`, `jsr166`, `ojluni-time`, harmony suites)
-  match their baselines in Wasm mode. *Status (V1, 4.15): the nine suites run on the Wasm tier with 0 regressions against their baselines and 0 unexplained differences from the JS tier (10,212 pinned, each with its mechanism);
-  `desccheck` is clean; `fwtest` passes 19 of 31 exercises, the other 12 pinned to B3, B2 and C3 limits.*
+  match their baselines in Wasm mode. *Status (V1, 4.15): the nine suites run on the Wasm tier with 0 regressions against their baselines and 0 unexplained differences from the JS tier (9,248 pinned, each with its mechanism);
+  `desccheck` is clean; `fwtest` passes all 31 exercises; the pins attributed to B2, B3 and C3 were deleted after the merge.*
 
 ### S3. Suspension and threads
 - One `promising` stack per Java thread; blocking operations (monitor contention, `wait`, `park`, class-init waits,
