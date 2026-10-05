@@ -1,10 +1,13 @@
 // Differential test: every static method of W.java and S.java (S and N need V8's stack frames, so not under Bun) runs as Wasm (this compiler, S over the AOSP boot dex), on the JDK and on the
 // production JS tier; results must be bit-identical. Needs javac, d8 and java on PATH. Run: bun run wasm diff [method-name-filter]
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { loadDexes, world } from "./lib";
+import { dexesIn } from "../../src/jvm/dex";
+import { descToName } from "../../src/jvm/abi";
+import { insnLen } from "../../src/jvm/opcodes";
 import { jsTier, natives } from "./oracle";
 import { ACC } from "../../src/wasm/compiler/program";
 import { namesWasmFrames } from "../../src/wasm/link/exc";
@@ -18,6 +21,22 @@ sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "W.java"
 sh(["d8", "--release", "--output", out, ...readdirSync(out).filter((f) => /^[WSN](\$\w+)?\.class$/.test(f)).map((f) => join(out, f))]);
 
 const dex = join(out, "classes.dex");
+// the d8 that built the apps ended a try range at the invoke, leaving its move-result outside (a block of its own, Doodle Jump's RamLogger.Append); this one keeps it inside: end every range that way
+{
+  const bytes = new Uint8Array(readFileSync(dex)), view = new DataView(bytes.buffer);
+  for (const d of dexesIn(bytes)) for (let i = 0; i < d.classDefCount; i++) {
+    const def = d.classDef(i);
+    if (descToName(d.type(d.classDef2Type(i))) !== "W") continue;
+    for (const m of [...def.directMethods, ...def.virtualMethods]) {
+      if (!m.codeOff) continue;
+      const code = d.code(m.codeOff), moves = new Set<number>();
+      for (let pc = 0; pc < code.insns.length; pc += insnLen(code.insns, pc)) if ((code.insns[pc] & 0xff) >= 0x0a && (code.insns[pc] & 0xff) <= 0x0c) moves.add(pc);
+      const items = m.codeOff + 16 + code.insns.length * 2 + (code.insns.length & 1) * 2;
+      code.tries.forEach((t, k) => { if (moves.has(t.end - 1)) view.setUint16(items + k * 8 + 4, t.end - t.start - 1, true); });
+    }
+  }
+  writeFileSync(dex, bytes);
+}
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives }), hit: string[] = [];
 w.onGap = (id) => hit.push(w.gapList[id]);
 // S and N run String, StringBuilder and the natives over the boot dex, whose System.<clinit> reads its caller from the frames of the Wasm stack: V8 only
@@ -44,4 +63,4 @@ const bad = r1.bad + r2.bad, explained = r1.explained + r2.explained, blocked = 
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
-process.exit(bad ? 1 : 0);
+process.exit(bad || blocked ? 1 : 0);

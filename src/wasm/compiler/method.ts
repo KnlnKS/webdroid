@@ -568,7 +568,7 @@ export class MC {
     const c = this.code, insts = this.prepared.instructions;
     const idx = insts.indexOf(ins); const nx = insts[idx + 1];
     if (kind === "V") return;
-    if (nx && nx.name.startsWith("move-result") && !this.prepared.leaders[nx.pc]) { this.consumed.add(nx.pc); this.set(kind, nx); }
+    if (nx && nx.name.startsWith("move-result")) { this.consumed.add(nx.pc); this.set(kind, nx); }
     else c.drop();
   }
   /** an invoke the compiler cannot translate: the code after it is dead, so a move-result stays unwritten */
@@ -578,7 +578,7 @@ export class MC {
   }
   consumeResult(ins: Ins) {
     const insts = this.prepared.instructions, nx = insts[insts.indexOf(ins) + 1];
-    if (nx?.name.startsWith("move-result") && !this.prepared.leaders[nx.pc]) this.consumed.add(nx.pc);
+    if (nx?.name.startsWith("move-result")) this.consumed.add(nx.pc);
   }
   emitInvoke(ins: Ins) {
     const cx = this.cx, c = this.code, dex = this.dex, prog = cx.prog;

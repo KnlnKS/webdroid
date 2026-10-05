@@ -47,6 +47,14 @@ public class W {
     try { try { r += 100 / a; } finally { r += 1; } r += 1000 / b; } catch (ArithmeticException e) { r += 7; } finally { r += 20; }
     return r;
   }
+  /** d8 ends a try range at the invoke when the handler reads the register the call's result goes to, so its move-result starts a block of its own */
+  public static int tryResult(int n) {
+    synchronized (W.class) {
+      String s = "[unknown] ";
+      try { s = String.format("%d:%s", n, Integer.toHexString(n)); } catch (RuntimeException e) { s = s + "x"; }
+      return s.length() + s.charAt(1);
+    }
+  }
   public static int tryNeg(int n) { try { int[] a = new int[n]; return a.length; } catch (NegativeArraySizeException e) { return -9; } }
   public static int nested(int n) {
     int s = 0;
