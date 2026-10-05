@@ -1,6 +1,7 @@
 import { bootstrapTransfers, closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data";
 import { callProxy, processError, type ProcessFailure } from "./process-port";
-import { workerControlMethods, type WorkerControl } from "./worker-control";
+import type { WorkerControl } from "./worker-control";
+import { workerControlMethods } from "./worker-control-methods";
 import { attachPointerInput, type PointerGeometry } from "./pointer-input";
 
 /** Page-owned Worker, input and control ports. JVM endpoint ownership passes to the broker on ready. */

@@ -24,4 +24,4 @@ export function workerControl(logs: string[], phase: () => string) {
   };
 }
 export type WorkerControl = ReturnType<typeof workerControl>;
-export const workerControlMethods = ["snapshot", "uiTree", "tap", "pointer", "back", "frame", "testFrame"] as const;
+export { workerControlMethods } from "./worker-control-methods";
