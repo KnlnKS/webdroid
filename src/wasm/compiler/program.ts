@@ -40,6 +40,7 @@ class DexClass implements JClass {
   private header_?: { flags: number; sup: string | null; ifaces: string[] };
   private def_?: ClassDef;
   private members_?: { fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
+  private methodInfos?: Map<number, MethodInfo>;
   constructor(readonly name: string, readonly dex: DexFile, private readonly idx: number) {}
   private get header() {
     if (!this.header_) {
@@ -65,6 +66,26 @@ class DexClass implements JClass {
     const def = this.dex.classDef(this.idx);
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
+  /** Implementation checks often miss: do not retain every member of each candidate class. */
+  method(key: string): MethodInfo | undefined {
+    if (this.members_) return this.members_.byKey.get(key);
+    const def = this.def_ ?? this.dex.classDef(this.idx);
+    let index = 0;
+    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
+      if (this.dex.methodKey(m.methodIdx) === key) return this.methodInfo(m, index);
+      index++;
+    }
+    return undefined;
+  }
+  private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
+    const cached = this.methodInfos?.get(index);
+    if (cached) return cached;
+    const { dex, name } = this, mr = dex.method(m.methodIdx), desc = dex.methodDesc(m.methodIdx), p = parseMethodDesc(desc);
+    const info: MethodInfo = { cls: name, name: mr.name, desc, flags: m.flags, dex, methodIdx: m.methodIdx, codeOff: m.codeOff, key: mkey(mr.name, desc),
+      isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret, index };
+    (this.methodInfos ??= new Map()).set(index, info);
+    return info;
+  }
   private build() {
     const { dex, name, def } = this;
     const fields: FieldInfo[] = [];
@@ -77,10 +98,9 @@ class DexClass implements JClass {
     }
     const methods: MethodInfo[] = [];
     for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
-      const mr = dex.method(m.methodIdx), desc = dex.methodDesc(m.methodIdx), p = parseMethodDesc(desc);
-      methods.push({ cls: name, name: mr.name, desc, flags: m.flags, dex, methodIdx: m.methodIdx, codeOff: m.codeOff, key: mkey(mr.name, desc),
-        isStatic: (m.flags & ACC.STATIC) !== 0, isCtor: mr.name === "<init>", params: p.params, ret: p.ret, index: methods.length });
+      methods.push(this.methodInfo(m, methods.length));
     }
+    this.methodInfos = undefined;
     return { fields, methods, byKey: new Map(methods.map((m) => [m.key, m])) };
   }
 }
@@ -218,13 +238,13 @@ export class Program {
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = c.byKey.get(key); if (m) return m;
+      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m) return m;
     }
     const seen = new Set<string>();
     const visit = (n: string): MethodInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const m = c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) return m;
+      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) return m;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return undefined;
     };
@@ -246,14 +266,14 @@ export class Program {
   }
   private findImpl(cls: string, key: string): MethodInfo | undefined {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = c.byKey.get(key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
+      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
     }
     // default methods: the most specific one, i.e. none whose interface is a superinterface of another candidate's
     const seen = new Set<string>(), found: MethodInfo[] = [];
     const visit = (n: string) => {
       if (seen.has(n)) return; seen.add(n);
       const c = this.get(n); if (!c) return;
-      const m = c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
+      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
       for (const i of c.ifaces) visit(i);
     };
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) for (const i of c.ifaces) visit(i);

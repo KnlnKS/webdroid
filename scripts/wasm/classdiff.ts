@@ -27,6 +27,8 @@ sh(["d8", "--release", "--output", join(out, "am"), ...readdirSync(join(out, "am
 const amExpected = sh(["java", "-cp", join(out, "am"), "Am"]).trim();
 const dex = join(out, "classes.dex"), jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
 const prog = program([dex, ...jars]), only = process.argv[2];
+const resolved = prog.resolve("C", "classIdent", "(I)I")!;
+if (resolved !== prog.resolve("C", "classIdent", "(I)I") || resolved !== prog.require("C").methods[resolved.index]) throw new Error("method identity changed when class members were materialized");
 const methods = prog.require("C").methods.filter((m) => m.isStatic && /^\(I\)[IJ]$/.test(m.desc) && (!only || m.name.includes(only)));
 const js = await jsTier(loadDexes(dex));
 const cases = methods.map((m) => ({ m, args: [0n] }));
