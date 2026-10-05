@@ -60,6 +60,12 @@ function canAccess(caller: string, decl: JClass, flags: number, w: World): boole
   if (flags & ACC.PRIVATE) return false;
   return samePackage || !!(flags & ACC.PROTECTED) && w.prog.isSubclass(caller, decl.name);
 }
+/** a `hostInfo` call that made a synthetic function, by names: the class ids it was given are the World's own */
+export type InfoRecord = [kind: number, cls: string, index: number, b: number];
+const fieldInfo = (kind: number) => kind === UInfo.FieldGet || kind === UInfo.FieldPut || kind === UInfo.FieldCas || kind === UInfo.StaticGet || kind === UInfo.StaticPut;
+export const infoRecord = (w: World, kind: number, a: number, b: number): InfoRecord => (fieldInfo(kind) ? [kind, w.nameOf(a >>> 12), a & 0xfff, b] : [kind, w.nameOf(a), 0, b]);
+/** asks again, in a World that numbers its classes differently, for what `infoRecord` recorded */
+export function replayInfo(w: World, [kind, cls, index, b]: InfoRecord): void { hostInfo(w, kind, fieldInfo(kind) ? w.idOf(cls) << 12 | index : w.idOf(cls), b); }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
   if (kind >= MInfo.ExecCount) return hostMembers(w, kind, a, b);
   if (kind >= RInfo.MethodCount) return hostReflect(w, kind, a, b);

@@ -25,6 +25,7 @@ import { natives, nativeSource } from "./nativesource";
 import { bindWorld, count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
 import { prepareApp, type AppCode } from "./appcode";
+import { prefetchInWorker } from "./aotload";
 import { openPersist } from "./persist";
 import type { WorkerPort } from "./compiler";
 
@@ -33,6 +34,11 @@ import type { WorkerPort } from "./compiler";
 const TAB_HEAP = 2048 * 1024 * 1024;
 
 declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
+
+/** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
+let starting = typeof location !== "undefined";
+const START_MS = 15_000;
+if (starting) setTimeout(() => { starting = false; }, START_MS);
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
 const hostLoop: HostLoop = {
@@ -43,7 +49,7 @@ const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
@@ -88,7 +94,6 @@ export async function bootWasmTier(): Promise<TierBackend> {
   rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(current(), cls); };
   const [aot, jars] = await opening;
   store = aot;
-  mark("aotOpened");
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
   mark("platformReady");
   return {
@@ -97,11 +102,15 @@ export async function bootWasmTier(): Promise<TierBackend> {
       appDexes.push(dex);
       world?.addDexes([dex]);
     },
+    launched() { starting = false; if (world) code?.watch(world); },
     async appCode(roots) {
       if (world || !store || !appDexes.length) return;
       code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }) as unknown as WorkerPort, roots });
       mark(code.hit ? "appCodeSaved" : "appCode");
       void code.made?.then(() => mark("appBuilt"));
+      // the World is made while the build's modules are still arriving; no Java runs until they have
+      current();
+      await store.ready;
     },
   };
 }
@@ -133,7 +142,7 @@ export function openAot(): Promise<FetchStore | undefined> {
     // the natives the modules import as Suspending were chosen when the build was made
     declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);
     mark("aotIndex");
-    await store.prefetch(JSON.parse(new TextDecoder().decode(startup)) as string[]);
+    store.ready = prefetchInWorker(store, JSON.parse(new TextDecoder().decode(startup)) as string[]).then(() => mark("aotOpened"));
     return store;
   });
 }

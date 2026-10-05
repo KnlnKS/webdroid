@@ -91,6 +91,9 @@ export class Cha {
       seen.add(n);
       const c = p.get(n);
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT) && (!filter || p.isSubclass(n, filter)) && p.implFor(n, key.slice(0, key.indexOf("(")), key.slice(key.indexOf("("))) === m) return true;
+      // a class that implements the method itself decides it for every subclass: none of them runs m
+      const own = c && !c.isInterface ? c.byKey.get(key) : undefined;
+      if (own && own !== m && !(own.flags & (ACC.STATIC | ACC.ABSTRACT))) continue;
       stack.push(...this.subsOf(n));
     }
     return false;

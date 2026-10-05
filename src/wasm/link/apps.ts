@@ -3,12 +3,16 @@
 import { Compiler } from "../compiler/j2w";
 import { mid } from "../compiler/ids";
 import { compileModule } from "./module";
-import { APP_VERSION, packModule, unitHeader, type AppIndex, type CHeader } from "./aot";
-import type { MethodInfo } from "../compiler/program";
+import { APP_VERSION, packModule, unitHeader, type AppIndex, type CHeader, type DHeader, type Demand, type SHeader } from "./aot";
+import { methodCount, type MethodInfo } from "../compiler/program";
 import type { World } from "./world";
 
 /** the estimated size of a code module (the bytes per dex code unit and per method aot-build measured) where the next class starts another */
 const MODULE_BYTES = 1 << 20, BYTES_PER_UNIT = 14, BYTES_PER_METHOD = 150;
+/** the same for a data module: a module is loaded whole when any of its classes is first used, so these are small; the figures are aot-build's */
+/** synthetic functions to a module */
+const SYNTH_GROUP = 64;
+const D_MODULE_BYTES = 128 << 10, D_BYTES_PER_CLASS = 330, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19;
 export interface AppBuild { index: AppIndex; files: [name: string, bytes: Uint8Array][] }
 
 /** the function V8 rejects in `bytes`, if it rejects the module */
@@ -34,28 +38,87 @@ export function compileChecked(w: World, methods: MethodInfo[], check: (bytes: U
   }
 }
 
-/** the build of `methods` (of the Program's classes after the platform's, in the order the app will want them), by a World that has just attached the platform build */
-export function buildApp(w: World, methods: MethodInfo[]): AppBuild {
+/** the build of `methods` (of the Program's classes after the platform's, in the order the app will want them) and the data modules of `demand.classes`, by a World that has just attached the platform build */
+export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBuild {
   const aot = w.aot;
   if (!aot) throw new Error("an app build needs the platform build");
   const base = w.numbering(), byClass = new Map<string, MethodInfo[]>();
   for (const m of methods) { const list = byClass.get(m.cls); if (list) list.push(m); else byClass.set(m.cls, [m]); }
-  const groups: MethodInfo[][] = [[]];
-  let bytes = 0;
-  for (const list of byClass.values()) {
-    const size = list.reduce((n, m) => n + BYTES_PER_METHOD + BYTES_PER_UNIT * (m.codeOff ? m.dex.code(m.codeOff).insns.length : 0), 0);
-    if (bytes && bytes + size > MODULE_BYTES) { groups.push([]); bytes = 0; }
-    groups[groups.length - 1].push(...list); bytes += size;
+  // the methods of platform classes that a platform code module holds are a patch to that module: loaded after it, they replace what a class of the app made it undo or lack. The other
+  // classes' methods are in modules of their own.
+  const own: MethodInfo[][] = [], patches = new Map<number, MethodInfo[][]>();
+  for (const [cls, list] of byClass) {
+    const over = aot.platformModule(w.blockOf(w.link(cls).slotBase));
+    if (over < 0) own.push(list); else (patches.get(over) ?? patches.set(over, []).get(over)!).push(list);
   }
-  const files: AppBuild["files"] = [], cOf: AppIndex["cOf"] = [];
-  for (const group of groups.filter((g) => g.length)) {
+  /** the classes' methods (all of a class together) in groups of about a module's size */
+  const grouped = (lists: MethodInfo[][]): MethodInfo[][] => {
+    const groups: MethodInfo[][] = [[]];
+    let bytes = 0;
+    for (const list of lists) {
+      const size = list.reduce((n, m) => n + BYTES_PER_METHOD + BYTES_PER_UNIT * (m.codeOff ? m.dex.code(m.codeOff).insns.length : 0), 0);
+      if (bytes && bytes + size > MODULE_BYTES) { groups.push([]); bytes = 0; }
+      groups[groups.length - 1].push(...list); bytes += size;
+    }
+    return groups.filter((g) => g.length);
+  };
+  const files: AppBuild["files"] = [], cOf: AppIndex["cOf"] = [], patchOf: AppIndex["patches"] = [], touched = new Set<string>();
+  const emit = (group: MethodInfo[], over: number) => {
     const { cx, built, touch, skipped } = compileChecked(w, group), module = files.length;
     const classes = [...new Set(group.map((m) => m.cls))].map((c) => w.blockOf(w.link(c).slotBase));
     const wanted = new Set(group);
     const absent = classes.flatMap((b) => w.prog.get(w.blockClass[b])!.methods.filter((m) => !wanted.has(m) || skipped.has(mid(m))).map((m) => w.blockBase[b] + m.index));
+    for (const n of touch) touched.add(n);
     const header: CHeader = { ...unitHeader(w, cx, touch), classes, mods: [], absent };
     files.push([`a${module}.wasm`, packModule(header, built.bytes, built.traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })))]);
-    for (const b of classes) cOf.push([b, module]);
+    if (over < 0) for (const b of classes) cOf.push([b, module]); else patchOf.push([module, over]);
+  };
+  for (const group of grouped(own)) emit(group, -1);
+  for (const [over, lists] of patches) for (const group of grouped(lists)) emit(group, over);
+  const code = files.length, dOf: AppIndex["dOf"] = [];
+  let group: string[] = [], size = 0;
+  const flush = () => {
+    if (!group.length) return;
+    w.beginTouch();
+    const bytes = w.classModule(group.map((n) => w.link(n))), touch = w.endTouch(), blocks = group.map((n) => w.blockOf(w.link(n).slotBase));
+    group = []; size = 0;
+    // a module V8 rejects leaves its classes to the on-demand builder
+    if (invalidFunction(bytes)) return;
+    const header: DHeader = { classes: blocks, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)) };
+    for (const b of blocks) dOf.push([b, files.length - code]);
+    files.push([`e${files.length - code}.wasm`, packModule(header, bytes)]);
+  };
+  // the classes a code module names are all linked when it is loaded, so their modules are wanted as soon as it is
+  for (const name of new Set([...demand.classes, ...touched])) {
+    const jc = name[0] === "!" ? undefined : w.prog.get(name);
+    if (!jc?.dex || w.idOf(name) <= aot.nSeeded) continue;
+    const bytes = D_BYTES_PER_CLASS + methodCount(jc) * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD;
+    if (size && size + bytes > D_MODULE_BYTES) flush();
+    group.push(name); size += bytes;
   }
-  return { index: { version: APP_VERSION, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, modules: files.length }, files };
+  flush();
+  // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
+  w.replay(demand.infos);
+  const synths: AppIndex["synths"] = [], all = w.synths();
+  for (let at = 0; at < all.length; at += SYNTH_GROUP) {
+    let group = all.slice(at, at + SYNTH_GROUP);
+    for (;;) {
+      const cx = new Compiler(w);
+      w.beginTouch();
+      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes);
+      if (!bad) {
+        if (built.kept.length) {
+          const module = synths.length, header: SHeader = { ...unitHeader(w, cx, touch), names: built.kept };
+          synths.push(built.kept);
+          files.push([`s${module}.wasm`, packModule(header, built.bytes)]);
+        }
+        break;
+      }
+      // a function V8 rejects is left to the on-demand compiler, as in `compileChecked`
+      const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs]?.slice(1) : "";
+      if (!name || !group.some((g) => g.name === name)) break;
+      group = group.filter((g) => g.name !== name);
+    }
+  }
+  return { index: { version: APP_VERSION, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand }, files };
 }

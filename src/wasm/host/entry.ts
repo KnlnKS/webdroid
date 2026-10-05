@@ -14,7 +14,7 @@ import type { FieldInfo, MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
 import type { Strand, ThreadRec } from "../link/sched";
 import type { Compiler } from "../compiler/j2w";
-import type { Code } from "../compiler/code";
+import { OP, type Code } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import { fromBits, refOf, toBits } from "./bridge";
 import { count } from "./stats";
@@ -134,6 +134,15 @@ export function wasmEntry(w: World): Entry {
         const write = w.hostFn(`e:sset:${f.owner}.${f.name}:${f.desc}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(f.owner, f.name, f.desc)); });
         scoped(() => write(f.kind === "L" ? bridge.toJava(value, f.desc) : toBits(value, f.desc)));
         return true;
+      },
+      setStatics: (entries, desc) => {
+        const fs = entries.map(([field, value]) => [staticOf(name, field, desc), value] as const).filter((e): e is readonly [FieldInfo, unknown] => !!e[0]);
+        if (!fs.length) return;
+        // one module for all of them: the function takes the index of the field and its value (a chain of tests is smaller for the engine to compile than a jump table of nested blocks)
+        const kind = fs[0][0].kind, write = w.hostFn(`e:ssets:${name}:${desc}:${fs.map(([f]) => f.name).join()}`, ["I", kind], "V", (cx, c) => {
+          fs.forEach(([f], i) => { c.lget(0).i32(i).raw(OP.i32_eq).if_().lget(1).gset(cx.staticGlobal(f.owner, f.name, f.desc)).ret().end(); });
+        });
+        scoped(() => fs.forEach(([f, value], i) => write(i, kind === "L" ? bridge.toJava(value, f.desc) : toBits(value, f.desc))));
       },
       has: (mname, desc) => { const m = prog.resolve(name, mname, desc); return !!m && !m.isStatic; },
       call: (mname, desc) => { const m = method(mname, desc, true); return (...args) => enter(() => invoke(m, null, args)); },

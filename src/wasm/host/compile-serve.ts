@@ -5,7 +5,7 @@ import { Program, type MethodInfo } from "../compiler/program";
 import { World } from "../link/world";
 import { buildApp, type AppBuild } from "../link/apps";
 import { UnitCompiler, type UnitResult, type UpgradeJob } from "../link/unit";
-import type { AppIndex, Numbering } from "../link/aot";
+import type { AppIndex, Demand, Numbering } from "../link/aot";
 import type { Intrinsic } from "../compiler/j2w";
 import type { NativeBinder } from "../link/hostapi";
 import { Program as Reach, callClosure, type MethodRoot } from "../../jvm/reach";
@@ -13,6 +13,7 @@ import { parseBaselineProfile } from "../../jvm/baselineprof";
 import { rootsOf } from "../../jvm/roots";
 import { dexesIn, type DexFile } from "../../jvm/dex";
 import { descToName } from "../../jvm/abi";
+import { methodOf } from "../compiler/ids";
 
 /** what the worker's realm provides: the platform's dex files, the registered natives and the intrinsics, which must be the page's for the code to be the page's */
 export interface CompileEnv {
@@ -30,8 +31,10 @@ export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launc
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; build?: BuildRoots }
+  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; build?: BuildRoots; demand?: Demand }
   | { type: "add"; dexes: Containers }
+  /** the app build again, with more built on demand since (the World of a worker that was asked for a build serves it once more) */
+  | { type: "refine"; demand: Demand }
   | { type: "upgrade"; id: number; keep: boolean; sync: Numbering; job: UpgradeJob };
 export type CompileResponse =
   /** the worker is listening: a module worker whose imports await something drops the messages sent before it is, so nothing is sent until this arrives */
@@ -45,7 +48,7 @@ export interface Port { postMessage(message: unknown, transfer?: Transferable[])
 const CLOSURE_LIMIT = 20_000;
 
 export function serveCompile(port: Port, env: CompileEnv): void {
-  let w: World | undefined, units: UnitCompiler | undefined, appDexes: DexFile[] = [];
+  let w: World | undefined, units: UnitCompiler | undefined, appDexes: DexFile[] = [], roots: BuildRoots | undefined;
   const send = (m: CompileResponse, transfer: Transferable[] = []) => port.postMessage(m, transfer);
   const open = (dexes: Containers) => dexes.flatMap(([name, bytes]) => dexesIn(bytes, name));
 
@@ -60,24 +63,32 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     if (req.hostClasses?.length) for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     // an app build numbers from where a World starts, before the page's numbering is followed
-    if (req.build) {
-      const t1 = performance.now(), methods = select(req.build), build = buildApp(w, methods);
-      send({ type: "built", build, methods: methods.length, ms: performance.now() - t1 }, build.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
-      w.rollback(build.index.base);
-    }
+    roots = req.build;
+    if (roots) build(req.demand ?? { methods: [], classes: [], infos: [] });
     units = new UnitCompiler(w);
     if (req.sync && !units.sync(req.sync, true)) throw new Error("the page's numbering is not the worker's at the start");
     req.initialized?.forEach((c) => w!.preInitialized.add(c));
     return performance.now() - t0;
   }
 
-  /** the methods an app build compiles, in the order the app is likely to want them */
-  function select(roots: BuildRoots): MethodInfo[] {
+  /** the app build, sent to the page; the World is back where it started when it returns */
+  function build(demand: Demand): void {
+    const t0 = performance.now(), methods = select(roots!, demand), built = buildApp(w!, methods, demand);
+    send({ type: "built", build: built, methods: methods.length, ms: performance.now() - t0 }, built.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
+    w!.rollback(built.index.base);
+  }
+
+  /** the methods an app build compiles, in the order the app is likely to want them: those a launch compiled on demand first, then the likely ones */
+  function select(roots: BuildRoots, demand: Demand): MethodInfo[] {
     const world = w!, reach = new Reach(), out = new Set<MethodInfo>();
+    for (const id of demand.methods) {
+      const m = methodOf(world.prog, id);
+      if (m && (m.codeOff || world.intrinsic(m))) out.add(m);
+    }
     appDexes.forEach((d) => reach.add(d));
     const take = (cls: string, dex: DexFile, methodIdx: number) => {
       const m = world.prog.get(cls)?.methods.find((x) => x.dex === dex && x.methodIdx === methodIdx);
-      if (m?.codeOff) out.add(m);
+      if (m && (m.codeOff || world.intrinsic(m))) out.add(m);
     };
     const nameOf = (dex: DexFile, idx: number) => descToName(dex.type(dex.method(idx).cls));
     const rootOf = (dex: DexFile, idx: number): MethodRoot => ({ cls: nameOf(dex, idx), sig: dex.method(idx).name + dex.methodDesc(idx) });
@@ -110,6 +121,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       if (req.type === "init") send({ type: "ready", ms: await init(req) });
       else if (!w || !units) throw new Error("not initialized");
       else if (req.type === "add") w.addDexes(open(req.dexes));
+      else if (req.type === "refine") build(req.demand);
       else if (req.type === "upgrade") {
         if (!units.sync(req.sync, req.keep)) throw new Error("the page's numbering is not the worker's");
         const result = units.upgrade(req.job);
