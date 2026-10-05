@@ -7,12 +7,12 @@ import { ACC, type JClass } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName, PRIM } from "./classes";
 import { rt } from "../compiler/rtfns";
+import { executableSlot, methodAt } from "./reflect";
 import type { EncAnnotation } from "../../jvm/dex";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
 
-const EXEC = "java/lang/reflect/Executable";
 const METHOD_ARRAY = "[Ljava/lang/reflect/Method;", CTOR_ARRAY = "[Ljava/lang/reflect/Constructor;";
 const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotation/EnclosingClass", ENCLOSING_METHOD = "dalvik/annotation/EnclosingMethod";
 const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
@@ -45,21 +45,21 @@ export function hostMembers(w: World, kind: MInfo, a: number, b: number): number
     }
     case MInfo.ExecAt: return listed[b];
     case MInfo.ClassAnn: return +present(annotationsOf(cls(a))?.cls, w.nameOf(b));
-    case MInfo.ExecAnn: { const jc = cls(b >>> 16)!; return +present(annotationsOf(jc)?.methods.get(jc.methods[b & 0xffff].methodIdx), w.nameOf(a)); }
+    case MInfo.ExecAnn: { const m = methodAt(w, b); return +present(annotationsOf(w.prog.get(m.cls))?.methods.get(m.methodIdx), w.nameOf(a)); }
     case MInfo.FieldAnn: {
       const jc = cls(b >>> 12)!, ids = [...jc.def!.staticFields, ...jc.def!.instanceFields];
       return +present(annotationsOf(jc)?.fields.get(ids[b & 0xfff].fieldIdx), w.nameOf(a));
     }
     case MInfo.CompareParams: {
       // the parameter lists of two methods (cookies a and b) by length, then by the class ids of their types: 0 when they agree
-      const [x, y] = [a, b].map((k) => cls(k >>> 16)!.methods[k & 0xffff].params.map((p) => w.idOf(typeName(p))));
+      const [x, y] = [a, b].map((k) => methodAt(w, k).params.map((p) => w.idOf(typeName(p))));
       if (x.length !== y.length) return x.length < y.length ? -1 : 1;
       const i = x.findIndex((t, k) => t !== y[k]);
       return i < 0 ? 0 : x[i] < y[i] ? -1 : 1;
     }
     case MInfo.ThrowsCount: case MInfo.ThrowsAt: {
       // the classes in the method's dalvik.annotation.Throws (system visibility), by class id
-      const jc = cls(a >>> 16)!, v = annotationsOf(jc)?.methods.get(jc.methods[a & 0xffff].methodIdx)?.find((x) => x.type === THROWS)?.elements.value;
+      const m = methodAt(w, a), jc = w.prog.get(m.cls)!, v = annotationsOf(jc)?.methods.get(m.methodIdx)?.find((x) => x.type === THROWS)?.elements.value;
       const types = Array.isArray(v) ? v.map((e) => w.idOf(descToName(jc.dex!.type((e as { idx: number }).idx)))) : [];
       return kind === MInfo.ThrowsCount ? types.length : types[b];
     }
@@ -110,7 +110,7 @@ for (const [name, array, ctor] of [["methodArray", METHOD_ARRAY, 0], ["ctorArray
   });
 }
 
-// throwsArray(cookie): the Class[] of an executable's declared exceptions
+// throwsArray(method slot): the Class[] of an executable's declared exceptions
 rt("throwsArray", ["I"], "L", (cx, c) => {
   const n = c.newLocal(T.i32), i = c.newLocal(T.i32), arr = c.newLocal(T.anyref);
   cx.info(c, MInfo.ThrowsCount, () => c.lget(0)); c.lset(n);
@@ -134,8 +134,7 @@ def("java/lang/Class.getDeclaredMethodsUnchecked(Z)[Ljava/lang/reflect/Method;",
 def("java/lang/Class.getDeclaredConstructorsInternal(Z)[Ljava/lang/reflect/Constructor;", (cx, c) => { classId(cx, c, 0); c.lget(1); cx.callRt(c, "ctorArray"); });
 for (const cls of ["Method", "Constructor"]) {
   def(`java/lang/reflect/${cls}.getExceptionTypes()[Ljava/lang/Class;`, (cx, c) => {
-    const st = cx.structFor(EXEC);
-    c.lget(0).refCast(st).structGet(st, cx.fieldIndex(EXEC, { owner: EXEC, name: "artMethod", desc: "J" })).raw(OP.i32_wrap_i64); cx.callRt(c, "throwsArray");
+    executableSlot(cx, c); cx.callRt(c, "throwsArray");
   });
 }
 def("java/lang/Class.getDeclaringClass()Ljava/lang/Class;", (cx, c) => { const id = c.newLocal(T.i32); cx.info(c, MInfo.DeclaringClass, () => classId(cx, c, 0)); c.lset(id); classOrNull(cx, c, id); });
@@ -143,12 +142,10 @@ def("java/lang/Class.getEnclosingClass()Ljava/lang/Class;", (cx, c) => { const i
 def("java/lang/Class.isAnonymousClass()Z", (cx, c) => { cx.info(c, MInfo.IsAnonymous, () => classId(cx, c, 0)); });
 def("java/lang/Class.isDeclaredAnnotationPresent(Ljava/lang/Class;)Z", (cx, c) => { cx.info(c, MInfo.ClassAnn, () => classId(cx, c, 0), () => classId(cx, c, 1)); });
 def("java/lang/reflect/Executable.isAnnotationPresentNative(Ljava/lang/Class;)Z", (cx, c) => {
-  const st = cx.structFor(EXEC);
-  cx.info(c, MInfo.ExecAnn, () => classId(cx, c, 1), () => c.lget(0).refCast(st).structGet(st, cx.fieldIndex(EXEC, { owner: EXEC, name: "artMethod", desc: "J" })).raw(OP.i32_wrap_i64));
+  cx.info(c, MInfo.ExecAnn, () => classId(cx, c, 1), () => executableSlot(cx, c));
 });
 def("java/lang/reflect/Executable.compareMethodParametersInternal(Ljava/lang/reflect/Method;)I", (cx, c) => {
-  const st = cx.structFor(EXEC), art = (l: number) => c.lget(l).refCast(st).structGet(st, cx.fieldIndex(EXEC, { owner: EXEC, name: "artMethod", desc: "J" })).raw(OP.i32_wrap_i64);
-  cx.info(c, MInfo.CompareParams, () => art(0), () => art(1));
+  cx.info(c, MInfo.CompareParams, () => executableSlot(cx, c, 0), () => executableSlot(cx, c, 1));
 });
 def("java/lang/reflect/Field.isAnnotationPresentNative(Ljava/lang/Class;)Z", (cx, c) => { cx.info(c, MInfo.FieldAnn, () => classId(cx, c, 1), () => { c.lget(0); fieldId(cx, c); }); });
 // the Method or Constructor a local or anonymous class is declared in

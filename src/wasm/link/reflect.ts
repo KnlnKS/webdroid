@@ -20,8 +20,7 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt, SerialInit }
-/** a member's (class id, index) packed into the cookie */
+export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt, SerialInit, MethodSlot }
 export const BOX: Record<string, [string, string, string]> = {
   Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
   S: ["java/lang/Short", "shortValue", "()S"], I: ["java/lang/Integer", "intValue", "()I"], J: ["java/lang/Long", "longValue", "()J"],
@@ -74,6 +73,7 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
     case RInfo.MethodParamType: return sigOf(w, m).params[b & 0xff];
     case RInfo.MethodRet: return sigOf(w, m).ret;
     case RInfo.MethodFlags: return m.flags;
+    case RInfo.MethodSlot: return w.slotOf(m);
     case RInfo.MethodInvoke: return w.synthSlot(`invoke:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, true, false) });
     case RInfo.MethodCall: case RInfo.MethodCallDirect: {
       const direct = kind === RInfo.MethodCallDirect;
@@ -81,6 +81,12 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
     }
   }
   return 0;
+}
+
+export function methodAt(w: World, slot: number): MethodInfo {
+  const entry = w.slotAt(slot);
+  if (entry?.k !== "method") throw new Error(`invalid executable slot ${slot}`);
+  return entry.m;
 }
 
 /** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle
@@ -216,12 +222,16 @@ rt("classArray", ["I", "I", "I"], "L", (cx, c) => {
 // ---------- intrinsics
 export const reflectIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => reflectIntrinsics.set(key, (cx, m, c) => f(cx, c));
-/** the class id and method index of the Executable in local 0 */
-function cookie(cx: Compiler, c: Code): [number, number] {
+/** the full-width class id and method index of an Executable */
+function cookie(cx: Compiler, c: Code, local = 0): [number, number] {
   const cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), art = c.newLocal(T.i64), st = cx.structFor(EXEC);
-  c.lget(0).refCast(st).structGet(st, cx.fieldIndex(EXEC, { owner: EXEC, name: "artMethod", desc: "J" })).lset(art);
+  c.lget(local).refCast(st).structGet(st, cx.fieldIndex(EXEC, { owner: EXEC, name: "artMethod", desc: "J" })).lset(art);
   c.lget(art).i64(16n).raw(OP.i64_shr_u, OP.i32_wrap_i64).lset(cid).lget(art).raw(OP.i32_wrap_i64).i32(0xffff).raw(OP.i32_and).lset(idx);
   return [cid, idx];
+}
+export function executableSlot(cx: Compiler, c: Code, local = 0): void {
+  const [cid, idx] = cookie(cx, c, local);
+  cx.info(c, RInfo.MethodSlot, () => c.lget(cid), () => c.lget(idx));
 }
 const exec = (cx: Compiler, c: Code, nameLocal: number | null, paramsLocal: number, ctor: 0 | 1) => {
   const cid = c.newLocal(T.i32), idx = c.newLocal(T.i32);
