@@ -53,7 +53,7 @@ const only = process.argv[2]?.split(","), substrate = !only || only.includes("su
 const CASES: [string, number][] = [
   ["reentrant", 5], ["deepLock", 300], ["deepLock", 10], ["imse", 0], ["contend", 200], ["pingPong", 30], ["notifyOne", 0], ["timedWait", 0],
   ["startJoin", 100], ["names", 3], ["names", 4], ["sleepOrder", 0], ["interruptSleep", 0], ["interruptWait", 0], ["interruptFlag", 0], ["joinTimeout", 0], ["uncaught", 4],
-  ["states", 0], ["threadLocals", 7], ["spin", 0], ["parkUnpark", 0], ["permit", 0], ["parkNanos", 0], ["parkInterrupt", 0],
+  ["states", 0], ["threadLocals", 7], ["spin", 0], ["spinStep", 0], ["spinTest", 0], ["parkUnpark", 0], ["permit", 0], ["parkNanos", 0], ["parkInterrupt", 0],
   ["executor", 0], ["chm", 300], ["latch", 0], ["lockCondition", 20], ["queue", 30], ["semaphore", 0], ["future", 21], ["timeout", 0], ["scheduled", 0], ["completable", 4],
   ["manyThreads", 100], ["atomics", 300], ["initRace", 0], ["initCycle", 0], ["initFail", 0], ["stackOverflow", 0], ["stackOverflowDeep", 0],
 ].filter(([n]) => !only || only.includes(n as string)) as [string, number][];

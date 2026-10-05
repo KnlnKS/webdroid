@@ -10,6 +10,7 @@ public class G1 {
   static class A extends Node { int val() { return v + 1; } }
   static class B extends Node { int val() { return v * 2; } }
   static class P { int x, y; P(int x, int y) { this.x = x; this.y = y; } int sum() { return x + y; } }
+  static class Counter { int n; synchronized void inc() { n++; } synchronized int get() { return n; } void plain() { n++; } void tryinc() { try { n++; } finally { n--; n++; } } }
   static String[] WORDS = new String[200];
   static { for (int i = 0; i < WORDS.length; i++) WORDS[i] = "word" + (i * 7919 % 1000) + (i % 3 == 0 ? "Alpha" : "beta"); }
 
@@ -34,6 +35,11 @@ public class G1 {
       case "arraySum": { int[] a = new int[4096]; for (int i = 0; i < a.length; i++) a[i] = i * 3; int s = 0; for (int r = 0; r < 40; r++) for (int i = 0; i < a.length; i++) s += a[i]; return s; }
       case "fieldLoop": { P p = new P(1, 2); for (int i = 0; i < 100000; i++) { p.x += p.y; p.y ^= p.x; } return p.sum(); }
       case "allocLoop": { int s = 0; for (int i = 0; i < 20000; i++) { P p = new P(i, i + 1); s += p.sum(); } return s; }
+      case "syncCall": { Counter c = new Counter(); for (int i = 0; i < 100000; i++) c.inc(); return c.get(); }
+      case "plainCall": { Counter c = new Counter(); for (int i = 0; i < 100000; i++) c.plain(); return c.get(); }
+      case "tryCall": { Counter c = new Counter(); for (int i = 0; i < 100000; i++) c.tryinc(); return c.get(); }
+      case "syncBlock": { Counter c = new Counter(); for (int i = 0; i < 100000; i++) { synchronized (c) { c.n++; } } return c.get(); }
+      case "idHash": { Object[] os = new Object[64]; for (int i = 0; i < 64; i++) os[i] = new Object(); int s = 0; for (int r = 0; r < 2000; r++) for (int i = 0; i < 64; i++) if (System.identityHashCode(os[i]) == os[i].hashCode()) s++; return s; }
       case "virtualMono": { Node n = new A(); n.v = 3; int s = 0; for (int i = 0; i < 100000; i++) s += n.val(); return s; }
       case "virtualBi": { Node[] ns = new Node[2]; ns[0] = new A(); ns[1] = new B(); ns[0].v = 3; ns[1].v = 4; int s = 0; for (int i = 0; i < 100000; i++) s += ns[i & 1].val(); return s; }
       case "interfaceBi": { Shape[] ss = { new Sq(3), new Rect(2, 5) }; int s = 0; for (int i = 0; i < 100000; i++) s += ss[i & 1].area(); return s; }

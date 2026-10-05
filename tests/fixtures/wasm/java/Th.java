@@ -147,6 +147,26 @@ public class Th {
     return r[0];
   }
 
+  // counters that move only when something else decides to, or are tested only then, wait like any other spin
+  static int spinStep(int n) throws Exception {
+    final int[] r = {0};
+    flag = false;
+    Thread spinner = new Thread(() -> { int i = 0; while (i < 3) { if (flag) i++; } r[0] = i; });
+    Thread setter = new Thread(() -> { try { Thread.sleep(15); } catch (InterruptedException e) { } flag = true; });
+    spinner.start(); setter.start();
+    spinner.join(); setter.join();
+    return r[0];
+  }
+  static int spinTest(int n) throws Exception {
+    final int[] r = {0};
+    flag = false;
+    Thread spinner = new Thread(() -> { int k = 0; while (true) { k++; if (flag) { if (k > 1) break; } } r[0] = 1; });
+    Thread setter = new Thread(() -> { try { Thread.sleep(15); } catch (InterruptedException e) { } flag = true; });
+    spinner.start(); setter.start();
+    spinner.join(); setter.join();
+    return r[0];
+  }
+
   // ---------- parking
   static int parkUnpark(int n) throws Exception {
     final int[] r = {0};

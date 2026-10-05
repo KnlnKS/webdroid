@@ -4,12 +4,12 @@
 //   bun g1.ts [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "--flag ..."]
 // --ref takes the JS tier's numbers (and which workloads match) from an earlier --json run and measures only Wasm, for A/B work on the compiler.
 // Needs javac, d8, node and (for chrome) Playwright's Chrome. The host is shared: the load average is printed and a high one flags the table noisy.
-import { cpus, loadavg, tmpdir } from "node:os";
+import { cpus, loadavg } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
-import { AOSP, JAVA, ROOT } from "./paths";
+import { AOSP, G1_DIR, JAVA, ROOT } from "./paths";
 import { cutWorkloads, dexAndroid, shellIn } from "./tools";
 
 const here = import.meta.dir;
@@ -18,7 +18,7 @@ const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag
 const only = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && !v[i - 1]?.startsWith("--"));
 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
-const out = join(tmpdir(), "g1"), sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
+const out = G1_DIR, sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
 mkdirSync(out, { recursive: true });
 const sh = shellIn(out);
 const names: string[] = [], classOf = new Map<string, string>(), cut = sources.map(([cls, file]) => {
