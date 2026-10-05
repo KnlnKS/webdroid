@@ -42,6 +42,14 @@ def("java/lang/Throwable.nativeGetStackTrace(Ljava/lang/Object;)[Ljava/lang/Stac
   c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(i).lget(e).arraySet(cx.tData.ref);
   c.lget(i).i32(1).raw(OP.i32_add).lset(i).br(0).end().end().lget(arr);
 });
+// VMStack.getThreadStackTrace(thread): the running thread's frames, taken as a new Throwable takes them; another thread's stack is not on this one (an empty trace)
+def("dalvik/system/VMStack.getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;", (cx, m, c) => {
+  const THR = "java/lang/Throwable", ctor = cx.prog.resolve(THR, "<init>", "()V"), trace = cx.prog.resolve(THR, "getStackTrace", "()[Ljava/lang/StackTraceElement;"), e = c.newLocal(T.anyref);
+  if (!ctor || !trace) { cx.gap(c, "Throwable.getStackTrace"); return; }
+  c.lget(0); cx.callRt(c, "curThread"); c.call(cx.helper("acmp")).if_(T.anyref);
+  cx.emitEnsure(c, THR); cx.emitNew(c, THR); c.lset(e).lget(e); cx.callMethod(c, ctor); c.lget(e); cx.callMethod(c, trace);
+  c.else_(); cx.emitNewArray(c, "[Ljava/lang/StackTraceElement;", () => c.i32(0)); c.end();
+});
 def("java/lang/Float.floatToRawIntBits(F)I", (cx, m, c) => { c.lget(0); });
 def("java/lang/Float.intBitsToFloat(I)F", (cx, m, c) => { c.lget(0); });
 def("java/lang/Double.doubleToRawLongBits(D)J", (cx, m, c) => { c.lget(0); });
