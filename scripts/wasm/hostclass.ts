@@ -15,7 +15,7 @@ import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { jsTier, natives, processStateAsync } from "./oracle";
 import { AOSP } from "./paths";
-import { deref, ownedHandle } from "../../src/android/handles";
+import { deref, handle, ownedHandle, release } from "../../src/android/handles";
 import { enter, hostCases, hostDex, JCounter } from "./hostcases";
 
 const dex = hostDex(), jars = [0, 1, 2, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
@@ -37,6 +37,18 @@ const fail = (what: string) => { failed++; console.log("FAIL " + what); };
 js.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  js    ${want}\n  wasm  ${wasm[i]}`); });
 if (wasm.length !== js.length) fail(`${wasm.length} answers for ${js.length}`);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
+
+{
+  const array = w.bridge.toJava(new Int32Array(2), "[I") as object, before = handle(array), mark = w.bridge.begin();
+  try {
+    if (deref(before) === array) fail("a Wasm array handle did not produce a host view");
+    release(before);
+    const after = handle(array);
+    try {
+      if (after === before || deref(after) === undefined) fail("a released Wasm array retained its stale handle");
+    } finally { release(after); }
+  } finally { w.bridge.end(mark); }
+}
 
 {
   const worker = world([dex, ...jars], { natives, compileOnly: true }), instances = worker.stats.instances;

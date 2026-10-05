@@ -9,7 +9,7 @@
 import { rt } from "../jvm/runtime";
 
 const objs: (object | undefined)[] = [undefined];
-/** the handle of each object. A Wasm GC object (a Java array of the Wasm tier) cannot be a weak key, so the handle of one keeps it. */
+/** Engines that reject Wasm GC weak keys use the strong table. */
 const weak = new WeakMap<object, bigint>(), strong = new Map<object, bigint>();
 const byObj = {
   get: (o: object): bigint | undefined => weak.get(o) ?? strong.get(o),
@@ -75,7 +75,7 @@ export function deref<T>(h: bigint): T {
 export function release(h: bigint): void {
   const n = Number(h);
   if (!objs[n]) return;
-  const old = deref<object | undefined>(h);
+  const old = objs[n] === WEAK ? refs[n]!.deref() : objs[n];
   if (old) byObj.delete(old);
   objs[n] = refs[n] = undefined;
   free.push(n);
