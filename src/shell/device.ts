@@ -1,7 +1,7 @@
 // Device shell: APK boot, display and configuration, input. AOSP's ActivityThread runs the app over
 // the hosted system services; SurfaceFlinger (surfaceflinger.ts) composes the display.
 
-import { dexesIn, isDexEntry } from "../jvm/dex";
+import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
 import { appCodeReady, appLaunched, loadAppCode, loadDex, tier } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
@@ -132,8 +132,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
   const loadAppDexes = async () => {
     await inflateTree(zip, isDexEntry);
-    // Match the worker's DEX order; asynchronous inflation can reorder the tree.
-    for (const name of Object.keys(zip).filter(isDexEntry).sort()) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
+    for (const name of dexEntryNames(Object.keys(zip))) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
     mark("dexLoaded");
   };
   // The Wasm tier's World numbers what it runs from the first Java this realm runs, and the app code a previous launch saved is attached only to a World that has numbered
@@ -163,7 +162,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   mark("startZygote"); onStatus("Loading app code…");
   if (tier === "js") await loadAppDexes();
   await code;
-  if (tier === "js") compileAhead({ dexes: Object.keys(zip).filter(isDexEntry).map((name) => [name, zip[name]]),
+  if (tier === "js") compileAhead({ dexes: dexEntryNames(Object.keys(zip)).map((name) => [name, zip[name]]),
     profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());

@@ -11,7 +11,7 @@ import { Arsc } from "./arsc";
 import { DEVICE_COLORS } from "./device-colors";
 import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt } from "../jvm/runtime";
-import { dexesIn, isDexEntry, type DexFile } from "../jvm/dex";
+import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex";
 import { Resources, setFramework } from "./res";
 import { PLATFORM_JARS } from "../jvm/provenance";
 import { loadDex } from "../jvm/tier";
@@ -32,7 +32,7 @@ let pendingDex: Promise<void> | null = null;
 /** a jar's classes*.dex, in load order */
 export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
   const dir = centralDir(jar);
-  return [...dir.keys()].filter(isDexEntry).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
+  return dexEntryNames(dir.keys()).flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `${label}:${name}`));
 }
 
 /** the `i`th boot class path jar: at its device path, with its classes indexed behind the app's
