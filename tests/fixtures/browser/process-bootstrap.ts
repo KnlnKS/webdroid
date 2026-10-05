@@ -425,3 +425,33 @@ export async function workerFrameOwnership() {
     return {...result,dimensions:[canvas.width,canvas.height],pixels};
   } finally {worker.terminate();close();closeFailed();held.port1.close();URL.revokeObjectURL(url);}
 }
+
+export async function pointerInputOwnership() {
+  const {attachPointerInput} = await import("../../../src/shell/pointer-input");
+  type Calls = { pointer(owner: number, action: number, x: number, y: number): Promise<void>; release(): Promise<void>; samples(): Promise<number[][]> };
+  const code = `import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
+    let release, samples=[];
+    self.onmessage=({data})=>serveCalls(data.port,{
+      pointer:async(owner,action,x,y)=>{samples.push([owner,action,x,y]);if(owner===1&&action===0)await new Promise(r=>release=r);},
+      release:async()=>{release();},samples:async()=>samples});`;
+  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  const channel=new MessageChannel(),client=callProxy<Calls>(channel.port1,["pointer","release","samples"]);
+  worker.postMessage({port:channel.port2},[channel.port2]);
+  const canvases=[1,2].map(()=>{const c=document.createElement("canvas");c.style.cssText="position:fixed;left:0;top:0;width:100px;height:100px";document.body.append(c);return c;});
+  const bindings=canvases.map((canvas,i)=>attachPointerInput(canvas,()=>({width:200,height:200,scrollUnit:128,touchSlop:16}),
+    (action,x,y)=>client.endpoint.pointer(i+1,action,x,y)));
+  const pointer=(i:number,type:string,x:number,y:number)=>canvases[i].dispatchEvent(new PointerEvent(type,{clientX:x,clientY:y,pointerId:i+1}));
+  try {
+    pointer(0,"pointerdown",10,20);
+    pointer(0,"pointermove",20,30);pointer(0,"pointermove",30,40);pointer(0,"pointerup",40,50);
+    pointer(1,"pointerdown",5,6);pointer(1,"pointercancel",0,0);
+    await client.endpoint.samples();await client.endpoint.release();
+    // Each read is an independent port roundtrip; allow the queued UP's acknowledgment chain.
+    let samples:number[][]=[];
+    for(let i=0;i<20;i++){samples=await client.endpoint.samples();if(samples.length===5)break;}
+    bindings.forEach(binding=>binding.close());
+    pointer(0,"pointerdown",1,1);pointer(1,"pointerdown",1,1);
+    const closed=await client.endpoint.samples();
+    return {samples,closed:closed.length===samples.length};
+  } finally { bindings.forEach(binding=>binding.close());client.close();worker.terminate();URL.revokeObjectURL(url);canvases.forEach(c=>c.remove()); }
+}

@@ -95,6 +95,11 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       renamed:"renamed-account",survivor:"renamed-account",changes:1,cleaned:true},source:[9,2],fresh:[1,2],denied:null,foreground:[1,2],absent:null,
       changes:1,peerChanges:3,survivor:[1,2],
       settings:{written:true,read:"shared",sameKey:true,changes:[["global","webdroid_worker_setting"]],survivor:"shared"}});
+    const pointers = await page.evaluate(async () => {
+      const {pointerInputOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return pointerInputOwnership();
+    });
+    expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,0,0],[1,2,60,80],[1,1,80,100]],closed:true});
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);
