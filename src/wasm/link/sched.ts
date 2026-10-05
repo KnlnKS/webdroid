@@ -216,9 +216,9 @@ export class Sched {
     this.root = this.strands[ROOT] = new Strand(ROOT, this.main, true, this);
     let get: Function | undefined, set: Function | undefined;
     const header: Header = {
-      lock: (o) => (get ??= w.hostFn("lock:get", ["L"], "I", (cx, c) => { c.lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).i64(32n).raw(OP.i64_shr_u, OP.i32_wrap_i64); }))(o),
+      lock: (o) => (get ??= w.hostFn("lock:get", ["L"], "I", (cx, c) => { c.lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).raw(OP.i32_wrap_i64); }))(o),
       setLock: (o, l) => (set ??= w.hostFn("lock:set", ["L", "I"], "V", (cx, c) => {
-        c.lget(0).refCast(cx.tObj).lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).i64(0xffffffffn).raw(OP.i64_and).lget(1).raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl, OP.i64_or).structSet(cx.tObj, 1);
+        c.lget(0).refCast(cx.tObj).lget(0).refCast(cx.tObj).structGet(cx.tObj, 1).i64(0xffffffff00000000n).raw(OP.i64_and).lget(1).raw(OP.i64_extend_i32_u, OP.i64_or).structSet(cx.tObj, 1);
       }))(o, l),
     };
     this.monitors = new Monitors(header, this.strands, (ms, fn) => loop.after(ms, fn));

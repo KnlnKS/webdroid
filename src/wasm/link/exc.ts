@@ -16,6 +16,8 @@ export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
  *  V8 does not let Wasm catch its own stack overflow, so a Java handler for StackOverflowError sees only the one this limit throws; the limit is half of what
  *  the stack holds, and an overflow it still hits is turned into the error at the edge of the Java world (World.boundary) */
 export const MAX_DEPTH = 56000, SOE_HEADROOM = 2000;
+/** the weight of the frames a method may leave out of the depth when it calls only methods that leave theirs out (method.ts) */
+export const MAX_UNCOUNTED = 512;
 /** bytes allocated between two heap checks; allocation counts up to zero from -ALLOC_WINDOW */
 export const ALLOC_WINDOW = 8 << 20;
 
