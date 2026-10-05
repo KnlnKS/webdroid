@@ -1512,6 +1512,17 @@ The existing Chromium process-port fixture now sends these commands from a real 
 
 This converts CookieManager's store access, not WebView presentation. WebView still receives the live jar and watcher functions in its iframe realm; its page-owned renderer, cookie notifications and network/document adapters need explicit Worker contracts. Other stores and FD/mapping coherence remain open. Parent owns `guest-clock.ts` and `shell/clock-port.ts`; Y2 will wire its provided API into process bootstrap. No JVM Worker is enabled, no new app/AOT acceptance is claimed, and integration requires a fresh AOT build before browser verification. No owned browser/server driver is running.
 
+
+### 4.25 Y2: owned clock/bootstrap handoff (2026-10-05)
+
+Parent clock API `88dc1058` is integrated in Y2 as `8a8046c9`. `ProcessBroker.bootstrap(pid, true)` now includes its ClockBootstrap and retains that clock's close callback with the archive owners. `bootstrapTransfers` lists archive, split and optional clock ports at both the initial structured clone and the Worker hop. Replacement closes the previous owner set; failed initial handoff closes only the unpublished set; process death closes all retained ports explicitly. Terminating a Worker alone cannot substitute for that broker cleanup. Default iframe bootstrap requests no clock port and keeps its existing direct clock bindings. Broker service/alarm timer ownership is unchanged.
+
+The registry/APK loader is extracted from the iframe entry into `shell/process-bootstrap.ts`, preserving the existing packed/raw own-package, lazy foreign-package and split-loading branches. The iframe now calls that shared implementation. Clock descriptors and their transfer list live in a small module with type-only archive dependencies, so a Worker startup can receive its clock before loading the JVM package loader.
+
+The existing Chromium archive fixture exercises the actual broker clone followed by a Worker postMessage using the same transfer list. Its Worker attaches the clock before archive loading and startup timers. Uptime, wall time and page origin agree; a microtask schedules a nested same-time timer before acknowledgment. Explicit broker death after Worker termination cancels the remaining process callback and preserves a scheduled system timer. Replacement/failure/death close four clock owners with zero remaining callbacks. The existing endpoint/cookie fixture also passes. Two selected browser core tests pass (nine assertions); full typecheck and diff check pass. Evidence: `webdroid-shots/y2-s5-endpoint/bootstrap-{clock-test,endpoint-test,clock-typecheck}.log`.
+
+These are bootstrap contracts, not a booted application JVM Worker. The production entry still uses an iframe; a real Worker entry must attach the clock before Java/time/timer initialization, transfer the reverse/endpoint ports, register diagnostics and close its broker owners on death or failed publication. Canonical FD/mapping coherence, remaining mutable stores and presentation/WebView adapters remain prerequisites. Parent may own a disjoint settings contract; Y2 retains process/bootstrap wiring and leaves clock files unchanged. No new AOT/app gate or performance result is claimed; rebuild AOT after source integration before browser verification.
+
 ## 5. Unverified facts the executor must check first
 
 Resolved on 2026-10-04 with `research/wasm/probe.mjs` and `probe-tiering.mjs` (matrix and versions in

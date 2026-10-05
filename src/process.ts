@@ -1,5 +1,6 @@
 import "./natives";
 import { processBroker } from "./shell/processes";
+import { loadProcessPackages } from "./shell/process-bootstrap";
 import { connectProcess, processPresentation } from "./shell/process-endpoint";
 import { bootApk, startZygote, setScreenCanvas, SCREEN_W, SCREEN_H, pressBack } from "./shell/device";
 import { loadSkia } from "./android/skia";
@@ -7,21 +8,11 @@ import { setProcessIdentity } from "./android/os";
 import { recordVsync } from "./android/vsync";
 import { attachIme, drainInput } from "./shell/input";
 import { setWebLayer } from "./android/webframes";
-import { apkCertificates, packageArchive, packageArchiveSource } from "./android/packagearchive";
-import { zipTree } from "./jvm/natives/jzip";
-import { PackedArchive, packedArchives } from "./shell/packedarchive";
-import { rt } from "./jvm/runtime";
 import { strictThreadOwnership } from "./jvm/natives/jentry";
 import { setBackgroundRealm } from "./jvm/yield";
 import { jitStats } from "./native/core";
-import { openInstallApks, type Install } from "./shell/install";
-import { RemoteFile } from "./shell/remote-file";
-import { readFully } from "./shell/lazyfile";
-import { installedPath, registerPackage } from "./android/pm";
-import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
-import { hexBytes, u8 } from "./jvm/abi";
 import { configureJvmCoverage } from "./jvm/coverage";
 import { guestClockControl } from "./guest-clock";
 import { realmWd } from "./shell/realmwd";
@@ -78,33 +69,7 @@ try {
   mark("bootstrapped");
   setProcessIdentity(pid, data.uid);
   mountSystemCertificates();
-  let boot: Install | null = null;
-  for (const snapshot of data.registry) {
-    const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;
-    let archive, base: Pick<Install, "zip" | "base">;
-    if ("index" in source) {
-      const packed = new PackedArchive(source.index, source.base);
-      await packed.prepare(own);
-      archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
-      packedArchives.set(path, packed); vfs.mount(path, packed);
-      if (own) rt.classpathSource = packed;
-      base = { zip: packed.zip, base: packed };
-    } else if (!own) {
-      const file = new RemoteFile(source);
-      archive = await packageArchiveSource(file, snapshot.certificates);
-      vfs.mount(path, file);
-      base = {zip: archive.res.zip, base: file};
-    } else {
-      const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
-      archive = packageArchive(zip, await apkCertificates(bytes, zip)); vfs.write(path, bytes);
-      base = { zip, base: bytes };
-    }
-    if (own) boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
-    const record = registerPackage(archive, path, snapshot.uid);
-    record.system = snapshot.system;
-    for (const grant of snapshot.grants) record.grants.add(grant);
-    record.compatibilityCertificates = snapshot.signatures?.map((s) => u8(s)) ?? null;
-  }
+  const boot = await loadProcessPackages(data);
   const endpoint = connectProcess();
   if (!boot) throw new Error("Process package unavailable");
   await loadSkia();

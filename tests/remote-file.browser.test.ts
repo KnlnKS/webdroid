@@ -2,12 +2,13 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("lazy archive reads cross a Worker without sharing buffers and fail on process teardown", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/remote-file.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/remote-file.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts", import.meta.dir + "/../src/guest-clock.ts"], target: "browser", format: "esm" });
   if (!build.success) throw new AggregateError(build.logs, "archive transport build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     const output = path === "/file.js" ? build.outputs.find(out => out.path.endsWith("remote-file.js"))
-      : path === "/bootstrap.js" ? build.outputs.find(out => out.path.endsWith("process-bootstrap.js")) : null;
+      : path === "/bootstrap.js" ? build.outputs.find(out => out.path.endsWith("process-bootstrap.js"))
+      : path === "/guest-clock.js" ? build.outputs.find(out => out.path.endsWith("guest-clock.js")) : null;
     return output ? new Response(output, { headers: { "content-type": "text/javascript" } })
       : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
@@ -16,7 +17,7 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    await page.goto(server.url.href);
+    await page.goto(server.url.href + "?testClock=controlled");
     const result = await page.evaluate(async () => {
       const { serveFile } = await import(location.origin + "/file.js") as typeof import("../src/shell/remote-file");
       const source = Uint8Array.of(10, 11, 12, 13);
@@ -63,7 +64,13 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       return bootstrapOwnership();
     });
     expect(ownership).toEqual({ eagerReads: 0, superseded: "Archive source closed", failed: true, discarded: ["Archive source closed", "Archive source closed"],
-      retained: [10], ended: "Archive source closed", isolated: [10] });
+      retained: [10], ended: "Archive source closed", isolated: [10], clocksClosed: 4, clockPending: 0, fired: 0 });
+    const clock = await page.evaluate(async () => {
+      const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return clockBootstrapOwnership();
+    });
+    expect(clock).toEqual({ controlled: true, archive: [31], origin: true, wall: true, uptime: true, ticks: ["first", "nested"],
+      advanced: 2, pendingBeforeDeath: 2, pendingAfterDeath: 1, brokerTimer: 1, pendingAfterAdvance: 0 });
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);

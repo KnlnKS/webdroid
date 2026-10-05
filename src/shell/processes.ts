@@ -15,7 +15,7 @@ import { newIntent, type ComponentRef } from "../android/intent";
 import { NOT_CRASHED, type Death, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
 import { logUncaught } from "../jvm/natives/jthrowable";
-import { uptimeMillis } from "../guest-clock";
+import { createGuestClockPort, uptimeMillis } from "../guest-clock";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords";
 import { ActivityStack } from "./activitystack";
 import { apkPath, vfs } from "./vfs";
@@ -33,9 +33,12 @@ import type { WebCookies } from "./webcookies";
 import { cookieCalls, type CookieCalls } from "./cookie-access";
 import { BrowserLocation } from "./geolocation";
 import { PrivateFiles } from "./privatefiles";
-import { packedArchives, type PackedArchiveIndex } from "./packedarchive";
-import { serveFile, type RemoteFileData } from "./remote-file";
+import { packedArchives } from "./packedarchive";
+import { serveFile } from "./remote-file";
+import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
 import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
+
+export type { ProcessBootstrap } from "./process-bootstrap-data";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
@@ -58,8 +61,6 @@ export type ActivityRequest = { kind: "launch"; id: number; component: string; i
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
   | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
 const BIND_NOT_FOREGROUND = 4, BIND_WAIVE_PRIORITY = 0x20;
-/** splits: the installed config/feature split apks beside the base, which only the running app has */
-type PackageSnapshot = { certificates: Uint8Array[]; pkg: string; source: RemoteFileData | { index: PackedArchiveIndex; base: string }; splits: RemoteFileData[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 export type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
@@ -138,7 +139,7 @@ class ProcessBroker {
   private clipboard: ParcelData | null = null;
   private clipboardWatchers = new Set<number>();
   private booted = false;
-  private archivePorts = new Map<number, (() => void)[]>();
+  private bootstrapPorts = new Map<number, (() => void)[]>();
   private endpointPorts = new Map<number, () => void>();
   private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
   private callerPorts = new Map<number, Set<() => void>>();
@@ -225,7 +226,7 @@ class ProcessBroker {
     const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid)).finally(() => { entry.foregroundClients--; });
     return { pid: entry.pid, shown };
   }
-  async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[]; launcher: Entry["launcher"] }> {
+  async bootstrap(pid: number, worker = false): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
       const packed = packedArchives.get(record.path);
@@ -243,11 +244,14 @@ class ProcessBroker {
       this.entry(pid);
       const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
-      const data = structuredClone({ pkg: owner.pkg, process: entry.process, uid: entry.uid, registry: snapshots, launcher: entry.launcher },
-        { transfer: snapshots.flatMap((record) => [...("port" in record.source ? [record.source.port] : []), ...record.splits.map((split) => split.port)]) });
+      const clock = worker ? createGuestClockPort(pid) : undefined;
+      if (clock) ports.push(clock.close);
+      const payload: ProcessBootstrap = { pkg: owner.pkg, process: entry.process, uid: entry.uid,
+        registry: snapshots, launcher: entry.launcher, clock: clock?.data };
+      const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
-      for (const close of this.archivePorts.get(pid) ?? []) close();
-      this.archivePorts.set(pid, ports);
+      for (const close of this.bootstrapPorts.get(pid) ?? []) close();
+      this.bootstrapPorts.set(pid, ports);
       return data;
     } catch (error) { for (const close of ports) close(); throw error; }
   }
@@ -302,8 +306,8 @@ class ProcessBroker {
     this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);
     for (const close of this.callerPorts.get(pid) ?? []) close();
     this.callerPorts.delete(pid);
-    for (const close of this.archivePorts.get(pid) ?? []) close();
-    this.archivePorts.delete(pid);
+    for (const close of this.bootstrapPorts.get(pid) ?? []) close();
+    this.bootstrapPorts.delete(pid);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     this.services.clientDied(pid);
