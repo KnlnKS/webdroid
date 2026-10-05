@@ -11,6 +11,9 @@ import type { EncAnnotation, EncVal } from "../../jvm/dex";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
+import { emitSave, type Strand } from "./sched";
+import { T } from "../compiler/wasmbin";
+import type { Kind } from "../compiler/program";
 
 const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature";
@@ -34,21 +37,27 @@ const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x
 const states = new WeakMap<World, ReturnType<typeof make>>();
 function make(w: World) {
   const fn = w.hostFn.bind(w);
+  const java = (name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void) => {
+    let plain: Function | undefined, waiting: ReturnType<World["callFn"]> | undefined;
+    return (strand: Strand, ...args: unknown[]) => strand.canSuspend && !w.inSynchronousJava()
+      ? (waiting ??= w.callFn(name, params, ret, body))(strand, ...args)
+      : w.synchronous(() => (plain ??= fn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); })))(...args));
+  };
   const classOf = fn("an:classOf", ["I"], "L", (cx, c) => { c.lget(0); cx.callRt(c, "classOf"); });
   const mkExec = fn("an:mkExec", ["I", "I", "I"], "L", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "mkExec"); });
   const newArray = (desc: string) => fn("an:new:" + desc, ["I"], "L", (cx, c) => cx.emitNewArray(c, desc, () => c.lget(0)));
   const aset = fn("an:aset", ["L", "I", "L"], "V", (cx, c) => { c.lget(0).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lget(1).lget(2).arraySet(cx.tData.ref); });
   const box = (letter: string) => {
     const [cls] = BOX[letter], bits = letter === "J" || letter === "D" ? "J" : "I";
-    return fn("an:box:" + letter, [bits], "L", (cx, c) => { cx.emitEnsure(c, cls); c.lget(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
+    return java("an:box:" + letter, [bits], "L", (cx, c, arg) => { cx.emitEnsure(c, cls); arg(0); cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${letter})L${cls};`)!); });
   };
   const call = (cls: string, name: string, desc: string, params: ("I" | "J" | "L")[], ret: "I" | "L" | "V") =>
-    fn(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c) => { cx.emitEnsure(c, cls); params.forEach((_, i) => c.lget(i)); cx.callMethod(c, cx.prog.resolve(cls, name, desc)!); });
-  const enumConstant = (cls: string, name: string, desc: string) => fn(`an:enum:${cls}.${name}`, [], "L", (cx, c) => { cx.emitEnsure(c, cls); c.gget(cx.staticGlobal(cls, name, desc)); });
+    java(`an:call:${cls}.${name}${desc}`, params, ret, (cx, c, arg) => { cx.emitEnsure(c, cls); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, name, desc)!); });
+  const enumConstant = (cls: string, name: string, desc: string) => java(`an:enum:${cls}.${name}`, [], "L", (cx, c) => { cx.emitEnsure(c, cls); c.gget(cx.staticGlobal(cls, name, desc)); });
   const construct = (cls: string, desc: string, params: ("I" | "J" | "L")[]) =>
-    fn(`an:new:${cls}${desc}`, params, "L", (cx, c) => {
+    java(`an:new:${cls}${desc}`, params, "L", (cx, c, arg) => {
       const o = c.newLocal(cx.vtOf("L"));
-      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(o).lget(o); params.forEach((_, i) => c.lget(i)); cx.callMethod(c, cx.prog.resolve(cls, "<init>", desc)!); c.lget(o);
+      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(o).lget(o); params.forEach((_, i) => arg(i)); cx.callMethod(c, cx.prog.resolve(cls, "<init>", desc)!); c.lget(o);
     });
   return {
     classOf, mkExec, newArray, aset, box,
@@ -68,46 +77,63 @@ function arrayOf(w: World, s: ReturnType<typeof make>, elem: string, items: unkn
 }
 
 /** a Java value for the encoded `v` of an annotation element whose method returns `desc` */
-function valueOf(w: World, s: ReturnType<typeof make>, dex: EncAnnotation["dex"], v: EncVal, desc: string): unknown {
+function* valueOf(w: World, s: ReturnType<typeof make>, strand: Strand, dex: EncAnnotation["dex"], v: EncVal, desc: string): Generator<unknown, unknown, any> {
   const bits = (letter: string, x: number | bigint | boolean) => {
     if (letter === "F") { const f = new Float32Array(1); f[0] = Number(x); return new Int32Array(f.buffer)[0]; }
     if (letter === "D") { const f = new Float64Array(1); f[0] = Number(x); return new BigInt64Array(f.buffer)[0]; }
     return letter === "J" ? BigInt(x as bigint | number) : Number(x);
   };
-  if (desc.length === 1) return s.box(desc)(bits(desc, v as number));
+  if (desc.length === 1) return yield s.box(desc)(strand, bits(desc, v as number));
   if (desc[0] === "[") {
     const elem = desc.slice(1), items = v as EncVal[];
     // a primitive array is filled on the host and copied in
     if (elem.length === 1) return w.bridge.toJava(VIEWS[elem].from(items.map((x) => (elem === "J" ? BigInt(x as bigint | number) : Number(x))) as never), desc);
-    return arrayOf(w, s, elem, items.map((x) => valueOf(w, s, dex, x, elem)));
+    const values: unknown[] = [];
+    for (const x of items) values.push(yield* valueOf(w, s, strand, dex, x, elem));
+    return arrayOf(w, s, elem, values);
   }
   if (v === null) return v;
   if (typeof v === "string") return w.javaString(v);
   const ref = v as { kind: string; idx: number; anno?: EncAnnotation };
   if (ref.kind === "type") {
     const name = typeName(dex.type(ref.idx));
-    return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : s.typeNotPresent(w.javaString(javaName(name).replace(/\//g, ".")), null);
+    return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : yield s.typeNotPresent(strand, w.javaString(javaName(name).replace(/\//g, ".")), null);
   }
   if (ref.kind === "enum") {
     const fr = dex.field(ref.idx), cls = descToName(dex.type(fr.cls)), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);
-    return f ? s.enumConstant(cls, f.name, f.desc)() : s.enumNotPresent(s.classOf(w.idOf(cls)), w.javaString(fr.name));
+    return yield (f ? s.enumConstant(cls, f.name, f.desc)(strand) : s.enumNotPresent(strand, s.classOf(w.idOf(cls)), w.javaString(fr.name)));
   }
-  if (ref.kind === "annotation") return annotation(w, s, ref.anno!);
+  if (ref.kind === "annotation") return yield* annotation(w, s, strand, ref.anno!);
   throw new Error(`annotation value of kind ${ref.kind}`);
 }
 
 /** the annotation object for `a`: its members are the elements it sets, those its type defaults come from AnnotationFactory itself */
-function annotation(w: World, s: ReturnType<typeof make>, a: EncAnnotation): object {
-  const type = w.prog.get(a.type)!, members = Object.entries(a.elements).flatMap(([name, value]) => {
+function* annotation(w: World, s: ReturnType<typeof make>, strand: Strand, a: EncAnnotation): Generator<unknown, object, any> {
+  const type = w.prog.get(a.type)!, members: object[] = [];
+  for (const [name, value] of Object.entries(a.elements)) {
     const index = type.methods.findIndex((m) => m.name === name && !m.params.length), m = type.methods[index];
-    if (!m) return [];                                       // an element the annotation class no longer declares
-    return [s.member(w.javaString(name), valueOf(w, s, a.dex, value, m.ret), s.classOf(w.idOf(typeName(m.ret))), s.mkExec(w.idOf(type.name), index, 0))];
-  });
-  return s.create(s.classOf(w.idOf(a.type)), arrayOf(w, s, `L${MEMBER};`, members));
+    if (!m) continue; // an element the annotation class no longer declares
+    const v = yield* valueOf(w, s, strand, a.dex, value, m.ret);
+    members.push(yield s.member(strand, w.javaString(name), v, s.classOf(w.idOf(typeName(m.ret))), s.mkExec(w.idOf(type.name), index, 0)));
+  }
+  return yield s.create(strand, s.classOf(w.idOf(a.type)), arrayOf(w, s, `L${MEMBER};`, members));
 }
 
-/** host.obj(kind, a, b, filter): the objects ART's annotation natives answer; `filter` is the annotation Class asked for, if one is */
-export function hostObject(w: World, kind: Ann, a: number, b: number, filter: object | null): object | null {
+/** host.annotation(kind, a, b, filter): the objects ART's annotation natives answer; `filter` is the annotation Class asked for, if one is */
+export function hostObject(w: World, kind: Ann, a: number, b: number, filter: object | null): object | null | Promise<object | null> {
+  const strand = w.sched.current(), materialize = objects(w, strand, kind, a, b, filter);
+  // Keep immediate reflection immediate; only an actual Java wait switches stacks.
+  const advance = (value?: unknown, failed = false): object | null | Promise<object | null> => {
+    let step = failed ? materialize.throw(value) : materialize.next(value);
+    while (!step.done) {
+      if (step.value instanceof Promise) return step.value.then(v => advance(v), e => advance(e, true));
+      step = materialize.next(step.value);
+    }
+    return step.value;
+  };
+  return advance();
+}
+function* objects(w: World, strand: Strand, kind: Ann, a: number, b: number, filter: object | null): Generator<unknown, object | null, any> {
   const s = (states.get(w) ?? (states.set(w, make(w)), states.get(w)!));
   const classId = w.fieldReader("java/lang/Class", "dexTypeIndex", "I") as (c: object) => number;
   if (kind === Ann.SignatureOfClass || kind === Ann.SignatureOfExecutable || kind === Ann.SignatureOfField) {
@@ -119,28 +145,41 @@ export function hostObject(w: World, kind: Ann, a: number, b: number, filter: ob
     const m = methodAt(w, a), jc = w.prog.get(m.cls)!;
     const holder = jc.def ? jc.dex!.classAnnotations(jc.def).cls : [], def = ofKind(holder, SYSTEM).find((x) => x.type === ANNOTATION_DEFAULT)?.elements.value as { anno?: EncAnnotation } | undefined;
     const v = def?.anno?.elements[m.name];
-    return v === undefined ? null : valueOf(w, s, jc.dex!, v, m.ret) as object;
+    return v === undefined ? null : (yield* valueOf(w, s, strand, jc.dex!, v, m.ret)) as object;
   }
   const { set, params } = elementOf(w, kind, a);
   if (kind === Ann.ExecutableParams) {
     if (!params) return null;
-    return arrayOf(w, s, "[Ljava/lang/annotation/Annotation;", params.map((p) => arrayOf(w, s, "Ljava/lang/annotation/Annotation;", ofKind(p, RUNTIME).map((x) => annotation(w, s, x)))));
+    const groups: object[] = [];
+    for (const p of params) {
+      const annotations: object[] = [];
+      for (const x of ofKind(p, RUNTIME)) annotations.push(yield* annotation(w, s, strand, x));
+      groups.push(arrayOf(w, s, "Ljava/lang/annotation/Annotation;", annotations));
+    }
+    return arrayOf(w, s, "[Ljava/lang/annotation/Annotation;", groups);
   }
   const runtime = ofKind(set, RUNTIME);
   if (filter) {
     const want = w.nameOf(classId(filter)), hit = runtime.find((x) => x.type === want);
-    return hit ? annotation(w, s, hit) : null;
+    return hit ? yield* annotation(w, s, strand, hit) : null;
   }
-  return arrayOf(w, s, "Ljava/lang/annotation/Annotation;", runtime.map((x) => annotation(w, s, x)));
+  const annotations: object[] = [];
+  for (const x of runtime) annotations.push(yield* annotation(w, s, strand, x));
+  return arrayOf(w, s, "Ljava/lang/annotation/Annotation;", annotations);
 }
 
 export const annotationIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => annotationIntrinsics.set(key, (cx, m, c) => f(cx, c));
-/** host.obj over the element in local 0 (kind `kind`), with the annotation Class in local 1 when `filtered` */
+/** host.annotation over the element in local 0 (kind `kind`), with the annotation Class in local 1 when `filtered` */
 function ask(cx: Compiler, c: Code, kind: Ann, element: () => void, filtered: boolean): void {
+  const restore = emitSave(cx, c);
   c.i32(kind); element(); c.i32(0);
   if (filtered) c.lget(1).externConvertAny(); else c.refNull(-17);        // an extern null
-  c.call(cx.imp.obj).anyConvertExtern();
+  c.call(cx.imp.annotation);
+  const wait = cx.global("rt", "wait", T.i32, true);
+  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
+  c.end().anyConvertExtern(); restore();
 }
 const classId = (cx: Compiler, c: Code) => { c.lget(0); idOfClass(cx, c); };
 const field = (cx: Compiler, c: Code) => { c.lget(0); fieldId(cx, c); };

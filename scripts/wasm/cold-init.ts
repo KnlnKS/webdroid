@@ -12,7 +12,18 @@ import { hostThrowable } from "../../src/wasm/host/entry";
 
 const dir = mkdtempSync(join(tmpdir(), "cold-init-")), sh = shellIn(dir);
 writeFileSync(join(dir, "ColdInit.java"), `import java.lang.invoke.MethodHandles;
+import java.lang.annotation.*;
 public class ColdInit {
+  public enum Choice { A; static {try {Thread.sleep(1);}catch(InterruptedException e){throw new RuntimeException(e);}} }
+  @Retention(RetentionPolicy.RUNTIME) public @interface Mark {int value() default 7; Choice choice() default Choice.A;}
+  @Mark(42) public static int annotated;
+  public static int annotationDefault()throws Exception{return ((Choice)Mark.class.getDeclaredMethod("choice").getDefaultValue()).ordinal()+7;}
+  public static int annotation()throws Exception{return ColdInit.class.getDeclaredField("annotated").getAnnotation(Mark.class).value();}
+  public static int concurrentAnnotations()throws Exception {
+    final int[] values=new int[4]; final Throwable[] errors=new Throwable[4]; Thread[] threads=new Thread[4];
+    for(int i=0;i<4;i++){final int index=i;threads[i]=new Thread(()->{try{values[index]=annotation();}catch(Throwable e){errors[index]=e;}});threads[i].start();}
+    int sum=0;for(int i=0;i<4;i++){threads[i].join();if(errors[i]!=null)throw new RuntimeException(errors[i]);sum+=values[i];}return sum;
+  }
   static class Wait { static int n; static {try { Thread.sleep(1); } catch(InterruptedException e){throw new RuntimeException(e);} n=42;} }
   public static int run(){return Wait.n;}
   public static int sleep()throws Exception {Thread.sleep(1);return 14;}
@@ -29,13 +40,13 @@ public class ColdInit {
   static int site(){for(StackTraceElement e:new Exception().getStackTrace())if(e.getClassName().equals("ColdInit")&&e.getMethodName().equals("sites"))return e.getLineNumber();return -1;}
   static synchronized int middle()throws Exception{return inner();}
   static int inner()throws Exception {Thread.sleep(1);int n=0;for(StackTraceElement e:new Exception().getStackTrace())if(e.getClassName().equals("ColdInit")&&(e.getMethodName().equals("mixed")||e.getMethodName().equals("middle")||e.getMethodName().equals("inner")))n++;return lookup()*100+n;}
-  public static void main(String[] args)throws Exception {System.out.println(sleep());System.out.println(run());System.out.println(lookup());System.out.println(trace());System.out.println(recursive());System.out.println(mixed());System.out.println(sites());}
+  public static void main(String[] args)throws Exception {System.out.println(concurrentAnnotations());System.out.println(annotationDefault());System.out.println(annotation());System.out.println(sleep());System.out.println(run());System.out.println(lookup());System.out.println(trace());System.out.println(recursive());System.out.println(mixed());System.out.println(sites());}
 }`);
 sh(["javac", "--release", "11", "-d", dir, join(dir, "ColdInit.java")]);
 sh(["d8", "--release", "--min-api", "34", "--output", dir, ...readdirSync(dir).filter(f => f.endsWith(".class")).map(f => join(dir, f))]);
 const dex = join(dir, "classes.dex"), paths = [dex, ...PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j))];
 await jsTier(loadDexes(dex)); rt.mkThrowable = hostThrowable;
-const cases = ["sleep", "run", "lookup", "trace", "recursive", "mixed", "sites"], jdk = sh(["java", "-cp", dir, "ColdInit"]).trim().split("\n");
+const cases = ["concurrentAnnotations", "annotationDefault", "annotation", "sleep", "run", "lookup", "trace", "recursive", "mixed", "sites"], jdk = sh(["java", "-cp", dir, "ColdInit"]).trim().split("\n");
 let checks = 0;
 for (const cold of [false, true]) for (const [i, name] of cases.entries()) {
   const w = world(paths, { cold, natives }), gaps: string[] = [];

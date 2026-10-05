@@ -195,6 +195,12 @@ export class World {
       },
       text: (kind: number, a: number) => this.javaValue(hostText(this, kind, a)),
       obj: (kind: number, a: number, b: number, filter: object | null) => (kind === LOADER_OF_CLASS ? loaderObject(this, a) : this.javaValue(hostObject(this, kind, a, b, filter))),
+      annotation: (kind: number, a: number, b: number, filter: object | null) => {
+        const value = hostObject(this, kind, a, b, filter);
+        if (!(value instanceof Promise)) return value;
+        this.sched.parkNative(value); return null;
+      },
+      annotationWait: suspending(() => null),
       proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
@@ -223,6 +229,7 @@ export class World {
     this.slots.length = FIRST_FREE_SLOT;
     this.startRuntime();
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
+    this.host.annotationWait = this.sched.settle();
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
     this.appAttached = !!opts.app && !!this.aot?.extend(opts.app.index, opts.app.store);
     this.base = this.numbering();
