@@ -27,7 +27,7 @@ export interface AotStore {
 /** how a build groups the platform classes: classes with the same key share a D (data) or C (code) module; no C key leaves a class to the on-demand compiler */
 export interface AotBuild { dGroup(cls: string): string; cGroup(cls: string): string | null; /** the dexes whose classes are numbered and compiled */ dexes: Set<DexFile> }
 
-export const DEOPT_ABI = 1;
+export const DEOPT_ABI = 2;
 export interface AotIndex {
   version: number;
   /** 0: no handoff support; DEOPT_ABI: runtime-guarded compiled activation contract. */

@@ -78,7 +78,7 @@ export class Compiler implements Base {
   private sigType = new Map<string, number>();
   private globalImports = new Map<string, number>();
   private helpers = new Map<string, number>();
-  readonly deopt?: { make: number; version: number; last: number; blocked: number; allocation: number; monitor: number; snapshot: number; bits: number; reference: number; target: number; epoch: number };
+  readonly deopt?: { make: number; version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; target: number; epoch: number; enabled: number };
   constructor(public w: World, deopt = !!w.opts.cold || !!w.opts.deopt) {
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
@@ -97,7 +97,7 @@ export class Compiler implements Base {
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     if (deopt) {
       const imp = (name: string, params: VT[], results: VT[]) => mb.importFunc("deopt", name, mb.addFuncType(params, results));
-      this.deopt = { make: imp("make", [T.i32, T.i32], [T.externref]), version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), snapshot: imp("snapshot", [T.externref, T.i32, T.i32, T.i32], [T.externref]), bits: imp("bits", [T.externref, T.i32, T.i64], []), reference: imp("reference", [T.externref, T.i32, T.externref], []), target: imp("target", [T.externref], [T.funcref]), epoch: this.global("rt", "deoptEpoch", T.i32, true) };
+      this.deopt = { make: imp("make", [T.i32, T.i32], [T.externref]), version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), capture: imp("capture", [T.externref, T.i32, T.i32, T.i32, T.externref, T.externref, T.externref], [T.externref]), target: imp("target", [T.externref], [T.funcref]), epoch: this.global("rt", "deoptEpoch", T.i32, true), enabled: this.global("rt", "deoptEnabled", T.i32, false) };
     }
     this.str.importBuiltins();
     // the imports that cannot run Java code
@@ -109,6 +109,68 @@ export class Compiler implements Base {
   runsJava(c: Code): boolean {
     const methods = new Set(this.fn.values());
     return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? !this.hostSafe.has(f) : methods.has(f)));
+  }
+  readonly deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0 };
+  private captureMaps = new Map<string, number>();
+  /** Only an invalidated activation constructs these vectors; ordinary execution has no carrier. */
+  captureValues(c: Code, values: { register: number; local: number; type: VT }[]): void {
+    const bits = values.filter(v => v.type !== T.anyref), references = values.filter(v => v.type === T.anyref);
+    const map = [...bits.map(v => v.register), ...references.map(v => v.register)], key = map.join(",");
+    let data = this.captureMaps.get(key);
+    if (data === undefined) {
+      const bytes = new Uint8Array(map.length * 2), view = new DataView(bytes.buffer);
+      map.forEach((r, i) => view.setUint16(2 * i, r, true));
+      this.captureMaps.set(key, data = this.mb.addDataPassive(bytes));
+      this.deoptWork.layouts++; this.deoptWork.metadataBytes += bytes.length;
+    }
+    const ordered = [...bits, ...references];
+    c.i32(0).i32(map.length).arrayNewData(this.tData.i16, data).externConvertAny();
+    if (ordered.length <= 64) {
+      const key = `capture:${bits.length}:${references.length}`;
+      const f = this.memo(key, () => {
+        const params = [T.externref, T.i32, T.i32, T.i32, T.externref, ...ordered.map(v => v.type === T.anyref ? T.anyref : T.i64)];
+        const f = this.mb.reserveFunc(this.mb.addFuncType(params, [T.externref]), "$capture"), body = new Code(params.length);
+        const depth = body.newLocal(T.i32), weights = this.emitEnter(body, depth);
+        this.allocBytes(body, () => body.i32(48 + 10 * ordered.length));
+        for (let i = 0; i < 5; i++) body.lget(i, false);
+        this.captureVectors(body, ordered.map((v, i) => ({ local: i + 5, type: v.type === T.anyref ? T.anyref : T.i64 })));
+        body.call(this.deopt!.capture);
+        this.emitLeave(body, depth, false);
+        for (const at of weights) body.patch(at, 4 + params.length + body.localTypes.length);
+        this.mb.setBody(f, body.finish());
+        return f;
+      });
+      for (const v of ordered) { if (v.type === T.anyref) c.lget(v.local, false); else this.captureBits(c, v); }
+      c.call(f);
+    } else {
+      this.allocBytes(c, () => c.i32(48 + 10 * ordered.length));
+      this.captureVectors(c, ordered); c.call(this.deopt!.capture);
+    }
+  }
+  private captureVectors(c: Code, values: { local: number; type: VT }[]): void {
+    const vector = (list: typeof values, type: number, push: (v: typeof values[number]) => void) => {
+      if (list.length <= 64) {
+        for (const v of list) push(v);
+        c.arrayNewFixed(type, list.length);
+      } else {
+        const array = c.newLocal(refNull(type));
+        c.i32(list.length).arrayNewDefault(type).lset(array);
+        list.forEach((v, i) => { c.lget(array).refAsNonNull().i32(i); push(v); c.arraySet(type); });
+        c.lget(array).refAsNonNull();
+      }
+      c.externConvertAny();
+    };
+    vector(values.filter(v => v.type !== T.anyref), this.tData.i64, ({ local, type }) => {
+      this.captureBits(c, { local, type });
+    });
+    vector(values.filter(v => v.type === T.anyref), this.tData.ref, ({ local }) => { c.lget(local, false); });
+  }
+
+  private captureBits(c: Code, { local, type }: { local: number; type: VT }): void {
+    c.lget(local, false);
+    if (type === T.f32) c.raw(OP.i32_reinterpret_f32);
+    if (type === T.f64) c.raw(OP.i64_reinterpret_f64);
+    if (type !== T.i64 && type !== T.f64) c.raw(OP.i64_extend_i32_s);
   }
   get natives() { return this.w.natives; }
   intrinsic(m: MethodInfo): Intrinsic | undefined { return this.w.intrinsic(m); }

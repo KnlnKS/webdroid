@@ -19,6 +19,8 @@ writeFileSync(join(out, "Osr.java"), `public class Osr {
   public static Object lock(){return lock;}
   public static int run(int n){effects++; I r=new Base(); if(n<0)return 0; int x=0; for(int i=0;i<n;i++)x+=i; return late(r).f()+x;}
   public static int nested(int n){effects++; synchronized(lock){int x=0; for(int i=0;i<n;i++)for(int j=0;j<3;j++){x++; if(i==n/2 && j==0)invalidate();} return x;}}
+  public static long raw(long j,float f,double d,Object r){effects++; invalidate(); return j ^ Float.floatToRawIntBits(f) ^ Double.doubleToRawLongBits(d) ^ (r==null?0:9);}
+  public static int wide(${Array.from({length:65},(_,i)=>`int a${i}`).join(',')}){effects++;invalidate();if(a0<0)return 0;return ${Array.from({length:65},(_,i)=>`a${i}`).join('+')};}
   public static int state(int n,boolean fail){synchronized(lock){effects++; int x=0; for(int i=0;i<n;i++)x+=i; try{return await(x,fail)+7;}catch(IllegalArgumentException e){return x+9;}}}
 }`);
 writeFileSync(join(out, "Late.java"), `public class Late extends Osr.Base {public int f(){return 2;} public static Osr.I make(){return new Late();}}`);
@@ -124,8 +126,9 @@ if(process.argv.includes("--aot")) {
   check("shipping producer emits guarded contract",index.deopt,DEOPT_ABI);
   const store={get:(file:string)=>new Uint8Array(readFileSync(join(dir,file)))};
   const files=[...PLATFORM_JARS.map(j=>join(AOSP,j)),join(out,"classes.dex")];
+  check("cold runtime rejects previous capture ABI",!!world(files,{cold:true,aot:{get:(file:string)=>file==="index.json"?new TextEncoder().encode(JSON.stringify({...index,deopt:DEOPT_ABI-1})):store.get(file)}}).aot,false);
   for(const cold of [false,true]) for(const fail of [0,1]) {
-    let nativeCalls=0, rootTransfers=0, stateTransfers=0;
+    let nativeCalls=0, rootTransfers=0, stateTransfers=0, makes=0, guards=0;
     const page=world(files,{cold,holdUpgrades:()=>true,aot:store,natives:new Natives({
       find:(cls,key)=>cls!=="Osr"?undefined:key==="invalidate()V"?()=>page.invalidate(page.slotOf(page.prog.resolve("Osr","nested","(I)I")!)):key==="await(IZ)I"?async(value:number,fail:number)=>{
         page.invalidate(page.slotOf(page.prog.resolve("Osr","state","(IZ)I")!));
@@ -137,6 +140,9 @@ if(process.argv.includes("--aot")) {
       thrown:e=>{const t=page.throwable(e);return t?{cls:page.classNameOf(t),msg:null,obj:t}:undefined;},
     })});
     check(`AOT attaches with cold=${cold}`,!!page.aot,true);
+    const make=page.deoptImports.make, blocked=page.deoptImports.blocked;
+    page.deoptImports.make=(slot,depth)=>{makes++;if(!cold)throw new Error("disabled AOT called activation import");return make(slot,depth);};
+    page.deoptImports.blocked=state=>{guards++;if(!cold)throw new Error("disabled AOT ran a guard");return blocked(state);};
     const enter=page.enterColdDeopt.bind(page);
     page.enterColdDeopt=(s,c)=>{if(!cold)throw new Error("disabled runtime attempted cold handoff");if(s.method?.cls==="Osr"){if(s.method.name==="run")rootTransfers++;if(s.method.name==="state")stateTransfers++;}return enter(s,c);};
     check(`AOT native/EH result and monitor cold=${cold} fail=${fail}`,await page.entryAsync("Osr","state","(IZ)I")(100,fail),4958+fail);
@@ -149,6 +155,15 @@ if(process.argv.includes("--aot")) {
     check(`AOT prefix executes once cold=${cold}`,page.entry("Osr","effects","()I")(),2);
     check(`AOT root handoff policy cold=${cold}`,rootTransfers,+cold);
     if(!cold)check("disabled AOT allocates no interpreted activations",page.stats.coldCalls,0);
+    check(`AOT activation imports follow cold=${cold}`,makes>0,cold);
+    check(`AOT epoch checks follow cold=${cold}`,guards>0,cold);
+    const prior=page.stats.coldDeopts, prefix=Number(page.entry("Osr","effects","()I")());
+    const j=fail?-0x123456789abcdefn:0x123456789abcdefn, f=fail?0x7fc12345:-2147483648, d=fail?0x7ff8123456789abcn:-9223372036854775808n;
+    check(`AOT long/FP/reference bits cold=${cold}`,await page.entryAsync("Osr","raw","(JFDLjava/lang/Object;)J")(j,f,d,fail?null:lock),BigInt.asIntN(64,j ^ BigInt(f) ^ d ^ (fail?0n:9n)));
+    check(`AOT wide carrier cold=${cold}`,await page.entryAsync("Osr","wide","("+"I".repeat(65)+")I")(...Array.from({length:65},(_,i)=>i)),2080);
+    check(`AOT vector transfers cold=${cold}`,page.stats.coldDeopts-prior,2*+cold);
+    check(`AOT vector effects execute once cold=${cold}`,page.entry("Osr","effects","()I")(),prefix+2);
+    console.log("AOT activation work",JSON.stringify({cold,fail,makes,guards,methods:page.stats.methods,bytes:page.stats.bytes,compileMs:page.stats.compileMs,aotC:page.stats.aot.c,deopts:page.stats.coldDeopts}));
   }
   const stale={get:(file:string)=>file==="index.json"?new TextEncoder().encode(JSON.stringify({...index,deopt:0})):store.get(file)};
   check("cold runtime rejects uninstrumented AOT",!!world(files,{cold:true,aot:stale}).aot,false);

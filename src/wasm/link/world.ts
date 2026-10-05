@@ -35,7 +35,7 @@ import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
-import { AotRuntime, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
+import { AotRuntime, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
@@ -539,7 +539,7 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
@@ -728,6 +728,20 @@ export class World {
     if (!this.opts.cold || !frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
     return frame;
   }
+  private captureReaders?: { length: (a: object) => number; register: (a: object, i: number) => number; bits: (a: object, i: number) => bigint; reference: (a: object, i: number) => object | null };
+  private captureReader() {
+    if (this.captureReaders) return this.captureReaders;
+    const mb = new ModuleBuilder(), b = declareBase(mb);
+    const exports: [string, number, VT][] = [["register", b.tData.i16, T.i32], ["bits", b.tData.i64, T.i64], ["reference", b.tData.ref, T.anyref]];
+    for (const [name, type, result] of exports) {
+      const c = new Code(2); c.lget(0).refCast(type).lget(1);
+      if (name === "register") c.arrayGetU(type); else c.arrayGet(type);
+      mb.export(name, "func", mb.addFunc(mb.addFuncType([T.anyref, T.i32], [result]), c.finish(), "$capture:" + name));
+    }
+    const c = new Code(1); c.lget(0).refCast(T.arrayref - 0x80).arrayLen();
+    mb.export("length", "func", mb.addFunc(mb.addFuncType([T.anyref], [T.i32]), c.finish(), "$capture:length"));
+    return this.captureReaders = this.instantiate(mb.build(), {}).exports as unknown as NonNullable<World["captureReaders"]>;
+  }
   readonly deoptImports = {
     make: (slot: number, depth: number): CompiledActivation | null => {
       if (!this.opts.cold) return null;
@@ -756,6 +770,22 @@ export class World {
     },
     bits: (s: ColdSnapshot, r: number, value: bigint) => { s.bits[r] = value; },
     reference: (s: ColdSnapshot, r: number, value: object | null) => { s.references[r] = value; s.kinds[r] = 1; },
+    capture: (s: CompiledActivation, pc: number, last: number, depth: number, map: object, bits: object, references: object): ColdSnapshot => {
+      this.deoptFrame(s);
+      const read = this.captureReader(), n = read.length(map), nb = read.length(bits), nr = read.length(references);
+      if (n !== nb + nr || n > s.item.regs) throw new Error("compiled capture layout mismatch");
+      const state = this.deoptImports.snapshot(s, pc, last, depth);
+      let bi = 0, ri = 0;
+      const seen = new Uint8Array(s.item.regs);
+      for (let i = 0; i < n; i++) {
+        const r = read.register(map, i);
+        if (r >= s.item.regs || seen[r]++) throw new Error("compiled capture register mismatch");
+        if (i >= nb) this.deoptImports.reference(state, r, read.reference(references, ri++));
+        else this.deoptImports.bits(state, r, read.bits(bits, bi++));
+      }
+      if (bi !== nb || ri !== nr) throw new Error("compiled capture value mismatch");
+      return state;
+    },
     target: (s: ColdSnapshot): Function => {
       const capture = this.deoptCaptures.get(s);
       if (!capture || capture.entered || !s.method || !s.owner) throw new Error("foreign deoptimization snapshot");
@@ -843,7 +873,7 @@ export class World {
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const s = this.slotAt(slot), head = result.header, t0 = performance.now();
     this.release(slot);
-    if ((head.deopt ?? 0) !== +!!job.cold || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
+    if ((head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
     const n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
     for (const id of head.touch) this.link(this.names[id]);

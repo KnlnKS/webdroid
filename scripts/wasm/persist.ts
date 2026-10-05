@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { AotStore } from "../../src/wasm/link/aot";
-import { sameMarks } from "../../src/wasm/link/aot";
+import { DEOPT_ABI, sameMarks } from "../../src/wasm/link/aot";
 import { Program } from "../../src/wasm/compiler/program";
 import { World, type WorldOptions } from "../../src/wasm/link/world";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
@@ -187,9 +187,9 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
 if (saved) {
   const index = saved.index, store = saved;
   const wrongPolicy = new Map(savedFiles!);
-  wrongPolicy.set("index.json", new TextEncoder().encode(JSON.stringify({ ...index, deopt: index.deopt ? 0 : 1 })));
+  wrongPolicy.set("index.json", new TextEncoder().encode(JSON.stringify({ ...index, deopt: index.deopt ? 0 : DEOPT_ABI })));
   check("saved module policy must match its index", await SavedBuild.open(wrongPolicy), undefined);
-  check("app activation policy differs from platform", world(app, { app: { index: { ...index, deopt: index.deopt ? 0 : 1 }, store } }).appAttached, false);
+  check("app activation policy differs from platform", world(app, { app: { index: { ...index, deopt: index.deopt ? 0 : DEOPT_ABI }, store } }).appAttached, false);
   const plain = world(app);
   answers(plain);
   const w = world(app, { app: { index, store } });
