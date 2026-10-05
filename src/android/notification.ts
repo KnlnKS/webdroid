@@ -436,6 +436,11 @@ function insert(r: PostedNotification): PostedNotification | null {
 }
 
 // ── posting
+/** Notification.isStyle(Notification$<style>.class), the class named through Class.forName so either tier supplies it */
+function* isStyle(n: JObj, style: string): Gen<number> {
+  const cls = yield scall("java/lang/Class", "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", `${N}$${style}`.replace(/\//g, "."), 0, null);
+  return yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", cls);
+}
 /** NotificationManagerService.fixNotification: what the service corrects in what an app sends */
 function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> {
   const info = yield vcall(yield* getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
@@ -447,7 +452,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
   flags &= ~FLAG_USER_INITIATED_JOB;
   flags = foreground ? flags & ~FLAG_AUTO_CANCEL | FLAG_FOREGROUND_SERVICE : flags & ~FLAG_FOREGROUND_SERVICE;
   const media: number = yield vcall(n, "isMediaNotification", "()Z");
-  const call: number = yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`));
+  const call: number = yield* isStyle(n, "CallStyle");
   flags = flags & FLAG_ONGOING_EVENT && (media || call) ? flags | FLAG_NO_DISMISS : flags & ~FLAG_NO_DISMISS;
   flags &= ~(FLAG_CAN_COLORIZE | FLAG_FSI_REQUESTED_BUT_DENIED);
   const extras: JObj = getDeclared<JObj>(n, N, "extras");
@@ -463,7 +468,7 @@ function* fixNotification(n: JObj, pkg: string, foreground: boolean): Gen<void> 
     const kept = actions.filter((a) => a !== null);
     setDeclared(n, N, { actions: kept.length ? jarray(kept, `L${N}$Action;`) : null });
   }
-  if ((yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$MediaStyle`))) || (yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$DecoratedMediaCustomViewStyle`)))) {
+  if ((yield* isStyle(n, "MediaStyle")) || (yield* isStyle(n, "DecoratedMediaCustomViewStyle"))) {
     for (const key of ["android.mediaRemoteDevice", "android.mediaRemoteIcon", "android.mediaRemoteIntent"]) yield vcall(extras, "remove", "(Ljava/lang/String;)V", key);
     // MEDIA_STYLE_NOTIFICATION_NOT_DISMISSABLE, from Android 14
     if (target >= 34) flags |= FLAG_NO_CLEAR;
@@ -512,7 +517,7 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
       return;
     }
   }
-  if (!foreground && (yield vcall(n, "isStyle", "(Ljava/lang/Class;)Z", rt.classFor(`${N}$CallStyle`))) && !getDeclared<JObj | null>(n, N, "fullScreenIntent") && !(getDeclared<number>(n, N, "flags") & FLAG_FSI_REQUESTED_BUT_DENIED))
+  if (!foreground && (yield* isStyle(n, "CallStyle")) && !getDeclared<JObj | null>(n, N, "fullScreenIntent") && !(getDeclared<number>(n, N, "flags") & FLAG_FSI_REQUESTED_BUT_DENIED))
     fail("java/lang/IllegalArgumentException", `${key} Not posted. CallStyle notifications must be for a foreground service or user initated job or use a fullScreenIntent.`);
   // a media notification is posted even when its app may not post others
   const media: number = yield vcall(n, "isMediaNotification", "()Z");
