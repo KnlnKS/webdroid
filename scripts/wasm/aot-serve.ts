@@ -5,16 +5,14 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { brotliCompressSync, constants } from "node:zlib";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { AOT_ROOT, sourceKey, type AotManifest } from "./aot-key";
+import { AOT_ROOT, sourceKey, sourcePaths, type AotManifest } from "./aot-key";
 import { AOSP, ROOT } from "./paths";
 
-const GLOBS = ["src/wasm/{compiler,link}/**/*.ts", "src/jvm/{dex,prepared,structure,opcodes,abi}.ts"];
-let current: { stamp: number; source: string } | undefined;
+let current: { stamp: string; source: string } | undefined;
 /** the key of the sources now, recomputed when a file has changed */
 function currentSource(): string {
-  let stamp = 0;
-  for (const glob of GLOBS) for (const f of new Bun.Glob(glob).scanSync({ cwd: ROOT })) stamp = Math.max(stamp, Bun.file(join(ROOT, f)).lastModified);
-  for (const jar of PLATFORM_JARS) stamp = Math.max(stamp, Bun.file(join(AOSP, jar)).lastModified);
+  const paths = [...sourcePaths().map((f) => join(ROOT, f)), ...PLATFORM_JARS.map((j) => join(AOSP, j))];
+  const stamp = paths.map((path) => { const s = statSync(path); return `${path}:${s.mtimeMs}:${s.size}`; }).join("\n");
   if (current?.stamp !== stamp) current = { stamp, source: sourceKey() };
   return current.source;
 }
