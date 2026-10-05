@@ -18,7 +18,7 @@ import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastRe
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
 import { usePermissionStore } from "../android/permissions";
-import { useSQLiteStore } from "../android/sqlite";
+import { sqliteTransport } from "../android/sqlite";
 import { usePreferenceStore } from "../android/sharedprefs";
 import { useNotificationStore } from "../android/notification";
 import { useSettingsStore } from "../android/settings";
@@ -75,7 +75,7 @@ export function connectProcess(): ProcessEndpoint {
     detached(() => after(data && encodeIntent(data), (encoded) => broker.activities.finish(PROCESS_PID, id, code, encoded)), logUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
-  useSQLiteStore(broker.databases);
+  sqliteTransport.call = request => brokerCalls().sqlite(request);
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
   const stopAccounts = useAccountStore(broker.accounts), stopSettings = useSettingsStore(broker.settings);

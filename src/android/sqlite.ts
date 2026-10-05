@@ -7,12 +7,13 @@
 // PRAGMAs) lasts as long as it does. The file's bytes reach the VFS in debounced snapshots.
 
 import initSqlJs from "sql.js";
-import { rt } from "../jvm/runtime";
-import { i8, u8 } from "../jvm/abi";
+import { rt, driven, awaited } from "../jvm/runtime";
+import { i8, u8, parseMethodDesc } from "../jvm/abi";
 import { vfs } from "../shell/vfs";
 import { handle, deref, release } from "./handles";
-import { type NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
+import { NativeWindow, FIELD_INTEGER, FIELD_FLOAT, FIELD_STRING, FIELD_BLOB, sqliteException, noHandle, SQLITE_BUSY, SQLITE_LOCKED,
   SQLITE_INTERRUPT, SQLITE_CANTOPEN, SQLITE_TOOBIG, SQLITE_MISUSE, SQLITE_RANGE, SQLITE_ROW as ROW, SQLITE_DONE as DONE } from "./cursorwindow";
+import { processFailure, processError, type ProcessFailure } from "../shell/process-port";
 import type { PackageState } from "../shell/packagedata";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
@@ -305,8 +306,131 @@ function fillWindow(c: Connection, s: number, w: NativeWindow, startPos: number,
   return BigInt(startPos) << 32n | BigInt(total);
 }
 
+type SQLiteFamily = "platform" | "driver" | "connection" | "statement";
+type SQLiteValue = number | bigint | string | null | Int8Array | void;
+type WindowData = Pick<NativeWindow, "rows" | "cols" | "used" | "types" | "values">;
+export type SQLiteRequest = { family: SQLiteFamily; method: string; args: SQLiteValue[];
+  window?: Pick<NativeWindow, "name" | "size" | "readOnly"> };
+export type SQLiteReply = { value: SQLiteValue; window?: WindowData; error?: ProcessFailure };
+export const sqliteTransport = { call: null as ((request: SQLiteRequest) => Promise<SQLiteReply>) | null };
+type NativeCall = (...args: never[]) => SQLiteValue | Promise<SQLiteValue>;
+const sqliteNatives = new Map<SQLiteFamily, Record<string, NativeCall>>();
+
+/** Keep the owning native implementations available to the canonical service. The client
+ *  wrappers are suspending entries even for operations that are synchronous inside sql.js. */
+function registerSQLite(family: SQLiteFamily, cls: string, table: Record<string, NativeCall>) {
+  sqliteNatives.set(family, table);
+  rt.registerJnis(cls, Object.fromEntries(Object.entries(table).map(([method, native]) => [method,
+    driven(function* (...args: SQLiteValue[]) {
+      args = args.slice(0, parseMethodDesc(method.slice(method.indexOf("("))).params.length);
+      if (!sqliteTransport.call) return yield* awaited(native(...args as never[]));
+      const window = method.startsWith("nativeExecuteForCursorWindow(") ? deref<NativeWindow>(args[2] as bigint) : null;
+      const reply = yield* awaited(sqliteTransport.call({ family, method,
+        args: window ? args.map((value, i) => i === 2 ? 0n : value) : args,
+        ...(window ? { window: { name: window.name, size: window.size, readOnly: window.readOnly } } : {}) }));
+      if (window && !window.readOnly && reply.window) Object.assign(window, reply.window);
+      if (reply.error) throw reply.error.javaClass ? rt.mkThrowable(reply.error.javaClass, reply.error.message) : processError(reply.error);
+      return reply.value;
+    })])));
+}
+
+let nextSQLiteToken = 1n;
+/** A process owns opaque tokens, not another realm's JNI handles or SQLite pointers. */
+export function createSQLiteSession() {
+  const connections = new Map<bigint, bigint>();
+  const statements = new Map<bigint, { pointer: bigint; connection: bigint }>();
+  type Request = { request: SQLiteRequest; resolve(reply: SQLiteReply): void; reject(error: unknown): void };
+  const queued: Request[] = [];
+  let closed = false, active: Request | undefined, finishing = Promise.resolve();
+  const dead = () => rt.mkThrowable("android/os/DeadObjectException", "SQLite session closed");
+  const invalid = () => sqliteException(SQLITE_MISUSE, "Invalid SQLite session handle");
+  const cleanup = () => {
+    for (const { pointer } of statements.values()) C._sqlite3_finalize(st(pointer));
+    statements.clear();
+    for (const h of connections.values()) closeConnection(h);
+    connections.clear();
+  };
+  const run = async (request: SQLiteRequest): Promise<SQLiteReply> => {
+    if (closed) throw dead();
+    const { family, method } = request, native = sqliteNatives.get(family)?.[method];
+    if (!native || !Object.hasOwn(sqliteNatives.get(family)!, method)) throw invalid();
+    const args = [...request.args], open = method.startsWith("nativeOpen("),
+      prepareStatement = method.startsWith("nativePrepare(") || method.startsWith("nativePrepareStatement("),
+      finalize = method.startsWith("nativeFinalizeStatement(") || (family === "statement" && method === "nativeClose(J)V");
+    let connection = 0n, statement = 0n;
+    if (family === "statement") {
+      statement = args[0] as bigint;
+      const owned = statements.get(statement);
+      if (!owned) throw invalid();
+      connection = owned.connection; args[0] = owned.pointer;
+    } else if (family === "connection" || (family === "platform" && !open)) {
+      connection = args[0] as bigint;
+      const h = connections.get(connection);
+      if (h === undefined) throw invalid();
+      args[0] = h;
+      if (method.includes("(JJ")) {
+        statement = args[1] as bigint;
+        const owned = statements.get(statement);
+        if (!owned || owned.connection !== connection) throw invalid();
+        args[1] = owned.pointer;
+      }
+    }
+    let window: NativeWindow | undefined, windowHandle: bigint | undefined;
+    if (method.startsWith("nativeExecuteForCursorWindow(")) {
+      if (!request.window) throw invalid();
+      window = new NativeWindow(request.window.name, request.window.size, request.window.readOnly);
+      args[2] = windowHandle = handle(window);
+    }
+    const windowData = (): WindowData => ({ rows: window!.rows, cols: window!.cols, used: window!.used, types: window!.types, values: window!.values });
+    try {
+      const result = native(...args as never[]);
+      let value = result instanceof Promise ? await result : result;
+      if (open) {
+        if (closed) { closeConnection(value as bigint); throw dead(); }
+        const token = nextSQLiteToken++;
+        connections.set(token, value as bigint); value = token;
+      } else if (prepareStatement && value !== 0n) {
+        const token = nextSQLiteToken++;
+        statements.set(token, { pointer: value as bigint, connection }); value = token;
+      } else if (finalize) statements.delete(statement);
+      else if (method === "nativeClose(J)V") connections.delete(connection);
+      if (closed) throw dead();
+      return { value, ...(window ? { window: windowData() } : {}) };
+    } catch (error) {
+      // Cursor filling mutates the window even when it throws (for example, an oversized row).
+      if (!window) throw error;
+      return { value: undefined, window: windowData(), error: processFailure(error) };
+    } finally { if (windowHandle !== undefined) release(windowHandle); }
+  };
+  const pump = () => {
+    if (closed || active) return;
+    const job = queued.shift();
+    if (!job) return;
+    active = job;
+    finishing = run(job.request).then(job.resolve, job.reject).then(() => {
+      active = undefined; pump();
+    });
+  };
+  return {
+    call(request: SQLiteRequest): Promise<SQLiteReply> {
+      if (closed) return Promise.reject(dead());
+      return new Promise((resolve, reject) => { queued.push({ request, resolve, reject }); pump(); });
+    },
+    close(): Promise<void> {
+      if (closed) return finishing;
+      closed = true;
+      active?.reject(dead());
+      for (const job of queued.splice(0)) job.reject(dead());
+      // An asynchronous open can still be loading its bytes; it closes its returned handle.
+      // Only that in-flight operation retains its request after death.
+      cleanup();
+      return finishing;
+    },
+  };
+}
+
 const OPEN_READONLY = 1, CREATE_IF_NECESSARY = 0x10000000;
-rt.registerJnis("android/database/sqlite/SQLiteConnection", {
+registerSQLite("platform", "android/database/sqlite/SQLiteConnection", {
   "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J": async (path: string, flags: number) => handle(await openConnection(path,
     (flags & OPEN_READONLY) !== 0 && !(flags & CREATE_IF_NECESSARY), (flags & CREATE_IF_NECESSARY) !== 0, sqliteException)),
   "nativeClose(J)V": closeConnection,
@@ -359,18 +483,18 @@ function column(s: bigint, i: number, row = true): number {
   return p;
 }
 rt.claimNativeLib("sqliteJni");
-rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteDriverKt", {
+registerSQLite("driver", "androidx/sqlite/driver/bundled/BundledSQLiteDriverKt", {
   "nativeThreadSafeMode()I": () => 0,
   "nativeOpen(Ljava/lang/String;I)J": async (name: string, flags: number) =>
     handle(await openConnection(name || ":memory:", (flags & 3) === 1, (flags & 6) === 6, androidx)),
 });
-rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteConnectionKt", {
+registerSQLite("connection", "androidx/sqlite/driver/bundled/BundledSQLiteConnectionKt", {
   "nativePrepare(JLjava/lang/String;)J": (h: bigint, sql: string) => prepare(conn(h), sql),
   "nativeClose(J)V": closeConnection,
   "nativeInTransaction(J)Z": (h: bigint) => +!C._sqlite3_get_autocommit(conn(h).ptr),
   "nativeLoadExtension(JLjava/lang/String;Ljava/lang/String;)V": () => { throw androidx(1, "not authorized"); },
 });
-rt.registerJnis("androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", {
+registerSQLite("statement", "androidx/sqlite/driver/bundled/BundledSQLiteStatementKt", {
   ...Object.fromEntries(BINDERS.map(([, name, desc, bind]) =>
     [`nativeBind${name}(JI${desc})V`, (s: bigint, i: number, v: never) => check(owner(s), bind(st(s), i, v))])),
   "nativeClearBindings(J)V": (s: bigint) => check(owner(s), C._sqlite3_clear_bindings(st(s))),

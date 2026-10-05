@@ -9,7 +9,7 @@ const methods = ["activity", "transact", "service", "serviceConnected", "content
 export type ProcessFailure = { javaClass: string | null; name: string; message: string | null };
 
 /** Java exceptions cross as class/message data, never as objects belonging to another VM. */
-function failure(error: unknown): ProcessFailure {
+export function processFailure(error: unknown): ProcessFailure {
   if (error && typeof error === "object") {
     const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
     const javaClass: unknown = info && typeof info === "object" ? Reflect.get(info, "name") : Reflect.get(error, "$javaClass");
@@ -47,8 +47,8 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
       const value = await invoke.apply(endpoint, data.args);
       if (!closed && data.kind === "call") port.postMessage({ kind: "result", id: data.id, value } satisfies Message);
     } catch (error) {
-      if (data.kind === "notify") close(failure(error));
-      else if (!closed) port.postMessage({ kind: "error", id: data.id, error: failure(error) } satisfies Message);
+      if (data.kind === "notify") close(processFailure(error));
+      else if (!closed) port.postMessage({ kind: "error", id: data.id, error: processFailure(error) } satisfies Message);
     }
   };
   return close;

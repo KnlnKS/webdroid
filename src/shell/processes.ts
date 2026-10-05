@@ -24,7 +24,7 @@ import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
 import { checkPermission, PermissionStore } from "../android/permissions";
 import { attrStr } from "../android/axml";
-import { sqliteStore } from "../android/sqlite";
+import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
 import { preferenceStore } from "../android/sharedprefs";
 import { notificationStore } from "../android/notification";
 import { settingsStore } from "../android/settings";
@@ -75,12 +75,13 @@ export type ProcessEndpoint = {
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 export type BrokerCalls = {
+  sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;
   service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["transact", "service", "contentProvider", "broadcast"] as const;
+export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -138,6 +139,7 @@ class ProcessBroker {
   private booted = false;
   private archivePorts = new Map<number, (() => void)[]>();
   private endpointPorts = new Map<number, () => void>();
+  private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
   private callerPorts = new Map<number, Set<() => void>>();
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
@@ -255,6 +257,12 @@ class ProcessBroker {
     let owned = this.callerPorts.get(pid);
     if (!owned) this.callerPorts.set(pid, owned = new Set());
     const stop = serveCalls<BrokerCalls>(port1, {
+      sqlite: request => {
+        this.entry(pid);
+        let session = this.sqliteSessions.get(pid);
+        if (!session) this.sqliteSessions.set(pid, session = createSQLiteSession());
+        return session.call(request);
+      },
       transact: request => this.transact(pid, request),
       service: (pkg, process, request) => this.service(pid, pkg, process, request),
       contentProvider: (pkg, process, authority) => this.contentProvider(pid, pkg, process, authority),
@@ -288,6 +296,7 @@ class ProcessBroker {
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
     entry.dead = true; entry.reject(error);
+    this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
     this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);
     for (const close of this.callerPorts.get(pid) ?? []) close();
     this.callerPorts.delete(pid);

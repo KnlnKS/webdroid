@@ -4,7 +4,10 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
-import { useSQLiteStore } from "../src/android/sqlite";
+import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
+import { NativeWindow } from "../src/android/cursorwindow";
+import { handle, release } from "../src/android/handles";
+import { callProxy, serveCalls } from "../src/shell/process-port";
 import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
@@ -77,6 +80,104 @@ describe("sqlite", () => {
     `(${S}Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)${DB}`, path, null, 0x10000000);
   const exec = (db: unknown, sql: string) => vcall(db, "execSQL", `(${S})V`, sql);
   const long = (db: unknown, sql: string) => scall("android/database/DatabaseUtils", "longForQuery", `(${DB}${S}[${S})J`, db, sql, null);
+
+  test("SQLite service ports preserve canonical transactions, TEMP state and copied cursor values", async () => {
+    freshSQLiteStore();
+    await bootApp(await packageRecord("org.webdroid.test.sqlite"));
+    vfs.mkdir("/data/data/test.sqlite/databases");
+    const path = "/data/data/test.sqlite/databases/service.db", session = createSQLiteSession();
+    type Calls = { sqlite(request: SQLiteRequest): Promise<SQLiteReply> };
+    const ports = new MessageChannel();
+    const stop = serveCalls<Calls>(ports.port1, { sqlite: request => session.call(request) });
+    const proxy = callProxy<Calls>(ports.port2, ["sqlite"], [], error => rt.mkThrowable(error.javaClass ?? "java/lang/RuntimeException", error.message));
+    sqliteTransport.call = request => proxy.endpoint.sqlite(request);
+    let first: unknown, second: unknown;
+    try {
+      first = await open(path); second = await open(path);
+      await exec(first, "CREATE TABLE t (big INTEGER, value BLOB)");
+      await exec(first, "INSERT INTO t VALUES (9007199254740993, x'01ff')");
+      await exec(first, "CREATE TEMP TABLE marker (id INTEGER)");
+      expect(await long(second, "SELECT big FROM t")).toBe(9007199254740993n);
+      expect(await long(first, "SELECT count(*) FROM sqlite_temp_master")).toBe(1n);
+      expect(await long(second, "SELECT count(*) FROM sqlite_temp_master")).toBe(0n);
+      await vcall(first, "beginTransactionNonExclusive", "()V");
+      await exec(first, "INSERT INTO t VALUES (7, x'02')");
+      expect(await long(second, "SELECT count(*) FROM t")).toBe(1n);
+      await vcall(first, "endTransaction", "()V");
+      expect(await long(second, "SELECT count(*) FROM t")).toBe(1n);
+      expect(await thrown(() => exec(first, "INSERT INTO absent VALUES (1)"))).toStartWith("android/database/sqlite/SQLiteException: ");
+      const cursor = await vcall(second, "rawQuery", `(${S}[${S})Landroid/database/Cursor;`, "SELECT big, value FROM t", null);
+      try {
+        expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
+        expect(await vcall(cursor, "getLong", "(I)J", 0)).toBe(9007199254740993n);
+        const bytes = await vcall(cursor, "getBlob", "(I)[B", 1) as Int8Array;
+        expect(bytes).toEqual(Int8Array.of(1, -1)); bytes[0] = 9;
+        expect(await long(first, "SELECT hex(value) = '01FF' FROM t")).toBe(1n);
+      } finally { await vcall(cursor, "close", "()V"); }
+      expect(sqliteStore.files.get(path)!.connections.size).toBeGreaterThanOrEqual(2);
+    } finally {
+      if (first) await vcall(first, "close", "()V");
+      if (second) await vcall(second, "close", "()V");
+      sqliteTransport.call = null; session.close(); stop(); proxy.close(); vfs.delete(path);
+    }
+    expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
+  });
+
+  test("SQLite service death rejects late opens and owns statement tokens across sessions", async () => {
+    freshSQLiteStore();
+    const first = createSQLiteSession(), second = createSQLiteSession();
+    const call = async (session: typeof first, method: string, ...args: SQLiteRequest["args"]) =>
+      (await session.call({ family: "platform", method, args })).value;
+    const openMethod = "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J";
+    try {
+      const a = await call(first, openMethod, ":memory:", 0x10000000) as bigint;
+      const b = await call(second, openMethod, ":memory:", 0x10000000) as bigint;
+      const st = await call(first, "nativePrepareStatement(JLjava/lang/String;)J", a, "SELECT 42") as bigint;
+      expect(await thrown(() => call(second, "nativeExecuteForLong(JJ)J", b, st))).toStartWith("android/database/sqlite/SQLiteMisuseException: ");
+      const tiny = await call(first, "nativePrepareStatement(JLjava/lang/String;)J", a, "SELECT 1, 2") as bigint;
+      const failedWindow = await first.call({ family: "platform", method: "nativeExecuteForCursorWindow(JJJIIZ)J",
+        args: [a, tiny, 0n, 0, 0, 1], window: { name: "tiny", size: 16, readOnly: false } });
+      expect(failedWindow.error?.javaClass).toBe("android/database/sqlite/SQLiteBlobTooBigException");
+      expect(failedWindow.window).toMatchObject({ rows: 0, cols: 2, used: 0 });
+      const readOnly = new NativeWindow("imported", 1024, true);
+      Object.assign(readOnly, { rows: 1, cols: 1, used: 16, types: [1], values: [42] });
+      const windowHandle = handle(readOnly);
+      sqliteTransport.call = request => first.call(request);
+      try {
+        const fill = rt.jniFn("android/database/sqlite/SQLiteConnection", "nativeExecuteForCursorWindow(JJJIIZ)J")! as (...args: unknown[]) => unknown;
+        expect(await thrown(() => fill(a, tiny, windowHandle, 0, 0, 1))).toStartWith("java/lang/IllegalStateException: ");
+        expect(readOnly.values).toEqual([42]); expect(readOnly.rows).toBe(1);
+      } finally { sqliteTransport.call = null; release(windowHandle); }
+      first.close(); first.close();
+      expect(await thrown(() => call(first, "nativeExecuteForLong(JJ)J", a, st))).toStartWith("android/os/DeadObjectException: ");
+      const live = await call(second, "nativePrepareStatement(JLjava/lang/String;)J", b, "SELECT 7") as bigint;
+      expect(await call(second, "nativeExecuteForLong(JJ)J", b, live)).toBe(7n);
+      const bundled = async (family: SQLiteRequest["family"], method: string, ...args: SQLiteRequest["args"]) =>
+        (await second.call({ family, method, args })).value;
+      const driver = await bundled("driver", "nativeOpen(Ljava/lang/String;I)J", ":memory:", 6) as bigint;
+      const query = await bundled("connection", "nativePrepare(JLjava/lang/String;)J", driver, "SELECT 9007199254740993, x'01ff'") as bigint;
+      expect(await bundled("statement", "nativeStep(J)Z", query)).toBe(1);
+      expect(await bundled("statement", "nativeGetLong(JI)J", query, 0)).toBe(9007199254740993n);
+      expect(await bundled("statement", "nativeGetBlob(JI)[B", query, 1)).toEqual(Int8Array.of(1, -1));
+      await bundled("statement", "nativeClose(J)V", query);
+      await bundled("connection", "nativeClose(J)V", driver);
+      const path = "/data/data/test.sqlite/databases/late-open.db", sql = await loadSql(), seed = new sql.Database();
+      seed.exec("CREATE TABLE marker (id INTEGER)");
+      const bytes = seed.export(); seed.close();
+      let unblock!: () => void, entered!: () => void;
+      const gate = new Promise<void>(resolve => unblock = resolve), reading = new Promise<void>(resolve => entered = resolve);
+      vfs.mount(path, { size: bytes.length, read: async (offset, length) => { entered(); await gate; return bytes.slice(offset, offset + length); } });
+      const dying = createSQLiteSession(), pending = thrown(() => call(dying, openMethod, path, 0x10000000));
+      await reading;
+      const queued = thrown(() => call(dying, openMethod, ":memory:", 0x10000000));
+      const closing = dying.close();
+      expect(await pending).toStartWith("android/os/DeadObjectException: ");
+      expect(await queued).toStartWith("android/os/DeadObjectException: ");
+      unblock(); await closing;
+      expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
+      vfs.delete(path);
+    } finally { first.close(); second.close(); }
+  });
 
   test("connections to one file share its writes, keep their own TEMP schema, and raise AOSP's exceptions", async () => {
     freshSQLiteStore();
