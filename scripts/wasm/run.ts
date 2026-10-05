@@ -10,7 +10,7 @@
 //   aottest      precompiled platform code stays sound as classes arrive (builds a platform AOT first unless WEBDROID_AOT names one)
 //   persist      the compile worker (second-tier units made elsewhere, adopted while the numbering holds), the app build attached to the platform build and the bounded store for it
 //   entry        host code calls Java through jentry on the JS tier, over a World and (entrytier) through ?tier=wasm: the same answers and exceptions
-//   hostclass    classes the host implements: Java objects and their host objects are one object, a bytecode subclass of one, the JS tier's answers
+//   hostclass    classes the host implements: Java objects and their host objects are one object, a bytecode subclass of one, the JS tier's answers (also over a platform build)
 //   fuzz         random verifiable methods as Wasm, on the JS tier and on the JDK (seeds 1 to 6 unless arguments are given)
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
 //   nested       natives that enter Java, a thousand times in one entry (the engine's stacks)
@@ -76,7 +76,8 @@ async function runSuite(name: string, args: string[]): Promise<number> {
     const dir = mkdtempSync(join(tmpdir(), "wasm-entry-out-")), env = { ...process.env, WASM_ENTRY_OUT: join(dir, "tier.json") };
     try { return (await exec(name, args, env)) || await exec("entrytier", [], { ...env, WEBDROID_TIER: "wasm" }); } finally { rmSync(dir, { recursive: true, force: true }); }
   }
-  if ((name !== "aottest" && name !== "persist") || process.env.WEBDROID_AOT) return exec(name, args, process.env);
+  if (name === "hostclass" && !process.env.WEBDROID_AOT && await exec(name, args, process.env)) return 1;
+  if ((name !== "aottest" && name !== "persist" && name !== "hostclass") || process.env.WEBDROID_AOT) return exec(name, args, process.env);
   const dir = mkdtempSync(join(tmpdir(), "wasm-aot-"));
   try {
     return (await exec("aot-build", ["--out", dir, "--jars", "4"], process.env)) || await exec(name, args, { ...process.env, WEBDROID_AOT: dir });

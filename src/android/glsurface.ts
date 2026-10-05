@@ -215,7 +215,7 @@ let stField = "";
 const stPtr = () => stField ||= declaredField(SURFACE_TEXTURE, "mSurfaceTexture");
 /** the native SurfaceTexture behind a Java one, or null for any other object */
 export function surfaceTextureOf(o: unknown): NativeSurfaceTexture | null {
-  const n = o && typeof o === "object" ? deref((o as Record<string, bigint>)[stPtr()]) : null;
+  const n = o && typeof o === "object" && iof(o, SURFACE_TEXTURE) ? deref((o as Record<string, bigint>)[stPtr()]) : null;
   return n instanceof NativeSurfaceTexture ? n : null;
 }
 const nst = (st: object) => surfaceTextureOf(st)!;

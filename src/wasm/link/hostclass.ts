@@ -14,7 +14,7 @@ import { parseMethodDesc } from "../../jvm/abi";
 import { HOSTED, type HostSpec } from "./hostapi";
 import type { World } from "./world";
 
-const OBJECT = "java/lang/Object", STATIC = "static ";
+const OBJECT = "java/lang/Object", STATIC = "static ", SHELL = "$$shell";
 
 /** the method `key` ("name(desc)ret", with "static " for a static one) as a native of class `cls` */
 function native(cls: string, key: string, index: number): MethodInfo {
@@ -54,10 +54,12 @@ export class HostClasses {
   private define(spec: HostSpec): boolean {
     const prog = this.w.prog, have = prog.get(spec.name);
     if (have?.dex) {
-      if (have.isInterface && !spec.statics) return true;
+      if (have.isInterface && !spec.statics) { this.javaClass(spec); return true; }
       // the methods a superclass declares are found through the whole chain
       for (let c: JClass | undefined = have; c?.sup; c = prog.get(c.sup)) if (!prog.get(c.sup)) return false;
       this.overlay(have, spec);
+      // made now, not at the first object: code that runs while one is made has already decided what the abstract class's concrete subclasses implement
+      if (have.flags & ACC.ABSTRACT) this.javaClass(spec);
       return true;
     }
     if (have) return true;
@@ -68,17 +70,32 @@ export class HostClasses {
   }
 
   /** the Java class a host object of `spec` is an instance of: the class itself, or where the spec stands for an interface (EGL10) a class of natives that implements it, with the
-   *  methods of the specs up its chain */
+   *  methods of the specs up its chain, or where it stands for an abstract class (EGLContext) a concrete subclass, which class-hierarchy analysis sees as the class the host
+   *  instantiates instead of taking the bytecode subclasses for the only implementations */
   javaClass(spec: HostSpec): string {
-    if (!this.w.prog.get(spec.name)?.isInterface) return spec.name;
-    const name = spec.name + HOSTED;
+    const jc = this.w.prog.get(spec.name), iface = !!jc?.isInterface;
+    if (!iface && !(jc && jc.flags & ACC.ABSTRACT)) return spec.name;
+    const name = spec.name + (iface ? HOSTED : SHELL);
     if (!this.w.prog.get(name)) {
       const methods = new Set<string>();
-      for (let s: HostSpec | undefined = spec; s; s = s.sup ? this.specs.get(s.sup) : undefined) for (const key of s.methods) if (!key.startsWith(STATIC)) methods.add(key);
-      this.synthesize({ ...spec, name, sup: null, ifaces: [spec.name], methods: [...methods] });
-      this.defined.set(name, spec);
+      if (iface) for (let s: HostSpec | undefined = spec; s; s = s.sup ? this.specs.get(s.sup) : undefined) for (const key of s.methods) if (!key.startsWith(STATIC)) methods.add(key);
+      this.synthesize({ ...spec, name, sup: iface ? null : spec.name, ifaces: iface ? [spec.name] : [], methods: [...methods] });
+      if (iface) this.defined.set(name, spec);
     }
     return name;
+  }
+  private changed: { cls: string; keys: string[] }[] = [];
+  /** the vtable entries of class `name` that a vtable made before the host classes (a class module of the platform build) has wrong: the virtual methods the specs took over or moved
+   *  to another class, as [index in the vtable, slot] */
+  vtableRepairs(name: string): [number, number][] {
+    const prog = this.w.prog, out: [number, number][] = [];
+    for (const { cls, keys } of this.changed) {
+      if (name === cls || !prog.get(name)?.isInterface && prog.isSubclass(name, cls)) for (const key of keys) {
+        const at = key.indexOf("("), m = prog.implFor(name, key.slice(0, at), key.slice(at));
+        if (m) out.push([this.w.vslot(name, key), this.w.slotOf(m)]);
+      }
+    }
+    return out;
   }
   /** a class of natives */
   private synthesize(spec: HostSpec): void {
@@ -100,26 +117,30 @@ export class HostClasses {
     const prog = this.w.prog, hosted = classOf(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
     const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: jc.isInterface, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
     for (const m of over.methods) over.byKey.set(m.key, m);
-    const taken: MethodInfo[] = [];
+    const taken: MethodInfo[] = [], virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
     // the JS tier initializes a class a spec implements without its `<clinit>`: with the values the spec names, if any
     const clinit = over.byKey.get("<clinit>()V");
     if (clinit && !spec.platformClinit) {
-      if (spec.statics) { clinit.flags |= ACC.NATIVE; clinit.codeOff = 0; taken.push(clinit); } else over.byKey.delete(clinit.key);
+      // the platform build's class module runs the `<clinit>` slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values
+      clinit.flags |= ACC.NATIVE; clinit.codeOff = 0; taken.push(clinit);
+      if (!spec.statics) bodies.set(clinit, () => {});
     }
     // an interface keeps its abstract methods: the objects that implement them are of a class of natives (javaClass)
     for (const key of jc.isInterface ? [] : spec.methods) {
       const m = native(spec.name, key, 0), own = over.byKey.get(m.key);
-      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); continue; }
+      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); if (!m.isStatic && !m.isCtor) virtual.push(m.key); continue; }
       // a method a superclass declares: the class resolves it in `hosted`, where the spec's native is
       const up = !m.isCtor && prog.resolve(spec.name, m.name, m.desc);
       if (!up || up.isStatic !== m.isStatic) continue;
       m.cls = hosted.name; m.index = hosted.methods.length;
       hosted.methods.push(m); over.byKey.set(m.key, m);
+      if (!m.isStatic) virtual.push(m.key);
     }
     // a class the JS tier never loads from the platform (the host implements it whole) does not run its initializer either
-    const bodies = new Map<MethodInfo, Intrinsic>(), init = over.byKey.get("<clinit>()V");
+    const init = over.byKey.get("<clinit>()V");
     if (init && this.w.opts.hostWhole?.(jc.name)) { bodies.set(init, () => {}); taken.push(init); }
     this.w.addClass(over, bodies);
+    if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.repairLinked(); }
     for (const m of taken) this.w.aot?.override(m);
     if (hosted.methods.length) this.w.addClass(hosted, new Map());
   }

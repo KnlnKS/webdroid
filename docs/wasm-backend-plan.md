@@ -25,7 +25,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 
 S0–S3 have substantial implementations and harness coverage. S4 has AOT delivery and worker compilation, but the Wasm cold interpreter and hot-loop re-entry deliverables still need an explicit audit. S5's process-per-Worker conversion and S6's default switch/removal are unfinished. Optional and open-ended work follows completion of the main stages and gates.
 
-Y1's recovered stabilization work is merged: per-call native array results, exceptional copyback, loop fuel, retryable stack-exhausted compilation and deterministic worker startup. G4 continuation work is active. Y2's host-class/JNI work remains isolated pending review. The TestNG runner and its shared cache fix are merged, with full conformance verification active.
+Y1 stabilization, Y2 host-class/JNI dispatch and the TestNG runner/shared cache recovery are merged. Section 4.19 records Y2's bounded app verification. G4 continuation, full conformance and the unresolved standalone Mihon navigation path remain active work.
 
 ## 0. How to read this
 
@@ -1393,6 +1393,32 @@ nothing in the build names). (3) The class-hierarchy index of platform method ke
 large hierarchy. (4) Lazy compile of big functions: V8's Liftoff time follows function size (the 11 functions over 2 ms are 293 ms), and compilation hints are not shipping (4.9). (5) Mihon's failure (Bridge.shellOf over an interface) is W1's.
 Evidence limits: headless Chrome with swiftshader on a loaded shared host (load 4 to 9; runs alternated between two builds, spreads +-0.2 s), a profile run of FitNotes and Calculator M (classes only another app runs are misses),
 shipped builds exist for the apps and the framework's processes that the profile run launched.
+
+### 4.19 Y2: recovered app parity slice (2026-10-05, `knlnks/wasm-y2`)
+
+Starting HEAD `47059fe3`, original base `1d7fdeea`. The four existing commits were inspected with their saved captures before edits. Main merges are `e10dae6d`, `0cd312b3`, `3ee7c299`, and `b38825f5` (through `809ce40d`, including Y1, parent's isolated CHA fix and the expanded all-production-source AOT key). The branch remains unmerged to main. Retained fixes are generic platform/JNI behavior; APKs, app bytecode, flow definitions, thresholds and goldens are unchanged.
+
+**Additional fix:** `02e82805` registers an interface host spec's concrete implementation before any caller is compiled. Previously the first native result made that implementation too late: CHA had selected the sole bytecode implementor. `Hc.faces` reproduces 303 against the JS tier's 307; after the fix both return 307. It changes `src/wasm/link/hostclass.ts`, `scripts/wasm/hostcases.ts`, `tests/fixtures/wasm/java/hc/Hc.java`, and `tests/fixtures/wasm/java/hc/stubs/wdtest/Maker.java`. Existing AOT vtable/initializer and same-thread nested JNI changes in `47059fe3` were retained after validation; recovery made no edits to Y1's `host/natives.ts`, `compiler/method.ts` or `link/sched.ts`.
+
+**Delivery reconciliation:** `f07dbca4` temporarily represented an absent optional app bundle as 204, eliminating browser 404 errors on otherwise completed flows. Main's `d36eb94a` instead publishes an always-present `apps.json` catalog and fetches only listed bundles. `469070a4` removes the temporary protocol; `src/wasm/host/bundle.ts` and `scripts/wasm/aot-serve.ts` now match main exactly. A fresh strict eight-jar AOT build validates all 290,828 methods. Generated assets remain ignored. The server was restarted after merging; `/aot/current.json` returns HTTP 200 and all five final flows load AOT modules (observed per-process maxima 260–276). Final build key `1fabf74bff3914b6` (source `72806f2054e1e9a9ba91b38f2deba88ca93872b6987bb666a3f45f66b7ada9f2`).
+
+| Flow | Final standalone at `b38825f5` | Final sequence at `b38825f5` | Reference coverage |
+|---|---|---|---|
+| Doodle Jump | Pass, 6 steps | Pass, 6 steps | Smoke; no golden manifest |
+| Flappy Bird | Pass, 7 steps | Pass, 7 steps | Smoke; no golden manifest |
+| Komikku | Pass, 23 steps, backup file retained | Pass, 23 steps, backup file retained | Smoke; no golden manifest |
+| Mihon onboarding | Pass, 5 steps; storage 15.36% | Pass, 5 steps; storage 15.36% | Existing storage-step visual limit 29% |
+| Mihon app | 17 steps; Appearance fails 74.77% vs 14% | Pass, 17 steps; Appearance 2.58% | Existing Appearance visual limit 14% |
+
+The final merged sequence and the pre-catalog strict sequence (`--jobs 1`) both pass 5/5: Mihon storage-step 15.36%, Appearance 2.58%. The failing standalone Appearance image shows Download queue, with Appearance/Dark/Light text targets returning false. A fresh build of starting `47059fe3` under matching inputs reproduces Download queue and a 74.60% difference; recovery did not introduce this failure. It remains intermittent and its underlying navigation/target-resolution cause is unresolved. No old EGL10 shell or Unsafe accessor error appears in either final Mihon observed path; no speculative Unsafe offset handling was added.
+
+Core checks are limited to the changed behavior: hostclass 31/31 against JS in lazy and four-jar AOT modes; JDK/JS/Wasm initialization race, cycle and failure 3/3; typecheck; all four affected APK smoke compiles with zero method failures. Every final standalone and sequence step has reachable process diagnostics with status ok, no unexpected missing/native/runtime/browser diagnostics, no wedged loop or completion timeout, and no error counters. Komikku retains its declared SQLite log messages: the eight unique code 28/284 messages and their `E/SQLiteLog` labels match the fresh starting `47059fe3` jobs-1 sequence, with the same geometry and flow hash. The AOSP severity question remains unresolved. Game motion checkpoints present advancing frames. No full-suite or idle-host performance claim is made.
+
+CHA coordination: the retained `a5749f0e` patch replaces exactly two `stack.push(...this.subsOf(n))` calls with loops. Direct Object-subtype counts are 42,726 / 42,624 / 58,501 / 55,636 for Doodle Jump / Flappy Bird / Komikku / Mihon. Archived original-base diagnostics record a Maximum call stack size exceeded error under HashMap.putVal, but a shallow Chromium worker spread accepts those counts. The specific pre-crash compiler-stack argument-limit mechanism is not isolated here; the overlap is resolved using parent's `ab42ca02` file exactly; there is no remaining CHA diff from main.
+
+The surviving Y2 source/fixture file set is `src/android/glsurface.ts`, `src/wasm/link/{hostclass,world,sched}.ts`, `scripts/wasm/{hostcases,run}.ts`, `tests/fixtures/wasm/java/hc/Hc.java`, and its `stubs/wdtest/{Maker,Counter}.java`; CHA and optional-bundle delivery match main. The two changed documentation files are this plan and the implementation history.
+
+Evidence and exact retained-commit mechanisms are in `docs/implementation-history.md`. Captures and logs are isolated under `webdroid-shots/y2-recovery/` (`standalone/`, `strict-before-catalog/`, archived `base/` and `start/`, core/build logs, `final-standalone/`, `final-sequence/`, their telemetry summaries, `final-manifest.json`, and `sqlite-baseline-comparison.json`). Original-base full flow work was stopped when startup could not progress; the later 45-second launch snapshots are bounded diagnostics, not completed baseline flows.
 
 ### 4.4 Do not trust
 
