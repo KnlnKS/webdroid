@@ -17,7 +17,7 @@ import { vfs } from "./vfs";
 import { broadcastTransport, deliverBroadcast as deliverQueued, type BroadcastResult } from "../android/server/broadcastqueue";
 import { activityTransport, startActivityInProcess, taskVisibility, type ResultDelivery } from "../android/server/atm";
 import { publishedProvider, providerProcesses } from "../android/server/am";
-import { usePermissionStore } from "../android/permissions";
+import { usePermissionStore, usePermissionAccess } from "../android/permissions";
 import { sqliteTransport } from "../android/sqlite";
 import { usePreferenceStore } from "../android/sharedprefs";
 import { useNotificationStore } from "../android/notification";
@@ -43,6 +43,10 @@ function connectCommandTransports(): void {
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   if (typeof window === "undefined" || window !== window.top) {
     useSettingsAccess(remoteSettings(brokerCalls));
+    usePermissionAccess({
+      permissionCheck: (pkg, names) => brokerCalls().permissionCheck(pkg, names),
+      permissionGrant: (pkg, names) => brokerCalls().permissionGrant(pkg, names),
+    });
     useAccountAccess({
       accountList: query => brokerCalls().accountList(query),
       accountRead: key => brokerCalls().accountRead(key),
@@ -126,12 +130,12 @@ export function connectProcess(): ProcessEndpoint {
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
   if (typeof window !== "undefined" && window === window.top) {
+    usePermissionStore(broker.permissions);
     const stopAccounts = useAccountStore(broker.accounts);
     if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
     const stopSettings = useSettingsStore(broker.settings);
     if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   }
-  usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
   locationTransport.available = () => broker.location.available;
   locationTransport.enabled = () => broker.location.enabled;

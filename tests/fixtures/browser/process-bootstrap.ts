@@ -350,6 +350,15 @@ export async function clipboardOwnership() {
     broker.accounts.records.find(s=>s.id===key.id)!.name="renamed-account";
     broker.accounts.persist();await accountNotice;
     const renamed=await ask("accountCached",key,"session") as {account:{name:string},token:string};
+    const permission="android.permission.POST_NOTIFICATIONS", extra="android.permission.CAMERA";
+    const before=await ask("permissionCheck",pkg,[permission]);
+    await ask("permissionGrant",pkg,[permission]);
+    const grantRead=await peers[0].endpoint.permissionCheck(pkg,[permission]);grantRead[0]=false;
+    const own=await ask("permissionCheck",pkg,[permission]);
+    const foreignDenied=await ask("permissionGrant",foreign,[permission]) as {error:string};
+    packages.get(foreign)!.grants.add("android.permission.GRANT_RUNTIME_PERMISSIONS");
+    await peers[1].endpoint.permissionGrant(pkg,[extra]);
+    const privileged=await ask("permissionCheck",pkg,[extra]);
     // Drain the notification endpoint before death, so cleanup is not racing its reply.
     await (await entries[1].ready).activity({kind:"back"});
     worker.terminate();broker.fail(8301,"clipboard Worker ended",NOT_CRASHED);
@@ -359,7 +368,7 @@ export async function clipboardOwnership() {
     const changesBefore=accountChanges;broker.accounts.persist();
     await peers[0].endpoint.accountExists(key);
     const cleaned=accountChanges===changesBefore;
-    return {accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
+    return {permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
       renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
       changes,peerChanges,survivor:Array.from(survivor!.bytes),
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
@@ -369,6 +378,7 @@ export async function clipboardOwnership() {
     for (let i=broker.accounts.records.length-1;i>=0;i--)
       if(broker.accounts.records[i].type==="test.worker")broker.accounts.records.splice(i,1);
     broker.accounts.persist();
+    broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
   }
 }

@@ -23,7 +23,7 @@ import { apkPath, vfs } from "./vfs";
 import { device, formatScreen } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
-import { checkPermission, PermissionStore } from "../android/permissions";
+import { checkPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
 import { preferenceStore } from "../android/sharedprefs";
@@ -81,7 +81,7 @@ export type ProcessEndpoint = {
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & {
+export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & {
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
   processExited: (record: ExitRecord) => void;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
@@ -96,7 +96,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & {
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -292,7 +292,15 @@ class ProcessBroker {
       return accountAuthority(caller.pkg, caller.uid);
     });
     const accounts = () => { this.watchAccounts(pid); return accountCommands; };
+    const permissions = canonicalPermissionCommands(this.permissions, pkg => {
+      const caller = this.entry(pid), target = packages.get(pkg);
+      if (caller.uid === 0 || caller.uid === 1000 || target?.uid === caller.uid ||
+        holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
+      throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
+    });
     const stop = serveCalls<BrokerCalls>(port1, {
+      permissionCheck: async (pkg, names) => { this.entry(pid); return permissions.permissionCheck(pkg, names); },
+      permissionGrant: async (pkg, names) => permissions.permissionGrant(pkg, names),
       accountList: async query => accounts().accountList(query),
       accountRead: async key => accounts().accountRead(key),
       accountExists: async key => accounts().accountExists(key),
