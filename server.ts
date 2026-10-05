@@ -131,6 +131,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
     },
     "/compile-worker.js": () => compileWorker("src/jvm/compileworker.ts"),
     "/wasm-compile-worker.js": () => compileWorker("src/wasm/host/compile-worker.ts"),
+    "/process-worker.js": () => compileWorker("src/process-worker.ts"),
     "/link-table.json": linkTable,
     "/build-id": buildIdResponse,
     "/font-index.json": async () => new Response(await (fontIndex ??= new Response(Bun.spawn(["bun", "scripts/font-index.ts"], { stdout: "pipe", stderr: "inherit" }).stdout).text()),
