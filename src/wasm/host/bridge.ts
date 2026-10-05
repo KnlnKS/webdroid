@@ -31,14 +31,14 @@ export const toBits = (v: unknown, desc: string): unknown => desc === "F" ? (f32
 
 /** the Java object a facade stands for */
 export const refOf = (v: unknown): object | undefined => typeof v === "object" && v !== null ? (v as { [REF]?: object })[REF] : undefined;
-/** what host code probes any object for (promises, serializers, error reporters), which is no read of a Java field */
-const PROBES = new Set(["then", "toJSON", "message", "stack", "jsStack", "name", "$javaClass", "asymmetricMatch", "nodeType"]);
+/** what host code probes any object for (promises, serializers, error reporters, the JS runtime of a class loader: one namespace here), which is no read of a Java field */
+const PROBES = new Set(["then", "toJSON", "message", "stack", "jsStack", "name", "$javaClass", "asymmetricMatch", "nodeType", "runtime"]);
 const THROWABLE = "java/lang/Throwable", THROWABLE_ALIAS: Record<string, string> = { msg: mangleField(THROWABLE, "detailMessage"), cause: mangleField(THROWABLE, "cause") };
 
 export class Bridge implements HostBridge {
   /** the host form of each Java object a native has seen, so its identity is stable across calls */
   private facades = new WeakMap<object, object>();
-  /** during a call: the host form of each array it reached, the Java array of each host form */
+  /** the host form of each array the calls in progress reached (a call that is passed one an enclosing call has copied shares the copy, which that call stores back); an array leaves it when the call that copied it ends */
   private live = new Map<object, object>();
   private owners = new WeakMap<object, object>();
   private bases = new WeakMap<object, number>();
@@ -104,9 +104,9 @@ export class Bridge implements HostBridge {
   initialize(cls: string, run: () => unknown): void {
     const stored = this.src?.stores?.(cls, () => { run(); }) ?? (run(), {});
     for (const [key, v] of Object.entries(stored)) {
-      const [name, desc] = key.split(":"), f = this.w.prog.get(cls)?.fields.find((x) => x.isStatic && x.name === name && x.desc === desc);
+      const [name, desc] = key.split(":"), f = this.w.prog.get(cls)?.fields.find((x) => x.isStatic && x.name === name && (desc === undefined || x.desc === desc));
       if (!f) continue;
-      this.w.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name, desc)); })(f.kind === "L" ? this.toJava(v, desc) : toBits(v, desc));
+      this.w.hostFn(`b:sset:${cls}.${name}`, [f.kind], "V", (cx, c) => { c.lget(0).gset(cx.staticGlobal(cls, name, f.desc)); })(f.kind === "L" ? this.toJava(v, f.desc) : toBits(v, f.desc));
     }
   }
 
@@ -131,7 +131,7 @@ export class Bridge implements HostBridge {
     const host = new VIEWS[name[1]](count), bytes = new Uint8Array(host.buffer), lo = from * size, n = count * size;
     bytes.set(new Uint8Array(this.w.mem.buffer, at + lo, n));
     this.live.set(o, host); this.owners.set(host, o); this.bases.set(host, from);
-    this.undo.push(() => { new Uint8Array(this.w.mem.buffer, at + lo, n).set(bytes); this.op.acopy(o, at, 0, from, count); });
+    this.undo.push(() => { this.live.delete(o); new Uint8Array(this.w.mem.buffer, at + lo, n).set(bytes); this.op.acopy(o, at, 0, from, count); });
     return host;
   }
   /** `offset`, an index into the whole array, as an index into `host`, which holds the elements from a range's start */
@@ -142,7 +142,7 @@ export class Bridge implements HostBridge {
     for (let i = 0; i < len; i++) host[i] = this.toHost(this.op.aget(o, i), elem);
     host.$t = elem;
     const seen = host.slice();
-    this.undo.push(() => { for (let i = 0; i < len; i++) if (host[i] !== seen[i]) this.op.aset(o, i, this.toJava(host[i], elem)); });
+    this.undo.push(() => { this.live.delete(o); for (let i = 0; i < len; i++) if (host[i] !== seen[i]) this.op.aset(o, i, this.toJava(host[i], elem)); });
     return host;
   }
   private fieldsOf(name: string): Map<string, FieldInfo> {
@@ -204,9 +204,10 @@ export class Bridge implements HostBridge {
     if (known) return known;
     const spec = this.w.hosts.specOfHost(host);
     if (!spec || !this.w.prog.get(spec.name)) return undefined;
-    const java = this.w.hostFn("e:new:" + spec.name, [], "L", (cx, c) => { cx.emitEnsure(c, spec.name); cx.emitNew(c, spec.name); })() as object;
+    const cls = this.w.hosts.javaClass(spec);
+    const java = this.w.hostFn("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); })() as object;
     this.w.hosts.bind(java, host);
-    this.share(host, java, spec.name);
+    this.share(host, java, cls);
     return java;
   }
   private properties = new Map<string, Map<string, FieldInfo>>();

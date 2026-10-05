@@ -35,6 +35,8 @@ public class Hc {
   static class Plain { long h; }
   public static Object own(long h) { Own o = new Own(); o.h = h; return o; }
   public static Object plain(long h) { Plain o = new Plain(); o.h = h; return o; }
+  /** host methods that take an array as an Object, one nested in another: each write is the array's before the next call */
+  public static int bumpTwice() { Counter k = new Counter(); int[] a = { 0 }; k.bump(a); k.bump(a); return a[0]; }
   /** a bytecode subclass calls a host method that waits */
   public static int blockSub() { Sub s = new Sub(); return s.pause(5) * 100 + s.get(); }
   /** Java that blocks on a monitor until another thread has run */

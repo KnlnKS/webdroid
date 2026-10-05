@@ -13,6 +13,8 @@ public class Counter implements Runnable, java.util.function.IntSupplier {
   public native int pause(int by);
   public native int reenter();
   public native void fail();
+  public native void bump(Object array);
+  public native int nested(Object unused);
   public native void run();
   public native int getAsInt();
   public static native Counter make(int n);

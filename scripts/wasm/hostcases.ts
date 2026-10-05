@@ -33,6 +33,8 @@ rt.register({
     "twice()I": function (this: JCounter) { return 2 * (vcall(this, "get", "()I") as number); },
     "pause(I)I": async function (this: JCounter, by: number) { await sleep(); this.n += by; return this.n; },
     "reenter()I": async function () { return (await enter.call("Hc", "locked", "()I")) as number; },
+    "bump(Ljava/lang/Object;)V": (a: Int32Array) => { a[0]++; },
+    "nested(Ljava/lang/Object;)I": () => scall("Hc", "bumpTwice", "()I"),
     "fail()V": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "from the host"); },
     "static make(I)Lwdtest/Counter;": (n: number) => { const c = new JCounter(); c.n = n; return c; },
   },
@@ -85,6 +87,7 @@ export async function hostCases(blocking: (cls: string, name: string, desc: stri
   await line("new", () => c);
   await line("class", () => classNameOf(c));
   await line("instance of", () => [iof(c, "wdtest/Counter"), iof(c, "java/lang/Runnable"), iof(c, "java/util/function/IntSupplier"), iof(c, "java/lang/Object"), iof(c, STR)]);
+  await line("a host method nested in another", () => vcall(c, "nested", `(${OBJ})I`, null));
   await line("inc inc", () => [vcall(c, "inc", "()I"), vcall(c, "inc", "()I")]);
   await line("a host field", () => (c as JCounter).n);
   await line("through the alias", () => vcall(c, "getAsInt", "()I"));
