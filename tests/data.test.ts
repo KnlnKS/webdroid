@@ -14,6 +14,8 @@ import { decodeIntent } from "../src/android/intentipc";
 import { clipboardTransport } from "../src/android/clipboard";
 import type { BrokerCalls } from "../src/shell/processes";
 import { cookieManager, cookieTransport } from "../src/android/cookies";
+import { useAccountAccess, useAccountStore } from "../src/android/accounts";
+import { AccountStore, canonicalAccountCommands, type AccountCalls } from "../src/shell/accounts";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access";
 import { WebCookies } from "../src/shell/webcookies";
 import { NativeWindow } from "../src/android/cursorwindow";
@@ -31,6 +33,51 @@ rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+
+test("account commands preserve credential ownership and await atomic owner mutations", async () => {
+  await bootApp(await packageRecord("org.webdroid.test.accounts"));
+  const store = new AccountStore(), authority = (caller: string) => ({ caller,
+    authenticator: (type: string) => type === "test" ? "owner" : undefined,
+    sameUid: (a: string, b: string) => a === b, known: () => true,
+    denied: (): never => { throw rt.mkThrowable("java/lang/SecurityException", "account owner required"); } });
+  const owner = canonicalAccountCommands(store, () => authority("owner"));
+  await owner.accountChange({ kind: "add", account: { name: "alice", type: "test", owner: "owner", password: "old",
+    data: {}, tokens: { login: "old-token" }, visibility: { reader: 1 } } });
+  const { port1, port2 } = new MessageChannel();
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+  const stop = serveCalls<AccountCalls>(port1, { ...owner, accountChange: async change => { entered(); await blocked; return owner.accountChange(change); } } as AccountCalls);
+  const client = callProxy<AccountCalls>(port2, ["accountList", "accountRead", "accountExists", "accountCached", "accountChange"]);
+  useAccountAccess(client.endpoint);
+  try {
+    const service = rt.make("webdroid/AccountManagerService"), account = await newObj("android/accounts/Account", "(Ljava/lang/String;Ljava/lang/String;)V", "alice", "test");
+    const write = vcallAsync(service, "setPassword", "(Landroid/accounts/Account;Ljava/lang/String;)V", account, "new");
+    await waiting;
+    expect([store.records[0].password, store.records[0].tokens.login]).toEqual(["old", "old-token"]);
+    release(); await write;
+    expect(await vcall(service, "getPassword", "(Landroid/accounts/Account;)Ljava/lang/String;", account)).toBe("new");
+    expect(store.records[0].tokens).toEqual({});
+    await Promise.all([
+      vcallAsync(service, "setUserData", "(Landroid/accounts/Account;Ljava/lang/String;Ljava/lang/String;)V", account, "__proto__", "data"),
+      vcallAsync(service, "setAuthToken", "(Landroid/accounts/Account;Ljava/lang/String;Ljava/lang/String;)V", account, "login", "token"),
+    ]);
+    expect([store.records[0].data.__proto__, store.records[0].tokens.login]).toEqual(["data", "token"]);
+    const reader = canonicalAccountCommands(store, () => authority("reader"));
+    const visible = await reader.accountList({ type: null, pkg: "reader" });
+    expect(Object.keys(visible[0]).sort()).toEqual(["id", "name", "owner", "type", "visibility"]);
+    visible[0].visibility.reader = 4;
+    expect((await reader.accountCached({ name: "alice", type: "test" }, "login"))?.token).toBe("token");
+    expect(await thrown(() => reader.accountRead({ name: "alice", type: "test" }))).toContain("SecurityException");
+    expect(await thrown(() => reader.accountChange({ kind: "entry", key: { name: "alice", type: "test" }, field: "tokens", name: "login", value: "foreign" }))).toContain("SecurityException");
+    expect(await thrown(() => reader.accountChange({ kind: "cache", key: { name: "alice", type: "test" }, authenticatorType: "other", tokenType: "login", token: "foreign" }))).toContain("SecurityException");
+    const held = (await owner.accountRead({ name: "alice", type: "test" }))!;
+    held.data.__proto__ = "copy";
+    expect(store.records[0].data.__proto__).toBe("data");
+    await owner.accountChange({ kind: "rename", key: held, name: "renamed" });
+    expect(await owner.accountChange({ kind: "drop", key: held })).toBe(1);
+    expect(await owner.accountExists({ name: "renamed", type: "test" })).toBe(false);
+  } finally { release(); client.close(); stop(); useAccountStore(new AccountStore()); }
+});
 
 test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
   const owner = await packageRecord("org.webdroid.test.activitycommands");
