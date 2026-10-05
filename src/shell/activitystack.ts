@@ -29,6 +29,7 @@ export class ActivityStack {
   constructor(private port: StackPort) {}
 
   get foreground(): number { return this.top; }
+  shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
   shown(pid: number): boolean { return this.shownPids.has(pid); }
   /** the page's own process, in front from its boot */
   setForeground(pid: number): void { this.top = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }
@@ -149,10 +150,11 @@ export class ActivityStack {
     this.shownPids = visible;
     const layers = this.layers = [...visible].reverse();
     for (const entry of this.port.entries()) {
-      if (!entry.frame) continue;
-      entry.frame.hidden = !visible.has(entry.pid);
-      entry.frame.style.zIndex = String(layers.indexOf(entry.pid) + 1);
-      entry.frame.style.pointerEvents = entry.pid === pid ? "auto" : "none";
+      const surface = entry.frame ?? entry.canvas;
+      if (!surface) continue;
+      surface.hidden = !visible.has(entry.pid);
+      surface.style.zIndex = String(layers.indexOf(entry.pid) + 1);
+      surface.style.pointerEvents = entry.pid === pid ? "auto" : "none";
     }
   }
 }

@@ -1,7 +1,7 @@
 import { attachWorkerBootstrap, serveWorkerEndpoint } from "./shell/worker-bootstrap";
 import { closeProcessBootstrap, type ProcessBootstrap } from "./shell/process-bootstrap-data";
 
-// This entry is not selected by ProcessBroker until the remaining canonical stores are wired.
+// ProcessBroker selects this entry with processMode=worker while remaining boundaries are verified.
 // Its URL carries the same screen/tier/coverage pins as an iframe before any JVM import runs.
 let started = false;
 globalThis.onmessage = async ({ data }: MessageEvent<{ bootstrap: ProcessBootstrap; endpoint: MessagePort; control: MessagePort }>) => {

@@ -34,6 +34,7 @@ import type { WebCookies } from "./webcookies";
 import { cookieCalls, type CookieCalls } from "./cookie-access";
 import { BrowserLocation } from "./geolocation";
 import { canonicalFilePaths, type FilePathCalls } from "./file-path";
+import { startProcessWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
@@ -98,7 +99,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & Permissio
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 export const brokerMethods = ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
-export type Entry = { canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
@@ -219,13 +220,23 @@ class ProcessBroker {
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
-    if (pid === undefined) {
+    if (pid === undefined && new URLSearchParams(location.search).get("processMode") === "worker") {
+      const canvas = document.createElement("canvas"); entry.canvas = canvas;
+      canvas.hidden = true;
+      canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
+      (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
+      const params = new URLSearchParams(location.search);
+      params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp)); params.set("hz", String(device.refreshRate));
+      entry.worker = startProcessWorker("/process-worker.js?" + params, canvas, () => device,
+        () => this.bootstrap(entry.pid, true), port => this.readyPort(entry.pid, port),
+        message => this.fail(entry.pid, message, NOT_CRASHED));
+    } else if (pid === undefined) {
       const frame = document.createElement("iframe"); entry.frame = frame;
       frame.hidden = true;
       frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
       frame.src = "/process?pid=" + entry.pid + `&screen=${formatScreen(device)}&statusBarDp=${device.statusBarDp}&hz=${device.refreshRate}`;
       const params = new URLSearchParams(location.search);
-      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock", "tier"]) {
+      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock", "tier", "cold", "processMode"]) {
         const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
       }
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed", NOT_CRASHED));
@@ -428,8 +439,13 @@ class ProcessBroker {
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); entry.frame?.remove(); entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
+    entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.frame?.remove(); entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     this.activities.processDied(pid);
+  }
+  workerSnapshots() {
+    return Promise.all([...this.entries.values()].filter(entry => entry.worker).map(async entry => ({
+      pid: entry.pid, pkg: entry.pkg, process: entry.process, snapshot: await entry.worker!.control.snapshot(),
+    })));
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of

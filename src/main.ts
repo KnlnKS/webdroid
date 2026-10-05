@@ -164,6 +164,8 @@ const framed = (): RealmWd[] => processBroker().activities.shownWindows().flatMa
 });
 // the process on top takes the tap, as it takes the browser's own pointer events
 const tap = (x: number, y: number): Promise<void> => {
+  const worker = processBroker().activities.shownEntries().at(-1)?.worker;
+  if (worker) return worker.control.tap(x, y);
   const top = processBroker().activities.shownWindows().at(-1);
   return (top && top !== window ? (top as unknown as { wd: RealmWd }).wd : local).tap(x, y);
 };
@@ -181,6 +183,7 @@ const wd = {
   code: () => ({ ...codeStats(), offered: offeredCount(), deferred: pendingCompilations() }),
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
+  workerProcesses: () => processBroker().workerSnapshots(),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
@@ -189,6 +192,7 @@ const wd = {
   uiTree: async (): Promise<Awaited<ReturnType<RealmWd["uiTree"]>>> => {
     const nodes = await local.uiTree();
     for (const child of framed()) nodes.push(...await child.uiTree());
+    for (const entry of processBroker().activities.shownEntries()) if (entry.worker) nodes.push(...await entry.worker.control.uiTree());
     return nodes;
   },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
@@ -260,6 +264,7 @@ const wd = {
   testFrame: async () => {
     await local.testFrame();
     for (const child of framed()) await child.testFrame();
+    for (const entry of processBroker().activities.shownEntries()) if (entry.worker) await entry.worker.control.testFrame();
   },
 };
 (globalThis as any).wd = wd;
