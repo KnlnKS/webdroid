@@ -9,7 +9,7 @@ export async function fetchBundle(base: string, key: string): Promise<Map<string
     }) };
     if (!(await catalog.keys).includes(key)) return undefined;
     const list = await fetch(`${base}app.${key}.json`);
-    if (list.status === 204 || !list.ok) return undefined;
+    if (!list.ok) return undefined;
     const names = await list.json() as string[];
     const files = await Promise.all(names.map(async (name) => {
       const res = await fetch(`${base}app.${key}.${name}`);

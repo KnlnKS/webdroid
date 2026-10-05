@@ -39,12 +39,7 @@ function brotli(path: string): Uint8Array<ArrayBuffer> {
 export function aotFile(key: string, file: string, acceptEncoding = ""): Response {
   if (!/^[0-9a-f]+$/.test(key) || !/^[\w.]+$/.test(file)) return new Response("nope", { status: 400 });
   const path = join(AOT_ROOT, key, file);
-  if (!existsSync(path)) {
-    // An app bundle is optional; a missing module of a published build is an error.
-    if (/^app\.[0-9a-f]+\.json$/.test(file) && existsSync(join(AOT_ROOT, key, "index.json")))
-      return new Response(null, { status: 204, headers: { "cache-control": "no-cache" } });
-    return new Response("not found", { status: 404 });
-  }
+  if (!existsSync(path)) return new Response("not found", { status: 404 });
   const headers: Record<string, string> = { "content-type": file.endsWith(".wasm") ? "application/wasm" : "application/json", "cache-control": "public, max-age=31536000, immutable", vary: "accept-encoding" };
   if (!/\bbr\b/.test(acceptEncoding)) return new Response(Bun.file(path), { headers });
   return new Response(brotli(path), { headers: { ...headers, "content-encoding": "br" } });
