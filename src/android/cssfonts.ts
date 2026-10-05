@@ -1,4 +1,4 @@
-// Fonts registered with the page's text engine. Canvas2D draws text with CSS fonts, so each font
+// Fonts registered with the process realm's text engine. Canvas2D draws text with CSS fonts, so each font
 // drawn becomes its own CSS family once loaded, its weight left to CSS when it has a wght axis
 // (Chrome sets wght from the requested weight). An axis Chrome would set otherwise than the font
 // wants (opsz, which it sets from the size; ital, which it leaves at the default; wdth and slnt
@@ -51,7 +51,9 @@ async function registerCss(font: NativeFont, ital: number): Promise<string> {
   try {
     const face = new FontFace(name, src as ArrayBuffer, desc);
     await face.load();
-    document.fonts.add(face);
+    const fonts = typeof document !== "undefined" ? document.fonts
+      : (globalThis as unknown as { fonts: FontFaceSet }).fonts;
+    fonts.add(face);
   } catch (e) {
     console.warn("[fonts] FontFace rejected", font.path, e);
   }
