@@ -55,5 +55,5 @@ export function startProcessWorker(url: string, canvas: HTMLCanvasElement, geome
       } catch (error) { closeProcessBootstrap(data); throw error; }
     } catch (error) { if (!closed) failed(String(error)); }
   })(); });
-  return { control: client.endpoint, close };
+  return { url: new URL(url, location.href).href, control: client.endpoint, close };
 }

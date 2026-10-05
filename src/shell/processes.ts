@@ -34,6 +34,7 @@ import type { WebCookies } from "./webcookies";
 import { cookieCalls, type CookieCalls } from "./cookie-access";
 import { BrowserLocation } from "./geolocation";
 import { canonicalFilePaths, type FilePathCalls } from "./file-path";
+import type { WorkerControl } from "./worker-control";
 import { startProcessWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
@@ -101,7 +102,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & Permissio
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 export const brokerMethods = ["systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string}; canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
@@ -228,10 +229,14 @@ class ProcessBroker {
       canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
       const params = new URLSearchParams(location.search);
-      params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp)); params.set("hz", String(device.refreshRate));
-      entry.worker = startProcessWorker("/process-worker.js?" + params, canvas, () => device,
-        () => this.bootstrap(entry.pid, true), port => this.readyPort(entry.pid, port),
-        message => this.fail(entry.pid, message, NOT_CRASHED));
+      params.set("pid", String(entry.pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp)); params.set("hz", String(device.refreshRate));
+      const url = "/process-worker.js?" + params;
+      entry.workerDiagnostic = {url:new URL(url,location.href).href};
+      try {
+        entry.worker = startProcessWorker(url, canvas, () => device,
+          () => this.bootstrap(entry.pid, true), port => this.readyPort(entry.pid, port),
+          message => this.fail(entry.pid, message, NOT_CRASHED));
+      } catch (error) { this.fail(entry.pid,String(error),NOT_CRASHED); throw error; }
     } else if (pid === undefined) {
       const frame = document.createElement("iframe"); entry.frame = frame;
       frame.hidden = true;
@@ -438,6 +443,7 @@ class ProcessBroker {
     if (!entry || entry.dead) return;
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
+    if (entry.worker || entry.workerDiagnostic) entry.workerDiagnostic = {url:entry.worker?.url ?? entry.workerDiagnostic!.url,error:message};
     entry.dead = true; entry.reject(error);
     this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
     this.settingsClients.get(pid)?.(); this.settingsClients.delete(pid);
@@ -452,13 +458,40 @@ class ProcessBroker {
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
+    this.workerReads.delete(pid);
     entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.frame?.remove(); entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     this.activities.processDied(pid);
   }
+  private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
   workerSnapshots() {
-    return Promise.all([...this.entries.values()].filter(entry => entry.worker).map(async entry => ({
-      pid: entry.pid, pkg: entry.pkg, process: entry.process, snapshot: await entry.worker!.control.snapshot(),
-    })));
+    return Promise.all([...this.entries.values()].flatMap(entry => {
+      const worker = entry.worker;
+      const url = worker?.url ?? entry.workerDiagnostic?.url;
+      if (!url) return [];
+      const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
+      if (!worker) return [Promise.resolve({...identity,error:entry.workerDiagnostic?.error ?? "Worker owner unavailable"})];
+      let read = this.workerReads.get(entry.pid);
+      if (!read) {
+        read = Promise.resolve().then(() => worker.control.snapshot());
+        this.workerReads.set(entry.pid, read);
+        const pending = read;
+        const clear = () => { if (this.workerReads.get(entry.pid) === pending) this.workerReads.delete(entry.pid); };
+        void read.then(clear, clear);
+      }
+      return [(async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const snapshot = await Promise.race([read, new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("Worker diagnostic timeout")), 5000);
+          })]);
+          if (entry.dead || snapshot.dead || snapshot.phase !== "ready")
+            throw new Error(`Worker is ${snapshot.dead || entry.dead ? "dead" : "not ready: " + snapshot.phase}`);
+          return {...identity,snapshot};
+        } catch (error) {
+          return {...identity,error: error instanceof Error ? error.message : String(error)};
+        } finally { clearTimeout(timer); }
+      })()];
+    }));
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of

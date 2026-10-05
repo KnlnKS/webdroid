@@ -1,3 +1,6 @@
+import { PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "../android/os";
+import { appHost } from "../android/apphost";
+import { jvmCoverage } from "../jvm/coverage";
 import { rt } from "../jvm/runtime";
 import { realmWd } from "./realmwd";
 import { processExited } from "../process-exit";
@@ -14,6 +17,10 @@ export function workerControl(logs: string[], phase: () => string) {
   const local = realmWd();
   return {
     snapshot: async () => ({ phase: phase(), dead: processExited(), ticks, width: SCREEN_W, height: SCREEN_H,
+      identity: {pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
+      missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
+      placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
+      coverage: jvmCoverage.snapshot(), compositor: Reflect.get(local,"compositorStatus") ?? null,
       main: { ...mainDbg }, perf: { ...perf }, missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
     uiTree: local.uiTree,
     tap: local.tap,

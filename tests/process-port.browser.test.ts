@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
   if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -100,6 +100,12 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return pointerInputOwnership();
     });
     expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,0,0],[1,2,60,80],[1,1,80,100]],closed:true});
+    const diagnostic = await page.evaluate(async () => {
+      const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return workerDiagnosticOwnership();
+    });
+    expect(diagnostic).toEqual({healthy:true,rejected:"owned diagnostic failure",hung:"Worker diagnostic timeout",phase:"Worker is not ready: packages",
+      secondHealthy:true,hungCalls:1,retained:"actual diagnostic fixture exit",identity:8401});
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);
