@@ -70,7 +70,7 @@ async function entrySource(source: FileSource, entry: ZEntry): Promise<FileSourc
   if (entry.method === 0) return new SliceFile(source, offset, entry.size);
   return new BytesFile(inflateEntry(await readFully(source, offset, entry.csize), entry));
 }
-class ZipEntryFile implements FileSource {
+export class ZipEntryFile implements FileSource {
   readonly size: number;
   private resolved: Promise<FileSource> | null = null;
 

@@ -26,7 +26,13 @@ import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import { locationTransport } from "../android/locationmanager";
-import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint } from "./processes";
+import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
+
+import { callProxy, processError } from "./process-port";
+
+let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
+const brokerCalls = (): BrokerCalls => (calls ??= callProxy<BrokerCalls>(processBroker().brokerPort(PROCESS_PID), brokerMethods, [],
+  error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error))).endpoint;
 
 const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
   after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
@@ -81,12 +87,12 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.last = () => broker.location.last;
   locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
-  providerProcesses.get = (pkg, process, authority) => after(remote(broker.contentProvider(PROCESS_PID, pkg, process, authority)), importBinder);
+  providerProcesses.get = (pkg, process, authority) => after(remote(brokerCalls().contentProvider(pkg, process, authority)), importBinder);
   broadcastTransport.send = driven(function* (intent, permissions, ordered, initial) {
     const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
-    return yield* awaited(broadcastResult(yield* awaited(remote(broker.broadcast(PROCESS_PID, data, targets, permissions, ordered, from)))));
+    return yield* awaited(broadcastResult(yield* awaited(remote(brokerCalls().broadcast(data, targets, permissions, ordered, from)))));
   });
-  binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
+  binderTransport.transact = (request) => remote(brokerCalls().transact(request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents, intentCodec));
@@ -105,7 +111,7 @@ export function connectProcess(): ProcessEndpoint {
   pendingTransport.flags = id => broker.intents.get(id)?.flags ?? 0;
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
-  const service = (pkg: string, process: string, request: ServiceRequest) => remote(broker.service(PROCESS_PID, pkg, process, request));
+  const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
   serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
     yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
   });
@@ -121,7 +127,7 @@ export function connectProcess(): ProcessEndpoint {
   });
   return {
     clipboardChanged: async () => clipboardChanged(),
-    packageRemoved: forgetRemoved,
+    packageRemoved: async pkg => forgetRemoved(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {
       if (request.kind === "back") return (await import("./device")).pressBack();

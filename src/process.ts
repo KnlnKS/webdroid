@@ -7,7 +7,7 @@ import { setProcessIdentity } from "./android/os";
 import { recordVsync } from "./android/vsync";
 import { attachIme, drainInput } from "./shell/input";
 import { setWebLayer } from "./android/webframes";
-import { apkCertificates, packageArchive } from "./android/packagearchive";
+import { apkCertificates, packageArchive, packageArchiveSource } from "./android/packagearchive";
 import { zipTree } from "./jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./shell/packedarchive";
 import { rt } from "./jvm/runtime";
@@ -89,6 +89,11 @@ try {
       packedArchives.set(path, packed); vfs.mount(path, packed);
       if (own) rt.classpathSource = packed;
       base = { zip: packed.zip, base: packed };
+    } else if (!own) {
+      const file = new RemoteFile(source);
+      archive = await packageArchiveSource(file, snapshot.certificates);
+      vfs.mount(path, file);
+      base = {zip: archive.res.zip, base: file};
     } else {
       const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
       archive = packageArchive(zip, await apkCertificates(bytes, zip)); vfs.write(path, bytes);

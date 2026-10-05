@@ -34,6 +34,7 @@ import { BrowserLocation } from "./geolocation";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchiveIndex } from "./packedarchive";
 import { serveFile, type RemoteFileData } from "./remote-file";
+import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
@@ -57,7 +58,7 @@ export type ActivityRequest = { kind: "launch"; id: number; component: string; i
   | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
 const BIND_NOT_FOREGROUND = 4, BIND_WAIVE_PRIORITY = 0x20;
 /** splits: the installed config/feature split apks beside the base, which only the running app has */
-type PackageSnapshot = { pkg: string; source: RemoteFileData | { index: PackedArchiveIndex; base: string }; splits: RemoteFileData[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
+type PackageSnapshot = { certificates: Uint8Array[]; pkg: string; source: RemoteFileData | { index: PackedArchiveIndex; base: string }; splits: RemoteFileData[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 export type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
@@ -68,10 +69,18 @@ export type ProcessEndpoint = {
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
-  packageRemoved: (pkg: string) => void;
+  packageRemoved: (pkg: string) => Promise<void>;
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
   kill: (signal: number, note?: KillNote) => void;
 };
+/** Caller identity is bound to the port, never supplied in a request's arguments. */
+export type BrokerCalls = {
+  transact: (request: Transaction) => Promise<TransactionReply>;
+  service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
+  contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
+  broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
+};
+export const brokerMethods = ["transact", "service", "contentProvider", "broadcast"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -128,6 +137,8 @@ class ProcessBroker {
   private clipboardWatchers = new Set<number>();
   private booted = false;
   private archivePorts = new Map<number, (() => void)[]>();
+  private endpointPorts = new Map<number, () => void>();
+  private callerPorts = new Map<number, Set<() => void>>();
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
@@ -218,14 +229,16 @@ class ProcessBroker {
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
       if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
       const splits = record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : [];
-      return { pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
+      return { certificates: record.certificates(), pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     });
     const ports: (() => void)[] = [];
     try {
       const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
         const served = serveFile(source); ports.push(served.close); return served.data;
       };
-      const snapshots = registry.map(({ file, ...record }) => ({ ...record,
+      const certificates = await Promise.all(registry.map(record => record.certificates));
+      this.entry(pid);
+      const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
       const data = structuredClone({ pkg: owner.pkg, process: entry.process, uid: entry.uid, registry: snapshots, launcher: entry.launcher },
         { transfer: snapshots.flatMap((record) => [...("port" in record.source ? [record.source.port] : []), ...record.splits.map((split) => split.port)]) });
@@ -235,7 +248,39 @@ class ProcessBroker {
       return data;
     } catch (error) { for (const close of ports) close(); throw error; }
   }
-  ready(pid: number, endpoint: ProcessEndpoint): void { this.entry(pid).resolve(endpoint); }
+  /** A process's reverse Binder/service channel. Only these serialized operations are exported. */
+  brokerPort(pid: number): MessagePort {
+    this.entry(pid);
+    const { port1, port2 } = new MessageChannel();
+    let owned = this.callerPorts.get(pid);
+    if (!owned) this.callerPorts.set(pid, owned = new Set());
+    const stop = serveCalls<BrokerCalls>(port1, {
+      transact: request => this.transact(pid, request),
+      service: (pkg, process, request) => this.service(pid, pkg, process, request),
+      contentProvider: (pkg, process, authority) => this.contentProvider(pid, pkg, process, authority),
+      broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
+    }, () => { owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); });
+    owned.add(stop);
+    return port2;
+  }
+  ready(pid: number, endpoint: ProcessEndpoint): void {
+    this.entry(pid);
+    if (this.endpointPorts.has(pid)) return;
+    const { port1, port2 } = new MessageChannel();
+    this.publishEndpoint(pid, port2, serveProcess(port1, endpoint));
+  }
+  /** A Worker transfers its serving port here; the broker owns it until process death. */
+  readyPort(pid: number, port: MessagePort): void { this.publishEndpoint(pid, port); }
+  private publishEndpoint(pid: number, port: MessagePort, stop = () => {}): void {
+    try {
+      const entry = this.entry(pid);
+      if (this.endpointPorts.has(pid)) { port.postMessage({ kind: "close" }); port.close(); stop(); return; }
+      const proxy = processProxy(port, error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error),
+        error => { if (!entry.dead) this.fail(pid, error.message ?? "Process endpoint closed", NOT_CRASHED); });
+      this.endpointPorts.set(pid, () => { stop(); proxy.close(); });
+      entry.resolve(proxy.endpoint);
+    } catch (error) { port.postMessage({ kind: "close" }); port.close(); stop(); throw error; }
+  }
   /** a process ended, or its frame failed: ActivityManagerService.appDiedLocked */
   fail(pid: number, message: string, death: Death): void {
     const entry = this.entries.get(pid);
@@ -243,6 +288,9 @@ class ProcessBroker {
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
     entry.dead = true; entry.reject(error);
+    this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);
+    for (const close of this.callerPorts.get(pid) ?? []) close();
+    this.callerPorts.delete(pid);
     for (const close of this.archivePorts.get(pid) ?? []) close();
     this.archivePorts.delete(pid);
     for (const reject of entry.pending) reject(error);
@@ -258,14 +306,14 @@ class ProcessBroker {
    *  its other processes); other signals are ART's to handle in the target and are not modelled */
   signal(callerPid: number, pid: number, signal: number): void {
     const caller = this.entry(callerPid);
-    if (signal === 9) void this.each((e) => e.pid === pid && e.uid === caller.uid, (endpoint) => endpoint.kill(signal));
+    if (signal === 9) unawaited(this.each((e) => e.pid === pid && e.uid === caller.uid, (endpoint, entry) => this.kill(entry, endpoint, signal)));
   }
   /** forceStopPackageLocked: the package's services go without restarting, and every process of its
    *  uid dies */
   async forceStop(pkg: string, note?: KillNote): Promise<void> {
     this.services.forceStop(pkg);
     const uid = packages.get(pkg)?.uid;
-    await this.each((e) => e.pkg === pkg || e.uid === uid, (endpoint) => endpoint.kill(9, note));
+    await this.each((e) => e.pkg === pkg || e.uid === uid, (endpoint, entry) => this.kill(entry, endpoint, 9, note));
   }
   /** a removed package leaves every process's package manager, this one's too */
   async packageRemoved(pkg: string): Promise<void> {
@@ -273,8 +321,17 @@ class ProcessBroker {
     await this.each(() => true, (endpoint) => endpoint.packageRemoved(pkg));
   }
   /** `f` on each live process `which` picks, once it is ready */
-  private each(which: (entry: Entry) => boolean, f: (endpoint: ProcessEndpoint) => unknown): Promise<unknown> {
-    return Promise.all([...this.entries.values()].filter((e) => !e.dead && which(e)).map((e) => e.ready.then(f, () => {})));
+  private each(which: (entry: Entry) => boolean, f: (endpoint: ProcessEndpoint, entry: Entry) => unknown): Promise<unknown> {
+    return Promise.all([...this.entries.values()].filter((e) => !e.dead && which(e)).map((e) => e.ready.then(endpoint => f(endpoint, e), () => {})));
+  }
+  private kill(entry: Entry, endpoint: ProcessEndpoint, signal: number, note?: KillNote): Promise<void> {
+    if (entry.dead) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const died = () => resolve();
+      entry.watchers.add(died);
+      try { endpoint.kill(signal, note); }
+      catch (error) { entry.watchers.delete(died); reject(error); }
+    });
   }
   /** system_server's part in a package's data change, run in this realm: it outlives its caller,
    *  which may be the package */

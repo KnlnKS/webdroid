@@ -1451,6 +1451,30 @@ The first focused change replaces bootstrap's live packed archives with descript
 
 Milestone `4f090a6f` changes only `src/process.ts`, `src/shell/processes.ts`, `src/shell/remote-file.ts` and the two focused browser test files. Typecheck and the Chromium transport/ownership test pass. A fresh strict eight-jar AOT build validates 290,828 methods, key `39e336d95afee941`, source `48d397a87ec6114e328ae82a5791fd0f25a3151f0f416db3e99806f583771ad3`. The restarted isolated server on port 4123 returns manifest/index 200. The final unchanged Wasm jobs-1 quick sequence passes 7/7, 105 steps (four Android-compared and three smoke), with zero reported gaps, unexpected errors, missing/native requirements, error counters, timeouts, wedges or semantic misses in final telemetry. Every observed process has healthy diagnostics; per-flow observed AOT maxima are 244–277. Appearance is 2.58% against 14%, FitNotes home 13.93% against 22%, onboarding storage 15.36% against 29%, Calculator result 1.17% against 10%. Komikku's declared guest SQLite messages remain. Evidence is isolated under `webdroid-shots/y2-s5/` (`quick/summary.json`, per-flow runs, `telemetry.json`, test/typecheck/build logs and `manifest.json`). An earlier seven-flow draft capture preceded the ownership/raw-source revision and is not the final-source gate. Only the final capture is retained in `quick/`. The owned server is stopped; main is not merged or changed.
 
+### 4.22 Y2: S5 endpoint and foreign resource contracts (2026-10-05)
+
+The endpoint milestone on integrated parent `8fcfadef` (Y2 merge `487204af`, including compiler-owner teardown `79589919`) uses typed MessagePort calls in both directions. Binder, service, provider and broadcast calls bind their caller PID to the reverse port. Requests dispatch independently so a suspended Binder call can receive a reentrant callback. Exceptions cross as class/name/message data and are reconstructed by the receiving VM. Endpoint death rejects pending and future calls; repeated readiness retains the first endpoint and closes an unpublished replacement. Package removal awaits its acknowledgment, and force-stop waits for actual process death rather than the queued kill notification. Parcel FD exports copy guest-backed bytes before the transfer boundary. `pageShared` retains one value per key in each Worker realm.
+
+Foreign raw APK bootstrap reads the ZIP directory, manifest and resource table through the canonical FileSource/ZIP helpers. Files named by the table's string pool are resident before publication, preserving synchronous `Resources.fileOf` (including account-authenticator XML); other entries keep lazy sources. Certificates come from the authoritative installed record. This does not read foreign DEX/native payloads eagerly. The existing packagearchive core check compares the unchanged FitNotes manifest, certificates, table and every referenced file against whole-APK parsing, then reads the lazy DEX and compares its bytes.
+
+Bounded read/residency measurements using BlobFile (not startup timing), bytes:
+
+| APK | Archive | Read at metadata load | Resident resource bytes |
+| --- | ---: | ---: | ---: |
+| FitNotes | 4,338,070 | 1,361,568 | 1,639,560 |
+| Mihon | 66,875,196 | 5,660,837 | 6,367,147 |
+| Komikku | 40,915,941 | 9,045,478 | 10,417,621 |
+| TikTok | 461,589,329 | 42,528,979 | 61,199,520 |
+| Google Maps | 303,173,591 | 60,272,208 | 67,573,066 |
+
+The cost is bounded by the resource files, but remains material for large installed registries and repeats in each process realm. No Worker JVM is enabled. Canonical mutable stores, controlled clock ordering, presentation/WebView adapters and the remaining S5 gates are still required. Chromium endpoint/archive checks (2), compiler-owner teardown checks (2), selected FD checks (5), packagearchive check (1) and full typecheck pass.
+
+Fresh strict eight-jar AOT validates 290,828 methods, key `2e6f95da6b05c96f`, source `f631f5d1734a85a75781ace1e4ae1edb1834502421d47968162ef48bad16956d`. The restarted isolated server on port 4123 serves manifest HTTP 200; every flow observes nonzero AOT loading. The unchanged Wasm jobs-1 six-flow sequence completes 92 captures: Doodle Jump 6, FitNotes 39, Flappy Bird 7, Mihon onboarding 5 and Calculator M 8 pass. Mihon app completes 17 captures but its last two Back steps each wedge and time out. All inspected runs have empty browser errors and new missing/error/native requirements, zero observed draw/layout/Wasm suspension error counters, and healthy process diagnostics. Completed rendering is observed in every flow. These observations do not establish unvisited-path coverage or timing acceptance.
+
+For the ambiguous Mihon failure, the endpoint draft was stashed and the clean integrated starting source rebuilt under matching port, flow, Wasm tier, preference/clock inputs and jobs-1 conditions. Baseline AOT key `00878c03d7402684`, source `cdba9bf7be42573c17ffc1ccdcaef6f5a27380368d80e982ed5890d18aa0e8bd`, also validates 290,828 methods. It reproduces exactly the final two Back wedges/timeouts, with no reported Java/browser error. This comparison does not explain or waive the failure. Earlier Komikku captures stalled; parent's later unchanged-source outlined/no-outline control attributes that crash to app compiler outlining, owned by G4. No process-kill suppression is introduced. There is no accepted all-seven gate or S5 completion claim.
+
+Evidence: `webdroid-shots/y2-s5-endpoint/8fc-six-flows/`, `8fc-baseline-mihon/`, `8fc-telemetry.json`, both manifest/build logs, endpoint/core/typecheck logs and foreign-resource measurements. The initial capture missing the Wasm selector was stopped and excluded. All owned captures and the port 4123 server are stopped. Parent diagnostic load prevents performance conclusions.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.

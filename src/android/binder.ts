@@ -100,8 +100,10 @@ export function systemToken(): JObj | Promise<JObj> {
 class JFileWriter extends JObj { fd = -1; }
 function* exportObject(o: unknown): Gen<BinderHandle | FileHandle | null> {
   if (!(o instanceof OwnedFd)) return exportBinder(o);
-  const bytes = yield* awaited(fdContents(o.fd));
-  if (!bytes) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
+  const contents = yield* awaited(fdContents(o.fd));
+  if (!contents) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
+  // File/ashmem views may share guest memory. Binder exports a snapshot, not that live view.
+  const bytes = new Uint8Array(contents);
   const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
   if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };
   linkClass("webdroid/FileWriter");

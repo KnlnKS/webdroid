@@ -1,0 +1,80 @@
+import { expect, test } from "bun:test";
+import { chromium } from "playwright";
+
+test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
+  if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
+  const server = Bun.serve({ port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    const output = build.outputs.find(out => out.path.endsWith(path));
+    return output ? new Response(output, { headers: { "content-type": "text/javascript" } })
+      : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
+  } });
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage(), errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const { processProxy, serveProcess } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
+      const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
+      const code = `import {processProxy, serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
+        import {pageShared} from ${JSON.stringify(location.origin + "/pageshared.js")};
+        let builds=0;
+        const cache=pageShared('__wdMappedPages',()=>{builds++;return new WeakMap();});
+        const cached=cache===pageShared('__wdMappedPages',()=>{builds++;return new WeakMap();})&&builds===1;
+        self.onmessage = ({data}) => {
+          const callback = processProxy(data.callback); let clips = 0;
+          serveProcess(data.endpoint, {
+            activity: async()=>{}, service: async()=>null, serviceConnected: async()=>{}, contentProvider:async()=>null,
+            broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
+            clipboardChanged:async()=>{clips++;},
+            transact:async(request,caller)=>{
+              if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data,cached};}
+              if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
+              if(request.code===3)throw {$javaClass:'java/lang/SecurityException',msg:'denied'};
+              if(request.code===4)return {handled:1,data:()=>{}};
+              self.postMessage('entered'); return new Promise(()=>{});
+            }
+          });
+        };`;
+      const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      const worker = new Worker(url, { type: "module" });
+      const proxy = processProxy(endpointPorts.port1, fault => Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }));
+      const empty = { bytes: new Uint8Array(0), objects: [] };
+      const stopCallbacks = serveProcess(callbacks.port1, {
+        activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
+        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, clipboardChanged: async () => {},
+        transact: async () => {
+          await proxy.endpoint.clipboardChanged();
+          return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
+        },
+      });
+      try {
+        worker.postMessage({ endpoint: endpointPorts.port2, callback: callbacks.port2 }, [endpointPorts.port2, callbacks.port2]);
+        const source = Uint8Array.of(1, 2), caller = { pid: 10, uid: 12000 };
+        const request = { handle: { pid: 20, id: 1 }, flags: 0, data: { bytes: source, objects: [[0, { pid: 10, id: 4 }]] } } as const;
+        const call = (code: number) => proxy.endpoint.transact({ ...request, code, data: { bytes: source, objects: [[0, { pid: 10, id: 4 }]] } }, caller);
+        const copied = await call(1), callback = await call(2);
+        const failure = await call(3).catch(error => ({ javaClass: error.javaClass, message: error.message }));
+        const cloneError = await call(4).catch(error => error.name);
+        const entered = new Promise<void>(resolve => worker.onmessage = () => resolve());
+        const pending = call(5).catch(error => error.javaClass);
+        await entered;
+        proxy.close();
+        const death = await pending, later = await call(1).catch(error => error.javaClass);
+        return { source: Array.from(source), copied: { cached: Reflect.get(copied,"cached"), handled: copied.handled, bytes: Array.from(copied.data.bytes), objects: copied.data.objects },
+          callback: Array.from(callback.data.bytes), failure, cloneError, death, later };
+      } finally { proxy.close(); stopCallbacks(); worker.terminate(); URL.revokeObjectURL(url); }
+    });
+    expect(result).toEqual({ source: [1, 2], copied: { cached: true, handled: 12000, bytes: [99, 2], objects: [[0, { pid: 10, id: 4 }]] },
+      callback: [21, 1], failure: { javaClass: "java/lang/SecurityException", message: "denied" }, cloneError: "DataCloneError",
+      death: "android/os/DeadObjectException", later: "android/os/DeadObjectException" });
+    const ownership = await page.evaluate(async () => {
+      const { endpointOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return endpointOwnership();
+    });
+    expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true });
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); server.stop(true); }
+}, 30_000);

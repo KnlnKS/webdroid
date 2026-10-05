@@ -12,7 +12,7 @@ import { pickFiles } from "../src/shell/hostfs";
 import { centralDir, zipTree } from "../src/jvm/natives/jzip";
 import { mergeInstall } from "../src/shell/install";
 import { BytesFile, readFully } from "../src/shell/lazyfile";
-import { parsePackageArchive, apkCertificates } from "../src/android/packagearchive";
+import { parsePackageArchive, packageArchiveSource, apkCertificates } from "../src/android/packagearchive";
 import { registerPackage, FLAG_IS_GAME } from "../src/android/pm";
 import { hostedService } from "../src/android/binder";
 import { newArrayList, toJsArray } from "../src/jvm/natives/jcoll";
@@ -241,6 +241,30 @@ describe("package-permissions", () => {
 });
 
 describe("packagearchive", () => {
+  test("foreign package metadata retains lazy assets without reading the whole APK", async () => {
+    const bytes = new Uint8Array(await Bun.file("apks/FitNotes.apk").arrayBuffer());
+    const baseline = await parsePackageArchive(bytes), file = new BytesFile(bytes);
+    let readBytes = 0;
+    const archive = await packageArchiveSource({ size: file.size, read(offset, length) {
+      const chunk = file.read(offset, length);
+      readBytes += chunk.length;
+      return chunk;
+    } }, baseline.certificates);
+    expect(archive.root).toEqual(baseline.root);
+    expect(archive.certificates).toEqual(baseline.certificates);
+    expect(archive.res.zip["resources.arsc"]).toEqual(baseline.res.zip["resources.arsc"]);
+    expect(readBytes).toBeLessThan(bytes.length);
+    const pool = archive.res.arsc!.values;
+    for (let i = 0; i < pool.length; i++) {
+      const name = pool.get(i);
+      if (Object.hasOwn(baseline.res.zip, name)) expect(archive.res.arsc!.files(name)).toEqual(baseline.res.zip[name]);
+    }
+    expect(archive.res.lazyEntries.has("classes.dex")).toBe(true);
+    const metadataBytes = readBytes, residentBytes = Object.values(archive.res.zip).reduce((sum, data) => sum + data.length, 0);
+    expect(await readFully(archive.res.lazyEntries.get("classes.dex")!)).toEqual(baseline.res.zip["classes.dex"]);
+    console.log(JSON.stringify({ apkBytes: bytes.length, metadataBytes, residentBytes }));
+  });
+
   test("v1 APK certificate discovery leaves unrelated ZIP entries lazy", async () => {
     const bytes = new Uint8Array(await Bun.file("apks/flappybird.apk").arrayBuffer());
     const zip = zipTree(bytes), descriptors = Object.getOwnPropertyDescriptors(zip);
