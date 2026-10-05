@@ -20,7 +20,7 @@ import { activityTransport, startActivityInProcess, taskVisibility, type ResultD
 import { publishedProvider, providerProcesses } from "../android/server/am";
 import { usePermissionStore, usePermissionAccess } from "../android/permissions";
 import { sqliteTransport } from "../android/sqlite";
-import { usePreferenceStore } from "../android/sharedprefs";
+import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs";
 import { useNotificationStore } from "../android/notification";
 import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings";
 import { remoteSettings } from "./settings";
@@ -48,6 +48,12 @@ function connectCommandTransports(): void {
       filePathTransport.calls = brokerCalls;
       vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
     }
+    usePreferenceAccess({
+      preferenceRead: (name, key) => brokerCalls().preferenceRead(name, key),
+      preferenceKeys: name => brokerCalls().preferenceKeys(name),
+      preferenceChange: (name, changes) => brokerCalls().preferenceChange(name, changes),
+      preferenceFiles: pkg => brokerCalls().preferenceFiles(pkg),
+    });
     usePermissionAccess({
       permissionCheck: (pkg, names) => brokerCalls().permissionCheck(pkg, names),
       permissionGrant: (pkg, names) => brokerCalls().permissionGrant(pkg, names),
@@ -132,9 +138,9 @@ export function connectProcess(): ProcessEndpoint {
     detached(() => after(data && encodeIntent(data), (encoded) => broker.activities.finish(PROCESS_PID, id, code, encoded)), logUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
-  usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
   if (typeof window !== "undefined" && window === window.top) {
+    usePreferenceStore(broker.preferences);
     usePermissionStore(broker.permissions);
     const stopAccounts = useAccountStore(broker.accounts);
     if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);

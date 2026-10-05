@@ -26,7 +26,7 @@ import { queryReceivers, exported, componentPermission, componentProcess, resolv
 import { checkPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
-import { preferenceStore } from "../android/sharedprefs";
+import { preferenceStore, canonicalPreferenceCommands, type PreferenceCalls } from "../android/sharedprefs";
 import { notificationStore } from "../android/notification";
 import { settingsStore } from "../android/settings";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
@@ -82,7 +82,7 @@ export type ProcessEndpoint = {
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & FilePathCalls & {
+export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
   processExited: (record: ExitRecord) => void;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
@@ -97,7 +97,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & Permissio
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -299,6 +299,15 @@ class ProcessBroker {
         holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
       throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
     });
+    const authorizePreference = (name: string, write: boolean) => {
+      const caller = this.entry(pid);
+      const notification = name.startsWith("android:notification-policy:");
+      const pkg = notification ? name.slice("android:notification-policy:".length) : name.split(":", 1)[0];
+      const publicRead = notification || name === `${pkg}:__system_power`;
+      if (caller.uid === 0 || caller.uid === 1000 || packages.get(pkg)?.uid === caller.uid || !write && publicRead) return;
+      throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
+    };
+    const preferences = canonicalPreferenceCommands(this.preferences, authorizePreference);
     const paths = canonicalFilePaths(path => {
       const caller = this.entry(pid);
       const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/([^/]+)(?:\/|$)/.exec(path);
@@ -315,6 +324,10 @@ class ProcessBroker {
       },
       fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
       fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
+      preferenceRead: async (name, key) => preferences.preferenceRead(name, key),
+      preferenceKeys: async name => preferences.preferenceKeys(name),
+      preferenceChange: async (name, changes) => preferences.preferenceChange(name, changes),
+      preferenceFiles: async pkg => { authorizePreference(pkg + ":", false); return preferences.preferenceFiles(pkg); },
       permissionCheck: async (pkg, names) => { this.entry(pid); return permissions.permissionCheck(pkg, names); },
       permissionGrant: async (pkg, names) => permissions.permissionGrant(pkg, names),
       accountList: async query => accounts().accountList(query),

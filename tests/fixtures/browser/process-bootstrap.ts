@@ -359,6 +359,20 @@ export async function clipboardOwnership() {
     packages.get(foreign)!.grants.add("android.permission.GRANT_RUNTIME_PERMISSIONS");
     await peers[1].endpoint.permissionGrant(pkg,[extra]);
     const privileged=await ask("permissionCheck",pkg,[extra]);
+    const prefName = pkg + ":worker", policyName = "android:notification-policy:" + foreign;
+    const prefAck = await ask("preferenceChange", prefName, [{kind:"put",key:"array",value:["one"]}]);
+    await peers[0].endpoint.preferenceChange(prefName, [{kind:"put",key:"other",value:9n}]);
+    const prefCopy = await ask("preferenceRead",prefName,"array") as string[]; prefCopy.push("local");
+    const prefFresh = await peers[0].endpoint.preferenceRead(prefName,"array");
+    const prefKeys = await ask("preferenceKeys",prefName) as string[];
+    const foreignPref = await ask("preferenceChange",foreign+":private",[{kind:"put",key:"secret",value:1}]) as {error:string};
+    const emptyForeign = await ask("preferenceFiles",foreign) as {error:string};
+    broker.preferences.open(policyName).set("delegate",pkg);
+    const publicPolicy = await ask("preferenceRead",policyName,"delegate");
+    const policyWrite = await ask("preferenceChange",policyName,[{kind:"remove",key:"delegate"}]) as {error:string};
+    const prefFiles = await ask("preferenceFiles",pkg) as [string,[string,unknown][]][];
+    const prefs = {ack:prefAck,fresh:prefFresh,keys:prefKeys,foreignDenied:!!foreignPref.error,emptyForeignDenied:!!emptyForeign.error,
+      publicPolicy,policyDenied:!!policyWrite.error,files:prefFiles.map(([name])=>name)};
     await ask("filePrepare",pkg);
     const directory=`/data/data/${pkg}/databases`;
     const made=await ask("fileMkdir",directory),repeated=await ask("fileMkdir",directory);
@@ -376,7 +390,7 @@ export async function clipboardOwnership() {
     const changesBefore=accountChanges;broker.accounts.persist();
     await peers[0].endpoint.accountExists(key);
     const cleaned=accountChanges===changesBefore;
-    return {paths:{made,repeated,directory:ownerStat.value?.directory,copied:freshList.value?.includes("databases"),foreignPath},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
+    return {prefs,paths:{made,repeated,directory:ownerStat.value?.directory,copied:freshList.value?.includes("databases"),foreignPath},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
       renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
       changes,peerChanges,survivor:Array.from(survivor!.bytes),
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
@@ -387,6 +401,7 @@ export async function clipboardOwnership() {
       if(broker.accounts.records[i].type==="test.worker")broker.accounts.records.splice(i,1);
     broker.accounts.persist();
     for(const path of [...vfs.dirs])if(path.startsWith(`/data/data/${pkg}`)||path.startsWith(`/data/user_de/0/${pkg}`))vfs.rmdir(path);
+    broker.preferences.remove(pkg); broker.preferences.delete("android:notification-policy:"+foreign);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
   }
