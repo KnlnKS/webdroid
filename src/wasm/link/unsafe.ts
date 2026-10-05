@@ -1,7 +1,6 @@
 // jdk.internal.misc.Unsafe's object accessors, as field-id based operations (plan S2).
 //
-// An offset is a cookie: an instance field's is OBJECT_BASE + 4 * its place in the layout of its class (small, because libraries keep offsets in 20 bits as ART's are; the class is the
-// object's), a static field's its id (class id << 12 | index), an array element's is
+// An offset is a cookie: an instance field's is a small number the World gives the field when reflection hands out its offset (libraries keep offsets in 20 bits, as ART's fit), a static field's likewise, an array element's is
 // ARRAY_BASE + index * scale. Fields are reached through a generated accessor per (field, operation) that the host hands out as a
 // table slot (hostUnsafe); arrays are handled inline: an element of the operation's own width directly, a wider access to a byte[] as
 // little-endian bytes (what heap ByteBuffer views do). Raw addresses (the getInt(long) forms) belong to the native heap and stay
@@ -9,7 +8,7 @@
 import { OP } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
 import { kindOf, type Kind } from "../compiler/program";
-import { H, type ElemKind } from "../compiler/consts";
+import type { ElemKind } from "../compiler/consts";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
@@ -18,8 +17,14 @@ import { rt } from "../compiler/rtfns";
 
 /** the first array element's offset, above every field id */
 const ARRAY_BASE = 1 << 30;
-/** the offset of the first instance field, and the size of each place */
-export const OBJECT_BASE = 16;
+/** the offsets handed out for fields, small so that a library which keeps them in 20 bits finds them again: field id (class id << 12 | index) to offset and back */
+const cookies = new WeakMap<World, { ofField: Map<number, number>; fields: number[] }>();
+export function fieldCookie(w: World, id: number): number {
+  let t = cookies.get(w); if (!t) cookies.set(w, t = { ofField: new Map(), fields: [] });
+  let c = t.ofField.get(id);
+  if (c === undefined) { t.ofField.set(id, c = t.fields.push(id) + 7); }
+  return c;
+}
 type Ty = "Z" | "B" | "S" | "C" | "I" | "F" | "J" | "D" | "L";
 const TYPES: Ty[] = ["Z", "B", "S", "C", "I", "F", "J", "D", "L"];
 const WIDTH: Record<Ty, number> = { Z: 1, B: 1, S: 2, C: 2, I: 4, F: 4, J: 8, D: 8, L: 4 };
@@ -33,20 +38,22 @@ export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, Al
 /** the table slot of the accessor of field `a` for the operation `kind` (the field's kind must be `b`: 0 int-like, 1 long-like, 2 reference), 0 if there is none;
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
 export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number {
+  // the offset of an Unsafe access names its field by the number fieldCookie gave it; reflection passes the field's id itself
+  if (kind >= UInfo.ObjGet && (a = cookies.get(w)?.fields[a - 8] ?? -1) < 0) return 0;
   const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);
   if (kind === UInfo.ComponentScale) return name[0] === "#" ? WIDTH[name[1] as Ty] : 4;
   if (kind === UInfo.AllocInstance) {
     const jc = w.prog.get(name);
     return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } });
   }
-  const stat = kind === UInfo.StaticGet || kind === UInfo.StaticPut, byLayout = kind >= UInfo.ObjGet;
-  const f = byLayout ? w.prog.layout(name)[a & 0xfff] : w.prog.get(name)?.fields[a & 0xfff];
+  const stat = kind === UInfo.StaticGet || kind === UInfo.StaticPut;
+  const f = w.prog.get(name)?.fields[a & 0xfff];
   if (!f || f.isStatic !== stat || f.kind !== (["I", "J", "L"] as const)[b]) return 0;
   const op = kind === UInfo.FieldGet || kind === UInfo.StaticGet || kind === UInfo.ObjGet ? "get" : kind === UInfo.FieldPut || kind === UInfo.StaticPut || kind === UInfo.ObjPut ? "put" : "cas", k = f.kind;
   const params: Kind[] = op === "get" ? ["L"] : op === "put" ? ["L", k] : ["L", k, k];
   // a static field's accessor takes the receiver slot too, so reflection reaches both kinds the same way
   if (stat) return w.synthSlot(`uf:s${op}:${a}`, { params, ret: op === "get" ? k : "V", body: (cx, c) => { const g = cx.staticGlobal(name, f.name, f.desc); if (op === "get") c.gget(g); else c.lget(1).gset(g); } });
-  return w.synthSlot(`uf:${kind}:${a}`, { params, ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
+  return w.synthSlot(`uf:${op}:${a}`, { params, ret: op === "get" ? k : op === "put" ? "V" : "I", body: (cx, c) => {
     const st = cx.structFor(name), at = cx.fieldIndex(name, f), o = c.newLocal(refNull(st));
     c.lget(0).refCast(st).lset(o);
     if (op === "get") c.lget(o).structGet(st, at);
@@ -123,8 +130,7 @@ const index = (c: Code, t: Ty): number => {
 };
 const slotOf = (cx: Compiler, c: Code, kind: UInfo, k: Kind): number => {
   const slot = c.newLocal(T.i32);
-  // the object's class id and the field's place in its layout
-  cx.info(c, kind, () => { c.lget(OBJ).call(cx.helper("vtab")).i32(H.ID).arrayGet(cx.tVT).i32(12).raw(OP.i32_shl).lget(OFF).raw(OP.i32_wrap_i64).i32(OBJECT_BASE).raw(OP.i32_sub).i32(2).raw(OP.i32_shr_u, OP.i32_or); }, () => c.i32({ I: 0, J: 1, L: 2 }[k])); c.lset(slot);
+  cx.info(c, kind, () => c.lget(OFF).raw(OP.i32_wrap_i64), () => c.i32({ I: 0, J: 1, L: 2 }[k])); c.lset(slot);
   c.lget(slot).raw(OP.i32_eqz).if_(); cx.gap(c, "Unsafe: no accessor for this offset"); c.end();
   return slot;
 };

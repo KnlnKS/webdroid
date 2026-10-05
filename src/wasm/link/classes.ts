@@ -15,7 +15,7 @@ import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
-import { hostUnsafe, UInfo, OBJECT_BASE } from "./unsafe";
+import { hostUnsafe, UInfo, fieldCookie } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";
 import { Lookup, LOADER_OF_CLASS } from "./loaders";
@@ -75,7 +75,7 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.Inner: return innerFlags(jc);
     // ObjectStreamClass.hasStaticInitializer: a <clinit> of the class, or with b set of a superclass
     case Info.HasClinit: { for (let k = jc; k; k = b && k.sup ? w.prog.get(k.sup) : undefined) if (k.byKey.has("<clinit>()V")) return 1; return 0; }
-    case Info.FieldOffset: { const f = fields[b]; return f.isStatic ? a << 12 | b : OBJECT_BASE + 4 * w.prog.layout(name).findIndex((x) => x.owner === name && x.name === f.name && x.desc === f.desc); }
+    case Info.FieldOffset: return fieldCookie(w, a << 12 | b);
     case Info.NameLen: return javaName(name).length;
     case Info.NameChar: return javaName(name).charCodeAt(b);
     case Info.NFields: return fields.length;
