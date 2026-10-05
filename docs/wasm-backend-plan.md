@@ -929,6 +929,29 @@ runs above, but an app that links classes continuously while it is hot would see
 **Handles of Java arrays.** `VMRuntime.addressOf` of an array that is not a direct buffer's (`TypedArray.mData`, `PathIterator`) is a `javaValues` host native answering `handle(array)` of the Java array itself; `deref` (android/handles.ts) gives a native the host form of such a handle (`handleViews`, a copy in a Bridge scope) and every non-raw native with a `long` parameter runs in a scope that stores the copy back on return (`jni.test.ts`, last test). A copy already made by an enclosing call that was passed the same array is the one `deref` returns.
 **Open.** (1) A JNI native that waits (a callback that blocks, a nested JNI call that returns a Promise) is reported by the plain import and re-imported as Suspending (`wasmNativeSuspended`); entering it needs strands in `entry.ts` (C3). (3) `cpuFor(curThread)` is the JS tier's thread: a Wasm strand has no Cpu of its own yet. (4) `FindClass` ignores the calling library's loader (one namespace). (5) JNI `MonitorEnter` of a contended lock cannot wait.
 
+### 4.15 C3: the framework on the Wasm tier (2026-10-04, `knlnks/wasm-tc3`)
+
+**Entry.** Host code that enters Java (`vcall`, `scall`, `newObj`, `linkInit`, `callOn`, `after`) runs on a new strand of the thread that owns the turn (`callOn`'s thread, else the thread of the strand whose native is running, else main), with the
+strand it entered from as `parent` (`monitor.ts owns`: same thread, so locks held are shared). The module of the call (`World.callFn`) records how it ended in globals and takes a token, so a call that never waited answers its value at once and a
+call that did answers a Promise: the JS tier's contract, which the 759 `vcall` sites rely on. `sched.onThread` keeps `curThread` the JThread of the running strand (a resumed strand says so with `Sync.Resume`). `Looper.loop` is the main strand suspended in
+`nativePollOnce` (a Suspending host native); `mainDbg.depth` is unchanged.
+**Natives that answer a Promise.** Every native without arrays is a plain import; if it answers a Promise, its wrapper hands the Promise to `sched.pending`, sets the `rt.wait` global, and the call site (`Natives.call`) then calls a
+Suspending `settle:*` import and takes the settled value in its place. This replaced classifying natives (the survey cannot tell `return transact(...)`): only natives with arrays still need to be known (`MAY_SUSPEND`, `webdroid/` services, the build's
+`waiting.json`), because their views are scratch memory; a parked scope keeps its scratch (the call site and `Bridge.end` lower the top only if nothing is above it).
+**Boot.** `bootWasmTier` opens the tab's build and platform Program (`openAot`, `platformProgram`) and makes a World over `new Program([], platform)`; the app's dexes join as they arrive and `opts.dexes` serves class loaders. Outside a page (the harnesses)
+it keeps the old path.
+**Results.** `WEBDROID_TIER=wasm`: Calculator M and FitNotes reach `Activity.onCreate`, `onStart`, `onResume` in a process frame and draw (the EventLog order matches the JS tier); the microG processes start. `lat` FitNotes: gate passes
+(max tap 47 ms cold, 42 ms warm), launch to first frame 7.9 s against 1.8 s on the JS tier (G3 fails on launch time; warm is not faster because bootWasmTier is not yet wired to `prepareApp`). Mihon: scenario times out. Calculator M: the gated taps need `uiTree`,
+which fails (below). The JS tier's quick gate is 7/7; Wasm: `fitnotes` ran its 39 steps with 11 failures, `doodlejump` wedged in `Application.onCreate`.
+**First failing mechanisms (open).** (1) Compose's `uiTree` (Calculator M): a `ViewGroup` made with no attributes reads a layoutAnimation resource id from its TypedArray (`AssetManager.nativeApplyStyle` fills `mData` through `deref` of an `addressOf` handle; a stale or
+shifted result). (2) `RuntimeError: illegal cast` in `Double.doubleValue` under an `$invoke` stub (reflection/MethodHandle boxing; FitNotes tab-graph). (3) `Runtime.link` guards left in JS-tier-only code: `rt.classFor` for `Notification$CallStyle`
+(`fixNotification`), the toast layout `transient_notification` ("Error inflating class <unknown>"). (4) `RamLogger.Append`: "move-result without invoke at 58" (a compiler gap on app code, Doodle Jump). (5) `AttributionSource should be unparceled during a binder transaction`
+for a receiver of a microG process (binder calling identity from a strand). (6) JNI natives that wait (4 `jni.test.ts` tests skip), a Cpu per strand, contended MonitorEnter from JNI, FindClass by the calling loader (B3's list) are not done. (7) The page's
+`heapUsed` is tab-wide, so `heapLimit` is 2 GiB there. Mihon's timeout is not diagnosed.
+**Fixed on the way** (all generic): suspending natives lost their array results when they completed without waiting (`give` ran only after a wait); `Bridge.invoke` scopes outliving the natives they reached handed a native the copy of an array an earlier one reached;
+`put` wrote array results at an unaligned scratch address; a process frame read a page file whose lazy source answers the page realm's Promise (`instanceof Promise` in `fdReadAt`); `Rect` edge names were cached by `constructor`, which every facade shares;
+`handles.ts` could not key a Wasm array; `pm.ts` cloned an ApplicationInfo as a JS object; `jcoll.ts` built ArrayLists as JS objects; the JS compile worker ran under `tier=wasm`; `VMRuntime.addressOf` took its receiver as the array.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
