@@ -5,36 +5,14 @@
 // tests/conformance/wasm-pins.json with its mechanism (the JS tier is wrong, or a limit the Wasm tier has), or the run fails it as unexplained, and a pin that
 // no longer diverges is stale. A pin is a class regex, a test-name regex and a `why`; with `because` (a regex) it covers only the tests whose Wasm result has a reason that matches:
 // the test's own failure, the reason its runner gave for skipping the method, or the failure of the whole class. A `flaky` pin names tests whose result depends on timing and varies from run to run on both tiers: it is never stale.
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { androidPlatform, androidTool } from "../android-sdk";
 import { prepare } from "../conform/prepare";
 import { hash, parseLines, type Outcome } from "../conform/results";
 import { SUITES } from "../conform/suites";
 import { consume } from "../args";
 import { bundleForNode } from "./undernode";
 import { arrayProviderFailures } from "./conform-coverage";
-
-/** prepare caches the suite DEX; rebuild its runner when NgRunner changes, including existing caches. */
-async function refreshNgRunner(dexDir: string, maven: string[]): Promise<void> {
-  const source = `${import.meta.dir}/../conform/NgRunner.java`, stamp = `${dexDir}/ngrunner-source.java`;
-  const text = await Bun.file(source).text();
-  if (existsSync(stamp) && await Bun.file(stamp).text() === text) return;
-  const classes = `${dexDir}/classes`, jars = maven.map((coords) => {
-    const [, artifact, version] = coords.split(":");
-    return `conform-cache/jars/${artifact}-${version}.jar`;
-  });
-  const javaHome = process.env.JAVA_HOME ?? "/opt/homebrew/opt/openjdk@21";
-  const run = (command: string[]) => {
-    const result = Bun.spawnSync(command, { env: { ...process.env, JAVA_HOME: javaHome, PATH: `${javaHome}/bin:${process.env.PATH}` }, stderr: "pipe" });
-    if (result.exitCode) throw new Error(`${command[0]} failed:\n${result.stderr.toString()}`);
-  };
-  for (const file of new Bun.Glob("NgRunner*.class").scanSync(classes)) rmSync(`${classes}/${file}`);
-  run(["javac", "--release", "17", "-XDstringConcat=inline", "-cp", jars.join(":"), "-d", classes, source]);
-  run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,
-    ...[...new Bun.Glob("**/*.class").scanSync(classes)].map((file) => `${classes}/${file}`)]);
-  await Bun.write(stamp, text);
-}
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [
@@ -99,7 +77,6 @@ let failed = false;
 const totals = { js: 0, wasm: 0, tests: 0, baseline: 0 };
 for (const [suiteName, classMatch] of plan) {
   const { suite, classes, dexDir } = await prepare(suiteName), runner = suite.testng ? "NgRunner" : "ConformRunner";
-  if (suite.testng) await refreshNgRunner(dexDir, suite.maven);
   const selected = classMatch ? classes.filter((c) => c.includes(classMatch)) : classes;
   const baseline: Record<string, string[]> = existsSync(`tests/conformance/${suiteName}.json`) ? await Bun.file(`tests/conformance/${suiteName}.json`).json() : {};
   const wasm = new Map<string, Map<string, Outcome>>(), js = new Map<string, Map<string, Outcome>>(), skipped = new Map<string, Map<string, string>>();
