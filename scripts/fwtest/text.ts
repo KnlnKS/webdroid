@@ -72,7 +72,7 @@ await exercise("SpannableStringBuilder, SpannableString, SpannedString, Selectio
   const spans = (t: unknown) => spanList(t, name);
   same("spans", `${await text(b)} ${await spans(b)}`, "e<l|l>o WO w2[0,10,640012] ii[1,6,50012] w1[0,10,12] ee[2,5,21] ei[2,6,22] ie[1,5,11] pt[4,4,22] para[0,4,33]");
   events();
-  const OBJ = rt.classFor("java/lang/Object"), MARK = rt.classFor("fwtest/Mark"), length: number = await vcall(b, "length", "()I");
+  const OBJ = await classMirror("java/lang/Object"), MARK = await classMirror("fwtest/Mark"), length: number = await vcall(b, "length", "()I");
   same("nextSpanTransition", [await vcall(b, "nextSpanTransition", "(IILjava/lang/Class;)I", 0, length, OBJ), await vcall(b, "nextSpanTransition", "(IILjava/lang/Class;)I", 2, length, MARK)], [1, 4]);
   const S = "android/text/Selection", sel = async () => [await scall(S, "getSelectionStart", "(Ljava/lang/CharSequence;)I", b), await scall(S, "getSelectionEnd", "(Ljava/lang/CharSequence;)I", b)];
   await scall(S, "setSelection", "(Landroid/text/Spannable;II)V", b, 1, 3);

@@ -2,7 +2,7 @@
 // the comparisons against values the reference AVD printed for the same calls.
 import type { DexFile } from "../../src/jvm/dex";
 import { rt, JObj, declaredField } from "../../src/jvm/runtime";
-import { vcall, scall, linkInit, implement, staticField, classNameOf } from "../../src/jvm/natives/jentry";
+import { vcall, scall, linkInit, staticField, classNameOf } from "../../src/jvm/natives/jentry";
 
 const reached: string[] = [];
 /** how a harness makes dex files known to the Java that runs: the JS tier's, unless the harness gives the World's */
@@ -55,8 +55,13 @@ export const statics = async (cls: string) => {
   await linkInit(cls);
   return new Proxy({} as Record<string, any>, { get: (_, key) => typeof key === "string" && key.startsWith("s$") ? staticField(cls, key.slice(2)) : undefined });
 };
-/** a listener object answering `name` with `fn` */
-export const listener = (name: string, desc: string, fn: (...a: any[]) => unknown) => implement(rt.make("java/lang/Object") as JObj, name, desc, fn);
+/** an object of a class that implements the interface `iface`, answering `name` with `fn` */
+let listeners = 0;
+export const listener = (iface: string, name: string, desc: string, fn: (...a: any[]) => unknown) => {
+  const cls = "fwtest/Listener" + listeners++;
+  rt.register({ name: cls, ctor: class extends JObj {}, ifaces: [iface], methods: { [name + desc]: fn } });
+  return rt.make(cls);
+};
 /** a Java Paint.FontMetrics' (or FontMetricsInt's) top, ascent, descent, bottom and leading */
 export const fontMetrics = (fm: object, cls = "FontMetrics") =>
   ["top", "ascent", "descent", "bottom", "leading"].map((k) => (fm as Record<string, number>)[declaredField(`android/graphics/Paint$${cls}`, k)]);

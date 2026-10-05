@@ -9,9 +9,9 @@ const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 
 // imported after the policy is set: rt.register consults it, so the specs never land
-const { rt } = await import("../../src/jvm/runtime");
-const { hostThrowable } = await import("../../src/wasm/host/entry");
-const { strandEntry } = await import("./strandentry");
+const { fieldNames, rt } = await import("../../src/jvm/runtime");
+const { useEntry } = await import("../../src/jvm/natives/jentry");
+const { fieldNamesOf, hostThrowable, wasmEntry } = await import("../../src/wasm/host/entry");
 const { world } = await import("./lib");
 const { jsTier, natives } = await import("./oracle");
 const { AOSP } = await import("./paths");
@@ -24,7 +24,10 @@ const hosted = new Set<string>();
 /** the classes the host implements that have been registered since: the exercises' modules register more as they load, each when it does */
 const addHostClasses = () => { for (const spec of natives.source!.hostSpecs!()) if (!hosted.has(spec.name)) { hosted.add(spec.name); w.addHostClass(spec); } };
 addHostClasses();
-strandEntry(w);
+const register = rt.register.bind(rt);
+rt.register = (spec) => { const r = register(spec); addHostClasses(); return r; };
+useEntry(wasmEntry(w));
+fieldNames.find = fieldNamesOf(w);
 rt.mkThrowable = hostThrowable;
 // the process state ActivityThread.main leaves, entered on a strand: System's initialization reads files
 try {
@@ -45,9 +48,9 @@ for (const jc of w.prog.all()) {
 }
 console.log(`withheld ${BYTECODE.length} prefixes; ${[...w.prog.all()].length} platform classes\n\ncoverage ${have}/${total} declared natives bound`);
 
-// the main looper the exercises' Handlers attach to (it is not run: the loop on a strand is Track C's)
-const { scall, vcall } = await import("../../src/jvm/natives/jentry");
-try { await scall("android/os/Looper", "prepareMainLooper", "()V"); } catch (e) { console.log("prepareMainLooper:", e instanceof Error ? e.stack : await vcall(e, "toString", "()Ljava/lang/String;")); }
+// the device's languages and the main looper the exercises' Handlers attach to, as a booted page has them
+await (await import("../../src/android/resnative")).initDeviceLocales();
+await (await import("../../src/android/mainloop")).startMainLooper();
 
 (await import("../fwtest/harness")).loader.loadDex = (dex) => { w.addDexes([dex]); };
 
