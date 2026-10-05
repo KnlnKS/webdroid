@@ -35,11 +35,10 @@ import { runUnderNode } from "./undernode";
 
 interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
-  cold: { node: true, all: false }, "cold-slow": { node: true, all: false },
+  cold: { node: true, all: true }, "cold-slow": { node: true, all: false },
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
   threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
-  cold: { node: false, all: true },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, "aot-profile": { node: false, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
