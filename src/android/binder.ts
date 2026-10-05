@@ -210,7 +210,7 @@ const oneWay = new Map<number, Promise<unknown>>();
 export const binderThread = (): JThread => Object.assign(new JThread(), { jname: "Binder:" + PROCESS_PID });
 /** Java frames entered by `call` keep the binder thread across suspensions; the thread is
  *  released as soon as `call` returns, so no other job resumes on it */
-async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
+export async function withCallingIdentity<T>(caller: Caller, call: () => T | Promise<T>, system = false): Promise<T> {
   const thread = binderThread(), state = ipc(thread);
   state.caller = caller;
   if (system) state.system = true;
@@ -429,7 +429,21 @@ const absentServices = new Set<string>();
 export const absentService = (...names: string[]): void => names.forEach((name) => absentServices.add(name));
 class JServiceManager extends JObj { binder: JObj | null = null; }
 /** a hosted service's binder, made when first asked for */
+let remoteServices = new Set<string>();
+let serviceLookup: ((name: string) => Promise<BinderHandle | null>) | undefined;
+export function useSystemServiceAccess(names: readonly string[], lookup?: (name: string) => Promise<BinderHandle | null>): void {
+  if (names.length && !lookup) throw new Error("System service lookup is required");
+  remoteServices = new Set(names);
+  serviceLookup = lookup;
+}
+export function ownedSystemService(name: string): BinderHandle | null | Promise<BinderHandle | null> {
+  return after(localHostedService(name), exportBinder);
+}
 export function hostedService(name: string): JObj | Promise<JObj> | null {
+  if (remoteServices.has(name) && serviceLookup) return after(serviceLookup(name), importBinder);
+  return localHostedService(name);
+}
+function localHostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);
   if (!service) { if (!absentServices.has(name)) rt.noteMissing(`service ${name} [binder]`); return null; }
   if (typeof service !== "function") return service;

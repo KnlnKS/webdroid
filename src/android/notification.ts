@@ -13,7 +13,7 @@ import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 import { jarray, stringHash } from "../jvm/abi";
-import { hostStub, hostedService, callingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData } from "./binder";
+import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData, type Caller } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { postMain } from "./mainloop";
 import { preferenceStore, Prefs } from "./sharedprefs";
@@ -556,16 +556,38 @@ function delegateOf(pkg: string): string | null | Promise<string | null> {
 const foregroundKey = (pkg: string, id: number) => `${pkg}|${id}`;
 /** Service.startForeground: the notification posts under the service's id, as the app's, with
  *  FLAG_FOREGROUND_SERVICE, which no app may set itself */
+export type ForegroundNotificationRequest = { kind: "start"; id: number; data: ParcelData | null }
+  | { kind: "stop"; id: number; remove: boolean };
+export const notificationTransport = { foreground: null as ((request: ForegroundNotificationRequest) => Promise<void>) | null };
+export function receiveForegroundNotification(pkg: string, caller: Caller, request: ForegroundNotificationRequest): Promise<void> {
+  return withCallingIdentity(caller, () => rt.drive(function* (): Gen<void> {
+    if (request.kind === "stop") return yield* stopForeground(pkg, request.id, request.remove);
+    const notification = request.data ? yield* awaited(unparcelled(N, request.data)) : null;
+    yield* startForeground(pkg, request.id, notification);
+  }()));
+}
 export const startForegroundNotification = driven(function* (id: number, notification: JObj | null): Gen<void> {
-  const pkg = appHost?.pkg;
+  if (notificationTransport.foreground) {
+    yield* awaited(notificationTransport.foreground({ kind: "start", id, data: notification && (yield* awaited(parcelled(notification))) }));
+    return;
+  }
+  yield* startForeground(appHost?.pkg, id, notification);
+});
+function* startForeground(pkg: string | undefined, id: number, notification: JObj | null): Gen<void> {
   if (!pkg || !id) return;
   if (notification === null) fail("java/lang/IllegalArgumentException", "null notification");
   notificationStore.foreground.add(foregroundKey(pkg, id));
   yield* enqueueNotification(pkg, pkg, null, id, notification, 0, true);
-});
+}
 /** stopForeground, and the service's end: removed, or left behind without FLAG_FOREGROUND_SERVICE */
 export const stopForegroundNotification = driven(function* (id: number, remove: boolean): Gen<void> {
-  const pkg = appHost?.pkg;
+  if (notificationTransport.foreground) {
+    yield* awaited(notificationTransport.foreground({ kind: "stop", id, remove }));
+    return;
+  }
+  yield* stopForeground(appHost?.pkg, id, remove);
+});
+function* stopForeground(pkg: string | undefined, id: number, remove: boolean): Gen<void> {
   if (!pkg) return;
   notificationStore.foreground.delete(foregroundKey(pkg, id));
   const r = find(pkg, null, id, 0);
@@ -574,7 +596,7 @@ export const stopForegroundNotification = driven(function* (id: number, remove: 
   const n = yield* awaited(unparcelled(N, r.data));
   setDeclared(n, N, { flags: r.flags &= ~FLAG_FOREGROUND_SERVICE });
   r.data = yield* awaited(parcelled(n));
-});
+}
 
 const POLICY = "android/app/NotificationManager$Policy";
 /** the reference AVD's Do Not Disturb policy: alarms, media, messages, calls, repeat callers and

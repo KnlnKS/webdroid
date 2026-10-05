@@ -7,6 +7,9 @@ import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
 import { preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, type PreferenceCalls } from "../src/android/sharedprefs";
 import { callProxy, serveCalls } from "../src/shell/process-port";
+import { ownedSystemService, useSystemServiceAccess, type BinderHandle } from "../src/android/binder";
+import { notificationTransport, receiveForegroundNotification, startForegroundNotification, stopForegroundNotification, type ForegroundNotificationRequest } from "../src/android/notification";
+import { PROCESS_PID } from "../src/android/os";
 import { bootApp, packageRecord } from "./java";
 
 const pkg = "org.webdroid.test.notify";
@@ -17,14 +20,23 @@ rt.linkNatives();
 
 beforeAll(async () => {
   app = await bootApp(await packageRecord(pkg, { permissions: ["android.permission.POST_NOTIFICATIONS"] }));
-  manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "notification");
   const owner = preferenceStore, { port1, port2 } = new MessageChannel();
+  const foreground = notificationTransport.foreground;
+  type Calls = PreferenceCalls & {
+    systemService(name: string): Promise<BinderHandle | null>;
+    foreground(request: ForegroundNotificationRequest): Promise<void>;
+  };
   const stop = serveCalls(port1, { ...canonicalPreferenceCommands(owner, name => {
     if (name !== "android:notification-policy:" + pkg) throw new Error("foreign preference file");
-  }) });
-  const client = callProxy<PreferenceCalls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]);
+  }), systemService: ownedSystemService,
+    foreground: (request: ForegroundNotificationRequest) => receiveForegroundNotification(pkg, {pid:PROCESS_PID,uid:packageUid(pkg)}, request),
+  });
+  const client = callProxy<Calls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "systemService", "foreground"]);
   usePreferenceAccess(client.endpoint);
-  closePreferences = () => { client.close(); stop(); usePreferenceStore(owner); };
+  useSystemServiceAccess(["notification"], client.endpoint.systemService);
+  notificationTransport.foreground = client.endpoint.foreground;
+  closePreferences = () => { client.close(); stop(); usePreferenceStore(owner); useSystemServiceAccess([]); notificationTransport.foreground = foreground; };
+  manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "notification");
 });
 afterAll(() => closePreferences?.());
 
@@ -91,6 +103,14 @@ describe("notification-manager", () => {
     expect(await vcall(copy, "getLayoutId", "()I")).toBe(0x7f0b0001);
     await vcall(manager, "cancel", "(Ljava/lang/String;I)V", "t", 1);
     await vcall(manager, "deleteNotificationChannel", "(Ljava/lang/String;)V", "p");
+    expect(await active()).toEqual([]);
+    await vcall(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("fg", "Service", 3));
+    await startForegroundNotification(7, await build("fg", "service"));
+    const foreground = await active();
+    expect(foreground.length).toBe(1);
+    const serviceNotification = await vcall(foreground[0], "getNotification", `()${N}`);
+    expect((serviceNotification as Record<string, number>)[declaredField("android/app/Notification", "flags")] & 64).toBe(64);
+    await stopForegroundNotification(7, true);
     expect(await active()).toEqual([]);
   });
 });
