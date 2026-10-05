@@ -132,9 +132,8 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // app's copy of a platform class is never loaded, as PathClassLoader asks its parent first.
   const loadAppDexes = async () => {
     await inflateTree(zip, isDexEntry);
-    for (const name of Object.keys(zip)) {
-      if (isDexEntry(name)) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
-    }
+    // Match the worker's DEX order; asynchronous inflation can reorder the tree.
+    for (const name of Object.keys(zip).filter(isDexEntry).sort()) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
     mark("dexLoaded");
   };
   // The Wasm tier's World numbers what it runs from the first Java this realm runs, and the app code a previous launch saved is attached only to a World that has numbered

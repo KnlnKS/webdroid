@@ -1,12 +1,6 @@
 {
   "ojluni-time": [
     {
-      "class": "tck\\.java\\.time\\.(TCKLocalTime|TCKLocalDateTime|format\\.TCKDateTimeFormatters)$",
-      "test": ".",
-      "why": "TestNG reads a data provider's generic return type, Iterator<Object[]>, and casts its type argument to Class. AOSP's libcore.reflect.GenericSignatureParser makes a GenericArrayTypeImpl for every array type argument and nothing resolves it to a Class, so the Wasm tier, which runs that bytecode, skips these tests (ClassCastException). The JS tier's reflection spec answers Object[].class.",
-      "because": "GenericArrayTypeImpl cannot be cast to java.lang.Class"
-    },
-    {
       "class": "test\\.java\\.time\\.TestClock_System$",
       "test": "^test_(ClockResolution|OffsetRegular)\\[",
       "why": "These compare System.currentTimeMillis with Clock.systemUTC() readings taken moments apart; on a loaded host either tier fails them in some runs.",

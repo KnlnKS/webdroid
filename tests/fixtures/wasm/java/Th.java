@@ -13,6 +13,54 @@ public class Th {
   static native int viaJs(int x);       // a plain native that calls Java which waits (a JS frame between the entry and the import)
   static int inner(int x) { return await(x) * 2; }
   static int trap(int x) { return await(x); }
+  static native byte[] gapEcho(byte[] a, int ms);   // an async native: waits, writes a[0] + 1 into its argument and answers the argument reversed
+  /** threads whose natives wait together each get their own array back, and see their own argument written, whatever the others do meanwhile */
+  static int arrayGap(int n) throws Exception {
+    final int[] bad = new int[1];
+    Thread[] ts = new Thread[n];
+    for (int i = 0; i < n; i++) {
+      final int k = i;
+      ts[i] = new Thread(() -> {
+        byte[] a = new byte[8 + k % 5];
+        for (int j = 0; j < a.length; j++) a[j] = (byte) (k * 7 + j);
+        byte first = a[0];
+        byte[] got = gapEcho(a, k % 3);
+        boolean ok = got != null && got.length == a.length && a[0] == (byte) (first + 1);
+        for (int j = 0; ok && j < a.length; j++) ok = got[j] == (byte) (k * 7 + a.length - 1 - j);
+        if (!ok) synchronized (bad) { bad[0]++; }
+      });
+      ts[i].start();
+    }
+    for (Thread t : ts) t.join();
+    return bad[0];
+  }
+
+  static native int gapAlias(byte[] a, byte[] b, boolean fail);
+  static int arrayAlias(int n) {
+    byte[] a = {3};
+    int r = gapAlias(a, a, false);
+    try { gapAlias(a, a, true); } catch (IllegalArgumentException e) { return r == 9 && a[0] == 9 ? 0 : 1; }
+    return 2;
+  }
+  static volatile boolean stop;
+  static int fuelProgress(int n) throws Exception {
+    stop = false;
+    Thread t = new Thread(() -> { try { Thread.sleep(1); } catch (InterruptedException e) { } stop = true; });
+    t.start();
+    int bound = 10;
+    for (int i = 0; i < bound; i++) { if (stop) break; bound++; }
+    t.join();
+    return stop ? 0 : 1;
+  }
+  static int fuelOverflow(int n) throws Exception {
+    stop = false;
+    Thread t = new Thread(() -> { try { Thread.sleep(1); } catch (InterruptedException e) { } stop = true; });
+    t.start();
+    for (int i = 0; i < Integer.MAX_VALUE; i += 2) { if (stop) break; }
+    t.join();
+    return stop ? 0 : 1;
+  }
+  static int fuelArithmetic(int n) { int r = 0; for (int i = 0; i < n; i++) r += i; return r; }
 
   // ---------- monitors
   static int reentrant(int n) {
@@ -321,6 +369,25 @@ public class Th {
     try { return depth(0); } catch (StackOverflowError e) { return 1; }
   }
   static int depth(int d) { return depth(d + 1) + 1; }
+  /** methods linked for the first time with the stack nearly full: a link that fails for want of stack must not leave the method without a body */
+  static int probe(int k, Object a, Object b) {
+    switch (k) {
+      case 0: return new java.util.HashMap<Object, Object>().put(a, b) == null ? 1 : 0;
+      case 1: { java.util.ArrayList<Object> l = new java.util.ArrayList<Object>(); l.add(a); return l.contains(b) ? 1 : 0; }
+      case 2: return a.toString().length() > 0 ? 1 : 0;
+      default: return java.util.Arrays.asList(a, b).hashCode() == 0 ? 0 : 1;
+    }
+  }
+  static int dive(int d, int at, int k, Object a) { return d == at ? probe(k, a, a) : dive(d + 1, at, k, a) + 0; }
+  static int linkDeep(int n) {
+    int broken = 0;
+    int[] depths = {4500, 3000, 1500, 500, 10};
+    for (int i = 0; i < depths.length; i++) for (int k = 0; k < 4; k++) {
+      try { dive(0, depths[i], k, "x" + i); } catch (StackOverflowError e) { } catch (UnsatisfiedLinkError e) { broken++; }
+    }
+    for (int k = 0; k < 4; k++) probe(k, "y", "z");
+    return broken;
+  }
   static int stackOverflowDeep(int n) {
     int caught = 0;
     for (int i = 0; i < 3; i++) try { depth(0); } catch (StackOverflowError e) { caught++; }
