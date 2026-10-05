@@ -9,6 +9,7 @@
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { ColdInterpreter } from "../cold/interpreter";
 import { ColdSlowOps } from "../cold/slowops";
+import { resumeUnit, type ResumeState } from "../compiler/resume";
 import type { ColdSnapshot } from "../cold/state";
 import { coldUnit, supportsColdBody } from "../cold/runtime";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
@@ -102,7 +103,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -679,6 +680,36 @@ export class World {
   validateColdSnapshot(state: ColdSnapshot, owner: Strand): void {
     (this.coldValidation ??= new ColdSlowOps(this)).validate(state, owner);
   }
+  private coldResumes = new Map<MethodInfo, Map<number, { fn: Function; take: (s: ResumeState) => ResumeState }>>();
+  /** Called only between committed cold operations; the adapter tail-calls the returned entry. */
+  promoteCold(m: MethodInfo, cold: ColdInterpreter, frame: object, edges: number): { fn: Function; state: ResumeState } | undefined {
+    if (cold !== this.cold) throw new Error("foreign cold interpreter");
+    const slot = this.slotOf(m), sl = this.slotAt(slot);
+    if (sl?.k !== "method" || (!sl.hot && edges < HOT_BUDGET)) return;
+    const snapshot = cold.snapshot(frame); this.stats.coldSnapshotRegisters += snapshot.item.regs;
+    if (snapshot.method !== m) throw new Error("cold resume method mismatch");
+    const state: ResumeState = { ...snapshot, method: m, activation: frame };
+    // A String constructor must commit its aliases before the compiled representation can take over.
+    if (state.uninitialized.length || m.flags & ACC.SYNCHRONIZED) return;
+    this.validateColdSnapshot(state, this.sched.current());
+    let entries = this.coldResumes.get(m);
+    if (!entries) this.coldResumes.set(m, entries = new Map());
+    let entry = entries.get(state.pc);
+    if (!entry) {
+      const t0 = performance.now(), unit = resumeUnit(new Compiler(this), m, state.pc);
+      this.stats.compileMs += performance.now() - t0;
+      const instance = this.instantiate(unit.built.bytes, { ...this.unitImports(unit.cx), ...unit.imports });
+      this.recordUnit(unit.cx, unit.built.traces, slot);
+      entry = { fn: instance.exports.resume as Function, take: unit.take({
+        validate: s => { this.validateColdSnapshot(s, this.sched.current()); },
+        claim: s => { cold.transfer(s.activation); this.rt.depth.value = s.depth; this.stats.coldResumes++; },
+      }) };
+      entries = this.coldResumes.get(m);
+      if (!entries) this.coldResumes.set(m, entries = new Map());
+      entries.set(state.pc, entry); this.stats.coldResumeEntries++; this.stats.units++; this.stats.methods++;
+    }
+    return { fn: entry.fn, state: entry.take(state) };
+  }
   private installCold(slot: number, m: MethodInfo, t0: number): boolean {
     if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
     const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
@@ -776,7 +807,10 @@ export class World {
     if (s.k === "method") {
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) new Int32Array(this.mem.buffer, COUNT_BASE + 4 * x, 1)[0] = 0; }
     } else set(slot, "m");
-    for (const t of built.traces) this.traces.set(t.name, t);
+    this.recordUnit(cx, built.traces, slot);
+  }
+  private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot: number): void {
+    for (const t of traces) this.traces.set(t.name, t);
     for (const [decl, name, desc, target, owner] of cx.assumptions) {
       const key = `${decl}.${name}${desc}`;
       let a = this.assumptions.get(key);
@@ -994,6 +1028,7 @@ export class World {
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
+    this.coldResumes.clear();
     this.cha.index(added);
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
     const now = this.noteLate(added);
@@ -1042,6 +1077,7 @@ export class World {
   invalidate(slot: number): void {
     for (const x of this.groupOf.get(slot) ?? [slot]) {
       const s = this.slotAt(x);
+      if (s?.k === "method") this.coldResumes.delete(s.m);
       if (s?.k === "ensure" || !s?.done) continue;
       const stub = s.stub ?? this.aot?.stub(x);
       if (!stub) continue;

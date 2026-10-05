@@ -96,8 +96,22 @@ if (linked.entry("W", "fib", "(I)I")(10) !== 55 || linked.stats.coldCalls <= col
   throw new Error("recursive invokes bypassed the cold bridge");
 const loop = linked.entry("W", "xorshift", "(I)J"), want = await js("W", "xorshift", "(I)J", [50_000]);
 if (loop(50_000) !== want || !linked.stats.upgrades) throw new Error("cold back edges did not promote the method");
+if (!linked.stats.coldResumes || !linked.stats.coldResumeEntries) throw new Error("long activation never transferred to compiled resume");
 const calls = linked.stats.coldCalls;
 if (loop(50_000) !== want || linked.stats.coldCalls !== calls) throw new Error("promoted calls stayed in the interpreter");
 if (!linked.stats.coldMethods || !linked.stats.coldCalls) throw new Error("method table bypassed the cold interpreter");
+const active = world([join(out, "classes.dex")], { cold: true, holdUpgrades: () => true });
+const activeMethod = active.prog.resolve("W", "xorshift", "(I)J")!;
+const activeCall = active.entry("W", "xorshift", "(I)J");
+if (activeCall(50_000) !== want || active.stats.coldCalls !== 1 || active.stats.coldResumes !== 1 || active.stats.upgrades !== 0)
+  throw new Error("first cold activation did not promote independently of future-call upgrades");
+const depth = active.rtImports().depth;
+for (let i = 0; i < 3; i++) {
+  depth.value = 123;
+  const raw = active.table.get(active.slotOf(activeMethod)) as (n: number) => bigint;
+  if (raw(50_000) !== want || Number(depth.value) !== 123) throw new Error("active transfer changed caller depth");
+}
+depth.value = 0;
+console.log(`active OSR: ${active.stats.coldResumes} production transfers; ${active.stats.coldResumeEntries} precise entries; held upgrades; caller depth preserved`);
 console.log(`linked cold: ${linked.stats.coldMethods} interpreted methods, ${linked.stats.coldCalls} calls`);
 console.log(`cold: ${checks} unchanged numeric/control DEX cases match JS/JDK across 1/7/4096-instruction slices and snapshot transfers; injected PC/register state, GC references and typed equality resume; standalone unsupported invokes rejected before execution; linked recursive invokes use canonical slow adapters`);

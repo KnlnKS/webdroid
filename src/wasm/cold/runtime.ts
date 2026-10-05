@@ -31,12 +31,16 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
   const slowAsync = cx.mb.importFunc("activation", "slowAsync", cx.mb.addFuncType([T.externref], []));
   const synchronous = cx.mb.importFunc("activation", "synchronous", cx.mb.addFuncType([T.externref], [T.i32]));
   const peer = cx.mb.importFunc("activation", "peer", cx.mb.addFuncType([T.externref], [T.externref]));
+  const target = cx.mb.importFunc("activation", "target", cx.mb.addFuncType([T.externref, T.i32], [T.funcref]));
+  const snapshot = cx.mb.importFunc("activation", "snapshot", cx.mb.addFuncType([T.externref], [T.externref]));
   const finish = cx.mb.importFunc("activation", "finish", cx.mb.addFuncType([T.externref], []));
   const create = cx.mb.importFunc("activation", "make", cx.mb.addFuncType([], [T.externref]));
   const bits = imp("bits", [T.externref, T.i32, T.i64], []), object = imp("object", [T.externref, T.i32, T.externref], []);
   const run = imp("run", [T.externref, T.i32], [T.i32]), result = imp("result", [T.externref], [T.i64]), reference = imp("reference", [T.externref], [T.externref]);
   const edges = imp("edges", [T.externref], [T.i32]);
   const ret = m.ret === "V" ? "V" : kindOf(m.ret);
+  const resumeSig = cx.mb.addFuncType([T.externref], ret === "V" ? [] : [cx.vtOf(ret)]);
+  const handed = new WeakMap<object, NonNullable<ReturnType<World["promoteCold"]>>>();
   const built = cx.buildSynthetic("cold:" + mid(m), kinds, c => {
     const frame = c.newLocal(T.externref), done = c.newLocal(T.i32), prior = c.newLocal(T.i32), iterations = c.newLocal(T.i32);
     const sid = cx.global("rt", "sid", T.i32, true), thr = cx.global("rt", "thr", T.anyref, true), depth = cx.global("rt", "depth", T.i32, true);
@@ -69,6 +73,9 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
     c.lget(done).i32(2).raw(OP.i32_eq).if_();
     c.lget(savedSid).i32(ROOT).raw(OP.i32_eq).lget(frame).call(synchronous).raw(OP.i32_or).if_().lget(frame).call(slow).else_().lget(frame).call(slowAsync).end();
     c.else_(); cx.callRt(c, "yieldFuel"); c.end(); restore();
+    const resume = c.newLocal(T.funcref);
+    c.lget(frame).lget(prior).call(target).ltee(resume).refIsNull().raw(OP.i32_eqz).if_();
+    c.lget(frame).call(snapshot).lget(resume).refAsNonNull().refCast(resumeSig).returnCallRef(resumeSig).end();
     c.br(0).end().end();
     c.lget(frame).call(finish); cx.emitLeave(c, entered, false); c.br(2);
     c.end().unreachable().end().lset(thrown); restore(); c.lget(frame).call(finish); cx.emitLeave(c, entered, false); c.lget(thrown).throw_(cx.tag); c.end();
@@ -90,6 +97,8 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter) {
     } catch (error) { unlock(); throw error; }
   };
   const imports = { cold: cold.imports, activation: {
+    target: (frame: object, edges: number) => { const next = w.promoteCold(m, cold, frame, edges); if (next) handed.set(frame, next); return next?.fn ?? null; },
+    snapshot: (frame: object) => { const next = handed.get(frame)!; handed.delete(frame); return next.state; },
     peer: (frame: object) => cold.owner(frame)?.thread.obj ?? null,
     synchronous: (frame: object) => +cold.synchronous(frame),
     finish: (frame: object) => cold.finish(frame),
