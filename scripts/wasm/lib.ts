@@ -24,8 +24,8 @@ export function loadDexes(path: string) {
 }
 /** WEBDROID_AOT=<dir> runs the harnesses over the precompiled platform assets (aot-build.ts) in <dir> */
 const AOT = typeof process === "undefined" ? (globalThis as { G1_AOT?: string }).G1_AOT : process.env.WEBDROID_AOT;
-/** a page may have compiled modules ahead (g1.ts): they are in G1_MODULES by path */
-const aotStore = (dir: string): AotStore => ({ get: (file) => (globalThis as { G1_MODULES?: Record<string, WebAssembly.Module> }).G1_MODULES?.[join(dir, file)] ?? new Uint8Array(readFileSync(join(dir, file))) });
+/** a page fetches the build as the app does (g1run.ts makes G1_STORE); node reads the files */
+const aotStore = (dir: string): AotStore => (globalThis as { G1_STORE?: AotStore }).G1_STORE ?? { get: (file) => new Uint8Array(readFileSync(join(dir, file))) };
 export function program(paths: string[]) {
   // precompiled code is numbered by the platform's classes, so all of them come first, in class path order, before the app's
   const platform = (p: string) => p.includes("/vendor/aosp/");

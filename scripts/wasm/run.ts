@@ -23,7 +23,8 @@
 //   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
 //                (not part of `all`; needs a build from `bun run aot`)
 // Tools: watdump prints the code generated for a method; `aot` (bun run aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process
-// loads (aot-build, then aot-startup), and makes that build the one the server offers.
+// loads (aot-build, then aot-startup), and makes that build the one the server offers. `aot-profile --classes`, `bun run aot`, `aot-profile` (in this order, with the server
+// running) regroup the build by what launches of apps use and write its startup list.
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

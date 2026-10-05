@@ -5,7 +5,7 @@
 // --ref takes the JS tier's numbers (and which workloads match) from an earlier --json run and measures only Wasm, for A/B work on the compiler.
 // Needs javac, d8, node and (for chrome) Playwright's Chrome. The host is shared: the load average is printed and a high one flags the table noisy.
 import { cpus, loadavg } from "node:os";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
@@ -53,14 +53,14 @@ const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
 async function chromeRun() {
   const { chromium } = await import("playwright");
   const bundlePath = await bundle(true);
-  const aotDir = process.env.WEBDROID_AOT, startup: string[] = aotDir && process.env.G1_PREFETCH ? (JSON.parse(readFileSync(join(aotDir, "startup.json"), "utf8")) as string[]).filter((f) => f[0] === process.env.G1_PREFETCH || process.env.G1_PREFETCH === "1") : [];
-  const preload = [dex, ...PLATFORM_JARS.map((j) => join(AOSP, j)), ...(aotDir ? readdirSync(aotDir).filter((f) => !startup.includes(f)).map((f) => join(aotDir, f)) : [])];
+  const aotDir = process.env.WEBDROID_AOT;
+  const preload = [dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))];
   // cross-origin isolation gives performance.now() microsecond resolution instead of 0.1 ms
   const iso = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp", "cross-origin-resource-policy": "same-origin" };
   const server = Bun.serve({ port: 0, fetch(req) {
     const u = new URL(req.url), p = u.pathname;
-    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(ROOT)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const t0=performance.now();globalThis.G1_MODULES={};await Promise.all(${JSON.stringify(startup.map((f) => join(aotDir!, f)))}.map(async(p)=>G1_MODULES[p]=${process.env.G1_STREAM ? 'await WebAssembly.compileStreaming(fetch("/m?p="+encodeURIComponent(p)),{builtins:["js-string"],importedStringConstants:"#"})' : 'await WebAssembly.compile(await (await fetch("/m?p="+encodeURIComponent(p))).arrayBuffer(),{builtins:["js-string"],importedStringConstants:"#"})'}));globalThis.G1_AHEAD=performance.now()-t0;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
-    if (p === "/m") return new Response(Bun.file(u.searchParams.get("p")!), { headers: { "content-type": "application/wasm", ...iso } });
+    if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(ROOT)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    if (aotDir && p.startsWith("/aot/")) { const file = join(aotDir, p.split("/").pop()!); return existsSync(file) ? new Response(Bun.file(file), { headers: { "content-type": file.endsWith(".wasm") ? "application/wasm" : "application/json", ...iso } }) : new Response("", { status: 404 }); }
     if (p === "/g1.js") return new Response(Bun.file(bundlePath), { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;
     return file && existsSync(file) ? new Response(Bun.file(file), { headers: iso }) : new Response("", { status: 404 });

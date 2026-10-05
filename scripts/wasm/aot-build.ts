@@ -30,12 +30,13 @@ const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c"
 const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
 const appPath = flag("--app", "");
+const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(join(AOT_ROOT, "hot.json"), "utf8")) as { linked: string[]; called: string[] } : { linked: [], called: [] };
 
 // ---- where it goes
 let out = flag("--out", "");
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
-  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, appPath && readFileSync(appPath).toString("base64")]));
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, appPath && readFileSync(appPath).toString("base64"), hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
@@ -63,6 +64,18 @@ function chunked(mode: string, size: (name: string) => number, limit: number): (
     return g.n ? `${key}#${g.n}` : key;
   };
 }
+/** the classes `aot-profile.ts` saw launches use, assigned to modules of their own in the order of use (a module per `limit` bytes); the rest are grouped as `rest` says */
+function hotChunked(names: string[], size: (name: string) => number, limit: number, tag: string, rest: (name: string) => string): (name: string) => string {
+  const of = new Map<string, string>();
+  let n = 0, bytes = 0;
+  for (const name of names) {
+    const b = size(name);
+    if (bytes && bytes + b > limit) { n++; bytes = 0; }
+    bytes += b;
+    of.set(name, `${tag}#${n}`);
+  }
+  return (name) => of.get(name) ?? rest(name);
+}
 const HARD_LIMIT = 7 * 1024 * 1024;
 // the bytes per dex code unit of a code module and per method and field of a data module, measured over the platform build
 const C_BYTES_PER_UNIT = 14, C_BYTES_PER_METHOD = 150, D_BYTES_PER_METHOD = 52, D_BYTES_PER_FIELD = 19, D_BYTES_PER_CLASS = 330;
@@ -72,12 +85,23 @@ const classSize = (kind: "c" | "d") => (name: string): number => {
   return jc.methods.reduce((n, m) => n + (m.codeOff ? C_BYTES_PER_METHOD + C_BYTES_PER_UNIT * m.dex.code(m.codeOff).insns.length : 0), 0);
 };
 
+/** `names` with their superclasses and interfaces, each before the classes that need it: a class module needs the stubs of what its vtable names */
+function withSupers(names: string[]): string[] {
+  const seen = new Set<string>(), out: string[] = [];
+  const add = (n: string | null) => {
+    const c = n ? prog.get(n) : undefined;
+    if (!n || !c?.dex || seen.has(n)) return;
+    seen.add(n); add(c.sup); c.ifaces.forEach(add); out.push(n);
+  };
+  names.forEach(add);
+  return out;
+}
 const dexes = PLATFORM_JARS.map((j) => loadDexes(join(AOSP, j)));
 // an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
 const appDexes = appPath ? loadDexes(appPath) : [];
 const prog = new Program([...dexes.flat(), ...appDexes]); prog.addExterns(externs);
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: { dGroup: chunked(dMode, classSize("d"), maxModule), cGroup: chunked(cMode, classSize("c"), maxModule), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
+const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxModule, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxModule, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
 const aot = w.aot!;
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0, largest = 0;

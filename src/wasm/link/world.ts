@@ -643,6 +643,11 @@ export class World {
     const { installed, copies } = this.group(s.m);
     return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), initialized: this.newlyInitialized() };
   }
+  /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
+  usage(): { linked: string[]; called: string[] } {
+    const called = this.blockClass.filter((name, b) => { const n = this.prog.get(name)?.methods.length ?? 0; for (let i = 0; i < n; i++) if ((this.slots[this.blockBase[b] + i] as { done?: boolean } | undefined)?.done) return true; return false; });
+    return { linked: [...this.classes.keys()], called };
+  }
   /** the classes linked whose finished initialization has not been reported yet */
   private unreported: string[] = [];
   /** the classes whose initialization finished since the last job */

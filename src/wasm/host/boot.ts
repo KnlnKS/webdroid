@@ -58,6 +58,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   const dexes = (path: string) => openDexes(path, appDexes, opened);
   const install = (made: World) => {
     world = made;
+    store?.worlds.add(() => made.usage());
     mark("worldMade");
     code?.start(made);
     rt.mkThrowable = hostThrowable;

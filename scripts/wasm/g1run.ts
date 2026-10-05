@@ -1,10 +1,22 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex) or on the production JS tier,
 // timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
+import { FetchStore } from "../../src/wasm/link/aotstore";
 import { loadDexes, program, world } from "./lib";
 import { jsTier, natives, processState } from "./oracle";
 import { HEAP_LIMIT } from "../../src/wasm/link/exc";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
+
+/** in a page, the build is opened the way the app opens it: the index and the modules a start loads, fetched and compiled before the World runs */
+const page = (globalThis as { document?: unknown; G1_AOT?: string }).document ? (globalThis as { G1_AOT?: string }).G1_AOT : undefined;
+const aotBase = page ? `/aot/${page.split("/").pop()}/` : "";
+if (aotBase) {
+  const store = new FetchStore(aotBase), t0 = performance.now();
+  await store.fetchBytes("index.json");
+  await store.prefetch(JSON.parse(new TextDecoder().decode(await store.fetchBytes("startup.json"))) as string[]);
+  (globalThis as { G1_STORE?: FetchStore; G1_AHEAD?: number }).G1_STORE = store;
+  (globalThis as { G1_AHEAD?: number }).G1_AHEAD = performance.now() - t0;
+}
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
 export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
