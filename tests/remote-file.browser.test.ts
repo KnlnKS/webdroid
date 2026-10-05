@@ -71,7 +71,7 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return clockBootstrapOwnership();
     });
-    expect(clock).toEqual({ controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],
+    expect(clock).toEqual({ exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],
       advanced: 2, pendingBeforeDeath: 2, pendingAfterDeath: 1, brokerTimer: 1, pendingAfterAdvance: 0 });
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }

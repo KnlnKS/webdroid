@@ -8,7 +8,7 @@ import { appHost } from "../android/apphost";
 import { binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder";
 import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit } from "../process-exit";
-import { deathOf, lastExit, noteAppKill } from "../android/server/appexitinfo";
+import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo";
 import { after } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { hostedServices, remoteServiceConnected, serviceTransport } from "../android/server/activeservices";
@@ -32,7 +32,7 @@ import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, 
 import { callProxy, processError } from "./process-port";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
-const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, [],
+const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited"],
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
 function connectCommandTransports(): void {
@@ -44,7 +44,7 @@ function connectCommandTransports(): void {
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
 }
 export function closeProcessBrokerPort(): void {
-  calls?.close(); calls = undefined;
+  calls?.close();
   workerActivityResults.clear();
 }
 const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
@@ -70,6 +70,8 @@ export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
   calls = commandProxy(port);
   connectCommandTransports();
   connectActivityCommands();
+  exitRecordTransport.records = pkg => brokerCalls().exitRecords(pkg);
+  exitRecordTransport.publish = record => brokerCalls().processExited(record);
   return calls.endpoint;
 }
 

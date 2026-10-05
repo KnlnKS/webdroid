@@ -44,6 +44,22 @@ export function exitRecords(pkg: string): ExitRecord[] {
     return Array.isArray(saved) ? saved as ExitRecord[] : [];
   } catch { return []; }
 }
+/** Workers query/publish through the page owner; no localStorage replica is authoritative. */
+export const exitRecordTransport: {
+  records?: (pkg: string) => Promise<ExitRecord[]>;
+  publish?: (record: ExitRecord) => void;
+} = {};
+export const queryExitRecords = (pkg: string): ExitRecord[] | Promise<ExitRecord[]> =>
+  exitRecordTransport.records ? exitRecordTransport.records(pkg) : exitRecords(pkg);
+/** The owner computes crash repetition against its current history, then persists before death. */
+export function recordRemoteExit(record: ExitRecord): ExitRecord {
+  const crashed = record.reason === REASON_CRASH || record.reason === REASON_CRASH_NATIVE;
+  const last = crashed ? exitRecords(record.pkg).find(r => r.process === record.process &&
+    (r.reason === REASON_CRASH || r.reason === REASON_CRASH_NATIVE)) : undefined;
+  const canonical = {...record, dialog: crashed && !!last && record.timestamp - last.timestamp < MIN_CRASH_INTERVAL_MS};
+  save(canonical);
+  return canonical;
+}
 function save(record: ExitRecord): void {
   try { globalThis.localStorage?.setItem(storageKey(record.pkg), JSON.stringify([record, ...exitRecords(record.pkg)].slice(0, HISTORY))); }
   catch (error) { console.warn("[AppExitInfoTracker] not persisted", error); }
@@ -85,13 +101,15 @@ function recordExit(status: ExitStatus): void {
   // debuggerd reports a crash dump to the activity manager (NativeCrashListener) as a native crash
   if (status.signal !== undefined && status.tombstone) appCrashed({ exceptionClassName: "Native crash", exceptionMessage: SIGNAL_TEXT[status.signal] ?? `Signal ${status.signal}`, throwFileName: "unknown", throwLineNumber: 0 }, true);
   const reason = noted?.reason ?? (status.code !== undefined ? REASON_EXIT_SELF : REASON_SIGNALED);
-  save(lastExit = {
+  lastExit = {
     pid: PROCESS_PID, uid: PROCESS_UID, process: processName(), pkg: appHost?.pkg ?? processName(), reason,
     // a Java crash keeps no status; the others carry the exit code or the signal
     status: reason === REASON_CRASH ? 0 : status.code ?? status.signal,
     importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED, timestamp: wallMillis(),
     description: noted?.description ?? null, state: stateSummary && stateSummary.toBase64(),
     tombstone: status.signal !== undefined && status.tombstone ? status.tombstone.toBase64() : null, dialog: noted?.dialog ?? false,
-  });
+  };
+  if (exitRecordTransport.publish) exitRecordTransport.publish(lastExit);
+  else save(lastExit);
 }
 onProcessExit(recordExit);

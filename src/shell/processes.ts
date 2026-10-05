@@ -12,7 +12,7 @@ import { appHost } from "../android/apphost";
 import { asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
-import { NOT_CRASHED, type Death, type KillNote } from "../android/server/appexitinfo";
+import { NOT_CRASHED, REASON_EXIT_SELF, recordRemoteExit, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
 import { logUncaught } from "../jvm/natives/jthrowable";
 import { createGuestClockPort, uptimeMillis } from "../guest-clock";
@@ -79,6 +79,8 @@ export type ProcessEndpoint = {
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 export type BrokerCalls = CookieCalls & SettingsCalls & {
+  exitRecords: (pkg: string) => Promise<ExitRecord[]>;
+  processExited: (record: ExitRecord) => void;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
   activityFinish: (id: number, code: number, data: ParcelData | null) => Promise<void>;
   activityPresentation: (translucent: boolean) => Promise<void>;
@@ -91,7 +93,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & {
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -276,6 +278,18 @@ class ProcessBroker {
     if (!owned) this.callerPorts.set(pid, owned = new Set());
     const stop = serveCalls<BrokerCalls>(port1, {
       ...cookieCalls(() => this.cookies(this.entry(pid).pkg), () => { this.entry(pid); }),
+      exitRecords: async pkg => {
+        const caller = this.entry(pid), owner = packages.get(pkg);
+        if (owner?.uid !== caller.uid && await permissionDenied("android.permission.DUMP", caller.pkg))
+          throw rt.mkThrowable("java/lang/SecurityException", "Exit records belong to another UID");
+        this.entry(pid);
+        return exitRecords(pkg);
+      },
+      processExited: record => {
+        const caller = this.entry(pid);
+        const canonical = recordRemoteExit({...record,pid:caller.pid,uid:caller.uid,pkg:caller.pkg,process:caller.process});
+        this.fail(pid,`Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`,deathOf(canonical));
+      },
       // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
       // would hold the launching main job while that same process is asked to pause.
       activityLaunch: async (pkg, process, component, intent, request, callingClass) => { this.entry(pid); unawaited(this.activities.launch(pid,pkg,process,component,intent,request,callingClass)); },

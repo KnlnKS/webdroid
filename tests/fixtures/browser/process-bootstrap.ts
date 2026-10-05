@@ -13,7 +13,7 @@ import { connectClock } from "../../../src/shell/clock-port";
 import { guestClockControl, setSystemTimeout, wallMillis, bootTime } from "../../../src/guest-clock";
 import { callProxy } from "../../../src/shell/process-port";
 import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes";
-import { NOT_CRASHED } from "../../../src/android/server/appexitinfo";
+import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo";
 
 export async function bootstrapOwnership() {
   let reads = 0, began!: () => void;
@@ -240,10 +240,23 @@ export async function clockBootstrapOwnership() {
     await incoming.settingsChanged("global","worker_endpoint_probe");
     await incoming.packageRemoved("worker.endpoint.absent.package");
     const advanced = await guestClockControl.advanceBy(10), pendingBeforeDeath = guestClockControl.pending();
-    worker.terminate(); broker.fail(pid, "terminated Worker fixture", NOT_CRASHED);
+    const previous = {pid:8199,uid:15000,process:pkg,pkg,reason:4,status:0,importance:400,timestamp:wall,
+      description:"crash",state:null,tombstone:null,dialog:false};
+    recordRemoteExit(previous);
+    const survivor = broker.connect(pkg,pkg+":reader",8202);
+    const reader = callProxy<BrokerCalls>(broker.brokerPort(survivor.pid),brokerMethods);
+    const died = new Promise<void>(resolve=>broker.watch(pid,()=>resolve()));
+    incoming.kill(9,{reason:4,description:"crash"});
+    await died;
+    const records = await reader.endpoint.exitRecords(pkg);
+    records[0]!.description="changed wire copy";
+    const stored = (await reader.endpoint.exitRecords(pkg))[0]!;
+    const exit = {pid:stored.pid,uid:stored.uid,process:stored.process,pkg:stored.pkg,reason:stored.reason,status:stored.status,dialog:stored.dialog,description:stored.description};
+    reader.close();broker.fail(survivor.pid,"exit reader cleanup",NOT_CRASHED);
+    worker.terminate();
     const pendingAfterDeath = guestClockControl.pending();
     await guestClockControl.advanceBy(10);
-    return {controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
+    return {exit,controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
       wall:ticks[0]?.wall===wall+10,uptime:ticks.every(tick=>tick.now===start+10),ticks:ticks.map(tick=>tick.tick),advanced,pendingBeforeDeath,pendingAfterDeath,
       brokerTimer,pendingAfterAdvance:guestClockControl.pending()};
   } finally { worker.terminate(); broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }

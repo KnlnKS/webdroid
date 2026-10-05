@@ -6,6 +6,8 @@ import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
 import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
 import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint";
+import { exitRecordTransport } from "../src/android/server/appexitinfo";
+import { settingsStore, useSettingsStore } from "../src/android/settings";
 import { activityTransport } from "../src/android/server/atm";
 import { newIntent } from "../src/android/intent";
 import { decodeIntent } from "../src/android/intentipc";
@@ -31,13 +33,16 @@ const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
 
 test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
-  await bootApp(await packageRecord("org.webdroid.test.activitycommands"));
-  const previous = {...activityTransport}, previousSql = sqliteTransport.call,
+  const owner = await packageRecord("org.webdroid.test.activitycommands");
+  await bootApp(owner);
+  const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport};
-  type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation">;
+  type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
   const waiting = new Promise<void>(resolve=>entered=resolve), blocked = new Promise<void>(resolve=>release=resolve);
+  let readEntered!:()=>void, readRelease!:()=>void;
+  const readWaiting = new Promise<void>(resolve=>readEntered=resolve), readBlocked = new Promise<void>(resolve=>readRelease=resolve);
   const received: unknown[] = [], results: unknown[] = [];
   const intent = await newIntent("org.webdroid.test.LAUNCH");
   const stop = serveCalls<Calls>(port1, {
@@ -48,6 +53,7 @@ test("Worker activity commands retain local results across reentrant replies and
       received.push(pkg,process,component,callingClass,copied===intent,await vcall(copied,"getAction","()Ljava/lang/String;"));
       entered(); await blocked;
     }, activityFinish:async()=>{},activityPresentation:async()=>{},
+    exitRecords:async()=>{readEntered();await readBlocked;return [{pid:71,uid:owner.uid,pkg:owner.pkg,process:owner.pkg,reason:2,status:9,importance:400,timestamp:1,description:null,state:null,tombstone:null,dialog:false}];},
   });
   attachProcessBrokerPort(port2);
   try {
@@ -66,9 +72,17 @@ test("Worker activity commands retain local results across reentrant replies and
     expect((denied as Error).message).toBe("launch denied");
     await endpoint.activity({kind:"result",request,code:33,data:null});
     expect(results).toEqual([[31,null]]);
+    let queried = false;
+    const query = vcallAsync(rt.make("webdroid/ActivityManagerService"),"getHistoricalProcessExitReasons","(Ljava/lang/String;III)Landroid/content/pm/ParceledListSlice;",owner.pkg,0,1,0).then(value=>{queried=true;return value;});
+    await readWaiting;expect(queried).toBe(false);readRelease();
+    const rows = await vcall(await query,"getList","()Ljava/util/List;"), info = await vcall(rows,"get","(I)Ljava/lang/Object;",0);
+    expect(await vcall(info,"getPid","()I")).toBe(71);
+    expect(await vcall(info,"getReason","()I")).toBe(2);
   } finally {
-    release();closeProcessBrokerPort();stop();
+    release();readRelease();closeProcessBrokerPort();stop();
     for(const key of Object.keys(activityTransport)) Reflect.deleteProperty(activityTransport,key);
+    for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
+    Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
     Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;Object.assign(clipboardTransport,previousClip);
   }
 });

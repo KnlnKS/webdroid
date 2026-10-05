@@ -15,7 +15,7 @@ import { systemProviderHolder } from "../systemproviders";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../urigrants";
 import { uriText, type JUri } from "../net";
 import { systemFontMap } from "../fonts";
-import { appCrashed, exitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo";
+import { appCrashed, queryExitRecords, noteApplicationFlags, setProcessStateSummary, type ExitRecord } from "./appexitinfo";
 import { callingIdentity, newStub, parceledList } from "../binder";
 import { packages } from "../packages";
 import { checkUidPermission } from "../permissions";
@@ -175,7 +175,9 @@ export const activityManagerMethods = {
     if (owner !== uid && (yield* awaited(checkUidPermission(DUMP, uid))) !== 0)
       throw rt.mkThrowable("java/lang/SecurityException", `Only package ${pkg} or a caller holding ${DUMP} may read its exit reasons`);
     const names = pkg !== null ? [pkg] : [...packages.values()].filter((p) => p.uid === uid).map((p) => p.pkg);
-    let records = names.flatMap(exitRecords).filter((r) => r.uid === owner && (pid <= 0 || r.pid === pid)).sort((a, b) => b.timestamp - a.timestamp);
+    const reads = names.map(queryExitRecords);
+    const histories = reads.some(records => records instanceof Promise) ? yield* awaited(Promise.all(reads)) : reads as ExitRecord[][];
+    let records = histories.flat().filter((r) => r.uid === owner && (pid <= 0 || r.pid === pid)).sort((a, b) => b.timestamp - a.timestamp);
     if (maxNum > 0) records = records.slice(0, maxNum);
     const infos: JObj[] = [];
     for (const r of records) infos.push(yield* awaited(exitInfo(r)));

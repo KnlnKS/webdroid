@@ -13,8 +13,12 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     const { setProcessIdentity, setProcessName } = await import("../android/os");
     setProcessIdentity(data.pid, data.uid);
     setProcessName(data.process);
-    const { attachProcessBrokerPort } = await import("./process-endpoint");
-    return attachProcessBrokerPort(data.broker);
+    const { attachProcessBrokerPort, closeProcessBrokerPort } = await import("./process-endpoint");
+    const broker = attachProcessBrokerPort(data.broker);
+    const { onProcessExit } = await import("../process-exit");
+    // AppExitInfoTracker publishes the real record first, then these received owners close.
+    onProcessExit(() => { guestClockControl.dispose(); closeProcessBrokerPort(); closeProcessBootstrap(data); });
+    return broker;
   } catch (error) {
     if (attachedClock) guestClockControl.dispose();
     closeProcessBootstrap(data);
