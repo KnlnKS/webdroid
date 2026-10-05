@@ -383,9 +383,9 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     p.args.reduce((n, d, i) => (at[i] = n, n + (isPrimArray(d) ? 2 : 1)), 0);
     const names = at.flatMap((n, i) => isPrimArray(p.args[i]) ? ["a" + n, "a" + (n + 1)] : ["a" + n]);
     // an Object argument with a range reaches the native as just that range, at offset 0
-    const pre: string[] = [], args = p.args.map((d, i) => isPrimArray(d) ? (susp ? `X.own(own,${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})` : `view(${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})`) : objects[i] ? `h${i}` : "a" + at[i]);
+    const pre: string[] = [], arrayPre: string[] = [], args = p.args.map((d, i) => isPrimArray(d) ? (susp ? `X.own(own,${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})` : `view(${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})`) : objects[i] ? `h${i}` : "a" + at[i]);
     p.args.forEach((d, i) => {
-      if (susp && isPrimArray(d)) { pre.push(`const h${i}=${args[i]};`); args[i] = `h${i}`; }
+      if (susp && isPrimArray(d)) { arrayPre.push(`const h${i}=${args[i]};`); args[i] = `h${i}`; }
       if (!objects[i]) return;
       const r = p.ranges.get(i);
       pre.push(`const h${i}=B.toHost(a${at[i]},D[${i}]${r ? `,[a${at[r[0]]},a${at[r[1]]}]` : ""});`);
@@ -399,7 +399,7 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}if(X.owes()){const back=${bridged ? "B.hold()" : "null"};X.yield(Promise.resolve(r).then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
     const failure = lands(p) ? `try{return raise(e)}catch(error){return {own:${susp ? "own" : "[]"},result:null,value:${p.retArray ? "-1" : zero},error}}` : "return raise(e)";
     const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"};try{r=await r}catch(e){back?.();throw e}back?.()}` : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}${susp ? "X.release(own);" : ""}r=${call}}catch(e){S(e);${scope[1]};${failure}}
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${arrayPre.join("")}${susp ? "X.release(own);" : ""}${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};${failure}}
 try{${wait}${toJava}}catch(e){${failure}}finally{${scope[1]}}
 ${lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result}}`) as Maker;
     makers.set(key, make);
