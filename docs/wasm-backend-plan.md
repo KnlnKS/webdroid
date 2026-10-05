@@ -1523,6 +1523,15 @@ The existing Chromium archive fixture exercises the actual broker clone followed
 
 These are bootstrap contracts, not a booted application JVM Worker. The production entry still uses an iframe; a real Worker entry must attach the clock before Java/time/timer initialization, transfer the reverse/endpoint ports, register diagnostics and close its broker owners on death or failed publication. Canonical FD/mapping coherence, remaining mutable stores and presentation/WebView adapters remain prerequisites. Parent may own a disjoint settings contract; Y2 retains process/bootstrap wiring and leaves clock files unchanged. No new AOT/app gate or performance result is claimed; rebuild AOT after source integration before browser verification.
 
+
+### 4.26 Y2: canonical Clipboard commands and registration ordering (2026-10-05)
+
+ClipboardService now gets, sets and registers listeners through three acknowledged reverse-port commands. The broker binds the caller PID; its existing foreground-UID access policy and canonical Parcel owner remain authoritative. Reads await a nullable result instead of treating a pending Promise as a present clip. Writes and listener registration complete after the broker acknowledgment; listener callbacks still enter the receiving process's main looper. Local synchronous transports retain their immediate path. Process transport setup stores lazy operation closures, so it does not acquire a reverse port before foreground registration.
+
+Parent CookieManager ordering fix `e38f3b10` is integrated as `fcced894` before this verification. A regression in the existing browser endpoint fixture calls connectProcess before PID 1000 exists, then registers it and successfully uses both cookie and clipboard commands. The real Worker clipboard contract checks canonical reads, independent wire/read buffers, foreground-UID denial and access after changing foreground, listener registration/removal, clear notifications and surviving access after the writing Worker dies. The existing data fixture exercises actual ClipboardService Java calls over MessageChannel, including a delayed write acknowledgment, absent asynchronous reads, text/Parcel round trip and clear. The CookieManager acknowledgment check remains green. Three selected core tests pass (22 assertions), full typecheck and diff check pass. Evidence: `webdroid-shots/y2-s5-endpoint/clipboard-{port-test,cookie-jvm-test,typecheck}.log`.
+
+This converts another direct broker/store coupling; it does not enable an application JVM Worker. Parent owns canonical settings and its broker registration; Y2 retains bootstrap/Worker wiring and the other remaining stores/presentation contracts. FD/ashmem backing and mapping coherence remain open (4.22). No new app capture, source-matched browser gate or performance result is claimed. Rebuild AOT after integration before app verification; no owned browser/server capture driver is active.
+
 ## 5. Unverified facts the executor must check first
 
 Resolved on 2026-10-04 with `research/wasm/probe.mjs` and `probe-tiering.mjs` (matrix and versions in

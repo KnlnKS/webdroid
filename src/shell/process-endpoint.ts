@@ -58,9 +58,9 @@ export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
   onProcessExit((status) => broker.fail(PROCESS_PID, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
   processTransport.signal = (pid, signal) => broker.signal(PROCESS_PID, pid, signal);
-  clipboardTransport.set = data => broker.setClipboard(PROCESS_PID, data);
-  clipboardTransport.get = () => broker.getClipboard(PROCESS_PID);
-  clipboardTransport.listen = active => broker.watchClipboard(PROCESS_PID, active);
+  clipboardTransport.set = data => brokerCalls().clipboardSet(data);
+  clipboardTransport.get = () => brokerCalls().clipboardGet();
+  clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   let nextRequest = 1;
   /** each launch's result delivery, by request */
   const requests = new Map<number, ResultDelivery["deliver"]>();

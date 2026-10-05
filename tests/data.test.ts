@@ -5,6 +5,8 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
 import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
+import { clipboardTransport } from "../src/android/clipboard";
+import type { BrokerCalls } from "../src/shell/processes";
 import { cookieManager, cookieTransport } from "../src/android/cookies";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access";
 import { WebCookies } from "../src/shell/webcookies";
@@ -23,6 +25,36 @@ rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+
+test("ClipboardService awaits canonical writes and reads null from an asynchronous owner", async () => {
+  await bootApp(await packageRecord("org.webdroid.test.clipboard"));
+  const previous = { ...clipboardTransport }, { port1, port2 } = new MessageChannel();
+  type Calls = Pick<BrokerCalls, "clipboardSet" | "clipboardGet" | "clipboardListen">;
+  let clip: Awaited<ReturnType<Calls["clipboardGet"]>> = null, entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+  const stop = serveCalls<Calls>(port1, {
+    clipboardSet: async data => { entered(); await blocked; clip = data; },
+    clipboardGet: async () => clip, clipboardListen: async () => {},
+  });
+  const client = callProxy<Calls>(port2, ["clipboardSet", "clipboardGet", "clipboardListen"]);
+  Object.assign(clipboardTransport, {set:client.endpoint.clipboardSet,get:client.endpoint.clipboardGet,listen:client.endpoint.clipboardListen});
+  try {
+    const service = rt.make("webdroid/ClipboardService"), P = "Ljava/lang/String;Ljava/lang/String;II", caller = ["org.webdroid.test.clipboard",null,0,0];
+    expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
+    const source = await scall("android/content/ClipData", "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;", "label", "copied");
+    const write = vcallAsync(service,"setPrimaryClip",`(Landroid/content/ClipData;${P})V`,source,...caller);
+    await waiting; expect(clip).toBeNull();
+    release(); await write;
+    expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(1);
+    expect(await vcall(service, "hasClipboardText", `(${P})Z`, ...caller)).toBe(1);
+    const restored = await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller);
+    expect(restored === source).toBe(false);
+    expect(await vcall(await vcall(restored,"getItemAt","(I)Landroid/content/ClipData$Item;",0),"getText","()Ljava/lang/CharSequence;")).toBe("copied");
+    await vcall(service, "clearPrimaryClip", `(${P})V`, ...caller);
+    expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);
+    expect(await vcall(service, "getPrimaryClip", `(${P})Landroid/content/ClipData;`, ...caller)).toBeNull();
+  } finally { release(); Object.assign(clipboardTransport,previous); client.close(); stop(); }
+});
 
 test("CookieManager waits for canonical mutation before its main-looper callback", async () => {
   await bootApp(await packageRecord("org.webdroid.test.cookies"));

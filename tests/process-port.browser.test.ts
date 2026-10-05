@@ -70,6 +70,11 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     expect(result).toEqual({ source: [1, 2], copied: { cached: true, handled: 12000, bytes: [99, 2], objects: [[0, { pid: 10, id: 4 }]] },
       callback: [21, 1], failure: { javaClass: "java/lang/SecurityException", message: "denied" }, cloneError: "DataCloneError",
       death: "android/os/DeadObjectException", later: "android/os/DeadObjectException" });
+    const foreground = await page.evaluate(async () => {
+      const { foregroundConnectionOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return foregroundConnectionOwnership();
+    });
+    expect(foreground).toEqual({unregistered:true,noCookies:true,clipboard:42});
     const ownership = await page.evaluate(async () => {
       const { endpointOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return endpointOwnership();
@@ -82,6 +87,12 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     expect(cookies).toEqual({ session: {value:true}, persisted: {value:true}, read: "session=one; saved=two", isolatedRead: "",
       document: ["saved=two"], accept: {value:false}, denied: {value:false}, removed: {value:true}, afterSession: "saved=two",
       saved: ["saved"], dead: true, pendingDead: true, survivor: "saved=two", empty: false, changes: 4 });
+    const clipboard = await page.evaluate(async () => {
+      const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return clipboardOwnership();
+    });
+    expect(clipboard).toEqual({source:[9,2],fresh:[1,2],denied:null,foreground:[1,2],absent:null,
+      changes:1,peerChanges:3,survivor:[1,2]});
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);

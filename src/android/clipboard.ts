@@ -6,9 +6,9 @@ import { parcelled, unparcelled, type ParcelData } from "./binder";
 import { postMain } from "./mainloop";
 
 export const clipboardTransport: {
-  set: (data: ParcelData | null) => void;
-  get: () => ParcelData | null;
-  listen: (active: boolean) => void;
+  set: (data: ParcelData | null) => void | Promise<void>;
+  get: () => ParcelData | null | Promise<ParcelData | null>;
+  listen: (active: boolean) => void | Promise<void>;
 } = {
   set: () => { throw new Error("Clipboard service unavailable"); },
   get: () => { throw new Error("Clipboard service unavailable"); },
@@ -21,7 +21,7 @@ export function clipboardChanged(): void {
 }
 /** the clip, read back from its parcel */
 function* current(): Gen<JObj | null> {
-  const data = clipboardTransport.get();
+  const data = yield* awaited(clipboardTransport.get());
   return data && (yield* awaited(unparcelled("android/content/ClipData", data)));
 }
 const P = "Ljava/lang/String;Ljava/lang/String;II";
@@ -29,14 +29,14 @@ rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, su
   // ClipboardService stamps the clip as copied now
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
     yield vcall(yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
-    clipboardTransport.set(yield* awaited(parcelled(clip)));
+    yield* awaited(clipboardTransport.set(yield* awaited(parcelled(clip))));
   }),
   [`getPrimaryClip(${P})Landroid/content/ClipData;`]: driven(current),
   [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: driven(function* () {
     const clip = yield* current();
     return clip && (yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"));
   }),
-  [`hasPrimaryClip(${P})Z`]: () => +(clipboardTransport.get() !== null),
+  [`hasPrimaryClip(${P})Z`]: driven(function* () { return +((yield* awaited(clipboardTransport.get())) !== null); }),
   [`hasClipboardText(${P})Z`]: driven(function* () {
     const clip = yield* current();
     if (!clip || !(yield vcall(clip, "getItemCount", "()I"))) return 0;
@@ -44,12 +44,15 @@ rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, su
     return +(text != null && (yield vcall(text, "length", "()I")) > 0);
   }),
   [`clearPrimaryClip(${P})V`]: () => clipboardTransport.set(null),
-  [`addPrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: (listener: unknown) => {
-    listeners.add(listener); clipboardTransport.listen(true);
-  },
-  [`removePrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: (listener: unknown) => {
-    listeners.delete(listener); if (!listeners.size) clipboardTransport.listen(false);
-  },
+  [`addPrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: driven(function* (listener: unknown) {
+    const present = listeners.has(listener);
+    listeners.add(listener);
+    try { yield* awaited(clipboardTransport.listen(true)); }
+    catch (error) { if (!present) listeners.delete(listener); throw error; }
+  }),
+  [`removePrimaryClipChangedListener(Landroid/content/IOnPrimaryClipChangedListener;${P})V`]: driven(function* (listener: unknown) {
+    listeners.delete(listener); if (!listeners.size) yield* awaited(clipboardTransport.listen(false));
+  }),
   // a clip's source app is not disclosed to other apps
   [`getPrimaryClipSource(${P})Ljava/lang/String;`]: () => null,
   // the platform default: an app reading the clipboard is announced

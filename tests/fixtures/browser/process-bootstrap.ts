@@ -1,3 +1,6 @@
+import { connectProcess } from "../../../src/shell/process-endpoint";
+import { cookieTransport } from "../../../src/android/cookies";
+import { clipboardTransport } from "../../../src/android/clipboard";
 import { processBroker, type ProcessEndpoint } from "../../../src/shell/processes";
 import { packages, PackageRecord } from "../../../src/android/packages";
 import { Resources } from "../../../src/android/res";
@@ -233,4 +236,91 @@ export async function clockBootstrapOwnership() {
       wall:ticks[0]?.wall===wall+10,uptime:ticks.every(tick=>tick.now===start+10),ticks:ticks.map(tick=>tick.tick),advanced,pendingBeforeDeath,pendingAfterDeath,
       brokerTimer,pendingAfterAdvance:guestClockControl.pending()};
   } finally { worker.terminate(); broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }
+}
+
+export async function clipboardOwnership() {
+  const broker = processBroker(), pkg = "test.clipboard.shared", foreign = "test.clipboard.other";
+  for (const [i, name] of [pkg, foreign].entries()) {
+    const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
+    packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
+  }
+  const entries = [pkg,pkg,foreign].map((name,i)=>broker.connect(name,name+":"+i,8301+i));
+  broker.activities.setForeground(8301);
+  let peerChanges = 0, peerChanged!: () => void;
+  const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),
+    service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
+    clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
+  broker.ready(8302,empty); broker.ready(8303,{...empty,clipboardChanged:async()=>{}});
+  const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
+  const code = `import {callProxy,serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
+    let broker;
+    self.onmessage = async ({data}) => {
+      if(data.reverse){
+        broker=callProxy(data.reverse,${JSON.stringify(brokerMethods)}).endpoint;
+        serveProcess(data.endpoint,{activity:async()=>{},transact:async r=>({handled:0,data:r.data}),service:async()=>null,
+          serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
+          clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
+        self.postMessage({ready:true});return;
+      }
+      try {
+        let value;
+        if(data.method==='write'){const bytes=Uint8Array.of(1,2);await broker.clipboardSet({bytes,objects:[]});bytes[0]=9;value=Array.from(bytes);}
+        else value=await broker[data.method](...data.args);
+        self.postMessage({id:data.id,value});
+      }catch(error){self.postMessage({id:data.id,error:error.message});}
+    };`;
+  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  let next=1,changes=0,changed!:()=>void,ready!:()=>void;
+  const waiting = new Map<number,(value:unknown)=>void>();
+  worker.onmessage=({data})=>{
+    if(data.ready){ready();return;} if(data.changed){changes++;changed?.();return;}
+    const resolve=waiting.get(data.id);waiting.delete(data.id);resolve?.(data.error?{error:data.error}:data.value);
+  };
+  const ask=(method:string,...args:unknown[])=>new Promise<unknown>(resolve=>{
+    const id=next++;waiting.set(id,resolve);worker.postMessage({id,method,args});
+  });
+  try {
+    const channel=new MessageChannel(),reverse=broker.brokerPort(8301);
+    const started=new Promise<void>(resolve=>ready=resolve);
+    worker.postMessage({reverse,endpoint:channel.port1},[reverse,channel.port1]);broker.readyPort(8301,channel.port2);
+    await started;await ask("clipboardListen",true);await peers[0].endpoint.clipboardListen(true);
+    const notification=new Promise<void>(resolve=>changed=resolve),peerNotification=new Promise<void>(resolve=>peerChanged=resolve);
+    const source=await ask("write");await Promise.all([notification,peerNotification]);
+    const read=await peers[0].endpoint.clipboardGet();read!.bytes[0]=7;
+    const fresh=await peers[0].endpoint.clipboardGet();
+    const denied=await peers[1].endpoint.clipboardGet();
+    broker.activities.setForeground(8303);const foreground=await peers[1].endpoint.clipboardGet();broker.activities.setForeground(8302);
+    await ask("clipboardListen",false);
+    const cleared=new Promise<void>(resolve=>peerChanged=resolve);
+    await peers[0].endpoint.clipboardSet(null);await cleared;
+    const absent=await ask("clipboardGet");
+    const written=new Promise<void>(resolve=>peerChanged=resolve);await ask("write");await written;
+    // Drain the notification endpoint before death, so cleanup is not racing its reply.
+    await (await entries[1].ready).activity({kind:"back"});
+    worker.terminate();broker.fail(8301,"clipboard Worker ended",NOT_CRASHED);
+    const survivor=await peers[0].endpoint.clipboardGet();
+    return {source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
+      changes,peerChanges,survivor:Array.from(survivor!.bytes)};
+  }finally{
+    for(const client of peers)client.close();worker.terminate();URL.revokeObjectURL(url);
+    for(const pid of [8301,8302,8303])broker.fail(pid,"clipboard fixture cleanup",NOT_CRASHED);
+    packages.delete(pkg);packages.delete(foreign);
+  }
+}
+
+export async function foregroundConnectionOwnership() {
+  const broker = processBroker(), pkg = "test.foreground.connect", pid = 1000;
+  const unregistered = !broker.alive(pid), previous = broker.activities.foreground;
+  // main.ts connects transports before bootApk registers the foreground process.
+  connectProcess();
+  const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
+  packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,17000,async()=>[]));
+  broker.connect(pkg,pkg,pid);broker.activities.setForeground(pid);
+  try {
+    const noCookies = !(await cookieTransport.calls!().cookieHas());
+    await clipboardTransport.set({bytes:Uint8Array.of(42),objects:[]});
+    const clip = await clipboardTransport.get();
+    await clipboardTransport.set(null);
+    return {unregistered,noCookies,clipboard:clip?.bytes[0]};
+  } finally { broker.fail(pid,"foreground fixture cleanup",NOT_CRASHED);broker.activities.setForeground(previous);packages.delete(pkg); }
 }

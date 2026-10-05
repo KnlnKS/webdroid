@@ -77,13 +77,16 @@ export type ProcessEndpoint = {
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 export type BrokerCalls = CookieCalls & {
+  clipboardSet: (data: ParcelData | null) => Promise<void>;
+  clipboardGet: () => Promise<ParcelData | null>;
+  clipboardListen: (active: boolean) => Promise<void>;
   sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;
   service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush"] as const;
+export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -263,6 +266,9 @@ class ProcessBroker {
     if (!owned) this.callerPorts.set(pid, owned = new Set());
     const stop = serveCalls<BrokerCalls>(port1, {
       ...cookieCalls(() => this.cookies(this.entry(pid).pkg), () => { this.entry(pid); }),
+      clipboardSet: async data => this.setClipboard(pid, data),
+      clipboardGet: async () => this.getClipboard(pid),
+      clipboardListen: async active => this.watchClipboard(pid, active),
       sqlite: request => {
         this.entry(pid);
         let session = this.sqliteSessions.get(pid);
