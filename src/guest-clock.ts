@@ -1,4 +1,5 @@
 import { processExited } from "./process-exit";
+import { connectClock, serveClock, type ClockBootstrap, type ClockClient } from "./shell/clock-port";
 
 export type GuestTimer = ReturnType<typeof setTimeout> | number;
 
@@ -7,7 +8,8 @@ type Scheduled = {
   at: number;
   realm: number;
   sequence: number;
-  callback: () => void;
+  callback: () => unknown;
+  acknowledged: boolean;
 };
 
 const before = (a: Scheduled, b: Scheduled): boolean =>
@@ -18,16 +20,27 @@ export class ControlledGuestClock {
   private live = new Map<number, number>();
   private nextId = 1;
   private sequence = 0;
+  private advancing = Promise.resolve();
+  private asynchronousAdvances = 0;
 
   constructor(public nowMs: number) {}
 
   schedule(callback: () => void, delayMs: number, realm = 0): number {
+    return this.enqueue(callback, delayMs, realm, false);
+  }
+
+  scheduleAcknowledged(callback: () => Promise<void>, delayMs: number, realm: number): number {
+    return this.enqueue(callback, delayMs, realm, true);
+  }
+
+  private enqueue(callback: () => unknown, delayMs: number, realm: number, acknowledged: boolean): number {
     const task: Scheduled = {
       id: this.nextId++,
       at: this.nowMs + Math.max(0, delayMs),
       realm,
       sequence: this.sequence++,
       callback,
+      acknowledged,
     };
     this.live.set(task.id, realm);
     this.push(task);
@@ -61,21 +74,49 @@ export class ControlledGuestClock {
   }
 
   advanceTo(targetMs: number): number {
+    if (this.asynchronousAdvances) throw new Error("guest clock is advancing asynchronously");
     if (targetMs < this.nowMs) throw new RangeError("guest time cannot move backwards");
     let ran = 0;
-    for (;;) {
-      this.discardCancelled();
-      const task = this.heap[0];
-      if (!task || task.at > targetMs) break;
-      this.pop();
-      if (!this.live.has(task.id)) continue;
-      this.nowMs = task.at;
-      this.live.delete(task.id);
+    for (let task = this.takeDue(targetMs, false); task; task = this.takeDue(targetMs, false)) {
       task.callback();
       ran++;
     }
     this.nowMs = targetMs;
     return ran;
+  }
+
+  advanceToAsync(targetMs: number, synchronize: (now: number) => Promise<void>): Promise<number> {
+    if (targetMs < this.nowMs) return Promise.reject(new RangeError("guest time cannot move backwards"));
+    this.asynchronousAdvances++;
+    const result = this.advancing.then(() => this.advanceAsync(Math.max(targetMs, this.nowMs), synchronize))
+      .finally(() => { this.asynchronousAdvances--; });
+    this.advancing = result.then(() => {}, () => {});
+    return result;
+  }
+
+  private async advanceAsync(targetMs: number, synchronize: (now: number) => Promise<void>): Promise<number> {
+    let ran = 0;
+    for (;;) {
+      await synchronize(this.nowMs);
+      const task = this.takeDue(targetMs, true);
+      if (!task) break;
+      await synchronize(this.nowMs);
+      const completion = task.callback();
+      if (task.acknowledged) await completion;
+      ran++;
+    }
+    this.nowMs = targetMs;
+    await synchronize(this.nowMs);
+    return ran;
+  }
+
+  private takeDue(target: number, asynchronous: boolean): Scheduled | undefined {
+    this.discardCancelled();
+    const task = this.heap[0];
+    if (!task || task.at > target) return;
+    if (task.acknowledged && !asynchronous) throw new Error("remote clock callbacks require asynchronous advancement");
+    this.pop(); this.live.delete(task.id); this.nowMs = task.at;
+    return task;
   }
 
   private discardCancelled(): void {
@@ -123,17 +164,21 @@ const clock = controlledGuestTime
 const realNow = browser ? performance.now.bind(performance) : () => performance.now();
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
+let remoteClock: ClockClient | null = null;
+let remoteAttached = false;
+const clockPorts = new Set<ReturnType<typeof serveClock>>();
+let remoteAdvancement = false;
 
 // HTML timers take a signed 32-bit delay: a longer one (a 30-day retry, a Long.MAX_VALUE wait)
 // would wrap and fire at once, so it waits the longest a timer can instead (~24.8 days)
 export const MAX_TIMER_DELAY = 0x7fffffff;
-export const guestNow = clock ? () => clock.nowMs : realNow;
+export let guestNow = clock ? () => clock.nowMs : realNow;
 // a dead process's timers never fire
 const live = (callback: () => void) => () => { if (!processExited()) callback(); };
-export const setGuestTimeout = clock
+export let setGuestTimeout = clock
   ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(live(callback), delayMs, realm)
   : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(live(callback), Math.min(delayMs, MAX_TIMER_DELAY));
-export const clearGuestTimeout = clock
+export let clearGuestTimeout = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
   : (timer: GuestTimer | null | undefined): void => { if (timer != null) realClearTimeout(timer as ReturnType<typeof setTimeout>); };
 export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
@@ -142,25 +187,53 @@ export const setSystemTimeout = clock
   ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(callback, delayMs, -1)
   : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY));
 /** the page's start: every realm's CLOCK_MONOTONIC (SystemClock.uptimeMillis, System.nanoTime) counts from it */
-export const bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;
+export let bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;
 /** CLOCK_MONOTONIC in milliseconds, one clock for every realm of the page */
-export const uptimeMillis = clock ? guestNow : (): number => performance.timeOrigin - bootTime + realNow();
+export let uptimeMillis = clock ? guestNow : (): number => performance.timeOrigin - bootTime + realNow();
 /** CLOCK_REALTIME in milliseconds: the host's, or under a controlled clock the host's at the
  *  clock's start advancing with guest time, as a device's wall clock advances with its uptime */
-export const wallMillis = clock
-  ? ((start) => () => start + clock.nowMs)(((window.top as unknown as ClockHost).__wdWallAtStart ??= Date.now() - clock.nowMs))
-  : (): number => Date.now();
+const wallAtStart = clock ? ((window.top as unknown as ClockHost).__wdWallAtStart ??= Date.now() - clock.nowMs) : 0;
+export let wallMillis = clock ? () => wallAtStart + clock.nowMs : (): number => Date.now();
+
+/** The broker transfers data.port with a process bootstrap; process death calls close. */
+export function createGuestClockPort(pid: number): { data: ClockBootstrap; close(): void } {
+  const data: ClockBootstrap = { controlled: !!clock, now: guestNow(), bootTime, wallAtStart };
+  if (!clock) return { data, close() {} };
+  const { port1, port2 } = new MessageChannel();
+  const served = serveClock(port1, clock, pid, () => clockPorts.delete(served));
+  remoteAdvancement = true;
+  clockPorts.add(served); data.port = port2;
+  return { data, close: served.close };
+}
+
+/** Install before boot creates a timer or reads Android's clocks. */
+export function attachGuestClockPort(data: ClockBootstrap): void {
+  if (clock || remoteAttached) throw new Error("guest clock is already attached");
+  remoteAttached = true;
+  bootTime = data.bootTime;
+  remoteClock = connectClock(data);
+  if (remoteClock) {
+    const client = remoteClock;
+    guestNow = uptimeMillis = () => client.now;
+    wallMillis = () => data.wallAtStart + client.now;
+    setGuestTimeout = (callback, delay = 0) => client.schedule(live(callback), delay);
+    clearGuestTimeout = timer => { if (timer != null) client.cancel(Number(timer)); };
+  }
+}
 
 const hostYield = (): Promise<void> => new Promise((resolve) => realSetTimeout(resolve, 0));
 const advanceTo = async (targetMs: number): Promise<number> => {
   if (!clock) return 0;
-  const ran = clock.advanceTo(Math.max(targetMs, clock.nowMs));
+  const target = Math.max(targetMs, clock.nowMs);
+  const ran = remoteAdvancement ? await clock.advanceToAsync(target, async now => {
+    await Promise.all([...clockPorts].map(port => port.synchronize(now)));
+  }) : clock.advanceTo(target);
   await hostYield();
   return ran;
 };
 export const guestClockControl = {
-  controlled: controlledGuestTime,
-  now: guestNow,
+  get controlled() { return controlledGuestTime || remoteClock !== null; },
+  now: () => guestNow(),
   pending: () => clock?.pending() ?? 0,
   nextDeadline: () => clock?.nextDeadline() ?? null,
   advanceTo,
@@ -185,5 +258,5 @@ export const guestClockControl = {
     }
     return operation;
   },
-  dispose: (): number => clock?.cancelRealm(realm) ?? 0,
+  dispose: (): number => remoteClock ? remoteClock.close() : clock?.cancelRealm(realm) ?? 0,
 };
