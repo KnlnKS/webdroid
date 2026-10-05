@@ -1,11 +1,10 @@
 // android.view's input classes against the reference AVD: InputProbe (scripts/InputProbe.java) runs
 // here over our natives and hosted IInputManager, and its output is compared line by line with
 // what it printed on the device (tests/fixtures/input-probe.txt, scripts/input-probe.ts).
-import { rt } from "../../src/jvm/runtime";
 import { DexFile } from "../../src/jvm/dex";
 import { jarray, mangleStaticField } from "../../src/jvm/abi";
 import { newObj, scall, vcall } from "../../src/jvm/natives/jentry";
-import { exercise, statics } from "./harness";
+import { exercise, loader, statics } from "./harness";
 
 /** event ids are random; the AVD has input devices beyond the two this host models */
 const comparable = (lines: string[]) => lines
@@ -13,7 +12,7 @@ const comparable = (lines: string[]) => lines
   .map((l) => l.replace(/eventId=(0x[0-9a-f]+|-?\d+)/g, "eventId=*").replace(/^(mp parcel size=\d+ .{24}).{8}/, "$1********"));
 
 await exercise("InputProbe: MotionEvent, VelocityTracker, KeyEvent, KeyCharacterMap, InputDevice (device values)", async () => {
-  rt.loadDex(new DexFile(new Uint8Array(await Bun.file("tests/fixtures/InputProbe.dex").arrayBuffer())));
+  loader.loadDex(new DexFile(new Uint8Array(await Bun.file("tests/fixtures/InputProbe.dex").arrayBuffer())));
   const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
   const out = await newObj("java/io/PrintStream", "(Ljava/io/OutputStream;Z)V", bytes, 1);
   const previous = (await statics("java/lang/System"))[mangleStaticField("out")];

@@ -212,7 +212,7 @@ await exercise("BitmapRegionDecoder (device values)", async () => {
 await exercise("ImageDecoder: headers, targets, allocators, partial input, drawables (device values)", async () => {
   const ID = "android/graphics/ImageDecoder", SRC = "Landroid/graphics/ImageDecoder$Source;";
   const source = (bytes: Int8Array) => scall(ID, "createSource", `([B)${SRC}`, bytes);
-  const onHeader = (fn: (decoder: unknown) => unknown) => listener("onHeaderDecoded", `(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;${SRC})V`, fn);
+  const onHeader = (fn: (decoder: unknown) => unknown) => listener(`${ID}$OnHeaderDecodedListener`, "onHeaderDecoded", `(Landroid/graphics/ImageDecoder;Landroid/graphics/ImageDecoder$ImageInfo;${SRC})V`, fn);
   const bitmap = async (bytes: Int8Array, fn?: (decoder: unknown) => unknown) =>
     fn ? scall(ID, "decodeBitmap", `(${SRC}Landroid/graphics/ImageDecoder$OnHeaderDecodedListener;)Landroid/graphics/Bitmap;`, await source(bytes), onHeader(fn))
       : scall(ID, "decodeBitmap", `(${SRC})Landroid/graphics/Bitmap;`, await source(bytes));
@@ -242,7 +242,7 @@ await exercise("ImageDecoder: headers, targets, allocators, partial input, drawa
   await bitmap(await image("patch.9.png"), (d) => vcall(d, "setOutPaddingRect", "(Landroid/graphics/Rect;)V", pad));
   same("nine-patch padding", ltrb(pad).join(","), "0,0,0,0");
   let seen = "";
-  const partial = listener("onPartialImage", "(Landroid/graphics/ImageDecoder$DecodeException;)Z", async (e: unknown) => {
+  const partial = listener(`${ID}$OnPartialImageListener`, "onPartialImage", "(Landroid/graphics/ImageDecoder$DecodeException;)Z", async (e: unknown) => {
     seen = `${await vcall(e, "getError", "()I")} ${await vcall(e, "getMessage", "()Ljava/lang/String;")} ${await vcall(e, "getCause", "()Ljava/lang/Throwable;")}`;
     return 1;
   });

@@ -21,6 +21,9 @@ function readResident(fd: number, target: Uint8Array): number | Promise<number> 
   return n;
 }
 
+/** archives the host adds to the boot class path after the platform's, for the resources of classes it runs on it (conformance suites) */
+export const extraBootEntries: string[] = [];
+
 /** Class.getPublicFieldRecursive, as ART searches: the public fields the class declares, then its interfaces', then its superclass's */
 function publicField(cls: object, name: string): object | null {
   for (const f of vcall(cls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;") as object[]) {
@@ -40,7 +43,7 @@ export const hostNatives = new Map<string, HostFn>([
   // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (bridge.ts)
   ["dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true })],
   // the archives of the boot class path, which BootClassLoader looks resources up in
-  ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS], "Ljava/lang/String;")],
+  ["java/lang/VMClassLoader.getBootClassPathEntries()[Ljava/lang/String;", () => jarray([...BOOT_JAR_PATHS, ...extraBootEntries], "Ljava/lang/String;")],
   [`libcore/io/Linux.readBytes(${FD}Ljava/lang/Object;II)I`, (d: object | null, buffer: IoBuffer, offset: number, count: number) =>
     readBytes("read", buffer, offset, count, (target) => readResident(fdInt(d as never), target))],
 ]);

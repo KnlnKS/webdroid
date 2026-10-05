@@ -1,7 +1,7 @@
 import { rt, JObj } from "../../src/jvm/runtime";
 import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
 import { mangleStaticField } from "../../src/jvm/abi";
-import { exercise, same, statics } from "./harness";
+import { exercise, same, statics, classMirror } from "./harness";
 
 // text: expected values printed by the same calls on the reference AVD
 await exercise("AndroidCharacter (device values)", async () => {
@@ -24,7 +24,7 @@ await exercise("AndroidCharacter (device values)", async () => {
 /** a Spanned's spans as the device probe prints them: name[start,end,flags in hex] */
 async function spanList(text: unknown, name: (span: any) => Promise<string>): Promise<string> {
   const out: string[] = [];
-  for (const span of await vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, await vcall(text, "length", "()I"), rt.classFor("java/lang/Object")))
+  for (const span of await vcall(text, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", 0, await vcall(text, "length", "()I"), await classMirror("java/lang/Object")))
     out.push(`${await name(span)}[${await vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", span)},${await vcall(text, "getSpanEnd", "(Ljava/lang/Object;)I", span)},${(await vcall(text, "getSpanFlags", "(Ljava/lang/Object;)I", span)).toString(16)}]`);
   return out.join(" ");
 }
@@ -72,7 +72,7 @@ await exercise("SpannableStringBuilder, SpannableString, SpannedString, Selectio
   const spans = (t: unknown) => spanList(t, name);
   same("spans", `${await text(b)} ${await spans(b)}`, "e<l|l>o WO w2[0,10,640012] ii[1,6,50012] w1[0,10,12] ee[2,5,21] ei[2,6,22] ie[1,5,11] pt[4,4,22] para[0,4,33]");
   events();
-  const OBJ = rt.classFor("java/lang/Object"), MARK = rt.classFor("fwtest/Mark"), length: number = await vcall(b, "length", "()I");
+  const OBJ = await classMirror("java/lang/Object"), MARK = await classMirror("fwtest/Mark"), length: number = await vcall(b, "length", "()I");
   same("nextSpanTransition", [await vcall(b, "nextSpanTransition", "(IILjava/lang/Class;)I", 0, length, OBJ), await vcall(b, "nextSpanTransition", "(IILjava/lang/Class;)I", 2, length, MARK)], [1, 4]);
   const S = "android/text/Selection", sel = async () => [await scall(S, "getSelectionStart", "(Ljava/lang/CharSequence;)I", b), await scall(S, "getSelectionEnd", "(Ljava/lang/CharSequence;)I", b)];
   await scall(S, "setSelection", "(Landroid/text/Spannable;II)V", b, 1, 3);
