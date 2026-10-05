@@ -5,6 +5,10 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
 import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
+import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint";
+import { activityTransport } from "../src/android/server/atm";
+import { newIntent } from "../src/android/intent";
+import { decodeIntent } from "../src/android/intentipc";
 import { clipboardTransport } from "../src/android/clipboard";
 import type { BrokerCalls } from "../src/shell/processes";
 import { cookieManager, cookieTransport } from "../src/android/cookies";
@@ -25,6 +29,49 @@ rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+
+test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
+  await bootApp(await packageRecord("org.webdroid.test.activitycommands"));
+  const previous = {...activityTransport}, previousSql = sqliteTransport.call,
+    previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport};
+  type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation">;
+  const {port1,port2} = new MessageChannel();
+  let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
+  const waiting = new Promise<void>(resolve=>entered=resolve), blocked = new Promise<void>(resolve=>release=resolve);
+  const received: unknown[] = [], results: unknown[] = [];
+  const intent = await newIntent("org.webdroid.test.LAUNCH");
+  const stop = serveCalls<Calls>(port1, {
+    activityLaunch: async (pkg,process,component,data,id,callingClass) => {
+      request=id; launches++;
+      if(launches>1) throw new Error("launch denied");
+      const copied = await decodeIntent(data);
+      received.push(pkg,process,component,callingClass,copied===intent,await vcall(copied,"getAction","()Ljava/lang/String;"));
+      entered(); await blocked;
+    }, activityFinish:async()=>{},activityPresentation:async()=>{},
+  });
+  attachProcessBrokerPort(port2);
+  try {
+    const endpoint = createProcessEndpoint(), delivery = {caller:{pkg:"org.webdroid.test.activitycommands",cls:"Caller"},deliver:(code:number,data:unknown)=>results.push([code,data])};
+    const launch = activityTransport.launch!("target","target:ui","Target",intent,delivery).then(()=>completed=true);
+    await waiting;
+    expect(completed).toBe(false);
+    expect(received).toEqual(["target","target:ui","Target","Caller",false,"org.webdroid.test.LAUNCH"]);
+    // A lifecycle reply may reenter before the owner's launch acknowledgment reaches this job.
+    await endpoint.activity({kind:"result",request,code:31,data:null});
+    expect(results).toEqual([[31,null]]);
+    await endpoint.activity({kind:"result",request,code:32,data:null});
+    expect(results).toEqual([[31,null]]);
+    release();await launch;expect(completed).toBe(true);
+    const denied = await activityTransport.launch!("target","target:ui","Target",intent,delivery).then(()=>null,error=>error);
+    expect((denied as Error).message).toBe("launch denied");
+    await endpoint.activity({kind:"result",request,code:33,data:null});
+    expect(results).toEqual([[31,null]]);
+  } finally {
+    release();closeProcessBrokerPort();stop();
+    for(const key of Object.keys(activityTransport)) Reflect.deleteProperty(activityTransport,key);
+    Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;Object.assign(clipboardTransport,previousClip);
+  }
+});
 
 test("ClipboardService awaits canonical writes and reads null from an asynchronous owner", async () => {
   await bootApp(await packageRecord("org.webdroid.test.clipboard"));

@@ -79,6 +79,9 @@ export type ProcessEndpoint = {
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 export type BrokerCalls = CookieCalls & SettingsCalls & {
+  activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
+  activityFinish: (id: number, code: number, data: ParcelData | null) => Promise<void>;
+  activityPresentation: (translucent: boolean) => Promise<void>;
   clipboardSet: (data: ParcelData | null) => Promise<void>;
   clipboardGet: () => Promise<ParcelData | null>;
   clipboardListen: (active: boolean) => Promise<void>;
@@ -88,7 +91,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & {
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -273,6 +276,11 @@ class ProcessBroker {
     if (!owned) this.callerPorts.set(pid, owned = new Set());
     const stop = serveCalls<BrokerCalls>(port1, {
       ...cookieCalls(() => this.cookies(this.entry(pid).pkg), () => { this.entry(pid); }),
+      // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
+      // would hold the launching main job while that same process is asked to pause.
+      activityLaunch: async (pkg, process, component, intent, request, callingClass) => { this.entry(pid); unawaited(this.activities.launch(pid,pkg,process,component,intent,request,callingClass)); },
+      activityFinish: async (id, code, data) => { this.entry(pid); unawaited(this.activities.finish(pid,id,code,data)); },
+      activityPresentation: async translucent => { this.entry(pid); this.activities.presentation(pid,translucent); },
       clipboardSet: async data => this.setClipboard(pid, data),
       clipboardGet: async () => this.getClipboard(pid),
       clipboardListen: async active => this.watchClipboard(pid, active),

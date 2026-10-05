@@ -1734,3 +1734,14 @@ The JVM endpoint handlers are extracted into `createProcessEndpoint`, independen
 Two existing Chromium core fixtures pass (11 assertions); TypeScript, full typecheck and diff check pass. The archive/bootstrap Worker uses the production time/identity/command attachment and now the real JVM endpoint factory. The page publishes its transferred endpoint, awaits settings-change and package-removal handlers, then verifies ordered timers and explicit broker death cleanup as before. The existing endpoint/clipboard/settings fixture also passes. Evidence: `webdroid-shots/y2-s5-endpoint/worker-incoming-{core,tsc,typecheck}.log`; integrated settings checks: `worker-settings-{core,tsc}.log`.
 
 No application Worker is enabled: the production entry remains an iframe. A Worker activity transport must share its result-delivery map with the endpoint; Java exit must report its real death record and close owners, and remaining stores, FD/ashmem coherence, diagnostics, input/presentation and WebView adapters are still required. The clock and settings owner files remain parent-owned. No app/AOT acceptance or performance claim; no owned browser/server capture driver is active.
+
+
+### 4.29 Y2: Worker activity commands and local result ownership (2026-10-05)
+
+Attached Workers now bind activity launch, finish and presentation to three PID-bound broker commands. Intent values use AOSP Parcel encoding; callbacks and request IDs stay in the requesting VM, shared with its incoming endpoint. Results retire their callback before decoding/delivery, duplicate replies are ignored, and a failed launch acknowledgment retires the unpublished callback. Closing the reverse port clears outstanding result callbacks. The iframe retains its existing direct ActivityStack binding.
+
+Launch/finish commands acknowledge queueing in the canonical ActivityStack, not completion of its lifecycle work. Waiting for completion would keep the caller's launching main job pending while the same process must answer pause. The broker checks the bound caller before queueing and retains the existing serialized stack and error handling.
+
+One existing Java data fixture passes seven assertions with real AOSP Intent encoding/decoding: independent parcel identity/action, delayed acknowledgment, a reentrant result before acknowledgment, duplicate suppression, and callback retirement on denial. An initial Bun rejects.toThrow matcher hung; explicitly catching and checking the same transported error passes. Two existing Chromium endpoint/bootstrap fixtures pass 11 assertions; full typecheck and diff check pass. Evidence: `webdroid-shots/y2-s5-endpoint/worker-activity-{java,core,typecheck}.log`.
+
+No application Worker is enabled yet. Canonical exit records and teardown, remaining stores, FD/ashmem coherence, diagnostics and input/presentation/WebView remain open. No fresh AOT/app gate or performance claim.

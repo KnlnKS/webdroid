@@ -43,11 +43,33 @@ function connectCommandTransports(): void {
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
 }
+export function closeProcessBrokerPort(): void {
+  calls?.close(); calls = undefined;
+  workerActivityResults.clear();
+}
+const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
+function connectActivityCommands(): void {
+  let nextRequest = 1;
+  activityTransport.presentation = translucent => {
+    detached(() => brokerCalls().activityPresentation(translucent), logUncaught);
+  };
+  activityTransport.launch = async (pkg, process, component, intent, result) => {
+    const request = nextRequest++;
+    if (result) workerActivityResults.set(request, result.deliver);
+    try { await brokerCalls().activityLaunch(pkg, process, component, await encodeIntent(intent), request, result?.caller.cls ?? null); }
+    catch (error) { workerActivityResults.delete(request); throw error; }
+  };
+  activityTransport.finished = (id, code, data) => {
+    setVisible(false);
+    detached(() => after(data && encodeIntent(data), encoded => brokerCalls().activityFinish(id, code, encoded)), logUncaught);
+  };
+}
 /** Worker commands use the transferred channel, with no parent-window lookup. */
 export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
   if (calls) { commandProxy(port).close(); throw new Error("Process command port already attached"); }
   calls = commandProxy(port);
   connectCommandTransports();
+  connectActivityCommands();
   return calls.endpoint;
 }
 
@@ -147,7 +169,7 @@ export function connectProcess(): ProcessEndpoint {
 }
 
 /** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
-export function createProcessEndpoint(requests = new Map<number, ResultDelivery["deliver"]>()): ProcessEndpoint {
+export function createProcessEndpoint(requests = workerActivityResults): ProcessEndpoint {
   return {
     clipboardChanged: async () => clipboardChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
