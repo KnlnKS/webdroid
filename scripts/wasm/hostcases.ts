@@ -52,12 +52,16 @@ rt.register({
   },
 });
 
+class JShape extends JObj {}
+rt.register({ name: "Hc$Shape", ctor: JShape, methods: { "area()I": () => 7 } });
+rt.register({ name: "wdtest/Maker", ctor: class extends JObj {}, methods: { "static make()Ljava/lang/Object;": () => new JShape() } });
+
 /** the fixture Hc and the classes it declares, as a dex; the classes the host implements are compiled against, not dexed */
 export function hostDex(): string {
   const out = mkdtempSync(join(tmpdir(), "wasm-hostclass-")), sh = shellIn(out), api = `${androidPlatform(35)}/android.jar`, dir = join(JAVA, "hc");
   const stubs = join(out, "stubs"), classes = join(out, "classes");
   mkdirSync(stubs); mkdirSync(classes);
-  sh(["javac", "--release", "11", "-cp", api, "-d", stubs, join(dir, "stubs/wdtest/Counter.java"), join(dir, "stubs/wdtest/HostList.java")]);
+  sh(["javac", "--release", "11", "-cp", api, "-d", stubs, join(dir, "stubs/wdtest/Counter.java"), join(dir, "stubs/wdtest/HostList.java"), join(dir, "stubs/wdtest/Maker.java")]);
   sh(["javac", "--release", "11", "-cp", `${api}:${stubs}`, "-d", classes, join(dir, "Hc.java")]);
   sh([androidTool("d8"), "--min-api", "26", "--classpath", stubs, "--output", out, ...filesIn(classes, /\.class$/)]);
   return join(out, "classes.dex");
@@ -78,7 +82,7 @@ async function run(f: () => unknown): Promise<string> {
 /** `blocking` runs the Java that waits: the JS tier's scall, or the World's entryAsync */
 export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown> = async (c, n, d) => scall(c, n, d)): Promise<string[]> {
   const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
-  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" ? "I" : STR}`));
+  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "shapes"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" ? "I" : STR}`));
 
   await line("a host method that waits, from a subclass", () => blocking("Hc", "blockSub", "()I"));
   await line("a host method that enters Java that blocks", () => blocking("Hc", "reentered", "()I"));

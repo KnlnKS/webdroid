@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.function.IntSupplier;
 import wdtest.Counter;
 import wdtest.HostList;
+import wdtest.Maker;
 
 /** Java that uses classes the host implements: the cases in scripts/wasm/hostcases.ts call these and the host objects directly. */
 public class Hc {
@@ -29,6 +30,11 @@ public class Hc {
     void method(String m) { method = m; }
     String lengths() { return fixedContentLength + "/" + fixedContentLengthLong + "/" + chunkLength; }
   }
+
+  public abstract static class Shape { public abstract int area(); }
+  static class Square extends Shape { @Override public int area() { return 4; } }
+  /** an instance of an abstract class that the host implements, made while this method runs: the call is to the host's method, not to the one concrete bytecode subclass */
+  public static int shapes() { Shape q = new Square(); Shape h = (Shape) Maker.make(); return q.area() * 100 + h.area(); }
 
   /** a native handle in a long field: the object that frees it in finalize() owns it, one that does not free it does not */
   static class Own { long h; @Override protected void finalize() {} }

@@ -14,7 +14,7 @@ import { parseMethodDesc } from "../../jvm/abi";
 import { HOSTED, type HostSpec } from "./hostapi";
 import type { World } from "./world";
 
-const OBJECT = "java/lang/Object", STATIC = "static ";
+const OBJECT = "java/lang/Object", STATIC = "static ", SHELL = "$$shell";
 
 /** the method `key` ("name(desc)ret", with "static " for a static one) as a native of class `cls` */
 function native(cls: string, key: string, index: number): MethodInfo {
@@ -58,6 +58,8 @@ export class HostClasses {
       // the methods a superclass declares are found through the whole chain
       for (let c: JClass | undefined = have; c?.sup; c = prog.get(c.sup)) if (!prog.get(c.sup)) return false;
       this.overlay(have, spec);
+      // made now, not at the first object: code that runs while one is made has already decided what the abstract class's concrete subclasses implement
+      if (have.flags & ACC.ABSTRACT) this.javaClass(spec);
       return true;
     }
     if (have) return true;
@@ -68,15 +70,17 @@ export class HostClasses {
   }
 
   /** the Java class a host object of `spec` is an instance of: the class itself, or where the spec stands for an interface (EGL10) a class of natives that implements it, with the
-   *  methods of the specs up its chain */
+   *  methods of the specs up its chain, or where it stands for an abstract class (EGLContext) a concrete subclass, which class-hierarchy analysis sees as the class the host
+   *  instantiates instead of taking the bytecode subclasses for the only implementations */
   javaClass(spec: HostSpec): string {
-    if (!this.w.prog.get(spec.name)?.isInterface) return spec.name;
-    const name = spec.name + HOSTED;
+    const jc = this.w.prog.get(spec.name), iface = !!jc?.isInterface;
+    if (!iface && !(jc && jc.flags & ACC.ABSTRACT)) return spec.name;
+    const name = spec.name + (iface ? HOSTED : SHELL);
     if (!this.w.prog.get(name)) {
       const methods = new Set<string>();
-      for (let s: HostSpec | undefined = spec; s; s = s.sup ? this.specs.get(s.sup) : undefined) for (const key of s.methods) if (!key.startsWith(STATIC)) methods.add(key);
-      this.synthesize({ ...spec, name, sup: null, ifaces: [spec.name], methods: [...methods] });
-      this.defined.set(name, spec);
+      if (iface) for (let s: HostSpec | undefined = spec; s; s = s.sup ? this.specs.get(s.sup) : undefined) for (const key of s.methods) if (!key.startsWith(STATIC)) methods.add(key);
+      this.synthesize({ ...spec, name, sup: iface ? null : spec.name, ifaces: iface ? [spec.name] : [], methods: [...methods] });
+      if (iface) this.defined.set(name, spec);
     }
     return name;
   }

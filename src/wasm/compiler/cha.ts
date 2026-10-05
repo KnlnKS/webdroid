@@ -65,7 +65,8 @@ export class Cha {
       seen.add(n); budget--;
       const c = this.prog.get(n);
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) { const m = this.prog.implFor(n, name, desc); if (m) found.add(m); }
-      stack.push(...this.subsOf(n));
+      // not push(...): the direct subtypes of Object exceed the engine's limit on arguments, which a worker's smaller stack lowers
+      for (const s of this.subsOf(n)) stack.push(s);
     }
     if (budget <= 0 && stack.length && found.size < 2) {
       found.clear();
@@ -94,7 +95,7 @@ export class Cha {
       // a class that implements the method itself decides it for every subclass: none of them runs m
       const own = c && !c.isInterface ? c.byKey.get(key) : undefined;
       if (own && own !== m && !(own.flags & (ACC.STATIC | ACC.ABSTRACT))) continue;
-      stack.push(...this.subsOf(n));
+      for (const s of this.subsOf(n)) stack.push(s);
     }
     return false;
   }
