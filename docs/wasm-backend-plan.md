@@ -15,7 +15,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 | Gate | Recovered evidence and work still required |
 |---|---|
 | G1 | Open. Shared-host runs beat the steady-state geometric mean, but some workloads lose more than 10% and Chrome first calls are slower. Repeat on an idle host after correctness stabilizes. |
-| G2 | Open for final acceptance. Differential suites and `fwtest` (31/31) pass. The TestNG runner now recovers 6,123 previously skipped executions; the affected classes pass 8,065 cases without skips. The full conformance rerun and browser quick gate remain pending. A compile sweep checks translation, not execution of every method. |
+| G2 | Open for final acceptance. Differential suites and `fwtest` (31/31) pass. The TestNG runner now recovers 6,123 previously skipped executions; the affected classes pass 8,065 cases without skips. The integrated quick gate at `5156bed1` passes 7/7 (four Android-compared, three smoke, zero reported gaps). The full conformance rerun remains open: Guava and jsr166 have zero unexplained divergences, but ojluni-time has missing coverage and unexplained results under investigation. A compile sweep checks translation, not execution of every method. |
 | G3 | Open. The stated bar is 30% less cold-call compile time and every gated tap at most 150 ms. Record matching cold/warm compile counters for every named app; launch parity is also required by S4/S6. X1's launch timings alone do not settle the compile-time criterion. |
 | G4 | Open. Re-entered loops tier up, but section 4.7 records a single long activation failing the 100 ms criterion. Compilation hints do not close that gap. |
 | G5 | Open. The string representation comparison is measured; the required boundary share below 5% of a heavy tap has not been demonstrated. |
@@ -25,7 +25,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 
 S0–S3 have substantial implementations and harness coverage. S4 has AOT delivery and worker compilation, but the Wasm cold interpreter and hot-loop re-entry deliverables still need an explicit audit. S5's process-per-Worker conversion and S6's default switch/removal are unfinished. Optional and open-ended work follows completion of the main stages and gates.
 
-Y1 stabilization, Y2 host-class/JNI dispatch and the TestNG runner/shared cache recovery are merged. Section 4.19 records Y2's bounded app verification. G4 continuation, full conformance and the unresolved standalone Mihon navigation path remain active work.
+Y1 stabilization, Y2 host-class/JNI dispatch and synthetic input timing, and the TestNG runner/shared cache recovery are merged. Sections 4.19–4.20 record Y2's verification and the resolved standalone Mihon navigation mechanism. Subsequent recovery fixes prevent compile-only AOT Worlds executing host vtable repairs and preserve full-width executable class IDs in annotation/exception metadata; the history records their reproduced failures and core checks. The full 15-flow matrix is running at `64622fec` with fresh eight-jar assets (`c0399a01f2c06e3f`). G4 continuation, full conformance, the cold interpreter and process-per-Worker conversion remain active work; no final timing or default-switch gate is accepted.
 
 ## 0. How to read this
 
