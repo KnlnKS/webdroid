@@ -48,6 +48,7 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   const runPath = `${actualDir}/run.json`;
   if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`bun run e2e --full --test ${flow.app}\``);
   const runInfo = await Bun.file(runPath).json() as FlowRun;
+  if (runInfo.aborted) throw new Error(`${flow.app}: capture aborted at ${runInfo.aborted.step}: ${runInfo.aborted.error}`);
   if (runInfo.mode !== "full" || runInfo.flowSchemaHash !== flowSchemaHash([flow], "full") ||
       runInfo.screen !== screenParam(screenOf(manifest)) ||
       runInfo.statusBarDp !== screenOf(manifest).statusBarDp ||

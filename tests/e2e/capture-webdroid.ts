@@ -53,7 +53,10 @@ export type StepRun = {
 
 type CaptureMode = "full" | "fast";
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { mode: CaptureMode; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[] };
+export type FlowRun = { mode: CaptureMode; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[]; aborted?: { step: string; error: string } };
+export class CaptureAborted extends Error {
+  constructor(cause: unknown, readonly runs: StepRun[]) { super(String(cause), { cause }); }
+}
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */
 export async function prepareShots(dir: string): Promise<void> {
@@ -148,67 +151,78 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
 
   log(`=== webdroid: ${flow.app} (${flow.steps.length} steps) ===`);
   const runs: StepRun[] = [];
-  for (const [i, step] of flow.steps.entries()) {
-    const action = step.action;
-    const rec = byId.get(step.id);
-    if (!rec && manifest && manifest.depth !== "startup")
-      throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
-    const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
-    const fastEvidence = evidenceOf(step);
-    const evidence = mode === "full" ? "visual" : fastEvidence.kind;
-    const r = await runStep(drv, flow, step, rec, mode);
-    const stepMs = Math.round(r.ms);
-    const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
-    // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
-    // a frame rate measured beside other flows' browsers measures the host, not the app
-    const motion = mode === "fast" ? fastEvidence.kind === "motion" : isMotionWait(step.wait);
-    const slow = !!(motion && action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
-    const writeAt = performance.now();
-    if (r.png) {
-      await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
+  const persist = (hostFiles?: FlowRun["hostFiles"], aborted?: FlowRun["aborted"]) => {
+    const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles, aborted };
+    return Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
+  };
+  let executing = "";
+  try {
+    for (const [i, step] of flow.steps.entries()) {
+      executing = step.id;
+      const action = step.action;
+      const rec = byId.get(step.id);
+      if (!rec && manifest && manifest.depth !== "startup")
+        throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
+      const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
+      const fastEvidence = evidenceOf(step);
+      const evidence = mode === "full" ? "visual" : fastEvidence.kind;
+      const r = await runStep(drv, flow, step, rec, mode);
+      const stepMs = Math.round(r.ms);
+      const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
+      // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
+      // a frame rate measured beside other flows' browsers measures the host, not the app
+      const motion = mode === "fast" ? fastEvidence.kind === "motion" : isMotionWait(step.wait);
+      const slow = !!(motion && action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
+      const writeAt = performance.now();
+      if (r.png) {
+        await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
+      }
+      await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
+      if (shots && r.frames.length) {
+        const dir = `${shots}/${flow.app}/${String(i).padStart(2, "0")}-${step.id}`;
+        await mkdir(dir, { recursive: true });
+        await Promise.all(r.frames.map((f, n) => Bun.write(`${dir}/f${String(n).padStart(3, "0")}.png`, Buffer.from(f, "base64"))));
+      }
+      const hostWriteMs = performance.now() - writeAt;
+      const frames = r.frames.length || undefined;
+      runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
+                  busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
+                  settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, hang: r.hang, frames,
+                  ms: stepMs, perf: r.perf, fps: motion ? Math.round(fps) : undefined,
+                  glFps: motion && r.ms ? (r.perf.glFrames ?? 0) * 1000 / r.ms : undefined,
+                  presentFps: motion && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
+                  slow: slow || undefined,
+                  newMissing: r.newMissing.length ? r.newMissing : undefined,
+                  newPlaceholders: r.newPlaceholders.length ? r.newPlaceholders : undefined,
+                  nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
+                  newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
+                  processes: await readProcesses(drv.page), frameHash: r.frameHash ?? undefined,
+                  presentation: r.presentation, evidence, phases: { ...r.phases, hostWriteMs } });
+      const p = r.perf;
+      const flags = [
+        r.semanticHit === false && !(action.type === "tapText" && action.optional) ? "coord-fallback" : "",
+        r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
+        r.wedged ? "MAIN LOOP WEDGED" : "",
+        r.hang ? `HANG in ${r.hang.phase}` : "",
+        frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
+        `${stepMs}ms`,
+        motion ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
+        p.glFrames ? `${p.glFrames} gl` : "",
+        slow ? "SLOW" : "",
+        p.draws ? `${p.draws} draw/${Math.round(p.drawMs)}ms` : "",
+        p.measureText ? `${p.measureText} measureText` : "",
+        p.rnReplay ? `${p.rnReplay} rnOps` : "",
+        ...r.web.map((w) => `web: ${w.loaded ? "loaded" : "loading"} ${w.url}`),
+        r.error ? `error: ${r.error}` : "",
+      ].filter(Boolean).join(", ");
+      log(`  ${String(i).padStart(2, "0")} ${step.label}${flags ? "  [" + flags + "]" : ""}`);
+      for (const m of r.newMissing) log(`       missing: ${m}`);
+      for (const n of r.nativeRequired) log(`       native code required: ${n}`);
+      for (const e of r.newErrors) log(`       ${e.slice(0, 200)}`);
     }
-    await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
-    if (shots && r.frames.length) {
-      const dir = `${shots}/${flow.app}/${String(i).padStart(2, "0")}-${step.id}`;
-      await mkdir(dir, { recursive: true });
-      await Promise.all(r.frames.map((f, n) => Bun.write(`${dir}/f${String(n).padStart(3, "0")}.png`, Buffer.from(f, "base64"))));
-    }
-    const hostWriteMs = performance.now() - writeAt;
-    const frames = r.frames.length || undefined;
-    runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
-                busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
-                settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, hang: r.hang, frames,
-                ms: stepMs, perf: r.perf, fps: motion ? Math.round(fps) : undefined,
-                glFps: motion && r.ms ? (r.perf.glFrames ?? 0) * 1000 / r.ms : undefined,
-                presentFps: motion && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
-                slow: slow || undefined,
-                newMissing: r.newMissing.length ? r.newMissing : undefined,
-                newPlaceholders: r.newPlaceholders.length ? r.newPlaceholders : undefined,
-                nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
-                newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
-                processes: await readProcesses(drv.page), frameHash: r.frameHash ?? undefined,
-                presentation: r.presentation, evidence, phases: { ...r.phases, hostWriteMs } });
-    const p = r.perf;
-    const flags = [
-      r.semanticHit === false && !(action.type === "tapText" && action.optional) ? "coord-fallback" : "",
-      r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
-      r.wedged ? "MAIN LOOP WEDGED" : "",
-      r.hang ? `HANG in ${r.hang.phase}` : "",
-      frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
-      `${stepMs}ms`,
-      motion ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
-      p.glFrames ? `${p.glFrames} gl` : "",
-      slow ? "SLOW" : "",
-      p.draws ? `${p.draws} draw/${Math.round(p.drawMs)}ms` : "",
-      p.measureText ? `${p.measureText} measureText` : "",
-      p.rnReplay ? `${p.rnReplay} rnOps` : "",
-      ...r.web.map((w) => `web: ${w.loaded ? "loaded" : "loading"} ${w.url}`),
-      r.error ? `error: ${r.error}` : "",
-    ].filter(Boolean).join(", ");
-    log(`  ${String(i).padStart(2, "0")} ${step.label}${flags ? "  [" + flags + "]" : ""}`);
-    for (const m of r.newMissing) log(`       missing: ${m}`);
-    for (const n of r.nativeRequired) log(`       native code required: ${n}`);
-    for (const e of r.newErrors) log(`       ${e.slice(0, 200)}`);
+  } catch (cause) {
+    await persist(undefined, { step: executing, error: String(cause) });
+    throw new CaptureAborted(cause, runs);
   }
   // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
   // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
@@ -225,8 +239,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
     };
     return scan(await navigator.storage.getDirectory(), "");
   }) : undefined;
-  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles };
-  await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
+  await persist(hostFiles);
   const missingFiles = (flow.privateStorage?.expectedFiles ?? []).filter((expected) => !hostFiles?.some(({ path, size }) =>
     path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
     .map((expected) => `missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);

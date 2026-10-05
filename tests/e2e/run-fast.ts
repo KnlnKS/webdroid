@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { captureFlow, launchFor, loadManifest, type StepRun } from "./capture-webdroid";
+import { captureFlow, launchFor, loadManifest, CaptureAborted, type StepRun } from "./capture-webdroid";
 import { defaultJobs, parseArgs } from "./lib/args";
 import { FLOWS } from "./flows";
 import type { Flow } from "./types";
@@ -97,7 +97,7 @@ function browserFailures(flow: Flow, errors: string[]): string[] {
 async function runFlow(flow: Flow): Promise<Outcome> {
   const started = performance.now();
   const checked = await checkFlow(flow).catch((error: unknown): Checked =>
-    ({ flow, runs: [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [] }));
+    ({ flow, runs: error instanceof CaptureAborted ? error.runs : [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [] }));
   const outcome = { ...checked, ms: performance.now() - started };
   console.log(`  ${flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
     (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +
