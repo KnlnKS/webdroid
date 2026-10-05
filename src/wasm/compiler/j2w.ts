@@ -219,13 +219,19 @@ export class Compiler implements Base {
     return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.fn.has(mid(m)));
   }
   /** counts `m`'s calls and loop iterations in its word of the scratch memory and asks the host to upgrade the method when they reach the budget */
-  emitCount(c: Code, m: MethodInfo): void {
+  emitCount(c: Code, m: MethodInfo, iterations?: number): void {
     const slot = this.w.slotOf(m);
     if (slot >= COUNT_SLOTS) return;
     this.scratch();
     const addr = COUNT_BASE + 4 * slot, n = c.scratch();
-    c.i32(addr).i32(addr).mem(OP.i32_load, 2).i32(1).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
-    c.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq).if_().i32(slot).call(this.imp.hot).end();
+    if (iterations === undefined) {
+      c.i32(addr).i32(addr).mem(OP.i32_load, 2).i32(1).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
+      c.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq).if_().i32(slot).call(this.imp.hot).end();
+      return;
+    }
+    c.i32(addr).i32(addr).mem(OP.i32_load, 2).lget(iterations).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
+    c.lget(n).lget(iterations).raw(OP.i32_sub).i32(HOT_BUDGET).raw(OP.i32_lt_u);
+    c.lget(n).i32(HOT_BUDGET).raw(OP.i32_ge_u, OP.i32_and).if_().i32(slot).call(this.imp.hot).end();
   }
   /** a method that calls something counts its frame (exc.ts MAX_DEPTH): `entry` takes the depth before it, which is restored on return and at a handler */
   emitEnter(c: Code, entry: number): number[] {
@@ -562,16 +568,29 @@ export class Compiler implements Base {
     }
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
+  outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
+    const roots = fns.length;
+    fns = fns.concat(this.outlines);
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
     this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), [0, 0x0b], "$start");
     const t0 = performance.now(), bytes = this.mb.build();
     this.w.stats.phase.encode += performance.now() - t0;
-    return { bytes, traces: fns.map(({ name, f, code, m }) => {
+    const traces = fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;
       return { name, m, offsets: Int32Array.from({ length: code.marks.length / 2 }, (_, i) => start + code.marks[2 * i]), pcs: Int32Array.from({ length: code.marks.length / 2 }, (_, i) => code.marks[2 * i + 1]) };
-    }) };
+    });
+    // AOT traces are keyed by Java slot. Chunk offsets join their owner's trace without changing that format.
+    for (let i = 0; i < roots; i++) {
+      const root = traces[i], parts = traces.slice(roots).filter((t) => t.name.startsWith(root.name + "#loop"));
+      if (!parts.length) continue;
+      const pairs: [number, number][] = [];
+      for (const t of [root, ...parts]) for (let k = 0; k < t.offsets.length; k++) pairs.push([t.offsets[k], t.pcs[k]]);
+      pairs.sort((a, b) => a[0] - b[0]);
+      root.offsets = Int32Array.from(pairs, (p) => p[0]); root.pcs = Int32Array.from(pairs, (p) => p[1]);
+    }
+    return { bytes, traces: traces.slice(0, roots) };
   }
 }
 

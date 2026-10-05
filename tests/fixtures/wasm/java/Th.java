@@ -62,6 +62,32 @@ public class Th {
   }
   static int fuelArithmetic(int n) { int r = 0; for (int i = 0; i < n; i++) r += i; return r; }
 
+  static class LoopInit { static int value = 7; }
+  static int loopState(int n) {
+    Object lock = new Object(); int[] a = { 0 }; long l = 3; float f = 1.25f; double d = 2.5;
+    synchronized (lock) {
+      for (int outer = 0; outer < 2; outer++) try {
+        for (int i = 0; i < 9000; i++) {
+          l += i; f += 0.5f; d += 0.25;
+          a[0] += Thread.holdsLock(lock) ? LoopInit.value : -100;
+          if (i == 8500) throw new IllegalArgumentException("chunk");
+        }
+      } catch (IllegalArgumentException e) { a[0] += (int) l + (int) f + (int) d; }
+    }
+    return a[0] + (Thread.holdsLock(lock) ? 100000 : 0);
+  }
+  static int loopTrace(int n) {
+    for (int i = 0; i < 9000; i++) {
+      if (i == 8500) {
+        StackTraceElement[] s = new Exception().getStackTrace();
+        int count = 0;
+        for (StackTraceElement e : s) if (e.getClassName().equals("Th") && e.getMethodName().equals("loopTrace")) count++;
+        return count;
+      }
+    }
+    return 0;
+  }
+
   // ---------- monitors
   static int reentrant(int n) {
     Object o = new Object(); int c = 0;
