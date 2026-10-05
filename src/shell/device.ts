@@ -39,6 +39,7 @@ import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server
 import { startActivityThread } from "../android/server/am";
 import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
+import { processExited } from "../process-exit";
 import { toThread } from "../jvm/natives/jthrowable";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
@@ -50,14 +51,25 @@ export function setDisplayChangeHandler(handler: () => void): void { displayChan
 // a frame. Read the screen back with toBlob: toDataURL on a transferred bitmap stalls.
 let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
 let frame = fb.getContext("2d")!;
-let screen: ImageBitmapRenderingContext | null = null;
-export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
+type ScreenSink = (bitmap: ImageBitmap) => void | Promise<boolean>;
+let screen: ScreenSink | null = null;
+export function setScreenSink(sink: ScreenSink): void { screen = sink; }
+export function setScreenCanvas(c: HTMLCanvasElement): void {
+  const context = c.getContext("bitmaprenderer");
+  screen = context ? bitmap => context.transferFromImageBitmap(bitmap) : null;
+}
 let firstFrame!: () => void;
 /** resolves once the screen first shows the app: work a device did before the app launched waits for it */
 export const firstPresented = new Promise<void>((resolve) => { firstFrame = resolve; });
 function present(): void {
   if (!screen) return;
-  screen.transferFromImageBitmap(fb.transferToImageBitmap());
+  const shown = screen(fb.transferToImageBitmap());
+  if (shown instanceof Promise) {
+    void shown.then(presented => { if (presented && !processExited()) presentedFrame(); },
+      error => { if (!processExited()) console.error("[display]", error); });
+  } else presentedFrame();
+}
+function presentedFrame(): void {
   if (!perf.presentations++) { mark("firstPresented"); startupDone(); appLaunched(); firstFrame(); }
   notePresent();
 }

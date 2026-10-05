@@ -35,6 +35,7 @@ import { BrowserLocation } from "./geolocation";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
+import { receiveFrames, canvasFrameSink } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
 import type { SettingsCalls, SettingsTable } from "./settings";
 import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
@@ -94,7 +95,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & {
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 export const brokerMethods = ["exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
-export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type Entry = { canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
@@ -260,8 +261,14 @@ class ProcessBroker {
       if (clock) ports.push(clock.close);
       const broker = worker ? this.serveBrokerPort(pid) : undefined;
       if (broker) ports.push(broker.close);
+      let display: MessagePort | undefined;
+      if (worker && entry.canvas) {
+        const sink = canvasFrameSink(entry.canvas);
+        const {port1,port2} = new MessageChannel();
+        ports.push(receiveFrames(port1,sink));display=port2;
+      }
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port };
+        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port, display };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
       for (const close of this.bootstrapPorts.get(pid) ?? []) close();
@@ -360,7 +367,7 @@ class ProcessBroker {
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
+    entry.watchers.clear(); entry.frame?.remove(); entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     this.activities.processDied(pid);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }

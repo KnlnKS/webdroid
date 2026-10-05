@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("lazy archive reads cross a Worker without sharing buffers and fail on process teardown", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/remote-file.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts", import.meta.dir + "/../src/guest-clock.ts", import.meta.dir + "/../src/shell/worker-bootstrap.ts", import.meta.dir + "/../src/android/os.ts"], splitting: true, target: "browser", format: "esm" });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/remote-file.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts", import.meta.dir + "/../src/guest-clock.ts", import.meta.dir + "/../src/shell/worker-bootstrap.ts", import.meta.dir + "/../src/android/os.ts", import.meta.dir + "/../src/shell/frame-port.ts"], splitting: true, target: "browser", format: "esm" });
   if (!build.success) throw new AggregateError(build.logs, "archive transport build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -57,6 +57,11 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
         return { ...await reply, source: Array.from(source), requests };
       } finally { worker.terminate(); URL.revokeObjectURL(url); served.close(); }
     });
+    const display = await page.evaluate(async () => {
+      const {workerFrameOwnership} = await import(location.origin+"/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return workerFrameOwnership();
+    });
+    expect(display).toEqual({sinkError:"display sink failure",results:[true,false,true],released:[0,0,0],dimensions:[4,1],pixels:[[255,0,0,255],[0,0,255,255]],closed:["Process display closed",false,"Process display closed","Process display closed"],pendingReleased:[0,0]});
     expect(errors).toEqual([]);
     expect(result).toEqual({ size: 4, bytes: [[10, 11], [12, 13]], readAgain: [10],
       failure: ["RangeError", "archive unavailable"], closed: "Archive source closed", later: "Archive source closed",
@@ -66,12 +71,12 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       return bootstrapOwnership();
     });
     expect(ownership).toEqual({ eagerReads: 0, superseded: "Archive source closed", failed: true, discarded: ["Archive source closed", "Archive source closed"],
-      retained: [10], ended: "Archive source closed", isolated: [10], clocksClosed: 4, clockPending: 0, fired: 0, callersClosed: true });
+      retained: [10], ended: "Archive source closed", isolated: [10], clocksClosed: 4, clockPending: 0, fired: 0, callersClosed: true,displaysClosed:4,displayErrors:Array(4).fill("Process display closed") });
     const clock = await page.evaluate(async () => {
       const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return clockBootstrapOwnership();
     });
-    expect(clock).toEqual({ exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],
+    expect(clock).toEqual({ display:true,exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],
       advanced: 2, pendingBeforeDeath: 2, pendingAfterDeath: 1, brokerTimer: 1, pendingAfterAdvance: 0 });
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }

@@ -16,6 +16,8 @@ import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo";
 
 export async function bootstrapOwnership() {
+  const {sendFrames} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port");
+  const displays: Promise<void>[] = [], senders: ReturnType<typeof sendFrames>[] = [];
   let reads = 0, began!: () => void;
   const waiting = new Promise<void>(resolve => began = resolve);
   for (const [i, pkg] of ["test.archive.one", "test.archive.two"].entries()) {
@@ -33,13 +35,16 @@ export async function bootstrapOwnership() {
   const watchClock = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
     if (!data.broker) throw new Error("expected command capability");
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
+    if (!data.display) throw new Error("expected display capability");
+    displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
+    senders.push(sendFrames(data.display));
     const port = data.clock?.port;
     if (!port) throw new Error("expected controlled clock port");
     clocks.push(new Promise<void>(resolve => port.addEventListener("message", ({data}) => { if (data.kind === "close") resolve(); })));
     connectClock(data.clock!)!.schedule(() => fired++, 5);
   };
-  broker.connect("test.archive.one", "test.archive.one", 7001);
-  broker.connect("test.archive.two", "test.archive.two", 7002);
+  broker.connect("test.archive.one", "test.archive.one", 7001).canvas=document.createElement("canvas");
+  broker.connect("test.archive.two", "test.archive.two", 7002).canvas=document.createElement("canvas");
   const file = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
     watchClock(data);
     const source = data.registry[0].source;
@@ -72,11 +77,12 @@ export async function bootstrapOwnership() {
   const ended = await pending;
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
-  await Promise.all(clocks);
+  await Promise.all([...clocks,...displays]);
+  const displayErrors = await Promise.all(senders.map(sender => {const fb=new OffscreenCanvas(1,1);fb.getContext("2d");return sender.present(fb.transferToImageBitmap()).then(()=>"unexpected frame",error=>error.message);}));
   const clockPending = guestClockControl.pending();
   const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired, callersClosed };
+  return { eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired, callersClosed, displaysClosed:displays.length,displayErrors };
 }
 
 export async function endpointOwnership() {
@@ -206,7 +212,7 @@ export async function clockBootstrapOwnership() {
   const path = `/data/app/${pkg}/base.apk`;
   packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
-  const entry = broker.connect(pkg, pkg, pid);
+  const entry = broker.connect(pkg, pkg, pid);entry.canvas=document.createElement("canvas");
   const data = await broker.bootstrap(pid, true), start = guestClockControl.now(), wall = wallMillis();
   const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout} from ${JSON.stringify(location.origin + "/guest-clock.js")};
     self.onmessage = async ({data}) => {
@@ -223,13 +229,13 @@ export async function clockBootstrapOwnership() {
         queueMicrotask(()=>setGuestTimeout(()=>self.postMessage({tick:'nested',now:uptimeMillis()}),0));
         setGuestTimeout(()=>self.postMessage({tick:'dead'}),5);
       },10);
-      self.postMessage({ready:true,archive,controlled:guestClockControl.controlled,bootTime,
+      self.postMessage({ready:true,display:!!data.display,archive,controlled:guestClockControl.controlled,bootTime,
         identity:[PROCESS_PID,PROCESS_UID,PROCESS_NAME],commands:{cookies:await broker.cookieHas(),clipboard:await broker.clipboardGet()},endpoint:endpoint.port2},[endpoint.port2]);
     };`;
   const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"});
   const ticks: {tick:string;now:number;wall?:number}[] = [];
   try {
-    const ready = await new Promise<{archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
+    const ready = await new Promise<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
       worker.onerror = event => reject(new Error(event.message));
       worker.onmessage = ({data}) => { if(data.ready) {broker.readyPort(pid,data.endpoint);resolve(data);} else ticks.push(data); };
       worker.postMessage(data, bootstrapTransfers(data));
@@ -256,7 +262,7 @@ export async function clockBootstrapOwnership() {
     worker.terminate();
     const pendingAfterDeath = guestClockControl.pending();
     await guestClockControl.advanceBy(10);
-    return {exit,controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
+    return {exit,display:ready.display,controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
       wall:ticks[0]?.wall===wall+10,uptime:ticks.every(tick=>tick.now===start+10),ticks:ticks.map(tick=>tick.tick),advanced,pendingBeforeDeath,pendingAfterDeath,
       brokerTimer,pendingAfterAdvance:guestClockControl.pending()};
   } finally { worker.terminate(); broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }
@@ -359,4 +365,40 @@ export async function foregroundConnectionOwnership() {
     await clipboardTransport.set(null);
     return {unregistered,noCookies,clipboard:clip?.bytes[0]};
   } finally { broker.fail(pid,"foreground fixture cleanup",NOT_CRASHED);broker.activities.setForeground(previous);packages.delete(pkg); }
+}
+
+
+export async function workerFrameOwnership() {
+  const {receiveFrames,canvasFrameSink} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port");
+  const canvas = document.createElement("canvas"), consume = canvasFrameSink(canvas), channel = new MessageChannel(), held = new MessageChannel(), failed = new MessageChannel();
+  const pixels: number[][] = [];
+  const close = receiveFrames(channel.port1,bitmap=>{
+    const copy = new OffscreenCanvas(bitmap.width,bitmap.height), ctx = copy.getContext("2d")!;
+    ctx.drawImage(bitmap,0,0);pixels.push(Array.from(ctx.getImageData(0,0,1,1).data));consume(bitmap);
+  });
+  const closeFailed = receiveFrames(failed.port1,()=>{throw new Error("display sink failure");});
+  const code = `import {sendFrames} from ${JSON.stringify(location.origin+"/frame-port.js")};
+    self.onmessage=async({data})=>{
+      const sender=sendFrames(data.port),fb=new OffscreenCanvas(2,3);let ctx=fb.getContext('2d');
+      const snapshot=color=>{ctx.fillStyle=color;ctx.fillRect(0,0,fb.width,fb.height);return fb.transferToImageBitmap();};
+      const red=snapshot('red'),first=sender.present(red),green=snapshot('lime'),second=sender.present(green);
+      fb.width=4;fb.height=1;ctx=fb.getContext('2d');const blue=snapshot('blue'),last=sender.present(blue);
+      ctx.fillStyle='yellow';ctx.fillRect(0,0,4,1);
+      const results=await Promise.all([first,second,last]);
+      sender.close();
+      const blocked=sendFrames(data.held),a=snapshot('black'),b=snapshot('white'),c=snapshot('red');
+      const failure=promise=>promise.then(value=>value,error=>error.message);
+      const p1=failure(blocked.present(a)),p2=failure(blocked.present(b)),p3=failure(blocked.present(c));
+      blocked.close();const future=snapshot('green'),p4=failure(blocked.present(future));
+      const rejected=sendFrames(data.failed);const sinkError=await failure(rejected.present(snapshot("black")));rejected.close();
+      self.postMessage({sinkError,results,released:[red.width,green.width,blue.width],closed:await Promise.all([p1,p2,p3,p4]),pendingReleased:[c.width,future.width]});
+    };`;
+  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  try {
+    const result=await new Promise<{sinkError:string;results:boolean[];released:number[];closed:(string|boolean)[];pendingReleased:number[]}>((resolve,reject)=>{
+      worker.onerror=event=>reject(new Error(event.message));worker.onmessage=({data})=>resolve(data);
+      worker.postMessage({port:channel.port2,held:held.port2,failed:failed.port2},[channel.port2,held.port2,failed.port2]);
+    });
+    return {...result,dimensions:[canvas.width,canvas.height],pixels};
+  } finally {worker.terminate();close();closeFailed();held.port1.close();URL.revokeObjectURL(url);}
 }
