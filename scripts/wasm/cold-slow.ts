@@ -46,6 +46,9 @@ public class ColdSlow {
   public static int suspendedCatch(int n){try{return rejected(n);}catch(IllegalArgumentException e){return n+37;}}
   public static IllegalArgumentException problem(){return new IllegalArgumentException();}
   public static void main(String[] args){for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","init","initFail"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
+  static class Vol { volatile int value; }
+  public static int repeatedFields(int n){Vol a=new Vol(); int r=0; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; return r;}
+  public static int payloads(int n){int[] a={11,12,13,14,15}; int[] b={21,22,23,24,25}; return a[n]+b[n];}
   public static int mainTest(int n){return objects(n);}
 }
 `);
@@ -74,6 +77,12 @@ expect("actual native suspension",gates,1);
 const serial=await Promise.all(Array.from({length:20},(_,i)=>run(wc,"serialAwait",i)));
 expect("contended suspended monitor",serial.join(","),Array.from({length:20},(_,i)=>i+1).join(","));
 expect("recursive suspended call",await run(wc,"suspendedRecursive",150),151);
+const before={adapters:wc.stats.coldSlowAdapters,modules:wc.stats.coldSlowModules,bytes:wc.stats.bytes};
+expect("repeated field side effects",await run(wc,"repeatedFields",2),600);
+const work={adapters:wc.stats.coldSlowAdapters-before.adapters,modules:wc.stats.coldSlowModules-before.modules,bytes:wc.stats.bytes-before.bytes};
+console.log("repeated-field construction work",JSON.stringify(work));
+expect("repeated fields share compiled adapters",work.modules < work.adapters/2,true);
+for(const n of [0,2,4]) expect("distinct PC-relative array payloads",await run(wc,"payloads",n),await run(warm,"payloads",n));
 const cold = new ColdInterpreter(), method=wc.prog.resolve("ColdSlow","suspended","(I)I")!, item=method.dex.code(method.codeOff);
 const frame=cold.prepare(item,true)(); const strand=wc.sched.strand(); cold.context(frame,method,strand);
 const call=decodeInstructions(item.insns).find(i=>i.name.startsWith("invoke-static"))!;

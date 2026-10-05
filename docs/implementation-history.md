@@ -4217,3 +4217,17 @@ opt-in: implicit synchronized bodies and unsupported method-handle/type constant
 fall back before effects. Per-PC helper modules, typing and register copying are
 counted, not accepted as a performance improvement. No broad G2/browser rerun or
 later parent G4/S5 source acceptance is claimed.
+
+### Share identical cold slow adapter calls (2026-10-05)
+
+Executed slow sites within a declaration can share compiled helpers when opcode
+operands, normalized register roles/aliases, precise web kinds and preparation
+flags agree. PC/result/EH state stays site-specific; PC-relative array payloads
+retain their absolute location. Unvisited sites do not compile eagerly. A paired
+real volatile-field probe retains 75 sites: modules75->5 and compiled bytes
+86902->9396, with the same side effects/result600. The prior nonvolatile probe was
+optimized down by D8 and is not cost evidence. The unchanged slow fixture uses
+175->161 modules with the same1049 slow calls. Extended145 checks, cold diff1105,
+customdiff375, selectedthreads11 and typecheck pass. Exact output paths and source
+epoch are in the cold review document. Full register copies and whole-method
+inference remain; no G3 timing acceptance or broad G2 rerun is claimed.

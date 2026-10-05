@@ -38,6 +38,7 @@ class SlowMC extends MC {
 export class ColdSlowOps {
   private analyses = new WeakMap<MethodInfo, Analysis>();
   private adapters = new WeakMap<MethodInfo, Map<number, Adapter>>();
+  private calls = new WeakMap<MethodInfo, Map<string, Adapter["call"]>>();
   private busy = new WeakSet<ColdSnapshot>();
   constructor(private readonly w: World) {}
 
@@ -91,6 +92,30 @@ export class ColdSlowOps {
       const web = typing.use(ins.pc, reg);
       if (web >= 0 && !seen.has(web)) { seen.add(web); inputs.push({ reg, kind: abi(typing.kind[web]), web }); }
     }
+    // Canonical emitters use conservative facts. Register numbers can differ
+    // while operand roles, aliases, web kinds and declaration linkage stay equal.
+    // PC-relative array payloads retain their absolute location in the key.
+    const named = registersOf(ins), roles = new Map<number, number>();
+    for (const reg of named) if (!roles.has(reg)) roles.set(reg, roles.size);
+    const a = roles.get(ins.a), b = roles.get(ins.b), c = roles.get(ins.c);
+    const operands = ins.fmt === "23x" ? [a, b, c]
+      : ["12x", "22x", "32x", "22b", "22s", "22c"].includes(ins.fmt) ? [a, b, ins.c]
+      : ["35c", "3rc", "45cc", "4rcc"].includes(ins.fmt) ? [ins.a, ins.b, ins.c, ins.regs.map(r => roles.get(r))]
+      : [a, ins.b, ins.c];
+    const def = typing.def(ins.pc);
+    const key = JSON.stringify([ins.op, operands, String(ins.wideLit),
+      ins.constKind, ins.nullRecv, ins.signOnly, output, def < 0 ? -1 : typing.kind[def],
+      inputs.map(i => [roles.get(i.reg), typing.kind[i.web]]), ins.name === "fill-array-data" ? ins.pc : -1]);
+    let calls = this.calls.get(m);
+    if (!calls) this.calls.set(m, calls = new Map());
+    const shared = calls.get(key);
+    const finish = (call: Adapter["call"]) => {
+      const adapter = { call, inputs, output, successor: ins.pc + ins.len,
+        producer: ins.name.startsWith("invoke") || ins.name.startsWith("filled-new-array") };
+      cache!.set(ins.pc, adapter); this.w.stats.coldSlowAdapters++;
+      return adapter;
+    };
+    if (shared) return finish(shared);
     const body = (cx: Compiler, c: Code, arg: (i: number) => void) => {
       arg(0); c.gset(cx.global("rt", "depth", T.i32, true));
       arg(1); c.gset(cx.global("rt", "thr", T.anyref, true));
@@ -126,9 +151,8 @@ export class ColdSlowOps {
     const call = (strand: Strand, sync: boolean, depth: number, peer: unknown, ...args: unknown[]) => strand.root || sync
       ? this.w.synchronous(() => (rootCall ??= this.w.hostFn(name, params, output, (cx, c) => body(cx, c, i => { c.lget(i); }), prepare))(depth, peer, ...args))
       : (strandCall ??= this.w.callFn(name, params, output, body, prepare))(strand, depth, peer, ...args);
-    found = { call, inputs, output, successor: ins.pc + ins.len, producer: ins.name.startsWith("invoke") || ins.name.startsWith("filled-new-array") };
-    cache.set(ins.pc, found); this.w.stats.coldSlowAdapters++;
-    return found;
+    calls.set(key, call);
+    return finish(call);
   }
 
   private read(state: ColdSnapshot, reg: number, kind: Kind): unknown {

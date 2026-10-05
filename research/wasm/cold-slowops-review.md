@@ -95,3 +95,42 @@ One module per executed slow PC, whole-method typing on first slow use, and full
 register copies at each slow boundary can cost more than whole-body compilation
 for object-heavy methods. Batching modules/shared adapters is future measured
 work. No broad G2, browser capture or performance rerun was performed here.
+
+## Shared adapter construction milestone
+
+The next recovery change caches compiled calls by normalized operand roles, register
+alias pattern, precise web kinds, opcode operands and preparation flags within one
+MethodInfo. Each PC still owns its successor/result producer and exception dispatch.
+Declaration-scoped caches preserve caller/loader linkage. PC-relative fill-array-data
+payloads retain their absolute PC; dedicated distinct-payload checks guard this.
+Only an executed operation constructs a module. There is no eager compilation of
+unvisited slow sites. Both root and suspendable calls retain their existing ABI.
+
+Paired construction evidence using the same new volatile-field fixture:
+
+| Source | Executed adapter sites | Constructed modules | Compiled bytes added |
+| --- | ---: | ---: | ---: |
+| `3b84ae6a` | 75 | 75 | 86,902 |
+| Shared adapter calls | 75 | 5 | 9,396 |
+
+Both execute the field side effects and return 600. The baseline intentionally fails
+the new module-reduction assertion, after recording the correct result/counts; it
+is not an all-green baseline suite claim. D8 eliminated accesses in the initial
+nonvolatile experiment, so that experiment was discarded as cost evidence.
+
+The unchanged 140-check fixture reduces module constructions from 175 to 161 with
+1,049 slow calls unchanged. Extended fixture: 145 checks, 58 interpreted methods,
+497 activations; full counters are in `shared-slowops.log`. Cold differential
+1105/1105 (`shared-diff.log`), customdiff375/375 (`shared-customdiff.log`), selected
+threads11/11 (`shared-threads.log`) and typecheck (`shared-typecheck.log`) pass.
+Baseline probe output is `shared-baseline.log`. Outputs use the same recovery
+`conform-cache/cold-review/` directory.
+
+This is structural compilation work/byte reduction, not an idle timing or G3
+acceptance result. Whole-method inference and full snapshot register copies remain.
+The runtime source epoch remains `3b84ae6a` plus this focused refinement; integrated
+parent `4845c6c8` was inspected through Git, not merged or claimed tested. No
+committed compiled-resume implementation was available in the inspected refs.
+Gauss's resume entry must reuse World.validateColdSnapshot before effects, carry
+pending result/exception/uninitialized aliases/monitors, and replace rather than
+add the cold frame's depth charge. No broad G2 rerun was performed.
