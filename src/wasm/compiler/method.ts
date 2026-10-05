@@ -14,6 +14,9 @@ import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure }
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { countedLoops } from "./loops";
 import { MAX_UNCOUNTED } from "../link/exc";
+
+/** the calls of a method that may count its frame around themselves instead of in a prologue */
+const MAX_SITES = 2;
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
@@ -22,7 +25,7 @@ const FLOAT_LOCALS = true;
 
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
-  const leaf = (c: Code) => { cx.bound.set(mid(m), 4 + nparams + c.localTypes.length); return c; };
+  const leaf = (c: Code) => { if (!cx.runsJava(c)) cx.bound.set(mid(m), 4 + nparams + c.localTypes.length); return c; };
   const intr = cx.intrinsic(m);
   if (intr) { const c = new Code(nparams); intr(cx, m, c); return leaf(c); }
   if (!m.codeOff) { const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${cx.natives.reason(m)}`); return leaf(c); }
@@ -144,7 +147,7 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    if (this.countsDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -204,27 +207,48 @@ export class MC {
   weigh(): Code {
     const own = 4 + this.code.nparams + this.code.localTypes.length;
     for (const at of this.weights) this.code.patch(at, own);
-    if (this.entryDepth < 0) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
+    if (this.entryDepth < 0 && this.boundable) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
     return this.code;
   }
   /** the weight of the heaviest method this one calls, once it counts no depth */
   private calleeWeight = 0;
-  /** whether the method counts its frame against the depth limit (exc.ts MAX_DEPTH). One that calls only methods of its unit that count none, and is small with them,
-   *  does not: the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones. A handler would have to restore the depth */
-  private countsDepth(): boolean {
+  /** the calls that count the frame around themselves (planDepth) */
+  private sites = new Set<string>();
+  /** whether the calls that count their own frame are all on paths that throw, so a caller need not count its frame for the method */
+  private boundable = true;
+  private siteLocal = -1;
+  private enterSite() { if (this.siteLocal < 0) this.siteLocal = this.code.newLocal(T.i32); this.weights.push(...this.cx.emitEnter(this.code, this.siteLocal)); }
+  private leaveSite() { this.cx.emitLeave(this.code, this.siteLocal, false); }
+  /** how the method counts its frame against the depth limit (exc.ts MAX_DEPTH): not at all when it calls only methods of its unit that count none and is small with
+   *  them, since the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones; around the one or two calls that are
+   *  not such methods (a slow path, a recursion); else for the whole frame. Answers whether it is for the whole frame, which a handler must restore */
+  private planDepth(): boolean {
     const calls = this.prepared.instructions.filter((i) => i.name.startsWith("invoke"));
     if (!calls.length) return false;
     if (this.tries) return true;
+    const open: string[] = [], cold: string[] = [], ends = new Map<number, string>(this.blockIns.flatMap((b) => b.map((i) => [i.pc, b[b.length - 1].name] as const))), throws = (ins: Ins) => ends.get(ins.pc) === "throw";
+    const bounded = (m: MethodInfo | "dynamic") => { const w = m === "dynamic" ? undefined : this.cx.boundOf(m); if (w !== undefined) this.calleeWeight = Math.max(this.calleeWeight, w); return w !== undefined; };
     for (const ins of calls) {
-      const t = this.callee(ins);
+      const t = this.callee(ins), key = String(ins.pc), virtual = this.virtuals.get(ins.pc);
       if (t === null) continue;
-      const w = t === "dynamic" ? undefined : this.cx.boundOf(t);
-      if (w === undefined) return true;
-      this.calleeWeight = Math.max(this.calleeWeight, w);
+      if (/custom|polymorphic/.test(ins.name)) return true;
+      // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
+      if (virtual && this.cx.guards(...virtual).length) {
+        for (const g of this.cx.guards(...virtual)) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
+        cold.push(key + ":f");
+      } else if (!bounded(t)) {
+        // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
+        (throws(ins) ? cold : open).push(key);
+      }
     }
-    return this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED;
+    if (this.calleeWeight + 4 + 3 * this.item.regs > MAX_UNCOUNTED || open.length > MAX_SITES) return true;
+    this.sites = new Set([...open, ...cold]);
+    this.boundable = open.length === 0;
+    return false;
   }
   private callees = new Map<number, MethodInfo | null | "dynamic">();
+  /** the declaration of each virtual call whose target is not unique */
+  private virtuals = new Map<number, [string, string, string]>();
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
   callee(ins: Ins): MethodInfo | null | "dynamic" {
     let r = this.callees.get(ins.pc);
@@ -242,6 +266,7 @@ export class MC {
     if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") return "dynamic";
     if (kind === "invoke-direct" || kind === "invoke-super") return target;
     const only = cx.devirt(decl, mr.name, desc);
+    if (only === "many") this.virtuals.set(ins.pc, [decl, mr.name, desc]);
     return only === "many" ? "dynamic" : only;
   }
   push(l: string) { this.nest.push(l); }
@@ -650,13 +675,16 @@ export class MC {
     if (declared !== decl && key === "clone()Ljava/lang/Object;") { this.nonNull(ins.regs[0]); cx.callRt(c, "aclone"); this.finishResult(ins, "L"); return; }
     const target = resolveInvoke(prog, kind, declared, mr.name, desc, this.m.cls);
     if (failed(target)) { this.consumeResult(ins); this.linkFail(target); return; }
+    const site = this.sites.has(String(ins.pc));
+    if (site) this.enterSite();
+    const wrap = (key: string, emit: () => void) => { const on = this.sites.has(`${ins.pc}:${key}`); if (on) this.enterSite(); emit(); if (on) this.leaveSite(); };
     if (isStatic) {
       const t = target;
       this.ensure(t.cls); pushArgs(); cx.callMethod(c, t);
     } else if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") {
       const make = cx.str.factory(desc);
       if (make === undefined) { this.invokeGap(ins, `String.<init>${desc}`); return; }
-      pushArgsFrom(this, ins, p.params); c.call(make); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
+      pushArgsFrom(this, ins, p.params); c.call(make); if (site) this.leaveSite(); c.lset(this.local(this.useWeb(ins.regs[0]))); return;
     } else if (kind === "invoke-direct" || kind === "invoke-super") {
       const t = target;
       this.nonNull(ins.regs[0]); pushArgsFrom(this, ins, p.params); cx.callMethod(c, t);
@@ -687,12 +715,13 @@ export class MC {
         if (guards.length) {
           const slot = this.slotLocal(), type = sigIdx();
           c.lset(slot);
-          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type).call(cx.fn.get(mid(g))!).else_(); }
-          c.lget(slot).callIndirect(type);
+          for (const g of guards) { c.lget(slot).i32(cx.w.slotOf(g)).raw(OP.i32_eq).ifType(type); wrap(mid(g), () => c.call(cx.fn.get(mid(g))!)); c.else_(); }
+          c.lget(slot); wrap("f", () => c.callIndirect(type));
           for (const _ of guards) c.end();
         } else c.callIndirect(sigIdx());
       }
     }
+    if (site) this.leaveSite();
     this.finishResult(ins, retK);
   }
   slotl = -1;

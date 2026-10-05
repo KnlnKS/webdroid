@@ -1,6 +1,6 @@
 // Exceptions the compiled code raises itself: the implicit throwers, their messages, stack traces and heap limits.
 import { ModuleBuilder, T } from "../compiler/wasmbin";
-import { Code } from "../compiler/code";
+import { Code, OP } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
 
@@ -18,6 +18,8 @@ export const COUNT_BASE = 8, COUNT_SLOTS = 1 << 20;
 export const MAX_DEPTH = 56000, SOE_HEADROOM = 2000;
 /** the weight of the frames a method may leave out of the depth when it calls only methods that leave theirs out (method.ts) */
 export const MAX_UNCOUNTED = 512;
+/** the weight a thrower adds to the depth, which the handler that catches the exception restores: the frames it builds the exception with may be uncounted */
+const THROWER_WEIGHT = MAX_UNCOUNTED;
 /** bytes allocated between two heap checks; allocation counts up to zero from -ALLOC_WINDOW */
 export const ALLOC_WINDOW = 8 << 20;
 
@@ -91,7 +93,13 @@ export function excMessage(kind: number, a: number, b: number, c: number, d: num
 export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
   const { cls, params } = THROWERS[name], n = params.length;
   // the error is made by Java code, which needs frames of its own
-  if (name === "soe") c.i32(MAX_DEPTH - SOE_HEADROOM).gset(cx.global("rt", "depth", T.i32, true));
+  const depth = cx.global("rt", "depth", T.i32, true);
+  if (name === "soe") c.i32(MAX_DEPTH - SOE_HEADROOM).gset(depth);
+  else {
+    // methods that call nothing but others like them do not count their frames, so what constructs an exception does, or an exception whose construction throws would recurse unbounded
+    c.gget(depth).i32(MAX_DEPTH).raw(OP.i32_ge_s).if_(); cx.callThrower(c, "soe"); c.end();
+    c.gget(depth).i32(THROWER_WEIGHT).raw(OP.i32_add).gset(depth);
+  }
   cx.emitEnsure(c, cls);
   const exn = c.newLocal(T.anyref), msg = c.newLocal(T.externref);
   cx.emitNew(c, cls); c.lset(exn);

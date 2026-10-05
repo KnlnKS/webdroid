@@ -94,6 +94,15 @@ export class Compiler implements Base {
       proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), claim: f("claim", [T.externref, T.i64], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     this.str.importBuiltins();
+    // the imports that cannot run Java code
+    const { mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block } = this.imp, runsJava = new Set([mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block]);
+    this.hostSafe = new Set(Array.from({ length: mb.nImportedFuncs }, (_, i) => i).filter((i) => !runsJava.has(i)));
+  }
+  private hostSafe: Set<number>;
+  /** whether the body `c` can run Java code beyond itself: it calls through a table, an import that may, or a method of this unit */
+  runsJava(c: Code): boolean {
+    const methods = new Set(this.fn.values());
+    return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? !this.hostSafe.has(f) : methods.has(f)));
   }
   get natives() { return this.w.natives; }
   intrinsic(m: MethodInfo): Intrinsic | undefined { return this.w.intrinsic(m); }
