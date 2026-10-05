@@ -529,7 +529,7 @@ export class World {
     let rt = this.classes.get(name);
     if (rt) return rt;
     const aot = this.aot?.linkClass(name);
-    if (aot) { this.classes.set(name, aot); this.unreported.push(name); return aot; }
+    if (aot) { this.classes.set(name, aot); this.unreported.push(name); this.repairVtable(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
@@ -544,6 +544,15 @@ export class World {
     if (jc?.dex && id > (this.aot?.nSeeded ?? 0) && !name.includes("@")) this.demand.classes.push(name);
     return rt;
   }
+  /** the vtable of a class module the platform build holds was made before this World's host classes: the entries of the methods they implement (abstract in the build) are put right */
+  private repairVtable(name: string): void {
+    const repairs = this.hosts.vtableRepairs(name);
+    if (!repairs.length) return;
+    const set = this.hostFn("vt:set:" + name, ["I", "I"], "V", (cx, c) => { c.gget(cx.vtGlobal(name)).refAsNonNull().lget(0).lget(1).arraySet(cx.tVT); });
+    for (const [at, slot] of repairs) set(at, slot);
+  }
+  /** a host class defined after classes were linked from the build: repairs the vtables of the ones it concerns */
+  repairLinked(): void { for (const [name, rt] of this.classes) if (rt.mod[0] === "g" || rt.mod[0] === "e") this.repairVtable(name); }
   /** The bytes of a module that defines classes `rts`: what a build-time mode stores beside the unit modules of Compiler.buildUnit, and instantiates
    *  in the same order (importing the same table), instead of this linker doing both on demand. */
   classModule(rts: ClassRt[]): Uint8Array {

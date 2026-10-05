@@ -84,6 +84,19 @@ export class HostClasses {
     }
     return name;
   }
+  private changed: { cls: string; keys: string[] }[] = [];
+  /** the vtable entries of class `name` that a vtable made before the host classes (a class module of the platform build) has wrong: the virtual methods the specs took over or moved
+   *  to another class, as [index in the vtable, slot] */
+  vtableRepairs(name: string): [number, number][] {
+    const prog = this.w.prog, out: [number, number][] = [];
+    for (const { cls, keys } of this.changed) {
+      if (name === cls || !prog.get(name)?.isInterface && prog.isSubclass(name, cls)) for (const key of keys) {
+        const at = key.indexOf("("), m = prog.implFor(name, key.slice(0, at), key.slice(at));
+        if (m) out.push([this.w.vslot(name, key), this.w.slotOf(m)]);
+      }
+    }
+    return out;
+  }
   /** a class of natives */
   private synthesize(spec: HostSpec): void {
     const sup = spec.sup ?? OBJECT, jc = classOf(spec.name, sup, spec.ifaces, ACC.PUBLIC), bodies = new Map<MethodInfo, Intrinsic>();
@@ -104,26 +117,30 @@ export class HostClasses {
     const prog = this.w.prog, hosted = classOf(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
     const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: jc.isInterface, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
     for (const m of over.methods) over.byKey.set(m.key, m);
-    const taken: MethodInfo[] = [];
+    const taken: MethodInfo[] = [], virtual: string[] = [], bodies = new Map<MethodInfo, Intrinsic>();
     // the JS tier initializes a class a spec implements without its `<clinit>`: with the values the spec names, if any
     const clinit = over.byKey.get("<clinit>()V");
     if (clinit && !spec.platformClinit) {
-      if (spec.statics) { clinit.flags |= ACC.NATIVE; clinit.codeOff = 0; taken.push(clinit); } else over.byKey.delete(clinit.key);
+      // the platform build's class module runs the `<clinit>` slot in its `ensure`: the slot is the host's, and does nothing unless the spec names values
+      clinit.flags |= ACC.NATIVE; clinit.codeOff = 0; taken.push(clinit);
+      if (!spec.statics) bodies.set(clinit, () => {});
     }
     // an interface keeps its abstract methods: the objects that implement them are of a class of natives (javaClass)
     for (const key of jc.isInterface ? [] : spec.methods) {
       const m = native(spec.name, key, 0), own = over.byKey.get(m.key);
-      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); continue; }
+      if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); if (!m.isStatic && !m.isCtor) virtual.push(m.key); continue; }
       // a method a superclass declares: the class resolves it in `hosted`, where the spec's native is
       const up = !m.isCtor && prog.resolve(spec.name, m.name, m.desc);
       if (!up || up.isStatic !== m.isStatic) continue;
       m.cls = hosted.name; m.index = hosted.methods.length;
       hosted.methods.push(m); over.byKey.set(m.key, m);
+      if (!m.isStatic) virtual.push(m.key);
     }
     // a class the JS tier never loads from the platform (the host implements it whole) does not run its initializer either
-    const bodies = new Map<MethodInfo, Intrinsic>(), init = over.byKey.get("<clinit>()V");
+    const init = over.byKey.get("<clinit>()V");
     if (init && this.w.opts.hostWhole?.(jc.name)) { bodies.set(init, () => {}); taken.push(init); }
     this.w.addClass(over, bodies);
+    if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.repairLinked(); }
     for (const m of taken) this.w.aot?.override(m);
     if (hosted.methods.length) this.w.addClass(hosted, new Map());
   }

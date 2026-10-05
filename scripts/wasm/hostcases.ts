@@ -32,6 +32,7 @@ rt.register({
     // the host calls Java on its own receiver: a subclass's override answers
     "twice()I": function (this: JCounter) { return 2 * (vcall(this, "get", "()I") as number); },
     "pause(I)I": async function (this: JCounter, by: number) { await sleep(); this.n += by; return this.n; },
+    "reenterInit()I": () => scall("Hc$Boot", "get", "()I"),
     "reenter()I": async function () { return (await enter.call("Hc", "locked", "()I")) as number; },
     "bump(Ljava/lang/Object;)V": (a: Int32Array) => { a[0]++; },
     "nested(Ljava/lang/Object;)I": () => scall("Hc", "bumpTwice", "()I"),
@@ -82,7 +83,7 @@ async function run(f: () => unknown): Promise<string> {
 /** `blocking` runs the Java that waits: the JS tier's scall, or the World's entryAsync */
 export async function hostCases(blocking: (cls: string, name: string, desc: string) => Promise<unknown> = async (c, n, d) => scall(c, n, d)): Promise<string[]> {
   const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
-  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "shapes"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" ? "I" : STR}`));
+  for (const m of ["runnable", "identity", "tags", "sub", "fail", "list", "http", "opened", "shapes", "booted"]) await line("Hc." + m, () => scall("Hc", m, `()${m === "sub" || m === "shapes" || m === "booted" ? "I" : STR}`));
 
   await line("a host method that waits, from a subclass", () => blocking("Hc", "blockSub", "()I"));
   await line("a host method that enters Java that blocks", () => blocking("Hc", "reentered", "()I"));

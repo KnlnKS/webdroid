@@ -54,6 +54,9 @@ public class Hc {
   }
   /** a host method that calls back into Java that blocks */
   public static int reentered() { return new Counter().reenter() + 1; }
+  /** a class whose initializer calls a host method that enters Java for a static method of the same class, as JNI_OnLoad does for the class that loads its library */
+  static class Boot { static final int V; static { V = new Counter().reenterInit() + 1; } static int get() { return 41; } }
+  public static int booted() { return Boot.V; }
   public static Object newSub() { return new Sub(); }
   public static Object newConn(URL url) { return new Conn(url); }
   public static Object keep(Object o) { KEPT.add(o); return o; }
@@ -100,6 +103,17 @@ public class Hc {
     m.add("a"); m.add("b"); m.add(1);
     return m + ":" + m.size() + ":" + m.contains("<b>") + ":" + m.indexOf("<1>") + ":" + m.equals(Arrays.asList("<a>", "<b>", "<1>")) + ":" + m.hashCode()
       + ":" + new ArrayList<>(m) + ":" + m.subList(1, 3);
+  }
+
+  /** the connection the platform's handler makes for each scheme is of the class the host implements, whose abstract methods the host answers */
+  public static String opened() throws Exception {
+    StringBuilder b = new StringBuilder();
+    for (String u : new String[] { "http://example.com/", "https://example.com/" }) {
+      HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
+      c.disconnect();
+      b.append(c instanceof javax.net.ssl.HttpsURLConnection).append(',').append(c.usingProxy()).append(';');
+    }
+    return b.toString();
   }
 
   public static String http() throws Exception {

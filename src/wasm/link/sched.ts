@@ -422,6 +422,8 @@ export class Sched {
   private initWait(s: Strand, id: number): Promise<St> | St {
     const holder = this.strands[this.w.initWord(id) >>> 2];
     if (!holder || holder === s) return St.Ok;
+    // a strand a native of the initializing thread entered Java on (JNI_OnLoad finding the class its library is loaded by) is that thread: it sees the statics as they are
+    if (holder.thread === s.thread) return St.Proceed;
     if (this.waitsFor(holder, s)) return St.Proceed;
     s.waitsOn = holder; s.thread.blocked = true;
     return new Promise<St>((resolve) => {
