@@ -200,8 +200,9 @@ function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], nonvirtu
 function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[]): Gen<unknown> {
   const { params, ret } = r;
   yield cpu.idleBase();
-  const prevCur = cur, previousRuntime = cpu.nativeRuntime;
+  const prevCur = cur, previousRuntime = cpu.nativeRuntime, previousClass = cpu.nativeClass;
   cpu.nativeRuntime = r.owner ?? rt;
+  cpu.nativeClass = r.c;
   cur = cpu;
   if (!r.critical) pushFrame(cpu);
   try {
@@ -238,7 +239,7 @@ function* callGuestNative(cpu: Cpu, r: Registered, self: unknown, args: unknown[
     const exc = cpu.exc;
     if (exc) { cpu.exc = null; throw vm.raise(exc); }
     return out;
-  } finally { if (!r.critical) popFrame(cpu); cpu.nativeRuntime = previousRuntime; cur = prevCur; }
+  } finally { if (!r.critical) popFrame(cpu); cpu.nativeRuntime = previousRuntime; cpu.nativeClass = previousClass; cur = prevCur; }
 }
 
 let envTable = 0;
@@ -303,7 +304,7 @@ export function jniInit(): void {
   });
   def(6, "FindClass", (cpu, a) => {
     a.p(); const n = a.str().replace(/\./g, "/");
-    const owner = cpu.nativeRuntime ?? rt, c = vm.find(n, owner);
+    const owner = cpu.nativeRuntime ?? rt, c = vm.find(n, owner, cpu.nativeClass);
     if (!c) { pend(cpu, vm.noClass(n)); return 0; }
     return toRef(vm.mirror(c, owner), cpu);
   });

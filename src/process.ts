@@ -25,6 +25,7 @@ import { configureJvmCoverage } from "./jvm/coverage";
 import { guestClockControl } from "./guest-clock";
 import { realmWd } from "./shell/realmwd";
 import { loadTier, tier } from "./jvm/tier";
+import { mark } from "./perf";
 import { NOT_CRASHED } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
@@ -68,10 +69,12 @@ window.addEventListener("pagehide", () => {
   broker.fail(pid, "Process frame unloaded", NOT_CRASHED);
 }, { once: true });
 try {
-  if (tier === "wasm") await loadTier();
+  mark("process");
+  const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
   mountPlatformData();
   void startZygote();
   const data = await broker.bootstrap(pid);
+  mark("bootstrapped");
   setProcessIdentity(pid, data.uid);
   mountSystemCertificates();
   let boot: Install | null = null;
@@ -100,6 +103,8 @@ try {
   const endpoint = connectProcess();
   if (!boot) throw new Error("Process package unavailable");
   await loadSkia();
+  mark("installOpened");
+  await tierReady;
   await bootApk(boot, () => {}, data.launcher?.assetKey ?? "", data.launcher ? null : data.process);
   broker.ready(pid, endpoint);
 } catch (error) {

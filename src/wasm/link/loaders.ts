@@ -18,11 +18,13 @@ interface State {
   byObject: WeakMap<object, Loader>;
   cookies: Map<string, { loader: Loader; dexes: DexFile[] }>;
   parentOf: (loader: object) => object | null;
+  /** the ClassLoader object that opened the app's own dex files, which the classes of the default namespace that the app defines answer to getClassLoader */
+  appLoader: object | null;
 }
 const states = new WeakMap<World, State>();
 function stateOf(w: World): State {
   let s = states.get(w);
-  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;") });
+  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), appLoader: null });
   return s;
 }
 
@@ -66,6 +68,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
     loader = dexes.map((d) => w.prog.loaderOfDex(d)).find((l) => l) ?? w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
     s.byObject.set(loaderObject!, loader);
   }
+  if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
   const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
   if (fresh.length) w.addDexes(fresh, loader);
   const id = `dex:${s.cookies.size}`;
@@ -73,8 +76,12 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
   return w.javaString(id) as object;
 }
 
-/** host.obj(LOADER_OF_CLASS, id): the ClassLoader object of the loader that defines class `id`, or null for the default namespace */
-export const loaderObject = (w: World, id: number): object | null => w.prog.loaderOf(w.nameOf(id)).object;
+/** host.obj(LOADER_OF_CLASS, id): the ClassLoader object of the loader that defines class `id`, or null for the boot loader and the platform's classes */
+export function loaderObject(w: World, id: number): object | null {
+  const name = w.nameOf(id), loader = w.prog.loaderOf(name);
+  // the app's classes are the default namespace's too, but its class loader is the one that opened the app's dex files, not the boot loader
+  return loader.object ?? (loader === w.prog.root && !w.prog.base?.has(name) ? stateOf(w).appLoader : null);
+}
 
 export const loaderIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => loaderIntrinsics.set(key, (cx, m, c) => f(cx, c));

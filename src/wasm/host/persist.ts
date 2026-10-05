@@ -4,6 +4,7 @@
 import { APP_VERSION, type AotStore, type AppIndex } from "../link/aot";
 import { compileBytes } from "../link/module";
 import type { DexFile } from "../../jvm/dex";
+import { COMPILED_CODE_DIR } from "../../shell/hostfs";
 
 /** where the files live; paths are "<key>/<file>" and "meta.json" */
 export interface FileBackend {
@@ -95,7 +96,7 @@ export const memoryBackend = (): FileBackend & { files: Map<string, Uint8Array> 
 async function opfsBackend(): Promise<FileBackend | undefined> {
   const root = await navigator.storage?.getDirectory?.();
   if (!root) return undefined;
-  const dir = await root.getDirectoryHandle("wd-wasm-apps", { create: true });
+  const dir = await root.getDirectoryHandle(COMPILED_CODE_DIR, { create: true });
   const split = (path: string) => { const i = path.indexOf("/"); return i < 0 ? [undefined, path] as const : [path.slice(0, i), path.slice(i + 1)] as const; };
   const parent = async (path: string, create: boolean) => { const [d, f] = split(path); return [d ? await dir.getDirectoryHandle(d, { create }) : dir, f] as const; };
   return {

@@ -1,20 +1,18 @@
 import { expect, test } from "bun:test";
 import "../natives";
-import { rt, JObj } from "../jvm/runtime";
+import { rt } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { DexFile } from "../jvm/dex";
-import { loadDex, tier } from "../jvm/tier";
-import { JThread, curThread, mainThread, setCurThread, scall, newObj, vcall, staticField, classNameOf } from "../jvm/natives/jentry";
+import { loadDex } from "../jvm/tier";
+import { JThread, mainThread, setCurThread, scall, newObj, vcall, staticField, classNameOf } from "../jvm/natives/jentry";
 import { cpuFor, setA64, type Cpu, type CallArg } from "./cpu";
 import { defineHost, retPair, PTR, ldp, cstr, type ArgReader } from "./host";
 import { javaVM, jniInit, pinnedCount, resolveByExport } from "./jni";
-import { mkMethod } from "../jvm/natives/jreflect";
 import { mem } from "./mem";
 import { handle, deref } from "../android/handles";
 
 rt.linkNatives();
-// The members and natives under test are the same Java on both tiers (tests/fixtures/JniProbe.java); the tests that need a class whose initialization or callbacks
-// wait register specs instead, which only the JS tier's cooperative suspension models.
+// The members and natives under test are the same Java on both tiers (tests/fixtures/JniProbe.java).
 loadDex(rt, new DexFile(new Uint8Array(await Bun.file(new URL("../../tests/fixtures/JniProbe.dex", import.meta.url)).arrayBuffer())));
 
 const TYPES = ["Object", "Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double", "Void"];
@@ -288,6 +286,32 @@ for (const a64 of abis) test(`${abi(a64)} MonitorEnter and MonitorExit lock the 
   await j.clear();
 }));
 
+test("MonitorEnter of a lock another thread holds waits for its MonitorExit", async () => {
+  setA64(true); jniInit();
+  const first = new JThread(), second = new JThread(), cpus = [cpuFor(first), cpuFor(second)], out = mem.malloc(2 * PTR);
+  try {
+    const envs: Env[] = [];
+    for (const [i, cpu] of cpus.entries()) {
+      setCurThread(i ? second : first);
+      await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out + i * PTR, 0x10006]);
+      envs.push(new Env(cpu, ldp(out + i * PTR)));
+    }
+    setCurThread(first);
+    const o = await envs[0].call(S.NewGlobalRef, await envs[0].probe());
+    expect(await envs[0].call(S.MonitorEnter, o)).toBe(0);
+    setCurThread(second);
+    let entered = false;
+    const waiting = envs[1].call(S.MonitorEnter, o).then((r) => { entered = true; return r; });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(entered).toBe(false);
+    setCurThread(first);
+    expect(await envs[0].call(S.MonitorExit, o)).toBe(0);
+    expect(await waiting).toBe(0);
+    setCurThread(second);
+    expect(await envs[1].call(S.MonitorExit, o)).toBe(0);
+  } finally { mem.free(out); cpus.forEach((cpu) => cpu.dispose()); setCurThread(mainThread); }
+});
+
 for (const a64 of abis) test(`${abi(a64)} references: local frames, global and weak global references`, () => withEnv(a64, async (j) => {
   const probe = await j.cls("JniProbe"), kind = (r: number) => j.call(S.GetObjectRefType, r);
   const made = await j.probe(), global = await j.call(S.NewGlobalRef, made), weak = await j.call(S.NewWeakGlobalRef, made);
@@ -390,9 +414,8 @@ test("natives take references and answer them: the objects themselves", async ()
   } finally { rt.jniResolver = previous; cpuFor(thread).dispose(); setCurThread(mainThread); }
 });
 
-// A native that makes JNI calls of its own waits on the Cpu for each. The JS tier's natives wait on a Promise; the Wasm tier's are Suspending imports, which a
-// call from the host cannot enter until Track C3 gives the entries strands.
-test.skipIf(tier === "wasm")("a native's own JNI calls reach Java, and an exception it leaves pending is thrown in Java", async () => {
+// A native that makes JNI calls of its own waits on the Cpu for each.
+test("a native's own JNI calls reach Java, and an exception it leaves pending is thrown in Java", async () => {
   const previous = rt.jniResolver, thread = new JThread();
   setA64(true); jniInit();
   try {
@@ -429,60 +452,45 @@ test("RegisterNatives binds a native after its class has run", async () => {
   } finally { rt.jniResolver = previous; setCurThread(mainThread); }
 });
 
-// The two tests below are the JS tier's: a class initializer or a callback that waits parks the Cpu's call chain on a Promise. On the Wasm tier the strand that
-// waits keeps its own stack, which the strands suite (bun run wasm threads) covers.
-test.skipIf(tier === "wasm")("JNI callbacks retain their caller after suspended class initialization", async () => {
+// A class initializer or a callback that waits parks the Cpu's call chain on a Promise (the JS tier), or the strand that called it (the Wasm tier).
+test("JNI callbacks retain their caller after suspended class initialization", async () => {
   setA64(true); jniInit();
   const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);
-  let finish!: () => void;
-  const ready = new Promise<void>((resolve) => { finish = resolve; });
-  rt.register({ name: "test/JniInitThread", ctor: class extends JObj {}, clinit: () => ready,
-    methods: { "static current()Z": () => +(curThread === thread) } });
-  const info = rt.link("test/JniInitThread");
-  rt.register({ name: "test/JniReflect", ctor: class extends JObj {}, methods: {
-    "static method()Ljava/lang/reflect/Method;": () => mkMethod(info, "current", "()Z", true, null),
-  } });
   try {
     await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out, 0x10006]);
     const env = new Env(cpu, ldp(out));
-    const factory = await env.cls("test/JniReflect");
-    const factoryMethod = await env.staticMethod(factory, "method", "()Ljava/lang/reflect/Method;");
-    const reflected = await env.call(call("Static", "Object"), factory, factoryMethod);
-    const method = await env.call(7, reflected), cls = await env.cls("test/JniInitThread");
-    const result = env.call(call("Static", "Int"), cls, method);
-    setCurThread(mainThread); finish();
-    expect(await result).toBe(1);
+    const klass = await env.cls("JniSlowInit"), method = await env.staticMethod(klass, "value", "()I");
+    // the initializer sleeps: the call waits for it, and the answer is the one the initialized class gives
+    expect(await env.call(call("Static", "Int"), klass, method)).toBe(1);
     expect(cpu.exc).toBeNull();
   } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
 });
 
-for (const a64 of abis) test.skipIf(tier === "wasm")(`${abi(a64)} JNI callbacks park only when Java suspends`, async () => {
+for (const a64 of abis) test(`${abi(a64)} JNI callbacks park only when Java suspends`, async () => {
   setA64(a64); jniInit();
   const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);
-  let body: () => unknown = () => 42;
-  const name = `test/JniCallback${+a64}`;
-  rt.register({ name, ctor: class extends JObj {}, methods: { "static value()I": () => { expect(curThread).toBe(thread); return body(); } } });
   try {
     await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out, 0x10006]);
     const env = new Env(cpu, ldp(out));
-    const klass = await env.cls(name), method = await env.staticMethod(klass, "value", "()I");
-    const immediate = env.call(call("Static", "Int"), klass, method);
+    const klass = await env.cls("JniCallback"), method = await env.staticMethod(klass, "value", "()I");
+    const run = () => env.call(call("Static", "Int"), klass, method);
+    const mode = async (m: number) => { await env.call(field("Set", "Int", true), klass, await env.staticField(klass, "mode", "I"), m); };
+    await mode(0);
+    const immediate = run();
     expect(cpu.parked).toBe(false);
     expect(await immediate).toBe(42);
 
-    const deferred = Promise.withResolvers<number>();
-    body = () => deferred.promise;
-    const suspended = env.call(call("Static", "Int"), klass, method);
+    await mode(1);
+    const suspended = run();
     expect(cpu.parked).toBe(true);
-    deferred.resolve(73);
     expect(await suspended).toBe(73);
 
-    const failure = rt.mkThrowable("java/lang/IllegalStateException", "callback failed");
-    for (const asynchronous of [false, true]) {
-      body = () => { if (asynchronous) return Promise.reject(failure); throw failure; };
-      expect(await env.call(call("Static", "Int"), klass, method)).toBe(0);
-      expect(cpu.exc).toBe(failure);
-      cpu.exc = null;
+    // a callback that throws, at once or after waiting, leaves the throwable pending and answers 0
+    for (const m of [2, 3]) {
+      await mode(m);
+      expect(await run()).toBe(0);
+      expect(await env.pending()).toBe("java.lang.IllegalStateException");
+      await env.clear();
     }
   } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
 });

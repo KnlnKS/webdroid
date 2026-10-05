@@ -5,6 +5,8 @@ import type { Bridge } from "./bridge";
 import { constClass, idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
+import type { Strand } from "../link/sched";
+import { onNestedStrand, runningThread } from "./entry";
 import type { JniClass, JniField, JniMethod, JniVm } from "../../native/jnivm";
 
 interface WasmField extends JniField { info: FieldInfo }
@@ -54,10 +56,16 @@ export function wasmJni(w: World): JniVm {
     return w.hostFn(`j:g${to ? "put" : "get"}_${kind}`, ["L", "I", "I", "I", "I"], "V", (cx, c) => { c.lget(0).lget(1).lget(2).lget(3).lget(4); cx.callRt(c, `g${to ? "put" : "get"}_${kind}`); });
   };
   const bufferField = (name: string, desc: string) => prog.resolveField("java/nio/Buffer", name, desc)!;
-  const monitor = (enter: boolean) => w.hostFn("j:monitor:" + enter, ["L"], "V", (cx, c) => { c.lget(0).call(cx.helper(enter ? "menter" : "mexit")); });
+  /** `f` as a call into Java from guest code, on a strand of its own so that Java that waits can: the result, or a Promise of it */
+  const nest = <T>(f: (s: Strand) => T): T => onNestedStrand(w, f);
 
   const vm: JniVm = {
-    find: (name) => (exists(name) ? cls(name) : null),
+    find(name, _owner, from) {
+      // the loader of the class whose native method asks, as ART's FindClass has it; a thread that attached by itself asks the default namespace
+      if (name[0] === "[" || !from) return exists(name) ? cls(name) : null;
+      const key = prog.lookup(prog.loaderOf(from.name), name);
+      return key === undefined ? null : cls(key);
+    },
     owner: () => null,
     mirror: (c) => mirror(c),
     classOf,
@@ -69,8 +77,9 @@ export function wasmJni(w: World): JniVm {
     assignable: (from, to) => isSub(from.name, to.name),
     isInstance: (o, c) => isSub(w.classNameOf(o as object), c.name),
     init(c) {
-      if (prog.get(c.name)) w.hostFn("e:init:" + c.name, [], "V", (cx, code) => { cx.emitEnsure(code, c.name); })();
-      return null;
+      if (!prog.get(c.name)) return null;
+      const done = nest((s) => w.callFn("e:init:" + c.name, [], "V", (cx, code) => { cx.emitEnsure(code, c.name); })(s));
+      return done instanceof Promise ? done.then(() => {}) : null;
     },
 
     hasMethod(c, name, sig, isStatic) {
@@ -87,7 +96,7 @@ export function wasmJni(w: World): JniVm {
       if (!isStatic && (self === null || self === undefined)) return fail("java/lang/NullPointerException", "JNI call on null " + name);
       const m = isStatic || nonvirtual ? prog.resolve(c.name, name, sig) : prog.implFor(w.classNameOf(self as object), name, sig);
       if (!m || m.isStatic !== isStatic) return noSuchMethod(name, sig);
-      return bridge.call(m, isStatic ? null : self as object, args);
+      return nest((s) => bridge.callOn(s, m, isStatic ? null : self as object, args));
     },
     construct(c, sig, args) {
       if (c.name === STRING) {
@@ -99,9 +108,8 @@ export function wasmJni(w: World): JniVm {
       }
       const ctor = prog.get(c.name)?.byKey.get("<init>" + sig);
       if (!ctor) return noSuchMethod("<init>", sig);
-      const o = alloc(c.name);
-      bridge.call(ctor, o, args);
-      return o;
+      const o = alloc(c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
+      return done instanceof Promise ? done.then(() => o) : o;
     },
     allocate: (c) => alloc(c.name),
     reflect(c, name, desc) {
@@ -153,7 +161,11 @@ export function wasmJni(w: World): JniVm {
     caught: (e) => w.throwable(w.boundary(e)) ?? w.makeThrowable("java/lang/InternalError", e instanceof Error ? e.message : String(e)),
     raise: (t) => bridge.toHost(t),
     describe: (t) => bridge.toHost(call(t as object, "toString", "()Ljava/lang/String;")) as string,
-    monitor(o, enter) { monitor(enter)(o); },
+    monitor(o, enter) {
+      const done = w.sched.nativeMonitor(runningThread(w), o as object, enter);
+      if (done instanceof Promise) return done;
+      if (done !== 0) fail("java/lang/IllegalMonitorStateException", "object not locked by thread before unlock");
+    },
     newBuffer(address, capacity) {
       const b = alloc("java/nio/DirectByteBuffer");
       bridge.call(prog.get("java/nio/DirectByteBuffer")!.byKey.get("<init>(JI)V")!, b, [BigInt(address), capacity]);

@@ -49,6 +49,8 @@ export interface WorldOptions {
   guest?: GuestMemory;
   /** a class that frees a native handle in its finalize() owns the handle it stores in a long field: called with the object and the handle each time one is stored there (no finalizer runs here) */
   claim?: (owner: object, handle: bigint) => void;
+  /** classes of the platform the host implements whole: their initializers do not run (hostclass.ts) */
+  hostWhole?: (name: string) => boolean;
   /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
   stackTraceLimit?: number;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
@@ -75,7 +77,8 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
 /** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it); a compiler that has not run yet is assumed to need UPGRADE_FIRST_MS */
 const UPGRADE_SHARE = 0.3, UPGRADE_FIRST_MS = 1;
-interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number> }
+/** `stands`: whether the classes added since the platform build leave it true, once a precompiled module has checked */
+interface Assumption { decl: string; name: string; desc: string; target?: MethodInfo; slots: Set<number>; stands?: boolean }
 
 export class World {
   prog: Program;
@@ -88,7 +91,7 @@ export class World {
   onGap: (id: number) => void = () => {};
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -440,7 +443,7 @@ export class World {
   instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
     const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, t0 = performance.now();
     const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
-    this.stats.instantiateMs += performance.now() - t0;
+    this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
     return inst;
   }
   /** a lazy-link stub for method `m` in `slot`, to put back where precompiled code was removed */
@@ -495,13 +498,13 @@ export class World {
     let rt = this.classes.get(name);
     if (rt) return rt;
     const aot = this.aot?.linkClass(name);
-    if (aot) { this.classes.set(name, aot); return aot; }
+    if (aot) { this.classes.set(name, aot); this.unreported.push(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
     if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.tail.push([name, methods.length + 1]); }
     rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} };
-    this.classes.set(name, rt);
+    this.classes.set(name, rt); this.unreported.push(name);
     if (this.aot?.building || this.opts.compileOnly) return rt;
     const bytes = this.classModule([rt]);
     this.stats.phase.classBuild += performance.now() - t0;
@@ -640,11 +643,18 @@ export class World {
     const { installed, copies } = this.group(s.m);
     return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), initialized: this.newlyInitialized() };
   }
-  private reportedInit = new Set<string>();
+  /** the classes linked whose finished initialization has not been reported yet */
+  private unreported: string[] = [];
   /** the classes whose initialization finished since the last job */
   newlyInitialized(): string[] {
     const out: string[] = [];
-    for (const [name, rt] of this.classes) if (!this.reportedInit.has(name) && (rt.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE) { this.reportedInit.add(name); out.push(name); }
+    this.unreported = this.unreported.filter((name) => {
+      const rt = this.classes.get(name);
+      if (!rt) return false;
+      if ((rt.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value !== INIT_DONE) return true;
+      out.push(name);
+      return false;
+    });
     return out;
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
@@ -713,7 +723,7 @@ export class World {
   /** whether native method `id` ("class.name+descriptor") has a host binding here, making its import available */
   nativeBound(id: string): boolean {
     if (id.startsWith("settle:")) return true;
-    const m = methodOf(this.prog, id);
+    const m = methodOf(this.prog, id.endsWith("#s") ? id.slice(0, -2) : id);
     return !!m && this.natives.prepare(m);
   }
   private unitImports(cx: Compiler): Record<string, any> {

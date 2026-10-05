@@ -25,5 +25,7 @@ export class FetchStore implements AotStore {
     this.files.set(file, bytes);
     return bytes;
   }
-  get(file: string): Uint8Array | WebAssembly.Module | undefined { return this.files.get(file); }
+  /** the files wanted so far, in order of first request, whether or not the store had them: what a start should prefetch (scripts/wasm/aot-profile.ts) */
+  readonly wanted = new Set<string>();
+  get(file: string): Uint8Array | WebAssembly.Module | undefined { this.wanted.add(file); return this.files.get(file); }
 }

@@ -22,6 +22,7 @@ export interface CompileEnv {
   externs: string[];
   fetchBytes(url: string): Promise<Uint8Array>;
   heapUsed(): number;
+  hostWhole?(name: string): boolean;
 }
 /** the methods an app build compiles: the baseline profile's, those of the classes a launch instantiates, those of the manifest's other components, and what these call */
 export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launch: string[]; limit?: number }
@@ -53,7 +54,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const platform = new Program(await env.platform()); platform.addExterns(env.externs);
     appDexes = open(req.dexes);
     const index = req.aot ? await env.fetchBytes(req.aot.base + "index.json") : undefined;
-    w = new World(new Program(appDexes, platform), { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, compileOnly: true,
+    w = new World(new Program(appDexes, platform), { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, hostWhole: env.hostWhole, compileOnly: true,
       ...index && { aot: { get: (file) => (file === "index.json" ? index : undefined) }, ...req.aot!.app && { app: { index: req.aot!.app, store: { get: () => undefined } } } } });
     // the classes the host implements are added as the page added them; they and the overlays on dex classes shape what compiles
     if (req.hostClasses?.length) for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);

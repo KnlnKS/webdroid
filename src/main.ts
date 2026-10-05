@@ -17,7 +17,7 @@ import { bootApk, firstPresented, startZygote, redraw, dispatchPointer, pressBac
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
-import { perf, perfReset } from "./perf";
+import { mark, perf, perfReset } from "./perf";
 import { loadTier, tier } from "./jvm/tier";
 import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "./jvm/profile";
 import { configureJvmCoverage } from "./jvm/coverage";
@@ -103,9 +103,10 @@ async function boot(file: string, local?: File) {
   shell.setState({ kind: "loading", file, stage: local ? "Opening package…" : "Downloading package…" });
   let rollbackAssets: (() => void) | undefined;
   try {
-    if (tier === "wasm") await loadTier();
+    mark("boot");
+    const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
     void startZygote();
-    const [install] = await Promise.all([local ? openInstallLocal(local, fixProcessBitness) : openInstallRemote("/apks/" + encodeURIComponent(file), fixProcessBitness), provisionPackages(), loadSkia(), displayRate]);
+    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, fixProcessBitness) : openInstallRemote("/apks/" + encodeURIComponent(file), fixProcessBitness), provisionPackages(), loadSkia(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -113,6 +114,7 @@ async function boot(file: string, local?: File) {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true }));
     }
+    mark("installOpened");
     rollbackAssets = activateLocalAssets(assets);
     const t0 = performance.now();
     connectProcess();

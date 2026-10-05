@@ -22,7 +22,7 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, BindMain, Plain, Resume }
+export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain }
 /** operations that may wait (`host.block`, Suspending) */
 export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
@@ -98,8 +98,14 @@ rt("curThread", [], "L", (cx, c) => {
   if (!ctor) { cx.gap(c, "Thread.<init>(ThreadGroup, String, int, boolean)"); return; }
   c.gget(g).refIsNull().if_();
   cx.emitEnsure(c, THREAD); cx.emitNew(c, THREAD); c.gset(g);
-  c.gget(g); cx.emitEnsure(c, GROUP); c.gget(cx.staticGlobal(GROUP, "mainThreadGroup")); cx.str.literal(c, "main"); c.i32(NORM_PRIORITY).i32(0);
-  cx.callMethod(c, ctor);
+  // a thread the host made (a binder thread, a native thread that attached) is named for what it is
+  emitSync(cx, c, Sync.IsMain); c.if_();
+  for (const name of ["main", "Thread-host"]) {
+    c.gget(g); cx.emitEnsure(c, GROUP); c.gget(cx.staticGlobal(GROUP, "mainThreadGroup")); cx.str.literal(c, name); c.i32(NORM_PRIORITY).i32(0);
+    cx.callMethod(c, ctor);
+    if (name === "main") c.else_();
+  }
+  c.end();
   // ART records the native thread in the peer, which is what Thread.isAlive reads
   const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
   c.gget(g).refCast(st).i64(1n).structSet(st, peer);
@@ -109,7 +115,7 @@ rt("curThread", [], "L", (cx, c) => {
     cx.emitEnsure(c, LOADER);
     c.gget(g).refCast(st); cx.callMethod(c, system); c.structSet(st, cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
   }
-  emitSync(cx, c, Sync.BindMain, () => c.gget(g)); c.drop();
+  emitSync(cx, c, Sync.Bind, () => c.gget(g)); c.drop();
   c.end().gget(g);
 });
 
@@ -176,14 +182,21 @@ export class ThreadRec {
   waiting = 0;
   blocked = false;
   alive = true;
+  /** the strand native code's monitors are held by (JNI MonitorEnter): the thread's, which does not end with a call */
+  root: Strand | null = null;
   constructor(public obj: object | null) {}
 }
+
+/** entries a strand may make before it waits; the engine's stacks run out at about 1,400 */
+const NESTED_LIMIT = 200;
 
 export class Strand {
   /** the strand this one waits for: the one initializing a class or holding a lock it needs */
   waitsOn: Strand | null = null;
   /** the strand whose native entered Java on this one: the same thread, so it holds what that strand holds */
   parent: Strand | null = null;
+  /** how many stacks the entries made from this strand's natives have taken since this strand last waited */
+  nested = 0;
   constructor(readonly id: number, readonly thread: ThreadRec, readonly root: boolean, private sched: Sched) {}
   /** whether code on this strand runs on a stack of its own, which may suspend (host code at the top level runs on the caller's) */
   get canSuspend(): boolean { return !this.root; }
@@ -203,8 +216,13 @@ export class Sched {
   running: Strand | null = null;
   /** blocking attempts on a stack that cannot suspend */
   blockedPlain = 0;
+  /** calls of Suspending imports: each switches stacks */
+  suspensions = 0;
   /** told whenever the thread whose code runs changes, for the host's notion of the current thread */
-  onThread: ((t: ThreadRec) => void) | null = null;
+  onThread: ((t: ThreadRec, idle: boolean) => void) | null = null;
+  /** The engine frees the stacks of calls made on a stack of its own only when that stack waits, and refuses a new one after about 1,400 are held (`File.list()` makes an entry for
+   *  each call, and a thousand of them in one entry would end in StackOverflowError): whether the strand running has made enough entries that a native should return by waiting once */
+  owes(): boolean { const s = this.current(); return !s.root && s.nested >= NESTED_LIMIT; }
   /** whether the code running now is on a stack of its own, which can wait for a Promise (the host's top level is not) */
   canWait(): boolean { return !this.current().root; }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
@@ -233,17 +251,33 @@ export class Sched {
   /** the strand running now, as the globals name it */
   current(): Strand { return this.strands[this.g.sid.value as number] ?? this.root; }
   get mainRec(): ThreadRec { return this.main; }
+  /** JNI MonitorEnter and MonitorExit of `obj` for the running thread: held by the thread (its root strand), not by the call that asked, and a contended enter answers the Promise of the hand-over */
+  nativeMonitor(rec: ThreadRec, obj: object, enter: boolean): Promise<void> | St {
+    const s = rec === this.main ? this.root : (rec.root ??= this.rootStrand(rec));
+    if (!enter) return this.monitors.exit(obj, s);
+    return this.monitors.tryEnter(obj, s) === St.Ok ? St.Ok : this.monitors.enter(obj, s);
+  }
+  private rootStrand(rec: ThreadRec): Strand {
+    let id = this.next;
+    while (this.strands[id]) id = id + 1 < 1 << 22 ? id + 1 : ROOT + 1;
+    this.next = id + 1 < 1 << 22 ? id + 1 : ROOT + 1;
+    return this.strands[id] = new Strand(id, rec, true, this);
+  }
+  /** a thread the host made: it runs Java as a thread of its own, whose Thread object is made when it first asks for it */
+  hostThread(): ThreadRec { return new ThreadRec(null); }
   /** who runs when no strand does: the host's top level, on the main thread */
-  idle(): void { this.g.sid.value = ROOT; this.g.thr.value = this.main.obj; this.g.depth.value = 0; this.running = null; this.onThread?.(this.main); }
+  idle(): void { this.g.sid.value = ROOT; this.g.thr.value = this.main.obj; this.g.depth.value = 0; this.running = null; this.onThread?.(this.main, true); }
   /** wraps `fn` as a Suspending import. What `fn` does before it first waits is on the calling strand; when it returns the stack switches away,
    *  so the globals go back to the host's top level then, and the strand sets its own when it resumes (emitBlock) */
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
     return suspending((...a: A) => {
+      this.suspensions++;
+      this.current().nested = 0;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); } finally { this.idle(); }
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
-      return r instanceof Promise ? r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread); throw e; }) : r;
+      return r instanceof Promise ? r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; }) : r;
     }) as unknown as (...a: A) => R;
   }
   /** a new strand of `thread` (the main thread's when none), for a call into Java from the native `parent` runs, if any */
@@ -271,14 +305,16 @@ export class Sched {
     return p;
   }
   enter(s: Strand, f: Function, args: unknown[]): Promise<unknown> {
+    const caller = this.current();
+    if (!caller.root) caller.nested++;
     const { sid, thr, depth } = this.g, was = [sid.value, thr.value, depth.value, this.running] as const;
-    sid.value = s.id; thr.value = s.thread.obj; depth.value = 0; this.running = s; this.onThread?.(s.thread);
+    sid.value = s.id; thr.value = s.thread.obj; depth.value = 0; this.running = s; this.onThread?.(s.thread, false);
     try {
       const p = this.promising(f)(...args) as Promise<unknown>, idle = () => this.idle();
       // a stack that ends after a resume leaves the globals as its own
       p.then(idle, idle);
       return p;
-    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; this.onThread?.(this.current().thread); }
+    } finally { sid.value = was[0]; thr.value = was[1]; depth.value = was[2]; this.running = was[3]; this.onThread?.(this.current().thread, this.current().root); }
   }
 
   // ---------- host.sync
@@ -289,7 +325,8 @@ export class Sched {
       case Sync.Exit: return this.monitors.exit(obj!, s);
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
       case Sync.Holds: return +this.monitors.holds(obj!, s);
-      case Sync.BindMain: this.main.obj = obj; this.threads.set(obj!, this.main); return 0;
+      case Sync.Bind: s.thread.obj = obj; this.threads.set(obj!, s.thread); return 0;
+      case Sync.IsMain: return +(s.thread === this.main);
       case Sync.Create: return this.create(obj!);
       case Sync.Interrupt: { const r = this.rec(obj!); if (r?.alive) { r.interrupted = true; r.wake?.(); r.parked?.(); } return 0; }
       case Sync.IsInterrupted: return +(this.rec(obj!)?.interrupted ?? false);
@@ -297,7 +334,7 @@ export class Sched {
       case Sync.Unpark: { const r = this.rec(obj!, true)!; if (r.parked) r.parked(); else r.permit = true; return 0; }
       case Sync.Status: return this.status(obj!, a !== 0);
       case Sync.Plain: this.blockedPlain++; return 0;
-      case Sync.Resume: this.onThread?.(s.thread); return 0;
+      case Sync.Resume: this.onThread?.(s.thread, false); return 0;
       case Sync.InitDone: return this.initDone(a);
     }
   }

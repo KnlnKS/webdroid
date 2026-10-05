@@ -1219,6 +1219,44 @@ Geometric mean js/wasm over 74 workloads: steady 1.83x -> 1.87x, first call 0.31
 - `strConcat`, `strSubstr`, `strBuild`, `strIndex`: unchanged (0.42x, 0.46x, 0.76x, 1.03x); the two allocations per String and the byte-array builder of libcore remain; sharing the parent's chars was costed in 4.10 and not built again. `ecdsaVerify` is 1.00x in node and Chrome (BigInteger, nothing missing in a profile: the time is in unnamed optimized code).
 - First call: not moved (0.48x -> 0.65x in node, 0.31x -> 0.31x in Chrome over a build of the 7 libcore jars; node's rows are on-demand compiles whose noise is +-15 ms). The compile phases are unchanged (the sweep of bouncycastle takes 4 s in both), the per-module cost of the larger import list is not visible next to V8's compile of the multi-MB package modules (4.11).
 
+### 4.16 W2: launch time (G3), Mihon's launch and JNI on strands (2026-10-04, `knlnks/wasm-w2`)
+
+**Instrumentation.** `wd.perf` has the World's work (`wasmMethods wasmCompileMs wasmModules wasmModuleMs wasmBytes wasmAotLoaded wasmAotMissed wasmAotMs wasmClasses wasmSuspensions wasmCrossings`, bound to `World.stats` by `host/stats.ts`, reset by `perfReset`),
+`src/perf.ts mark()` writes launch milestones (`boot tierLoaded installOpened bootApk dexLoaded appCodeSaved|appCode worldMade startZygote dataReady resourcesReady firstPresented`, and the build's `aotIndex aotOpened platformReady`) as
+performance marks of the realm that makes them, and `bun run lat <scenario> --timeline` prints them for the page and its process frames (`--query tier=wasm`; `scripts/lat/profsum.ts from= until=` windows a `--cpuprofile`).
+**Where a 7.9 s FitNotes launch went** (cold, Chrome, load average 14; the app runs in the page, the framework's processes in frames): 3.4 s of the 5.5 s from `startActivityThread` to the first frame was on-demand compile
+(14,449 methods, 18,695 modules instantiated: 2.5 s compiler, 0.9 s Module/Instance) because (1) the startup list (`startup.json`, from a probe of one process, 188 files) missed 293 modules the framework's start wants, and a missed module is compiled on demand
+for good, (2) a precompiled code module imports Suspending natives as `id#s`, which `World.nativeBound` did not know, so 25 modules were dead and compiled on demand, (3) no saved app build was attached (`bootWasmTier` made the World before the app's dex files
+existed, and the zygote's Java ran before them), (4) 62 more modules died because a class module they import was a miss.
+**Changes.** `bun run wasm aot-profile [apk ...]` launches the apps in headless Chrome twice (no saved build, then with one), takes every file `FetchStore.wanted` saw (all realms of the tab) and writes the build's `startup.json`
+(about 530 modules, 120 MB of the 215 MB build, plus every class module: 39 MB; run it after `bun run aot`, which still writes the one-process probe). The tab's build opens while the package downloads. `bootApk` loads the app's dex files and
+calls `loadAppCode` (tier.ts, `host/boot.ts appCode`, `host/appcode.ts prepareApp`) before any other Java; the World is made lazily at the first Java the realm runs over `new Program(appDexes, platform)`, so a build a previous launch saved (OPFS directory
+`wd-wasm-apps`, kept by `wd.reset`) attaches (`appCodeSaved`), a launch without one has a worker build it for the next, and the second-tier compile worker is the one `prepareApp` made. The zygote waits for the app's code (`appCodeReady`).
+`nativeBound` strips `#s`; a precompiled module's class-hierarchy decision is checked against the app's classes once (`Assumption.stands`), not once per module (298 ms of `Program.implFor` building the members of 4,000 app classes);
+`newlyInitialized` scans the classes whose initialization was not reported, not all of them (it ran for every worker job: 120 ms).
+**Result** (`lat fitnotes`, the same machine busy with other agents: load average 14; ranges of 3 runs; the JS tier's baselines from docs/wasm-baselines.md):
+
+| App | Launch to first frame, cold | warm | JS tier cold / warm | on-demand methods (cold / warm) | gated taps |
+|---|---|---|---|---|---|
+| FitNotes | 7.9 s -> 4.2 to 5.6 s | 7.7 s -> 3.8 to 4.0 s | 1.76 / 1.24 s | 14,449 -> 2,900 / 2,200 | 8 to 24 ms but the first tap 84 to 178 ms (24 methods, 85 ms of CHA `reaches`/`isSubclass`; limit 150) |
+| Calculator M | not measured by lat (uiTree, W1) | | 1.69 / 1.22 s | 5.6 s cold, 4.1 s warm by `wd.perf.presentations` | |
+| Mihon | never presented (below) | | 7.39 / 6.71 s | | |
+
+G3's warm target (at most the JS tier's) is not met: the floor is the framework's own start run as Wasm (the zygote's Java 1.3 s, `startActivityThread` to the first frame 2.0 s) with what is still compiled or linked on demand: 2,200 methods
+(0.5 s compile, 0.5 s Module/Instance), 1,365 class modules of the app's classes built on demand (0.3 s: the app build does not persist class modules), 300 precompiled methods undone by the app's classes (CHA) and recompiled, 700 platform class
+modules instantiated (0.3 s), and the build's 620 ms open (a tier open is on the critical path beside the package download). Next: persist the methods a launch compiled on demand and the app's class modules in the app build, and cache the compiled
+modules (IndexedDB takes a `WebAssembly.Module`).
+**Mihon** never presented because its process died: (1) `Thread.getStackTrace` is `VMStack.getThreadStackTrace`, a JS-tier native that links `StackTraceElement` through the runtime (`App.getPackageName` calls it) -> an intrinsic over the frames the host records;
+(2) `ActivityManager.getMemoryInfo` wrote `totalMem` by its Java name -> `setDeclared`; (3) the app's classes answered the boot loader for `getClassLoader` (the open item of A3), so kotlinx.coroutines found no Main dispatcher -> the loader that opened the app's dex
+files is the default namespace's loader for the classes the app defines; (4) the host implements `javax.microedition.khronos` whole, but the Wasm tier ran the dex `EGLContext.<clinit>` (EGLImpl natives) -> `hostWhole` classes drop their initializers.
+Next failure: a host spec over a dex *interface* (`EGL10`/`EGL11`, `GL10`) has no class an instance can be made of (`Bridge.shellOf` allocates the interface); the same classes need a concrete class of natives (hostclass.ts, B2). Also seen: an `Unsafe` accessor gap, `AttributionSource should be unparceled` (microG process).
+**Strands.** The engine frees the JSPI stacks of calls made on a stack of its own only when that stack waits and refuses a new one past about 1,400 (reproduced with 30 lines of Wasm: 1,485 nested `promising` calls in one outer stack; none from the top level, and a Suspending import in the loop frees them).
+A native that enters Java (File.list0 asks the File for its path) 1,000 times in one entry therefore ended in StackOverflowError. A strand that made 200 nested entries returns its next plain native through the settle import (`Sched.owes`), which waits once. `bun run wasm nested`; the FileTest and CharsetTest pins are gone.
+**JNI.** A JNI call into Java (`vm.invoke/construct/init/monitor`) runs on a strand of the calling thread (`host/entry.ts onNestedStrand`, `Bridge.callOn`) and answers a Promise when it waited. A JThread the host made (binder, native, test) is a Java thread of its own (`recOf`, `Sched.hostThread`; its
+Thread object is named `Thread-host` and bound to its record by `Sync.Bind`) and has its own Cpu; the host's current thread is what it was before it entered Java (`hostCurrent`). JNI monitors belong to the thread's root strand (`Sched.nativeMonitor`), so they outlive the call that took them and a contended
+MonitorEnter waits (a Promise, no stack). FindClass resolves in the loader of the class declaring the running native method (`Cpu.nativeClass`; `JniVm.find(name, owner, from)`; checked by reading, not by a test: `jni.test.ts` has one loader). `WEBDROID_TIER=wasm bun test src/native/jni.test.ts` runs all 26 (the 4 skipped
+ones now use Java fixtures: `JniSlowInit`, `JniCallback`). Open: the doodlejump flow's JNI part cannot be reached on the Wasm tier until `RamLogger.Append` compiles (move-result gap, W1).
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.

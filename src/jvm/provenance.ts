@@ -74,6 +74,9 @@ export const TS_SPECS: Record<string, `${"vm" | "boundary" | "intrinsic"}: ${str
   "android/webkit/WebViewFactory": "boundary: the WebView provider over the browser",
 };
 
+/** classes of the platform jars that the host implements whole: the JS tier does not load their bytecode, and neither does the Wasm tier run their initializers */
+export const hostWhole = (name: string): boolean => name.startsWith("javax/microedition/khronos/");
+
 /** the TS_SPECS key that allows `name`, if any */
 export const tsSpecAllowance = (name: string): string | undefined =>
   name in TS_SPECS ? name : Object.keys(TS_SPECS).find((k) => k.endsWith("/") && name.startsWith(k));

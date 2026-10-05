@@ -19,6 +19,8 @@ export const tier: Tier = parseTier(typeof location !== "undefined" ? new URLSea
 /** what the Wasm tier's host provides the places that load code */
 export interface TierBackend {
   loadDex(dex: DexFile, platform: boolean): void;
+  /** the app's dex files are all loaded: prepare its compiled code (a build an earlier launch saved) before Java first runs */
+  appCode?(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void>;
 }
 let backend: TierBackend | undefined;
 /** loads the Wasm tier's host; only under `tier === "wasm"` */
@@ -26,9 +28,19 @@ export async function loadTier(): Promise<void> {
   backend = await (await import("../wasm/host/boot")).bootWasmTier();
 }
 
+/** the Wasm tier's compiled app code, once the app's dex files are loaded; the JS tier has its own (jvm/aot.ts) */
+export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> {
+  try { await backend?.appCode?.(roots); } finally { appCodeDone(); }
+}
+let appCodeDone!: () => void;
+/** settles once the app's code is prepared: the Wasm tier's World is made at the first Java the realm runs, and numbers what it runs from there, which a saved app build needs to find unnumbered */
+export const appCodeReady = new Promise<void>((resolve) => { appCodeDone = resolve; });
+
 /** `dex` made known to the Java that runs: to `runtime` on the JS tier, to the one Wasm World on the Wasm tier, whose loaders share a namespace */
 export function loadDex(runtime: Runtime, dex: DexFile, platform = false): void {
   if (tier !== "wasm") return runtime.loadDex(dex, platform);
+  // the browser's platform classes are the tab's build and Program, not something a World is given, and may be loaded before the tab's build is open
+  if (!backend && platform) return;
   if (!backend) throw new Error("?tier=wasm: loadTier() has not run");
   backend.loadDex(dex, platform);
 }
