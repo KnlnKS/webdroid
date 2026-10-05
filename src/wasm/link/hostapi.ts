@@ -19,6 +19,10 @@ export interface HostSpec {
   methods: string[];
   /** the Java-visible instance fields and the host properties that hold them */
   fields: [javaName: string, prop: string][];
+  /** the dex class's own `<clinit>` runs (its statics are the platform's); without it a class the spec implements is initialized as the JS tier does, with none */
+  platformClinit?: boolean;
+  /** the host values of static fields the class is initialized with, by field name */
+  statics?: Record<string, unknown>;
   ctor: new () => object;
 }
 /** the class that holds, beside an existing class, the methods of its spec that a superclass declares (hostclass.ts); the natives are found under the class's own name */
@@ -35,7 +39,7 @@ export interface NativeSource {
   thrown(e: unknown): { cls: string; msg: string | null; obj?: object; java?: object } | undefined;
   /** the Java class name of an object the production runtime made, if `v` is one: a native result the Bridge copies into the Wasm heap */
   classOf?(v: unknown): string | undefined;
-  /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" */
+  /** runs `run`, a `static ()V` native of `cls` that fills in static fields (initConstants), and answers the values it stored by "name:descriptor" (or by name alone) */
   stores?(cls: string, run: () => void): Record<string, unknown>;
   /** the classes the host implements */
   hostSpecs?(): HostSpec[];
@@ -100,7 +104,7 @@ export interface NativeBinder {
 }
 
 /** answers `host.net` for libcore's getaddrinfo (inet.ts): an address count or minus an EAI code for a lookup, a byte of a found address */
-export type HostNet = (w: World, op: number, node: string, a: number, b: number) => number;
+export type HostNet = (w: World, op: number, node: string, a: number, b: number) => number | Promise<number>;
 
 /** a second-tier compiler that runs elsewhere (a worker, host/compiler.ts). It is given the World's jobs and answers with `World.adoptUnit`; it may decline, and then the World compiles inline. */
 export interface CompileService {

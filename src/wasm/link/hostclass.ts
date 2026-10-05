@@ -28,6 +28,7 @@ export class HostClasses {
   private pending = new Map<string, HostSpec>();
   private defined = new Map<string, HostSpec>();
   private byCtor = new Map<Function, HostSpec>();
+  private specs = new Map<string, HostSpec>();
   private chain = new Map<string, HostSpec | null>();
   private hosts = new WeakMap<object, object>();
   private shells = new WeakMap<object, object>();
@@ -35,7 +36,7 @@ export class HostClasses {
   constructor(private w: World) {}
 
   add(spec: HostSpec): void {
-    this.byCtor.set(spec.ctor, spec); this.pending.set(spec.name, spec);
+    this.byCtor.set(spec.ctor, spec); this.pending.set(spec.name, spec); this.specs.set(spec.name, spec);
     this.settle();
   }
   /** classes arrived: a spec waiting for its superclass may be defined now */
@@ -53,7 +54,7 @@ export class HostClasses {
   private define(spec: HostSpec): boolean {
     const prog = this.w.prog, have = prog.get(spec.name);
     if (have?.dex) {
-      if (have.isInterface) return true;
+      if (have.isInterface && !spec.statics) return true;
       // the methods a superclass declares are found through the whole chain
       for (let c: JClass | undefined = have; c?.sup; c = prog.get(c.sup)) if (!prog.get(c.sup)) return false;
       this.overlay(have, spec);
@@ -66,6 +67,19 @@ export class HostClasses {
     return true;
   }
 
+  /** the Java class a host object of `spec` is an instance of: the class itself, or where the spec stands for an interface (EGL10) a class of natives that implements it, with the
+   *  methods of the specs up its chain */
+  javaClass(spec: HostSpec): string {
+    if (!this.w.prog.get(spec.name)?.isInterface) return spec.name;
+    const name = spec.name + HOSTED;
+    if (!this.w.prog.get(name)) {
+      const methods = new Set<string>();
+      for (let s: HostSpec | undefined = spec; s; s = s.sup ? this.specs.get(s.sup) : undefined) for (const key of s.methods) if (!key.startsWith(STATIC)) methods.add(key);
+      this.synthesize({ ...spec, name, sup: null, ifaces: [spec.name], methods: [...methods] });
+      this.defined.set(name, spec);
+    }
+    return name;
+  }
   /** a class of natives */
   private synthesize(spec: HostSpec): void {
     const sup = spec.sup ?? OBJECT, jc = classOf(spec.name, sup, spec.ifaces, ACC.PUBLIC), bodies = new Map<MethodInfo, Intrinsic>();
@@ -84,10 +98,16 @@ export class HostClasses {
    *  Worlds share, are not changed. Methods keep their positions, so ids, slots and the AOT build's numbering are the platform's. */
   private overlay(jc: JClass, spec: HostSpec): void {
     const prog = this.w.prog, hosted = classOf(spec.name + HOSTED, OBJECT, [], ACC.PUBLIC | ACC.ABSTRACT);
-    const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: false, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
+    const over: JClass = { name: jc.name, dex: jc.dex, def: jc.def, sup: jc.sup, ifaces: jc.ifaces, flags: jc.flags, isInterface: jc.isInterface, fields: jc.fields, methods: jc.methods.map((m) => ({ ...m })), byKey: new Map() };
     for (const m of over.methods) over.byKey.set(m.key, m);
     const taken: MethodInfo[] = [];
-    for (const key of spec.methods) {
+    // the JS tier initializes a class a spec implements without its `<clinit>`: with the values the spec names, if any
+    const clinit = over.byKey.get("<clinit>()V");
+    if (clinit && !spec.platformClinit) {
+      if (spec.statics) { clinit.flags |= ACC.NATIVE; clinit.codeOff = 0; taken.push(clinit); } else over.byKey.delete(clinit.key);
+    }
+    // an interface keeps its abstract methods: the objects that implement them are of a class of natives (javaClass)
+    for (const key of jc.isInterface ? [] : spec.methods) {
       const m = native(spec.name, key, 0), own = over.byKey.get(m.key);
       if (own && own.isStatic === m.isStatic) { own.flags &= ~ACC.ABSTRACT; own.codeOff = 0; taken.push(own); continue; }
       // a method a superclass declares: the class resolves it in `hosted`, where the spec's native is

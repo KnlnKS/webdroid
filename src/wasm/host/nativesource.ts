@@ -20,7 +20,7 @@ export const lookup = (cls: string, key: string, isStatic: boolean) => {
 export const settled = new Map<string, unknown>();
 /** the registered classes the host implements: all but those the VM itself is (the Wasm tier runs those as Wasm) and those that stand in for bytecode for speed */
 const hostSpecs = (): HostSpec[] => [...rt.natives].filter(([name]) => !/^(vm|intrinsic)/.test(TS_SPECS[tsSpecAllowance(name) ?? ""] ?? "")).map(([name, spec]) => ({
-  name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), ctor: spec.ctor,
+  name, sup: spec.sup ?? null, ifaces: spec.ifaces ?? [], methods: Object.keys(spec.methods ?? {}), platformClinit: spec.platformClinit, statics: spec.statics, ctor: spec.ctor,
   fields: Array.isArray(spec.fields) ? spec.fields.map((n) => [n, n]) : Object.entries(spec.fields ?? {}),
 }));
 export const nativeSource: NativeSource = {
@@ -28,13 +28,20 @@ export const nativeSource: NativeSource = {
   find: (cls, key, isStatic, hasBody) => {
     if (cls === "java/lang/String" && key.startsWith("<init>")) return rt.newStr[key.slice(6) as keyof typeof rt.newStr] as HostFn | undefined;
     if (cls === "java/lang/String") { const f = stringOverrides.get(mangleMethod(...splitSig(key))); if (f || hasBody) return f; }
-    return settled.has(cls + "." + key) ? () => settled.get(cls + "." + key) : lookup(cls, key, isStatic);
+    if (settled.has(cls + "." + key)) return () => settled.get(cls + "." + key);
+    if (key === "<clinit>()V" && !hasBody && rt.natives.get(cls)?.statics) return () => {};
+    const own = lookup(cls, key, isStatic);
+    if (own || hasBody) return own;
+    // a method no code declares is the one the spec's superclass (or the interface-implementing class of a spec: its supertypes' specs) implements
+    for (let sup = rt.natives.get(cls)?.sup; sup; sup = rt.natives.get(sup)?.sup) { const inherited = lookup(sup, key, isStatic); if (inherited) return inherited; }
+    return undefined;
   },
   late: (cls, key) => Object.assign(function (this: unknown, ...args: unknown[]) {
     const bound = rt.jniFn(cls, key) as HostFn | null;
     if (!bound) throw rt.ulink(cls, ...splitSig(key));
     return bound.apply(this, args);
   }, { javaValues: true }),
+  stores: (cls, run) => { run(); return { ...rt.natives.get(cls)?.statics }; },
   classOf: (v) => v instanceof JObj ? (v.constructor as unknown as { $i?: { name: string } }).$i?.name : undefined,
   // a Java exception the host caught from a call into Java and rethrows is thrown as it is, never copied
   thrown: (e) => {
