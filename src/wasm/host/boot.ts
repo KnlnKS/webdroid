@@ -6,7 +6,7 @@ import { FetchStore } from "../link/aotstore";
 import { rt, fieldNames } from "../../jvm/runtime";
 import { useEntry, type Entry } from "../../jvm/natives/jentry";
 import type { TierBackend } from "../../jvm/tier";
-import { dexesIn, isDexEntry, type DexFile } from "../../jvm/dex";
+import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex";
 import { centralDir, entryBytes } from "../../jvm/natives/jzip";
 import { vfs } from "../../shell/vfs";
 import { Program } from "../compiler/program";
@@ -127,7 +127,7 @@ function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] |
 }
 const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
   const dir = centralDir(zip);
-  return [...dir.keys()].filter(isDexEntry).sort().flatMap((name) => dexesIn(entryBytes(zip, dir.get(name)!), `${label}:${name}`));
+  return dexEntryNames(dir.keys()).flatMap((name) => dexesIn(entryBytes(zip, dir.get(name)!), `${label}:${name}`));
 };
 
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled: fetched once by the tab,

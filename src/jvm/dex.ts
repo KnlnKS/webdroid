@@ -6,6 +6,8 @@ import { decodeModifiedUtf8, descToName } from "./abi";
 export const NO_INDEX = 0xffffffff;
 
 export const isDexEntry = (name: string): boolean => /^classes\d*\.dex$/.test(name);
+export const dexEntryNames = (names: Iterable<string>): string[] => [...names].filter(isDexEntry)
+  .sort((a, b) => (Number(a.slice(7, -4)) || 1) - (Number(b.slice(7, -4)) || 1));
 
 /** The logical dex files in one physical file. Before v41 that is always exactly one; the v41
  *  container format (Android 15) packs several into a file and is what an apk built against a

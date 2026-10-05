@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dexesIn, isDexEntry, DexFile } from "../src/jvm/dex";
+import { dexesIn, dexEntryNames, isDexEntry, DexFile } from "../src/jvm/dex";
 import { zipTree } from "../src/jvm/natives/jzip";
 import { openInstall } from "../src/shell/install";
 import { rt } from "../src/jvm/runtime";
@@ -20,9 +20,7 @@ export async function openApk(path: string): Promise<Zip> {
 }
 
 export function dexesOf(zip: Zip): DexFile[] {
-  return Object.keys(zip)
-    .filter(isDexEntry)
-    .flatMap((name) => dexesIn(zip[name], name));
+  return dexEntryNames(Object.keys(zip)).flatMap((name) => dexesIn(zip[name], name));
 }
 
 export async function openDexes(path: string): Promise<DexFile[]> {
