@@ -61,6 +61,7 @@ setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();
 void fetchPlatformJars();
+if (tier === "wasm") void loadTier();
 // the worker serves persisted compiled code (src/jvm/codecache.ts), so V8 can cache it
 void navigator.serviceWorker?.register("/webview-worker.js").catch(() => {});
 

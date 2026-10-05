@@ -4,9 +4,12 @@
 //    what it runs.
 //  - without it, every module file any realm of the tab asked for (FetchStore.wanted), in order, is the build's startup.json, which a page prefetches and compiles off the main
 //    thread before the World runs. The probe of aot-startup.ts sees one process after ActivityThread.main; this sees the framework's processes and an app through its first frames.
+//    The launches also leave the app builds of the apps and of the framework's processes (host/appcode.ts) in the browser's store: they are written beside the modules as
+//    app.<key>.<file> (host/bundle.ts), so that a first launch of these apps finds their compiled code.
 // Run `--classes` after a build, then `bun run aot` for the build that groups by hot.json, then this without it for that build's startup.json.
 //   WEBDROID_URL=http://localhost:4090 bun run wasm aot-profile [--classes] [apk ...]      (the server's current build; default apks: FitNotes, Calculator M, Mihon)
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { COMPILED_CODE_DIR } from "../../src/shell/hostfs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
@@ -29,8 +32,8 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
   await context.route(/\/aot\/\w+\/startup\.json$/, (route) => route.fulfill({ json: readdirSync(join(AOT_ROOT, key)).filter((f) => /^[cd]\d+\.wasm$/.test(f)) }));
   if (classes) await context.route(/\/aot\/\w+\/c\d+\.wasm$/, (route) => route.abort());
   try {
-    // a launch with no saved app build and one with it: the modules an app build's code names differ from those of code compiled on demand
-    for (const launch of classes ? ["cold"] : ["cold", "warm"]) {
+    // a launch with no saved app build, one with it, and one with the build the second made of what it compiled on demand: the modules an app build's code names differ from those of code compiled on demand
+    for (const launch of classes ? ["cold"] : ["cold", "warm", "settled"]) {
       const page = await context.newPage();
       page.on("pageerror", (e) => console.log("pageerror", e.message));
       await page.goto(`${BASE}/?apk=${encodeURIComponent(apk)}&screen=1080x2160@480&tier=wasm`);
@@ -43,6 +46,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       for (const f of wanted) ordered.add(f);
       const mb = (kind: string) => (wanted.filter((f) => f[0] === kind).reduce((n, f) => n + statSync(join(AOT_ROOT, key, f)).size, 0) / 1e6).toFixed(1);
       console.log(`${apk} ${launch}: ${wanted.length} files wanted (C ${wanted.filter((f) => f[0] === "c").length}, ${mb("c")} MB; D ${wanted.filter((f) => f[0] === "d").length}, ${mb("d")} MB), ${ordered.size - before} new`);
+      if (launch === "settled") await exportBundles(page);
       await page.close();
     }
   } catch (e) { console.log(`${apk}: ${(e as Error).message.split("\n")[0]}`); } finally { await context.close(); rmSync(profile, { recursive: true, force: true }); }
@@ -57,4 +61,29 @@ if (classes) {
   const files = [...ordered].filter((f) => /^[cd]\d+\.wasm$/.test(f));
   writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
   console.log(`${files.length} files in ${key}/startup.json`);
+}
+
+/** the app builds in the page's store, written beside the platform build's modules */
+async function exportBundles(page: import("playwright").Page): Promise<void> {
+  const dir = join(AOT_ROOT, key);
+  const listing = await page.evaluate(async (name) => {
+    const root = await navigator.storage.getDirectory(), store = await root.getDirectoryHandle(name);
+    const meta = JSON.parse(await (await (await store.getFileHandle("meta.json")).getFile()).text()) as { entries: Record<string, { files: Record<string, number> }> };
+    return Object.fromEntries(Object.entries(meta.entries).map(([k, e]) => [k, Object.keys(e.files)]));
+  }, COMPILED_CODE_DIR);
+  for (const [entry, names] of Object.entries(listing)) {
+    for (const old of readdirSync(dir).filter((f) => f.startsWith(`app.${entry}.`))) rmSync(join(dir, old));
+    for (const name of names) {
+      const base64 = await page.evaluate(async ([store, entry, name]) => {
+        const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
+        const bytes = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
+        let text = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return btoa(text);
+      }, [COMPILED_CODE_DIR, entry, name]);
+      writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(base64, "base64"));
+    }
+    writeFileSync(join(dir, `app.${entry}.json`), JSON.stringify(names));
+    console.log(`app build ${entry}: ${names.length} files`);
+  }
 }

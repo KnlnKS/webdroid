@@ -34,6 +34,11 @@ const TAB_HEAP = 2048 * 1024 * 1024;
 
 declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
 
+/** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
+let starting = typeof location !== "undefined";
+const START_MS = 15_000;
+if (starting) setTimeout(() => { starting = false; }, START_MS);
+
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
 const hostLoop: HostLoop = {
   yield: (soon) => soon ? wakeSoon() : yieldToLoop(),
@@ -43,7 +48,7 @@ const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
@@ -97,6 +102,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       appDexes.push(dex);
       world?.addDexes([dex]);
     },
+    launched() { starting = false; if (world) code?.watch(world); },
     async appCode(roots) {
       if (world || !store || !appDexes.length) return;
       code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }) as unknown as WorkerPort, roots });

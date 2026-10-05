@@ -217,6 +217,51 @@ if (saved) {
   check("a module that is missing is compiled on demand", answers(partial).join(), expected.join());
 }
 
+// ---- what a launch builds on demand goes into the next build
+{
+  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key: "platform" } as unknown as FetchStore, persist, spawn,
+    roots: { launch: ["Pst"] } };
+  const first = await prepareApp(request);
+  await first.made!;
+  const second = await prepareApp(request), w = hosted(app, second.options);
+  check("the first build attaches", w.appAttached, true);
+  answers(w);
+  check("the launch compiled methods the build lacked", w.demand.methods.size > 0, true);
+  check("the classes its code names have modules in the build", (second.options.app?.index.dModules ?? 0) > 0 && w.stats.classes < 2, true);
+  const built = await second.refine(w, 1);
+  check("the build is made again with them", built?.kept, true);
+  const third = await prepareApp(request), w3 = hosted(app, third.options);
+  check("a launch after it finds it", w3.appAttached, true);
+  check("answers as without", answers(w3).join(), expected.join());
+  check("it compiled fewer methods on demand", w3.stats.methods < w.stats.methods, true);
+  console.log(`  refined build: ${w3.stats.methods} methods built on demand against ${w.stats.methods}, ${third.options.app?.index.dModules} data module(s)`);
+  check("nothing new to add the next time", await third.refine(w3, 1), undefined);
+  for (const c of [first, second, third]) { c.compiler.close(); c.close(); }
+}
+
+// ---- a build the platform build ships
+{
+  const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: "https://shipped.invalid/", key: "platform" } as unknown as FetchStore, persist, spawn, roots: { launch: ["Pst"] } };
+  const key = await appKey(app, "platform"), origin = new Persist(memoryBackend());
+  const made = await prepareApp({ ...request, persist: origin, aot: { base: BASE, key: "platform" } as unknown as FetchStore });
+  await made.made!;
+  const files = (await origin.load(key))!, realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    const prefix = `${request.aot.base}app.${key}.`, name = String(url).slice(prefix.length);
+    if (!String(url).startsWith(prefix)) return new Response("", { status: 404 });
+    if (name === "json") return Response.json([...files.keys()]);
+    return files.has(name) ? new Response(files.get(name) as BodyInit) : new Response("", { status: 404 });
+  }) as typeof fetch;
+  try {
+    const first = await prepareApp(request);
+    check("a first launch finds the build the platform build ships", first.hit, true);
+    check("and keeps it for the next", (await persist.load(key))?.size, files.size);
+    const none = await prepareApp({ ...request, dexes: late, persist: new Persist(memoryBackend()) });
+    check("an app it ships none for has none", none.hit, false);
+    for (const c of [made, first, none]) { c.compiler.close(); c.close(); }
+  } finally { globalThis.fetch = realFetch; }
+}
+
 // ---- the store
 {
   const fs = memoryBackend(), p = new Persist(fs, { entry: 100, total: 250 }), blob = (n: number) => new Uint8Array(n).fill(n);
