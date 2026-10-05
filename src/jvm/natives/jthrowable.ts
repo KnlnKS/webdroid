@@ -8,7 +8,7 @@ import { coldStack, COLD_SOURCE, type ColdAt } from "../cold";
 import { frameSource, type FrameAt } from "../stacklines";
 import { Strand } from "../suspend";
 import { processExited } from "../../process-exit";
-import { after, callOn, curThread, mainThread, vcall, vcallOn, type JThread } from "./jentry";
+import { after, callOn, classNameOf, curThread, mainThread, vcall, vcallOn, type JThread } from "./jentry";
 import { jclsName } from "./jlang";
 
 export class JThrowable extends JObj {
@@ -198,7 +198,7 @@ export function logUncaught(e: unknown): void {
     causes += `\n  caused by ${(c.constructor as any)?.$i?.name ?? "?"}: ${c.msg ?? ""}`;
   }
   const jframes = (je as { jframes?: string[] } | null)?.jframes;
-  console.error("[uncaught]", (je?.constructor as any)?.$i?.name ?? "?", (je?.msg ?? "") + causes + (jframes ? "\n  at " + jframes.join("\n  at ") : ""), (je as any)?.jsStack ?? (e as any)?.stack ?? "");
+  console.error("[uncaught]", classNameOf(je) ?? (je?.constructor as any)?.$i?.name ?? "?", (je?.msg ?? "") + causes + (jframes ? "\n  at " + jframes.join("\n  at ") : ""), (je as any)?.jsStack ?? (e as any)?.stack ?? "");
   rt.onUncaught(je);
 }
 
