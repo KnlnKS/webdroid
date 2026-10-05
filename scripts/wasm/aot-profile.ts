@@ -13,6 +13,7 @@ import { COMPILED_CODE_DIR } from "../../src/shell/hostfs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
+import { DEOPT_ABI, type AppIndex, type AotIndex } from "../../src/wasm/link/aot";
 import { AOT_ROOT } from "./aot-key";
 
 const BASE = process.env.WEBDROID_URL ?? "http://localhost:4090";
@@ -23,6 +24,8 @@ const SETTLE_MS = 10_000;
 const byUse = (m: Map<string, number>) => [...m].sort((a, b) => b[1] - a[1]).map(([name]) => name);
 
 const { key } = await (await fetch(`${BASE}/aot/current.json`)).json() as { key: string };
+const policy = (JSON.parse(readFileSync(join(AOT_ROOT, key, "index.json"), "utf8")) as AotIndex).deopt ?? 0;
+if (![0, DEOPT_ABI].includes(policy)) throw new Error("unknown AOT activation policy");
 const ordered = new Set<string>();
 const uses = { linked: new Map<string, number>(), called: new Map<string, number>() };
 for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "mihon-v0.20.4.apk"]) {
@@ -72,6 +75,11 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
     return Object.fromEntries(Object.entries(meta.entries).map(([k, e]) => [k, Object.keys(e.files)]));
   }, COMPILED_CODE_DIR);
   for (const [entry, names] of Object.entries(listing)) {
+    const app = await page.evaluate(async ([store, entry]) => {
+      const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
+      return JSON.parse(await (await (await dir.getFileHandle("index.json")).getFile()).text());
+    }, [COMPILED_CODE_DIR, entry]) as AppIndex;
+    if ((app.deopt ?? 0) !== policy) throw new Error(`app build ${entry}: activation policy differs from platform`);
     for (const old of readdirSync(dir).filter((f) => f.startsWith(`app.${entry}.`))) rmSync(join(dir, old));
     for (const name of names) {
       const base64 = await page.evaluate(async ([store, entry, name]) => {

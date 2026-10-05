@@ -164,7 +164,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 }
 
 // ---- the app build
-let saved: SavedBuild | undefined;
+let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefined;
 {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key: "platform" } as unknown as FetchStore, persist, spawn,
     roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } };
@@ -179,11 +179,17 @@ let saved: SavedBuild | undefined;
   check("and a different platform build finds none", (await prepareApp({ ...request, aot: { base: BASE, key: "other" } as unknown as FetchStore })).hit, false);
   second.compiler.close();
   first.compiler.close();
-  saved = await SavedBuild.open((await persist.load(await appKey(app, "platform")))!);
+  savedFiles = (await persist.load(await appKey(app, "platform")))!;
+  saved = await SavedBuild.open(savedFiles);
+  check("saved modules load with their matching activation policy", !!saved, true);
 }
 
 if (saved) {
   const index = saved.index, store = saved;
+  const wrongPolicy = new Map(savedFiles!);
+  wrongPolicy.set("index.json", new TextEncoder().encode(JSON.stringify({ ...index, deopt: index.deopt ? 0 : 1 })));
+  check("saved module policy must match its index", await SavedBuild.open(wrongPolicy), undefined);
+  check("app activation policy differs from platform", world(app, { app: { index: { ...index, deopt: index.deopt ? 0 : 1 }, store } }).appAttached, false);
   const plain = world(app);
   answers(plain);
   const w = world(app, { app: { index, store } });

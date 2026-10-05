@@ -1,11 +1,12 @@
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { UnitCompiler } from "../../src/wasm/link/unit";
 import { Natives } from "../../src/wasm/host/natives";
 import { loadDexes, world } from "./lib";
-import { AOSP } from "./paths";
+import { DEOPT_ABI, type AotIndex } from "../../src/wasm/link/aot";
+import { ROOT, AOSP } from "./paths";
 import { shellIn } from "./tools";
 
 const out = mkdtempSync(join(tmpdir(), "cold-osr-")), sh = shellIn(out);
@@ -98,6 +99,7 @@ w.sched.monitors.exit(lock,w.sched.root);
   check("worker job carries activation contract",job.cold,true);
   const from=worker.numbering(), unit=uc.upgrade(job);
   if(typeof unit==="string")throw new Error(unit);
+  check("stale unit policy rejected before installation",page.adoptUnit(slot,job,{...unit,header:{...unit.header,deopt:0}},page.epoch),false);
   check("worker hot root installed",page.adoptUnit(slot,job,unit,page.epoch),true);
   const depth=page.rtImports().depth; depth.value=123;
   check("ordinary hot root deopts through nested chunks",(page.table.get(slot) as (n:number)=>number)(20_000),60_000);
@@ -113,5 +115,48 @@ w.sched.monitors.exit(lock,w.sched.root);
   check("ordinary hot native-loaded interface override",await page.entryAsync("Osr","run","(I)I")(100),4952);
   check("ordinary hot interface deopts once",page.stats.coldDeopts,2);
   check("ordinary hot native prefix never replay",page.entry("Osr","effects","()I")(),4);
+}
+// Use the shipping producer and loader, with a small unchanged DEX as its selected archive.
+if(process.argv.includes("--aot")) {
+  const dir=join(out,"aot");
+  sh(["bun",join(ROOT,"scripts/wasm/run.ts"),"aot-build","--out",dir,"--jars","0","--app",join(out,"classes.dex")]);
+  const index=JSON.parse(readFileSync(join(dir,"index.json"),"utf8")) as AotIndex;
+  check("shipping producer emits guarded contract",index.deopt,DEOPT_ABI);
+  const store={get:(file:string)=>new Uint8Array(readFileSync(join(dir,file)))};
+  const files=[...PLATFORM_JARS.map(j=>join(AOSP,j)),join(out,"classes.dex")];
+  for(const cold of [false,true]) for(const fail of [0,1]) {
+    let nativeCalls=0, rootTransfers=0, stateTransfers=0;
+    const page=world(files,{cold,holdUpgrades:()=>true,aot:store,natives:new Natives({
+      find:(cls,key)=>cls!=="Osr"?undefined:key==="invalidate()V"?()=>page.invalidate(page.slotOf(page.prog.resolve("Osr","nested","(I)I")!)):key==="await(IZ)I"?async(value:number,fail:number)=>{
+        page.invalidate(page.slotOf(page.prog.resolve("Osr","state","(IZ)I")!));
+        await Promise.resolve();if(fail)throw page.exception(page.makeThrowable("java/lang/IllegalArgumentException","AOT native throw"));return value+1;
+      }:key==="late(LOsr$I;)LOsr$I;"?Object.assign(async()=>{
+        nativeCalls++;page.addDexes(loadDexes(join(out,"late/classes.dex")));
+        return await page.entryAsync("Late","make","()LOsr$I;")();
+      },{javaValues:true}):undefined,
+      thrown:e=>{const t=page.throwable(e);return t?{cls:page.classNameOf(t),msg:null,obj:t}:undefined;},
+    })});
+    check(`AOT attaches with cold=${cold}`,!!page.aot,true);
+    const enter=page.enterColdDeopt.bind(page);
+    page.enterColdDeopt=(s,c)=>{if(!cold)throw new Error("disabled runtime attempted cold handoff");if(s.method?.cls==="Osr"){if(s.method.name==="run")rootTransfers++;if(s.method.name==="state")stateTransfers++;}return enter(s,c);};
+    check(`AOT native/EH result and monitor cold=${cold} fail=${fail}`,await page.entryAsync("Osr","state","(IZ)I")(100,fail),4958+fail);
+    check(`AOT committed result/EH handoff cold=${cold} fail=${fail}`,stateTransfers,+cold);
+    const lock=page.entry("Osr","lock","()Ljava/lang/Object;")() as object;
+    check(`AOT monitor release cold=${cold}`,page.sched.monitors.tryEnter(lock,page.sched.root),0);page.sched.monitors.exit(lock,page.sched.root);
+    check(`AOT live interface override cold=${cold}`,await page.entryAsync("Osr","run","(I)I")(100),4952);
+    check(`actual AOT code runs cold=${cold}`,page.stats.aot.c>0,true);
+    check(`AOT native executes once cold=${cold}`,nativeCalls,1);
+    check(`AOT prefix executes once cold=${cold}`,page.entry("Osr","effects","()I")(),2);
+    check(`AOT root handoff policy cold=${cold}`,rootTransfers,+cold);
+    if(!cold)check("disabled AOT allocates no interpreted activations",page.stats.coldCalls,0);
+  }
+  const stale={get:(file:string)=>file==="index.json"?new TextEncoder().encode(JSON.stringify({...index,deopt:0})):store.get(file)};
+  check("cold runtime rejects uninstrumented AOT",!!world(files,{cold:true,aot:stale}).aot,false);
+  const off=join(out,"aot-off");
+  sh(["bun",join(ROOT,"scripts/wasm/run.ts"),"aot-build","--out",off,"--jars","0","--app",join(out,"classes.dex"),"--deopt","off"]);
+  const offStore={get:(file:string)=>new Uint8Array(readFileSync(join(off,file)))};
+  check("off producer records absent contract",(JSON.parse(readFileSync(join(off,"index.json"),"utf8")) as AotIndex).deopt,0);
+  check("disabled runtime accepts actual off assets",!!world(files,{cold:false,aot:offStore}).aot,true);
+  check("cold runtime rejects actual off assets",!!world(files,{cold:true,aot:offStore}).aot,false);
 }
 console.log(`cold OSR: ${checks} checks; ${w.stats.coldDeopts} deoptimizations; ${w.stats.coldResumes} active transfers / ${w.stats.coldResumeEntries} compiled entries; live interface loading, effects, monitors, native suspension and Java EH`);

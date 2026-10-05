@@ -17,8 +17,9 @@ function program(m: MethodInfo) {
   if (!p) { const item = m.dex.code(m.codeOff); programs.set(m, p = { item, decoded: coldCode(item) }); }
   return p;
 }
-export function supportsColdBody(m: MethodInfo): boolean {
-  const { item, decoded } = program(m), slow = new Set(decoded.slowPcs);
+export function supportsColdBody(m: MethodInfo, cache = true): boolean {
+  // AOT preflight must not retain a decoded program for every platform method.
+  const item = m.dex.code(m.codeOff), decoded = cache ? program(m).decoded : coldCode(item), slow = new Set(decoded.slowPcs);
   return decodeInstructions(item.insns).every(ins => !slow.has(ins.pc) || ColdSlowOps.supports(ins));
 }
 

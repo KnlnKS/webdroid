@@ -80,6 +80,8 @@ export interface WorldOptions {
   compileOnly?: boolean;
   /** Experimental shared opcode loop; unsupported bodies are compiled before execution. */
   cold?: boolean;
+  /** Emit guarded activation handoffs; runtime execution still follows cold. */
+  deopt?: boolean;
 }
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
@@ -723,22 +725,24 @@ export class World {
   private coldDeoptEntries = new Map<MethodInfo, Function>();
   private deoptFrame(state: CompiledActivation) {
     const frame = this.deoptFrames.get(state);
-    if (!frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
+    if (!this.opts.cold || !frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
     return frame;
   }
   readonly deoptImports = {
-    make: (slot: number, depth: number): CompiledActivation => {
+    make: (slot: number, depth: number): CompiledActivation | null => {
+      if (!this.opts.cold) return null;
       const sl = this.slotAt(slot);
       if (sl?.k !== "method") throw new Error("compiled activation method missing");
       const state: CompiledActivation = { item: sl.m.dex.code(sl.m.codeOff), method: sl.m, owner: this.sched.current(), sync: this.inSynchronousJava(), depth, executedPc: 0, edges: 0 };
       this.deoptFrames.set(state, { version: Number(this.deoptEpoch.value), blocked: 0, claimed: false, monitors: [] });
       return state;
     },
-    version: (s: CompiledActivation) => this.deoptFrame(s).version,
-    last: (s: CompiledActivation) => s.executedPc,
+    version: (s: CompiledActivation | null) => s ? this.deoptFrame(s).version : Number(this.deoptEpoch.value),
+    last: (s: CompiledActivation | null) => s?.executedPc ?? 0,
     blocked: (s: CompiledActivation) => this.deoptFrame(s).blocked,
-    allocation: (s: CompiledActivation, delta: number) => { this.deoptFrame(s).blocked += delta; },
-    monitor: (s: CompiledActivation, object: object, enter: number) => {
+    allocation: (s: CompiledActivation | null, delta: number) => { if (s) this.deoptFrame(s).blocked += delta; },
+    monitor: (s: CompiledActivation | null, object: object, enter: number) => {
+      if (!s) return;
       const monitors = this.deoptFrame(s).monitors, index = monitors.findIndex(m => m.object === object);
       if (enter) { if (index < 0) monitors.push({ object, count: 1 }); else monitors[index].count++; }
       else { if (index < 0) throw new Error("compiled monitor ownership mismatch"); if (!--monitors[index].count) monitors.splice(index, 1); }
@@ -776,7 +780,7 @@ export class World {
     const frame = cold.restore(state.item, state); this.rt.depth.value = state.depth; this.stats.coldDeopts++; this.stats.coldCalls++;
     return frame;
   }
-  canDeopt(m: MethodInfo): boolean { return !(m.flags & ACC.SYNCHRONIZED) && supportsColdBody(m); }
+  canDeopt(m: MethodInfo): boolean { return !(m.flags & ACC.SYNCHRONIZED) && supportsColdBody(m, false); }
   private installCold(slot: number, m: MethodInfo, t0: number): boolean {
     if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
     const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
@@ -839,7 +843,7 @@ export class World {
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const s = this.slotAt(slot), head = result.header, t0 = performance.now();
     this.release(slot);
-    if (!!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
+    if ((head.deopt ?? 0) !== +!!job.cold || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
     const n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
     for (const id of head.touch) this.link(this.names[id]);

@@ -27,8 +27,11 @@ export interface AotStore {
 /** how a build groups the platform classes: classes with the same key share a D (data) or C (code) module; no C key leaves a class to the on-demand compiler */
 export interface AotBuild { dGroup(cls: string): string; cGroup(cls: string): string | null; /** the dexes whose classes are numbered and compiled */ dexes: Set<DexFile> }
 
+export const DEOPT_ABI = 1;
 export interface AotIndex {
   version: number;
+  /** 0: no handoff support; DEOPT_ABI: runtime-guarded compiled activation contract. */
+  deopt?: number;
   /** ids of the dexes of the build's Program, in class path order, and how many classes with bytecode they define: the Program of a World must start the same way */
   dexes: string[];
   programClasses: number;
@@ -55,6 +58,7 @@ export interface AotIndex {
 export interface DHeader { classes: number[]; touch: number[]; synth: string[] }
 /** what compiled code relies on and needs before it runs: the same for a precompiled module and for a unit a worker compiled */
 export interface UnitHeader {
+  deopt?: number;
   /** the classes (ids) and runtime functions its code names a table slot of, which need their stubs */
   touch: number[]; synth: string[];
   /** native imports by method id */
@@ -85,11 +89,12 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 2;
+export const APP_VERSION = 3;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
 export interface AppIndex {
   version: number;
+  deopt?: number;
   /** the numbering it continues: only a World that has attached the platform build and numbered nothing since can use it */
   base: Marks;
   /** the dexes of the app that follow the platform's in the Program, and how many classes with bytecode they define */
@@ -118,7 +123,7 @@ export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHead
     const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
     if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
   }
-  return { touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
+  return { deopt: cx.deopt ? DEOPT_ABI : 0, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
     natives: [...cx.nativeImports.keys()], assumptions, allocs: [...cx.allocs],
     missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]), gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)) };
 }
@@ -163,6 +168,7 @@ export class AotRuntime {
   /** the platform classes; the on-demand compiler numbers everything after them */
   nSeeded = 0;
   private index!: AotIndex;
+  get deopt(): number { return this.index?.deopt ?? (this.w.opts.deopt ? DEOPT_ABI : 0); }
   private store?: AotStore;
   private dOf = new Int32Array(0);
   private cOf = new Int32Array(0);
@@ -222,7 +228,7 @@ export class AotRuntime {
     const raw = store.get("index.json") as Uint8Array | undefined;
     if (!raw) return undefined;
     const index = JSON.parse(new TextDecoder().decode(raw)) as AotIndex;
-    if (index.version !== VERSION) return undefined;
+    if (index.version !== VERSION || ![0, DEOPT_ABI].includes(index.deopt ?? 0) || w.opts.cold && index.deopt !== DEOPT_ABI) return undefined;
     // the first `index.classes` classes with bytecode must come from exactly the dexes of the build
     const seen: string[] = [], rest: string[] = [];
     let n = 0;
@@ -272,7 +278,7 @@ export class AotRuntime {
    *  Program must start with the dexes it was made from; false (and nothing changed) otherwise */
   extend(app: AppIndex, store: AotStore): boolean {
     const w = this.w, sigs = this.appDexes(app.classes);
-    if (app.version !== APP_VERSION || this.rest.length < app.classes || !sameMarks(w.numbering(), app.base) || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) || !w.adopt(app.numbering)) return false;
+    if ((app.deopt ?? 0) !== this.deopt || w.opts.cold && app.deopt !== DEOPT_ABI || app.version !== APP_VERSION || this.rest.length < app.classes || !sameMarks(w.numbering(), app.base) || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) || !w.adopt(app.numbering)) return false;
     this.appClasses = new Set(this.rest.slice(0, app.classes));
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
     cOf.set(this.cOf);
@@ -346,6 +352,7 @@ export class AotRuntime {
     this.synthState[k] = LOADING;
     if (!mod) { this.synthState[k] = DEAD; return false; }
     const head = header<SHeader>(mod);
+    if ((head.deopt ?? 0) !== this.deopt) { this.synthState[k] = DEAD; return false; }
     if (!head.natives.every((id) => w.nativeBound(id))) { this.synthState[k] = DEAD; return false; }
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
@@ -410,6 +417,7 @@ export class AotRuntime {
     const w = this.w, app = c >= this.appFrom, mod = this.module(app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`);
     if (!mod) { this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
+    if ((head.deopt ?? 0) !== this.deopt) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
     // a store that lacks a D module) its methods are compiled on demand
     if (!head.natives.every((id) => w.nativeBound(id)) || !head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
@@ -504,7 +512,7 @@ export class AotRuntime {
   finish(): AotIndex {
     const w = this.w;
     const withCode = [...w.prog.all()].filter((c) => c.dex);
-    return { version: VERSION, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
+    return { version: VERSION, deopt: this.deopt, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
       extraNames: w.names.slice(this.nSeeded + 1), tail: w.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, linkMessages: w.linkMessages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()] };
   }
 }

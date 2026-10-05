@@ -554,7 +554,7 @@ export class MC {
     const d = this.deopt, c = this.code;
     if (!d || !this.typing.reached(ins.pc) || ins.op >= 0x0a && ins.op <= 0x0d) return;
     c.pc = ins.pc;
-    c.gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne).if_(); this.push("deoptChanged");
+    c.gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne).lget(this.activationLocal).refIsNull().raw(OP.i32_eqz, OP.i32_and).if_(); this.push("deoptChanged");
     c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe");
     c.lget(this.activationLocal).i32(ins.pc).lget(this.executedLocal).lget(this.entryDepth).call(d.snapshot).lset(this.deoptState);
     this.typing.before(ins.pc).forEach((web, register) => {
