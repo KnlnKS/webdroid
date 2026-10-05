@@ -27,14 +27,14 @@ import { declareWaiting } from "./suspend";
 import { prepareApp, type AppCode } from "./appcode";
 import { prefetchInWorker } from "./aotload";
 import { openPersist } from "./persist";
-import type { WorkerPort } from "./compiler";
+import type { CompileClient, WorkerPort } from "./compiler";
 import { onProcessExit, processExited } from "../../process-exit";
 
 
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
 
-declare global { interface Window { __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
+declare global { interface Window { __wdCold?: { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; aotKey?: string }; __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
 
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
@@ -48,10 +48,23 @@ const hostLoop: HostLoop = {
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
 };
 
+/** Process URLs inherit the tab's explicit choice; a local cold=0 overrides it. */
+function browserCold(): boolean {
+  if (typeof location === "undefined") return false;
+  let choice = new URLSearchParams(location.search).get("cold");
+  if (choice === null && typeof window !== "undefined") {
+    try {
+      if (window.parent.location.origin === location.origin) choice = new URLSearchParams(window.parent.location.search).get("cold");
+    } catch { /* A page in another origin keeps its own default. */ }
+  }
+  return choice === "1";
+}
+
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { cold: browserCold(), holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
+  if (typeof window !== "undefined") window.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
   return w;
@@ -77,6 +90,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
     code?.start(made);
+    if (typeof window !== "undefined" && window.__wdCold) Object.assign(window.__wdCold, { worker: code?.compiler.stats, appSaved: code?.hit, aotKey: store?.key });
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
     return made;
