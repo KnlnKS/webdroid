@@ -59,6 +59,7 @@ export class MC {
   shadowKeys = new Set<string>();
   shadows = new Map<string, number>();
   private root!: Code;
+  private reentryRegions = new Set<number>();
   private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number };
   private chunks: NonNullable<MC["chunk"]>[] = [];
   private resultLocal = -1;
@@ -155,7 +156,8 @@ export class MC {
     for (const p of m.params) param(isWide(p));
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    const hasLoops = flow.regions.some((r) => r.scopes.some((s) => s.loop));
+    this.findCyclicRegions();
+    const hasLoops = this.reentryRegions.size > 0 || flow.regions.some((r) => r.scopes.some((s) => s.loop));
     if (hasLoops) {
       c.nullableLocals = true;
       this.controlLocal = c.newLocal(T.i32);
@@ -335,7 +337,51 @@ export class MC {
 
   emitRegion(k: number) {
     const r = this.flow.regions[k];
-    this.emitSpan(r, 0, r.order.length, r.scopes);
+    if (this.reentryRegions.has(k)) this.outline(r, { open: 0, close: r.order.length, label: "$region" + k, loop: true }, r.scopes);
+    else this.emitSpan(r, 0, r.order.length, r.scopes);
+  }
+  private findCyclicRegions(): void {
+    const { regions, blockAt } = this.flow, n = regions.length;
+    if (n < 2) return;
+    const owner = new Int32Array(this.flow.starts.length);
+    regions.forEach((r, k) => { for (const b of r.order) owner[b] = k; });
+    const edges = Array.from({ length: n }, () => new Set<number>()), reverse = Array.from({ length: n }, () => new Set<number>());
+    for (let k = 0; k < n; k++) for (const b of regions[k].order) {
+      const ins = this.blockIns[b].at(-1)!;
+      const targets = [...branchTargets(this.item, ins)];
+      if (!endsBlock(ins.op)) targets.push(ins.pc + ins.len);
+      for (const pc of targets) {
+        const to = owner[blockAt[pc]];
+        if (to !== k) { edges[k].add(to); reverse[to].add(k); }
+      }
+    }
+    // Strong components identify dispatch cycles without outlining acyclic handler paths.
+    const seen = new Set<number>(), order: number[] = [];
+    for (let start = 0; start < n; start++) {
+      if (seen.has(start)) continue;
+      const stack: [number, boolean][] = [[start, false]];
+      while (stack.length) {
+        const [v, done] = stack.pop()!;
+        if (done) { order.push(v); continue; }
+        if (seen.has(v)) continue;
+        seen.add(v); stack.push([v, true]);
+        for (const to of edges[v]) if (!seen.has(to)) stack.push([to, false]);
+      }
+    }
+    seen.clear();
+    for (const start of order.reverse()) {
+      if (seen.has(start)) continue;
+      const component: number[] = [], stack = [start]; seen.add(start);
+      while (stack.length) {
+        const v = stack.pop()!; component.push(v);
+        for (const to of reverse[v]) if (!seen.has(to)) { seen.add(to); stack.push(to); }
+      }
+      if (component.length > 1) {
+        const members = new Set(component);
+        // Every cycle crosses a non-forward edge; its target must re-enter a function.
+        for (const v of component) for (const to of edges[v]) if (to <= v && members.has(to)) this.reentryRegions.add(to);
+      }
+    }
   }
   private emitSpan(r: Flow["regions"][number], start: number, end: number, scopes: Flow["regions"][number]["scopes"]) {
     const open: { close: number }[] = []; let next = 0, p = start;
