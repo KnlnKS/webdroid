@@ -15,6 +15,9 @@ export class Code {
   scratch(): number { return this.scratchI32 < 0 ? (this.scratchI32 = this.newLocal(T.i32)) : this.scratchI32; }
   locals = new Set<number>();
   localOffset = 0;
+  compactLocals = false;
+  localMap = new Map<number, number>();
+  private materializing = false;
   /** Snapshotting includes dead reference temporaries; live reads still require their original non-null type. */
   nullableLocals = false;
   nonNullLocals = new Set<number>();
@@ -33,9 +36,18 @@ export class Code {
   i64(n: bigint): this { this.b.push(0x42); sleb(BigInt.asIntN(64, n), this.b); return this; }
   f32const(bits: number): this { this.b.push(0x43); for (let i = 0; i < 4; i++) this.b.push((bits >>> (8 * i)) & 255); return this; }
   f64const(bits: bigint): this { this.b.push(0x44); for (let i = 0n; i < 8n; i++) this.b.push(Number((bits >> (8n * i)) & 255n)); return this; }
-  lget(i: number, nonNull = true): this { if (this.nullableLocals) this.locals.add(i); this.b.push(0x20); uleb(i + this.localOffset, this.b); if (nonNull && this.nonNullLocals.has(i)) this.refAsNonNull(); return this; }
-  lset(i: number): this { if (this.nullableLocals) this.locals.add(i); this.b.push(0x21); uleb(i + this.localOffset, this.b); return this; }
-  ltee(i: number): this { if (this.nullableLocals) this.locals.add(i); this.b.push(0x22); uleb(i + this.localOffset, this.b); if (this.nonNullLocals.has(i)) this.refAsNonNull(); return this; }
+  private local(op: number, i: number, nonNull: boolean): this {
+    if (this.nullableLocals) this.locals.add(i);
+    if (this.compactLocals && !this.materializing) { this.defer((c) => { c.local(op, i, nonNull); }); return this; }
+    const index = this.compactLocals ? this.localMap.get(i) : i + this.localOffset;
+    if (index === undefined) throw new Error(`Unmapped outlined local ${i}`);
+    this.b.push(op); uleb(index, this.b);
+    if (nonNull && this.nonNullLocals.has(i)) this.refAsNonNull();
+    return this;
+  }
+  lget(i: number, nonNull = true): this { return this.local(0x20, i, nonNull); }
+  lset(i: number): this { return this.local(0x21, i, false); }
+  ltee(i: number): this { return this.local(0x22, i, true); }
   gget(i: number): this { this.b.push(0x23); uleb(i, this.b); return this; }
   gset(i: number): this { this.b.push(0x24); uleb(i, this.b); return this; }
   private mark(): void { if (this.pc >= 0) this.marks.push(this.b.length, this.pc); }
@@ -121,6 +133,7 @@ export class Code {
   defer(emit: (c: Code) => void): void { this.deferred.push({ at: this.b.length, emit }); }
   materialize(): void {
     if (!this.deferred.length) return;
+    this.materializing = true;
     const old = this.b, marks = this.marks;
     this.b = []; this.marks = [];
     let from = 0, mi = 0;
@@ -134,6 +147,7 @@ export class Code {
     while (mi < marks.length) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
     for (let i = from; i < old.length; i++) this.b.push(old[i]);
     this.deferred = [];
+    this.materializing = false;
   }
   finish(): number[] {
     this.materialize();

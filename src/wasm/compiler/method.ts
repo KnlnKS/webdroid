@@ -228,6 +228,11 @@ export class MC {
     const own = (this.chunks.length ? 5 : 4) + types.length;
     for (const ch of this.chunks) {
       ch.locals = [...ch.code.locals].sort((a, b) => a - b);
+      // State fields retain method indices; native chunks declare only their used locals.
+      const locals = [...ch.locals, this.stateLocal];
+      ch.code.localMap = new Map(locals.map((l, i) => [l, i + 1]));
+      ch.code.nparams = 1;
+      ch.code.localTypes = locals.map((l) => l === this.stateLocal ? refNull(this.stateType) : types[l]);
       const owner = this.cx.mb.funcNames[this.cx.fn.get(mid(this.m))! - this.cx.mb.nImportedFuncs];
       const name = `${owner}#loop${ch.label.slice(1)}`;
       ch.f = this.cx.mb.reserveFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), name);
@@ -242,7 +247,6 @@ export class MC {
     if (this.entryDepth < 0 && this.boundable) this.cx.bound.set(mid(this.m), own + this.calleeWeight);
     for (const ch of this.chunks) {
       ch.code.materialize();
-      ch.code.nparams = 1; ch.code.localTypes = [...types, refNull(this.stateType)];
       this.cx.mb.setBody(ch.f, ch.code.finish());
     }
     this.root.materialize();
@@ -422,12 +426,13 @@ export class MC {
   }
   private outline(r: Flow["regions"][number], scope: Flow["regions"][number]["scopes"][number], scopes: Flow["regions"][number]["scopes"]) {
     const parent = this.code, nest = this.nest, outer = this.chunk;
-    const body = new Code(this.root.nparams); body.localTypes = this.root.localTypes; body.nullableLocals = true; body.nonNullLocals = this.root.nonNullLocals; body.localOffset = 1;
+    const body = new Code(this.root.nparams); body.localTypes = this.root.localTypes; body.nullableLocals = true; body.nonNullLocals = this.root.nonNullLocals; body.compactLocals = true;
     body.defer((c) => {
       c.raw(0x20, 0).lset(this.stateLocal);
       this.loadState(c, ch.locals);
     });
     const ch = { code: body, label: scope.label, count: parent.newLocal(T.i32), entry: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1 };
+    parent.locals.add(ch.entry);
     this.chunks.push(ch); this.code = body; this.nest = []; this.chunk = ch;
     this.push("$chunkReturn"); body.block(T.i32);
     this.push("$chunkCaught"); body.block(T.anyref);
@@ -450,7 +455,7 @@ export class MC {
       this.saveState(c, ch.locals);
       // Charge the dispatcher and chunk only while their native frames are active.
       const weights = this.cx.emitEnter(c, ch.entry);
-      const size = this.root.nparams + this.root.localTypes.length;
+      const size = ch.code.localTypes.length;
       for (const at of weights) c.patch(at, 12 + size);
       c.lget(this.stateLocal).refAsNonNull().call(ch.dispatch).lset(this.controlLocal);
       this.cx.emitLeave(c, ch.entry, false);
