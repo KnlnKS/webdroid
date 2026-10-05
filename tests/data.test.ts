@@ -15,6 +15,7 @@ import { clipboardTransport } from "../src/android/clipboard";
 import type { BrokerCalls } from "../src/shell/processes";
 import { cookieManager, cookieTransport } from "../src/android/cookies";
 import { useAccountAccess, useAccountStore } from "../src/android/accounts";
+import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions";
 import { AccountStore, canonicalAccountCommands, type AccountCalls } from "../src/shell/accounts";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access";
 import { WebCookies } from "../src/shell/webcookies";
@@ -33,6 +34,40 @@ rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+
+test("permission checks deny pending grants and Java calls await the canonical owner", async () => {
+  const pkg = "org.webdroid.test.permissioncommands", fine = "android.permission.ACCESS_FINE_LOCATION";
+  await bootApp(await packageRecord(pkg, { target: 34, permissions: [fine] }));
+  const store = new PermissionStore(), owner = canonicalPermissionCommands(store, target => {
+    if (target !== pkg) throw rt.mkThrowable("java/lang/SecurityException", "foreign permission grant");
+  });
+  const { port1, port2 } = new MessageChannel();
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+  const stop = serveCalls<PermissionCalls>(port1, { ...owner,
+    permissionGrant: async (target, names) => { entered(); await blocked; return owner.permissionGrant(target, names); },
+  } as PermissionCalls);
+  const client = callProxy<PermissionCalls>(port2, ["permissionCheck", "permissionGrant"]);
+  usePermissionAccess(client.endpoint);
+  try {
+    const service = rt.make("webdroid/PermissionManagerService"), location = rt.make("webdroid/LocationManagerService");
+    const check = () => vcall(service, "checkPermission", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)I", pkg, fine, pkg, 0);
+    const last = () => vcall(location, "getLastLocation", "(Ljava/lang/String;Landroid/location/LastLocationRequest;Ljava/lang/String;Ljava/lang/String;)Landroid/location/Location;", null, null, pkg, null);
+    expect(await check()).toBe(-1);
+    expect(await thrown(last)).toContain("SecurityException");
+    let completed = false;
+    const grant = Promise.resolve(grantPermissions([fine])).then(value => { completed = true; return value; });
+    await waiting;
+    expect(completed).toBe(false);
+    expect(await client.endpoint.permissionCheck(pkg, [fine])).toEqual([false]);
+    release();
+    expect(await grant).toEqual(Int32Array.of(0));
+    expect(await check()).toBe(0);
+    expect(await last()).toBeNull();
+    expect(await client.endpoint.permissionGrant("foreign", [fine]).then(() => null, error => error.message)).toBe("foreign permission grant");
+    expect(await owner.permissionCheck("foreign", [fine])).toEqual([false]);
+  } finally { release(); client.close(); stop(); usePermissionStore(new PermissionStore()); }
+});
 
 test("account commands preserve credential ownership and await atomic owner mutations", async () => {
   await bootApp(await packageRecord("org.webdroid.test.accounts"));

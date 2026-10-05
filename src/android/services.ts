@@ -354,7 +354,7 @@ const defaultMode = (code: number): Promise<number> => scall(AOM, "opToDefaultMo
 function* opMode(code: number, pkg: string): Gen<number> {
   const op: number = yield scall(AOM, "opToSwitch", "(I)I", code);
   const permission: string | null = yield scall(AOM, "opToPermission", "(I)Ljava/lang/String;", op);
-  if (permission !== null && isRuntimePermission(permission)) return permissionGranted(pkg, permission) ? MODE_ALLOWED : MODE_IGNORED;
+  if (permission !== null && isRuntimePermission(permission)) return (yield* awaited(permissionGranted(pkg, permission))) ? MODE_ALLOWED : MODE_IGNORED;
   return yield* awaited(defaultMode(op));
 }
 const checkOp = driven(function* (code: number, uid: number, pkg: string | null): Gen<number> {

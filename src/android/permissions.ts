@@ -3,7 +3,7 @@
 // IPermissionManager over them.
 import { awaited, JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, sameBytes } from "../jvm/abi";
-import { vcall, newObj } from "../jvm/natives/jentry";
+import { after, vcall, newObj } from "../jvm/natives/jentry";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { type XmlNode, attrStr, attr } from "./axml";
 import { appHost } from "./apphost";
@@ -53,33 +53,54 @@ export class PermissionStore {
   }
 }
 let permissionStore = new PermissionStore();
-export function usePermissionStore(store: PermissionStore) { permissionStore = store; }
+export interface PermissionAccess {
+  permissionCheck(pkg: string, names: string[]): boolean[] | Promise<boolean[]>;
+  permissionGrant(pkg: string, names: string[]): void | Promise<void>;
+}
+export type PermissionCalls = {
+  [K in keyof PermissionAccess]: (...args: Parameters<PermissionAccess[K]>) => Promise<Awaited<ReturnType<PermissionAccess[K]>>>;
+};
+export function canonicalPermissionCommands(store: PermissionStore, authorize: (pkg: string) => void): PermissionAccess {
+  return {
+    permissionCheck: (pkg, names) => names.map(name => permissionHeld(store, pkg, name)),
+    permissionGrant: (pkg, names) => { authorize(pkg); store.grant(pkg, names); },
+  };
+}
+let permissionAccess = canonicalPermissionCommands(permissionStore, () => {});
+export function usePermissionStore(store: PermissionStore) {
+  permissionStore = store;
+  permissionAccess = canonicalPermissionCommands(store, () => {});
+}
+export function usePermissionAccess(access: PermissionCalls): void { permissionAccess = access; }
 /** signature|appop|pre23 permissions, the special access a user grants in Settings (which this
  *  device has no screen for): held at install by a requesting app targeting below 23 or a system one */
 const SPECIAL_ACCESS = new Set(["android.permission.SYSTEM_ALERT_WINDOW", "android.permission.WRITE_SETTINGS"]);
 // granted by the app's own request, or to a system package by the default grant policy
 export const isRuntimePermission = (name: string): boolean => RUNTIME_PERMISSIONS.has(name);
-export const permissionGranted = (pkg: string, name: string): boolean => {
+function permissionHeld(store: PermissionStore, pkg: string, name: string): boolean {
   const record = packages.get(pkg);
   if (SPECIAL_ACCESS.has(name)) return !!record && (record.grants.has(name) || record.permissions.has(name) && (record.system || record.sdk.target < 23));
-  return !RUNTIME_PERMISSIONS.has(name) || permissionStore.get(pkg).has(name) || !!record?.grants.has(name);
-};
+  return !RUNTIME_PERMISSIONS.has(name) || store.get(pkg).has(name) || !!record?.grants.has(name);
+}
+export const permissionsGranted = (pkg: string, names: string[]): boolean[] | Promise<boolean[]> => permissionAccess.permissionCheck(pkg, names);
+export const permissionGranted = (pkg: string, name: string): boolean | Promise<boolean> =>
+  RUNTIME_PERMISSIONS.has(name) ? after(permissionsGranted(pkg, [name]), values => values[0]) : permissionHeld(permissionStore, pkg, name);
 /** whether a package holds a platform permission no third-party app is granted at install: it is a
  *  system package that requests it (privileged or preinstalled), or the special access above */
 export const holdsPlatformPermission = (pkg: string, name: string): boolean => {
   const record = packages.get(pkg);
-  if (SPECIAL_ACCESS.has(name)) return permissionGranted(pkg, name);
+  if (SPECIAL_ACCESS.has(name)) return permissionHeld(permissionStore, pkg, name);
   return !!record && (record.grants.has(name) || record.system && record.permissions.has(name));
 };
-export function grantPermissions(names: string[]): Int32Array {
+export function grantPermissions(names: string[]): Int32Array | Promise<Int32Array> {
   const pkg = appHost?.pkg ?? "", record = packages.get(pkg);
   // an app targeting below Android 13 cannot ask for POST_NOTIFICATIONS: the system prompts for it (notification.ts)
   const asked = record && usesSdk(record.root).target < 33 ? names.filter((name) => name !== "android.permission.POST_NOTIFICATIONS") : names;
-  permissionStore.grant(pkg, asked);
-  return Int32Array.from(names, (name) => permissionGranted(pkg, name) ? 0 : -1);
+  return after(permissionAccess.permissionGrant(pkg, asked), () =>
+    after(permissionsGranted(pkg, names), values => Int32Array.from(values, value => value ? 0 : -1)));
 }
 /** a permission the system's own prompt asked for, answered by the same policy */
-export const grantPrompted = (pkg: string, name: string): void => permissionStore.grant(pkg, [name]);
+export const grantPrompted = (pkg: string, name: string): void | Promise<void> => permissionAccess.permissionGrant(pkg, [name]);
 // GrantPermissionsActivity, which Activity.requestPermissions starts: asking grants, and the
 // answer is the names with their results
 const PERMISSIONS = "android.content.pm.extra.REQUEST_PERMISSIONS_";
@@ -87,7 +108,7 @@ registerSystemActivity("android.content.pm.action.REQUEST_PERMISSIONS", driven(f
   const names: string[] = (yield vcall(intent, "getStringArrayExtra", "(Ljava/lang/String;)[Ljava/lang/String;", PERMISSIONS + "NAMES")) ?? jarray([], "Ljava/lang/String;");
   const result = yield* awaited(newIntent());
   yield putExtra(result, PERMISSIONS + "NAMES", names, "[Ljava/lang/String;");
-  yield putExtra(result, PERMISSIONS + "RESULTS", grantPermissions([...names]), "[I");
+  yield putExtra(result, PERMISSIONS + "RESULTS", yield* awaited(grantPermissions([...names])), "[I");
   return result;
 }));
 const declaredPermission = (name: string): [PackageRecord, XmlNode] | null => {
@@ -103,7 +124,7 @@ export function checkPermission(permission: string, pkg: string): number | Promi
   if (record?.grants.has(permission)) return 0;
   if (!record?.permissions.has(permission)) return -1;
   if (signaturePermissions.has(permission)) return signerHolds(record, permission);
-  return permissionGranted(pkg, permission) ? 0 : -1;
+  return after(permissionGranted(pkg, permission), granted => granted ? 0 : -1);
 }
 /** a signature permission: held when the package is signed as the one declaring it */
 async function signerHolds(record: PackageRecord, permission: string): Promise<number> {

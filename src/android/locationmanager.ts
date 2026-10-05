@@ -13,7 +13,7 @@ import { bootTime, uptimeMillis } from "../guest-clock";
 import { onMain, postMain } from "./mainloop";
 import { hostStub } from "./binder";
 import { geocodeMethods } from "./geocoder";
-import { permissionGranted } from "./permissions";
+import { permissionsGranted } from "./permissions";
 import { packages } from "./packages";
 import { appHost } from "./apphost";
 import type { LocationEvent, LocationFix } from "../shell/geolocation";
@@ -44,12 +44,14 @@ const properties = Object.fromEntries(Object.entries(PROPERTIES).map(([provider,
   }))]));
 const providerProperties = (provider: string) => properties[provider]();
 const permitted = (pkg: string | null) => pkg !== null
-  && (permissionGranted(pkg, "android.permission.ACCESS_FINE_LOCATION") || permissionGranted(pkg, "android.permission.ACCESS_COARSE_LOCATION"));
-function enforce(pkg: string | null): void {
-  if (permitted(pkg)) return;
-  const uid = pkg === null ? -1 : packages.get(pkg)?.uid ?? -1;
-  throw rt.mkThrowable("java/lang/SecurityException",
-    `uid ${uid} does not have android.permission.ACCESS_COARSE_LOCATION or android.permission.ACCESS_FINE_LOCATION.`);
+  && after(permissionsGranted(pkg, ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"]), values => values.some(Boolean));
+function enforce(pkg: string | null): void | Promise<void> {
+  return after(permitted(pkg), allowed => {
+    if (allowed) return;
+    const uid = pkg === null ? -1 : packages.get(pkg)?.uid ?? -1;
+    throw rt.mkThrowable("java/lang/SecurityException",
+      `uid ${uid} does not have android.permission.ACCESS_COARSE_LOCATION or android.permission.ACCESS_FINE_LOCATION.`);
+  });
 }
 function requireProvider(provider: string | null): string {
   if (!exists(provider)) throw rt.mkThrowable("java/lang/IllegalArgumentException", `provider "${provider}" does not exist`);
@@ -127,7 +129,7 @@ function distanceM(a: LocationFix, b: LocationFix): Promise<number> {
 }
 /** LocationManagerService.getProviders: none for a caller without location permission */
 function* providerList(criteria: JObj | null, enabledOnly: number): Gen<string[]> {
-  if (!permitted(appHost?.pkg ?? null)) return [];
+  if (!(yield* awaited(permitted(appHost?.pkg ?? null)))) return [];
   const out: string[] = [];
   for (const name of providers()) {
     if (enabledOnly && !locationTransport.enabled()) continue;
@@ -158,14 +160,13 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
   "getProviderProperties(Ljava/lang/String;)Landroid/location/provider/ProviderProperties;": (provider: string | null) =>
     providerProperties(requireProvider(provider)),
   "getLastLocation(Ljava/lang/String;Landroid/location/LastLocationRequest;Ljava/lang/String;Ljava/lang/String;)Landroid/location/Location;":
-    (provider: string | null, _request: JObj, pkg: string | null) => {
-      enforce(pkg);
+    (provider: string | null, _request: JObj, pkg: string | null) => after(enforce(pkg), () => {
       const fix = exists(provider) ? lastFix(provider!) : null;
       return fix && location(fix, provider!);
-    },
+    }),
   [`registerLocationListener(Ljava/lang/String;Landroid/location/LocationRequest;${LISTENER}Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V`]:
     driven(function* (provider: string | null, request: JObj, listener: JObj, pkg: string | null) {
-      enforce(pkg);
+      yield* awaited(enforce(pkg));
       const name = requireProvider(provider);
       subscribe(listener, name, yield* readRequest(name, request), {
         location: (fix) => after(location(fix, name), (l: JObj) => vcall(listener, "onLocationChanged", "(Ljava/util/List;Landroid/os/IRemoteCallback;)V", newArrayList([l]), null)),
@@ -178,7 +179,7 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
   // one location within the request's duration, or null once it passes
   "getCurrentLocation(Ljava/lang/String;Landroid/location/LocationRequest;Landroid/location/ILocationCallback;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/os/ICancellationSignal;":
     driven(function* (provider: string | null, request: JObj, callback: JObj, pkg: string | null) {
-      enforce(pkg);
+      yield* awaited(enforce(pkg));
       const name = requireProvider(provider), deliver = (value: JObj | null) => vcall(callback, "onLocation", "(Landroid/location/Location;)V", value);
       subscribe(callback, name, { ...yield* readRequest(name, request), maxUpdates: 1 }, {
         location: (fix) => after(location(fix, name), deliver), expired: () => deliver(null),

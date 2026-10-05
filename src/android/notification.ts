@@ -7,7 +7,7 @@
 // Rules follow the reference AVD's services.jar (NotificationManagerService, PreferencesHelper,
 // GroupHelper); its answers to an app were probed with a test app (targetSdk 25, 32 and 35).
 import { awaited, JObj, rt, getDeclared, setDeclared, driven, type Gen } from "../jvm/runtime";
-import { newObj, vcall, scall, iof } from "../jvm/natives/jentry";
+import { after, newObj, vcall, scall, iof } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
@@ -109,7 +109,7 @@ function denyPolicyAccess(): never { return fail("java/lang/SecurityException", 
 const targetSdk = (pkg: string) => packages.get(pkg)?.sdk.target ?? 10000;
 const packageOf = (uid: number) => [...packages.values()].find((p) => p.uid === uid)?.pkg ?? null;
 /** PermissionHelper.hasPermission: the uid holds POST_NOTIFICATIONS */
-function hasPermission(uid: number): boolean {
+function hasPermission(uid: number): boolean | Promise<boolean> {
   if (SYSTEM_UIDS.has(uid)) return true;
   const pkg = packageOf(uid);
   return pkg !== null && !!packages.get(pkg)?.permissions.has(POST_NOTIFICATIONS) && permissionGranted(pkg, POST_NOTIFICATIONS);
@@ -249,14 +249,13 @@ function enforceNoForegroundService(pkg: string, userId: number, channel: string
 /** PermissionPolicyService's notification prompt for an app targeting 6.0 to 12L, which cannot ask
  *  for POST_NOTIFICATIONS itself: once it has a channel, the system asks when a launcher task is in
  *  front. The dialog's answer follows the grant policy runtime permissions follow. */
-function promptNeeded(pkg: string): boolean {
+function promptNeeded(pkg: string): boolean | Promise<boolean> {
   const record = packages.get(pkg), target = targetSdk(pkg);
   return !!record && target >= 23 && target < 33 && pkg === appHost?.pkg && record.permissions.has(POST_NOTIFICATIONS)
-    && !permissionGranted(pkg, POST_NOTIFICATIONS) && new Preferences(pkg).ids(CHANNEL_KEY).length > 0;
+    && new Preferences(pkg).ids(CHANNEL_KEY).length > 0 && after(permissionGranted(pkg, POST_NOTIFICATIONS), granted => !granted);
 }
 function showNotificationPrompt(pkg: string): unknown {
-  grantPrompted(pkg, POST_NOTIFICATIONS);
-  return coverTop();
+  return after(grantPrompted(pkg, POST_NOTIFICATIONS), () => coverTop());
 }
 
 // ── the notification list
@@ -404,7 +403,7 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
     postTime: BigInt(Date.now()), flags: getDeclared<number>(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(parcelled(summary)),
   };
   notificationStore.autobundled.set(pk, record.key);
-  if (!hasPermission(record.uid) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
+  if (!(yield* awaited(hasPermission(record.uid))) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
   insert(record);
 }
 /** updateAutobundledSummaryLocked: the summary follows its members' flags and look */
@@ -521,7 +520,7 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
     fail("java/lang/IllegalArgumentException", `${key} Not posted. CallStyle notifications must be for a foreground service or user initated job or use a fullScreenIntent.`);
   // a media notification is posted even when its app may not post others
   const media: number = yield vcall(n, "isMediaNotification", "()Z");
-  if (!media && (!hasPermission(notifyUid) || (yield vcall(channel, "getImportance", "()I")) === IMPORTANCE_NONE)) return;
+  if (!media && (!(yield* awaited(hasPermission(notifyUid))) || (yield vcall(channel, "getImportance", "()I")) === IMPORTANCE_NONE)) return;
   enqueueRate(pkg!, performance.now(), true);
   // handleGroupedNotificationLocked: a summary flag without an app group is dropped
   let flags: number = getDeclared<number>(n, N, "flags");
@@ -683,7 +682,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     }
     // the prompt shows over the activity in front, after this call returns: covering it pauses that
     // activity, whose main thread may be the caller
-    if (created && !had && foreground() && promptNeeded(pkg)) detached(() => showNotificationPrompt(pkg), logUncaught);
+    if (created && !had && foreground() && (yield* awaited(promptNeeded(pkg)))) detached(() => showNotificationPrompt(pkg), logUncaught);
   }),
   "getNotificationChannel(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)Landroid/app/NotificationChannel;":
     driven(function* (callingPkg: string, userId: number, pkg: string, channelId: string | null) {
@@ -738,7 +737,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
   "areNotificationsEnabledForPackage(Ljava/lang/String;I)Z": areNotificationsEnabledForPackage,
   "getPackageImportance(Ljava/lang/String;)I": (pkg: string) => {
     checkCallerIsSystemOrSameApp(pkg);
-    return hasPermission(callingIdentity().uid) ? IMPORTANCE_DEFAULT : IMPORTANCE_NONE;
+    return after(hasPermission(callingIdentity().uid), granted => granted ? IMPORTANCE_DEFAULT : IMPORTANCE_NONE);
   },
   // bubbles are on for the device and allowed for no app until the user allows one
   "areBubblesAllowed(Ljava/lang/String;)Z": (pkg: string) => { enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package"); return 0; },
@@ -796,9 +795,9 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
 } });
 hostStub("notification", "webdroid/NotificationManagerService");
 
-function areNotificationsEnabledForPackage(pkg: string, uid: number): number {
+function areNotificationsEnabledForPackage(pkg: string, uid: number): number | Promise<number> {
   enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");
-  return +hasPermission(uid);
+  return after(hasPermission(uid), granted => +granted);
 }
 /** canNotifyAsPackage: an app may act for itself, or for a package that made it its delegate */
 function canNotifyAsPackage(callingPkg: string, pkg: string, userId: number): boolean {
