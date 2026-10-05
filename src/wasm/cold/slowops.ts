@@ -5,7 +5,7 @@ import { OP } from "../compiler/code";
 import { inferTyping, D, R, J, type Typing } from "../compiler/infer";
 import { MC } from "../compiler/method";
 import { mid } from "../compiler/ids";
-import { kindOf, type Kind, type MethodInfo } from "../compiler/program";
+import { declaredMethod, kindOf, type Kind, type MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { Compiler } from "../compiler/j2w";
 import { T } from "../compiler/wasmbin";
@@ -147,7 +147,16 @@ export class ColdSlowOps {
     const name = `cold:slow:${mid(m)}:${ins.pc}`, params: Kind[] = ["I", "L", ...inputs.map(i => i.kind)];
     let rootCall: ((...args: unknown[]) => unknown) | undefined;
     let strandCall: ((strand: Strand, ...args: unknown[]) => unknown) | undefined;
-    const prepare = (cx: Compiler) => { this.w.stats.coldSlowModules++; cx.natives.declare(cx, [m]); };
+    const prepare = (cx: Compiler) => {
+      this.w.stats.coldSlowModules++;
+      // Ordinary calls use method-table entries with their own native imports.
+      // Only String construction embeds a native factory in this adapter; reserve
+      // its imports before emission, without rescanning the caller's whole body.
+      if (this.stringConstructor(m, ins)) {
+        const ctor = declaredMethod(cx.prog.get("java/lang/String"), "<init>" + m.dex.methodDesc(ins.b));
+        if (ctor) cx.natives.declare(cx, [ctor]);
+      }
+    };
     const call = (strand: Strand, sync: boolean, depth: number, peer: unknown, ...args: unknown[]) => strand.root || sync
       ? this.w.synchronous(() => (rootCall ??= this.w.hostFn(name, params, output, (cx, c) => body(cx, c, i => { c.lget(i); }), prepare))(depth, peer, ...args))
       : (strandCall ??= this.w.callFn(name, params, output, body, prepare))(strand, depth, peer, ...args);

@@ -11,6 +11,8 @@ import { shellIn } from "./tools";
 import { AOSP } from "./paths";
 import { Natives } from "../../src/wasm/host/natives";
 import { nativeSource } from "../../src/wasm/host/nativesource";
+import type { Compiler } from "../../src/wasm/compiler/j2w";
+import type { MethodInfo } from "../../src/wasm/compiler/program";
 import type { HostFn } from "../../src/wasm/link/hostapi";
 
 const out = mkdtempSync(join(tmpdir(), "cold-slow-")), sh = shellIn(out);
@@ -40,12 +42,13 @@ public class ColdSlow {
   public static int monitor(int n){Object lock=new ColdSlow(); synchronized(lock){synchronized(lock){try{if(n==0)throw new IllegalArgumentException();return n+3;}finally{counter++;}}}}
   public static int monitorCatch(int n){try{return monitor(n);}catch(IllegalArgumentException e){return 36;}}
   public static int strings(int n){String a=new String(new char[]{'a','b'}); Object b=a; return ((String)b).length()+n;}
+  public static int stringBytes(int n)throws Exception{return new String(new byte[]{65,-61,-87},0,3,"UTF-8").length()+n;}
   public static int init(int n){return Init.n+Init.n+counter+n;}
   public static int initFail(int n){int r=0; try{r+=Fail.n;}catch(ExceptionInInitializerError e){r+=1;}try{r+=Fail.n;}catch(NoClassDefFoundError e){r+=2;}return r+n;}
   public static int suspended(int n){return await(n)+plus(n);}
   public static int suspendedCatch(int n){try{return rejected(n);}catch(IllegalArgumentException e){return n+37;}}
   public static IllegalArgumentException problem(){return new IllegalArgumentException();}
-  public static void main(String[] args){for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","init","initFail"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
+  public static void main(String[] args){for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","init","initFail"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
   static class Vol { volatile int value; }
   public static int repeatedFields(int n){Vol a=new Vol(); int r=0; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; return r;}
   public static int payloads(int n){int[] a={11,12,13,14,15}; int[] b={21,22,23,24,25}; return a[n]+b[n];}
@@ -60,14 +63,27 @@ const natives: Record<string, HostFn> = {
   "await(I)I": async (n: number) => { gates++; await Promise.resolve(); return n+1; },
   "rejected(I)I": async () => { await Promise.resolve(); const t=await wc.entryAsync("ColdSlow","problem","()Ljava/lang/IllegalArgumentException;")(); throw wc.exception(t as object); },
 };
-const wc = world(paths, { cold: true, natives: new Natives({ ...nativeSource, find: (cls,key,s,b) => cls === "ColdSlow" && natives[key] ? natives[key] : nativeSource.find(cls,key,s,b) }) });
-const warm = world(paths);
+class MeasuredNatives extends Natives {
+  declarationWords = 0; callerDeclarationWords = 0; declarations = 0;
+  override declare(cx: Compiler, methods: Iterable<MethodInfo>): void {
+    const declared = [...methods]; this.declarations++;
+    for (const m of declared) if (m.codeOff) {
+      const words = m.dex.code(m.codeOff).insns.length;
+      this.declarationWords += words;
+      if (m.cls === "ColdSlow") this.callerDeclarationWords += words;
+    }
+    super.declare(cx, declared);
+  }
+}
+const measuredNatives = new MeasuredNatives({ ...nativeSource, find: (cls,key,s,b) => cls === "ColdSlow" && natives[key] ? natives[key] : nativeSource.find(cls,key,s,b) });
+const wc = world(paths, { cold: true, natives: measuredNatives });
+const warm = world(paths, { natives: new Natives(nativeSource) });
 const jdk=sh(["java","-cp",out,"ColdSlow"]).trim().split("\n");
 let jdkAt=0;
 let checks = 0;
 const expect = (what: string, got: unknown, want: unknown) => { if(got !== want)throw new Error(`${what}: ${got} != ${want}`); checks++; };
 const run = async (w: typeof wc, name: string, n: number) => {try{return await w.entryAsync("ColdSlow",name,"(I)I")(n);}catch(e){const t=w.throwable(e); return t ? "throw:"+w.classNameOf(t) : (()=>{throw e;})();}};
-for (const name of ["objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","init","initFail"]) {
+for (const name of ["objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","init","initFail"]) {
   for(const n of [-1,0,1,2,4]) { const want=await run(warm,name,n); const got=await run(wc,name,n); expect(`JDK ${name}(${n})`,String(got),jdk[jdkAt++]); expect(`${name}(${n})`,got,want); }
   console.log("pass",name);
 }
@@ -149,5 +165,6 @@ resumed.pc=exit.pc;resumed.references[exit.a]=lock;resumed.kinds[exit.a]=1;await
 expect("explicit release consumes monitor state",resumed.monitors.length,0);
 expect("canonical monitor actually released",wc.sched.monitors.depth(lock as object,strand),0);
 wc.sched.end(strand);
-console.log("cold counters",JSON.stringify({slowAdapters:wc.stats.coldSlowAdapters,slowModules:wc.stats.coldSlowModules,slowCalls:wc.stats.coldSlowCalls,slowWaits:wc.stats.coldSlowWaits,typingMethods:wc.stats.coldTypingMethods,snapshotRegisters:wc.stats.coldSnapshotRegisters}));
+expect("slow adapters do not rescan caller bodies for native imports",measuredNatives.callerDeclarationWords,0);
+console.log("cold counters",JSON.stringify({slowAdapters:wc.stats.coldSlowAdapters,slowModules:wc.stats.coldSlowModules,slowCalls:wc.stats.coldSlowCalls,slowWaits:wc.stats.coldSlowWaits,typingMethods:wc.stats.coldTypingMethods,snapshotRegisters:wc.stats.coldSnapshotRegisters,nativeDeclarationWords:measuredNatives.declarationWords,nativeDeclarations:measuredNatives.declarations}));
 console.log(`cold slow: ${checks} checks, ${wc.stats.coldMethods} methods / ${wc.stats.coldCalls} activations; object/fields/arrays/dispatch/EH/monitors/class initialization/JSPI and pending-result snapshot validation`);
