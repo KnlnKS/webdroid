@@ -38,6 +38,8 @@ import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
 
+type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
+
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
   /** the registered natives, bound to host imports by descriptor (host/natives.ts) */
@@ -121,6 +123,7 @@ export class World {
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
   private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) } as Map<string, FnTrace>;
   private stacks = new WeakMap<object, Error | JavaFrame[]>();
+  private bridgeStacks = new WeakMap<Strand, BridgeStack>();
   private frames: JavaFrame[] = [];
   assumptions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
@@ -207,7 +210,7 @@ export class World {
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id])),
       capture: (exn: object) => {
         const stack = new Error();
-        this.stacks.set(exn, this.cold?.hasActive(this.sched.current()) ? javaFrames(stack.stack ?? "", this.frameTraces) : stack);
+        this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) ? this.javaStack(stack.stack ?? "") : stack);
       },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : javaName(this.frames[i].cls)),
@@ -1192,20 +1195,33 @@ export class World {
     try { (this.table.get(SLOT.soe) as Function)(); } catch (x) { return x; } finally { this.rt.depth.value = depth; }
     return e;
   }
-  /** the Java frames Throwable.nativeFillInStackTrace recorded under `state`, innermost first, without the frames of the throwable's own construction */
-  /** the innermost `count` Java frames of the running stack. V8 builds an Error's frames up to `stackTraceLimit`, which is deep for Java stacks: a caller a few frames out is found in a short one first. */
+  private javaStack(stack: string, count = Infinity, lines = true): JavaFrame[] {
+    // Each callFn enters a fresh engine stack. Keep only that stack's frames,
+    // then append its suspended callers; parse once so recursive cold PCs retain
+    // their activation order. The marker's name is explicit, even in minified builds.
+    const local = (text: string) => {
+      const rows = text.split("\n"), boundary = rows.findIndex(row => row.includes("at webdroid:callFn ("));
+      return (boundary < 0 ? rows : rows.slice(0, boundary)).filter(row => row.includes("wasm-function[")).join("\n");
+    };
+    const parts = [local(stack)];
+    for (let caller = this.bridgeStacks.get(this.sched.current()); caller; caller = caller.prior)
+      parts.push(local(caller.stack.stack ?? ""));
+    return javaFrames(parts.join("\n"), this.frameTraces, count, lines);
+  }
+  /** the innermost `count` Java frames, including callers suspended at host bridges */
   private callerFrames(count: number): JavaFrame[] {
     const full = Error.stackTraceLimit;
     try {
       for (const limit of [16, 48]) {
         if (limit >= full) break;
         Error.stackTraceLimit = limit;
-        const frames = javaFrames(new Error().stack ?? "", this.frameTraces, count, false);
+        const frames = this.javaStack(new Error().stack ?? "", count, false);
         if (frames.length >= count) return frames;
       }
     } finally { Error.stackTraceLimit = full; }
-    return javaFrames(new Error().stack ?? "", this.frameTraces, count, false);
+    return this.javaStack(new Error().stack ?? "", count, false);
   }
+  /** captured frames without the throwable's own construction */
   stackTrace(state: object): JavaFrame[] {
     const captured = this.stacks.get(state);
     if (!captured) return [];
@@ -1263,12 +1279,26 @@ export class World {
       c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
     }, ret);
     const fn = (this.instantiate(bytes, { ...this.unitImports(cx), call: { d, v, x: thr } }).exports as Record<string, any>).m as Function;
+    const enter = (s: Strand, ...args: unknown[]) => s.call(fn, ...args);
+    Object.defineProperty(enter, "name", { value: "webdroid:callFn" });
     let token = 0;
     this.callFns.set(name, f = (s, ...args) => {
       token = token % 0x3fffffff + 1;
-      const mine = token, p = this.freshStack(() => s.call(fn, mine, ...args)) as Promise<unknown>;
+      const caller: BridgeStack = { stack: new Error(), prior: this.bridgeStacks.get(s), done: false };
+      this.bridgeStacks.set(s, caller);
+      const leave = () => {
+        caller.done = true;
+        if (this.bridgeStacks.get(s) !== caller) return;
+        let prior = caller.prior;
+        while (prior?.done) prior = prior.prior;
+        if (prior) this.bridgeStacks.set(s, prior); else this.bridgeStacks.delete(s);
+      };
+      const mine = token;
+      let p: Promise<unknown>;
+      try { p = this.freshStack(() => enter(s, mine, ...args)); } catch (error) { leave(); throw error; }
       const state = d.value as number;
-      if (state !== mine && state !== -mine) return p;
+      if (state !== mine && state !== -mine) { p.then(leave, leave); return p; }
+      leave();
       p.catch(() => {});
       // the globals are not to keep the last result alive
       if (state < 0) { const t = thr.value as object; thr.value = null; throw this.exception(t); }

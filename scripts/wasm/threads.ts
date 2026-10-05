@@ -123,6 +123,7 @@ if (substrate) {
   for (const [name, entry] of [["reach", "strand"], ["reachHeavy", "strand"], ["reach", "plain"], ["reachHeavy", "plain"]] as const) {
     const got = await show(() => entry === "strand" ? w.entryAsync("Th", name, "(I)I")(0) : w.entry("Th", name, "(I)I")(0)), frames = Number(got);
     console.log(`${name} on ${entry}: ${Number.isNaN(frames) ? got : frames + " frames"} before StackOverflowError`);
+    if (process.env.J2W_V) console.log("last recursive counter", await show(() => w.entry("Th", "count", "(I)I")(0)));
     expect(`${name} on ${entry} catches the overflow`, frames > 100, true);
   }
   // blocking where the stack cannot suspend (a plain entry) is an error that says so

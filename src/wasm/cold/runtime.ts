@@ -65,7 +65,13 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
     });
     const entered = c.newLocal(T.i32), thrown = c.newLocal(T.anyref);
     c.block().block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
-    const weights = cx.emitEnter(c, entered); c.gget(depth).lset(savedDepth);
+    const weights = cx.emitEnter(c, entered);
+    // Plain cold calls retain the host adapters on the native stack as well as
+    // their Wasm locals. Count those frames so SOE fires before the host stack
+    // runs out of room to build the Java exception. JSPI calls use fresh stacks.
+    c.lget(savedSid).i32(ROOT).raw(OP.i32_eq).lget(frame).call(synchronous).raw(OP.i32_or).if_();
+    c.gget(depth).i32(128).raw(OP.i32_add).gset(depth); c.end();
+    c.gget(depth).lset(savedDepth);
     cx.emitCount(c, m);
     c.block().loop().lget(frame).i32(FUEL).call(run).lset(done);
     c.lget(frame).call(edges).lget(prior).raw(OP.i32_sub).lset(iterations);

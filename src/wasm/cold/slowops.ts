@@ -258,6 +258,7 @@ export class ColdSlowOps {
       return "next";
     };
     const failure = (error: unknown): "handler" => {
+      error = this.w.boundary(error);
       const throwable = this.w.throwable(error);
       if (!throwable) throw error;
       const target = this.handler(m, ins.pc, throwable);
