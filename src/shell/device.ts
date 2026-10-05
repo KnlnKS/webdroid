@@ -3,7 +3,7 @@
 
 import { dexesIn, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
-import { appCodeReady, loadAppCode, loadDex, tier } from "../jvm/tier";
+import { appCodeReady, appLaunched, loadAppCode, loadDex, tier } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
@@ -58,7 +58,7 @@ export const firstPresented = new Promise<void>((resolve) => { firstFrame = reso
 function present(): void {
   if (!screen) return;
   screen.transferFromImageBitmap(fb.transferToImageBitmap());
-  if (!perf.presentations++) { mark("firstPresented"); startupDone(); firstFrame(); }
+  if (!perf.presentations++) { mark("firstPresented"); startupDone(); appLaunched(); firstFrame(); }
   notePresent();
 }
 

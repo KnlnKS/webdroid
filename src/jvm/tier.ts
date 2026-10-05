@@ -21,17 +21,22 @@ export interface TierBackend {
   loadDex(dex: DexFile, platform: boolean): void;
   /** the app's dex files are all loaded: prepare its compiled code (a build an earlier launch saved) before Java first runs */
   appCode?(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void>;
+  /** the app has shown its first frame */
+  launched?(): void;
 }
 let backend: TierBackend | undefined;
-/** loads the Wasm tier's host; only under `tier === "wasm"` */
-export async function loadTier(): Promise<void> {
-  backend = await (await import("../wasm/host/boot")).bootWasmTier();
+let loading: Promise<void> | undefined;
+/** loads the Wasm tier's host; only under `tier === "wasm"`. A page asks as soon as it runs, so that the tier's build is opened while the rest starts. */
+export function loadTier(): Promise<void> {
+  return loading ??= import("../wasm/host/boot").then(async (host) => { backend = await host.bootWasmTier(); });
 }
 
 /** the Wasm tier's compiled app code, once the app's dex files are loaded; the JS tier has its own (jvm/aot.ts) */
 export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> {
   try { await backend?.appCode?.(roots); } finally { appCodeDone(); }
 }
+/** the app's first frame is on the screen: the Wasm tier sees what the launch had to compile and build for the next one */
+export function appLaunched(): void { backend?.launched?.(); }
 let appCodeDone!: () => void;
 /** settles once the app's code is prepared: the Wasm tier's World is made at the first Java the realm runs, and numbers what it runs from there, which a saved app build needs to find unnumbered */
 export const appCodeReady = new Promise<void>((resolve) => { appCodeDone = resolve; });
@@ -53,6 +58,8 @@ export interface JavaClass {
   static(name: string, desc?: string): unknown;
   /** sets static field `name`, as `static` names it; false if the class declares no such field */
   setStatic(name: string, value: unknown, desc?: string): boolean;
+  /** sets the static fields `entries` name, all of type `desc`, as `setStatic` does (the fields the class does not declare are skipped): a class with hundreds of constants */
+  setStatics(entries: [name: string, value: unknown][], desc: string): void;
   /** does an instance have method `name``desc`, declared or inherited */
   has(name: string, desc: string): boolean;
   /** static method `name``desc`, as a function of its arguments */
@@ -78,6 +85,7 @@ export function jsClass(info: ClassInfo): JavaClass {
       if (key !== undefined) ctor[key] = value;
       return key !== undefined;
     },
+    setStatics: (entries, desc) => { for (const [name, value] of entries) cls!.setStatic(name, value, desc); },
     has: (name, desc) => mangleMethod(name, desc) in ctor.prototype,
     call: (name, desc) => {
       const fn = ctor[mangleMethod(name, desc)] ?? lateMethod.find?.(ctor, name, desc);

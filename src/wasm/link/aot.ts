@@ -12,10 +12,11 @@
 //    added since the build, and kept with the other assumptions of the World afterwards, so a dex added later undoes them like the rest;
 //    a method whose decisions do not hold is put back to its lazy-link stub, and compiled on demand.
 import type { ClassRt, World } from "./world";
+import type { InfoRecord } from "./classes";
 import type { DexFile } from "../../jvm/dex";
-import type { MethodInfo } from "../compiler/program";
+import { methodCount, type MethodInfo } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
-import { mid } from "../compiler/ids";
+import { methodOf } from "../compiler/ids";
 
 /** the files of a build, read synchronously: a page fetches them (and may compile them) before the code that needs them runs */
 export interface AotStore {
@@ -73,7 +74,7 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-export const VERSION = 2;
+export const VERSION = 3;
 
 /** the sizes of what a World numbers, which only grow */
 export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
@@ -84,7 +85,9 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 1;
+export const APP_VERSION = 2;
+/** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
+export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
 export interface AppIndex {
   version: number;
   /** the numbering it continues: only a World that has attached the platform build and numbered nothing since can use it */
@@ -95,8 +98,19 @@ export interface AppIndex {
   numbering: Numbering;
   /** the code module of each class block, as (block, module) pairs; modules are files a<module>.wasm */
   cOf: [number, number][];
+  /** the modules that are patches of platform code modules, as (module, platform module) pairs: their methods are installed after the platform module is, over its own */
+  patches: [number, number][];
   modules: number;
+  /** the synthetic functions (names) the modules s<module>.wasm put in their slots */
+  synths: string[][];
+  /** the data module of each class block it holds the globals of, as (block, module) pairs; modules are files e<module>.wasm */
+  dOf: [number, number][];
+  dModules: number;
+  /** what the build was asked to include beyond the app's likely methods: a build made later includes it too */
+  demand: Demand;
 }
+/** the module of synthetic functions: what it relies on, and the functions it holds */
+export interface SHeader extends UnitHeader { names: string[] }
 /** what compiled code (built by `cx`, whose classes were touched while it was made) relies on, by the numbers of `w` */
 export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHeader {
   const seen = new Set<string>(), assumptions: UnitHeader["assumptions"] = [];
@@ -122,12 +136,15 @@ export function packModule(header: object, wasm: Uint8Array, traces?: { slot: nu
     uleb(n.length + inner.length + body.length, pre);
     return [Uint8Array.from(pre), Uint8Array.from(inner), n, body];
   };
-  // a trace is ascending offsets and the pcs they belong to: both as differences
+  // a function's trace is its slot, its length in bytes and then the count, ascending offsets and the pcs they belong to (both as differences): a reader skips the functions it does not want
   const t: number[] = [];
   for (const { slot, offsets, pcs } of traces ?? []) {
-    uleb(slot, t); uleb(offsets.length, t);
+    const body: number[] = [];
+    uleb(offsets.length, body);
     let o = 0, p = 0;
-    for (let i = 0; i < offsets.length; i++) { uleb(offsets[i] - o, t); o = offsets[i]; uleb((((pcs[i] - p) << 1) ^ ((pcs[i] - p) >> 31)) >>> 0, t); p = pcs[i]; }
+    for (let i = 0; i < offsets.length; i++) { uleb(offsets[i] - o, body); o = offsets[i]; uleb((((pcs[i] - p) << 1) ^ ((pcs[i] - p) >> 31)) >>> 0, body); p = pcs[i]; }
+    uleb(slot, t); uleb(body.length, t);
+    for (const x of body) t.push(x);
   }
   const parts = [wasm, ...section("aot", new TextEncoder().encode(JSON.stringify(header))), ...(traces ? section("aottrace", Uint8Array.from(t)) : [])];
   const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
@@ -139,7 +156,7 @@ const customSection = (m: WebAssembly.Module, name: string): Uint8Array => new U
 const header = <H>(m: WebAssembly.Module): H => JSON.parse(new TextDecoder().decode(customSection(m, "aot"))) as H;
 function unleb(b: Uint8Array, at: number[]): number { let n = 0, s = 1; for (;;) { const x = b[at[0]++]; n += (x & 127) * s; if (x < 128) return n; s *= 128; } }
 
-const LIVE = 1, DEAD = 2;
+const LIVE = 1, DEAD = 2, LOADING = 3;
 
 export class AotRuntime {
   readonly building: boolean;
@@ -153,15 +170,27 @@ export class AotRuntime {
   private cState: number[] = [];
   private cAbsent: (Set<number> | undefined)[] = [];
   private overridden = new Set<number>();
+  /** the overridden slots by the code module that holds them, made from `overridden` when it has grown */
+  private overriddenBy = new Map<number, number[]>();
+  private overriddenSeen = 0;
   private cHeader: (CHeader | undefined)[] = [];
   private cModule: (WebAssembly.Module | undefined)[] = [];
-  private cTraced = new Set<number>();
+  /** where each function's trace starts in the section of a loaded code module, by slot */
+  private cTraces = new Map<number, { bytes: Uint8Array; starts: Map<number, number> }>();
   /** slots reserved by the build after the platform classes, by class */
   private reservedBases = new Map<string, number>();
   /** the classes with bytecode after the platform's, which an app build (`extend`) takes the first of */
   private rest: string[] = [];
   /** code modules from this one on belong to the app build; the classes it defines */
   private appFrom = Infinity;
+  /** the app build's data modules, and the one that holds each class block */
+  private appD: (WebAssembly.Exports | undefined)[] = [];
+  /** the code modules (absolute) that patch each platform code module */
+  private patchesOver = new Map<number, number[]>();
+  /** the app build's module of each synthetic function it holds, and whether each module is loaded (LIVE), being loaded or unusable (DEAD) */
+  private synthIn = new Map<string, number>();
+  private synthState: number[] = [];
+  private appDOf = new Map<number, number>();
   private appClasses = new Set<string>();
   // ---- build
   private dexSigs = new Set<string>();
@@ -251,12 +280,18 @@ export class AotRuntime {
     for (const [block, module] of app.cOf) cOf[block] = this.appFrom + module;
     this.cOf = cOf;
     this.cState.length = this.cHeader.length = this.appFrom + app.modules;
-    // the app build's files are a<module>.wasm, which no platform file is named like
-    this.store = { get: (file) => (file[0] === "a" ? store : platform).get(file) };
+    for (const [module, over] of app.patches) (this.patchesOver.get(over) ?? this.patchesOver.set(over, []).get(over)!).push(this.appFrom + module);
+    app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, module)));
+    for (const [block, module] of app.dOf) this.appDOf.set(block, module);
+    this.appD.length = app.dModules;
+    // the app build's files are a<module>.wasm, e<module>.wasm and s<module>.wasm, which no platform file is named like
+    this.store = { get: (file) => ("aes".includes(file[0]) ? store : platform).get(file) };
     return true;
   }
 
   // ---- numbering
+  /** the platform build's code module of the class block `b`, -1 if it has none (a class of the app, or one the build does not number) */
+  platformModule(b: number): number { return b >= 0 && b < this.nSeeded ? this.cOf[b] : -1; }
   /** the slots of a class compiled on demand although the build numbered it: those the build gave it */
   reservedBase(name: string): number | undefined {
     const id = this.w.ids.get(name);
@@ -268,24 +303,71 @@ export class AotRuntime {
   linkClass(name: string): ClassRt | undefined {
     const w = this.w, id = w.ids.get(name);
     if (id === undefined || this.building && id > this.nSeeded) return undefined;
-    const seeded = id <= this.nSeeded, base = seeded ? w.blockBase[id - 1] : this.reservedBases.get(name);
-    if (base === undefined) return undefined;
-    const g = seeded ? (this.building ? this.dGroupOf : this.dOf)[id - 1] : this.building ? this.dKeys.length : this.index.extraGroup;
-    const exports = this.building || w.opts.compileOnly ? {} : this.loadD(g);
-    return exports && { name, id, mod: "g" + g, slotBase: base, nMethods: w.prog.get(name)?.methods.length ?? 0, exports };
+    let base: number, g = 0, app: number | undefined;
+    const reserved = this.reservedBases.get(name);
+    if (id <= this.nSeeded) { base = w.blockBase[id - 1]; g = (this.building ? this.dGroupOf : this.dOf)[id - 1]; }
+    else if (reserved !== undefined) { base = reserved; g = this.building ? this.dKeys.length : this.index.extraGroup; }
+    else {
+      // a class the app build gave a data module to
+      const slots = w.preassigned.get(name);
+      app = slots === undefined ? undefined : this.appDOf.get(w.blockOf(slots));
+      if (slots === undefined || app === undefined) return undefined;
+      base = slots;
+    }
+    const exports = this.building || w.opts.compileOnly ? {} : app === undefined ? this.loadD(g) : this.data(`e${app}.wasm`, this.appD, app);
+    const jc = w.prog.get(name);
+    return exports && { name, id, mod: (app === undefined ? "g" + g : "e" + app), slotBase: base, nMethods: jc ? methodCount(jc) : 0, exports };
   }
-  private loadD(g: number): WebAssembly.Exports | undefined {
-    let ex = this.dExports[g];
+  private loadD(g: number): WebAssembly.Exports | undefined { return this.data(`d${g}.wasm`, this.dExports, g); }
+  private data(file: string, memo: (WebAssembly.Exports | undefined)[], g: number): WebAssembly.Exports | undefined {
+    let ex = memo[g];
     if (ex) return ex;
-    const w = this.w, mod = this.module(`d${g}.wasm`);
+    const w = this.w, mod = this.module(file);
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
-    ex = this.dExports[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host }).exports;
+    ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
-    for (const id of head.touch) w.link(w.names[id]);
+    for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
     return ex;
+  }
+  /** makes sure the module that holds class `id` is loaded: the class's own record is made when something asks for the class, not for every class a module names */
+  private touch(id: number): void {
+    const w = this.w;
+    if (id <= this.nSeeded && !this.building && !w.opts.compileOnly && this.loadD(this.dOf[id - 1])) return;
+    w.link(w.names[id]);
+  }
+  /** puts the app build's code of synthetic function `name` in its slot, with the others of its module; false if the build has none */
+  installSynth(name: string): boolean {
+    const k = this.synthIn.get(name);
+    if (k === undefined || this.synthState[k]) return false;
+    const w = this.w, mod = this.module(`s${k}.wasm`);
+    this.synthState[k] = LOADING;
+    if (!mod) { this.synthState[k] = DEAD; return false; }
+    const head = header<SHeader>(mod);
+    if (!head.natives.every((id) => w.nativeBound(id))) { this.synthState[k] = DEAD; return false; }
+    for (const id of head.touch) this.touch(id);
+    // the functions of this module are not made twice: they are in it
+    for (const s of head.synth) if (this.synthIn.get(s) !== k) w.ensureSynth(s);
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives) };
+    w.classImports(mod, imports);
+    w.instantiate(mod, imports);
+    for (const n of head.names) { const slot = w.synthSlotOf(n); if (slot !== undefined && !w.isStubbed(slot)) w.holdsSynth(n, slot); }
+    for (const cls of head.allocs) w.allocated.add(cls);
+    for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
+    this.synthState[k] = LIVE;
+    return true;
+  }
+  /** whether the platform build numbers class `name`: the classes of its jars; those of the other jars of the class path are numbered, like the app's, as they are used */
+  seeded(name: string): boolean {
+    const id = this.w.ids.get(name);
+    return id !== undefined && id <= this.nSeeded;
+  }
+  /** whether the module that holds platform class `name` is loaded */
+  hasLoaded(name: string): boolean {
+    const id = this.w.ids.get(name);
+    return id !== undefined && id <= this.nSeeded && !!this.dExports[this.dOf[id - 1]];
   }
   /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (scripts/wasm/aot-startup.ts) */
   loaded: string[] = [];
@@ -332,7 +414,7 @@ export class AotRuntime {
     // a store that lacks a D module) its methods are compiled on demand
     if (!head.natives.every((id) => w.nativeBound(id)) || !head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
-    for (const id of head.touch) w.link(w.names[id]);
+    for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
     const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives) };
     for (const m of head.mods) imports[m] = this.dExports[+m.slice(1)];
@@ -342,20 +424,20 @@ export class AotRuntime {
     const t2 = performance.now();
     // slots made before the module was loaded say it is not there; the rest are made from the module's state
     for (const b of head.classes) {
-      const base = w.blockBase[b], methods = w.prog.get(w.blockClass[b])!.methods;
-      for (let i = 0; i < methods.length; i++) { const s = w.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
+      const base = w.blockBase[b], n = w.methodsIn(b);
+      for (let i = 0; i < n; i++) { const s = w.peek(base + i); if (s?.k === "method" && this.has(c, base + i)) s.done = true; }
     }
     // the decisions are kept with the World's others; those about a class that has gained subtypes since the build are checked now, the rest cannot have changed
     for (const [decl, name, desc, tc, tk, owner] of head.assumptions) {
-      const key = `${decl}.${name}${desc}`, target = tc ? w.prog.get(tc)?.byKey.get(tk) : undefined;
+      const key = `${decl}.${name}${desc}`;
       let e = w.assumptions.get(key);
-      if (!e) w.assumptions.set(key, e = { decl, name, desc, target, slots: new Set() });
+      if (!e) w.assumptions.set(key, e = { decl, name, desc, tc, tk, slots: new Set() });
       e.slots.add(owner);
       // the classes of an app build are the ones its code was made with
       const by = app ? w.late.get(decl)?.filter((n) => !this.appClasses.has(n)) : w.late.get(decl);
       // the answer for the classes added so far is the same for every module that relies on the decision (later classes are checked as they arrive, World.addDexes)
-      const known = !app && e.target === target ? e.stands : undefined, stands = !by?.length || (known ?? w.holds(e, by));
-      if (!app && e.target === target) e.stands = stands;
+      const same = e.tc === tc && e.tk === tk, known = !app && same ? e.stands : undefined, stands = !by?.length || (known ?? w.holds({ name, desc, tc, tk }, by));
+      if (!app && same) e.stands = stands;
       if (!stands) { w.invalidate(owner); w.stats.aot.dead++; }
     }
     for (const cls of head.allocs) w.allocated.add(cls);
@@ -366,8 +448,15 @@ export class AotRuntime {
       slots.add(owner);
     }
     for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
-    for (const slot of this.overridden) if (this.cOf[w.blockOf(slot)] === c && !this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
+    if (this.overriddenSeen !== this.overridden.size) {
+      this.overriddenBy.clear();
+      for (const slot of this.overridden) { const m = this.cOf[w.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
+      this.overriddenSeen = this.overridden.size;
+    }
+    for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
     w.stats.aot.ms += performance.now() - t2;
+    // the app build's patches of this module's methods: after its own code, which they replace where they have some
+    for (const p of this.patchesOver.get(c) ?? []) this.loadC(p);
     return true;
   }
 
@@ -378,23 +467,36 @@ export class AotRuntime {
     return s?.k === "method" ? w.restoreStub(slot, s.m) : undefined;
   }
   // ---- stack traces
-  /** the trace of function `name` of a loaded code module, whose section is read the first time a stack needs one of them */
+  /** the trace of function `name` of a loaded code module, whose section is indexed the first time a stack needs one of its functions and read function by function */
   trace(name: string): FnTrace | undefined {
-    const w = this.w, cls = name.slice(0, name.indexOf(".")), base = this.reservedBase(cls) ?? w.preassigned.get(cls);
-    const c = base === undefined ? -1 : this.cOf[w.blockOf(base)];
-    if (!(c >= 0) || this.cState[c] !== LIVE || this.cTraced.has(c)) return undefined;
-    this.cTraced.add(c);
-    const b = customSection(this.cModule[c]!, "aottrace"), at = [0];
-    while (at[0] < b.length) {
-      const slot = unleb(b, at), n = unleb(b, at), offsets = new Int32Array(n), pcs = new Int32Array(n);
-      for (let i = 0, o = 0, p = 0; i < n; i++) {
-        offsets[i] = o += unleb(b, at);
-        const z = unleb(b, at); pcs[i] = p += (z >>> 1) ^ -(z & 1);
-      }
-      const m = (w.peek(slot) ?? w.slotAt(slot)) as { m?: MethodInfo } | undefined;
-      if (m?.m) w.traces.set(mid(m.m), { name: mid(m.m), m: m.m, offsets, pcs });
+    const w = this.w, m = methodOf(w.prog, name);
+    if (!m) return undefined;
+    const base = this.reservedBase(m.cls) ?? w.preassigned.get(m.cls), c = base === undefined ? -1 : this.cOf[w.blockOf(base)];
+    if (c < 0) return undefined;
+    // a patch of the module has the code of the methods it replaced
+    for (const module of [...this.patchesOver.get(c) ?? [], c]) {
+      const t = this.cState[module] === LIVE ? this.traceIn(module, (base as number) + m.index, m, name) : undefined;
+      if (t) return t;
     }
-    return w.traces.get(name);
+    return undefined;
+  }
+  private traceIn(c: number, slot: number, m: MethodInfo, name: string): FnTrace | undefined {
+    let section = this.cTraces.get(c);
+    if (!section) {
+      const bytes = customSection(this.cModule[c]!, "aottrace"), at = [0], starts = new Map<number, number>();
+      while (at[0] < bytes.length) { const s = unleb(bytes, at), len = unleb(bytes, at); starts.set(s, at[0]); at[0] += len; }
+      this.cTraces.set(c, section = { bytes, starts });
+    }
+    const from = section.starts.get(slot);
+    if (from === undefined) return undefined;
+    const b = section.bytes, at = [from], n = unleb(b, at), offsets = new Int32Array(n), pcs = new Int32Array(n);
+    for (let i = 0, o = 0, p = 0; i < n; i++) {
+      offsets[i] = o += unleb(b, at);
+      const z = unleb(b, at); pcs[i] = p += (z >>> 1) ^ -(z & 1);
+    }
+    const t = { name, m, offsets, pcs };
+    this.w.traces.set(name, t);
+    return t;
   }
 
   // ---- build output

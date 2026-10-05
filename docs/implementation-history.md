@@ -4099,3 +4099,13 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
 - B3 (2026-10-04, `knlnks/wasm-tb3`; plan 4.15). Failure mechanism: the Wasm tier made every `VMRuntime.addressOf` byte[] a table entry and map key for good, and a direct buffer's address
   (bit 50 plus a table index) was meaningless to native code and to the production natives (`FileChannel`, `Memory.memmove` between buffers). Direct buffers now live in the core's memory.
   JNI weak globals were strong globals; they are `WeakRef`s now. Evidence limits: the G1 rows were measured at load 11 to 20; a native that makes its own JNI calls was tested on the JS tier only.
+
+- X1 (2026-10-05, `knlnks/wasm-x1`; plan 4.18). Failure mechanisms of a Wasm-tier launch (warm FitNotes, 3.5 s at `d0c9a31b`): the saved app build covered the likely methods only, so a launch compiled 829 app methods, 733 synthetic
+  functions and 1,365 class modules on demand, and 27 platform methods that the app's classes undo (installProvider: 98 ms, most of it the one-time class-hierarchy index); loading a platform module made a record (and built the member
+  list) of every class it names and built the members of every class in it; `hostObject` made a new `fieldReader` module on every call (1,151); the streaming compile of 130 MB held the main thread for 450 ms; one static initializer
+  with a long array literal (ICU `LocaleIDs`) was 140 ms of lazy Liftoff compile. Decision: the build holds what a launch built on demand (the next launch compiles 23 methods, 6 ms), a platform build ships the builds of the apps it was
+  profiled with, and the boot image (G6) is not built: of the zygote's 453 ms from the World to `startZygote`, 12 ms are Java (wasm self time), 172 ms module loading; of the 845 ms after it, 141 ms are Java; the page's Java heap at the
+  first frame is 140,139 objects (20.7 MB), so a loader would be fast and would save at most 8%, because the statics live in the globals of D modules that the loader must instantiate anyway. Results: warm 3.53 -> 1.74 to 1.87 s,
+  cold 4.06 -> 2.15 to 2.55 s with a shipped build (2.9 to 3.0 s without), against 1.27 and 1.70 s on the JS tier. Evidence limits: loaded shared host (load 4 to 9), headless Chrome with swiftshader, two builds alternated on two ports;
+  only 8.4% of the methods in the platform code modules a launch loads run before the first frame (a method-level split would cut the fetched code to a tenth, not built: it is X2's chunking); Mihon still does not present
+  (`Bridge.shellOf` over a dex interface); the shipped builds exist for FitNotes, Calculator M and the framework's processes only.

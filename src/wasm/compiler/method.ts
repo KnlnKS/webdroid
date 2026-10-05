@@ -565,7 +565,14 @@ export class MC {
     this.set(k === "ref" ? "L" : k === "i64" ? "J" : "I");
   }
   emitAput(ins: Ins) {
-    const c = this.code, cx = this.cx, { k } = this.elemOf(ins.name), d = this.dloc(k);
+    const c = this.code, cx = this.cx, { k } = this.elemOf(ins.name);
+    // a static initializer runs once, and its long array literals take the engine longer to compile than to run: their stores are a call
+    if (this.m.name === "<clinit>") {
+      this.nonNull(ins.b); this.get("I", ins.c); this.get(k === "ref" ? "L" : k === "i64" ? "J" : "I", ins.a);
+      c.call(cx.helper("aput:" + k));
+      return;
+    }
+    const d = this.dloc(k);
     this.nonNull(ins.b); c.lset(this.tmpL);
     c.lget(this.tmpL).refCast(cx.tArr[k]).structGet(cx.tArr[k], 2).lset(d);
     this.idxCheck(k, ins.c);

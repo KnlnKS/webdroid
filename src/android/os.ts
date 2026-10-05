@@ -672,5 +672,5 @@ rt.registerJni("sun/nio/fs/UnixCopyFile", "transfer(IIJ)V", driven(function* (ds
 // device's values (bun run gen-framework)
 rt.registerJni("android/system/OsConstants", "initConstants()V", () => {
   const constants = linkClass("android/system/OsConstants");
-  for (const [name, value] of Object.entries(OS_CONSTANTS)) constants.setStatic(name, value, "I");
+  constants.setStatics(Object.entries(OS_CONSTANTS), "I");
 });

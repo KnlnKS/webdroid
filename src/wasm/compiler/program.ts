@@ -109,7 +109,7 @@ export class Program {
   add(dexes: DexFile[], loader: Loader = this.root): string[] {
     if (this.sealed) throw new Error("this Program is the base of another and cannot change");
     const added: string[] = [];
-    this.subclassMemo.clear(); this.implMemo.clear();
+    this.ancestorMemo.clear(); this.implMemo.clear();
     for (const dex of dexes) {
       const owner = this.loaderOfDex(dex);
       if (owner && owner !== loader) throw new Error(`${dex.name} belongs to another loader`);
@@ -183,33 +183,36 @@ export class Program {
       const m: MethodInfo = { cls, name, desc, flags: ACC.PUBLIC | ACC.STATIC, dex: null!, methodIdx: -1, codeOff: 0, key: mkey(name, desc), isStatic: true, isCtor: false, params: p.params, ret: p.ret, index: c.methods.length };
       c.methods.push(m); c.byKey.set(m.key, m);
     }
-    this.subclassMemo.clear(); this.implMemo.clear();
+    this.ancestorMemo.clear(); this.implMemo.clear();
   }
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
   addClass(jc: JClass): void {
     if (this.base?.has(jc.name)) this.shadowing = true;
     jc.methods.forEach((m, i) => { m.index = i; });
     this.classes.set(jc.name, jc);
-    this.subclassMemo.clear(); this.implMemo.clear();
+    this.ancestorMemo.clear(); this.implMemo.clear();
   }
   get(name: string): JClass | undefined { return this.classes.get(name) ?? this.base?.get(name); }
   require(name: string): JClass { const c = this.get(name); if (!c) throw new Error("class not found: " + name); return c; }
   /** a class of this Program stands in for one of the base's (a host class over a platform class): the base's answers about implementations are no longer this Program's */
   private shadowing = false;
-  private subclassMemo = new Map<string, Map<string, boolean>>();
+  private ancestorMemo = new Map<string, Set<string>>();
   private implMemo = new Map<string, Map<string, MethodInfo | undefined>>();
+  /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
+  private ancestors(a: string): Set<string> {
+    let s = this.ancestorMemo.get(a);
+    if (!s) {
+      s = new Set([a]);
+      const c = this.get(a);
+      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of this.ancestors(p)) s.add(x);
+      this.ancestorMemo.set(a, s);
+    }
+    return s;
+  }
   isSubclass(a: string, b: string): boolean {
     if (a === b) return true;
     if (this.base?.has(a)) return this.base.isSubclass(a, b);
-    let m = this.subclassMemo.get(a);
-    if (!m) this.subclassMemo.set(a, m = new Map());
-    let r = m.get(b);
-    if (r === undefined) {
-      const c = this.get(a);
-      r = !!c && ((!!c.sup && this.isSubclass(c.sup, b)) || c.ifaces.some((i) => this.isSubclass(i, b)));
-      m.set(b, r);
-    }
-    return r;
+    return this.ancestors(a).has(b);
   }
   /** resolve a method declared in `cls` or inherited (superclasses, then interfaces) */
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {

@@ -28,9 +28,9 @@ export class Persist {
   async load(key: string): Promise<Map<string, Uint8Array> | undefined> {
     const meta = await this.meta(), entry = meta.entries[key];
     if (!entry) return undefined;
+    const read = await Promise.all(Object.entries(entry.files).map(async ([name, size]) => [name, size, await this.fs.read(`${key}/${name}`).catch(() => undefined)] as const));
     const files = new Map<string, Uint8Array>();
-    for (const [name, size] of Object.entries(entry.files)) {
-      const bytes = await this.fs.read(`${key}/${name}`).catch(() => undefined);
+    for (const [name, size, bytes] of read) {
       if (bytes?.length !== size) { await this.evict(meta, key); return undefined; }
       files.set(name, bytes);
     }
