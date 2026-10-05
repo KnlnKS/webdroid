@@ -28,9 +28,11 @@ export async function bootstrapOwnership() {
       return Uint8Array.of(i + 10);
     } });
   }
-  const broker = processBroker(), clocks: Promise<void>[] = [];
+  const broker = processBroker(), clocks: Promise<void>[] = [], callers: ReturnType<typeof callProxy<BrokerCalls>>[] = [];
   let fired = 0;
   const watchClock = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
+    if (!data.broker) throw new Error("expected command capability");
+    callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
     const port = data.clock?.port;
     if (!port) throw new Error("expected controlled clock port");
     clocks.push(new Promise<void>(resolve => port.addEventListener("message", ({data}) => { if (data.kind === "close") resolve(); })));
@@ -72,8 +74,9 @@ export async function bootstrapOwnership() {
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
   await Promise.all(clocks);
   const clockPending = guestClockControl.pending();
+  const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired };
+  return { eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired, callersClosed };
 }
 
 export async function endpointOwnership() {
@@ -205,9 +208,11 @@ export async function clockBootstrapOwnership() {
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
   broker.connect(pkg, pkg, pid);
   const data = await broker.bootstrap(pid, true), start = guestClockControl.now(), wall = wallMillis();
-  const code = `import {attachGuestClockPort,guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout} from ${JSON.stringify(location.origin + "/guest-clock.js")};
+  const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout} from ${JSON.stringify(location.origin + "/guest-clock.js")};
     self.onmessage = async ({data}) => {
-      attachGuestClockPort(data.clock);
+      const {attachWorkerBootstrap} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
+      const broker = await attachWorkerBootstrap(data);
+      const {PROCESS_PID,PROCESS_UID,PROCESS_NAME} = await import(${JSON.stringify(location.origin + "/os.js")});
       const {RemoteFile} = await import(${JSON.stringify(location.origin + "/file.js")});
       const file = new RemoteFile(data.registry.find(record=>record.pkg===data.pkg).source);
       const archive = Array.from(await file.read(0,1));
@@ -216,12 +221,13 @@ export async function clockBootstrapOwnership() {
         queueMicrotask(()=>setGuestTimeout(()=>self.postMessage({tick:'nested',now:uptimeMillis()}),0));
         setGuestTimeout(()=>self.postMessage({tick:'dead'}),5);
       },10);
-      self.postMessage({ready:true,archive,controlled:guestClockControl.controlled,bootTime});
+      self.postMessage({ready:true,archive,controlled:guestClockControl.controlled,bootTime,
+        identity:[PROCESS_PID,PROCESS_UID,PROCESS_NAME],commands:{cookies:await broker.cookieHas(),clipboard:await broker.clipboardGet()}});
     };`;
   const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"});
   const ticks: {tick:string;now:number;wall?:number}[] = [];
   try {
-    const ready = await new Promise<{archive:number[];controlled:boolean;bootTime:number}>((resolve,reject) => {
+    const ready = await new Promise<{archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
       worker.onerror = event => reject(new Error(event.message));
       worker.onmessage = ({data}) => { if(data.ready) resolve(data); else ticks.push(data); };
       worker.postMessage(data, bootstrapTransfers(data));
@@ -232,7 +238,7 @@ export async function clockBootstrapOwnership() {
     worker.terminate(); broker.fail(pid, "terminated Worker fixture", NOT_CRASHED);
     const pendingAfterDeath = guestClockControl.pending();
     await guestClockControl.advanceBy(10);
-    return {controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,
+    return {controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
       wall:ticks[0]?.wall===wall+10,uptime:ticks.every(tick=>tick.now===start+10),ticks:ticks.map(tick=>tick.tick),advanced,pendingBeforeDeath,pendingAfterDeath,
       brokerTimer,pendingAfterAdvance:guestClockControl.pending()};
   } finally { worker.terminate(); broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }

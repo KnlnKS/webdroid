@@ -1710,3 +1710,14 @@ linear heap, add a generational collector with a write barrier and a safepoint p
   the design in this file or take the alternative in 3.7; do not weaken the gate.
 - Respect AGENTS.md: no app-specific substitutes, no fabricated success, unchanged bytecode, goldens unchanged,
   serialized timing runs.
+
+
+### 4.27 Y2: Worker command attachment before JVM initialization (2026-10-05)
+
+Worker bootstrap now transfers a PID-bound reverse command port together with archive and clock capabilities through both hops. The broker retains its exact close callback; replacement, failed initial clone and process death retire command owners through the existing caller-port registry. Iframe bootstrap leaves its lazy reverse-port path unchanged.
+
+`attachWorkerBootstrap` attaches time before dynamically loading natives/JVM modules, sets the actual process PID, UID and name, and installs SQL, cookie and clipboard bindings from the received command proxy without consulting a parent window. Failed attachment closes only the received bootstrap capabilities; duplicate clock attachment does not dispose the previously attached clock. This entry is an attachment contract, not application boot or a Worker enablement switch.
+
+Two selected existing Chromium core fixtures pass (11 assertions), and full typecheck and diff check pass. The bootstrap fixture invokes the production attachment function in a real Worker, observes JVM identity and canonical cookie/clipboard commands, and retains origin, nested controlled-timer acknowledgment, system-timer survival and owner teardown coverage. The endpoint fixture remains green. Shared build chunks preserve one guest-clock module identity across fixture entry points. Evidence: `webdroid-shots/y2-s5-endpoint/worker-commands-{core,typecheck}.log`.
+
+Application entry still uses an iframe. Incoming JVM endpoint publication, remaining canonical stores, FD/ashmem coherence and presentation adapters remain required. Parent owns settings/device and the settings callback registration; Y2 will preserve that binding when integrating the parent API. No AOT/app gate or performance result is claimed. No owned browser/server capture driver is active.

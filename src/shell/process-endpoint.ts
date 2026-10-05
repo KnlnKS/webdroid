@@ -32,8 +32,24 @@ import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, 
 import { callProxy, processError } from "./process-port";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
-const brokerCalls = (): BrokerCalls => (calls ??= callProxy<BrokerCalls>(processBroker().brokerPort(PROCESS_PID), brokerMethods, [],
-  error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error))).endpoint;
+const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, [],
+  error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
+const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
+function connectCommandTransports(): void {
+  if (typeof window === "undefined" || window !== window.top) useSettingsAccess(remoteSettings(brokerCalls));
+  sqliteTransport.call = request => brokerCalls().sqlite(request);
+  cookieTransport.calls = brokerCalls;
+  clipboardTransport.set = data => brokerCalls().clipboardSet(data);
+  clipboardTransport.get = () => brokerCalls().clipboardGet();
+  clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
+}
+/** Worker commands use the transferred channel, with no parent-window lookup. */
+export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
+  if (calls) { commandProxy(port).close(); throw new Error("Process command port already attached"); }
+  calls = commandProxy(port);
+  connectCommandTransports();
+  return calls.endpoint;
+}
 
 const resultData = (result: BroadcastResult): BroadcastData | Promise<BroadcastData> =>
   after(result.extras && parcelled(result.extras), (extras) => ({ ...result, extras }));
@@ -59,9 +75,7 @@ export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
   onProcessExit((status) => broker.fail(PROCESS_PID, `Process has died: ${status.signal !== undefined ? "signal " + status.signal : "exit " + status.code}`, deathOf(lastExit)));
   processTransport.signal = (pid, signal) => broker.signal(PROCESS_PID, pid, signal);
-  clipboardTransport.set = data => brokerCalls().clipboardSet(data);
-  clipboardTransport.get = () => brokerCalls().clipboardGet();
-  clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
+  connectCommandTransports();
   let nextRequest = 1;
   /** each launch's result delivery, by request */
   const requests = new Map<number, ResultDelivery["deliver"]>();
@@ -76,13 +90,10 @@ export function connectProcess(): ProcessEndpoint {
     detached(() => after(data && encodeIntent(data), (encoded) => broker.activities.finish(PROCESS_PID, id, code, encoded)), logUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
-  sqliteTransport.call = request => brokerCalls().sqlite(request);
-  cookieTransport.calls = brokerCalls;
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
   const stopAccounts = useAccountStore(broker.accounts);
-  if (typeof window === "undefined" || window !== window.top) useSettingsAccess(remoteSettings(brokerCalls));
-  else {
+  if (typeof window !== "undefined" && window === window.top) {
     const stopSettings = useSettingsStore(broker.settings);
     if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   }

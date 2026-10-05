@@ -253,8 +253,10 @@ class ProcessBroker {
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
       const clock = worker ? createGuestClockPort(pid) : undefined;
       if (clock) ports.push(clock.close);
-      const payload: ProcessBootstrap = { pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, clock: clock?.data };
+      const broker = worker ? this.serveBrokerPort(pid) : undefined;
+      if (broker) ports.push(broker.close);
+      const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
+        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
       for (const close of this.bootstrapPorts.get(pid) ?? []) close();
@@ -263,7 +265,8 @@ class ProcessBroker {
     } catch (error) { for (const close of ports) close(); throw error; }
   }
   /** A process's reverse Binder/service channel. Only these serialized operations are exported. */
-  brokerPort(pid: number): MessagePort {
+  brokerPort(pid: number): MessagePort { return this.serveBrokerPort(pid).port; }
+  private serveBrokerPort(pid: number): { port: MessagePort; close(): void } {
     this.entry(pid);
     const { port1, port2 } = new MessageChannel();
     let owned = this.callerPorts.get(pid);
@@ -289,7 +292,7 @@ class ProcessBroker {
       broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
     }, () => { owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); });
     owned.add(stop);
-    return port2;
+    return { port: port2, close: stop };
   }
   ready(pid: number, endpoint: ProcessEndpoint): void {
     this.entry(pid);
