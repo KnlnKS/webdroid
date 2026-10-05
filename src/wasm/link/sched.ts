@@ -291,10 +291,12 @@ export class Sched {
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
     return suspending((...a: A) => {
       this.suspensions++;
-      this.current().nested = 0;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); } finally { this.idle(); }
+      // Immediate imports retain their engine stacks. Clear the quota only
+      // when the import actually suspends, including a forced cold-loop yield.
+      if (r instanceof Promise) s.nested = 0;
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
       return r instanceof Promise ? r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; }) : r;
     }) as unknown as (...a: A) => R;

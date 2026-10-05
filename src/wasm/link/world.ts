@@ -106,7 +106,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -125,6 +125,7 @@ export class World {
   private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) } as Map<string, FnTrace>;
   private stacks = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
+  private bridgeCaller?: Error;
   private frames: JavaFrame[] = [];
   assumptions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
@@ -1265,6 +1266,12 @@ export class World {
     return f as never;
   }
   private callFns = new Map<string, (s: Strand, ...a: any[]) => unknown>();
+  /** A cold activation keeps the same physical caller frames across its slow
+   * operations. Its DEX PCs are resolved from the live activation when read. */
+  withBridgeCaller<T>(stack: Error, run: () => T): T {
+    const prior = this.bridgeCaller; this.bridgeCaller = stack;
+    try { return run(); } finally { this.bridgeCaller = prior; }
+  }
   /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
    *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
    *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
@@ -1292,7 +1299,10 @@ export class World {
     let token = 0;
     this.callFns.set(name, f = (s, ...args) => {
       token = token % 0x3fffffff + 1;
-      const caller: BridgeStack = { stack: new Error(), prior: this.bridgeStacks.get(s), done: false };
+      const stack = this.bridgeCaller ?? new Error();
+      if (!this.bridgeCaller) this.stats.bridgeCallerCaptures++;
+      this.bridgeCaller = undefined;
+      const caller: BridgeStack = { stack, prior: this.bridgeStacks.get(s), done: false };
       this.bridgeStacks.set(s, caller);
       const leave = () => {
         caller.done = true;

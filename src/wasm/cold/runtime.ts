@@ -8,7 +8,7 @@ import { T, type VT } from "../compiler/wasmbin";
 import { FUEL, ROOT } from "../link/sched";
 import type { World } from "../link/world";
 import { ColdSlowOps } from "./slowops";
-import { hasJspi, suspending } from "../link/module";
+import { hasJspi } from "../link/module";
 import { coldCode, type ColdInterpreter } from "./interpreter";
 
 const programs = new WeakMap<MethodInfo, { item: ReturnType<MethodInfo["dex"]["code"]>; decoded: ReturnType<typeof coldCode> }>();
@@ -92,14 +92,17 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
     else if (ret !== "V") { c.lget(frame).call(result); if (ret === "I") c.raw(OP.i32_wrap_i64); }
   }, ret, resuming ? "resume" : "m" + slot, resuming ? [T.externref] : undefined);
   for (const trace of built.traces) { trace.m = m; trace.currentPcs = () => cold.tracePcs(m, w.sched.current()); }
+  const callers = new WeakMap<object, Error>();
   const step = (frame: object) => {
+    let caller = callers.get(frame);
+    if (!caller) { callers.set(frame, caller = new Error()); w.stats.coldCallerCaptures++; }
     const state = cold.snapshot(frame), owner = state.owner!; w.stats.coldSnapshotRegisters += item.regs;
     cold.inFlight(frame, true); cold.attempt(frame, state.pc);
     let busy = true;
     const unlock = () => { if (busy) { cold.inFlight(frame, false); busy = false; } };
     const commit = () => { unlock(); cold.commit(frame, state); };
     try {
-      const result = slowOps.step(state, owner, Number(w.rtImports().depth.value));
+      const result = slowOps.step(state, owner, Number(w.rtImports().depth.value), caller);
       if (result instanceof Promise) return result.then(commit, error => { unlock(); throw error; });
       commit();
     } catch (error) { unlock(); throw error; }
@@ -110,7 +113,7 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
     peer: (frame: object) => cold.owner(frame)?.thread.obj ?? null,
     synchronous: (frame: object) => +cold.synchronous(frame),
     finish: (frame: object) => cold.finish(frame),
-    slow: step, slowAsync: hasJspi() ? suspending(step) : step,
+    slow: step, slowAsync: hasJspi() ? w.sched.suspending(step) : step,
     make: (state?: ColdSnapshot) => { if (resuming) return w.enterColdDeopt(state!, cold); w.stats.coldCalls++; const frame = make(); cold.context(frame, m, w.sched.current(), w.inSynchronousJava(), Number(w.rtImports().depth.value)); return frame; },
   } };
   return { cx, built, imports };

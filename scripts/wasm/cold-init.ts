@@ -21,15 +21,21 @@ public class ColdInit {
   static int recursiveFrames(int d){if(d>0)return recursiveFrames(d-1);int n=0;for(StackTraceElement e:new Exception().getStackTrace())if(e.getClassName().equals("ColdInit")&&e.getMethodName().equals("recursiveFrames"))n++;return n;}
   public static int recursive(){return recursiveFrames(4);}
   public static int mixed()throws Exception{return middle();}
+  public static int sites()throws Exception {
+    int a=site();
+    Thread.sleep(1);
+    return a*1000+site();
+  }
+  static int site(){for(StackTraceElement e:new Exception().getStackTrace())if(e.getClassName().equals("ColdInit")&&e.getMethodName().equals("sites"))return e.getLineNumber();return -1;}
   static synchronized int middle()throws Exception{return inner();}
   static int inner()throws Exception {Thread.sleep(1);int n=0;for(StackTraceElement e:new Exception().getStackTrace())if(e.getClassName().equals("ColdInit")&&(e.getMethodName().equals("mixed")||e.getMethodName().equals("middle")||e.getMethodName().equals("inner")))n++;return lookup()*100+n;}
-  public static void main(String[] args)throws Exception {System.out.println(sleep());System.out.println(run());System.out.println(lookup());System.out.println(trace());System.out.println(recursive());System.out.println(mixed());}
+  public static void main(String[] args)throws Exception {System.out.println(sleep());System.out.println(run());System.out.println(lookup());System.out.println(trace());System.out.println(recursive());System.out.println(mixed());System.out.println(sites());}
 }`);
 sh(["javac", "--release", "11", "-d", dir, join(dir, "ColdInit.java")]);
 sh(["d8", "--release", "--min-api", "34", "--output", dir, ...readdirSync(dir).filter(f => f.endsWith(".class")).map(f => join(dir, f))]);
 const dex = join(dir, "classes.dex"), paths = [dex, ...PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j))];
 await jsTier(loadDexes(dex)); rt.mkThrowable = hostThrowable;
-const cases = ["sleep", "run", "lookup", "trace", "recursive", "mixed"], jdk = sh(["java", "-cp", dir, "ColdInit"]).trim().split("\n");
+const cases = ["sleep", "run", "lookup", "trace", "recursive", "mixed", "sites"], jdk = sh(["java", "-cp", dir, "ColdInit"]).trim().split("\n");
 let checks = 0;
 for (const cold of [false, true]) for (const [i, name] of cases.entries()) {
   const w = world(paths, { cold, natives }), gaps: string[] = [];
@@ -41,6 +47,6 @@ for (const cold of [false, true]) for (const [i, name] of cases.entries()) {
 }
 const concurrent = world(paths, { cold: true, natives });
 const values = await Promise.all(Array.from({ length: 8 }, () => concurrent.entryAsync("ColdInit", "mixed", "()I")()));
-if (values.some(v => String(v) !== jdk.at(-1))) throw new Error(`concurrent strands lost callers: ${values}`);
+if (values.some(v => String(v) !== jdk[cases.indexOf("mixed")])) throw new Error(`concurrent strands lost callers: ${values}`);
 checks++;
 console.log(`cold init: ${checks} checks match JDK; fresh Thread.sleep/initializer, caller classes, recursive traces, compiled synchronized middle and suspended concurrent strands`);

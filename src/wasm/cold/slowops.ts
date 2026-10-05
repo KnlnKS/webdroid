@@ -205,7 +205,7 @@ export class ColdSlowOps {
       throw new Error("incompatible pending cold exception handler");
   }
 
-  step(state: ColdSnapshot, strand: Strand, depth = state.depth): "next" | "handler" | Promise<"next" | "handler"> {
+  step(state: ColdSnapshot, strand: Strand, depth = state.depth, caller?: Error): "next" | "handler" | Promise<"next" | "handler"> {
     const m = state.method;
     if (!m) throw new Error("cold activation has no method identity");
     const item = m.dex.code(m.codeOff);
@@ -270,7 +270,8 @@ export class ColdSlowOps {
     // A peer can be allocated but not yet bound during Thread construction.
     // Capture it before yielding; callFn enters a fresh engine stack using the bound peer.
     const peer = this.w.rtImports().thr.value;
-    const invoke = () => adapter.call(strand, state.sync, depth, peer, ...args);
+    const call = () => adapter.call(strand, state.sync, depth, peer, ...args);
+    const invoke = () => caller && !strand.root && !state.sync ? this.w.withBridgeCaller(caller, call) : call();
     try {
       const pending = !state.sync && this.w.sched.current() === strand && this.w.sched.owes()
         ? Promise.resolve(this.w.callFn("cold:slow:yield", [], "V", (cx, c) => cx.callRt(c, "yieldFuel"))(strand)).then(invoke)
