@@ -2,7 +2,7 @@
 // build's startup.json, which a page prefetches and compiles off the main thread before the World runs. The probe of aot-startup.ts sees one process after ActivityThread.main;
 // this sees the framework's processes and an app through its first frames.
 //   WEBDROID_URL=http://localhost:4090 bun run wasm aot-profile [apk ...]      (the server's current build; default apks: FitNotes, Calculator M, Mihon)
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
@@ -33,7 +33,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
     }
   } catch (e) { console.log(`${apk}: ${(e as Error).message.split("\n")[0]}`); } finally { await context.close(); rmSync(profile, { recursive: true, force: true }); }
 }
-// index.json, startup.json and waiting.json are fetched by name, not as modules
-const files = [...ordered].filter((f) => /^[acd]\d+\.wasm$/.test(f) && !f.startsWith("a"));
+// A code module whose class (D) module is missing is not used, and the D modules are small: all of them are listed
+const files = [...new Set([...ordered, ...readdirSync(join(AOT_ROOT, key)).filter((f) => f[0] === "d")])].filter((f) => /^[cd]\d+\.wasm$/.test(f));
 writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
 console.log(`${files.length} files in ${key}/startup.json`);
