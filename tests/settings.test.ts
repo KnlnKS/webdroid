@@ -79,13 +79,18 @@ describe("settings-provider", () => {
     expect(await thrown(() => scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "font_scale"))).toBe("android/provider/Settings$SettingNotFoundException: font_scale");
     expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, "device_name")).toBe(DEVICE_PROPERTIES["ro.product.model"]);
     expect(await scall(GLOBAL, "getFloat", `(${CR}${S}F)F`, cr, "animator_duration_scale", 0.5)).toBe(0.5);
-    const enabled = locationTransport.enabled;
+    const enabled = locationTransport.enabled, available = locationTransport.available;
     try {
-      locationTransport.enabled = () => false;
+      const service = rt.make("webdroid/LocationManagerService");
+      locationTransport.available = async () => false;
+      expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(0);
+      locationTransport.available = async () => true;
+      expect(await vcall(service, "hasProvider", "(Ljava/lang/String;)Z", "gps")).toBe(1);
+      locationTransport.enabled = async () => false;
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(0);
-      locationTransport.enabled = () => true;
+      locationTransport.enabled = async () => true;
       expect(await scall(SECURE, "getInt", `(${CR}${S})I`, cr, "location_mode")).toBe(3);
-    } finally { locationTransport.enabled = enabled; }
+    } finally { locationTransport.enabled = enabled; locationTransport.available = available; }
   });
 
   test("an app reads its SSAID, the same for every package with its signer", async () => {

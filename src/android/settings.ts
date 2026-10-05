@@ -125,7 +125,7 @@ function* enforceReadable(c: Caller, table: Table, name: string): Gen<void> {
 /** settings whose value another owner keeps: LocationManagerService writes location_mode with the
  *  location switch, and DatabaseHelper names the device after its model until someone renames it */
 const DERIVED: Partial<Record<Table, Record<string, (stored: string | null) => unknown>>> = {
-  secure: { location_mode: () => locationTransport.enabled() ? "3" : "0" },
+  secure: { location_mode: () => after(locationTransport.enabled(), enabled => enabled ? "3" : "0") },
   global: { device_name: (stored) => stored ?? staticField("android/os/Build", "MODEL") },
 };
 const valueOf = (table: Table, name: string): unknown => {

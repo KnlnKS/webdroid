@@ -26,7 +26,7 @@ const refuseChange = () => after(enforce("android.permission.CHANGE_WIFI_STATE")
  *  below Q) */
 function* canAccessScanResults(pkg: string): Gen<boolean> {
   const { uid } = callingIdentity(), check = (name: string) => checkUidPermission("android.permission." + name, uid);
-  return locationTransport.enabled() && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
+  return (yield* awaited(locationTransport.enabled())) && ((yield* awaited(check("ACCESS_FINE_LOCATION"))) === 0 || (packages.get(pkg)?.sdk.target ?? 0) < 29 && (yield* awaited(check("ACCESS_COARSE_LOCATION"))) === 0);
 }
 function* connectionInfo(): Gen<JObj> {
   const info = yield newObj("android/net/wifi/WifiInfo");
