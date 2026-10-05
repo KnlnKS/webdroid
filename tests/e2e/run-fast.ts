@@ -96,8 +96,11 @@ function browserFailures(flow: Flow, errors: string[]): string[] {
 /** One flow's outcome; an exception is that flow's failure, never the lane's. */
 async function runFlow(flow: Flow): Promise<Outcome> {
   const started = performance.now();
-  const checked = await checkFlow(flow).catch((error: unknown): Checked =>
-    ({ flow, runs: error instanceof CaptureAborted ? error.runs : [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [] }));
+  const checked = await checkFlow(flow).catch((error: unknown): Checked => {
+    const runs = error instanceof CaptureAborted ? error.runs : [];
+    const observed = runs.length ? diagnostics(executionFlow(flow, "fast"), runs) : { errors: [], gaps: [] };
+    return { flow, runs, visual: [], errors: [...observed.errors, `flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: observed.gaps };
+  });
   const outcome = { ...checked, ms: performance.now() - started };
   console.log(`  ${flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
     (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +

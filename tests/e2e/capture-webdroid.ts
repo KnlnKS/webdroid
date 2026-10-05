@@ -220,28 +220,28 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
       for (const n of r.nativeRequired) log(`       native code required: ${n}`);
       for (const e of r.newErrors) log(`       ${e.slice(0, 200)}`);
     }
+    // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
+    // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
+    // and would quietly report a better number for the same pixels.
+    const hostFiles = flow.privateStorage ? await drv.page.evaluate(async () => {
+      const scan = async (dir: FileSystemDirectoryHandle, prefix: string): Promise<{ path: string; size: number }[]> => {
+        const files: { path: string; size: number }[] = [];
+        for await (const [name, handle] of dir.entries()) {
+          const path = prefix + name;
+          if (handle.kind === "directory") files.push(...await scan(handle as FileSystemDirectoryHandle, path + "/"));
+          else files.push({ path, size: (await (handle as FileSystemFileHandle).getFile()).size });
+        }
+        return files;
+      };
+      return scan(await navigator.storage.getDirectory(), "");
+    }) : undefined;
+    await persist(hostFiles);
+    const missingFiles = (flow.privateStorage?.expectedFiles ?? []).filter((expected) => !hostFiles?.some(({ path, size }) =>
+      path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
+      .map((expected) => `missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);
+    return { runs, errors: missingFiles };
   } catch (cause) {
     await persist(undefined, { step: executing, error: String(cause) });
     throw new CaptureAborted(cause, runs);
   }
-  // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
-  // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
-  // and would quietly report a better number for the same pixels.
-  const hostFiles = flow.privateStorage ? await drv.page.evaluate(async () => {
-    const scan = async (dir: FileSystemDirectoryHandle, prefix: string): Promise<{ path: string; size: number }[]> => {
-      const files: { path: string; size: number }[] = [];
-      for await (const [name, handle] of dir.entries()) {
-        const path = prefix + name;
-        if (handle.kind === "directory") files.push(...await scan(handle as FileSystemDirectoryHandle, path + "/"));
-        else files.push({ path, size: (await (handle as FileSystemFileHandle).getFile()).size });
-      }
-      return files;
-    };
-    return scan(await navigator.storage.getDirectory(), "");
-  }) : undefined;
-  await persist(hostFiles);
-  const missingFiles = (flow.privateStorage?.expectedFiles ?? []).filter((expected) => !hostFiles?.some(({ path, size }) =>
-    path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
-    .map((expected) => `missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);
-  return { runs, errors: missingFiles };
 }
