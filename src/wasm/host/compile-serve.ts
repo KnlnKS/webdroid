@@ -59,8 +59,8 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const index = req.aot ? await env.fetchBytes(req.aot.base + "index.json") : undefined;
     w = new World(new Program(appDexes, platform), { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, hostWhole: env.hostWhole, compileOnly: true,
       ...index && { aot: { get: (file) => (file === "index.json" ? index : undefined) }, ...req.aot!.app && { app: { index: req.aot!.app, store: { get: () => undefined } } } } });
-    // the classes the host implements are added as the page added them; they and the overlays on dex classes shape what compiles
-    if (req.hostClasses?.length) for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);
+    // Initial app builds precede hostClasses arriving. Apply overlays from the start, as the page does.
+    for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     // an app build numbers from where a World starts, before the page's numbering is followed
     roots = req.build;
