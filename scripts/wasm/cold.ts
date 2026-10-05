@@ -91,13 +91,13 @@ const unsupported = prog.require("W").methods.find((m) => m.name === "convd")!;
 let error = "";
 try { interpreter.create(unsupported.dex.code(unsupported.codeOff)); } catch (e) { error = String(e); }
 if (!error.includes("unsupported opcode 0x71 at DEX PC 3")) throw new Error(`invoke support boundary was hidden: ${error}`);
-const coldBeforeFallback = linked.stats.coldCalls;
-if (linked.entry("W", "fib", "(I)I")(10) !== 55 || linked.stats.coldCalls !== coldBeforeFallback)
-  throw new Error("unsupported body was not compiled before execution");
+const coldBeforeInvoke = linked.stats.coldCalls;
+if (linked.entry("W", "fib", "(I)I")(10) !== 55 || linked.stats.coldCalls <= coldBeforeInvoke)
+  throw new Error("recursive invokes bypassed the cold bridge");
 const loop = linked.entry("W", "xorshift", "(I)J"), want = await js("W", "xorshift", "(I)J", [50_000]);
 if (loop(50_000) !== want || !linked.stats.upgrades) throw new Error("cold back edges did not promote the method");
 const calls = linked.stats.coldCalls;
 if (loop(50_000) !== want || linked.stats.coldCalls !== calls) throw new Error("promoted calls stayed in the interpreter");
 if (!linked.stats.coldMethods || !linked.stats.coldCalls) throw new Error("method table bypassed the cold interpreter");
 console.log(`linked cold: ${linked.stats.coldMethods} interpreted methods, ${linked.stats.coldCalls} calls`);
-console.log(`cold: ${checks} unchanged numeric/control DEX cases match JS/JDK across 1/7/4096-instruction slices and snapshot transfers; injected PC/register state, GC references and typed equality resume; unsupported invokes rejected before execution`);
+console.log(`cold: ${checks} unchanged numeric/control DEX cases match JS/JDK across 1/7/4096-instruction slices and snapshot transfers; injected PC/register state, GC references and typed equality resume; standalone unsupported invokes rejected before execution; linked recursive invokes use canonical slow adapters`);

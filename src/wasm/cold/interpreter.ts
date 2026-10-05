@@ -1,4 +1,6 @@
 import { decodeInstructions, switchCases } from "../../jvm/prepared";
+import { validateColdSnapshot, type ColdSnapshot } from "./state";
+export type { ColdSnapshot } from "./state";
 import type { CodeItem } from "../../jvm/dex";
 import { Code, OP } from "../compiler/code";
 import { ModuleBuilder, T, ref, type VT } from "../compiler/wasmbin";
@@ -40,7 +42,7 @@ for (const [name, input, output, op] of [
 const numericIds = new Map(operations.map((op, i) => [op.name, 32 + i]));
 
 /** Decoding produces data, never a method-specific Wasm body or inferred register webs. */
-export function coldCode(item: CodeItem): { words: Int32Array; pcs: number[] } {
+export function coldCode(item: CodeItem): { words: Int32Array; pcs: number[]; slowPcs: number[] } {
   const instructions = decodeInstructions(item.insns), indices = new Map(instructions.map((ins, i) => [ins.pc, i]));
   const words = new Int32Array(instructions.length * WIDTH), tables: number[] = [];
   for (const [i, ins] of instructions.entries()) {
@@ -81,7 +83,7 @@ export function coldCode(item: CodeItem): { words: Int32Array; pcs: number[] } {
     words.set([op, ins.pc, a, b, c, i + 1, Number(BigInt.asIntN(32, literal)), Number(BigInt.asIntN(32, literal >> 32n))], i * WIDTH);
   }
   const data = new Int32Array(words.length + tables.length); data.set(words); data.set(tables, words.length);
-  return { words: data, pcs: instructions.map((ins) => ins.pc) };
+  return { words: data, pcs: instructions.map((ins) => ins.pc), slowPcs: instructions.filter((_, i) => words[i * WIDTH] === I.Unsupported).map(ins => ins.pc) };
 }
 
 type Handle = object;
@@ -107,23 +109,15 @@ interface Exports {
   result(frame: Handle): bigint;
   reference(frame: Handle): unknown;
 }
-export interface ColdSnapshot {
-  readonly item: CodeItem;
-  pc: number;
-  executedPc: number;
-  edges: number;
-  bits: BigInt64Array;
-  references: unknown[];
-  kinds: Uint8Array;
-}
 
 /** One opcode loop shared by all cold methods. Opaque GC frames can be resumed without JS instruction stepping. */
 export class ColdInterpreter {
   readonly bytes: Uint8Array;
   private readonly api: Exports;
   readonly imports: WebAssembly.Exports;
-  private readonly frames = new WeakMap<Handle, { item: CodeItem; pcs: number[]; done: boolean }>();
-  private readonly programs = new WeakMap<CodeItem, { code: Handle; pcs: number[] }>();
+  private readonly frames = new WeakMap<Handle, { item: CodeItem; pcs: number[]; done: boolean; slow: boolean; busy: boolean; context: Pick<ColdSnapshot, "method" | "owner" | "result" | "exception" | "monitors" | "uninitialized" | "sync" | "depth"> }>();
+  private readonly active = new WeakMap<NonNullable<ColdSnapshot["owner"]>, Handle[]>();
+  private readonly programs = new WeakMap<CodeItem, { code: Handle; pcs: number[]; unsupported?: [number, number] }>();
   constructor(instantiate = (bytes: Uint8Array, imports: Record<string, Record<string, unknown>>) =>
     new WebAssembly.Instance(new WebAssembly.Module(bytes as Uint8Array<ArrayBuffer>), imports as WebAssembly.Imports)) {
     const mb = new ModuleBuilder(), words = mb.addType({ k: "array", elem: { t: T.i32, mut: true } });
@@ -131,7 +125,7 @@ export class ColdInterpreter {
     const refs = mb.addType({ k: "array", elem: { t: T.anyref, mut: true } });
     // Code, numeric/reference registers, cursor, DEX PC, result bits/reference, register kinds (0 bits, 1 reference), back-edge count.
     const frame = mb.addType({ k: "struct", fields: [ref(words), ref(bits), ref(refs), T.i32, T.i32, T.i64, T.anyref, ref(words), T.i32].map((t) => ({ t, mut: true })) });
-    const failure = mb.importFunc("host", "unsupported", mb.addFuncType([T.i32, T.i32], []));
+
     const equal = mb.importFunc("host", "equal", mb.addFuncType([T.externref, T.externref], [T.i32]));
     const functions = new Map<string, { index: number; params: VT[]; results: VT[] }>();
     const fn = (name: string, params: Parameters<ModuleBuilder["addFuncType"]>[0], results: Parameters<ModuleBuilder["addFuncType"]>[0], emit: (c: Code) => void) => {
@@ -195,8 +189,9 @@ export class ColdInterpreter {
       c.loop().lget(1).raw(OP.i32_eqz).if_().i32(0).ret().end();
       c.lget(1).i32(1).raw(OP.i32_sub).lset(1);
       c.lget(0).structGet(frame, 3).i32(WIDTH).raw(OP.i32_mul).lset(at);
-      c.lget(0); word(1); c.structSet(frame, 4);
-      word(0); c.lset(opcode); word(2); c.lset(a); word(3); c.lset(b); word(4); c.lset(d);
+      word(0); c.lset(opcode);
+      c.lget(opcode).i32(I.Unsupported).raw(OP.i32_eq).if_().i32(2).ret().end();
+      c.lget(0); word(1); c.structSet(frame, 4); word(2); c.lset(a); word(3); c.lset(b); word(4); c.lset(d);
       handler(I.Const, () => { word(6); c.raw(OP.i64_extend_i32_u); word(7); c.raw(OP.i64_extend_i32_u).i64(32n).raw(OP.i64_shl, OP.i64_or); store("long"); });
       handler(I.Move, () => { numeric(b, "long"); store("long"); });
       handler(I.MoveObject, () => {
@@ -251,7 +246,7 @@ export class ColdInterpreter {
           numeric(b, "int"); word(4); c.raw(...op.op); store("int");
         });
       });
-      c.lget(0).structGet(frame, 4); word(6); c.call(failure).unreachable().end().unreachable();
+      c.i32(2).ret().end().unreachable();
     });
     for (const [name, f] of functions) {
       if (name === "frame" || name === "code" || name === "word") continue;
@@ -270,21 +265,21 @@ export class ColdInterpreter {
     }).exports;
     this.api = this.imports as unknown as Exports;
   }
-  prepare(item: CodeItem): () => Handle {
+  prepare(item: CodeItem, slow = false, decoded?: ReturnType<typeof coldCode>): () => Handle {
     let program = this.programs.get(item);
     if (!program) {
-      const { words, pcs } = coldCode(item);
-      // Until all opcodes have runtime entries, reject the entire body before executing any instruction.
-      for (let i = 0; i < pcs.length * WIDTH; i += WIDTH) if (words[i] === I.Unsupported)
-        throw new UnsupportedColdBody(words[i + 1], words[i + 6]);
+      const { words, pcs } = decoded ?? coldCode(item);
+      let unsupported: [number, number] | undefined;
+      for (let i = 0; i < pcs.length * WIDTH; i += WIDTH) if (words[i] === I.Unsupported) { unsupported = [words[i + 1], words[i + 6]]; break; }
       const code = this.api.code(words.length);
       for (let i = 0; i < words.length; i++) this.api.word(code, i, words[i]);
-      this.programs.set(item, program = { code, pcs });
+      this.programs.set(item, program = { code, pcs, unsupported });
     }
+    if (!slow && program.unsupported) throw new UnsupportedColdBody(...program.unsupported);
     const ready = program;
     return () => {
       const frame = this.api.frame(ready.code, item.regs);
-      this.frames.set(frame, { item, pcs: ready.pcs, done: false });
+      this.frames.set(frame, { item, pcs: ready.pcs, done: false, slow, busy: false, context: { monitors: [], uninitialized: [], sync: false, depth: 0 } });
       return frame;
     };
   }
@@ -306,19 +301,24 @@ export class ColdInterpreter {
     if (!Number.isInteger(budget) || budget < 1 || budget > 0x7fffffff) throw new Error("invalid cold instruction budget");
     const state = this.frames.get(frame);
     if (!state) throw new Error("foreign cold activation");
-    return state.done || (state.done = this.api.run(frame, budget) === 1);
+    if (state.busy) throw new Error("cold operation already in flight");
+    if (state.done) return true;
+    const status = this.api.run(frame, budget);
+    if (status === 2) throw new UnsupportedColdBody(this.pc(frame), 0);
+    return state.done = status === 1;
   }
   pc(frame: Handle): number { return this.api.pc(frame); }
   enterAt(frame: Handle, item: CodeItem, pc: number): void {
     const state = this.frames.get(frame);
     if (state?.item !== item) throw new Error("cold activation belongs to a different method");
+    if (state.busy) throw new Error("cold operation already in flight");
     const index = state.pcs.indexOf(pc);
     if (index < 0) throw new Error(`not a DEX instruction boundary: ${pc}`);
     this.api.cursor(frame, index); state.done = false;
   }
   snapshot(frame: Handle): ColdSnapshot {
     const state = this.frames.get(frame);
-    if (!state || state.done) throw new Error("no active cold activation to snapshot");
+    if (!state || state.done || state.busy) throw new Error("no committed cold activation to snapshot");
     const pc = state.pcs[this.api.index(frame)];
     if (pc === undefined) throw new Error("cold activation left its code");
     const bits = new BigInt64Array(state.item.regs), references: unknown[] = [], kinds = new Uint8Array(state.item.regs);
@@ -326,19 +326,52 @@ export class ColdInterpreter {
       bits[i] = this.api.readBits(frame, i); kinds[i] = this.api.kind(frame, i);
       references.push(this.api.readObject(frame, i));
     }
-    return { item: state.item, pc, executedPc: this.api.pc(frame), edges: this.api.edges(frame), bits, references, kinds };
+    return { item: state.item, ...state.context, monitors: state.context.monitors.map(m => ({ ...m })), uninitialized: state.context.uninitialized.map(a => ({ ...a })), result: state.context.result && { ...state.context.result }, exception: state.context.exception && { ...state.context.exception }, pc, executedPc: this.api.pc(frame), edges: this.api.edges(frame), bits, references, kinds };
+  }
+  validate(item: CodeItem, snapshot: ColdSnapshot): void { validateColdSnapshot(snapshot, item); }
+
+  commit(frame: Handle, snapshot: ColdSnapshot): void {
+    const state = this.frames.get(frame);
+    if (!state || state.busy) throw new Error("no committed cold activation");
+    this.validate(state.item, snapshot);
+    if (state.context.owner && state.context.owner !== snapshot.owner) throw new Error("cold activation cannot change strands");
+    this.enterAt(frame, state.item, snapshot.pc); this.api.executed(frame, snapshot.executedPc); this.api.setEdges(frame, snapshot.edges);
+    for (let i = 0; i < state.item.regs; i++) {
+      if (snapshot.kinds[i] === 1) this.setObject(frame, i, snapshot.references[i]);
+      else this.setBits(frame, i, snapshot.bits[i]);
+    }
+    state.context = { method: snapshot.method, owner: snapshot.owner, sync: snapshot.sync, depth: snapshot.depth, result: snapshot.result && { ...snapshot.result }, exception: snapshot.exception && { ...snapshot.exception }, monitors: snapshot.monitors.map(m => ({ ...m })), uninitialized: snapshot.uninitialized.map(a => ({ ...a })) };
+    this.context(frame, snapshot.method, snapshot.owner, snapshot.sync, snapshot.depth);
   }
   restore(item: CodeItem, snapshot: ColdSnapshot): Handle {
-    if (snapshot.item !== item) throw new Error("cold snapshot belongs to a different method");
-    if (snapshot.bits.length !== item.regs || snapshot.references.length !== item.regs || snapshot.kinds.length !== item.regs)
-      throw new Error("cold snapshot register count mismatch");
-    const frame = this.create(item); this.enterAt(frame, item, snapshot.pc); this.api.executed(frame, snapshot.executedPc); this.api.setEdges(frame, snapshot.edges);
-    for (let i = 0; i < item.regs; i++) {
-      if (snapshot.kinds[i] === 1) this.setObject(frame, i, snapshot.references[i]);
-      else if (snapshot.kinds[i] === 0) this.setBits(frame, i, snapshot.bits[i]);
-      else throw new Error("invalid cold snapshot register kind");
-    }
-    return frame;
+    this.validate(item, snapshot);
+    const frame = this.prepare(item, !!snapshot.method)(); this.commit(frame, snapshot); return frame;
+  }
+  context(frame: Handle, method: ColdSnapshot["method"], owner: ColdSnapshot["owner"], sync = false, depth = 0): void {
+    const state = this.frames.get(frame);
+    if (!state || state.context.owner && state.context.owner !== owner) throw new Error("foreign cold activation owner");
+    state.context = { ...state.context, method, owner, sync, depth };
+    if (owner) { let frames = this.active.get(owner); if (!frames) this.active.set(owner, frames = []); if (!frames.includes(frame)) frames.push(frame); }
+  }
+  attempt(frame: Handle, pc: number): void { this.api.executed(frame, pc); }
+  transfer(frame: Handle): ColdSnapshot { const state = this.snapshot(frame); this.finish(frame); return state; }
+  owner(frame: Handle): ColdSnapshot["owner"] { return this.frames.get(frame)?.context.owner; }
+  synchronous(frame: Handle): boolean { return this.frames.get(frame)!.context.sync; }
+  hasActive(owner: NonNullable<ColdSnapshot["owner"]>): boolean { return !!this.active.get(owner)?.length; }
+  tracePcs(method: ColdSnapshot["method"], owner: NonNullable<ColdSnapshot["owner"]>): number[] {
+    return (this.active.get(owner) ?? []).filter(f => this.frames.get(f)?.context.method === method).reverse().map(f => this.pc(f));
+  }
+  finish(frame: Handle): void {
+    const state = this.frames.get(frame);
+    if (!state || state.busy) throw new Error("cold activation ended with an operation in flight");
+    state.done = true;
+    const frames = state.context.owner && this.active.get(state.context.owner), index = frames?.indexOf(frame) ?? -1;
+    if (index >= 0) frames!.splice(index, 1);
+  }
+  inFlight(frame: Handle, busy: boolean): void {
+    const state = this.frames.get(frame);
+    if (!state || state.busy === busy) throw new Error("invalid cold operation transition");
+    state.busy = busy;
   }
   result(frame: Handle): bigint { return this.api.result(frame); }
   reference(frame: Handle): unknown { return this.api.reference(frame); }

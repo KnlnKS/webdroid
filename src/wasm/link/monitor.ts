@@ -109,6 +109,13 @@ export class Monitors {
     m.owner = null;
     this.deflate(m);
   }
+  /** Current owned recursion depth, for validating a continuation's held locks. */
+  depth(obj: object, s: Strand): number {
+    const l = this.header.lock(obj);
+    if (l > 0) return owns(this.thin(l) ?? null, s) ? l & 255 : 0;
+    const m = l < 0 ? this.table[l & 0x7fffffff] : undefined;
+    return m && owns(m.owner, s) ? m.depth : 0;
+  }
   holds(obj: object, s: Strand): boolean {
     const l = this.header.lock(obj);
     return l > 0 ? owns(this.thin(l) ?? null, s) : l < 0 && owns(this.table[l & 0x7fffffff]!.owner, s);

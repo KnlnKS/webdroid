@@ -1,5 +1,7 @@
 // The Wasm backend's suites: bun run wasm <suite> [args], or `all`. They need javac, d8 and java (and the Android SDK for jbench and g1) on PATH.
 // Most run under node because Reflection.getCallerClass and stack symbolisation read V8's wasm frames, which Bun's JavaScriptCore lacks.
+//   cold         shared numeric interpreter and snapshot slicing against JS/JDK
+//   cold-slow    canonical slow operations, EH, JSPI and snapshot validation
 //   diff         every static method of the W, S and N fixtures as Wasm, on the JS tier and on the JDK
 //   libdiff      primitive-only static methods of the AOSP libraries, Wasm against the JS tier
 //   classdiff    class initialisation and the class model against the JS tier and the JDK
@@ -33,6 +35,7 @@ import { runUnderNode } from "./undernode";
 
 interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
+  cold: { node: true, all: false }, "cold-slow": { node: true, all: false },
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
   threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },

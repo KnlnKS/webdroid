@@ -4191,3 +4191,29 @@ removed in 24cade3f; `git show 24cade3f^:<path>` reads them.
   - reportGroup root remains 146 parameters/locals. Its loop81/107/359 chunks shrink from 146 declared locals to 83/62/28, with dispatcher-plus-chunk weights 95/74/40 (formerly 158). Its module validates. This is measured generated layout, not browser acceptance or execution timing. Generic raw-table invocation bypassing World.entry restoration preserves a nonzero depth sentinel across five repeats each of the existing nested try/monitor loopState and loopTrace fixtures (15/15 checks including fixture results).
   - Checks: typecheck; core differential 1,105/1,105 plus two wide cases; threads 72/72 (three reported JS-tier divergences); nested entries pass; existing irreducible/EH fuzzer seed 1, 2,400/2,400 with the exception-only cycle identified; strict eight-jar build validates all 290,828 methods with five existing gaps. The tested checkout also contains unfinished compiled-resume work, separately uncommitted: 865 precise-PC cold-to-compiled numeric/reference/raw-FP and transfer checks pass across 45 entries. No production cold integration is claimed.
   - Evidence is isolated in Y1 tests/e2e/actual/y1-recovery/compact-*. Tested source fingerprint e5856d19eeed432b3086abfc7eb93660a6bd4d8028550cf6d21bd0a9fba74b4e includes that separate resume work; the focused patch alone requires a fresh parent AOT build and Komikku acceptance. C modules total 220,663 KB on this source; shared-load build timings are diagnostic only. Idle <=100 ms optimization, G1/G3 tradeoffs and the earlier TikTok OOM attribution remain open.
+### Cold slow runtime and committed snapshot validation (2026-10-05)
+
+The opt-in cold numeric loop now stops before slow operations and uses canonical
+MC/Compiler/World adapters for object, field, array, invoke, throw, explicit
+monitor, class initialization and JSPI behavior. Registers commit after success;
+ordered typed DEX handlers retain the original Throwable and pre-fault destination.
+Snapshots include pending results/exceptions, String constructor aliases, monitors,
+strand ownership and logical depth. The shared World validator rejects a pending
+result unless its invoke/filled-array producer immediately precedes the committed
+cursor; fixtures verify rejection before writes. Compiled resume must reuse that
+validator; active OSR remains separate compiler integration work.
+
+Fresh JSPI bridge entry initially lost the unbound Thread peer during constructor
+execution, producing recursive construction/StackOverflowError. Restoring a null
+entry peer also discarded a newly bound peer and lost currentThread identity.
+Passing the partial peer and preserving newly bound ownership fixes both. Cold
+traces now carry real methods and fault PCs, frozen when Throwable stacks capture.
+
+Focused recovery-source checks: slow fixture 140, numeric 1290, classdiff 33,
+customdiff 375, differential 1105, selected threads 11; typecheck. Exact commands,
+source epoch, output files and remaining boundaries are recorded in
+`research/wasm/cold-slowops-review.md`. Pins/baselines are unchanged. Cold stays
+opt-in: implicit synchronized bodies and unsupported method-handle/type constants
+fall back before effects. Per-PC helper modules, typing and register copying are
+counted, not accepted as a performance improvement. No broad G2/browser rerun or
+later parent G4/S5 source acceptance is claimed.

@@ -8,7 +8,9 @@
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { ColdInterpreter } from "../cold/interpreter";
-import { coldUnit } from "../cold/runtime";
+import { ColdSlowOps } from "../cold/slowops";
+import type { ColdSnapshot } from "../cold/state";
+import { coldUnit, supportsColdBody } from "../cold/runtime";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
 import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
@@ -100,7 +102,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -117,7 +119,7 @@ export class World {
   traces = new Map<string, FnTrace>();
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
   private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) } as Map<string, FnTrace>;
-  private stacks = new WeakMap<object, Error>();
+  private stacks = new WeakMap<object, Error | JavaFrame[]>();
   private frames: JavaFrame[] = [];
   assumptions = new Map<string, Assumption>();
   /** the slots whose code fails a site because a class is not loaded, by class name: loading it undoes them */
@@ -201,7 +203,10 @@ export class World {
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id])),
-      capture: (exn: object) => { this.stacks.set(exn, new Error()); },
+      capture: (exn: object) => {
+        const stack = new Error();
+        this.stacks.set(exn, this.cold?.hasActive(this.sched.current()) ? javaFrames(stack.stack ?? "", this.frameTraces) : stack);
+      },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : javaName(this.frames[i].cls)),
       stLine: (i: number) => this.frames[i].line,
@@ -669,8 +674,13 @@ export class World {
     this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, t0);
   }
   private cold?: ColdInterpreter;
+  private coldValidation?: ColdSlowOps;
+  /** Shared by slow execution and compiled resume, before transferring an activation. */
+  validateColdSnapshot(state: ColdSnapshot, owner: Strand): void {
+    (this.coldValidation ??= new ColdSlowOps(this)).validate(state, owner);
+  }
   private installCold(slot: number, m: MethodInfo, t0: number): boolean {
-    if (!m.codeOff || this.intrinsic(m) || m.flags & (ACC.SYNCHRONIZED | ACC.DECLARED_SYNCHRONIZED)) return false;
+    if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
     const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
     const unit = coldUnit(this, m, cold);
     if (!unit) return false;
@@ -826,7 +836,7 @@ export class World {
       const f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m;
       this.throwMakers.set(cls, make = (m) => f(m === null ? null : this.javaString(m)));
     }
-    return make(msg);
+    return this.synchronous(() => make!(msg));
   }
   /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
@@ -1064,8 +1074,8 @@ export class World {
     return async (...args) => {
       const s = this.sched.strand();
       try {
-        if (m.isStatic && this.needsInit(m.cls)) await s.call(this.table.get(this.ensureSlot(m.cls)) as Function);
-        const r = await s.call(this.table.get(slot) as Function, ...args.map((a) => typeof a === "string" ? this.javaString(a) : a));
+        if (m.isStatic && this.needsInit(m.cls)) await this.freshStack(() => s.call(this.table.get(this.ensureSlot(m.cls)) as Function));
+        const r = await this.freshStack(() => s.call(this.table.get(slot) as Function, ...args.map((a) => typeof a === "string" ? this.javaString(a) : a)));
         return typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
       } catch (e) { throw this.boundary(e); } finally { s.end(); }
     };
@@ -1106,12 +1116,22 @@ export class World {
     return javaFrames(new Error().stack ?? "", this.frameTraces, count, false);
   }
   stackTrace(state: object): JavaFrame[] {
-    const err = this.stacks.get(state);
-    if (!err) return [];
-    const frames = javaFrames(err.stack ?? "", this.frameTraces);
+    const captured = this.stacks.get(state);
+    if (!captured) return [];
+    const frames = Array.isArray(captured) ? captured : javaFrames(captured.stack ?? "", this.frameTraces);
     let skip = 0;
     while (skip < frames.length && /^(fillInStackTrace|nativeFillInStackTrace)$|^<init>$/.test(frames[skip].method) && (frames[skip].method !== "<init>" || this.prog.isSubclass(frames[skip].cls.replace(/\./g, "/"), "java/lang/Throwable"))) skip++;
     return frames.slice(skip);
+  }
+  private synchronousEntries = 0;
+  inSynchronousJava(): boolean { return this.synchronousEntries > 0; }
+  synchronous<T>(run: () => T): T {
+    this.synchronousEntries++;
+    try { return run(); } finally { this.synchronousEntries--; }
+  }
+  private freshStack<T>(run: () => T): T {
+    const prior = this.synchronousEntries; this.synchronousEntries = 0;
+    try { return run(); } finally { this.synchronousEntries = prior; }
   }
   private hostFns = new Map<string, Function>();
   /** runs the Cleaner of a native allocation once its referent has been collected (sun.misc.Cleaner.create), as ART's reference queue daemon does */
@@ -1120,10 +1140,11 @@ export class World {
     if (clean) try { this.hostFn("cleaner:clean", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, clean); })(cleaner); } catch { /* the Cleaner reports a failing thunk itself */ }
   });
   /** a function over Java values, generated once under `name` and callable from the host: an int is a number, a long a bigint, a reference an opaque value */
-  hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void): (...a: any[]) => any {
+  hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (...a: any[]) => any {
     let f = this.hostFns.get(name);
     if (!f) {
-      const cx = new Compiler(this), { bytes } = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
+      const cx = new Compiler(this); prepare?.(cx);
+      const { bytes } = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
       this.hostFns.set(name, f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m);
     }
     return f as never;
@@ -1132,10 +1153,11 @@ export class World {
   /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
    *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
    *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
-  callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void): (s: Strand, ...a: any[]) => unknown {
+  callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void): (s: Strand, ...a: any[]) => unknown {
     let f = this.callFns.get(name);
     if (f) return f;
     const cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
+    prepare?.(cx);
     const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "externref", mutable: true }, null);
     const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
     const { bytes } = cx.buildSynthetic(name, ["I", ...params], (c) => {
@@ -1153,7 +1175,7 @@ export class World {
     let token = 0;
     this.callFns.set(name, f = (s, ...args) => {
       token = token % 0x3fffffff + 1;
-      const mine = token, p = s.call(fn, mine, ...args) as Promise<unknown>;
+      const mine = token, p = this.freshStack(() => s.call(fn, mine, ...args)) as Promise<unknown>;
       const state = d.value as number;
       if (state !== mine && state !== -mine) return p;
       p.catch(() => {});

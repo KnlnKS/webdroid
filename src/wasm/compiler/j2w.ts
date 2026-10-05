@@ -596,4 +596,4 @@ export class Compiler implements Base {
 }
 
 /** the side table that maps a Wasm frame offset of one function back to a DEX pc: offsets ascend, pcs[i] belongs to offsets[i] */
-export interface FnTrace { name: string; m?: MethodInfo; offsets: Int32Array; pcs: Int32Array }
+export interface FnTrace { name: string; m?: MethodInfo; currentPcs?: () => readonly number[]; offsets: Int32Array; pcs: Int32Array }
