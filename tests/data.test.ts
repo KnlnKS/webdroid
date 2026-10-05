@@ -23,6 +23,7 @@ import { WebCookies } from "../src/shell/webcookies";
 import { NativeWindow } from "../src/android/cursorwindow";
 import { handle, release } from "../src/android/handles";
 import { callProxy, serveCalls } from "../src/shell/process-port";
+import { filePathTransport } from "../src/shell/file-path";
 import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
@@ -157,7 +158,8 @@ test("Worker activity commands retain local results across reentrant replies and
   const owner = await packageRecord("org.webdroid.test.activitycommands");
   await bootApp(owner);
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
-    previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport};
+    previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
+    previousPrepare = vfs.prepare, previousPrefs = preferenceStore;
   type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -205,6 +207,8 @@ test("Worker activity commands retain local results across reentrant replies and
     for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
     Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
     Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;Object.assign(clipboardTransport,previousClip);
+    filePathTransport.calls = previousPaths; vfs.prepare = previousPrepare;
+    usePermissionStore(new PermissionStore()); useAccountStore(new AccountStore()); usePreferenceStore(previousPrefs);
   }
 });
 
