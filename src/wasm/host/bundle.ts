@@ -1,9 +1,13 @@
-// The app builds a platform build ships (scripts/wasm/aot-profile.ts makes them beside its modules, as a cloud profile and its compiled code are shipped for an Android app): a first launch
-// of an app a profile run has seen finds its compiled code as a later launch would. A bundle is the files persist.ts keeps for the app, as app.<key>.<file> with the list in app.<key>.json.
+let catalog: { base: string; keys: Promise<string[]> } | undefined;
 
 /** the files of the app build `key` that the platform build at `base` ships, if it ships one */
 export async function fetchBundle(base: string, key: string): Promise<Map<string, Uint8Array> | undefined> {
   try {
+    if (catalog?.base !== base) catalog = { base, keys: fetch(`${base}apps.json`).then(async (res) => {
+      if (!res.ok) throw new Error(`apps.json: ${res.status}`);
+      return await res.json() as string[];
+    }) };
+    if (!(await catalog.keys).includes(key)) return undefined;
     const list = await fetch(`${base}app.${key}.json`);
     if (list.status === 204 || !list.ok) return undefined;
     const names = await list.json() as string[];

@@ -86,4 +86,6 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
     writeFileSync(join(dir, `app.${entry}.json`), JSON.stringify(names));
     console.log(`app build ${entry}: ${names.length} files`);
   }
+  const entries = readdirSync(dir).flatMap((file) => /^app\.([a-f0-9]+)\.json$/.exec(file)?.[1] ?? []);
+  writeFileSync(join(dir, "apps.json"), JSON.stringify(entries.sort()));
 }
