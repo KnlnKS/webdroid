@@ -18,6 +18,7 @@ import { specClass, type HostBridge, type HostContext, type HostFn, type NativeB
 import type { World } from "../link/world";
 import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
 import { emitSave, ROOT } from "../link/sched";
+import { crossings } from "./stats";
 
 /** the primitive array classes natives take and return */
 const PRIM_ARRAYS = ["Z", "B", "C", "S", "I", "J", "F", "D"].map((k) => "[" + k);
@@ -308,7 +309,7 @@ interface Aux {
   park?(promise: Promise<unknown>): void;
 }
 type Maker = (f: HostFn, raise: (e: unknown) => never, suspended: () => never, view: (k: string, p: number, l: number) => unknown, put: (r: View | null) => number,
-  B: HostBridge, D: string[], RD: string | null, CLS: string | null, X: Aux, S: (e: unknown) => void) => HostFn;
+  B: HostBridge, D: string[], RD: string | null, CLS: string | null, X: Aux, S: (e: unknown) => void, K: typeof crossings) => HostFn;
 const makers = new Map<string, Maker>();
 /** one function per shape: a native runs under try/catch so a Java throwable it raises becomes a Wasm exception, and a native that
  *  suspends (answers a Promise) is reported, not mistaken for a value; array parameters become views, an array result is stored, and
@@ -340,10 +341,10 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
     const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp)}X.give(own);` : parked ? park : "if(r instanceof Promise)return suspended();";
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
 try{${wait}${toJava}}catch(e){return raise(e)}finally{${scope[1]}}
 ${result}}`) as Maker;
     makers.set(key, make);
   }
-  return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes, X, reportSuspendError);
+  return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes, X, reportSuspendError, crossings);
 }

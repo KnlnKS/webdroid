@@ -197,6 +197,8 @@ export class Sched {
   running: Strand | null = null;
   /** blocking attempts on a stack that cannot suspend */
   blockedPlain = 0;
+  /** calls of Suspending imports: each switches stacks */
+  suspensions = 0;
   /** told whenever the thread whose code runs changes, for the host's notion of the current thread */
   onThread: ((t: ThreadRec) => void) | null = null;
   /** whether the code running now is on a stack of its own, which can wait for a Promise (the host's top level is not) */
@@ -233,6 +235,7 @@ export class Sched {
    *  so the globals go back to the host's top level then, and the strand sets its own when it resumes (emitBlock) */
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
     return suspending((...a: A) => {
+      this.suspensions++;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); } finally { this.idle(); }
