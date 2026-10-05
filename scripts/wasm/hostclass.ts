@@ -9,6 +9,8 @@ import { jsEntry, scall, useEntry } from "../../src/jvm/natives/jentry";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { fieldNamesOf, hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { Program } from "../../src/wasm/compiler/program";
+import { Compiler } from "../../src/wasm/compiler/j2w";
+import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { jsTier, natives } from "./oracle";
 import { AOSP } from "./paths";
@@ -34,6 +36,16 @@ const fail = (what: string) => { failed++; console.log("FAIL " + what); };
 js.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  js    ${want}\n  wasm  ${wasm[i]}`); });
 if (wasm.length !== js.length) fail(`${wasm.length} answers for ${js.length}`);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
+
+{
+  const worker = world([dex, ...jars], { natives, compileOnly: true }), instances = worker.stats.instances;
+  for (const spec of natives.source!.hostSpecs!()) worker.addHostClass(spec);
+  worker.link("java/net/HttpURLConnection");
+  worker.repairLinked();
+  const method = worker.prog.get("Hc")!.byKey.get("http()Ljava/lang/String;")!;
+  compileModule(new Compiler(worker).buildUnit([method]).bytes);
+  if (worker.stats.instances !== instances) fail("a compile-only World instantiated host vtable repairs");
+}
 
 // Worlds over one platform Program, as the process frames of a tab are: the host classes are each World's own, the platform's classes are not changed, and every World behaves alike
 {

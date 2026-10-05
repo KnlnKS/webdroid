@@ -546,6 +546,7 @@ export class World {
   }
   /** the vtable of a class module the platform build holds was made before this World's host classes: the entries of the methods they implement (abstract in the build) are put right */
   private repairVtable(name: string): void {
+    if (this.opts.compileOnly || this.aot?.building) return;
     const repairs = this.hosts.vtableRepairs(name);
     if (!repairs.length) return;
     const set = this.hostFn("vt:set:" + name, ["I", "I"], "V", (cx, c) => { c.gget(cx.vtGlobal(name)).refAsNonNull().lget(0).lget(1).arraySet(cx.tVT); });
