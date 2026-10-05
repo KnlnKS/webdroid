@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
+import { UnitCompiler } from "../../src/wasm/link/unit";
 import { Natives } from "../../src/wasm/host/natives";
 import { loadDexes, world } from "./lib";
 import { AOSP } from "./paths";
@@ -15,7 +16,7 @@ writeFileSync(join(out, "Osr.java"), `public class Osr {
   static native I late(I before); static native int await(int value, boolean fail); static native void invalidate();
   public static int effects(){return effects;}
   public static Object lock(){return lock;}
-  public static int run(int n){effects++; I r=new Base(); int x=0; for(int i=0;i<n;i++)x+=i; return late(r).f()+x;}
+  public static int run(int n){effects++; I r=new Base(); if(n<0)return 0; int x=0; for(int i=0;i<n;i++)x+=i; return late(r).f()+x;}
   public static int nested(int n){effects++; synchronized(lock){int x=0; for(int i=0;i<n;i++)for(int j=0;j<3;j++){x++; if(i==n/2 && j==0)invalidate();} return x;}}
   public static int state(int n,boolean fail){synchronized(lock){effects++; int x=0; for(int i=0;i<n;i++)x+=i; try{return await(x,fail)+7;}catch(IllegalArgumentException e){return x+9;}}}
 }`);
@@ -77,4 +78,40 @@ depth.value=0;
 check("all handoffs reject duplicate entry",duplicateRejects,w.stats.coldDeopts);
 check("nested handoff releases monitor",w.sched.monitors.tryEnter(lock,w.sched.root),0);
 w.sched.monitors.exit(lock,w.sched.root);
+// A real compile-worker job installs an ordinary Java-ABI hot root, not a resume entry.
+{
+  const files=[join(out,"classes.dex"),...PLATFORM_JARS.slice(0,2).map(j=>join(AOSP,j))];
+  const page=world(files,{cold:true,holdUpgrades:()=>true,natives:new Natives({
+    find:(cls,key)=>cls!=="Osr"?undefined:key==="invalidate()V"?()=>page.invalidate(page.slotOf(page.prog.resolve("Osr","nested","(I)I")!)):key==="late(LOsr$I;)LOsr$I;"?Object.assign(async()=>{
+      const before=page.stats.invalidated;
+      page.addDexes(loadDexes(join(out,"late/classes.dex")));
+      check("ordinary hot interface slot invalidated",page.stats.invalidated>before,true);
+      return await page.entryAsync("Late","make","()LOsr$I;")();
+    },{javaValues:true}):undefined,
+    thrown:e=>{const t=page.throwable(e);return t?{cls:page.classNameOf(t),msg:null,obj:t}:undefined;},
+  })});
+  check("cold worker seed",page.entry("Osr","nested","(I)I")(0),0);
+  check("cold interface seed",page.entry("Osr","run","(I)I")(-1),0);
+  const worker=world(files,{compileOnly:true}), uc=new UnitCompiler(worker);
+  check("worker follows executing World",uc.sync(page.since(page.base),true),true);
+  const m=page.prog.resolve("Osr","nested","(I)I")!,slot=page.slotOf(m),job=page.upgradeJob(slot)!;
+  check("worker job carries activation contract",job.cold,true);
+  const from=worker.numbering(), unit=uc.upgrade(job);
+  if(typeof unit==="string")throw new Error(unit);
+  check("worker hot root installed",page.adoptUnit(slot,job,unit,page.epoch),true);
+  const depth=page.rtImports().depth; depth.value=123;
+  check("ordinary hot root deopts through nested chunks",(page.table.get(slot) as (n:number)=>number)(20_000),60_000);
+  check("ordinary hot root preserves caller depth",depth.value,123);depth.value=0;
+  check("ordinary hot root transfers exactly once",page.stats.coldDeopts,1);
+  check("ordinary hot prefix never replay",page.entry("Osr","effects","()I")(),3);
+  check("worker follows after adoption",uc.sync(page.since(from),false),true);
+  const run=page.prog.resolve("Osr","run","(I)I")!,runSlot=page.slotOf(run),runJob=page.upgradeJob(runSlot)!;
+  check("worker follows job numbering",uc.sync(page.since(worker.numbering()),true),true);
+  const runUnit=uc.upgrade(runJob);
+  if(typeof runUnit==="string")throw new Error(runUnit);
+  check("worker interface root installed",page.adoptUnit(runSlot,runJob,runUnit,page.epoch),true);
+  check("ordinary hot native-loaded interface override",await page.entryAsync("Osr","run","(I)I")(100),4952);
+  check("ordinary hot interface deopts once",page.stats.coldDeopts,2);
+  check("ordinary hot native prefix never replay",page.entry("Osr","effects","()I")(),4);
+}
 console.log(`cold OSR: ${checks} checks; ${w.stats.coldDeopts} deoptimizations; ${w.stats.coldResumes} active transfers / ${w.stats.coldResumeEntries} compiled entries; live interface loading, effects, monitors, native suspension and Java EH`);

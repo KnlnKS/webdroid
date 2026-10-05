@@ -78,6 +78,7 @@ export class Compiler implements Base {
   private sigType = new Map<string, number>();
   private globalImports = new Map<string, number>();
   private helpers = new Map<string, number>();
+  readonly deopt?: { make: number; version: number; last: number; blocked: number; allocation: number; monitor: number; snapshot: number; bits: number; reference: number; target: number; epoch: number };
   constructor(public w: World) {
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
@@ -94,6 +95,10 @@ export class Compiler implements Base {
       info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), galloc: f("galloc", [T.externref, T.i32], [T.i64]), hot: f("hot", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
       proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), watch: f("watch", [T.externref, T.externref], []), claim: f("claim", [T.externref, T.i64], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
+    if (w.opts.cold) {
+      const imp = (name: string, params: VT[], results: VT[]) => mb.importFunc("deopt", name, mb.addFuncType(params, results));
+      this.deopt = { make: imp("make", [T.i32, T.i32], [T.externref]), version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), snapshot: imp("snapshot", [T.externref, T.i32, T.i32, T.i32], [T.externref]), bits: imp("bits", [T.externref, T.i32, T.i64], []), reference: imp("reference", [T.externref, T.i32, T.externref], []), target: imp("target", [T.externref], [T.funcref]), epoch: this.global("rt", "deoptEpoch", T.i32, true) };
+    }
     this.str.importBuiltins();
     // the imports that cannot run Java code
     const { mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block } = this.imp, runsJava = new Set([mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block]);

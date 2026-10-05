@@ -39,6 +39,7 @@ import { AotRuntime, sameMarks, type AotBuild, type AotStore, type AppIndex, typ
 import type { UnitResult, UpgradeJob } from "./unit";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
+type CompiledActivation = Pick<ColdSnapshot, "item" | "method" | "owner" | "sync" | "depth" | "executedPc" | "edges">;
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -717,24 +718,31 @@ export class World {
     return { fn: entry.fn, state: loaded };
   }
   private deoptFrames = new WeakMap<object, { version: number; blocked: number; claimed: boolean; monitors: ColdSnapshot["monitors"] }>();
-  private deoptCaptures = new WeakMap<object, { source: ResumeState; entered: boolean }>();
+  private deoptCaptures = new WeakMap<object, { source: CompiledActivation; entered: boolean }>();
   private coldDeoptEntries = new Map<MethodInfo, Function>();
-  private deoptFrame(state: ResumeState) {
+  private deoptFrame(state: CompiledActivation) {
     const frame = this.deoptFrames.get(state);
     if (!frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
     return frame;
   }
-  private deoptImports = {
-    version: (s: ResumeState) => this.deoptFrame(s).version,
-    last: (s: ResumeState) => s.executedPc,
-    blocked: (s: ResumeState) => this.deoptFrame(s).blocked,
-    allocation: (s: ResumeState, delta: number) => { this.deoptFrame(s).blocked += delta; },
-    monitor: (s: ResumeState, object: object, enter: number) => {
+  readonly deoptImports = {
+    make: (slot: number, depth: number): CompiledActivation => {
+      const sl = this.slotAt(slot);
+      if (sl?.k !== "method") throw new Error("compiled activation method missing");
+      const state: CompiledActivation = { item: sl.m.dex.code(sl.m.codeOff), method: sl.m, owner: this.sched.current(), sync: this.inSynchronousJava(), depth, executedPc: 0, edges: 0 };
+      this.deoptFrames.set(state, { version: Number(this.deoptEpoch.value), blocked: 0, claimed: false, monitors: [] });
+      return state;
+    },
+    version: (s: CompiledActivation) => this.deoptFrame(s).version,
+    last: (s: CompiledActivation) => s.executedPc,
+    blocked: (s: CompiledActivation) => this.deoptFrame(s).blocked,
+    allocation: (s: CompiledActivation, delta: number) => { this.deoptFrame(s).blocked += delta; },
+    monitor: (s: CompiledActivation, object: object, enter: number) => {
       const monitors = this.deoptFrame(s).monitors, index = monitors.findIndex(m => m.object === object);
       if (enter) { if (index < 0) monitors.push({ object, count: 1 }); else monitors[index].count++; }
       else { if (index < 0) throw new Error("compiled monitor ownership mismatch"); if (!--monitors[index].count) monitors.splice(index, 1); }
     },
-    snapshot: (s: ResumeState, pc: number, executedPc: number, depth: number): ColdSnapshot => {
+    snapshot: (s: CompiledActivation, pc: number, executedPc: number, depth: number): ColdSnapshot => {
       const frame = this.deoptFrame(s);
       if (frame.blocked) throw new Error("unsafe compiled String aliases");
       const state: ColdSnapshot = { ...s, pc, executedPc, depth, bits: new BigInt64Array(s.item.regs), references: Array(s.item.regs).fill(null), kinds: new Uint8Array(s.item.regs), result: undefined, exception: undefined, uninitialized: [], monitors: frame.monitors.map(m => ({ ...m })) };
@@ -750,7 +758,7 @@ export class World {
       this.validateColdSnapshot(s, this.sched.current());
       let fn = this.coldDeoptEntries.get(s.method);
       if (!fn) {
-        const unit = coldUnit(this, s.method, this.cold!, true);
+        const unit = coldUnit(this, s.method, this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports)), true);
         fn = this.instantiate(unit.built.bytes, { ...this.unitImports(unit.cx), ...unit.imports }).exports.resume as Function;
         this.recordUnit(unit.cx, unit.built.traces, this.slotOf(s.method));
         this.coldDeoptEntries.set(s.method, fn); this.stats.units++;
@@ -767,6 +775,7 @@ export class World {
     const frame = cold.restore(state.item, state); this.rt.depth.value = state.depth; this.stats.coldDeopts++; this.stats.coldCalls++;
     return frame;
   }
+  canDeopt(m: MethodInfo): boolean { return !(m.flags & ACC.SYNCHRONIZED) && supportsColdBody(m); }
   private installCold(slot: number, m: MethodInfo, t0: number): boolean {
     if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
     const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
@@ -801,7 +810,7 @@ export class World {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return undefined;
     const { installed, copies } = this.group(s.m);
-    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), initialized: this.newlyInitialized() };
+    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized() };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
@@ -829,7 +838,7 @@ export class World {
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const s = this.slotAt(slot), head = result.header, t0 = performance.now();
     this.release(slot);
-    if (epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
+    if (!!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
     const n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
     for (const id of head.touch) this.link(this.names[id]);
@@ -839,7 +848,7 @@ export class World {
     const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]) };
-    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives) };
+    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), deopt: this.deoptImports };
     this.classImports(mod, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
@@ -1047,7 +1056,6 @@ export class World {
     if (yes === undefined) this.claimers.set(f.owner, yes = !!this.prog.get(f.owner)?.byKey.get("finalize()V")?.codeOff);
     return yes;
   }
-  /** keeps a Java object in the table compiled code reads by index (the byte[]s of VMRuntime.addressOf, the Method objects of a proxy class) */
   /** keeps a Java object in the table compiled code reads by index (the Method objects of a proxy class) */
   pin(object: object): number {
     let i = this.pinned.get(object);

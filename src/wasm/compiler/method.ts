@@ -77,9 +77,8 @@ export class MC {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
     if (resume) this.root.localOffset = 1;
-    if (resume && cx.w.opts.cold) {
-      const imp = (name: string, params: VT[], results: VT[]) => cx.mb.importFunc("deopt", name, cx.mb.addFuncType(params, results));
-      this.deopt = { version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), snapshot: imp("snapshot", [T.externref, T.i32, T.i32, T.i32], [T.externref]), bits: imp("bits", [T.externref, T.i32, T.i64], []), reference: imp("reference", [T.externref, T.i32, T.externref], []), target: imp("target", [T.externref], [T.funcref]), epoch: cx.global("rt", "deoptEpoch", T.i32, true), sig: cx.mb.addFuncType([T.externref], m.ret === "V" ? [] : [cx.vtOf(kindOf(m.ret))]) };
+    if (cx.deopt && (resume || cx.w.canDeopt(m))) {
+      this.deopt = { ...cx.deopt, sig: cx.mb.addFuncType([T.externref], m.ret === "V" ? [] : [cx.vtOf(kindOf(m.ret))]) };
     }
     this.tries = this.item.tries.length > 0;
   }
@@ -213,10 +212,12 @@ export class MC {
       if (m.ret !== "V") this.resultLocal = c.newLocal(cx.vtOf(kindOf(m.ret)));
       if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     }
-    if (this.resume || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (this.resume || this.deopt || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (this.deopt) {
       this.activationLocal = c.newLocal(T.externref); this.versionLocal = c.newLocal(T.i32); this.executedLocal = c.newLocal(T.i32); this.deoptState = c.newLocal(T.externref); this.deoptTarget = c.newLocal(T.funcref);
-      c.raw(0x20, 0).ltee(this.activationLocal).call(this.deopt.version).lset(this.versionLocal);
+      if (this.resume) c.raw(0x20, 0);
+      else c.i32(cx.w.slotOf(m)).lget(this.entryDepth).call(cx.deopt!.make);
+      c.ltee(this.activationLocal).call(this.deopt.version).lset(this.versionLocal);
       c.lget(this.activationLocal).call(this.deopt.last).lset(this.executedLocal);
     }
     if (cx.counting) cx.emitCount(c, m);

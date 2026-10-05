@@ -12,6 +12,7 @@ import type { World } from "./world";
 export interface UpgradeJob {
   /** the number its unit's function names carry */
   unit: number;
+  cold?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
   installed: string[]; copies: string[];
   /** per virtual call (declaring class, name, descriptor), the implementations worth a guarded direct call (method ids) */
@@ -46,6 +47,7 @@ export class UnitCompiler {
     job.initialized.forEach((c) => w.preInitialized.add(c));
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.stats.units = job.unit;
+    w.opts.cold = !!job.cold;
     const cx = new Compiler(w);
     w.beginTouch();
     const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), true);

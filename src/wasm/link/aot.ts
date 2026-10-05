@@ -350,7 +350,7 @@ export class AotRuntime {
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
     for (const s of head.synth) if (this.synthIn.get(s) !== k) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives) };
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), deopt: w.deoptImports };
     w.classImports(mod, imports);
     w.instantiate(mod, imports);
     for (const n of head.names) { const slot = w.synthSlotOf(n); if (slot !== undefined && !w.isStubbed(slot)) w.holdsSynth(n, slot); }
@@ -416,7 +416,7 @@ export class AotRuntime {
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives) };
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), deopt: w.deoptImports };
     for (const m of head.mods) imports[m] = this.dExports[+m.slice(1)];
     if (app) w.classImports(mod, imports);
     w.instantiate(mod, imports);
