@@ -9,6 +9,7 @@ import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { H } from "../compiler/consts";
 import { emitString, idOfClass, classMethod, typeName } from "./classes";
+import { UInfo } from "./unsafe";
 import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
@@ -18,7 +19,7 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt }
+export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt, MethodInit }
 /** a member's (class id, index) packed into the cookie */
 export const BOX: Record<string, [string, string, string]> = {
   Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
@@ -69,6 +70,7 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
     case RInfo.MethodRet: return sigOf(w, m).ret;
     case RInfo.MethodFlags: return m.flags;
     case RInfo.MethodInvoke: return w.synthSlot(`invoke:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, true, false) });
+    case RInfo.MethodInit: return w.synthSlot(`init:${a}:${b}`, { params: ["L"], ret: "V", body: (cx, c) => { c.lget(0); cx.callMethod(c, m); } });
     case RInfo.MethodCall: case RInfo.MethodCallDirect: {
       const direct = kind === RInfo.MethodCallDirect;
       return w.synthSlot(`call:${direct}:${a}:${b}`, { params: ["L", "L"], ret: "L", body: (cx, c) => invokeBody(cx, c, m, false, direct) });
@@ -77,21 +79,51 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
   return 0;
 }
 
+/** the primitives a wrapper's value widens to (JLS 5.1.2), which Method.invoke accepts for a parameter of that type */
+const WIDENS: Record<string, string> = { Z: "Z", B: "BSIJFD", S: "SIJFD", C: "CIJFD", I: "IJFD", J: "JFD", F: "FD", D: "D" };
+/** pushes the argument in local `arg` for a parameter of descriptor `p`: a primitive from its wrapper, widened as the parameter needs; a reference as it is. What the parameter cannot take is
+ *  an IllegalArgumentException (argument type mismatch), as it is in ART, not a failed cast inside the callee. */
+function emitArgument(cx: Compiler, c: Code, p: string, arg: number): void {
+  if (!BOX[p]) {
+    const name = descToName(p);
+    if (name !== "java/lang/Object") { c.lget(arg).refIsNull().raw(OP.i32_eqz).if_().lget(arg).call(cx.instanceOfFn(name)).raw(OP.i32_eqz).if_(); cx.callThrower(c, "argt"); c.end().end(); }
+    c.lget(arg);
+    return;
+  }
+  const sources = [...Object.keys(BOX)].filter((w) => WIDENS[w].includes(p)), vt = cx.vtOf(kindOf(p));
+  for (const w of sources) {
+    const [cls, name, d] = BOX[w];
+    c.lget(arg).call(cx.instanceOfFn(cls)).if_(vt);
+    c.lget(arg); classMethod(cx, c, cls, name, d);
+    if (w === "F" && p === "D") c.raw(OP.f32_reinterpret_i32, OP.f64_promote_f32, OP.i64_reinterpret_f64);
+    else if (w !== p && p === "J") c.raw(OP.i64_extend_i32_s);
+    else if (w !== p && (p === "F" || p === "D")) {
+      const wide = w === "J", single = p === "F";
+      c.raw(single ? (wide ? OP.f32_convert_i64_s : OP.f32_convert_i32_s) : (wide ? OP.f64_convert_i64_s : OP.f64_convert_i32_s), single ? OP.i32_reinterpret_f32 : OP.i64_reinterpret_f64);
+    }
+    c.else_();
+  }
+  cx.callThrower(c, "argt"); c.unreachable();
+  for (const _ of sources) c.end();
+}
+
 /** the thunk body: params (receiver, Object[]) -> Object. Method.invoke wraps what the method throws in InvocationTargetException (`wrap`); a method handle
  *  lets it through, and calls the method itself rather than the receiver's override when it invokes a super or direct method. */
 function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct: boolean): void {
   const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref), recv = c.newLocal(T.anyref);
   if (m.params.length) c.lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(args);
+  // the arguments are checked before the call, outside what InvocationTargetException wraps
+  const values = m.params.map((p, i) => {
+    const arg = c.newLocal(T.anyref), v = c.newLocal(cx.vtOf(kindOf(p)));
+    c.lget(args).refAsNonNull().i32(i).arrayGet(cx.tData.ref).lset(arg);
+    emitArgument(cx, c, p, arg);
+    return c.lset(v), v;
+  });
   if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
   if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
   else if (!m.isStatic) { c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); c.lget(0).lset(recv); c.lget(recv); }
   else cx.emitEnsure(c, m.cls);
-  let i = 0;
-  for (const p of m.params) {
-    c.lget(args).refAsNonNull().i32(i++).arrayGet(cx.tData.ref);
-    const box = BOX[p];
-    if (box) { c.refAsNonNull(); classMethod(cx, c, ...box); }
-  }
+  for (const v of values) c.lget(v);
   const prog = cx.prog, decl = prog.get(m.cls)!;
   if (m.isStatic || ctor || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
   else {
@@ -220,5 +252,17 @@ const invoke = (cx: Compiler, c: Code, recv: () => void, args: number) => {
   const [cid, idx] = cookie(cx, c);
   recv(); c.lget(args); info(cx, c, RInfo.MethodInvoke, cid, () => c.lget(idx)); c.callIndirect(cx.sig(["L", "L"], "L"));
 };
+// newInstanceFromSerialization(ctorClass, allocClass): an instance of allocClass that ctorClass's no-argument constructor ran on, as Java serialization makes the object of a Serializable class
+def("java/lang/reflect/Constructor.newInstanceFromSerialization(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/Object;", (cx, c) => {
+  const cid = c.newLocal(T.i32), idx = c.newLocal(T.i32), alloc = c.newLocal(T.i32), obj = c.newLocal(T.anyref);
+  c.lget(0); idOfClass(cx, c); c.lset(cid);
+  c.lget(cid).anyNull().anyNull().i32(1); cx.callRt(c, "findMethod"); c.lset(idx);
+  c.lget(1); idOfClass(cx, c); c.lset(alloc);
+  cx.info(c, UInfo.AllocInstance, () => c.lget(alloc)); c.lset(alloc);
+  c.lget(idx).i32(0).raw(OP.i32_lt_s).lget(alloc).raw(OP.i32_eqz).raw(OP.i32_or).if_(); cx.callThrower(c, "inste"); c.end();
+  c.lget(alloc).callIndirect(cx.sig([], "L")); c.lset(obj);
+  c.lget(obj); info(cx, c, RInfo.MethodInit, cid, () => c.lget(idx)); c.callIndirect(cx.sig(["L"], "V"));
+  c.lget(obj);
+});
 def("java/lang/reflect/Method.invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", (cx, c) => invoke(cx, c, () => c.lget(1), 2));
 def("java/lang/reflect/Constructor.newInstance0([Ljava/lang/Object;)Ljava/lang/Object;", (cx, c) => invoke(cx, c, () => c.anyNull(), 1));

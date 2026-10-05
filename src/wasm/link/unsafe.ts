@@ -101,8 +101,9 @@ rt("uput", ["L", "I", "I", "J"], "V", (cx, c) => {
 });
 
 export const unsafeIntrinsics = new Map<string, Intrinsic>();
-const U = "jdk/internal/misc/Unsafe.";
-const def = (key: string, f: (cx: Compiler, c: Code) => void) => unsafeIntrinsics.set(U + key, (cx, m, c) => f(cx, c));
+/** libcore's sun.misc.Unsafe keeps its accessors native too, under the names of the older API (Object where jdk.internal has Reference) */
+const JDK = "jdk/internal/misc/Unsafe.", SUN = "sun/misc/Unsafe.";
+const def = (key: string, f: (cx: Compiler, c: Code) => void, owners = [JDK, SUN]) => { for (const cls of owners) unsafeIntrinsics.set(cls + key, (cx, m, c) => f(cx, c)); };
 /** locals: 0 = this, 1 = object, 2 = offset (long), then the operation's values */
 const OBJ = 1, OFF = 2;
 
@@ -182,6 +183,10 @@ for (const t of TYPES) {
   for (const g of names) def(`get${g}(Ljava/lang/Object;J)${d}`, (cx, c) => emitGet(cx, c, t));
   const puts = t === "L" ? ["Reference", "ReferenceVolatile", "OrderedObject"] : t === "I" || t === "J" ? [n, n + "Volatile", "Ordered" + n] : [n];
   for (const p of puts) def(`put${p}(Ljava/lang/Object;J${d})V`, (cx, c) => emitPut(cx, c, t));
+  if (t === "L") {
+    for (const g of ["Object", "ObjectVolatile"]) def(`get${g}(Ljava/lang/Object;J)${d}`, (cx, c) => emitGet(cx, c, t), [SUN]);
+    for (const p of ["Object", "ObjectVolatile"]) def(`put${p}(Ljava/lang/Object;J${d})V`, (cx, c) => emitPut(cx, c, t), [SUN]);
+  }
 }
 for (const [t, names] of [["I", ["compareAndSetInt", "compareAndSwapInt"]], ["J", ["compareAndSetLong", "compareAndSwapLong"]], ["L", ["compareAndSetReference", "compareAndSwapObject"]]] as const) {
   const d = desc(t);
