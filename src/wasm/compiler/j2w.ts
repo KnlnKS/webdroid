@@ -4,7 +4,7 @@ import { Code, OP } from "./code";
 import { Program, kindOf, type Kind, type MethodInfo } from "./program";
 import { mid } from "./ids";
 import { H, elemKindOf, type ElemKind } from "./consts";
-import { compileMethod } from "./method";
+import { compileMethod, MC } from "./method";
 import type { ClassRt, World } from "../link/world";
 import { rtfns, type Synth } from "./rtfns";
 import type { LinkFailure } from "./linkage";
@@ -542,6 +542,20 @@ export class Compiler implements Base {
       mb.addElemActive(0, at[i][0], at.slice(i, j).map((x) => x[1]));
     }
     return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
+  }
+  buildResume(m: MethodInfo, pc: number) {
+    if (this.fn.size || this.codes.size) throw new Error("resume needs a fresh compiler");
+    if (!m.codeOff || this.intrinsic(m)) throw new Error("resume needs a bytecode body");
+    this.natives.declare(this, [m]);
+    const name = `${mid(m)}#resume${pc}`, ret = m.ret === "V" ? "V" : kindOf(m.ret);
+    const bits = this.mb.importFunc("resume", "bits", this.mb.addFuncType([T.externref, T.i32], [T.i64]));
+    const reference = this.mb.importFunc("resume", "reference", this.mb.addFuncType([T.externref, T.i32], [T.externref]));
+    const f = this.mb.reserveFunc(this.mb.addFuncType([T.externref], ret === "V" ? [] : [this.vtOf(ret)]), name);
+    this.fn.set(mid(m), f); this.direct = false; this.owner = this.head = this.assumer = m; this.counting = false;
+    const mc = new MC(this, m, { pc, bits, reference }); mc.run();
+    const code = mc.weigh(); this.mb.setBody(f, code.finish()); this.mb.export("resume", "func", f);
+    const built = this.finishModule([{ name, f, code, m }]);
+    return { ...built, registers: mc.resumeRegisters };
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
   buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m"): { bytes: Uint8Array; traces: FnTrace[] } {

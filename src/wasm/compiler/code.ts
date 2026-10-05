@@ -57,6 +57,7 @@ export class Code {
   call(f: number): this { this.mark(); this.targets.push(f); this.b.push(0x10); uleb(f, this.b); return this; }
   callIndirect(type: number, table = 0): this { this.mark(); this.indirect++; this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
   callRef(type: number): this { this.indirect++; this.b.push(0x14); uleb(type, this.b); return this; }
+  returnCallRef(type: number): this { this.mark(); this.indirect++; this.b.push(0x15); uleb(type, this.b); return this; }
   block(bt: number | VT | null = null): this { this.b.push(0x02); this.bt(bt); return this; }
   loop(bt: number | VT | null = null): this { this.b.push(0x03); this.bt(bt); return this; }
   if_(bt: number | VT | null = null): this { this.b.push(0x04); this.bt(bt); return this; }

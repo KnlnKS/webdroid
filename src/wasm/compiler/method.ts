@@ -5,7 +5,7 @@ import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { descToName, parseMethodDesc, isWide } from "../../jvm/abi";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
-import { Flow, Go, structureAny } from "../../jvm/structure";
+import { Flow, Go, Irreducible, structureAny } from "../../jvm/structure";
 import { mid } from "./ids";
 import { constClass, emitStoreCheck } from "../link/classes";
 import { emitPolymorphic } from "./poly";
@@ -67,9 +67,10 @@ export class MC {
   private controlLocal = -1;
   private stateType = -1;
   private stateLocal = -1;
-  constructor(public cx: Compiler, public m: MethodInfo) {
+  constructor(public cx: Compiler, public m: MethodInfo, private resume?: { pc: number; bits: number; reference: number }) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
+    if (resume) this.root.localOffset = 1;
     this.tries = this.item.tries.length > 0;
   }
 
@@ -127,18 +128,34 @@ export class MC {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
     let t = performance.now();
     const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
-    const prepared = this.prepared = prepareMethod(this.dex, item, m.desc, m.isStatic);
+    let prepared = prepareMethod(this.dex, item, m.desc, m.isStatic);
+    if (this.resume) {
+      const instruction = prepared.instructions.find((i) => i.pc === this.resume!.pc);
+      if (!instruction) throw new Error("invalid resume PC");
+      if (instruction.op >= 0x0a && instruction.op <= 0x0d) throw new Error("resume needs pending result or exception support");
+      const leaders = Uint8Array.from(prepared.leaders); leaders[this.resume.pc] = 1;
+      prepared = { ...prepared, leaders };
+    }
+    this.prepared = prepared;
     lap("prepare");
     let flow: Flow;
-    try { flow = structureAny(prepared, item, Infinity); } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
+    try {
+      if (this.resume) {
+        const entries = new Set([this.resume.pc]);
+        for (;;) {
+          try { flow = new Flow(prepared, item, Infinity, [...entries]); break; }
+          catch (e) { if (!(e instanceof Irreducible)) throw e; const before = entries.size; for (const pc of e.heads) entries.add(pc); if (entries.size === before) throw e; }
+        }
+      } else flow = structureAny(prepared, item, Infinity);
+    } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     lap("flow");
-    this.typing = inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions);
+    this.typing = inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions, this.resume?.pc);
     lap("infer");
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
-    this.findShadows();
+    if (!this.resume) this.findShadows();
     this.findWaiting();
     this.entryFacts = analyze(this);
     lap("facts");
@@ -149,12 +166,33 @@ export class MC {
       const w = this.typing.param(reg);
       if (w >= 0) {
         const k = this.typing.kind[w], native = FLOAT_LOCALS && (k === KF || k === KD);
-        if (native) c.lget(pi).raw(k === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64).lset(this.local(w)); else this.webLocal[w] = pi;
+        if (native) { if (!this.resume) c.lget(pi).raw(k === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64).lset(this.local(w)); }
+        else this.webLocal[w] = pi;
       }
       pi++; reg += wide ? 2 : 1;
     };
     if (!m.isStatic) param(false);
     for (const p of m.params) param(isWide(p));
+    if (this.resume) {
+      c.nullableLocals = true;
+      const seen = new Set<number>();
+      this.typing.entry!.forEach((web, register) => {
+        if (web < 0 || seen.has(web)) return;
+        seen.add(web);
+        const kind = this.typing.kind[web], local = this.local(web);
+        this.resumeRegisters.push({ register, kind });
+        c.defer((c) => {
+          c.raw(0x20, 0).i32(register);
+          if (kind === KR) c.call(this.resume!.reference).anyConvertExtern();
+          else {
+            c.call(this.resume!.bits);
+            if (kind !== KJ && kind !== KD) c.raw(OP.i32_wrap_i64);
+            if (FLOAT_LOCALS && (kind === KF || kind === KD)) c.raw(kind === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64);
+          }
+          c.lset(local);
+        });
+      });
+    }
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
     this.findCyclicRegions();
@@ -165,7 +203,7 @@ export class MC {
       if (m.ret !== "V") this.resultLocal = c.newLocal(cx.vtOf(kindOf(m.ret)));
       if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     }
-    if (hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    if (this.resume || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
@@ -175,6 +213,7 @@ export class MC {
       return c;
     }
     this.regionLocal = c.newLocal(T.i32);
+    if (this.resume) c.i32(this.regionOfPc.get(this.resume.pc)!).lset(this.regionLocal);
     if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     this.push("$disp"); c.loop();
     if (this.tries) {
@@ -205,6 +244,7 @@ export class MC {
     return c;
   }
   /** the local holding the depth before this method's frame, if it counts one */
+  resumeRegisters: { register: number; kind: number }[] = [];
   private entryDepth = -1;
   private fuelLocal = -1;
   /** Every bytecode back edge can hold the browser thread, including finite arithmetic loops. */
@@ -225,7 +265,7 @@ export class MC {
       this.stateType = this.cx.mb.addType({ k: "struct", fields: types.map((t) => ({ t, mut: true })) });
       this.stateLocal = this.root.newLocal(refNull(this.stateType));
     }
-    const own = (this.chunks.length ? 5 : 4) + types.length;
+    const own = (this.chunks.length ? 5 : 4) + types.length + (this.resume ? 1 : 0);
     for (const ch of this.chunks) {
       ch.locals = [...ch.code.locals].sort((a, b) => a - b);
       // State fields retain method indices; native chunks declare only their used locals.
@@ -248,6 +288,10 @@ export class MC {
     for (const ch of this.chunks) {
       ch.code.materialize();
       this.cx.mb.setBody(ch.f, ch.code.finish());
+    }
+    if (this.resume) {
+      this.root.localTypes = [...(this.m.isStatic ? [] : [T.anyref]), ...this.m.params.map((p) => this.cx.vtOf(kindOf(p))), ...this.root.localTypes];
+      this.root.nparams = 1;
     }
     this.root.materialize();
     return this.root;
