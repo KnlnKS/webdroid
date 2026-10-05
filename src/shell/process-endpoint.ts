@@ -6,7 +6,7 @@ import { executePendingIntent, pendingTransport } from "../android/pendingintent
 import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
 import { appHost } from "../android/apphost";
-import { binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder";
+import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder";
 import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit } from "../process-exit";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo";
@@ -21,7 +21,7 @@ import { publishedProvider, providerProcesses } from "../android/server/am";
 import { usePermissionStore, usePermissionAccess } from "../android/permissions";
 import { sqliteTransport } from "../android/sqlite";
 import { usePreferenceStore, usePreferenceAccess } from "../android/sharedprefs";
-import { useNotificationStore } from "../android/notification";
+import { useNotificationStore, notificationTransport } from "../android/notification";
 import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings";
 import { remoteSettings } from "./settings";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
@@ -37,12 +37,15 @@ const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerM
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
 function connectCommandTransports(): void {
+  binderTransport.transact = request => remote(brokerCalls().transact(request));
   sqliteTransport.call = request => brokerCalls().sqlite(request);
   cookieTransport.calls = brokerCalls;
   clipboardTransport.set = data => brokerCalls().clipboardSet(data);
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   if (typeof window === "undefined" || window !== window.top) {
+    useSystemServiceAccess(["notification"], name => brokerCalls().systemService(name));
+    notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
     useSettingsAccess(remoteSettings(brokerCalls));
     if (typeof window === "undefined") {
       filePathTransport.calls = brokerCalls;
@@ -138,8 +141,10 @@ export function connectProcess(): ProcessEndpoint {
     detached(() => after(data && encodeIntent(data), (encoded) => broker.activities.finish(PROCESS_PID, id, code, encoded)), logUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
-  useNotificationStore(broker.notifications);
   if (typeof window !== "undefined" && window === window.top) {
+    useSystemServiceAccess([]);
+    notificationTransport.foreground = null;
+    useNotificationStore(broker.notifications);
     usePreferenceStore(broker.preferences);
     usePermissionStore(broker.permissions);
     const stopAccounts = useAccountStore(broker.accounts);
@@ -158,7 +163,6 @@ export function connectProcess(): ProcessEndpoint {
     const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
     return yield* awaited(broadcastResult(yield* awaited(remote(brokerCalls().broadcast(data, targets, permissions, ordered, from)))));
   });
-  binderTransport.transact = (request) => remote(brokerCalls().transact(request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents, intentCodec));

@@ -10,7 +10,7 @@ import { encodeIntent, intentCodec } from "../android/intentipc";
 import type { IntentCodec } from "./pendingintents";
 import { packages } from "../android/packages";
 import { appHost } from "../android/apphost";
-import { asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
+import { ownedSystemService, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
 import { NOT_CRASHED, REASON_EXIT_SELF, recordRemoteExit, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
@@ -27,7 +27,7 @@ import { checkPermission, PermissionStore, canonicalPermissionCommands, holdsPla
 import { attrStr } from "../android/axml";
 import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
 import { preferenceStore, canonicalPreferenceCommands, type PreferenceCalls } from "../android/sharedprefs";
-import { notificationStore } from "../android/notification";
+import { notificationStore, receiveForegroundNotification, type ForegroundNotificationRequest } from "../android/notification";
 import { settingsStore } from "../android/settings";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
 import type { WebCookies } from "./webcookies";
@@ -84,6 +84,8 @@ export type ProcessEndpoint = {
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
+  systemService: (name: string) => Promise<BinderHandle | null>;
+  notificationForeground: (request: ForegroundNotificationRequest) => Promise<void>;
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
   processExited: (record: ExitRecord) => void;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
@@ -98,7 +100,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & Permissio
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -327,6 +329,17 @@ class ProcessBroker {
       return owner && packages.get(owner)?.uid !== caller.uid && caller.uid !== 0 && caller.uid !== 1000 ? 13 : 0;
     });
     const stop = serveCalls<BrokerCalls>(port1, {
+      systemService: async name => {
+        this.entry(pid);
+        if (name !== "notification") throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
+        const handle = await asSystem(() => ownedSystemService(name));
+        this.entry(pid);
+        return handle;
+      },
+      notificationForeground: async request => {
+        const caller = this.entry(pid);
+        await receiveForegroundNotification(caller.pkg, {pid:caller.pid,uid:caller.uid}, request);
+      },
       filePrepare: async pkg => {
         const caller = this.entry(pid);
         if (packages.get(pkg)?.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");

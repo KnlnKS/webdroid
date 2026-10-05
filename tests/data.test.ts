@@ -12,6 +12,8 @@ import { activityTransport } from "../src/android/server/atm";
 import { newIntent } from "../src/android/intent";
 import { decodeIntent } from "../src/android/intentipc";
 import { clipboardTransport } from "../src/android/clipboard";
+import { binderTransport, useSystemServiceAccess } from "../src/android/binder";
+import { notificationTransport } from "../src/android/notification";
 import type { BrokerCalls } from "../src/shell/processes";
 import { cookieManager, cookieTransport } from "../src/android/cookies";
 import { useAccountAccess, useAccountStore } from "../src/android/accounts";
@@ -159,7 +161,7 @@ test("Worker activity commands retain local results across reentrant replies and
   await bootApp(owner);
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
-    previousPrepare = vfs.prepare, previousPrefs = preferenceStore;
+    previousPrepare = vfs.prepare, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -207,6 +209,7 @@ test("Worker activity commands retain local results across reentrant replies and
     for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
     Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
     Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;Object.assign(clipboardTransport,previousClip);
+    useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
     filePathTransport.calls = previousPaths; vfs.prepare = previousPrepare;
     usePermissionStore(new PermissionStore()); useAccountStore(new AccountStore()); usePreferenceStore(previousPrefs);
   }
