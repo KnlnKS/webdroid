@@ -21,6 +21,9 @@ import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { mkComponentName, newIntent } from "../src/android/intent";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
 import { PendingIntents } from "../src/shell/pendingintents";
+import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent";
+import { alarmTransport } from "../src/android/alarm";
+import { callProxy, serveCalls } from "../src/shell/process-port";
 import { javaReadFd } from "../src/native/fs";
 import { Arsc } from "../src/android/arsc";
 import { scall, loadLibcore, bootApp, packageRecord } from "./java";
@@ -315,16 +318,46 @@ describe("pending-intents", () => {
 
   test("PendingIntent reports its stored operation type", async () => {
     const context = await app(), intent = await newIntent();
-    const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
-    const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
-    const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
-    expect(await vcall(activity, "isActivity", "()Z")).toBe(1);
-    expect(await vcall(activity, "isBroadcast", "()Z")).toBe(0);
-    expect(await vcall(activity, "isImmutable", "()Z")).toBe(1);
-    expect(await vcall(broadcast, "isActivity", "()Z")).toBe(0);
-    expect(await vcall(broadcast, "isBroadcast", "()Z")).toBe(1);
-    expect(await vcall(foreground, "isForegroundService", "()Z")).toBe(1);
-    expect(await vcall(foreground, "isService", "()Z")).toBe(0);
+    const owner = { ...pendingTransport }, alarms = { ...alarmTransport }, { port1, port2 } = new MessageChannel();
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const acknowledgment = new Promise<void>(resolve => { release = resolve; });
+    const stop = serveCalls(port1, { ...owner, cancel: async (id: number) => { entered(); await acknowledgment; await owner.cancel(id); },
+      alarmSchedule: alarms.schedule, alarmCancel: alarms.cancel });
+    type Calls = { [K in keyof PendingAccess]: (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> } & {
+      alarmSchedule(id: number, type: number, at: number, interval: number): Promise<void>;
+      alarmCancel(id: number): Promise<void>;
+    };
+    const client = callProxy<Calls>(port2, ["create", "cancel", "send", "operation", "kind", "flags", "creator", "alarmSchedule", "alarmCancel"]);
+    Object.assign(pendingTransport, Object.fromEntries(Object.keys(owner).map(name => [name, client.endpoint[name as keyof PendingAccess]])));
+    alarmTransport.schedule = client.endpoint.alarmSchedule;
+    alarmTransport.cancel = client.endpoint.alarmCancel;
+    try {
+      const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
+      const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
+      const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
+      expect(await vcall(activity, "isActivity", "()Z")).toBe(1);
+      expect(await vcall(activity, "isBroadcast", "()Z")).toBe(0);
+      expect(await vcall(activity, "isImmutable", "()Z")).toBe(1);
+      expect(await vcall(broadcast, "isActivity", "()Z")).toBe(0);
+      expect(await vcall(broadcast, "isBroadcast", "()Z")).toBe(1);
+      expect(await vcall(foreground, "isForegroundService", "()Z")).toBe(1);
+      expect(await vcall(foreground, "isService", "()Z")).toBe(0);
+      const alarm = await vcall(context, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "alarm");
+      await vcall(alarm, "set", "(IJLandroid/app/PendingIntent;)V", 2, 1000000000000n, broadcast);
+      await vcall(alarm, "cancel", "(Landroid/app/PendingIntent;)V", broadcast);
+      let done = false;
+      const canceled = vcallAsync(activity, "cancel", "()V").then(() => { done = true; });
+      await waiting;
+      expect(done).toBe(false);
+      release();
+      await canceled;
+      expect(done).toBe(true);
+      const error = await Promise.resolve(sendIntent(activity)).then(() => null, error => error);
+      expect(rt.iof(error, "android/app/PendingIntent$CanceledException")).toBe(1);
+    } finally {
+      release(); client.close(); stop(); Object.assign(pendingTransport, owner); Object.assign(alarmTransport, alarms);
+    }
   });
 });
 

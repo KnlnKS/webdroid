@@ -25,7 +25,16 @@ export const executePendingIntent = driven(function* (operation: PendingOperatio
   } else yield startService(intent, null, operation.kind === "foreground-service", operation.pkg);
 });
 export const localPendingIntents = new PendingIntents(intentCodec, executePendingIntent);
-export const pendingTransport = {
+export type PendingAccess = {
+  create(pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]): Promise<number | null>;
+  cancel(id: number): void | Promise<void>;
+  send(id: number, fill: ParcelData | null): Promise<boolean>;
+  operation(id: number): PendingOperation | null | Promise<PendingOperation | null>;
+  kind(id: number): PendingOperation["kind"] | null | Promise<PendingOperation["kind"] | null>;
+  flags(id: number): number | Promise<number>;
+  creator(id: number): { pkg: string; uid: number } | null | Promise<{ pkg: string; uid: number } | null>;
+};
+export const pendingTransport: PendingAccess = {
   create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents?: ParcelData[]) =>
     localPendingIntents.create({ pkg, kind, code, flags, intent, intents, uid: PROCESS_UID, process: PROCESS_NAME || pkg }),
   cancel: (id: number) => localPendingIntents.cancel(id),
@@ -74,11 +83,11 @@ export const intentSenderMethods = {
       const id = yield* awaited(pendingTransport.create(pkg, kind, code, flags, encoded.at(-1)!, kind === "activity" && encoded.length > 1 ? encoded : undefined));
       return id === null ? null : intentSender(id);
     }),
-  "cancelIntentSender(Landroid/content/IIntentSender;)V": driven(function* (sender: JObj): Gen { pendingTransport.cancel(yield* senderId$(sender)); }),
+  "cancelIntentSender(Landroid/content/IIntentSender;)V": driven(function* (sender: JObj): Gen { yield* awaited(pendingTransport.cancel(yield* senderId$(sender))); }),
   "getInfoForIntentSender(Landroid/content/IIntentSender;)Landroid/app/ActivityManager$PendingIntentInfo;": driven(function* (sender: JObj): Gen {
-    const id = yield* senderId$(sender), creator = pendingTransport.creator(id), kind = pendingTransport.kind(id);
+    const id = yield* senderId$(sender), creator = yield* awaited(pendingTransport.creator(id)), kind = yield* awaited(pendingTransport.kind(id));
     return newObj("android/app/ActivityManager$PendingIntentInfo", "(Ljava/lang/String;IZI)V", creator?.pkg ?? null, creator?.uid ?? -1,
-      +!!(pendingTransport.flags(id) & 0x4000000), kind ? KINDS[kind] : 0);
+      +!!((yield* awaited(pendingTransport.flags(id))) & 0x4000000), kind ? KINDS[kind] : 0);
   }),
   // ActivityManager.START_CANCELED when the record is gone; a finished receiver hears the send, as
   // PendingIntentRecord.sendInner tells one for every kind but an ordered broadcast
@@ -95,7 +104,7 @@ export const intentSenderMethods = {
 export const intentSenderTaskMethods = {
   "startActivityIntentSender(Landroid/app/IApplicationThread;Landroid/content/IIntentSender;Landroid/os/IBinder;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IIILandroid/os/Bundle;)I":
     driven(function* (caller: JObj, target: JObj, _token: unknown, fill: JIntent | null, resolvedType: string | null, resultTo: JObj | null, resultWho: string | null, requestCode: number): Gen {
-      const id = yield* senderId$(target), operation = pendingTransport.operation(id);
+      const id = yield* senderId$(target), operation = yield* awaited(pendingTransport.operation(id));
       if (!operation) return START_CANCELED;
       if (operation.kind !== "activity") return (yield* awaited(pendingTransport.send(id, fill ? yield* awaited(encodeIntent(fill)) : null))) ? 0 : START_CANCELED;
       const intent = yield* awaited(decodeIntent(operation.intent));

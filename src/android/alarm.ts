@@ -11,7 +11,10 @@ import { clearGuestTimeout, setGuestTimeout, uptimeMillis, type GuestTimer } fro
 import { packages, usesSdk } from "./packages";
 
 const localAlarms = new Alarms(localPendingIntents, uptimeMillis, logUncaught);
-export const alarmTransport = {
+export const alarmTransport: {
+  schedule(id: number, type: number, at: number, interval: number): void | Promise<void>;
+  cancel(id: number): void | Promise<void>;
+} = {
   schedule: (id: number, type: number, at: number, interval: number) => localAlarms.schedule(id, type, at, interval),
   cancel: (id: number) => localAlarms.cancel(id),
 };
@@ -35,7 +38,7 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
       if (window === WINDOW_EXACT && !canScheduleExact(pkg))
         throw rt.mkThrowable("java/lang/SecurityException", `Caller ${pkg} needs to hold android.permission.SCHEDULE_EXACT_ALARM or android.permission.USE_EXACT_ALARM to set exact alarms.`);
       const trigger = Math.max(0, Number(at));
-      if (operation) return alarmTransport.schedule(yield* awaited(operationId(operation)), type, trigger, Number(interval));
+      if (operation) { yield* awaited(alarmTransport.schedule(yield* awaited(operationId(operation)), type, trigger, Number(interval))); return; }
       clearGuestTimeout(listenerAlarms.get(listener));
       const delay = trigger - (type < 2 ? Date.now() : uptimeMillis());
       listenerAlarms.set(listener, setGuestTimeout(() => {
@@ -45,7 +48,7 @@ rt.register({ name: "webdroid/AlarmManagerService", ctor: class extends JObj {},
       }, Math.max(0, Math.min(delay, 0x7fffffff))));
     }),
   "remove(Landroid/app/PendingIntent;Landroid/app/IAlarmListener;)V": driven(function* (operation: JObj | null, listener: unknown): Gen<void> {
-    if (operation) alarmTransport.cancel(yield* awaited(operationId(operation)));
+    if (operation) yield* awaited(alarmTransport.cancel(yield* awaited(operationId(operation))));
     if (listener) { clearGuestTimeout(listenerAlarms.get(listener)); listenerAlarms.delete(listener); }
   }),
   "canScheduleExactAlarms(Ljava/lang/String;)Z": (pkg: string) => +canScheduleExact(pkg),
