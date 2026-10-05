@@ -2,7 +2,7 @@
 // and DisplayEventReceiver's natives deliver it to every receiver that scheduled one (each
 // Choreographer, per looper) as a callback on that receiver's looper, as SurfaceFlinger's event
 // thread wakes its fd there.
-import { rt, type JObj } from "../jvm/runtime";
+import { rt, driven, type Gen, type JObj } from "../jvm/runtime";
 import { mangleField } from "../jvm/abi";
 import { vcall, newObj, after } from "../jvm/natives/jentry";
 import { handle, deref, FINALIZER } from "./handles";
@@ -47,7 +47,7 @@ function fill(data: Record<string, unknown>): void {
   timeline[F.vsyncId] = BigInt(latest.frame);
   timeline[F.present] = timeline[F.deadline] = latest.nanos + interval;
 }
-const ref = (weak: JObj): JObj | null => vcall(weak, "get", "()Ljava/lang/Object;");
+const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get", "()Ljava/lang/Object;");
 
 /** a host display frame: true when it is a virtual vsync, delivered now to every receiver that asked */
 export function recordVsync(time: number): boolean {
@@ -100,11 +100,12 @@ export function deliverVsync(): void {
 const PTR = mangleField("android/os/MessageQueue", "mPtr");
 rt.registerJnis("android/view/DisplayEventReceiver", {
   "nativeInit(Ljava/lang/ref/WeakReference;Ljava/lang/ref/WeakReference;Landroid/os/MessageQueue;IIJ)J":
-    (receiver: JObj, data: JObj, queue: Record<string, bigint>) => {
-      const r = ref(receiver), d = ref(data);
+    driven(function* (receiver: JObj, data: JObj, queue: Record<string, bigint>): Gen<bigint> {
+      // Java weak-reference reads may wait; native state must hold their referents.
+      const r = yield ref(receiver), d = yield ref(data);
       if (!r || !d) throw rt.mkThrowable("java/lang/RuntimeException", "Failed to initialize display event receiver.");
       return handle({ looper: deref<NativeLooper>(queue[PTR]), receiver: r, data: d } satisfies Receiver);
-    },
+    }),
   "nativeGetDisplayEventReceiverFinalizer()J": () => FINALIZER,
   "nativeScheduleVsync(J)V": (ptr: bigint) => { scheduled.add(deref<Receiver>(ptr)); },
   "nativeGetLatestVsyncEventData(J)Landroid/view/DisplayEventReceiver$VsyncEventData;": async () => {
