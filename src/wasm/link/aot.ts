@@ -246,7 +246,7 @@ export class AotRuntime {
     }
     index.selectors.forEach((k) => w.selectorId(k));
     index.gaps.forEach((g, i) => w.gaps.set(g, i));
-    w.linkMessages.push(...index.linkMessages);
+    for (const l of index.linkMessages) w.linkMessages.push(l);
     a.dOf = unrle(index.dOf); a.cOf = unrle(index.cOf);
     a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.cState.length = a.cHeader.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);

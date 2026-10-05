@@ -42,6 +42,26 @@ public class Th {
     try { gapAlias(a, a, true); } catch (IllegalArgumentException e) { return r == 9 && a[0] == 9 ? 0 : 1; }
     return 2;
   }
+  static volatile boolean stop;
+  static int fuelProgress(int n) throws Exception {
+    stop = false;
+    Thread t = new Thread(() -> { try { Thread.sleep(1); } catch (InterruptedException e) { } stop = true; });
+    t.start();
+    int bound = 10;
+    for (int i = 0; i < bound; i++) { if (stop) break; bound++; }
+    t.join();
+    return stop ? 0 : 1;
+  }
+  static int fuelOverflow(int n) throws Exception {
+    stop = false;
+    Thread t = new Thread(() -> { try { Thread.sleep(1); } catch (InterruptedException e) { } stop = true; });
+    t.start();
+    for (int i = 0; i < Integer.MAX_VALUE; i += 2) { if (stop) break; }
+    t.join();
+    return stop ? 0 : 1;
+  }
+  static int fuelArithmetic(int n) { int r = 0; for (int i = 0; i < n; i++) r += i; return r; }
+
   // ---------- monitors
   static int reentrant(int n) {
     Object o = new Object(); int c = 0;
@@ -349,6 +369,25 @@ public class Th {
     try { return depth(0); } catch (StackOverflowError e) { return 1; }
   }
   static int depth(int d) { return depth(d + 1) + 1; }
+  /** methods linked for the first time with the stack nearly full: a link that fails for want of stack must not leave the method without a body */
+  static int probe(int k, Object a, Object b) {
+    switch (k) {
+      case 0: return new java.util.HashMap<Object, Object>().put(a, b) == null ? 1 : 0;
+      case 1: { java.util.ArrayList<Object> l = new java.util.ArrayList<Object>(); l.add(a); return l.contains(b) ? 1 : 0; }
+      case 2: return a.toString().length() > 0 ? 1 : 0;
+      default: return java.util.Arrays.asList(a, b).hashCode() == 0 ? 0 : 1;
+    }
+  }
+  static int dive(int d, int at, int k, Object a) { return d == at ? probe(k, a, a) : dive(d + 1, at, k, a) + 0; }
+  static int linkDeep(int n) {
+    int broken = 0;
+    int[] depths = {4500, 3000, 1500, 500, 10};
+    for (int i = 0; i < depths.length; i++) for (int k = 0; k < 4; k++) {
+      try { dive(0, depths[i], k, "x" + i); } catch (StackOverflowError e) { } catch (UnsatisfiedLinkError e) { broken++; }
+    }
+    for (int k = 0; k < 4; k++) probe(k, "y", "z");
+    return broken;
+  }
   static int stackOverflowDeep(int n) {
     int caught = 0;
     for (int i = 0; i < 3; i++) try { depth(0); } catch (StackOverflowError e) { caught++; }

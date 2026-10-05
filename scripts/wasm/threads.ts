@@ -16,6 +16,7 @@ import { suspendedNatives } from "../../src/wasm/host/suspend";
 import { rt } from "../../src/jvm/runtime";
 import { perf } from "../../src/perf";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
+import { defaultLoop } from "../../src/wasm/link/sched";
 import { hasJspi } from "../../src/wasm/link/module";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
@@ -28,10 +29,11 @@ sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).f
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+let arithmeticProbe = false, turns = 0;
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource) });
+} satisfies NativeSource), loop: { ...defaultLoop, due: () => arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
 const TH: Record<string, HostFn> = {
@@ -60,7 +62,7 @@ const CASES: [string, number][] = [
   ["startJoin", 100], ["names", 3], ["names", 4], ["sleepOrder", 0], ["interruptSleep", 0], ["interruptWait", 0], ["interruptFlag", 0], ["joinTimeout", 0], ["uncaught", 4],
   ["states", 0], ["threadLocals", 7], ["spin", 0], ["spinStep", 0], ["spinTest", 0], ["parkUnpark", 0], ["permit", 0], ["parkNanos", 0], ["parkInterrupt", 0],
   ["executor", 0], ["chm", 300], ["latch", 0], ["lockCondition", 20], ["queue", 30], ["semaphore", 0], ["future", 21], ["timeout", 0], ["scheduled", 0], ["completable", 4],
-  ["manyThreads", 100], ["atomics", 300], ["initRace", 0], ["initCycle", 0], ["initFail", 0], ["stackOverflow", 0], ["stackOverflowDeep", 0],
+  ["manyThreads", 100], ["atomics", 300], ["initRace", 0], ["initCycle", 0], ["initFail", 0], ["stackOverflow", 0], ["stackOverflowDeep", 0], ["linkDeep", 0], ["fuelProgress", 0], ["fuelOverflow", 0],
 ].filter(([n]) => !only || only.includes(n as string)) as [string, number][];
 if (!CASES.length) CASES.push(["reentrant", 3]);
 // a case that deadlocks the JDK is a bug in the case
@@ -83,6 +85,8 @@ if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffe
 
 // ---------- the substrate, directly
 if (substrate) {
+  const cold = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives(nativeSource) });
+  expect("lazy linking near the stack limit", await cold.entryAsync("Th", "linkDeep", "(I)I")(0), 0);
   // natives that wait: async, a generator, one that enters Java through a promising entry that waits again
   expect("async native", await show(() => w.entryAsync("Th", "trap", "(I)I")(4)), 5);
   expect("generator native", await show(() => w.entryAsync("Th", "driven", "(I)I")(4)), 13);
@@ -90,6 +94,10 @@ if (substrate) {
   // arrays given to and answered by natives that wait at the same time stay each strand's own
   expect("array arguments and results across a wait", await show(() => w.entryAsync("Th", "arrayGap", "(I)I")(300)), 0);
   expect("array alias and exceptional copy-back", await show(() => w.entryAsync("Th", "arrayAlias", "(I)I")(0)), 0);
+  arithmeticProbe = true;
+  try { expect("arithmetic loop answer", await show(() => w.entryAsync("Th", "fuelArithmetic", "(I)I")(100000)), 704982704); }
+  finally { arithmeticProbe = false; }
+  expect("arithmetic loop yields", turns > 0, true);
   // 1,000 stacks suspended in the same native at once
   { const t0 = performance.now(), r = await Promise.all(Array.from({ length: 1000 }, (_, i) => w.entryAsync("Th", "trap", "(I)I")(i))); const ms = performance.now() - t0;
     expect("1,000 suspended stacks", r.reduce((a: number, b) => a + (b as number), 0), 1000 * 999 / 2 + 1000);

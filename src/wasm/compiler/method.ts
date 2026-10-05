@@ -12,8 +12,7 @@ import { emitPolymorphic } from "./poly";
 import { emitCustom } from "./custom";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
-import { countedLoops } from "./loops";
-import { MAX_UNCOUNTED } from "../link/exc";
+import { MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
@@ -34,6 +33,8 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
     mc.run();
     return mc.weigh();
   } catch (e) {
+    // Stack exhaustion is transient; keep the lazy stub available for a shallower retry.
+    if (isStackOverflow(e)) throw e;
     const c = new Code(nparams); cx.gap(c, `${mid(m)}: ${(e as Error).message}`); return leaf(c);
   }
 }
@@ -189,14 +190,11 @@ export class MC {
   /** the local holding the depth before this method's frame, if it counts one */
   private entryDepth = -1;
   private fuelLocal = -1;
-  /** the heads of loops that can wait for something another strand does: a loop whose body calls, locks or reads a field. A loop of arithmetic and array
-   *  elements only (the kernels) has no fuel check, which cost them 40 to 150%; it ends by itself or is a hang in any VM */
+  /** Every bytecode back edge can hold the browser thread, including finite arithmetic loops. */
   private waiting = new Set<number>();
   private findWaiting(): void {
-    const ins = this.prepared.instructions, counted = countedLoops(this.prepared, this.item, this.typing);
-    for (const b of ins) for (const t of branchTargets(this.item, b)) {
-      if (t > b.pc || this.waiting.has(t) || counted.has(t)) continue;
-      if (ins.some((x) => x.pc >= t && x.pc <= b.pc && /^(invoke|monitor|[is]get)/.test(x.name))) this.waiting.add(t);
+    for (const b of this.prepared.instructions) for (const t of branchTargets(this.item, b)) {
+      if (t <= b.pc) this.waiting.add(t);
     }
   }
   private fuel() { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32))); }
