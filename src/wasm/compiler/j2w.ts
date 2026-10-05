@@ -6,11 +6,12 @@ import { mid } from "./ids";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { compileMethod } from "./method";
 import type { ClassRt, World } from "../link/world";
-import { rtfns } from "./rtfns";
+import { rtfns, type Synth } from "./rtfns";
 import type { LinkFailure } from "./linkage";
 import { Block, FUEL, emitBlock } from "../link/sched";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
 import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
+import { emitStoreCheck } from "../link/classes";
 import type { NativeBinder } from "../link/hostapi";
 
 export interface Intrinsic { (cx: Compiler, m: MethodInfo, c: Code): void }
@@ -434,6 +435,17 @@ export class Compiler implements Base {
         c.lget(0).refAsNonNull().lget(p).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_add).arraySet(tVT).end();
         return c.lget(slot).finish();
       }];
+      // aput:<element kind>(array, index, value): the store of an array element out of line, for code that runs once (method.ts emitAput)
+      case "aput:i8": case "aput:i16": case "aput:i32": case "aput:i64": case "aput:ref": {
+        const k = name.slice(5) as ElemKind;
+        return [t([L, T.i32, k === "ref" ? L : k === "i64" ? T.i64 : T.i32], []), () => {
+          const c = new Code(3), data = c.newLocal(ref(this.tData[k]));
+          c.lget(0).refCast(this.tArr[k]).structGet(this.tArr[k], 2).lset(data);
+          c.lget(1).lget(data).arrayLen().raw(OP.i32_ge_u).if_().lget(1).lget(data).arrayLen(); this.callThrower(c, "aioobe"); c.end();
+          if (k === "ref") emitStoreCheck(this, c, 0, () => c.lget(2));
+          return c.lget(data).lget(1).lget(2).arraySet(this.tData[k]).finish();
+        }];
+      }
       // the header word: the monitor (thin lock owner and count, or an inflated monitor's index) in its low half, the identity hash in its high half
       case "hash": return [t([L], [T.i32]), () => {
         const c = new Code(1), w = c.newLocal(T.i64), hv = c.newLocal(T.i32), g = this.global("rt", "hash", T.i32, true);
@@ -531,6 +543,24 @@ export class Compiler implements Base {
     this.mb.setBody(f, c.finish());
     this.mb.export("m", "func", f);
     return this.finishModule([{ name: "$" + name, f, code: c }]);
+  }
+  /** one module of several synthetic functions, each put in its table slot when the module is instantiated (a build's, link/apps.ts). A function whose code relies on a class-hierarchy
+   *  decision or on a class being absent is left out: nothing here could undo it. */
+  buildSynthetics(fns: { name: string; slot: number; d: Synth }[]): { bytes: Uint8Array; traces: FnTrace[]; kept: string[] } {
+    const mb = this.mb, parts: { name: string; slot: number; f: number; code: Code }[] = [];
+    for (const { name, slot, d } of fns) {
+      const f = mb.reserveFunc(this.sig(d.params, d.ret), "$" + name), code = new Code(d.params.length), assumed = this.assumptions.length, absent = this.absent.length;
+      d.body(this, code);
+      mb.setBody(f, code.finish());
+      if (this.assumptions.length !== assumed || this.absent.length !== absent) { this.assumptions.length = assumed; this.absent.length = absent; continue; }
+      parts.push({ name, slot, f, code });
+    }
+    parts.sort((a, b) => a.slot - b.slot);
+    for (let i = 0, j = 0; i < parts.length; i = j) {
+      while (++j < parts.length && parts[j].slot === parts[j - 1].slot + 1);
+      mb.addElemActive(0, parts[i].slot, parts.slice(i, j).map((p) => p.f));
+    }
+    return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
   }
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
