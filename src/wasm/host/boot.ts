@@ -11,7 +11,7 @@ import { centralDir, entryBytes } from "../../jvm/natives/jzip";
 import { vfs } from "../../shell/vfs";
 import { Program } from "../compiler/program";
 import { fetchPlatformJars, jarDexes } from "../../android/framework";
-import { PLATFORM_JARS } from "../../jvm/provenance";
+import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance";
 import { parkTimeout, unparkTimeout, turnElapsed, wakeSoon, yieldToLoop } from "../../jvm/yield";
 import { World, type WorldOptions } from "../link/world";
 import type { HostLoop } from "../link/sched";
@@ -43,7 +43,7 @@ const hostLoop: HostLoop = {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = new World(prog, { intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
   bindWorld(w);
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
