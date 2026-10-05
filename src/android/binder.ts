@@ -102,7 +102,8 @@ function* exportObject(o: unknown): Gen<BinderHandle | FileHandle | null> {
   if (!(o instanceof OwnedFd)) return exportBinder(o);
   const contents = yield* awaited(fdContents(o.fd));
   if (!contents) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
-  // File/ashmem views may share guest memory. Binder exports a snapshot, not that live view.
+  // Own the wire buffer: FileSource views may alias guest memory. This copy does not
+  // implement shared FD backing; the current importer only writes back on last close.
   const bytes = new Uint8Array(contents);
   const prot = ashmemProt(o.fd), region = prot === undefined ? {} : { prot };
   if ((javaFcntlFd(o.fd, F_GETFL, 0) & O_ACCMODE) === O_RDONLY) return { bytes, writer: null, ...region };

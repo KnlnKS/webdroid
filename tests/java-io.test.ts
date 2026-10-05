@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { mkPfd, pfdBackingBytes } from "../src/android/os";
+import { mkPfd, pfdBackingBytes, fdContents } from "../src/android/os";
 import { parcelled, unparcelled } from "../src/android/binder";
 import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -251,7 +251,7 @@ describe("parcel-file", () => {
       await vcall(pfd, "close", "()V");
     } finally { vfs.delete(path); }
   });
-  test("a descriptor's exported Parcel owns a snapshot outside shared guest memory", async () => {
+  test("FD wire serialization owns its buffers independently of the source storage", async () => {
     await loadLibcore();
     const pfd = await mkPfd(Uint8Array.of(1, 2, 3));
     try {
@@ -260,9 +260,12 @@ describe("parcel-file", () => {
       if (!exported || !("bytes" in exported)) throw new Error("descriptor bytes missing from Parcel");
       expect(exported.bytes.buffer).toBeInstanceOf(ArrayBuffer);
       const fd = await vcall(pfd, "getFd", "()I");
-      javaPwriteFd(fd, Uint8Array.of(9), 0);
-      expect(exported.bytes).toEqual(Uint8Array.of(1, 2, 3));
-      expect(structuredClone(wire).objects).toEqual(wire.objects);
+      const source = await fdContents(fd);
+      expect(exported.bytes.buffer).not.toBe(source!.buffer);
+      const cloned = structuredClone(wire);
+      expect(cloned.objects).toEqual(wire.objects);
+      exported.bytes[0] = 9;
+      expect(await fdContents(fd)).toEqual(Uint8Array.of(1, 2, 3));
     } finally { await vcall(pfd, "close", "()V"); }
   });
   test("read-only file opens load lazy bytes and AutoCloseInputStream owns the descriptor", async () => {
