@@ -106,6 +106,8 @@ class DexClass implements JClass {
 }
 /** how many methods (and so table slots) a class has */
 export const methodCount = (c: JClass): number => (c instanceof DexClass ? c.nMethods : c.methods.length);
+/** One declared method without materializing unrelated members. */
+export const declaredMethod = (c: JClass | undefined, key: string): MethodInfo | undefined => (c instanceof DexClass ? c.method(key) : c?.byKey.get(key));
 /** the keys and access flags of the methods a class declares */
 export const declaredMethods = (c: JClass): [string, number][] => (c instanceof DexClass ? c.declared() : c.methods.map((m) => [m.key, m.flags]));
 
@@ -238,13 +240,13 @@ export class Program {
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m) return m;
+      const m = declaredMethod(c, key); if (m) return m;
     }
     const seen = new Set<string>();
     const visit = (n: string): MethodInfo | undefined => {
       if (seen.has(n)) return undefined; seen.add(n);
       const c = this.get(n); if (!c) return undefined;
-      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) return m;
+      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) return m;
       for (const i of c.ifaces) { const r = visit(i); if (r) return r; }
       return undefined;
     };
@@ -266,14 +268,14 @@ export class Program {
   }
   private findImpl(cls: string, key: string): MethodInfo | undefined {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
+      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
     }
     // default methods: the most specific one, i.e. none whose interface is a superinterface of another candidate's
     const seen = new Set<string>(), found: MethodInfo[] = [];
     const visit = (n: string) => {
       if (seen.has(n)) return; seen.add(n);
       const c = this.get(n); if (!c) return;
-      const m = c instanceof DexClass ? c.method(key) : c.byKey.get(key); if (m && !(m.flags & ACC.STATIC)) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
+      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
       for (const i of c.ifaces) visit(i);
     };
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) for (const i of c.ifaces) visit(i);

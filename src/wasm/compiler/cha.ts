@@ -1,4 +1,4 @@
-import { ACC, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
+import { ACC, declaredMethod, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
 
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
@@ -72,7 +72,7 @@ export class Cha {
       const key = mkey(name, desc);
       for (const cls of this.declaring(key)) {
         if (found.size >= 2) break;
-        const m = this.prog.get(cls)!.byKey.get(key)!;
+        const m = declaredMethod(this.prog.get(cls), key)!;
         if (this.reaches(decl, m)) found.add(m);
       }
     }
@@ -92,7 +92,7 @@ export class Cha {
       const c = p.get(n);
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT) && (!filter || p.isSubclass(n, filter)) && p.implFor(n, key.slice(0, key.indexOf("(")), key.slice(key.indexOf("("))) === m) return true;
       // a class that implements the method itself decides it for every subclass: none of them runs m
-      const own = c && !c.isInterface ? c.byKey.get(key) : undefined;
+      const own = c && !c.isInterface ? declaredMethod(c, key) : undefined;
       if (own && own !== m && !(own.flags & (ACC.STATIC | ACC.ABSTRACT))) continue;
       for (const sub of this.subsOf(n)) stack.push(sub);
     }
