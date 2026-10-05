@@ -32,7 +32,6 @@ type Sql = SqlJs & {
   _sqlite3_exec(db: number, sql: number, callback: number, arg: number, error: number): number;
   _sqlite3_wal_checkpoint_v2(db: number, name: number, mode: number, log: number, checkpointed: number): number;
   _sqlite3_prepare_v2(db: number, sql: number, bytes: number, out: number, tail: number): number;
-  _sqlite3_db_handle(st: number): number;
   _sqlite3_finalize(st: number): number;
   _sqlite3_reset(st: number): number;
   _sqlite3_clear_bindings(st: number): number;
@@ -83,10 +82,12 @@ type Raise = (code: number, sqliteMessage: string, message?: string | null) => u
 class Connection {
   cancelable = false;
   canceled = false;
+  closed = false;
+  readonly statements = new Set<number>();
   constructor(readonly ptr: number, readonly file: SharedDatabase | null, readonly raise: Raise) {}
 }
 const conn = (h: bigint) => deref<Connection>(h);
-const byPtr = new Map<number, Connection>();
+const statementOwners = new Map<number, Connection>();
 const dbError = (c: Connection, message: string | null = null) =>
   c.raise(C._sqlite3_extended_errcode(c.ptr), C.UTF8ToString(C._sqlite3_errmsg(c.ptr)), message);
 const check = (c: Connection, rc: number) => { if (rc) throw dbError(c); };
@@ -102,6 +103,8 @@ function scheduleSave(file: SharedDatabase) {
 function snapshot(file: SharedDatabase): Uint8Array | null {
   let any: Connection | null = null;
   for (const c of file.connections) {
+    // A close_v2 zombie is unusable but still owns its file until its statements finalize.
+    if (c.closed) return null;
     // mid-transaction the file can hold uncommitted pages whose undo lives in a journal we do not copy
     if (!C._sqlite3_get_autocommit(c.ptr)) return null;
     any = c;
@@ -187,21 +190,24 @@ async function openConnection(path: string, readOnly: boolean, create: boolean, 
   if (ptr < 0) throw raise(-ptr, "unable to open database file", "Could not open database");
   C._RegisterExtensionFunctions(ptr);
   const c = new Connection(ptr, file ?? null, raise);
-  byPtr.set(ptr, c);
   file?.connections.add(c);
   if (readOnly && file) withUTF8("PRAGMA query_only=1", (sql) => C._sqlite3_exec(ptr, sql, 0, 0, 0));
   collate(c, "UNICODE", "und", {});
   return c;
 }
-/** sqlite3_close_v2: statements the caller has yet to close keep the handle alive until they finalize */
-function closeConnection(h: bigint) {
-  const c = conn(h);
-  C._sqlite3_close_v2(c.ptr);
-  byPtr.delete(c.ptr);
-  release(h);
+/** Release file ownership only after close_v2's final statement has destroyed its zombie. */
+function retiredConnection(c: Connection) {
   if (!c.file) return;
   c.file.connections.delete(c);
   if (sqliteStore.files.get(c.file.path) !== c.file) retire(c.file);
+}
+/** sqlite3_close_v2 leaves an unusable zombie while statements still need finalization. */
+function closeConnection(h: bigint) {
+  const c = conn(h);
+  check(c, C._sqlite3_close_v2(c.ptr));
+  c.closed = true;
+  release(h);
+  if (!c.statements.size) retiredConnection(c);
 }
 
 // ── statements: the long a PreparedStatement holds is the sqlite3_stmt pointer itself
@@ -209,7 +215,17 @@ const st = (h: bigint) => Number(h);
 /** sqlite3_prepare_v2's statement, or the connection's exception with `message` */
 function prepare(c: Connection, sql: string, message: string | null = null): bigint {
   if (withUTF8(sql, (text) => C._sqlite3_prepare_v2(c.ptr, text, -1, out, 0))) throw dbError(c, message);
-  return BigInt(int32At(out));
+  const pointer = int32At(out);
+  if (pointer) { c.statements.add(pointer); statementOwners.set(pointer, c); }
+  return BigInt(pointer);
+}
+/** finalize destroys the statement even when its result reports the previous evaluation error. */
+function finalizeStatement(s: bigint) {
+  const pointer = st(s), c = statementOwners.get(pointer);
+  try { C._sqlite3_finalize(pointer); } finally {
+    statementOwners.delete(pointer); c?.statements.delete(pointer);
+    if (c?.closed && !c.statements.size) retiredConnection(c);
+  }
 }
 const bindText = (s: number, i: number, value: string) => withUTF8(value, (text) => C._sqlite3_bind_text(s, i, text, -1, TRANSIENT));
 function bindBlob(s: number, i: number, value: Int8Array): number {
@@ -345,7 +361,7 @@ export function createSQLiteSession() {
   const dead = () => rt.mkThrowable("android/os/DeadObjectException", "SQLite session closed");
   const invalid = () => sqliteException(SQLITE_MISUSE, "Invalid SQLite session handle");
   const cleanup = () => {
-    for (const { pointer } of statements.values()) C._sqlite3_finalize(st(pointer));
+    for (const [token, { pointer }] of statements) { statements.delete(token); finalizeStatement(pointer); }
     statements.clear();
     for (const h of connections.values()) closeConnection(h);
     connections.clear();
@@ -361,13 +377,13 @@ export function createSQLiteSession() {
     if (family === "statement") {
       statement = args[0] as bigint;
       const owned = statements.get(statement);
-      if (!owned) throw invalid();
+      if (!owned || (!finalize && !connections.has(owned.connection))) throw invalid();
       connection = owned.connection; args[0] = owned.pointer;
     } else if (family === "connection" || (family === "platform" && !open)) {
       connection = args[0] as bigint;
       const h = connections.get(connection);
-      if (h === undefined) throw invalid();
-      args[0] = h;
+      if (h === undefined && !finalize) throw invalid();
+      args[0] = h ?? 0n;
       if (method.includes("(JJ")) {
         statement = args[1] as bigint;
         const owned = statements.get(statement);
@@ -382,6 +398,8 @@ export function createSQLiteSession() {
       args[2] = windowHandle = handle(window);
     }
     const windowData = (): WindowData => ({ rows: window!.rows, cols: window!.cols, used: window!.used, types: window!.types, values: window!.values });
+    // Validation is complete. Ownership ends at finalize dispatch, even if it throws afterward.
+    if (finalize) statements.delete(statement);
     try {
       const result = native(...args as never[]);
       let value = result instanceof Promise ? await result : result;
@@ -392,8 +410,7 @@ export function createSQLiteSession() {
       } else if (prepareStatement && value !== 0n) {
         const token = nextSQLiteToken++;
         statements.set(token, { pointer: value as bigint, connection }); value = token;
-      } else if (finalize) statements.delete(statement);
-      else if (method === "nativeClose(J)V") connections.delete(connection);
+      } else if (!finalize && method === "nativeClose(J)V") connections.delete(connection);
       if (closed) throw dead();
       return { value, ...(window ? { window: windowData() } : {}) };
     } catch (error) {
@@ -437,7 +454,7 @@ registerSQLite("platform", "android/database/sqlite/SQLiteConnection", {
   "nativeRegisterLocalizedCollators(JLjava/lang/String;)V": (h: bigint, locale: string) =>
     collate(conn(h), "LOCALIZED", locale.replaceAll("_", "-"), { sensitivity: "base" }),
   "nativePrepareStatement(JLjava/lang/String;)J": (h: bigint, sql: string) => prepare(conn(h), sql, ", while compiling: " + sql),
-  "nativeFinalizeStatement(JJ)V": (_h: bigint, s: bigint) => { C._sqlite3_finalize(st(s)); },
+  "nativeFinalizeStatement(JJ)V": (_h: bigint, s: bigint) => finalizeStatement(s),
   "nativeGetParameterCount(JJ)I": (_h: bigint, s: bigint) => C._sqlite3_bind_parameter_count(st(s)),
   "nativeIsReadOnly(JJ)Z": (_h: bigint, s: bigint) => C._sqlite3_stmt_readonly(st(s)),
   "nativeGetColumnCount(JJ)I": (_h: bigint, s: bigint) => C._sqlite3_column_count(st(s)),
@@ -474,9 +491,14 @@ rt.registerJni("android/database/sqlite/SQLiteGlobal", "nativeReleaseMemory()I",
 
 // ── androidx.sqlite's bundled driver (libsqliteJni): its statement natives name only the statement
 const androidx: Raise = (code, sqliteMessage) => rt.mkThrowable("android/database/SQLException", `Error code: ${code}, message: ${sqliteMessage}`);
-const owner = (s: bigint) => byPtr.get(C._sqlite3_db_handle(st(s))) ?? rt.npe();
+const owner = (s: bigint) => {
+  const c = statementOwners.get(st(s));
+  if (!c || c.closed) throw androidx(SQLITE_MISUSE, "statement connection is closed");
+  return c;
+};
 /** throwIfNoRow and throwIfInvalidColumn, which guard the column getters */
 function column(s: bigint, i: number, row = true): number {
+  owner(s);
   const p = st(s);
   if (row && !C._sqlite3_stmt_busy(p)) throw androidx(SQLITE_MISUSE, "no row");
   if (i < 0 || i >= C._sqlite3_column_count(p)) throw androidx(SQLITE_RANGE, "column index out of range");
@@ -505,8 +527,8 @@ registerSQLite("statement", "androidx/sqlite/driver/bundled/BundledSQLiteStateme
     return +(rc === ROW);
   },
   "nativeReset(J)V": (s: bigint) => check(owner(s), C._sqlite3_reset(st(s))),
-  "nativeClose(J)V": (s: bigint) => { C._sqlite3_finalize(st(s)); },
-  "nativeGetColumnCount(J)I": (s: bigint) => C._sqlite3_column_count(st(s)),
+  "nativeClose(J)V": finalizeStatement,
+  "nativeGetColumnCount(J)I": (s: bigint) => { owner(s); return C._sqlite3_column_count(st(s)); },
   "nativeGetColumnName(JI)Ljava/lang/String;": (s: bigint, i: number) => columnName(column(s, i, false), i),
   "nativeGetColumnType(JI)I": (s: bigint, i: number) => C._sqlite3_column_type(column(s, i), i),
   "nativeGetLong(JI)J": (s: bigint, i: number) => C._sqlite3_column_int64(column(s, i), i),

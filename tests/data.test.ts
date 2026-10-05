@@ -17,7 +17,8 @@ import { loadLibcore, loadFrameworkJar, bootApp, packageRecord, thrown } from ".
 beforeAll(loadFrameworkJar);
 
 rt.linkNatives();
-const loadSql = () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
+let sqlReady: ReturnType<typeof initSqlJs> | undefined;
+const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
 
 describe("cursorwindow", () => {
@@ -177,6 +178,67 @@ describe("sqlite", () => {
       expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
       vfs.delete(path);
     } finally { first.close(); second.close(); }
+  });
+
+  test("SQLite service retires finalizers on errors and permits only release on closed connections", async () => {
+    freshSQLiteStore(); vfs.mkdir("/data/local/tmp");
+    const sql = await loadSql() as Awaited<ReturnType<typeof initSqlJs>> & { _sqlite3_finalize(pointer: number): number };
+    for (const family of ["platform", "driver"] as const) {
+      const session = createSQLiteSession(), path = `/data/local/tmp/sqlite-finalizer-${family}.db`;
+      let activeSession = session;
+      const call = async (kind: SQLiteRequest["family"], method: string, ...args: SQLiteRequest["args"]) =>
+        (await activeSession.call({ family: kind, method, args })).value;
+      const openConnection = () => family === "platform"
+        ? call(family, "nativeOpen(Ljava/lang/String;ILjava/lang/String;ZZII)J", path, 0x10000000)
+        : call(family, "nativeOpen(Ljava/lang/String;I)J", path, 6);
+      const prepareStatement = (c: bigint, text: string) => family === "platform"
+        ? call(family, "nativePrepareStatement(JLjava/lang/String;)J", c, text)
+        : call("connection", "nativePrepare(JLjava/lang/String;)J", c, text);
+      const execute = (c: bigint, s: bigint) => family === "platform"
+        ? call(family, "nativeExecute(JJZ)V", c, s, 0) : call("statement", "nativeStep(J)Z", s);
+      const finalize = (c: bigint, s: bigint) => family === "platform"
+        ? call(family, "nativeFinalizeStatement(JJ)V", c, s) : call("statement", "nativeClose(J)V", s);
+      const closeConnection = (c: bigint) => call(family === "platform" ? family : "connection", "nativeClose(J)V", c);
+      const original = sql._sqlite3_finalize;
+      try {
+        const c = await openConnection() as bigint;
+        for (const text of ["CREATE TABLE t(v INTEGER UNIQUE)", "INSERT INTO t VALUES (1)"]) {
+          const s = await prepareStatement(c, text) as bigint;
+          await execute(c, s); await finalize(c, s);
+        }
+        const failed = await prepareStatement(c, "INSERT INTO t VALUES (1)") as bigint;
+        await prepareStatement(c, "SELECT 7");
+        expect(await thrown(() => execute(c, failed))).toContain(family === "platform" ? "SQLiteConstraintException" : "SQLException");
+        const calls = new Map<number, number>(); let firstPointer: number | undefined, code = 0;
+        sql._sqlite3_finalize = pointer => {
+          const count = (calls.get(pointer) ?? 0) + 1; calls.set(pointer, count);
+          // Detect a repeated destruction before invoking undefined native behavior in the test.
+          if (count > 1) throw new Error("Repeated finalized pointer");
+          const rc = original(pointer);
+          if (firstPointer === undefined) {
+            firstPointer = pointer; code = rc;
+            throw rt.mkThrowable("java/lang/RuntimeException", "post-finalize diagnostic");
+          }
+          return rc;
+        };
+        expect(await thrown(() => finalize(c, failed))).toBe("java/lang/RuntimeException: post-finalize diagnostic");
+        expect(code & 255).toBe(19); // SQLite reports the prior constraint failure after destroying the statement.
+        expect(await thrown(() => execute(c, failed))).toContain("SQLiteMisuseException");
+        await session.close();
+        expect(calls.get(firstPointer!)).toBe(1); expect(calls.size).toBe(2);
+        expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
+        sql._sqlite3_finalize = original;
+        const zombie = activeSession = createSQLiteSession();
+        try {
+          const z = await openConnection() as bigint, s = await prepareStatement(z, "SELECT 7") as bigint;
+          await closeConnection(z);
+          expect(sqliteStore.files.get(path)!.connections.size).toBe(1);
+          expect(await thrown(() => execute(z, s))).toContain("SQLiteMisuseException");
+          await finalize(z, s);
+          expect(sqliteStore.files.get(path)!.connections.size).toBe(0);
+        } finally { await zombie.close(); }
+      } finally { sql._sqlite3_finalize = original; await session.close(); vfs.delete(path); }
+    }
   });
 
   test("connections to one file share its writes, keep their own TEMP schema, and raise AOSP's exceptions", async () => {
