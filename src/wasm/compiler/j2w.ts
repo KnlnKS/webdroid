@@ -201,9 +201,10 @@ export class Compiler implements Base {
     return code;
   }
   private head?: MethodInfo;
+  directFunc(m: MethodInfo): number | undefined { return this.direct ? this.fn.get(mid(m)) : undefined; }
   /** calls `m`: directly when this module defines it, else through its table slot (a lazy-link stub until it is compiled) */
   callMethod(c: Code, m: MethodInfo): void {
-    const f = this.direct ? this.fn.get(mid(m)) : undefined;
+    const f = this.directFunc(m);
     if (f !== undefined) c.call(f); else c.i32(this.w.slotOf(m)).callIndirect(this.methodSig(m));
   }
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
@@ -216,7 +217,7 @@ export class Compiler implements Base {
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
   guards(decl: string, name: string, desc: string): MethodInfo[] {
-    return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.fn.has(mid(m)));
+    return (this.w.plan.get(`${decl}.${name}${desc}`) ?? []).filter((m) => this.directFunc(m) !== undefined);
   }
   /** counts `m`'s calls and loop iterations in its word of the scratch memory and asks the host to upgrade the method when they reach the budget */
   emitCount(c: Code, m: MethodInfo, iterations?: number): void {

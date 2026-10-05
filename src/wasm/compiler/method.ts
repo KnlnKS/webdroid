@@ -268,10 +268,11 @@ export class MC {
       if (t === null) continue;
       if (/custom|polymorphic/.test(ins.name)) return true;
       // a virtual call tests for the likely implementations of its unit first (guards): the call of one that counts, and the dispatch behind them, count around themselves
-      if (virtual && this.callGuards(ins).length) {
-        for (const g of this.callGuards(ins)) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
+      const guards = virtual ? this.callGuards(ins) : [];
+      if (guards.length) {
+        for (const g of guards) if (!bounded(g)) open.push(`${key}:${mid(g)}`);
         cold.push(key + ":f");
-      } else if (!bounded(t)) {
+      } else if (!bounded(virtual ? "dynamic" : t)) {
         // the constructor of an exception thrown right after runs once and leaves the method: a caller's weight is no loss there, whatever the stack holds
         (throws(ins) ? cold : open).push(key);
       }
@@ -289,7 +290,8 @@ export class MC {
   private virtuals = new Map<number, [string, string, string]>();
   private callGuards(ins: Ins): MethodInfo[] {
     const target = this.callee(ins), virtual = this.virtuals.get(ins.pc);
-    return target && target !== "dynamic" ? [target] : virtual ? this.cx.guards(...virtual) : [];
+    if (target && target !== "dynamic") return this.cx.directFunc(target) === undefined ? [] : [target];
+    return virtual ? this.cx.guards(...virtual) : [];
   }
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
   callee(ins: Ins): MethodInfo | null | "dynamic" {
