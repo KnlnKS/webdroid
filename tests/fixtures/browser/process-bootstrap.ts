@@ -101,7 +101,7 @@ export async function endpointOwnership() {
       entered(); return new Promise(() => {});
     },
     service: async () => ({ pid, id: 1 }), serviceConnected: async () => {}, contentProvider: async () => null,
-    broadcast: async (_intent, _component, _ordered, result) => result, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
+    broadcast: async (_intent, _component, _ordered, result) => result, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
     packageRemoved: async () => { await new Promise(resolve => setTimeout(resolve, 10)); removed = true; },
     kill: () => { setTimeout(() => { killed = true; broker.fail(pid, "fixture kill delivered", NOT_CRASHED); }, 10); },
   });
@@ -115,7 +115,7 @@ export async function endpointOwnership() {
         if(request.intent?.bytes[0]===42){const reply=await broker.transact({handle:{pid:8001,id:1},code:2,flags:0,data:request.intent,caller:{pid:9999,uid:9999}});return {pid:reply.handled,id:clips};}
         return {pid:8002,id:removed?2:1};
       }, serviceConnected:async()=>{}, contentProvider:async()=>null,
-      broadcast:async(_i,_c,_o,r)=>r, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
+      broadcast:async(_i,_c,_o,r)=>r, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
       packageRemoved:async()=>{await new Promise(r=>setTimeout(r,10));removed=true;}
     });};`;
   const url = URL.createObjectURL(new Blob([workerCode], {type:"text/javascript"}));
@@ -279,8 +279,8 @@ export async function clipboardOwnership() {
   let peerChanges = 0, peerChanged!: () => void;
   const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),
     service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-    accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
-  broker.ready(8302,empty); broker.ready(8303,{...empty,accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{}});
+    locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
+  broker.ready(8302,empty); broker.ready(8303,{...empty,locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{}});
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
   const code = `import {callProxy,serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
     let broker;
@@ -289,7 +289,7 @@ export async function clipboardOwnership() {
         broker=callProxy(data.reverse,${JSON.stringify(brokerMethods)}).endpoint;
         serveProcess(data.endpoint,{activity:async()=>{},transact:async r=>({handled:0,data:r.data}),service:async()=>null,
           serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-          accountsChanged:async()=>self.postMessage({accountsChanged:true}), settingsChanged:async(table,name)=>self.postMessage({setting:[table,name]}), clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
+          locationChanged:async()=>{}, accountsChanged:async()=>self.postMessage({accountsChanged:true}), settingsChanged:async(table,name)=>self.postMessage({setting:[table,name]}), clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
         self.postMessage({ready:true});return;
       }
       try {
@@ -527,5 +527,70 @@ export async function workerDiagnosticOwnership() {
   } finally {
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);
     clients.forEach(client=>client.close());worker.terminate();URL.revokeObjectURL(url);packages.delete(pkg);
+  }
+}
+
+/** A real Worker owns callbacks; only copied fixes cross the canonical browser location owner. */
+export async function locationOwnership() {
+  const broker = processBroker(), pkg = "test.location.owner", other = "test.location.denied";
+  for (const [i,name] of [pkg,other].entries()) {
+    const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
+    packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,17000+i,async()=>[]));
+  }
+  broker.permissions.grant(pkg,["android.permission.ACCESS_FINE_LOCATION"]);
+  const entry = broker.connect(pkg,pkg,8501), denied = broker.connect(other,other,8502), peer = broker.connect(pkg,pkg+":peer",8503);
+  const oldGeo = Object.getOwnPropertyDescriptor(navigator,"geolocation");
+  let watched: PositionCallback | undefined, cleared = 0;
+  Object.defineProperty(navigator,"geolocation",{configurable:true,value:{
+    watchPosition(success:PositionCallback){watched=success;return 71;},clearWatch(){cleared++;},
+  }});
+  type Control = {subscribe():Promise<void>;remove():Promise<void>;read():Promise<unknown>;events():Promise<number[]>};
+  const code = `import {callProxy,serveCalls,serveProcess} from ${JSON.stringify(location.origin+"/process-port.js")};
+    import {remoteLocation} from ${JSON.stringify(location.origin+"/location-access.js")};
+    self.onmessage=({data})=>{
+      const broker=callProxy(data.broker,["locationAvailable","locationEnabled","locationLast","locationSubscribe","locationRemove"]);
+      const remote=remoteLocation(()=>broker.endpoint),events=[];
+      serveProcess(data.endpoint,{locationChanged:async(id,token,event)=>remote.changed(id,token,event)});
+      serveCalls(data.control,{
+        subscribe:()=>remote.access.subscribe(41,false,true,event=>{if(event.kind==="fix")events.push(event.fix.latitude);}),
+        remove:()=>remote.access.remove(41),read:()=>remote.access.last(),events:async()=>events.slice(),
+      });
+    };`;
+  const url = URL.createObjectURL(new Blob([code],{type:"text/javascript"})), worker = new Worker(url,{type:"module"});
+  const endpoint = new MessageChannel(), control = new MessageChannel(), client = callProxy<Control>(control.port1,["subscribe","remove","read","events"]);
+  const deniedClient = callProxy<BrokerCalls>(broker.brokerPort(denied.pid),brokerMethods,[],error=>Object.assign(new Error(error.message??""),{javaClass:error.javaClass}));
+  const peerClient = callProxy<BrokerCalls>(broker.brokerPort(peer.pid),brokerMethods);
+  let peerEvents = 0;
+  const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,
+    broadcast:async(_i,_c,_o,r)=>r,accountsChanged:async()=>{},settingsChanged:async()=>{},clipboardChanged:async()=>{},locationChanged:async()=>{peerEvents++;},packageRemoved:async()=>{},kill:()=>{}};
+  broker.ready(peer.pid,empty);
+  const emit = (latitude:number) => watched!({coords:{latitude,longitude:2,accuracy:3,altitude:null,altitudeAccuracy:null,heading:null,speed:null},timestamp:Date.now()} as GeolocationPosition);
+  const waitEvents = async(count:number)=>{
+    for(let i=0;i<30;i++){const events=await client.endpoint.events();if(events.length===count)return events;await new Promise(r=>setTimeout(r,5));}
+    return client.endpoint.events();
+  };
+  try {
+    const reverse = broker.brokerPort(entry.pid);
+    worker.postMessage({broker:reverse,endpoint:endpoint.port1,control:control.port2},[reverse,endpoint.port1,control.port2]);
+    broker.readyPort(entry.pid,endpoint.port2);
+    const available = await peerClient.endpoint.locationAvailable();
+    const deniedRead = await deniedClient.endpoint.locationLast().catch(error=>error.message==="Location permission denied");
+    await client.endpoint.subscribe();emit(12);await waitEvents(1);
+    const copy = await client.endpoint.read() as {latitude:number}; copy.latitude=99;
+    const copied = broker.location.last?.latitude===12;
+    await client.endpoint.subscribe();
+    await (await entry.ready).locationChanged(41,1,{kind:"fix",fix:{...broker.location.last!,latitude:99}});
+    emit(24);const events=await waitEvents(2),stale=events.join(",")==="12,24";
+    await client.endpoint.remove();const removed=cleared===1;
+    await peerClient.endpoint.locationSubscribe(1,1,false,true);
+    await client.endpoint.subscribe();broker.fail(entry.pid,"location fixture death",NOT_CRASHED);
+    emit(48);for(let i=0;i<30&&!peerEvents;i++)await new Promise(r=>setTimeout(r,5));
+    const peerSurvives=peerEvents>0;
+    broker.fail(peer.pid,"location peer death",NOT_CRASHED);
+    return {available,denied:deniedRead,events,copied,stale,removed,peerSurvives,deathCloses:cleared===2};
+  } finally {
+    for(const pid of [8501,8502,8503])broker.fail(pid,"location fixture cleanup",NOT_CRASHED);
+    client.close();deniedClient.close();peerClient.close();worker.terminate();URL.revokeObjectURL(url);broker.permissions.clear(pkg);
+    if(oldGeo)Object.defineProperty(navigator,"geolocation",oldGeo);else Reflect.deleteProperty(navigator,"geolocation");
   }
 }

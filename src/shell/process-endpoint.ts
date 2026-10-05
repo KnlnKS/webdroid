@@ -1,5 +1,6 @@
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
+import { remoteLocation } from "./location-access";
 import { filePathTransport } from "./file-path";
 import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
@@ -36,7 +37,9 @@ let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited"],
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
+const workerLocation = remoteLocation(brokerCalls);
 function connectCommandTransports(): void {
+  Object.assign(locationTransport,workerLocation.access);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
   pendingTransport.cancel = id => brokerCalls().pendingCancel(id);
   pendingTransport.send = (id, fill) => brokerCalls().pendingSend(id, fill);
@@ -109,6 +112,7 @@ function connectCommandTransports(): void {
 }
 export function closeProcessBrokerPort(): void {
   calls?.close();
+  workerLocation.close();
   workerActivityResults.clear();
 }
 const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
@@ -190,11 +194,13 @@ export function connectProcess(): ProcessEndpoint {
     if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   }
   useWebCookies((pkg) => broker.cookies(pkg));
-  locationTransport.available = () => broker.location.available;
-  locationTransport.enabled = () => broker.location.enabled;
-  locationTransport.last = () => broker.location.last;
-  locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
-  locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
+  if (typeof window !== "undefined" && window === window.top) {
+    locationTransport.available = () => broker.location.available;
+    locationTransport.enabled = () => broker.location.enabled;
+    locationTransport.last = () => broker.location.last;
+    locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
+    locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
+  }
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents, intentCodec));
@@ -223,6 +229,7 @@ export function connectProcess(): ProcessEndpoint {
 /** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
 export function createProcessEndpoint(requests = workerActivityResults): ProcessEndpoint {
   return {
+    locationChanged: async (id,token,event) => workerLocation.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),

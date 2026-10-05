@@ -337,6 +337,9 @@ describe("pending-intents", () => {
       return encodeIntent(intent);
     };
     try {
+      expect(await other.locationLast().catch(error=>error.javaClass)).toBe("java/lang/SecurityException");
+      await creator.permissionGrant(PKG,["android.permission.ACCESS_FINE_LOCATION"]);
+      expect(await sibling.locationLast()).toBeNull();
       const data = await encoded("original");
       const cls = PKG + ".CanonicalService";
       owner.components.service.set(cls,{name:"service",attrs:[
@@ -388,7 +391,7 @@ describe("pending-intents", () => {
     } finally {
       for (const client of clients) client.close();
       for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
-      broker.intents.remove(PKG); packages.delete(foreign.pkg);
+      broker.intents.remove(PKG); broker.permissions.clear(PKG); packages.delete(foreign.pkg);
     }
   });
 

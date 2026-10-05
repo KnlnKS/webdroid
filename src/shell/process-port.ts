@@ -4,7 +4,7 @@ type Contract = Record<string, (...args: never[]) => unknown>;
 type Message = { kind: "call" | "notify"; id: number; method: string; args: unknown[] }
   | { kind: "result"; id: number; value: unknown }
   | { kind: "error"; id: number; error: ProcessFailure } | { kind: "close"; error?: ProcessFailure };
-const methods = ["activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "accountsChanged", "packageRemoved", "kill"] as const;
+const methods = ["locationChanged", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "accountsChanged", "packageRemoved", "kill"] as const;
 
 export type ProcessFailure = { javaClass: string | null; name: string; message: string | null };
 

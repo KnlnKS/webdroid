@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
   if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -28,7 +28,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
           serveProcess(data.endpoint, {
             activity: async()=>{}, service: async()=>null, serviceConnected: async()=>{}, contentProvider:async()=>null,
             broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
-            accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;},
+            locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;},
             transact:async(request,caller)=>{
               if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data,cached};}
               if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
@@ -44,7 +44,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const empty = { bytes: new Uint8Array(0), objects: [] };
       const stopCallbacks = serveProcess(callbacks.port1, {
         activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
-        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
+        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
         transact: async () => {
           await proxy.endpoint.clipboardChanged();
           return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
@@ -100,6 +100,12 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return pointerInputOwnership();
     });
     expect(pointers).toEqual({samples:[[1,0,20,40],[2,0,10,12],[2,3,0,0],[1,2,60,80],[1,1,80,100]],closed:true});
+    const locationResult = await page.evaluate(async () => {
+      const {locationOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return locationOwnership();
+    });
+    expect(locationResult).toEqual({available:true,denied:true,events:[12,24],copied:true,
+      stale:true,removed:true,peerSurvives:true,deathCloses:true});
     const diagnostic = await page.evaluate(async () => {
       const {workerDiagnosticOwnership} = await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return workerDiagnosticOwnership();
