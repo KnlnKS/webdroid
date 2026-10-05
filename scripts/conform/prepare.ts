@@ -1,6 +1,6 @@
 // Fetches a suite's jars and test sources and compiles them with ConformRunner to dex under conform-cache/<suite>
-// (once); shared by the JS tier's runner (run.ts) and the Wasm tier's (scripts/wasm/conform.ts).
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+// (cached by runner source content); shared by the JS tier's runner (run.ts) and the Wasm tier's (scripts/wasm/conform.ts).
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { androidPlatform, androidTool } from "../android-sdk";
 import { SUITES } from "./suites";
 
@@ -48,22 +48,35 @@ export async function prepare(suiteName: string): Promise<{ suite: (typeof SUITE
     }
     classes = classes.sort();
   }
-  if (!existsSync(`${dexDir}/classes.dex`)) {
-    const out = `${dexDir}/classes`;
+  const out = `${dexDir}/classes`, stamp = `${dexDir}/runner-sources.json`;
+  const runners = [`${import.meta.dir}/ConformRunner.java`, ...(suite.testng ? [`${import.meta.dir}/NgRunner.java`] : [])];
+  const runnerSources = JSON.stringify(runners.map((file) => readFileSync(file, "utf8")));
+  const fullBuild = !existsSync(`${dexDir}/classes.dex`) || !existsSync(out);
+  const runnerChanged = !existsSync(stamp) || readFileSync(stamp, "utf8") !== runnerSources;
+  if (fullBuild || runnerChanged) {
     mkdirSync(out, { recursive: true });
+    // javac does not remove inner classes that disappeared from a runner's source.
+    for (const file of readdirSync(out)) if (/^(ConformRunner|NgRunner)(\$.*)?\.class$/.test(file)) rmSync(`${out}/${file}`);
     // libcore's test sources also name android.* and test-selection annotations (scripts/conform/stubs)
     const stubs = [...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/stubs`)].map((f) => `${import.meta.dir}/stubs/${f}`);
     // hidden platform APIs the tests call: compiled against, never dexed, so the platform's own classes answer
     const hidden = `${dexDir}/hidden`;
-    if (suite.source) run(["javac", "--release", "17", "-nowarn", "-cp", `${androidPlatform(35)}/android.jar`, "-d", hidden,
+    if (fullBuild && suite.source) run(["javac", "--release", "17", "-nowarn", "-cp", `${androidPlatform(35)}/android.jar`, "-d", hidden,
       ...[...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/hidden`)].map((f) => `${import.meta.dir}/hidden/${f}`)]);
     // hidden java.* classes cannot come from the class path; they patch java.base as sources javac only reads
     const patch = suite.source ? ["--patch-module", `java.base=${import.meta.dir}/patch/java.base`] : [];
     run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", ...patch, "-cp", [...jars, `${androidPlatform(35)}/android.jar`, hidden].join(":"),
-      "-d", out, `${import.meta.dir}/ConformRunner.java`, ...(suite.source ? stubs : []),
-      ...(suite.testng ? [`${import.meta.dir}/NgRunner.java`] : []), ...sources]);
-    run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,
-      ...[...new Bun.Glob("**/*.class").scanSync(out)].map((f) => `${out}/${f}`)]);
+      "-d", out, ...runners, ...(fullBuild ? [...(suite.source ? stubs : []), ...sources] : [])]);
+    // Build separately: a smaller result must not leave classes2.dex from an older build.
+    // Publish only after d8 succeeds; failed builds keep their old stamp and are retried.
+    const nextDex = mkdtempSync(`${dexDir}/dex-`);
+    try {
+      run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", nextDex, ...jars,
+        ...[...new Bun.Glob("**/*.class").scanSync(out)].map((f) => `${out}/${f}`)]);
+      for (const file of readdirSync(dexDir)) if (/^classes(\d+)?\.dex$/.test(file)) rmSync(`${dexDir}/${file}`);
+      for (const file of readdirSync(nextDex)) renameSync(`${nextDex}/${file}`, `${dexDir}/${file}`);
+      await Bun.write(stamp, runnerSources);
+    } finally { rmSync(nextDex, { recursive: true, force: true }); }
   }
   // the suite's resource roots as a jar, which the Wasm tier's system class loader reads (the JS tier reads the roots, run.ts)
   if (suite.source?.resources?.length && !existsSync(`${dexDir}/resources.jar`)) {
