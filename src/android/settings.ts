@@ -9,7 +9,7 @@
 // generators, so each Java call runs on the asking thread (see binder.ts newStub).
 import { awaited, rt, driven, type JObj, type Gen } from "../jvm/runtime";
 import { hexBytes } from "../jvm/abi";
-import { vcall, scall, staticField, newObj, iof } from "../jvm/natives/jentry";
+import { vcall, scall, staticField, newObj, iof, after } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { newArrayList, toJsArray, arrayMapEntries } from "../jvm/natives/jcoll";
 import { unbox } from "../jvm/natives/jbox";
@@ -20,26 +20,31 @@ import { packages, type PackageRecord } from "./packages";
 import { notifyContent } from "./server/content";
 import { locationTransport } from "./locationmanager";
 import { holdsPlatformPermission } from "./permissions";
-import { SettingsStore, type SettingsTable } from "../shell/settings";
+import { SettingsStore, type SettingsTable, type SettingsAccess } from "../shell/settings";
 import { registerSystemProvider, matrixCursor } from "./systemproviders";
 
 const SETTINGS_AUTHORITY = "settings";
 let store = new SettingsStore(), stopWatching = store.watch(settingsChanged);
+let access: SettingsAccess = store;
 /** the broker's store, shared by every process */
 export function useSettingsStore(shared: SettingsStore): () => void {
-  stopWatching(); store = shared;
+  stopWatching(); store = shared; access = shared;
   return stopWatching = shared.watch(settingsChanged);
 }
 export const settingsStore = (): SettingsStore => store;
+export function useSettingsAccess(shared: SettingsAccess): void {
+  stopWatching(); access = shared;
+}
 /** SettingsProvider.notifyForSettingsChange: notifyChange(uri, null, syncToNetwork) as the system */
-function settingsChanged(table: SettingsTable, name: string): void {
+export function settingsChanged(table: SettingsTable, name: string): void {
   detached(() => asSystem(() => notifyContent(`content://settings/${table}/${name}`, null, false, 1)), logUncaught);
 }
 
 /** UiModeManagerService persists the device's night mode as Secure.UI_NIGHT_MODE once it is set:
  *  MODE_NIGHT_YES (2) while dark, MODE_NIGHT_NO (1) after it was dark */
-export function deviceNightMode(night: boolean): void {
-  if (night || store.get("secure", "ui_night_mode") !== null) store.put("secure", "ui_night_mode", night ? "2" : "1");
+export function deviceNightMode(night: boolean): void | Promise<void> {
+  return after(night ? "2" : access.get("secure", "ui_night_mode"), value =>
+    value === null ? undefined : after(access.put("secure", "ui_night_mode", night ? "2" : "1"), () => {}));
 }
 
 type Table = "system" | "secure" | "global";
@@ -124,14 +129,16 @@ const DERIVED: Partial<Record<Table, Record<string, (stored: string | null) => u
   global: { device_name: (stored) => stored ?? staticField("android/os/Build", "MODEL") },
 };
 const valueOf = (table: Table, name: string): unknown => {
-  const derive = DERIVED[table]?.[name], stored = store.get(table, name);
-  return derive ? derive(stored) : stored;
+  const derive = DERIVED[table]?.[name];
+  return after(access.get(table, name), stored => derive ? derive(stored) : stored);
 };
 /** the table's settings in SettingsState order, with the derived ones */
-function namesOf(table: Table): string[] {
-  const names = store.entries(table).map(([name]) => name);
-  for (const name of Object.keys(DERIVED[table] ?? {})) if (!names.includes(name)) names.push(name);
-  return names;
+function namesOf(table: Table): string[] | Promise<string[]> {
+  return after(access.entries(table), entries => {
+    const names = entries.map(([name]) => name);
+    for (const name of Object.keys(DERIVED[table] ?? {})) if (!names.includes(name)) names.push(name);
+    return names;
+  });
 }
 /** a setting's value as the provider reads it for this caller */
 function* readSetting(c: Caller, table: Table, name: string): Gen<string | null> {
@@ -149,7 +156,7 @@ const ssaids = new Map<number, Promise<string>>();
 function ssaid(record: PackageRecord): Promise<string> {
   let id = ssaids.get(record.uid);
   if (!id) ssaids.set(record.uid, id = (async () => {
-    const key = await crypto.subtle.importKey("raw", hexBytes(store.ssaidKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const key = await crypto.subtle.importKey("raw", hexBytes(await access.ssaidKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const parts: Uint8Array[] = [];
     for (const cert of await record.visibleCertificates()) {
       const prefix = new Uint8Array(4);
@@ -168,7 +175,7 @@ function ssaid(record: PackageRecord): Promise<string> {
 /** the rows a whole-table query or LIST answers: the readable, non-null settings */
 function* readableRows(c: Caller, table: Table): Gen<[string, string, string][]> {
   const rows: [string, string, string][] = [];
-  const names = namesOf(table);
+  const names = yield* awaited(namesOf(table));
   if (table === "secure" && c.appId >= FIRST_APPLICATION_UID && !names.includes("android_id")) names.push("android_id");
   for (let i = 0; i < names.length; i++) {
     let value: string | null;
@@ -216,7 +223,7 @@ const validKey = (name: string | null): name is string =>
 function* writeSetting(c: Caller, table: Table, name: string, value: string | null, operation: number): Gen<boolean> {
   if (table === "system") yield* enforceSystemWrite(c, operation, name);
   else enforceSecureWrite(c);
-  return store.put(table, name, operation === SYSTEM_DELETE ? null : value) || operation !== SYSTEM_DELETE;
+  return (yield* awaited(access.put(table, name, operation === SYSTEM_DELETE ? null : value))) || operation !== SYSTEM_DELETE;
 }
 
 // ── the provider's operations
@@ -233,16 +240,16 @@ const call = driven(function* call$(method: string, name: string | null, args: J
   const table = /^(?:GET|PUT|DELETE|LIST|RESET)_(system|secure|global|config)$/.exec(method)?.[1] as Table | "config" | undefined;
   const verb = method.slice(0, method.indexOf("_")), key = name ?? "";
   if (table === "config") {
-    if (verb === "GET") return yield* bundle([["String", "value", store.get("config", key)]]);
+    if (verb === "GET") return yield* bundle([["String", "value", yield* awaited(access.get("config", key))]]);
     if (verb === "LIST") {
       const prefix: string | null = args ? yield string(args, "_prefix") : null;
       const map = yield newObj("java/util/HashMap", "()V");
-      for (const [k, value] of store.entries("config")) if (!prefix || k.startsWith(prefix)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
+      for (const [k, value] of yield* awaited(access.entries("config"))) if (!prefix || k.startsWith(prefix)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, value);
       return yield* bundle([["Serializable", "value", map]]);
     }
     enforceConfigWrite(c);
-    if (verb === "PUT") { store.put("config", key, args ? yield string(args, "value") : null); return null; }
-    if (verb === "DELETE") return yield* bundle([["Int", "result_rows_deleted", store.put("config", key, null) ? 1 : 0]]);
+    if (verb === "PUT") { yield* awaited(access.put("config", key, args ? yield string(args, "value") : null)); return null; }
+    if (verb === "DELETE") return yield* bundle([["Int", "result_rows_deleted", (yield* awaited(access.put("config", key, null))) ? 1 : 0]]);
     return yield* reset(c, args);
   }
   if (table) {
@@ -313,7 +320,7 @@ const query = driven(function* query$(uri: string, projection: string[] | null, 
   const c = caller();
   if (name === null) return yield* awaited(cursorOf(columns, yield* readableRows(c, table as Table)));
   const value = yield* readSetting(c, table as Table, name);
-  const index = namesOf(table as Table).indexOf(name);
+  const index = (yield* awaited(namesOf(table as Table))).indexOf(name);
   return yield* awaited(cursorOf(columns, value === null ? [] : [[String(index < 0 ? 0 : index + 1), name, value]]));
 });
 const named = (values: Map<string, unknown>): [string | null, string | null] => {

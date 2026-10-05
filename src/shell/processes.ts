@@ -36,6 +36,7 @@ import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
+import type { SettingsCalls, SettingsTable } from "./settings";
 import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
 
 export type { ProcessBootstrap } from "./process-bootstrap-data";
@@ -70,13 +71,14 @@ export type ProcessEndpoint = {
   contentProvider: (authority: string) => Promise<BinderHandle | null>;
   broadcast: (intent: ParcelData, component: string | null, ordered: boolean, result: BroadcastData, sender: Sender | null) => Promise<BroadcastData>;
   clipboardChanged: () => Promise<void>;
+  settingsChanged: (table: SettingsTable, name: string) => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
   packageRemoved: (pkg: string) => Promise<void>;
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = CookieCalls & {
+export type BrokerCalls = CookieCalls & SettingsCalls & {
   clipboardSet: (data: ParcelData | null) => Promise<void>;
   clipboardGet: () => Promise<ParcelData | null>;
   clipboardListen: (active: boolean) => Promise<void>;
@@ -86,7 +88,7 @@ export type BrokerCalls = CookieCalls & {
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen"] as const;
+export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -145,6 +147,7 @@ class ProcessBroker {
   private bootstrapPorts = new Map<number, (() => void)[]>();
   private endpointPorts = new Map<number, () => void>();
   private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
+  private settingsClients = new Map<number, () => void>();
   private callerPorts = new Map<number, Set<() => void>>();
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
@@ -231,6 +234,7 @@ class ProcessBroker {
   }
   async bootstrap(pid: number, worker = false): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
+    this.watchSettings(pid);
     const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
@@ -269,6 +273,10 @@ class ProcessBroker {
       clipboardSet: async data => this.setClipboard(pid, data),
       clipboardGet: async () => this.getClipboard(pid),
       clipboardListen: async active => this.watchClipboard(pid, active),
+      settingsGet: async (table, name) => { this.watchSettings(pid); return this.settings.get(table, name); },
+      settingsEntries: async table => { this.watchSettings(pid); return this.settings.entries(table); },
+      settingsPut: async (table, name, value) => { this.watchSettings(pid); return this.settings.put(table, name, value); },
+      settingsSsaid: async () => { this.watchSettings(pid); return this.settings.ssaidKey(); },
       sqlite: request => {
         this.entry(pid);
         let session = this.sqliteSessions.get(pid);
@@ -301,6 +309,13 @@ class ProcessBroker {
       entry.resolve(proxy.endpoint);
     } catch (error) { port.postMessage({ kind: "close" }); port.close(); stop(); throw error; }
   }
+  private watchSettings(pid: number): void {
+    const entry = this.entry(pid);
+    if (this.settingsClients.has(pid)) return;
+    this.settingsClients.set(pid, this.settings.watch((table, name) => {
+      if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.settingsChanged(table, name)));
+    }));
+  }
   /** a process ended, or its frame failed: ActivityManagerService.appDiedLocked */
   fail(pid: number, message: string, death: Death): void {
     const entry = this.entries.get(pid);
@@ -309,6 +324,7 @@ class ProcessBroker {
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
     entry.dead = true; entry.reject(error);
     this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
+    this.settingsClients.get(pid)?.(); this.settingsClients.delete(pid);
     this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);
     for (const close of this.callerPorts.get(pid) ?? []) close();
     this.callerPorts.delete(pid);

@@ -21,7 +21,8 @@ import { usePermissionStore } from "../android/permissions";
 import { sqliteTransport } from "../android/sqlite";
 import { usePreferenceStore } from "../android/sharedprefs";
 import { useNotificationStore } from "../android/notification";
-import { useSettingsStore } from "../android/settings";
+import { useSettingsStore, useSettingsAccess, settingsChanged } from "../android/settings";
+import { remoteSettings } from "./settings";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { cookieTransport, useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
@@ -79,8 +80,13 @@ export function connectProcess(): ProcessEndpoint {
   cookieTransport.calls = brokerCalls;
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
-  const stopAccounts = useAccountStore(broker.accounts), stopSettings = useSettingsStore(broker.settings);
-  if (broker.alive(PROCESS_PID)) { broker.watch(PROCESS_PID, stopAccounts); broker.watch(PROCESS_PID, stopSettings); }
+  const stopAccounts = useAccountStore(broker.accounts);
+  if (typeof window === "undefined" || window !== window.top) useSettingsAccess(remoteSettings(brokerCalls));
+  else {
+    const stopSettings = useSettingsStore(broker.settings);
+    if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
+  }
+  if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopAccounts);
   usePermissionStore(broker.permissions);
   useWebCookies((pkg) => broker.cookies(pkg));
   locationTransport.available = () => broker.location.available;
@@ -128,6 +134,7 @@ export function connectProcess(): ProcessEndpoint {
   });
   return {
     clipboardChanged: async () => clipboardChanged(),
+    settingsChanged: async (table, name) => settingsChanged(table, name),
     packageRemoved: async pkg => forgetRemoved(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {

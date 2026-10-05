@@ -7,7 +7,9 @@ import { setProcessIdentity } from "../src/android/os";
 import { locationTransport } from "../src/android/locationmanager";
 import { hostedService } from "../src/android/binder";
 import { mkUri, uriText, type JUri } from "../src/android/net";
-import { settingsStore } from "../src/android/settings";
+import { settingsStore, useSettingsStore, useSettingsAccess } from "../src/android/settings";
+import { remoteSettings, type SettingsCalls } from "../src/shell/settings";
+import { callProxy, serveCalls } from "../src/shell/process-port";
 import { systemProvider } from "../src/android/systemproviders";
 import { bootApp, packageRecord, thrown } from "./java";
 import { DEVICE_PROPERTIES } from "../src/shell/device-properties";
@@ -40,6 +42,37 @@ beforeAll(async () => {
 });
 
 describe("settings-provider", () => {
+  test("the provider awaits canonical reads and mutation acknowledgment", async () => {
+    const store = settingsStore(), channel = new MessageChannel(), key = "webdroid_async_setting";
+    let release!: () => void, began!: () => void;
+    const gate = new Promise<void>(resolve => release = resolve), entered = new Promise<void>(resolve => began = resolve);
+    const stop = serveCalls<SettingsCalls>(channel.port1, {
+      settingsGet: async (table, name) => store.get(table, name),
+      settingsEntries: async table => store.entries(table),
+      settingsSsaid: async () => store.ssaidKey(),
+      settingsPut: async (table, name, value) => { began(); await gate; return store.put(table, name, value); },
+    });
+    const client = callProxy<SettingsCalls>(channel.port2, ["settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"]);
+    useSettingsAccess(remoteSettings(() => client.endpoint));
+    setProcessIdentity(4321, 1000);
+    try {
+      const pending = scall(GLOBAL, "putString", `(${CR}${S}${S})Z`, cr, key, "shared");
+      await entered;
+      expect(store.get("global", key)).toBeNull();
+      release();
+      expect(await pending).toBe(1);
+      expect(await scall(GLOBAL, "getString", `(${CR}${S})${S}`, cr, key)).toBe("shared");
+      const cursor = await vcall(cr, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+        mkUri(`content://settings/global/${key}`), null, null, null, null);
+      expect(await vcall(cursor, "getCount", "()I")).toBe(1);
+      expect(await vcall(cursor, "moveToFirst", "()Z")).toBe(1);
+      expect(await vcall(cursor, "getString", "(I)Ljava/lang/String;", 2)).toBe("shared");
+      await vcall(cursor, "close", "()V");
+    } finally {
+      release(); client.close(); stop(); useSettingsStore(store); store.put("global", key, null);
+      setProcessIdentity(4321, packages.get("org.webdroid.test.settings")!.uid);
+    }
+  });
   test("Settings reads the device's tables through the provider", async () => {
     expect(await scall(SYSTEM, "getFloat", `(${CR}${S})F`, cr, "font_scale")).toBe(1);
     expect(await scall(SYSTEM, "getInt", `(${CR}${S})I`, cr, "screen_brightness")).toBe(102);

@@ -92,7 +92,7 @@ export async function endpointOwnership() {
       entered(); return new Promise(() => {});
     },
     service: async () => ({ pid, id: 1 }), serviceConnected: async () => {}, contentProvider: async () => null,
-    broadcast: async (_intent, _component, _ordered, result) => result, clipboardChanged: async () => {},
+    broadcast: async (_intent, _component, _ordered, result) => result, settingsChanged: async()=>{}, clipboardChanged: async () => {},
     packageRemoved: async () => { await new Promise(resolve => setTimeout(resolve, 10)); removed = true; },
     kill: () => { setTimeout(() => { killed = true; broker.fail(pid, "fixture kill delivered", NOT_CRASHED); }, 10); },
   });
@@ -106,7 +106,7 @@ export async function endpointOwnership() {
         if(request.intent?.bytes[0]===42){const reply=await broker.transact({handle:{pid:8001,id:1},code:2,flags:0,data:request.intent,caller:{pid:9999,uid:9999}});return {pid:reply.handled,id:clips};}
         return {pid:8002,id:removed?2:1};
       }, serviceConnected:async()=>{}, contentProvider:async()=>null,
-      broadcast:async(_i,_c,_o,r)=>r, clipboardChanged:async()=>{clips++;}, kill:()=>{},
+      broadcast:async(_i,_c,_o,r)=>r, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
       packageRemoved:async()=>{await new Promise(r=>setTimeout(r,10));removed=true;}
     });};`;
   const url = URL.createObjectURL(new Blob([workerCode], {type:"text/javascript"}));
@@ -249,8 +249,8 @@ export async function clipboardOwnership() {
   let peerChanges = 0, peerChanged!: () => void;
   const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),
     service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-    clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
-  broker.ready(8302,empty); broker.ready(8303,{...empty,clipboardChanged:async()=>{}});
+    settingsChanged: async()=>{}, clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
+  broker.ready(8302,empty); broker.ready(8303,{...empty,settingsChanged: async()=>{}, clipboardChanged:async()=>{}});
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
   const code = `import {callProxy,serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
     let broker;
@@ -259,7 +259,7 @@ export async function clipboardOwnership() {
         broker=callProxy(data.reverse,${JSON.stringify(brokerMethods)}).endpoint;
         serveProcess(data.endpoint,{activity:async()=>{},transact:async r=>({handled:0,data:r.data}),service:async()=>null,
           serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-          clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
+          settingsChanged:async(table,name)=>self.postMessage({setting:[table,name]}), clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
         self.postMessage({ready:true});return;
       }
       try {
@@ -270,10 +270,12 @@ export async function clipboardOwnership() {
       }catch(error){self.postMessage({id:data.id,error:error.message});}
     };`;
   const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
-  let next=1,changes=0,changed!:()=>void,ready!:()=>void;
+  let next=1,changes=0,changed!:()=>void,ready!:()=>void,settingChanged!:()=>void;
+  const settingChanges: string[][] = [];
   const waiting = new Map<number,(value:unknown)=>void>();
   worker.onmessage=({data})=>{
     if(data.ready){ready();return;} if(data.changed){changes++;changed?.();return;}
+    if(data.setting){settingChanges.push(data.setting);settingChanged?.();return;}
     const resolve=waiting.get(data.id);waiting.delete(data.id);resolve?.(data.error?{error:data.error}:data.value);
   };
   const ask=(method:string,...args:unknown[])=>new Promise<unknown>(resolve=>{
@@ -295,12 +297,22 @@ export async function clipboardOwnership() {
     await peers[0].endpoint.clipboardSet(null);await cleared;
     const absent=await ask("clipboardGet");
     const written=new Promise<void>(resolve=>peerChanged=resolve);await ask("write");await written;
+    await ask("settingsGet","global","webdroid_worker_setting");
+    const settingNotice=new Promise<void>(resolve=>settingChanged=resolve);
+    const settingsWritten=await ask("settingsPut","global","webdroid_worker_setting","shared");
+    await settingNotice;
+    const settingsRead=await peers[0].endpoint.settingsGet("global","webdroid_worker_setting");
+    const rows=await peers[0].endpoint.settingsEntries("global");
+    rows.find(([name])=>name==="webdroid_worker_setting")![1]="copied";
+    const sameKey=await ask("settingsSsaid")===await peers[0].endpoint.settingsSsaid();
     // Drain the notification endpoint before death, so cleanup is not racing its reply.
     await (await entries[1].ready).activity({kind:"back"});
     worker.terminate();broker.fail(8301,"clipboard Worker ended",NOT_CRASHED);
     const survivor=await peers[0].endpoint.clipboardGet();
+    const settingsSurvivor=await peers[0].endpoint.settingsGet("global","webdroid_worker_setting");
     return {source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
-      changes,peerChanges,survivor:Array.from(survivor!.bytes)};
+      changes,peerChanges,survivor:Array.from(survivor!.bytes),
+      settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
   }finally{
     for(const client of peers)client.close();worker.terminate();URL.revokeObjectURL(url);
     for(const pid of [8301,8302,8303])broker.fail(pid,"clipboard fixture cleanup",NOT_CRASHED);

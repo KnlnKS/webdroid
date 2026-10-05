@@ -143,7 +143,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   }
   applicationNightOverride = nightOverride(getPrefs(pkg, "__system_uimode").map.get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
-  deviceNightMode(device.night);
+  await deviceNightMode(device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcher ? launcherOrientation(appNode, launcher, pkg) : -1);
@@ -236,8 +236,9 @@ function setApplicationNightMode(pkg: string, mode: number): void {
 }
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
   .addEventListener("change", (e) => {
-    deviceNightMode(e.matches);
-    if (applicationNightOverride === null) applyNightMode(e.matches);
+    Promise.resolve(deviceNightMode(e.matches)).then(() => {
+      if (applicationNightOverride === null) applyNightMode(e.matches);
+    }).catch(toThread());
   });
 
 const KEYCODE_BACK = 4;

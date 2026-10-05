@@ -28,7 +28,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
           serveProcess(data.endpoint, {
             activity: async()=>{}, service: async()=>null, serviceConnected: async()=>{}, contentProvider:async()=>null,
             broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
-            clipboardChanged:async()=>{clips++;},
+            settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;},
             transact:async(request,caller)=>{
               if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data,cached};}
               if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
@@ -44,7 +44,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const empty = { bytes: new Uint8Array(0), objects: [] };
       const stopCallbacks = serveProcess(callbacks.port1, {
         activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
-        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, clipboardChanged: async () => {},
+        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
         transact: async () => {
           await proxy.endpoint.clipboardChanged();
           return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
@@ -92,7 +92,8 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return clipboardOwnership();
     });
     expect(clipboard).toEqual({source:[9,2],fresh:[1,2],denied:null,foreground:[1,2],absent:null,
-      changes:1,peerChanges:3,survivor:[1,2]});
+      changes:1,peerChanges:3,survivor:[1,2],
+      settings:{written:true,read:"shared",sameKey:true,changes:[["global","webdroid_worker_setting"]],survivor:"shared"}});
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);
