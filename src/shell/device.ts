@@ -153,7 +153,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     await loadAppDexes();
     await loadAppCode({ profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   }
-  applicationNightOverride = nightOverride(getPrefs(pkg, "__system_uimode").map.get("mode"));
+  applicationNightOverride = nightOverride(await getPrefs(pkg, "__system_uimode").get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
   await deviceNightMode(device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
@@ -183,7 +183,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // installd's createAppData: the data directory with its cache directories, which apps stat
   // before ContextImpl ever creates them
   for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
-  writePrefsFiles(pkg);
+  await writePrefsFiles(pkg);
   const labelAttr = appNode?.attrs.find((a) => a.name === "label");
 
   mark("dataReady"); onStatus("Loading resources…");
@@ -202,10 +202,10 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setAppHost({
     res, pkg, assetKey, zip,
     splits: install.splits.map((sp) => sp.name),
-    setApplicationNightMode: (mode) => { setApplicationNightMode(pkg, mode); },
-    setApplicationLocales: (locales) => { setApplicationLocales(pkg, locales); },
+    setApplicationNightMode: (mode) => setApplicationNightMode(pkg, mode),
+    setApplicationLocales: (locales) => setApplicationLocales(pkg, locales),
   });
-  const savedLocales = getPrefs(pkg, "__system_locales").map.get("tags");
+  const savedLocales = await getPrefs(pkg, "__system_locales").get("tags");
   if (typeof savedLocales === "string" && savedLocales) await onMain(() => after(localesFromTags(savedLocales), applyApplicationLocales));
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
@@ -233,18 +233,16 @@ function applyConfigChange(): void { postMain(configurationChanged); }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange();
 }
-function setApplicationLocales(pkg: string, locales: Locales): void {
-  const prefs = getPrefs(pkg, "__system_locales");
-  prefs.map.set("tags", locales.tags.join(","));
-  prefs.persist();
-  if (applyApplicationLocales(locales)) applyConfigChange();
+function setApplicationLocales(pkg: string, locales: Locales): void | Promise<void> {
+  return after(getPrefs(pkg, "__system_locales").set("tags", locales.tags.join(",")), () => {
+    if (applyApplicationLocales(locales)) applyConfigChange();
+  });
 }
-function setApplicationNightMode(pkg: string, mode: number): void {
-  const prefs = getPrefs(pkg, "__system_uimode");
-  prefs.map.set("mode", mode);
-  prefs.persist();
-  applicationNightOverride = nightOverride(mode);
-  applyNightMode(applicationNightOverride ?? device.night);
+function setApplicationNightMode(pkg: string, mode: number): void | Promise<void> {
+  return after(getPrefs(pkg, "__system_uimode").set("mode", mode), () => {
+    applicationNightOverride = nightOverride(mode);
+    applyNightMode(applicationNightOverride ?? device.night);
+  });
 }
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
   .addEventListener("change", (e) => {

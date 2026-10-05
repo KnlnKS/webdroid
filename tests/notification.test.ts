@@ -1,21 +1,32 @@
-import { expect, test, beforeAll, describe } from "bun:test";
+import { expect, test, beforeAll, afterAll, describe } from "bun:test";
 import "../src/natives";
 import { rt, JObj, declaredField } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { stringHash } from "../src/jvm/abi";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
+import { preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, type PreferenceCalls } from "../src/android/sharedprefs";
+import { callProxy, serveCalls } from "../src/shell/process-port";
 import { bootApp, packageRecord } from "./java";
 
 const pkg = "org.webdroid.test.notify";
 const N = "Landroid/app/Notification;", B = "Landroid/app/Notification$Builder;";
 let manager: JObj, app: JObj;
+let closePreferences: () => void;
 rt.linkNatives();
 
 beforeAll(async () => {
   app = await bootApp(await packageRecord(pkg, { permissions: ["android.permission.POST_NOTIFICATIONS"] }));
   manager = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "notification");
+  const owner = preferenceStore, { port1, port2 } = new MessageChannel();
+  const stop = serveCalls(port1, { ...canonicalPreferenceCommands(owner, name => {
+    if (name !== "android:notification-policy:" + pkg) throw new Error("foreign preference file");
+  }) });
+  const client = callProxy<PreferenceCalls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]);
+  usePreferenceAccess(client.endpoint);
+  closePreferences = () => { client.close(); stop(); usePreferenceStore(owner); };
 });
+afterAll(() => closePreferences?.());
 
 const channel = async (id: string, name: string, importance: number) =>
   newObj("android/app/NotificationChannel", "(Ljava/lang/String;Ljava/lang/CharSequence;I)V", id, name, importance);
@@ -41,8 +52,9 @@ describe("notification-manager", () => {
     stored = await vcall(manager, "getNotificationChannel", "(Ljava/lang/String;)Landroid/app/NotificationChannel;", "a");
     expect(await vcall(stored, "getName", "()Ljava/lang/CharSequence;")).toBe("Alpha3");
     expect(await vcall(stored, "getImportance", "()I")).toBe(2);
-    await expect(vcallAsync(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("miscellaneous", "M", 3)))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+    const rejected = await vcallAsync(manager, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V", await channel("miscellaneous", "M", 3))
+      .then(() => null, error => error);
+    expect(rejected).toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
     await vcall(manager, "deleteNotificationChannel", "(Ljava/lang/String;)V", "a");
     expect(await vcall(manager, "getNotificationChannel", "(Ljava/lang/String;)Landroid/app/NotificationChannel;", "a")).toBeNull();
   });

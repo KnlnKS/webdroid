@@ -9,9 +9,9 @@ export interface AppHost {
   zip: Record<string, Uint8Array>;
   /** the names of the config/feature splits installed beside the base, empty for a plain apk */
   splits: string[];
-  setApplicationNightMode: (mode: number) => void;
+  setApplicationNightMode: (mode: number) => void | Promise<void>;
   /** LocaleManager.setApplicationLocales: persist the list and deliver the configuration change */
-  setApplicationLocales: (locales: Locales) => void;
+  setApplicationLocales: (locales: Locales) => void | Promise<void>;
 }
 export let appHost: AppHost | null = null;
 export function setAppHost(h: AppHost | null) { appHost = h; }

@@ -16,6 +16,7 @@ import type { BrokerCalls } from "../src/shell/processes";
 import { cookieManager, cookieTransport } from "../src/android/cookies";
 import { useAccountAccess, useAccountStore } from "../src/android/accounts";
 import { PermissionStore, canonicalPermissionCommands, usePermissionAccess, usePermissionStore, grantPermissions, type PermissionCalls } from "../src/android/permissions";
+import { PreferenceStore, preferenceStore, canonicalPreferenceCommands, usePreferenceAccess, usePreferenceStore, getPrefs, type PreferenceCalls } from "../src/android/sharedprefs";
 import { AccountStore, canonicalAccountCommands, type AccountCalls } from "../src/shell/accounts";
 import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access";
 import { WebCookies } from "../src/shell/webcookies";
@@ -34,6 +35,44 @@ rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+
+test("preference commands acknowledge Java-visible changes without overwriting other keys", async () => {
+  const pkg = "org.webdroid.test.preferencecommands";
+  await bootApp(await packageRecord(pkg));
+  const original = preferenceStore, store = new PreferenceStore(), owner = canonicalPreferenceCommands(store, name => {
+    if (!name.startsWith(pkg + ":")) throw new Error("foreign preference file");
+  });
+  const { port1, port2 } = new MessageChannel();
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+  const stop = serveCalls<PreferenceCalls>(port1, { ...owner,
+    preferenceChange: async (name, changes) => { entered(); await blocked; return owner.preferenceChange(name, changes); },
+  } as PreferenceCalls);
+  const client = callProxy<PreferenceCalls>(port2, ["preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles"]);
+  usePreferenceAccess(client.endpoint);
+  try {
+    const prefs = getPrefs(pkg, "__system_power"), service = rt.make("webdroid/DeviceIdleController");
+    const exempt = () => vcall(service, "isPowerSaveWhitelistApp", "(Ljava/lang/String;)Z", pkg);
+    expect(await exempt()).toBe(0);
+    let completed = false;
+    const write = Promise.resolve(prefs.set("exempt", 1)).then(value => { completed = true; return value; });
+    await waiting;
+    expect(completed).toBe(false);
+    expect(await owner.preferenceRead(prefs.name, "exempt")).toBeUndefined();
+    release(); await write;
+    expect(await exempt()).toBe(1);
+    await Promise.all([prefs.set("__proto__", ["kept"]), prefs.set("long", 9007199254740993n)]);
+    expect(await prefs.get("long")).toBe(9007199254740993n);
+    const values = await prefs.get("__proto__") as string[];
+    values.push("copy");
+    expect(await prefs.get("__proto__")).toEqual(["kept"]);
+    await prefs.remove("long");
+    expect(await prefs.get("long")).toBeUndefined();
+    expect(await prefs.get("exempt")).toBe(1);
+    expect(await client.endpoint.preferenceChange("foreign:file", [{kind:"put",key:"x",value:1}]).then(() => null, error => error.message)).toBe("foreign preference file");
+    expect(store.open("foreign:file").size).toBe(0);
+  } finally { release(); client.close(); stop(); usePreferenceStore(original); }
+});
 
 test("permission checks deny pending grants and Java calls await the canonical owner", async () => {
   const pkg = "org.webdroid.test.permissioncommands", fine = "android.permission.ACCESS_FINE_LOCATION";

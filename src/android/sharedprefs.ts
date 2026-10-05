@@ -1,14 +1,15 @@
 // The preference store behind AOSP's SharedPreferencesImpl files and the platform's own settings.
 
 import { vfs } from "../shell/vfs";
+import { after } from "../jvm/natives/jentry";
 import { storedPackages } from "./packages";
 
 /** the platform's preference files of a package that a data clear keeps: DeviceIdleController's
  *  allowlist (ActivityTaskManager's per-app night mode and locales go, onPackageDataCleared) */
 const KEPT_ON_CLEAR = new Set(["__system_power"]);
 
-type PreferenceValue =string | number | bigint | boolean | null | readonly string[];
-class PreferenceStore {
+export type PreferenceValue = string | number | bigint | boolean | null | readonly string[];
+export class PreferenceStore {
   private files = new Map<string, Map<string, PreferenceValue>>();
   open(name: string): Map<string, PreferenceValue> {
     let values = this.files.get(name);
@@ -31,7 +32,7 @@ class PreferenceStore {
     return values;
   }
   /** a package's files, held or persisted */
-  private named(pkg: string): string[] {
+  named(pkg: string): string[] {
     const prefix = pkg + ":", names = new Set([...this.files.keys()].filter((name) => name.startsWith(prefix)));
     const storage = globalThis.localStorage;
     for (let i = 0; storage && i < storage.length; i++) {
@@ -54,51 +55,80 @@ class PreferenceStore {
   persist(name: string, values: Map<string, PreferenceValue>): boolean {
     this.files.set(name, values);
     try {
-      const saved: Record<string, unknown> = {};
+      const saved: Record<string, unknown> = Object.create(null);
       for (const [key, value] of values) saved[key] = typeof value === "bigint" ? { $l: value.toString() } : value;
       globalThis.localStorage?.setItem("wd:prefs:" + name, JSON.stringify(saved));
       return true;
     } catch { return false; }
   }
 }
+export type PreferenceChange = { kind: "put"; key: string; value: PreferenceValue } | { kind: "remove"; key: string };
+export interface PreferenceAccess {
+  preferenceRead(name: string, key: string): PreferenceValue | undefined | Promise<PreferenceValue | undefined>;
+  preferenceKeys(name: string): string[] | Promise<string[]>;
+  preferenceChange(name: string, changes: PreferenceChange[]): boolean | Promise<boolean>;
+  preferenceFiles(pkg: string): [string, [string, PreferenceValue][]][] | Promise<[string, [string, PreferenceValue][]][]>;
+}
+export type PreferenceCalls = {
+  [K in keyof PreferenceAccess]: (...args: Parameters<PreferenceAccess[K]>) => Promise<Awaited<ReturnType<PreferenceAccess[K]>>>;
+};
+const copyValue = (value: PreferenceValue | undefined) => Array.isArray(value) ? [...value] : value;
+export function canonicalPreferenceCommands(store: PreferenceStore, authorize: (name: string, write: boolean) => void): PreferenceAccess {
+  return {
+    preferenceRead: (name, key) => { authorize(name, false); return copyValue(store.open(name).get(key)); },
+    preferenceKeys: name => { authorize(name, false); return [...store.open(name).keys()]; },
+    preferenceChange: (name, changes) => {
+      authorize(name, true);
+      const values = store.open(name);
+      for (const change of changes) {
+        if (change.kind === "remove") values.delete(change.key);
+        else values.set(change.key, copyValue(change.value)!);
+      }
+      return store.persist(name, values);
+    },
+    preferenceFiles: pkg => store.named(pkg).map(name => {
+      authorize(name, false);
+      return [name.slice(pkg.length + 1), [...store.open(name)].map(([key, value]) => [key, copyValue(value)!])];
+    }),
+  };
+}
 export let preferenceStore = new PreferenceStore();
+let preferenceAccess = canonicalPreferenceCommands(preferenceStore, () => {});
 export function usePreferenceStore(store: PreferenceStore): void {
   preferenceStore = store;
-  for (const prefs of prefsCache.values()) prefs.load();
+  preferenceAccess = canonicalPreferenceCommands(store, () => {});
 }
+export function usePreferenceAccess(access: PreferenceCalls): void { preferenceAccess = access; }
 const escapeXml = (s: string) => s.replace(/[&<>"]/g, (c) => `&${({ "&": "amp", "<": "lt", ">": "gt", '"': "quot" } as Record<string, string>)[c]};`);
 /** AOSP's SharedPreferencesImpl reads shared_prefs XML: a package's preferences this store holds
  *  (an earlier run, a harness seed) become the files it has not written yet, in
  *  XmlUtils.writeMapXml's form. A whole number becomes an int: the store does not keep the type. */
-export function writePrefsFiles(pkg: string): void {
-  const prefix = `wd:prefs:${pkg}:`, storage = globalThis.localStorage;
-  for (let i = 0; storage && i < storage.length; i++) {
-    const key = storage.key(i)!;
-    const path = `/data/data/${pkg}/shared_prefs/${key.slice(prefix.length)}.xml`;
-    if (!key.startsWith(prefix) || vfs.stat(path)) continue;
-    const entries = [...new PreferenceStore().open(key.slice("wd:prefs:".length))].map(([k, v]) => {
-      const name = escapeXml(k);
-      if (v === null) return `<null name="${name}" />`;
-      if (typeof v === "string") return `<string name="${name}">${escapeXml(v)}</string>`;
-      if (typeof v === "boolean") return `<boolean name="${name}" value="${v}" />`;
-      if (typeof v === "bigint") return `<long name="${name}" value="${v}" />`;
-      if (typeof v === "number") return `<${Number.isInteger(v) ? "int" : "float"} name="${name}" value="${v}" />`;
-      return `<set name="${name}">${v.map((x) => `<string>${escapeXml(x)}</string>`).join("")}</set>`;
-    });
-    vfs.write(path, new TextEncoder().encode(`<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n${entries.join("\n")}\n</map>\n`));
-  }
+export function writePrefsFiles(pkg: string): void | Promise<void> {
+  return after(preferenceAccess.preferenceFiles(pkg), files => {
+    for (const [file, values] of files) {
+      const path = `/data/data/${pkg}/shared_prefs/${file}.xml`;
+      if (vfs.stat(path)) continue;
+      const entries = values.map(([k, v]) => {
+        const name = escapeXml(k);
+        if (v === null) return `<null name="${name}" />`;
+        if (typeof v === "string") return `<string name="${name}">${escapeXml(v)}</string>`;
+        if (typeof v === "boolean") return `<boolean name="${name}" value="${v}" />`;
+        if (typeof v === "bigint") return `<long name="${name}" value="${v}" />`;
+        if (typeof v === "number") return `<${Number.isInteger(v) ? "int" : "float"} name="${name}" value="${v}" />`;
+        return `<set name="${name}">${v.map(x => `<string>${escapeXml(x)}</string>`).join("")}</set>`;
+      });
+      vfs.write(path, new TextEncoder().encode(`<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n${entries.join("\n")}\n</map>\n`));
+    }
+  });
 }
 /** a preference file the platform keeps for itself, outside the app's shared_prefs */
-class Prefs {
-  map!: Map<string, PreferenceValue>;
-  constructor(readonly name: string) { this.load(); }
-  persist(): boolean { return preferenceStore.persist(this.name, this.map); }
-  load(): void { this.map = preferenceStore.open(this.name); }
+export class Prefs {
+  constructor(readonly name: string) {}
+  get(key: string): ReturnType<PreferenceAccess["preferenceRead"]> { return preferenceAccess.preferenceRead(this.name, key); }
+  keys(): ReturnType<PreferenceAccess["preferenceKeys"]> { return preferenceAccess.preferenceKeys(this.name); }
+  set(key: string, value: PreferenceValue): boolean | Promise<boolean> {
+    return preferenceAccess.preferenceChange(this.name, [{ kind: "put", key, value }]);
+  }
+  remove(key: string): boolean | Promise<boolean> { return preferenceAccess.preferenceChange(this.name, [{ kind: "remove", key }]); }
 }
-const prefsCache = new Map<string, Prefs>();
-export function getPrefs(pkg: string, name: string): Prefs {
-  const key = pkg + ":" + name;
-  let p = prefsCache.get(key);
-  if (!p) prefsCache.set(key, p = new Prefs(key));
-  return p;
-}
+export const getPrefs = (pkg: string, name: string): Prefs => new Prefs(pkg + ":" + name);

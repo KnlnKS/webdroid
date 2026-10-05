@@ -332,11 +332,10 @@ registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", 
   const data: JObj | null = yield vcall(intent, "getData", "()Landroid/net/Uri;");
   const pkg: string | null = data && (yield vcall(data, "getScheme", "()Ljava/lang/String;")) === "package" ? yield vcall(data, "getSchemeSpecificPart", "()Ljava/lang/String;") : null;
   if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
-  const prefs = getPrefs(pkg, DOZE_EXEMPTION);
-  prefs.map.set("exempt", 1); prefs.persist();
+  yield* awaited(getPrefs(pkg, DOZE_EXEMPTION).set("exempt", 1));
   return newIntent();
 }));
-const exempt = (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1);
+const exempt = (pkg: string) => after(getPrefs(pkg, DOZE_EXEMPTION).get("exempt"), value => +(value === 1));
 rt.register({ name: "webdroid/DeviceIdleController", ctor: class extends JObj {}, sup: "android/os/IDeviceIdleController$Stub", methods: {
   "isPowerSaveWhitelistApp(Ljava/lang/String;)Z": exempt,
   "isPowerSaveWhitelistExceptIdleApp(Ljava/lang/String;)Z": exempt,
@@ -552,7 +551,7 @@ rt.register({ name: "webdroid/UiModeManagerService", ctor: class extends JObj {}
   "getCurrentModeType()I": () => 1,
   "getNightMode()I": () => device.night ? 2 : 1,
   "getContrast()F": () => 0,
-  "setApplicationNightMode(I)V": (mode: number) => { appHost?.setApplicationNightMode(mode); },
+  "setApplicationNightMode(I)V": (mode: number) => appHost?.setApplicationNightMode(mode),
   ...stubs(0, "isNightModeLocked()Z", "isUiModeLocked()Z", "getActiveProjectionTypes()I"),
   ...noops("addCallback(Landroid/app/IUiModeManagerCallback;)V"),
 } });
