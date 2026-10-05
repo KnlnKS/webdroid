@@ -14,7 +14,7 @@ import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { Sched, defaultLoop, ROOT, type HostLoop, type Strand } from "./sched";
+import { Sched, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes";
 import { HostClasses } from "./hostclass";
@@ -640,7 +640,9 @@ export class World {
     const ci = jc.byKey.get("<clinit>()V");
     if (ci) call(rt.slotBase + ci.index);
     const wake = () => { c.gget(iw).if_().i32(rt.id); call(rtfn("initWake"), mb.addFuncType([T.i32], [])); c.end(); };
-    c.i32(INIT_DONE).gset(initG); wake(); c.br(2);
+    c.i32(INIT_DONE).gset(initG);
+    if (jc.name === SYSTEM_LOADER) call(rtfn("threadLoaderReady"));
+    wake(); c.br(2);
     c.end().unreachable().end();                                // the thrown Throwable is on the stack
     c.lset(e).i32(INIT_FAILED).gset(initG); wake(); c.lget(e); call(rtfn("initFail"), b.tTagFn);
     return c.end().finish();

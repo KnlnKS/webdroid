@@ -15,6 +15,7 @@ import { promising, suspending } from "./module";
 import type { World } from "./world";
 
 const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
+export const SYSTEM_LOADER = "java/lang/ClassLoader$SystemClassLoader";
 const EXTERN = -17, MILLION = 0x412e848000000000n;
 /** loop iterations of one activation between two chances for another strand to run (a power of two) */
 export const FUEL = 4096;
@@ -22,7 +23,7 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain }
+export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady }
 /** operations that may wait (`host.block`, Suspending) */
 export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
@@ -109,20 +110,37 @@ rt("curThread", [], "L", (cx, c) => {
   // ART records the native thread in the peer, which is what Thread.isAlive reads
   const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
   c.gget(g).refCast(st).i64(1n).structSet(st, peer);
+  emitSync(cx, c, Sync.Bind, () => c.gget(g)); c.drop();
   // and the runtime gives the main thread the system class loader as its context loader, which threads started from it inherit
   const system = cx.prog.resolve(LOADER, "getSystemClassLoader", `()L${LOADER};`);
   if (system) {
+    // The loader's constructor can itself ask for the main Thread. Register the
+    // pending assignment before entering it, so its completed initializer repairs
+    // that peer; an explicit Java setter cancels the runtime assignment.
+    emitSync(cx, c, Sync.ContextDeferred, () => c.gget(g)); c.drop();
     cx.emitEnsure(c, LOADER);
-    c.gget(g).refCast(st); cx.callMethod(c, system); c.structSet(st, cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
+    const loader = c.newLocal(T.anyref);
+    cx.callMethod(c, system); c.lset(loader);
+    emitSync(cx, c, Sync.SystemLoaderReady, () => c.lget(loader)); c.drop();
   }
-  emitSync(cx, c, Sync.Bind, () => c.gget(g)); c.drop();
   c.end().gget(g);
+});
+// Called only after the system loader's initializer succeeds, before waking its
+// waiters. Same-thread re-entry still observes the real, partially initialized class.
+rt("threadLoaderReady", [], "V", (cx, c) => {
+  emitSync(cx, c, Sync.SystemLoaderReady, () => c.gget(cx.staticGlobal(SYSTEM_LOADER, "loader"))); c.drop();
 });
 
 export const threadIntrinsics = new Map<string, Intrinsic>();
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => threadIntrinsics.set(key, (cx, m, c) => f(cx, c));
 const thread = (name: string) => `${THREAD}.${name}`;
 def(thread("currentThread()Ljava/lang/Thread;"), (cx, c) => { cx.callRt(c, "curThread"); });
+def(thread("setContextClassLoader(Ljava/lang/ClassLoader;)V"), (cx, c) => {
+  // Android's setter only writes this field (SecurityManager is removed).
+  c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+  c.lget(0).refCast(cx.structFor(THREAD)).lget(1).structSet(cx.structFor(THREAD), cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
+  emitSync(cx, c, Sync.ContextSet, () => c.lget(0)); c.drop();
+});
 def(thread("nativeGetStatus(Z)I"), (cx, c) => { emitSync(cx, c, Sync.Status, () => c.lget(0), () => c.lget(1).raw(OP.f64_convert_i32_s)); });
 def(thread("isInterrupted()Z"), (cx, c) => { emitSync(cx, c, Sync.IsInterrupted, () => c.lget(0)); });
 def(thread("interrupted()Z"), (cx, c) => { emitSync(cx, c, Sync.Interrupted); });
@@ -232,6 +250,7 @@ export class Sched {
   private main = new ThreadRec(null);
   private next = ROOT + 1;
   private threads = new WeakMap<object, ThreadRec>();
+  private pendingContext = new Set<object>();
   private initWaiters = new Map<number, { go: () => void }[]>();
   private promised = new WeakMap<Function, Function>();
   private fns = new Map<string, Function>();
@@ -326,6 +345,18 @@ export class Sched {
       case Sync.Notify: case Sync.NotifyAll: return this.monitors.notify(obj!, s, op === Sync.NotifyAll);
       case Sync.Holds: return +this.monitors.holds(obj!, s);
       case Sync.Bind: s.thread.obj = obj; this.threads.set(obj!, s.thread); return 0;
+      case Sync.ContextDeferred: this.pendingContext.add(obj!); return 0;
+      case Sync.ContextSet: this.pendingContext.delete(obj!); return 0;
+      case Sync.SystemLoaderReady: {
+        if (obj && this.pendingContext.size) {
+          const set = this.w.hostFn("thread:context", ["L", "L"], "V", (cx, c) => {
+            c.lget(0).refCast(cx.structFor(THREAD)).lget(1).structSet(cx.structFor(THREAD), cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
+          });
+          for (const peer of this.pendingContext) set(peer, obj);
+          this.pendingContext.clear();
+        }
+        return 0;
+      }
       case Sync.IsMain: return +(s.thread === this.main);
       case Sync.Create: return this.create(obj!);
       case Sync.Interrupt: { const r = this.rec(obj!); if (r?.alive) { r.interrupted = true; r.wake?.(); r.parked?.(); } return 0; }
