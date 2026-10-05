@@ -13,7 +13,35 @@ public class Th {
   static native int viaJs(int x);       // a plain native that calls Java which waits (a JS frame between the entry and the import)
   static int inner(int x) { return await(x) * 2; }
   static int trap(int x) { return await(x); }
+  static native byte[] gapEcho(byte[] a, int ms);   // an async native: waits, writes a[0] + 1 into its argument and answers the argument reversed
+  /** threads whose natives wait together each get their own array back, and see their own argument written, whatever the others do meanwhile */
+  static int arrayGap(int n) throws Exception {
+    final int[] bad = new int[1];
+    Thread[] ts = new Thread[n];
+    for (int i = 0; i < n; i++) {
+      final int k = i;
+      ts[i] = new Thread(() -> {
+        byte[] a = new byte[8 + k % 5];
+        for (int j = 0; j < a.length; j++) a[j] = (byte) (k * 7 + j);
+        byte first = a[0];
+        byte[] got = gapEcho(a, k % 3);
+        boolean ok = got != null && got.length == a.length && a[0] == (byte) (first + 1);
+        for (int j = 0; ok && j < a.length; j++) ok = got[j] == (byte) (k * 7 + a.length - 1 - j);
+        if (!ok) synchronized (bad) { bad[0]++; }
+      });
+      ts[i].start();
+    }
+    for (Thread t : ts) t.join();
+    return bad[0];
+  }
 
+  static native int gapAlias(byte[] a, byte[] b, boolean fail);
+  static int arrayAlias(int n) {
+    byte[] a = {3};
+    int r = gapAlias(a, a, false);
+    try { gapAlias(a, a, true); } catch (IllegalArgumentException e) { return r == 9 && a[0] == 9 ? 0 : 1; }
+    return 2;
+  }
   // ---------- monitors
   static int reentrant(int n) {
     Object o = new Object(); int c = 0;

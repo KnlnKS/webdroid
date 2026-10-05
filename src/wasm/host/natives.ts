@@ -65,8 +65,14 @@ const rangesOf = (m: MethodInfo): Map<number, [number, number]> => {
 /** whether a native that answers a Promise where it was not expected to may still wait: its call site settles the Promise with a Suspending import. Its arrays are views of the
  *  scratch region it reserved, which stays reserved while it waits (the call site lowers the scratch top only if nothing was reserved above it meanwhile) */
 const parkable = (p: Plan): boolean => !p.suspends && !p.always;
-/** the import that settles a Promise answered by a native whose import returns `ret` */
-const settleKey = (p: Plan): string => "settle:" + (p.ret === null ? "v" : p.ret === T.externref ? "x" : p.ret === T.i64 ? "j" : p.ret === T.f32 ? "f" : p.ret === T.f64 ? "d" : "i");
+/** whether a Suspending native has arrays to give back or answers one: they reach the call site through `land` once it has resumed */
+const lands = (p: Plan): boolean => p.suspends && (p.retArray !== null || p.args.some(isPrimArray));
+/** The primitive result kind shared by settle and landing imports. */
+const resultKind = (p: Plan): string => (p.ret === null ? "v" : p.ret === T.externref ? "x" : p.ret === T.i64 ? "j" : p.ret === T.f32 ? "f" : p.ret === T.f64 ? "d" : "i");
+
+const settleKey = (p: Plan): string => "settle:" + resultKind(p);
+const landingKey = (p: Plan): string => "land:" + resultKind(p);
+interface Landing { own: [number, View][]; result: View | null; value: unknown; error?: unknown }
 
 interface Plan {
   id: string; fn: HostFn; recv: boolean;
@@ -139,9 +145,14 @@ export class Natives implements NativeBinder {
       const p = this.plan(m, override);
       if (typeof p === "string") return;
       for (const key of p.suspends && !p.always ? [p.id, p.id + "#s"] : [p.id]) {
-        if (!cx.nativeImports.has(key)) cx.nativeImports.set(key, cx.mb.importFunc("n", key, cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])));
+        if (!cx.nativeImports.has(key)) cx.nativeImports.set(key, cx.mb.importFunc("n", key, cx.mb.addFuncType(p.params, lands(p) ? [T.externref] : p.ret === null ? [] : [p.ret])));
       }
       if (parkable(p) && !cx.nativeImports.has(settleKey(p))) cx.nativeImports.set(settleKey(p), cx.mb.importFunc("n", settleKey(p), cx.mb.addFuncType([], p.ret === null ? [] : [p.ret])));
+      if (lands(p)) {
+        if (!cx.nativeImports.has("land:check")) cx.nativeImports.set("land:check", cx.mb.importFunc("n", "land:check", cx.mb.addFuncType([T.externref], [])));
+        if (!cx.nativeImports.has("land")) cx.nativeImports.set("land", cx.mb.importFunc("n", "land", cx.mb.addFuncType([T.externref, T.i32, T.i32], [T.i32])));
+        if (!cx.nativeImports.has(landingKey(p))) cx.nativeImports.set(landingKey(p), cx.mb.importFunc("n", landingKey(p), cx.mb.addFuncType([T.externref], p.ret === null ? [] : [p.ret])));
+      }
     };
     const string = cx.prog.get(STRING_CLASS);
     for (const m of methods) {
@@ -177,7 +188,7 @@ export class Natives implements NativeBinder {
     const restore = p.suspends ? emitSave(cx, c) : null;
     const arrays: ReturnType<Natives["copyIn"]>[] = [];
     const scratch = p.args.some(isPrimArray) || p.retArray ? cx.scratch() : -1, sp0 = scratch >= 0 ? c.newLocal(T.i32) : -1;
-    const top = scratch >= 0 && parkable(p) ? c.newLocal(T.i32) : -1;
+    const top = scratch >= 0 && parkable(p) ? c.newLocal(T.i32) : -1, back = lands(p) ? c.newLocal(T.i32) : -1, landed = lands(p) ? c.newLocal(T.externref) : -1;
     if (scratch >= 0) c.gget(scratch).lset(sp0);
     p.args.forEach((d, i) => {
       const t = abi(d);
@@ -202,7 +213,7 @@ export class Natives implements NativeBinder {
     }
     else {
       // a throw out of the call finds the globals as another strand left them: they are set again before it goes on
-      const results = p.ret === null ? [] : [p.ret], run = cx.mb.addFuncType(p.params, results), thrown = cx.mb.addFuncType(p.params, [T.exnref]);
+      const results = lands(p) ? [T.externref] : p.ret === null ? [] : [p.ret], run = cx.mb.addFuncType(p.params, results), thrown = cx.mb.addFuncType(p.params, [T.exnref]);
       c.blockType(run).blockType(thrown).tryTableType(run, [[3, 0, 0]]);
       if (p.always) c.call(imp);
       else {
@@ -213,6 +224,14 @@ export class Natives implements NativeBinder {
       restore(); c.throwRef();
       c.end();
       restore();
+      // Each call carries its private arrays through JSPI; only the resumed Wasm caller writes shared scratch.
+      if (landed >= 0) {
+        const land = cx.nativeImports.get("land")!;
+        c.lset(landed).gget(scratch).lset(back);
+        for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).lget(a.alias).raw(OP.i32_eqz).raw(OP.i32_and).if_().lget(landed).lget(a.ptr).lget(a.len).call(land).lset(a.ptr).end();
+        if (p.retArray) c.lget(landed).i32(-1).i32(0).call(land).drop();
+        c.lget(landed).call(cx.nativeImports.get(landingKey(p))!);
+      }
     }
     if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) { if (p.retString) cx.str.fromHost(c); else c.anyConvertExtern(); }
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
@@ -221,7 +240,9 @@ export class Natives implements NativeBinder {
     for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).lget(a.alias).raw(OP.i32_eqz).raw(OP.i32_and).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.from).lget(a.count).call(this.copy(cx, a.ek, false)).end();
     if (p.retArray) this.copyOut(cx, c, p.retArray, rlen, scratch);
     if (top >= 0) c.gget(scratch).lget(top).raw(OP.i32_le_u).if_().lget(sp0).gset(scratch).end();
+    else if (back >= 0) c.lget(back).gset(scratch);
     else if (scratch >= 0) c.lget(sp0).gset(scratch);
+    if (landed >= 0) c.lget(landed).call(cx.nativeImports.get("land:check")!);
   }
   /** copies array parameter `i` of class `d` into a fresh scratch region, leaving its (pointer, length), or (0, -1) for null; only the
    *  elements [from, from + count) are copied when the native's contract names a range inside the array (RANGES), all of them otherwise */
@@ -280,24 +301,45 @@ export class Natives implements NativeBinder {
       return throwJava(t);
     };
     const view = (kind: string, ptr: number, len: number) => len < 0 ? null : new VIEWS[kind](ctx.mem.buffer, ptr, len);
+    // `reserve(bytes)`: 8-aligned scratch past the current top
+    const reserve = (bytes: number): number => {
+      const at = ((ctx.sp.value as number) + 7) & -8, need = at + bytes, have = ctx.mem.buffer.byteLength;
+      ctx.sp.value = at;
+      if (need > have) ctx.mem.grow(Math.ceil((need - have) / 65536));
+      return at;
+    };
     // a result array is left at the scratch top, which the stub copies out
     const put = (r: View | null) => {
       if (r === null) return -1;
-      const at = ((ctx.sp.value as number) + 7) & -8, need = at + r.byteLength, have = ctx.mem.buffer.byteLength;
-      ctx.sp.value = at;
-      if (need > have) ctx.mem.grow(Math.ceil((need - have) / 65536));
+      const at = reserve(r.byteLength);
       new (r.constructor as typeof Uint8Array)(ctx.mem.buffer, at, r.length).set(r as never);
       return r.length;
     };
-    // a suspending native keeps private copies of the arrays it is given and writes them to the scratch region when it resumes: the region is
-    // other strands' while this one waits
     const aux: Aux = {
-      sp: () => ctx.sp.value as number, setSp: (v) => { ctx.sp.value = v; },
-      own: (list, kind, ptr, len) => { const v = view(kind, ptr, len) as Uint8Array | null; if (v === null) return null; const copy = v.slice(); list.push([ptr, copy]); return copy; },
-      give: (list) => { for (const [ptr, copy] of list) new Uint8Array(ctx.mem.buffer, ptr, copy.byteLength).set(new Uint8Array(copy.buffer, copy.byteOffset, copy.byteLength)); },
+      // Release copied arguments before the native can re-enter Java.
+      release: (list) => { for (const [ptr] of list) if (ptr < (ctx.sp.value as number)) ctx.sp.value = ptr; },
+      own: (list, kind, ptr, len) => {
+        const v = view(kind, ptr, len) as (View & { slice(): View }) | null;
+        if (v === null) return null;
+        const same = list.find(([at, copy]) => at === ptr && copy.constructor === v.constructor && copy.byteLength === v.byteLength);
+        if (same) return same[1];
+        const copy = v.slice(); list.push([ptr, copy]); return copy;
+      },
+    };
+    const land = (rec: Landing, ptr: number, len: number): number => {
+      if (ptr < 0) { put(rec.result); return 0; }
+      const mine = rec.own.find(([at, copy]) => at === ptr && copy.length === len);
+      if (!mine) return ptr;
+      const bytes = mine[1].byteLength, at = reserve(bytes);
+      new Uint8Array(ctx.mem.buffer, at, bytes).set(new Uint8Array(mine[1].buffer, mine[1].byteOffset, bytes));
+      ctx.sp.value = at + bytes;
+      return at;
     };
     for (const key of ids) {
       if (key.startsWith("settle:")) { out[key] = ctx.sched.settle() as HostFn; continue; }
+      if (key === "land:check") { out[key] = ((rec: Landing) => { if ("error" in rec) throw rec.error; }) as HostFn; continue; }
+      if (key.startsWith("land:")) { out[key] = ((rec: Landing) => rec.value) as HostFn; continue; }
+      if (key === "land") { out[key] = land as HostFn; continue; }
       const waits = key.endsWith("#s"), id = waits ? key.slice(0, -2) : key, p = this.plans.get(id);
       if (typeof p === "string" || !p) continue;
       const suspending = waits || p.always, cache = waits ? (p.waiting ??= new WeakMap()) : (p.wrapped ??= new WeakMap()), cached = cache.get(ctx);
@@ -314,9 +356,8 @@ export class Natives implements NativeBinder {
 }
 
 interface Aux {
-  sp(): number; setSp(v: number): void;
+  release(list: [number, View][]): void;
   own(list: [number, View][], kind: string, ptr: number, len: number): View | null;
-  give(list: [number, View][]): void;
   /** a plain native answered a Promise: whether this stack can wait for it, and handing it to the call site to settle */
   canWait?(): boolean;
   /** whether the strand has made so many nested entries that it should wait once (Sched.owes), and handing the call site the Promise to wait for */
@@ -343,7 +384,8 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const names = at.flatMap((n, i) => isPrimArray(p.args[i]) ? ["a" + n, "a" + (n + 1)] : ["a" + n]);
     // an Object argument with a range reaches the native as just that range, at offset 0
     const pre: string[] = [], args = p.args.map((d, i) => isPrimArray(d) ? (susp ? `X.own(own,${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})` : `view(${JSON.stringify(d[1])},a${at[i]},a${at[i] + 1})`) : objects[i] ? `h${i}` : "a" + at[i]);
-    p.args.forEach((_, i) => {
+    p.args.forEach((d, i) => {
+      if (susp && isPrimArray(d)) { pre.push(`const h${i}=${args[i]};`); args[i] = `h${i}`; }
       if (!objects[i]) return;
       const r = p.ranges.get(i);
       pre.push(`const h${i}=B.toHost(a${at[i]},D[${i}]${r ? `,[a${at[r[0]]},a${at[r[1]]}]` : ""});`);
@@ -352,14 +394,14 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const call = p.initializes !== null ? "B.initialize(CLS,f)" : p.recv ? `f.call(${args.join(",")})` : `f(${args.join(",")})`;
     const scope = bridged ? ["const s=B.begin()", "B.end(s)"] : ["", ""];
     const toJava = p.retRef !== null ? "r=B.toJava(r,RD);" : "", result = `return ${p.retArray ? "put(r)" : "r"}`;
-    // the arrays and the scratch top as they were when the call began, set again after the wait
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}if(X.owes()){const back=${bridged ? "B.hold()" : "null"};X.yield(Promise.resolve(r).then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
-    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp)}X.give(own);` : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
-try{${wait}${toJava}}catch(e){return raise(e)}finally{${scope[1]}}
-${result}}`) as Maker;
+    const failure = lands(p) ? `try{return raise(e)}catch(error){return {own:${susp ? "own" : "[]"},result:null,value:${p.retArray ? "-1" : zero},error}}` : "return raise(e)";
+    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"};try{r=await r}catch(e){back?.();throw e}back?.()}` : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}${susp ? "X.release(own);" : ""}r=${call}}catch(e){S(e);${scope[1]};${failure}}
+try{${wait}${toJava}}catch(e){${failure}}finally{${scope[1]}}
+${lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result}}`) as Maker;
     makers.set(key, make);
   }
   return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes, X, reportSuspendError, crossings);

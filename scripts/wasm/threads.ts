@@ -13,6 +13,7 @@ import { jsTier, processState } from "./oracle";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
 import { suspendedNatives } from "../../src/wasm/host/suspend";
+import { rt } from "../../src/jvm/runtime";
 import { perf } from "../../src/perf";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
 import { hasJspi } from "../../src/wasm/link/module";
@@ -31,11 +32,15 @@ const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].m
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
 } satisfies NativeSource) });
+// the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
+let gate: Promise<void> | null = null;
 const TH: Record<string, HostFn> = {
   "await(I)I": async (x: number) => { await sleep(1); return x + 1; },
   "driven(I)I": Object.assign(() => { throw new Error("the generator form runs"); }, { $g: function* (x: number) { const v: number = yield Promise.resolve(x * 3); return v + 1; } }),
   "nested(I)I": async (x: number) => (await w.entryAsync("Th", "inner", "(I)I")(x) as number) + 1,
   "flagged(I)I": (x: number) => Promise.resolve(x),
+  "gapEcho([BI)[B": async (a: Int8Array, ms: number) => { await (gate ??= sleep(20 + ms).then(() => { gate = null; })); const r = Int8Array.from(a).reverse(); a[0] = a[0] + 1; return r; },
+  "gapAlias([B[BZ)I": async (a: Int8Array, b: Int8Array, fail: boolean) => { await sleep(1); a[0] += 2; b[0] += 1; if (fail) throw rt.mkThrowable("java/lang/IllegalArgumentException", "array changed"); return a === b ? 9 : -1; },
   "viaJs(I)I": (x: number) => w.entry("Th", "trap", "(I)I")(x),
 };
 const gaps: string[] = [];
@@ -82,6 +87,9 @@ if (substrate) {
   expect("async native", await show(() => w.entryAsync("Th", "trap", "(I)I")(4)), 5);
   expect("generator native", await show(() => w.entryAsync("Th", "driven", "(I)I")(4)), 13);
   expect("nested promising entry", await show(() => w.entryAsync("Th", "nested", "(I)I")(4)), 11);
+  // arrays given to and answered by natives that wait at the same time stay each strand's own
+  expect("array arguments and results across a wait", await show(() => w.entryAsync("Th", "arrayGap", "(I)I")(300)), 0);
+  expect("array alias and exceptional copy-back", await show(() => w.entryAsync("Th", "arrayAlias", "(I)I")(0)), 0);
   // 1,000 stacks suspended in the same native at once
   { const t0 = performance.now(), r = await Promise.all(Array.from({ length: 1000 }, (_, i) => w.entryAsync("Th", "trap", "(I)I")(i))); const ms = performance.now() - t0;
     expect("1,000 suspended stacks", r.reduce((a: number, b) => a + (b as number), 0), 1000 * 999 / 2 + 1000);
