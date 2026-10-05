@@ -15,7 +15,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 | Gate | Recovered evidence and work still required |
 |---|---|
 | G1 | Open. Shared-host runs beat the steady-state geometric mean, but some workloads lose more than 10% and Chrome first calls are slower. Repeat on an idle host after correctness stabilizes. |
-| G2 | Open for final acceptance. Differential suites and `fwtest` have passed, but conformance skips about 6,100 TestNG data-provider cases and the browser quick gate is unstable. A compile sweep checks translation, not execution of every method. |
+| G2 | Open for final acceptance. Differential suites and `fwtest` (31/31) pass. The TestNG runner now recovers 6,123 previously skipped executions; the affected classes pass 8,065 cases without skips. The full conformance rerun and browser quick gate remain pending. A compile sweep checks translation, not execution of every method. |
 | G3 | Open. The stated bar is 30% less cold-call compile time and every gated tap at most 150 ms. Record matching cold/warm compile counters for every named app; launch parity is also required by S4/S6. X1's launch timings alone do not settle the compile-time criterion. |
 | G4 | Open. Re-entered loops tier up, but section 4.7 records a single long activation failing the 100 ms criterion. Compilation hints do not close that gap. |
 | G5 | Open. The string representation comparison is measured; the required boundary share below 5% of a heavy tap has not been demonstrated. |
@@ -25,7 +25,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 
 S0–S3 have substantial implementations and harness coverage. S4 has AOT delivery and worker compilation, but the Wasm cold interpreter and hot-loop re-entry deliverables still need an explicit audit. S5's process-per-Worker conversion and S6's default switch/removal are unfinished. Optional and open-ended work follows completion of the main stages and gates.
 
-The surviving Y1 worktree contains uncommitted stabilization changes. Y2 has unmerged host-class/JNI commits through `47059fe3`. Recovery agents own those slices; a third agent is investigating the TestNG coverage gap.
+Y1's recovered stabilization work is merged: per-call native array results, exceptional copyback, loop fuel, retryable stack-exhausted compilation and deterministic worker startup. G4 continuation work is active. Y2's host-class/JNI work remains isolated pending review. The TestNG runner and its shared cache fix are merged, with full conformance verification active.
 
 ## 0. How to read this
 
