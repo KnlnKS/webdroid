@@ -20,8 +20,7 @@ export type ProcessDiagnostics = {
 } | { status: "unavailable" } | { status: "failure"; message: string };
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
-type WorkerSnapshot = Awaited<ReturnType<WorkerControl["snapshot"]>> & Partial<Pick<Extract<ProcessDiagnostics, { status: "ok" }>,
-  "missingAt" | "placeholders" | "placeholderAt" | "coverage">>;
+type WorkerSnapshot = Awaited<ReturnType<WorkerControl["snapshot"]>>;
 type WorkerProcess = { pid: number; pkg: string; process: string; url?: string; snapshot?: WorkerSnapshot; error?: string };
 
 async function bounded<T>(read: Promise<T>): Promise<T | { status: "failure"; message: string }> {
@@ -40,10 +39,13 @@ function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
   if (snapshot.dead || snapshot.phase !== "ready") return { status: "failure", message: `Worker ${worker.pid}: ${snapshot.dead ? "dead" : snapshot.phase}` };
   if (!snapshot.missingAt || !snapshot.placeholders || !snapshot.placeholderAt || snapshot.coverage === undefined)
     return { status: "failure", message: `Worker ${worker.pid}: incomplete diagnostics` };
+  const identity = snapshot.identity;
+  if (!identity || identity.pid !== worker.pid || identity.process !== worker.process || identity.pkg !== worker.pkg)
+    return { status: "failure", message: `Worker ${worker.pid}: diagnostic identity mismatch` };
   return { status: "ok", pkg: worker.pkg, ticks: snapshot.ticks, missing: snapshot.missing, missingAt: snapshot.missingAt,
     placeholders: snapshot.placeholders, placeholderAt: snapshot.placeholderAt, native: snapshot.nativeRequired,
     errors: snapshot.logs.filter(line => /^(error:|window.error:|unhandledrejection:)/.test(line)), perf: snapshot.perf,
-    queue: { queued: snapshot.main.queued, depth: snapshot.main.depth }, compositor: null, coverage: snapshot.coverage };
+    queue: { queued: snapshot.main.queued, depth: snapshot.main.depth }, compositor: snapshot.compositor, coverage: snapshot.coverage };
 }
 
 function isWebdroidProcessFrame(url: string, origin: string): boolean {
