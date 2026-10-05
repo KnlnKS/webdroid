@@ -7,14 +7,14 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { VERSION } from "../../src/wasm/link/aot";
 import { AOSP, ROOT } from "./paths";
 
-// Host natives emit Wasm too; their ABI must invalidate platform and persisted app builds together.
-const SOURCES = ["src/wasm", "scripts/wasm/aot-build.ts", "src/jvm/dex.ts", "src/jvm/prepared.ts", "src/jvm/structure.ts", "src/jvm/opcodes.ts", "src/jvm/abi.ts"];
+// Host registrations outside Wasm determine class layouts and suspension imports too.
+const SOURCES = ["src", "scripts/wasm/aot-build.ts"];
 
 export const AOT_ROOT = join(ROOT, "vendor/wasm-aot");
 
 export function sourcePaths(): string[] {
   return SOURCES.flatMap((s) => s.endsWith(".ts") ? [s] : readdirSync(join(ROOT, s), { recursive: true, encoding: "utf8" })
-    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).sort().map((f) => join(s, f)));
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.endsWith(".wasm.ts")).sort().map((f) => join(s, f)));
 }
 
 /** a digest of the platform jars, the compiler sources and the build format */
