@@ -34,8 +34,10 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
   check("Lz.test after", w.entry("Lz", "test", "()I")(), 11);
 }
 
-{
+for (const hot of [false, true]) {
+  let loading = !hot;
   const late = Object.assign(() => {
+    if (!loading) return w.entry("Lz", "first", "()LLz$A;")();
     w.addDexes(loadDexes(join(out, "out2/classes.dex")));
     return w.entry("Lz2", "make", "()LLz$A;")();
   }, { javaValues: true });
@@ -43,7 +45,15 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
     find: (cls, key) => cls === "Lz" && key === "late()LLz$A;" ? late : undefined,
     thrown: () => undefined,
   }) });
-  check("active frame sees a native-loaded override", w.entry("Lz", "active", "()I")(), 2);
+  const call = w.entry("Lz", "active", "()I");
+  if (hot) {
+    check("active before loading", call(), 1);
+    const slot = w.slotOf(w.prog.resolve("Lz", "active", "()I")!), initial = w.table.get(slot);
+    for (let i = 0; i < 20000 && w.table.get(slot) === initial; i++) call();
+    check("active frame's method was promoted", w.table.get(slot) !== initial, true);
+    loading = true;
+  }
+  check(`${hot ? "hot" : "cold"} active frame sees a native-loaded override`, call(), 2);
 }
 
 // ---- tiers: a method that uses up its budget is recompiled (here inside a loop, so the next call is the second tier) and answers the same
