@@ -16,9 +16,9 @@ export let webCookies = (pkg: string): Promise<WebCookies> => {
 // would not recognise as one to wait for
 export function useWebCookies(get: typeof webCookies) { webCookies = (pkg) => Promise.resolve(get(pkg)); }
 /** The process's CookieManager reaches the canonical jar through acknowledged operations. */
-export const cookieTransport: { calls?: CookieCalls } = {};
+export const cookieTransport: { calls?: () => CookieCalls } = {};
 const localCalls = cookieCalls(() => webCookies(appHost?.pkg ?? ""));
-const calls = (): CookieCalls => cookieTransport.calls ?? localCalls;
+const calls = (): CookieCalls => cookieTransport.calls?.() ?? localCalls;
 const complete = (callback: unknown, value: boolean) => {
   if (callback) postMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", boxBool(value)));
 };

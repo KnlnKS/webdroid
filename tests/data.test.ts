@@ -36,7 +36,7 @@ test("CookieManager waits for canonical mutation before its main-looper callback
   const { port1, port2 } = new MessageChannel();
   const stop = serveCalls<CookieCalls>(port1, cookieCalls(async () => { entered(); await blocked; return jar; }));
   const client = callProxy<CookieCalls>(port2, ["cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush"]);
-  cookieTransport.calls = client.endpoint;
+  cookieTransport.calls = () => client.endpoint;
   try {
     const manager = cookieManager(), url = "https://cookies.example/";
     const write = vcallAsync(manager, "setCookie", "(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V",

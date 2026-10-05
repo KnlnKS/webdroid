@@ -76,7 +76,7 @@ export function connectProcess(): ProcessEndpoint {
   };
   broker.files.attach(PROCESS_PID, vfs);
   sqliteTransport.call = request => brokerCalls().sqlite(request);
-  cookieTransport.calls = brokerCalls();
+  cookieTransport.calls = brokerCalls;
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
   const stopAccounts = useAccountStore(broker.accounts), stopSettings = useSettingsStore(broker.settings);
