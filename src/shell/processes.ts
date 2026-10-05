@@ -19,7 +19,6 @@ import { uptimeMillis } from "../guest-clock";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords";
 import { ActivityStack } from "./activitystack";
 import { apkPath, vfs } from "./vfs";
-import type { FileSource } from "./lazyfile";
 import { device, formatScreen } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
@@ -33,7 +32,8 @@ import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
 import type { WebCookies } from "./webcookies";
 import { BrowserLocation } from "./geolocation";
 import { PrivateFiles } from "./privatefiles";
-import { packedArchives, type PackedArchive } from "./packedarchive";
+import { packedArchives, type PackedArchiveIndex } from "./packedarchive";
+import { serveFile, type RemoteFileData } from "./remote-file";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await checkPermission(permission, pkg) !== 0;
@@ -57,7 +57,7 @@ export type ActivityRequest = { kind: "launch"; id: number; component: string; i
   | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
 const BIND_NOT_FOREGROUND = 4, BIND_WAIVE_PRIORITY = 0x20;
 /** splits: the installed config/feature split apks beside the base, which only the running app has */
-type PackageSnapshot = { pkg: string; source: Uint8Array | PackedArchive; splits: FileSource[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
+type PackageSnapshot = { pkg: string; source: RemoteFileData | { index: PackedArchiveIndex; base: string }; splits: RemoteFileData[]; uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 export type ProcessEndpoint = {
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
@@ -127,6 +127,7 @@ class ProcessBroker {
   private clipboard: ParcelData | null = null;
   private clipboardWatchers = new Set<number>();
   private booted = false;
+  private archivePorts = new Map<number, (() => void)[]>();
   readonly activities: ActivityStack = new ActivityStack({
     entry: (pid) => this.entry(pid), alive: (pid) => this.alive(pid), entries: () => this.entries.values(), connect: (pkg, process) => this.connect(pkg, process),
     activity: (entry, request) => this.request(entry, (endpoint) => endpoint.activity(request)),
@@ -212,13 +213,27 @@ class ProcessBroker {
   }
   async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[]; launcher: Entry["launcher"] }> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
-    const registry = await Promise.all([...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map(async (record) => {
-      const source = packedArchives.get(record.path) ?? await vfs.readFile(record.path);
-      if (!source) throw new Error("Package bytes unavailable: " + record.pkg);
+    const registry = [...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map((record) => {
+      const packed = packedArchives.get(record.path);
+      const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
+      if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
       const splits = record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : [];
-      return { pkg: record.pkg, source, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
-    }));
-    return { pkg: owner.pkg, process: entry.process, uid: entry.uid, registry, launcher: entry.launcher };
+      return { pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
+    });
+    const ports: (() => void)[] = [];
+    try {
+      const publish = (source: NonNullable<ReturnType<typeof vfs.source>>) => {
+        const served = serveFile(source); ports.push(served.close); return served.data;
+      };
+      const snapshots = registry.map(({ file, ...record }) => ({ ...record,
+        source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
+      const data = structuredClone({ pkg: owner.pkg, process: entry.process, uid: entry.uid, registry: snapshots, launcher: entry.launcher },
+        { transfer: snapshots.flatMap((record) => [...("port" in record.source ? [record.source.port] : []), ...record.splits.map((split) => split.port)]) });
+      // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
+      for (const close of this.archivePorts.get(pid) ?? []) close();
+      this.archivePorts.set(pid, ports);
+      return data;
+    } catch (error) { for (const close of ports) close(); throw error; }
   }
   ready(pid: number, endpoint: ProcessEndpoint): void { this.entry(pid).resolve(endpoint); }
   /** a process ended, or its frame failed: ActivityManagerService.appDiedLocked */
@@ -228,6 +243,8 @@ class ProcessBroker {
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
     entry.dead = true; entry.reject(error);
+    for (const close of this.archivePorts.get(pid) ?? []) close();
+    this.archivePorts.delete(pid);
     for (const reject of entry.pending) reject(error);
     entry.pending.clear();
     this.services.clientDied(pid);

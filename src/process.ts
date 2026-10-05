@@ -15,7 +15,8 @@ import { strictThreadOwnership } from "./jvm/natives/jentry";
 import { setBackgroundRealm } from "./jvm/yield";
 import { jitStats } from "./native/core";
 import { openInstallApks, type Install } from "./shell/install";
-import type { FileSource } from "./shell/lazyfile";
+import { RemoteFile } from "./shell/remote-file";
+import { readFully } from "./shell/lazyfile";
 import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
@@ -82,19 +83,18 @@ try {
     const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;
     let archive, base: Pick<Install, "zip" | "base">;
     if ("index" in source) {
-      const packed = new PackedArchive(source.index, source.base, source);
+      const packed = new PackedArchive(source.index, source.base);
       await packed.prepare(own);
       archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
       packedArchives.set(path, packed); vfs.mount(path, packed);
       if (own) rt.classpathSource = packed;
       base = { zip: packed.zip, base: packed };
     } else {
-      const bytes = u8(source), zip = zipTree(bytes);
+      const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
       archive = packageArchive(zip, await apkCertificates(bytes, zip)); vfs.write(path, bytes);
       base = { zip, base: bytes };
     }
-    // splits carry their native libraries and config resources; their reads return the parent realm's arrays
-    if (own) boot = await openInstallApks(snapshot.splits.map((split): FileSource => ({ size: split.size, read: async (offset, length) => u8(await split.read(offset, length)) })), base);
+    if (own) boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
     const record = registerPackage(archive, path, snapshot.uid);
     record.system = snapshot.system;
     for (const grant of snapshot.grants) record.grants.add(grant);
