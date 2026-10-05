@@ -19,6 +19,7 @@ import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
+import { remoteFilePath } from "../shell/file-path";
 import { javaOnLastClose, javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, bufferBytes, isBuffer, resident } from "../jvm/natives/jnio";
@@ -382,6 +383,11 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "strerror(I)Ljava/lang/String;": strerror,
     "stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
+      const remote = remoteFilePath(path);
+      if (remote) return after(remote.fileStat(path), reply => {
+        if (!reply.value) throw errno("stat", reply.errno);
+        return statOf(path, reply.value.size, reply.value.directory ? 0o40755 : 0o100644, reply.value.mtime);
+      });
       const st = existing("stat", path);
       return statOf(path, st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
     },
@@ -410,10 +416,16 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       return structStatVfs();
     },
     "readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
-    "access(Ljava/lang/String;I)Z": (path: string, mode: number) => { if (path === null) rt.npe(); sys("access", accessPath(null, path, mode)); return 1; },
+    "access(Ljava/lang/String;I)Z": (path: string, mode: number) => {
+      if (path === null) rt.npe();
+      return after(remoteFilePath(path)?.fileAccess(path, mode) ?? accessPath(null, path, mode), result => { sys("access", result); return 1; });
+    },
     "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); sys("remove", removePath(null, path)); },
     // the VFS keeps no permission bits: the mode is not recorded
-    "mkdir(Ljava/lang/String;I)V": (path: string) => { if (path === null) rt.npe(); sys("mkdir", mkdirPath(null, path)); },
+    "mkdir(Ljava/lang/String;I)V": (path: string) => {
+      if (path === null) rt.npe();
+      return after(remoteFilePath(path)?.fileMkdir(path) ?? mkdirPath(null, path), result => { sys("mkdir", result); });
+    },
     "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
       if (from === null || to === null) rt.npe();
       sys("rename", renamePath(null, from, to));
@@ -460,11 +472,14 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "initIDs()V": () => {},
   "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.norm(path),
   "getBooleanAttributes0(Ljava/lang/String;)I": (path: string) => {
-    const p = vfs.norm(path);
+    const p = vfs.norm(path), remote = remoteFilePath(p);
+    if (remote) return after(remote.fileStat(p), reply => reply.value ? BA_EXISTS | (reply.value.directory ? BA_DIRECTORY : BA_REGULAR) : 0);
     return vfs.isDir(p) ? BA_EXISTS | BA_DIRECTORY : vfs.exists(p) ? BA_EXISTS | BA_REGULAR : 0;
   },
   "list0(Ljava/io/File;)[Ljava/lang/String;": (file: JObj) => {
     const p = pathOf(file);
+    const remote = remoteFilePath(p);
+    if (remote) return after(remote.fileList(p), reply => reply.value ? jarray(reply.value, "Ljava/lang/String;") : null);
     return vfs.isDir(p) ? jarray(vfs.list(p), "Ljava/lang/String;") : null;
   },
   "createFileExclusively0(Ljava/lang/String;)Z": (path: string) => {
@@ -474,7 +489,10 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
     if (r < 0) throw rt.mkThrowable("java/io/IOException", ERRSTR[-r] ?? path);
     return 1;
   },
-  "createDirectory0(Ljava/io/File;)Z": (file: JObj) => +(mkdirPath(null, pathOf(file)) === 0),
+  "createDirectory0(Ljava/io/File;)Z": (file: JObj) => {
+    const p = pathOf(file);
+    return after(remoteFilePath(p)?.fileMkdir(p) ?? mkdirPath(null, p), result => +(result === 0));
+  },
   "getLastModifiedTime0(Ljava/io/File;)J": (file: JObj) => BigInt(vfs.mtime(pathOf(file))),
   "setLastModifiedTime0(Ljava/io/File;J)Z": (file: JObj, ms: bigint) => {
     const p = pathOf(file);

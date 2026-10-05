@@ -1,5 +1,6 @@
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
+import { filePathTransport } from "./file-path";
 import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
@@ -43,6 +44,10 @@ function connectCommandTransports(): void {
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   if (typeof window === "undefined" || window !== window.top) {
     useSettingsAccess(remoteSettings(brokerCalls));
+    if (typeof window === "undefined") {
+      filePathTransport.calls = brokerCalls;
+      vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
+    }
     usePermissionAccess({
       permissionCheck: (pkg, names) => brokerCalls().permissionCheck(pkg, names),
       permissionGrant: (pkg, names) => brokerCalls().permissionGrant(pkg, names),

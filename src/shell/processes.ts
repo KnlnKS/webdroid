@@ -33,6 +33,7 @@ import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
 import type { WebCookies } from "./webcookies";
 import { cookieCalls, type CookieCalls } from "./cookie-access";
 import { BrowserLocation } from "./geolocation";
+import { canonicalFilePaths, type FilePathCalls } from "./file-path";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
@@ -81,7 +82,7 @@ export type ProcessEndpoint = {
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & {
+export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & FilePathCalls & {
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
   processExited: (record: ExitRecord) => void;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
@@ -96,7 +97,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & Permissio
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -298,7 +299,22 @@ class ProcessBroker {
         holdsPlatformPermission(caller.pkg, "android.permission.GRANT_RUNTIME_PERMISSIONS")) return;
       throw rt.mkThrowable("java/lang/SecurityException", "Permission grants belong to another UID");
     });
+    const paths = canonicalFilePaths(path => {
+      const caller = this.entry(pid);
+      const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/([^/]+)(?:\/|$)/.exec(path);
+      const external = /^\/sdcard\/Android\/data\/([^/]+)(?:\/|$)/.exec(path);
+      const owner = privatePath?.[1] ?? external?.[1];
+      return owner && packages.get(owner)?.uid !== caller.uid && caller.uid !== 0 && caller.uid !== 1000 ? 13 : 0;
+    });
     const stop = serveCalls<BrokerCalls>(port1, {
+      filePrepare: async pkg => {
+        const caller = this.entry(pid);
+        if (packages.get(pkg)?.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
+        await this.files.prepare(pkg); this.entry(pid);
+        for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
+      },
+      fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
+      fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
       permissionCheck: async (pkg, names) => { this.entry(pid); return permissions.permissionCheck(pkg, names); },
       permissionGrant: async (pkg, names) => permissions.permissionGrant(pkg, names),
       accountList: async query => accounts().accountList(query),

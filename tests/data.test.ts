@@ -624,3 +624,25 @@ describe("mediastore", () => {
     expect([await vcall(cursor, "getString", "(I)Ljava/lang/String;", 0), await vcall(cursor, "getInt", "(I)I", 1)]).toEqual(["/sdcard/Pictures/resolved.png", 3]);
   });
 });
+
+test("libcore directory operations await their canonical owner and observe peer metadata", async () => {
+  const {onMain}=await import("../src/android/mainloop");
+  const {filePathTransport,canonicalFilePaths} = await import("../src/shell/file-path");
+  const previous=filePathTransport.calls,owner=canonicalFilePaths(()=>0),root="/data/data/org.webdroid.test.pathowner",path=root+"/created";
+  const {vfs}=await import("../src/shell/vfs");vfs.mkdir(root);
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>release=resolve);
+  filePathTransport.calls=()=>({filePrepare:async()=>{},fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
+    fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}});
+  try {
+    const file=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",path));
+    let finished=false;
+    const made=onMain(()=>vcall(file,"mkdir","()Z")).then(value=>{finished=true;return value;});
+    await new Promise(resolve=>setTimeout(resolve,0));expect(finished).toBe(false);expect(vfs.isDir(path)).toBe(false);
+    release();expect(await made).toBe(1);
+    expect(await onMain(()=>vcall(file,"isDirectory","()Z"))).toBe(1);
+    expect(await onMain(()=>vcall(file,"mkdir","()Z"))).toBe(0);
+    const parent=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",root));
+    expect(await onMain(()=>vcall(parent,"list","()[Ljava/lang/String;"))).toEqual(["created"]);
+  }finally{release();filePathTransport.calls=previous;vfs.rmdir(path);vfs.rmdir(root);}
+});

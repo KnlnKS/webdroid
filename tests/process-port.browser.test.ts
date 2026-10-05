@@ -91,7 +91,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const { clipboardOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return clipboardOwnership();
     });
-    expect(clipboard).toEqual({permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},accounts:{publicOnly:true,exists:true,token:"visible-token",deniedRead:true,deniedWrite:true,
+    expect(clipboard).toEqual({paths:{made:0,repeated:-17,directory:true,copied:true,foreignPath:-13},permissions:{before:[false],own:[true],foreignDenied:true,privileged:[true]},accounts:{publicOnly:true,exists:true,token:"visible-token",deniedRead:true,deniedWrite:true,
       renamed:"renamed-account",survivor:"renamed-account",changes:1,cleaned:true},source:[9,2],fresh:[1,2],denied:null,foreground:[1,2],absent:null,
       changes:1,peerChanges:3,survivor:[1,2],
       settings:{written:true,read:"shared",sameKey:true,changes:[["global","webdroid_worker_setting"]],survivor:"shared"}});

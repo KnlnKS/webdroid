@@ -359,6 +359,14 @@ export async function clipboardOwnership() {
     packages.get(foreign)!.grants.add("android.permission.GRANT_RUNTIME_PERMISSIONS");
     await peers[1].endpoint.permissionGrant(pkg,[extra]);
     const privileged=await ask("permissionCheck",pkg,[extra]);
+    await ask("filePrepare",pkg);
+    const directory=`/data/data/${pkg}/databases`;
+    const made=await ask("fileMkdir",directory),repeated=await ask("fileMkdir",directory);
+    const ownerStat=await peers[0].endpoint.fileStat(directory);
+    const listed=await ask("fileList",`/data/data/${pkg}`) as {value:string[]};
+    listed.value.length=0;
+    const freshList=await peers[0].endpoint.fileList(`/data/data/${pkg}`);
+    const foreignPath=await ask("fileMkdir",`/data/data/${foreign}/denied`);
     // Drain the notification endpoint before death, so cleanup is not racing its reply.
     await (await entries[1].ready).activity({kind:"back"});
     worker.terminate();broker.fail(8301,"clipboard Worker ended",NOT_CRASHED);
@@ -368,7 +376,7 @@ export async function clipboardOwnership() {
     const changesBefore=accountChanges;broker.accounts.persist();
     await peers[0].endpoint.accountExists(key);
     const cleaned=accountChanges===changesBefore;
-    return {permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
+    return {paths:{made,repeated,directory:ownerStat.value?.directory,copied:freshList.value?.includes("databases"),foreignPath},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
       renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
       changes,peerChanges,survivor:Array.from(survivor!.bytes),
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
@@ -378,6 +386,7 @@ export async function clipboardOwnership() {
     for (let i=broker.accounts.records.length-1;i>=0;i--)
       if(broker.accounts.records[i].type==="test.worker")broker.accounts.records.splice(i,1);
     broker.accounts.persist();
+    for(const path of [...vfs.dirs])if(path.startsWith(`/data/data/${pkg}`)||path.startsWith(`/data/user_de/0/${pkg}`))vfs.rmdir(path);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
   }
