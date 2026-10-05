@@ -39,8 +39,8 @@ const activityManager: NativeSpec["methods"] = {
   "getRunningAppProcesses()Ljava/util/List;": () => after(newObj(PROCESS_INFO), (info) => newArrayList([fillProc(info)])),
   "getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JObj) => { fillProc(info); },
   // the device profile's memory: the page cannot read the host's
-  "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: { totalMem: bigint; availMem: bigint; lowMemory: number; threshold: bigint }) => {
-    mi.totalMem = 4n << 30n; mi.availMem = 2n << 30n; mi.lowMemory = 0; mi.threshold = 128n << 20n;
+  "getMemoryInfo(Landroid/app/ActivityManager$MemoryInfo;)V": (mi: JObj) => {
+    setDeclared(mi, "android/app/ActivityManager$MemoryInfo", { totalMem: 4n << 30n, availMem: 2n << 30n, lowMemory: 0, threshold: 128n << 20n });
   },
   "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": driven(function* (pids: Int32Array): Gen {
     const infos: JObj[] = [];

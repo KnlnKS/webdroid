@@ -1,7 +1,7 @@
 // WebViewFactory's provider: the WebView implementation package is this one (webkit.ts's provider),
 // and what AOSP's WebView statics reach through it.
 import { awaited, rt, JObj, stubs, fieldSetters, driven, setDeclared, type Gen } from "../jvm/runtime";
-import { vcall, newObj, linkClass } from "../jvm/natives/jentry";
+import { vcall, scall, newObj, linkClass } from "../jvm/natives/jentry";
 import { boxBool } from "../jvm/natives/jbox";
 import { hostStub } from "./binder";
 import { onMain } from "./mainloop";
@@ -27,7 +27,7 @@ rt.register({
     // getWebViewContextAndSetProvider's package, then the provider class its context's loader finds
     "static getProviderClass()Ljava/lang/Class;": driven(function* (): Gen {
       linkClass("android/webkit/WebViewFactory").setStatic("sPackageInfo", yield* awaited(webViewPackage()));
-      return rt.classFor(FACTORY);
+      return yield scall("java/lang/Class", "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", FACTORY.replace(/\//g, "."), 0, null);
     }),
   },
 });
@@ -73,7 +73,9 @@ rt.register({
     "getWebStorage()Landroid/webkit/WebStorage;": function (this: Factory) { return this.storage ??= inst("webdroid/WebStorage"); },
     "getServiceWorkerController()Landroid/webkit/ServiceWorkerController;": function (this: Factory) { return this.serviceWorker ??= inst("webdroid/ServiceWorkerController"); },
     "getTracingController()Landroid/webkit/TracingController;": function (this: Factory) { return this.tracing ??= inst("webdroid/TracingController"); },
-    "getWebViewClassLoader()Ljava/lang/ClassLoader;": () => vcall(rt.classFor(FACTORY), "getClassLoader", "()Ljava/lang/ClassLoader;"),
+    "getWebViewClassLoader()Ljava/lang/ClassLoader;": driven(function* (): Gen {
+      return yield vcall(yield scall("java/lang/Class", "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", FACTORY.replace(/\//g, "."), 0, null), "getClassLoader", "()Ljava/lang/ClassLoader;");
+    }),
     ...stubs(null, "getTokenBindingService()Landroid/webkit/TokenBindingService;", "getWebIconDatabase()Landroid/webkit/WebIconDatabase;"),
   },
 });

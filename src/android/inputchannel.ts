@@ -3,7 +3,7 @@
 // looper (NativeInputEventReceiver's handleEvent) and finishes it by sequence number, which settles
 // the publisher's wait.
 import { rt, type JObj } from "../jvm/runtime";
-import { vcall, newObj } from "../jvm/natives/jentry";
+import { vcall, newObj, after } from "../jvm/natives/jentry";
 import { handle, deref, release, FINALIZER } from "./handles";
 import { nativeParcel, readInt, readLocalObject, writeInt, writeLocalObject } from "./parcel";
 import { mangleField } from "../jvm/abi";
@@ -16,7 +16,9 @@ export class Channel {
   /** a focus change the client end's receiver has not heard yet */
   focus: boolean | null = null;
   readonly pending = new Map<number, (handled: boolean) => void>();
-  constructor(readonly name: string, readonly token: JObj) {}
+  /** the Binder both ends are known by, made when first asked for */
+  constructor(readonly name: string, readonly shared: { token: JObj | null }) {}
+  get token(): JObj | null { return this.shared.token; }
 }
 let nextSeq = 1;
 /** publish `event` on the server end: resolves with whether the window handled it, or false when no
@@ -51,9 +53,9 @@ export const channelOf = (input: JObj): Channel => channel((input as unknown as 
 const PTR = mangleField("android/os/MessageQueue", "mPtr");
 
 rt.registerJnis("android/view/InputChannel", {
-  "nativeOpenInputChannelPair(Ljava/lang/String;)[J": async (name: string) => {
-    const token = await newObj("android/os/Binder", "()V");
-    const server = new Channel(name, token), client = new Channel(name, token);
+  // the Binder is made by nativeGetToken: this native answers an array, which it must do without waiting (a Suspending import's array result would not survive the gap before its caller resumes)
+  "nativeOpenInputChannelPair(Ljava/lang/String;)[J": (name: string) => {
+    const shared = { token: null }, server = new Channel(name, shared), client = new Channel(name, shared);
     server.peer = client; client.peer = server;
     return BigInt64Array.of(ref(server), ref(client));
   },
@@ -61,7 +63,7 @@ rt.registerJnis("android/view/InputChannel", {
   "nativeDispose(J)V": (h: bigint) => release(h),
   "nativeDup(J)J": (h: bigint) => ref(channel(h)),
   "nativeGetName(J)Ljava/lang/String;": (h: bigint) => channel(h).name,
-  "nativeGetToken(J)Landroid/os/IBinder;": (h: bigint) => channel(h).token,
+  "nativeGetToken(J)Landroid/os/IBinder;": (h: bigint) => { const s = channel(h).shared; return s.token ?? after(newObj("android/os/Binder", "()V"), (token: JObj) => (s.token = token)); },
   "nativeWriteToParcel(Landroid/os/Parcel;J)V": (parcel: JObj, h: bigint) => {
     const p = nativeParcel(parcel);
     writeInt(p, h ? 1 : 0);
