@@ -22,6 +22,7 @@ export interface AppCodeRequest {
   spawn(): WorkerPort;
   /** where an app build starts, for a launch without a saved one */
   roots: BuildRoots;
+  signal?: AbortSignal;
 }
 export interface AppCode {
   /** whether a saved build was found and its modules compiled */
@@ -36,7 +37,7 @@ export interface AppCode {
   refine(world: World, min?: number): Promise<Built | undefined>;
   /** from the first frame of the app on: looks at the launch every so often, and refines once it has gone quiet */
   watch(world: World): void;
-  /** stops watching, and stops the worker that builds */
+  /** stops watching and both compiler workers; outstanding builds reject */
   close(): void;
 }
 export interface Built { kept: boolean; methods: number; modules: number; ms: number }
@@ -55,16 +56,27 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     if (files) void req.persist?.save(key, [...files]).catch(() => {});
   }
   const saved = files && await SavedBuild.open(files);
+  req.signal?.throwIfAborted();
   const compiler = new CompileClient(req.spawn()), builder = new Builder(req, key);
+  let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    req.signal?.removeEventListener("abort", close);
+    clearTimeout(timer); timer = undefined;
+    compiler.close(); builder.close();
+  };
+  req.signal?.addEventListener("abort", close, { once: true });
+  if (req.signal?.aborted) close();
   /** the classes the host implements, as the World began with them: a worker that builds applies the same ones */
   let hostClasses: string[] | undefined;
   /** what the saved build was asked to include, which the next one includes too */
   let covered: Demand = saved?.index.demand ?? { methods: [], classes: [], infos: [] };
-  const code: AppCode = { hit: !!saved, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
-    refine, watch: (world) => { if (req.persist) watch(world); }, close: () => builder.close() };
-  if (!saved) {
+  const code: AppCode = { hit: !!saved, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
+    refine, watch: (world) => { if (!closed && !watching && req.persist) { watching = true; watch(world); } }, close };
+  if (!saved && !closed) {
     code.made = builder.build({ methods: [], classes: [], infos: [] });
-    code.made.catch((e) => console.warn("[webdroid] the app build failed", e));
+    code.made.catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); });
   }
 
   /** what `world` built on demand that the saved build lacks, with the build's own demand before it */
@@ -76,6 +88,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     return { merged: { methods: [...methods], classes: [...classes], infos: [...infos.values()] }, fresh: methods.size + classes.size + infos.size - before };
   }
   async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
+    if (closed) return undefined;
     const { merged, fresh } = demanded(world);
     if (fresh < min) return undefined;
     const built = await builder.build(merged, hostClasses);
@@ -85,46 +98,64 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
     const until = performance.now() + WATCH_MS;
+    const again = () => { if (!closed) timer = setTimeout(tick, TICK_MS); };
     const tick = () => {
-      if (performance.now() > until && !building && !builder.busy) { builder.close(); return; }
-      if (building || builder.busy) { setTimeout(tick, TICK_MS); return; }
+      timer = undefined;
+      if (closed) return;
+      if (performance.now() > until && !building && !builder.busy) { builder.close(undefined, false); return; }
+      if (building || builder.busy) { again(); return; }
       const { fresh } = demanded(world);
       // the launch has gone quiet: what it compiled since the last look is all there is for now
       if (fresh >= MIN_FRESH && fresh === last) {
         building = true;
-        refine(world).catch((e) => console.warn("[webdroid] the app build failed", e))
-          .finally(() => { building = false; if (++refines >= MAX_REFINES) builder.close(); else setTimeout(tick, TICK_MS); });
+        refine(world).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
+          .finally(() => { building = false; if (++refines >= MAX_REFINES) builder.close(undefined, false); else again(); });
         return;
       }
       last = fresh;
-      setTimeout(tick, TICK_MS);
+      again();
     };
-    setTimeout(tick, TICK_MS);
+    again();
   }
   return code;
 }
 
 /** the worker that builds the app, started by the first build and kept for the ones after it */
 class Builder {
+  private closed = false;
   private port?: WorkerPort;
   private waiting?: { resolve(built: Built): void; reject(error: Error): void };
   constructor(private req: AppCodeRequest, private key: string) {}
   get busy(): boolean { return !!this.waiting; }
   /** builds with `demand`; the worker checks that the host's classes it applies are the ones `hostClasses` names */
   build(demand: Demand, hostClasses?: string[]): Promise<Built> {
+    if (this.closed) return Promise.reject(new Error("App code closed"));
+    if (this.waiting) return Promise.reject(new Error("An app build is already pending"));
     return new Promise((resolve, reject) => {
       this.waiting = { resolve: (built) => { this.waiting = undefined; resolve(built); }, reject: (error) => { this.waiting = undefined; reject(error); } };
-      if (this.port) { this.port.postMessage({ type: "refine", demand }); return; }
-      const port = this.port = this.req.spawn(), list = containers(this.req.dexes);
-      port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
-        if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand }, list.map(([, b]) => b.buffer as ArrayBuffer));
-        if (data.type === "failed") { this.close(); this.waiting?.reject(new Error(data.message)); }
-        if (data.type !== "built") return;
-        const kept = !!await this.req.persist?.save(this.key, buildFiles(data.build)).catch(() => false);
-        this.waiting?.resolve({ kept, methods: data.methods, modules: data.build.files.length, ms: data.ms });
-      };
-      port.onerror = (e) => { this.close(); this.waiting?.reject(new Error(e.message)); };
+      try {
+        if (this.port) { this.port.postMessage({ type: "refine", demand }); return; }
+        const port = this.req.spawn();
+        if (this.closed) { port.terminate(); return; }
+        this.port = port;
+        const list = containers(this.req.dexes);
+        port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
+          if (this.closed || this.port !== port) return;
+          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand }, list.map(([, b]) => b.buffer as ArrayBuffer));
+          if (data.type === "failed") this.close(new Error(data.message), false);
+          if (data.type !== "built") return;
+          const pending = this.waiting;
+          const kept = !!await this.req.persist?.save(this.key, buildFiles(data.build)).catch(() => false);
+          if (!this.closed && this.waiting === pending) pending?.resolve({ kept, methods: data.methods, modules: data.build.files.length, ms: data.ms });
+        };
+        port.onerror = (e) => this.close(new Error(e.message), false);
+      } catch (error) { this.close(error instanceof Error ? error : new Error(String(error)), false); }
     });
   }
-  close(): void { this.port?.terminate(); this.port = undefined; }
+  close(error = new Error("App code closed"), terminal = true): void {
+    if (this.closed) return;
+    this.closed = terminal;
+    if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }
+    this.waiting?.reject(error);
+  }
 }

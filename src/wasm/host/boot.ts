@@ -28,6 +28,7 @@ import { prepareApp, type AppCode } from "./appcode";
 import { prefetchInWorker } from "./aotload";
 import { openPersist } from "./persist";
 import type { WorkerPort } from "./compiler";
+import { onProcessExit, processExited } from "../../process-exit";
 
 
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
@@ -60,11 +61,20 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
  *  harnesses under node) there is no build to fetch: the World is made when the first dex arrives and takes the platform's dex files as they are loaded. */
 export async function bootWasmTier(): Promise<TierBackend> {
   let world: World | undefined, code: AppCode | undefined, platform: Program | undefined, store: FetchStore | undefined;
+  let usage: (() => ReturnType<World["usage"]>) | undefined;
+  const lifetime = new AbortController();
+  const close = () => {
+    lifetime.abort(); code?.close();
+    if (usage) { store?.worlds.delete(usage); usage = undefined; }
+  };
+  onProcessExit(close);
+  if (processExited()) close();
+  if (typeof window !== "undefined") window.addEventListener("pagehide", close, { once: true });
   const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined>();
   const dexes = (path: string) => openDexes(path, appDexes, opened);
   const install = (made: World) => {
     world = made;
-    store?.worlds.add(() => made.usage());
+    if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
     code?.start(made);
     rt.mkThrowable = hostThrowable;
@@ -105,9 +115,12 @@ export async function bootWasmTier(): Promise<TierBackend> {
     launched() { starting = false; if (world) code?.watch(world); },
     async appCode(roots) {
       if (world || !store || !appDexes.length) return;
-      code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }) as unknown as WorkerPort, roots });
+      try {
+        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }) as unknown as WorkerPort, roots, signal: lifetime.signal });
+      } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
+      if (lifetime.signal.aborted) { code.close(); return; }
       mark(code.hit ? "appCodeSaved" : "appCode");
-      void code.made?.then(() => mark("appBuilt"));
+      void code.made?.then(() => mark("appBuilt"), () => {});
       // the World is made while the build's modules are still arriving; no Java runs until they have
       current();
       await store.ready;

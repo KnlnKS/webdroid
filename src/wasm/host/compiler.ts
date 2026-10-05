@@ -41,6 +41,7 @@ export class CompileClient implements CompileService {
 
   /** starts the worker over `w`'s Program as it is now: `aotBase` is where the platform build's files are fetched from, and `w` has `app` attached if it says so */
   start(w: World, aotBase: string | undefined, app: AppIndex | undefined): void {
+    if (this.state === "retired") return;
     const dexes = new Set<DexFile>();
     for (const c of w.prog.own()) { if (c.name.includes("@")) return this.retire("a class loader of its own"); if (c.dex) dexes.add(c.dex); }
     this.w = w; this.state = "starting";
@@ -78,6 +79,7 @@ export class CompileClient implements CompileService {
     }
   }
   private receive(m: CompileResponse): void {
+    if (this.state === "retired") return;
     if (m.type === "loaded") { this.loaded = true; for (const [req, transfer] of this.waiting.splice(0)) this.port.postMessage(req, transfer); return; }
     const w = this.w!;
     if (m.type === "ready") { this.state = "ready"; this.stats.startMs = performance.now() - this.stats.startMs; this.pump(); return; }
@@ -108,6 +110,8 @@ export class CompileClient implements CompileService {
     this.state = "retired"; this.retired = reason;
     for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.release(slot);
     this.queue = []; this.busy = undefined;
+    this.waiting = []; this.w = undefined;
+    this.port.onmessage = null; this.port.onerror = null;
     this.port.terminate();
   }
   close(): void { this.retire("closed"); }
