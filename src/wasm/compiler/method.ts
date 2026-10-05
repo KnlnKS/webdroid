@@ -59,14 +59,12 @@ export class MC {
   shadowKeys = new Set<string>();
   shadows = new Map<string, number>();
   private root!: Code;
-  private chunk?: { code: Code; label: string; count: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number };
+  private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number };
   private chunks: NonNullable<MC["chunk"]>[] = [];
   private resultLocal = -1;
   private controlLocal = -1;
   private stateType = -1;
   private stateLocal = -1;
-  private chunkDepth = 0;
-  private maxChunkDepth = 0;
   constructor(public cx: Compiler, public m: MethodInfo) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
@@ -224,7 +222,7 @@ export class MC {
       this.stateType = this.cx.mb.addType({ k: "struct", fields: types.map((t) => ({ t, mut: true })) });
       this.stateLocal = this.root.newLocal(refNull(this.stateType));
     }
-    const own = this.chunks.length ? (5 + types.length) * (1 + this.maxChunkDepth) + 8 * this.maxChunkDepth : 4 + types.length;
+    const own = (this.chunks.length ? 5 : 4) + types.length;
     for (const ch of this.chunks) {
       ch.locals = [...ch.code.locals].sort((a, b) => a - b);
       const owner = this.cx.mb.funcNames[this.cx.fn.get(mid(this.m))! - this.cx.mb.nImportedFuncs];
@@ -364,9 +362,8 @@ export class MC {
       c.raw(0x20, 0).lset(this.stateLocal);
       this.loadState(c, ch.locals);
     });
-    const ch = { code: body, label: scope.label, count: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1 };
+    const ch = { code: body, label: scope.label, count: parent.newLocal(T.i32), entry: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1 };
     this.chunks.push(ch); this.code = body; this.nest = []; this.chunk = ch;
-    this.maxChunkDepth = Math.max(this.maxChunkDepth, ++this.chunkDepth);
     this.push("$chunkReturn"); body.block(T.i32);
     this.push("$chunkCaught"); body.block(T.anyref);
     this.push("$chunkTry"); body.tryTable(null, [[0, this.cx.tag, 0]]);
@@ -379,14 +376,19 @@ export class MC {
     if (this.cx.counting) this.cx.emitCount(body, this.m, ch.count);
     body.defer((c) => { this.saveState(c, ch.locals); c.ret(); });
     for (const l of body.locals) parent.locals.add(l);
-    this.chunkDepth--; this.code = parent; this.nest = nest; this.chunk = outer;
+    this.code = parent; this.nest = nest; this.chunk = outer;
     const c = parent;
     this.push("$chunkCall"); c.loop();
     c.i32(0).lset(ch.count);
     c.defer((c) => {
       c.lget(this.stateLocal).refIsNull().if_().gc(1, this.stateType).lset(this.stateLocal).end();
       this.saveState(c, ch.locals);
+      // Charge the dispatcher and chunk only while their native frames are active.
+      const weights = this.cx.emitEnter(c, ch.entry);
+      const size = this.root.nparams + this.root.localTypes.length;
+      for (const at of weights) c.patch(at, 12 + size);
       c.lget(this.stateLocal).refAsNonNull().call(ch.dispatch).lset(this.controlLocal);
+      this.cx.emitLeave(c, ch.entry, false);
       this.loadState(c, ch.locals);
     });
     c.lget(this.controlLocal).i32(1).raw(OP.i32_eq).brIf(0);
