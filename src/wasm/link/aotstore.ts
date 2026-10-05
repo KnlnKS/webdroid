@@ -18,6 +18,8 @@ export class FetchStore implements AotStore {
   private waiting = new Map<string, (() => void)[]>();
   /** the files that could not be fetched or compiled */
   failed: string[] = [];
+  /** settles once the modules a start wants are held (or known to be missing): code does not run before, or it compiles what it finds missing on demand */
+  ready: Promise<void> = Promise.resolve();
   constructor(readonly base: string) {}
   /** the build's key: its directory's name */
   get key(): string { return this.base.split("/").filter(Boolean).pop()!; }
@@ -43,6 +45,9 @@ export class FetchStore implements AotStore {
       });
     }
   }
+  has(file: string): boolean { return this.files.has(file); }
+  /** adds `file` as the module compiled elsewhere (a worker: host/aotload.ts) */
+  put(file: string, module: WebAssembly.Module): void { this.files.set(file, module); }
   /** fetches `file` as bytes: the index and the list of a start's modules */
   async fetchBytes(file: string): Promise<Uint8Array> {
     const res = await fetch(this.base + file);
