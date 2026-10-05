@@ -5,7 +5,7 @@
 // --ref takes the JS tier's numbers (and which workloads match) from an earlier --json run and measures only Wasm, for A/B work on the compiler.
 // Needs javac, d8, node and (for chrome) Playwright's Chrome. The host is shared: the load average is printed and a high one flags the table noisy.
 import { cpus, loadavg } from "node:os";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
@@ -60,6 +60,8 @@ async function chromeRun() {
   const server = Bun.serve({ port: 0, fetch(req) {
     const u = new URL(req.url), p = u.pathname;
     if (p === "/") return new Response(`<script type=module>globalThis.G1_ROOT=${JSON.stringify(ROOT)};globalThis.G1_AOT=${JSON.stringify(aotDir ?? "")}||undefined;const f={};await Promise.all(${JSON.stringify(preload)}.map(async(p)=>f[p]=new Uint8Array(await(await fetch("/f?p="+encodeURIComponent(p))).arrayBuffer())));globalThis.G1_FILES=f;await import("/g1.js");window.ready=true</script>`, { headers: { "content-type": "text/html", ...iso } });
+    // G1_STARTUP=all: every module of the build is fetched and compiled before the first call, which shows what the rows cost when the page has what they run
+    if (aotDir && p.endsWith("/startup.json") && process.env.G1_STARTUP === "all") return Response.json(readdirSync(aotDir).filter((f) => /^[cd]\d+\.wasm$/.test(f)), { headers: iso });
     if (aotDir && p.startsWith("/aot/")) { const file = join(aotDir, p.split("/").pop()!); return existsSync(file) ? new Response(Bun.file(file), { headers: { "content-type": file.endsWith(".wasm") ? "application/wasm" : "application/json", ...iso } }) : new Response("", { status: 404 }); }
     if (p === "/g1.js") return new Response(Bun.file(bundlePath), { headers: { "content-type": "text/javascript", ...iso } });
     const file = p === "/f" ? u.searchParams.get("p")! : p.startsWith("/vendor/aosp/") ? join(ROOT, p) : null;

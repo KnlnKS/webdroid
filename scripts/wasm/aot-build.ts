@@ -1,6 +1,6 @@
 // Builds the ahead-of-time assets (aot.ts) of the platform jars: one D (data) module per class group and one C (code) module per group,
 // and the index that numbers everything.
-//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--no-validate] [--app app.dex] [--force]
+//   bun run aot [--out dir] [--jars N | --only jar,jar] [--d class|outer|pkg|pkgN|all] [--c class|outer|pkg|pkgN|all] [--max-module KiB] [--max-hot KiB] [--no-validate] [--app app.dex] [--force]
 // Without --out the build goes to vendor/wasm-aot/<key> (aot-key.ts) and is skipped when that exists; the default jars are the platform's code: the libcore jars and framework.jar.
 // The Program holds every platform jar (class-hierarchy decisions are made over all of them); the chosen jars are numbered and compiled.
 // A group is the classes of a package (or of the mode's unit) up to --max-module KiB of estimated module size: Chrome compiles a module above 8 MiB asynchronously only,
@@ -26,7 +26,7 @@ import { AOSP } from "./paths";
 
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const PLATFORM = ["core-oj", "core-libart", "okhttp", "bouncycastle", "apache-xml", "conscrypt", "core-icu4j", "framework"];
-const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg"), maxModule = +flag("--max-module", "3072") * 1024;
+const nJars = flag("--jars", ""), dMode = flag("--d", "pkg"), cMode = flag("--c", "pkg"), maxModule = +flag("--max-module", "3072") * 1024, maxHot = +flag("--max-hot", "1024") * 1024;
 const jarNames = flag("--only", nJars ? "" : PLATFORM.join(",")).split(",").filter(Boolean);
 const jars = PLATFORM_JARS.filter((j, i) => (jarNames.length ? jarNames.some((n) => j.endsWith("/" + n + ".jar") || j === n + ".jar") : i < +nJars));
 const appPath = flag("--app", "");
@@ -36,7 +36,7 @@ const hot = existsSync(join(AOT_ROOT, "hot.json")) ? JSON.parse(readFileSync(joi
 let out = flag("--out", "");
 if (!out) {
   const nativeKeys = [...rt.jni.keys(), ...[...rt.natives].flatMap(([cls, spec]) => Object.keys(spec.methods ?? {}).map((k) => `${cls}|${k}`)), ...hostNatives.keys(), ...[SERVICES, ...MAY_SUSPEND, ...waitingNatives()].map((id) => `suspends|${id}`)].sort();
-  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, appPath && readFileSync(appPath).toString("base64"), hot]));
+  const source = sourceKey(), key = buildKey(source, nativeKeys, JSON.stringify([jars, dMode, cMode, maxModule, maxHot, appPath && readFileSync(appPath).toString("base64"), hot]));
   out = join(AOT_ROOT, key);
   mkdirSync(AOT_ROOT, { recursive: true });
   writeFileSync(join(AOT_ROOT, "latest.json"), JSON.stringify({ key, source }));
@@ -101,7 +101,7 @@ const dexes = PLATFORM_JARS.map((j) => loadDexes(join(AOSP, j)));
 const appDexes = appPath ? loadDexes(appPath) : [];
 const prog = new Program([...dexes.flat(), ...appDexes]); prog.addExterns(externs);
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxModule, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxModule, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
+const w = world(prog, { natives, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
 const aot = w.aot!;
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0, largest = 0;
