@@ -89,6 +89,8 @@ export class World {
   /** the gaps of the code in this World by id; precompiled code numbers all of its gaps, but only those of modules that are loaded are listed */
   gapList: string[] = [];
   onGap: (id: number) => void = () => {};
+  /** the gap site that ran last, which the UnsatisfiedLinkError the code throws next names */
+  private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
   stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
@@ -156,7 +158,7 @@ export class World {
     const names = (id: number) => javaName(this.names[id]);
     this.host = {
       fmod: (a: number, b: number) => a % b,
-      gap: (id: number) => this.onGap(id),
+      gap: (id: number) => { this.lastGap = id; this.onGap(id); },
       link: (slot: number) => this.linkSlot(slot),
       sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
       // without JSPI (Bun) nothing can wait, which the first attempt says
@@ -185,7 +187,7 @@ export class World {
         if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => this.linkMessages[id])),
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id])),
       capture: (exn: object) => { this.stacks.set(exn, new Error()); },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : javaName(this.frames[i].cls)),

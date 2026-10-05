@@ -80,6 +80,7 @@ export function excMessage(kind: number, a: number, b: number, c: number, d: num
     case SLOT.fin: return `Cannot set a final field of class ${dotted(className(a))}`;
     case SLOT.ncdfe: return `Could not initialize class ${dotted(className(a))}`;
     case SLOT.ncdfr: case SLOT.nsme: case SLOT.nsfer: case SLOT.icce: return linkMessage(a);
+    case SLOT.ule: return linkMessage(-1);
     case SLOT.nbs: return "blocking operation on a stack that cannot suspend";
     case SLOT.iarg: return `argument ${a + 1} should have type ${pretty(className(b))}, got ${c < 0 ? "null" : pretty(className(c))}`;
     case SLOT.iarity: return `Wrong number of arguments; expected ${a}, got ${b}`;
