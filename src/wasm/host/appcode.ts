@@ -110,15 +110,12 @@ class Builder {
   private waiting?: { resolve(built: Built): void; reject(error: Error): void };
   constructor(private req: AppCodeRequest, private key: string) {}
   get busy(): boolean { return !!this.waiting; }
-  private hostClasses?: string[];
-  /** builds with `demand`; the worker applies the host's classes `hostClasses` names, which code of theirs needs (a worker that began without them is replaced) */
+  /** builds with `demand`; the worker checks that the host's classes it applies are the ones `hostClasses` names */
   build(demand: Demand, hostClasses?: string[]): Promise<Built> {
-    if (this.port && hostClasses && !this.hostClasses) this.close();
     return new Promise((resolve, reject) => {
       this.waiting = { resolve: (built) => { this.waiting = undefined; resolve(built); }, reject: (error) => { this.waiting = undefined; reject(error); } };
       if (this.port) { this.port.postMessage({ type: "refine", demand }); return; }
       const port = this.port = this.req.spawn(), list = containers(this.req.dexes);
-      this.hostClasses = hostClasses;
       port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
         if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand }, list.map(([, b]) => b.buffer as ArrayBuffer));
         if (data.type === "failed") { this.close(); this.waiting?.reject(new Error(data.message)); }
@@ -129,5 +126,5 @@ class Builder {
       port.onerror = (e) => { this.close(); this.waiting?.reject(new Error(e.message)); };
     });
   }
-  close(): void { this.port?.terminate(); this.port = undefined; this.hostClasses = undefined; }
+  close(): void { this.port?.terminate(); this.port = undefined; }
 }
