@@ -256,6 +256,11 @@ export class StructStrings implements StringRepr {
       });
       // the hidden constructor libcore's case mapping uses: a range of a char[] it filled itself, so the range needs no check
       case "(II[C)V": return make("String.<init>(II[C)V", (c) => { copy(c, 2, () => c.lget(0), () => c.lget(1)); });
+      // the builders are final classes: their toString is the String the constructor makes
+      case "(Ljava/lang/StringBuffer;)V": case "(Ljava/lang/StringBuilder;)V": {
+        const to = cx.prog.resolve(desc.slice(2, -3), "toString", "()Ljava/lang/String;");
+        return to ? make("String.<init>" + desc, (c) => { this.npe(c, 0); c.lget(0); cx.callMethod(c, to); }) : host();
+      }
       default: return host();
     }
   }

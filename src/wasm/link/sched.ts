@@ -14,7 +14,7 @@ import { Monitors, St, type Header } from "./monitor";
 import { promising, suspending } from "./module";
 import type { World } from "./world";
 
-const THREAD = "java/lang/Thread", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
+const THREAD = "java/lang/Thread", LOADER = "java/lang/ClassLoader", GROUP = "java/lang/ThreadGroup", OBJECT = "java/lang/Object", NORM_PRIORITY = 5;
 const EXTERN = -17, MILLION = 0x412e848000000000n;
 /** loop iterations of one activation between two chances for another strand to run (a power of two) */
 export const FUEL = 4096;
@@ -24,7 +24,7 @@ export const ROOT = 1;
 /** operations that answer at once (`host.sync`) */
 export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, BindMain, Plain, Resume }
 /** operations that may wait (`host.block`, Suspending) */
-export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init }
+export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
 const sidOf = (cx: Compiler) => cx.global("rt", "sid", T.i32, true);
 const thrOf = (cx: Compiler) => cx.global("rt", "thr", T.anyref, true);
@@ -103,6 +103,12 @@ rt("curThread", [], "L", (cx, c) => {
   // ART records the native thread in the peer, which is what Thread.isAlive reads
   const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" });
   c.gget(g).refCast(st).i64(1n).structSet(st, peer);
+  // and the runtime gives the main thread the system class loader as its context loader, which threads started from it inherit
+  const system = cx.prog.resolve(LOADER, "getSystemClassLoader", `()L${LOADER};`);
+  if (system) {
+    cx.emitEnsure(c, LOADER);
+    c.gget(g).refCast(st); cx.callMethod(c, system); c.structSet(st, cx.fieldIndex(THREAD, { owner: THREAD, name: "contextClassLoader", desc: `L${LOADER};` }));
+  }
   emitSync(cx, c, Sync.BindMain, () => c.gget(g)); c.drop();
   c.end().gget(g);
 });
@@ -314,8 +320,10 @@ export class Sched {
       case Block.Wait: return a < 0 || b < 0 ? St.Neg : b > 999999 ? St.Nanos : this.monitors.wait(obj!, s, a, false);
       case Block.Sleep: return this.monitors.wait(obj!, s, a, true);
       case Block.Park: return this.park(s, a, b !== 0);
-      case Block.Yield: return this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : Promise.resolve(St.Ok);
+      // b: a turn of the timer queue rather than of the yield channel, which the engine runs its finalizers between
+      case Block.Yield: return b ? new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); }) : this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : Promise.resolve(St.Ok);
       case Block.Init: return this.initWait(s, a);
+      case Block.Net: return (this.w.opts.net?.wait?.(this.w) ?? Promise.resolve()).then(() => St.Ok);
     }
   }
   /** LockSupport.park: returns on a permit, the deadline or an interrupt (which stays set) */
@@ -359,6 +367,8 @@ export class Sched {
     } finally {
       const exit = this.threadFn("exit", () => w.hostFn("thr:exit", ["L"], "V", (cx, c) => { c.lget(0); cx.callMethod(c, w.prog.resolve(THREAD, "exit", "()V")!); }));
       try { await s.call(exit, obj); } catch { /* a failing exit leaves the thread over all the same */ }
+      // a thread that join wakes is TERMINATED when it asks: the flag goes before the peer is cleared and the joiners notified
+      s.thread.alive = false;
       const done = this.threadFn("finish", () => w.hostFn("thr:finish", ["L"], "V", (cx, c) => {
         const st = cx.structFor(THREAD), peer = cx.fieldIndex(THREAD, { owner: THREAD, name: "nativePeer", desc: "J" }), lock = cx.fieldIndex(THREAD, { owner: THREAD, name: "lock", desc: "Ljava/lang/Object;" }), l = c.newLocal(T.anyref);
         c.lget(0).refCast(st).i64(0n).structSet(st, peer);
@@ -368,7 +378,6 @@ export class Sched {
         c.lget(l).call(cx.helper("mexit"));
       }));
       try { await s.call(done, obj); } catch (e) { console.error("[wasm thread exit]", e); }
-      s.thread.alive = false;
       s.end();
     }
   }

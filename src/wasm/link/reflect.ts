@@ -8,7 +8,9 @@ import { T, refNull } from "../compiler/wasmbin";
 import { ACC, kindOf, type JClass, type MethodInfo } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { H } from "../compiler/consts";
-import { emitString, idOfClass, classMethod, typeName } from "./classes";
+import { emitString, idOfClass, classMethod, typeName, vtId } from "./classes";
+import { UInfo } from "./unsafe";
+import { WIDEN } from "../compiler/fields";
 import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
@@ -18,7 +20,7 @@ const EXEC = "java/lang/reflect/Executable", METHOD = "java/lang/reflect/Method"
 const CLASS_ARRAY = "[Ljava/lang/Class;";
 const ITE = "java/lang/reflect/InvocationTargetException";
 
-export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt }
+export const enum RInfo { MethodCount = 200, MethodNameLen, MethodNameChar, MethodKind, MethodParams, MethodParamType, MethodRet, MethodFlags, MethodInvoke, MethodCall, MethodCallDirect, IfaceCount, Iface, MemberCount, Member, MethodsNamed, MethodNamedAt, SerialInit }
 /** a member's (class id, index) packed into the cookie */
 export const BOX: Record<string, [string, string, string]> = {
   Z: ["java/lang/Boolean", "booleanValue", "()Z"], B: ["java/lang/Byte", "byteValue", "()B"], C: ["java/lang/Character", "charValue", "()C"],
@@ -57,6 +59,10 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
     return (named = index?.get(b) ?? []).length;
   }
   if (kind === RInfo.MethodNamedAt) return named[b];
+  if (kind === RInfo.SerialInit) {
+    const init = jc?.byKey.get("<init>()V");
+    return init ? w.synthSlot(`sinit:${a}`, { params: ["L"], ret: "V", body: (cx, c) => { cx.emitEnsure(c, init.cls); c.lget(0); cx.callMethod(c, init); } }) : 0;
+  }
   if (kind === RInfo.MemberCount) return members(jc).length;
   if (kind === RInfo.Member) return w.idOf(members(jc)[b]);
   const idx = kind === RInfo.MethodParamType ? b >> 8 : b, m = jc!.methods[kind === RInfo.MethodNameChar ? b >>> 16 : idx];
@@ -81,16 +87,33 @@ export function hostReflect(w: World, kind: RInfo, a: number, b: number): number
  *  lets it through, and calls the method itself rather than the receiver's override when it invokes a super or direct method. */
 function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct: boolean): void {
   const ctor = m.isCtor, args = c.newLocal(refNull(cx.tData.ref)), e = c.newLocal(T.anyref), w = c.newLocal(T.anyref), recv = c.newLocal(T.anyref);
+  if (wrap) {
+    // ART checks the number of arguments, the receiver and each argument's type before anything runs
+    const given = c.newLocal(T.i32);
+    c.lget(1).refIsNull().if_(T.i32).i32(0).else_().lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).arrayLen().end().lset(given);
+    c.lget(given).i32(m.params.length).raw(OP.i32_ne).if_().i32(m.params.length).lget(given); cx.callThrower(c, "iarity"); c.end();
+  }
   if (m.params.length) c.lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(args);
   if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
   if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
-  else if (!m.isStatic) { c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); c.lget(0).lset(recv); c.lget(recv); }
+  else if (!m.isStatic) {
+    c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    if (wrap) { c.lget(0).call(cx.instanceOfFn(m.cls)).raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); vtId(cx, c); cx.callThrower(c, "recv"); c.end(); }
+    c.lget(0).lset(recv); c.lget(recv);
+  }
   else cx.emitEnsure(c, m.cls);
   let i = 0;
   for (const p of m.params) {
-    c.lget(args).refAsNonNull().i32(i++).arrayGet(cx.tData.ref);
-    const box = BOX[p];
-    if (box) { c.refAsNonNull(); classMethod(cx, c, ...box); }
+    c.lget(args).refAsNonNull().i32(i).arrayGet(cx.tData.ref);
+    const ty = cx.idOf(typeName(p));
+    if (BOX[p]) { c.i32(p.charCodeAt(0)).i32(i).i32(ty); cx.callRt(c, "argp"); if (kindOf(p) === "I") c.raw(OP.i32_wrap_i64); }
+    else if (wrap && p !== "Ljava/lang/Object;") {
+      const v = c.newLocal(T.anyref);
+      c.lset(v).lget(v).refIsNull().raw(OP.i32_eqz).if_().lget(v).call(cx.instanceOfFn(p[0] === "L" ? descToName(p) : p)).raw(OP.i32_eqz).if_();
+      c.i32(i).i32(ty).lget(v); vtId(cx, c); cx.callThrower(c, "iarg"); c.end().end();
+      c.lget(v);
+    }
+    i++;
   }
   const prog = cx.prog, decl = prog.get(m.cls)!;
   if (m.isStatic || ctor || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
@@ -221,4 +244,43 @@ const invoke = (cx: Compiler, c: Code, recv: () => void, args: number) => {
   recv(); c.lget(args); info(cx, c, RInfo.MethodInvoke, cid, () => c.lget(idx)); c.callIndirect(cx.sig(["L", "L"], "L"));
 };
 def("java/lang/reflect/Method.invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", (cx, c) => invoke(cx, c, () => c.lget(1), 2));
+// Constructor.newInstanceFromSerialization(ctorClass, allocClass): an instance of allocClass whose fields ctorClass's no-argument constructor initializes (java.io's
+// deserialization makes objects this way, with the first non-serializable superclass's constructor)
+def("java/lang/reflect/Constructor.newInstanceFromSerialization(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/Object;", (cx, c) => {
+  const alloc = c.newLocal(T.i32), obj = c.newLocal(T.anyref), init = c.newLocal(T.i32);
+  c.lget(1); idOfClass(cx, c); c.lset(alloc);
+  cx.info(c, UInfo.AllocInstance, () => c.lget(alloc)); c.ltee(alloc).raw(OP.i32_eqz).if_(); cx.callThrower(c, "inste"); c.end();
+  c.lget(alloc).callIndirect(cx.sig([], "L")).lset(obj);
+  c.lget(0); idOfClass(cx, c); c.lset(init);
+  info(cx, c, RInfo.SerialInit, init); c.ltee(init).raw(OP.i32_eqz).if_(); cx.callThrower(c, "inste"); c.end();
+  c.lget(obj).lget(init).callIndirect(cx.sig(["L"], "V")).lget(obj);
+});
 def("java/lang/reflect/Constructor.newInstance0([Ljava/lang/Object;)Ljava/lang/Object;", (cx, c) => invoke(cx, c, () => c.anyNull(), 1));
+
+// argp(value, letter, index, type id): a Method.invoke argument for a primitive parameter of type `letter`, as bits: the wrapper of that type or of one that
+// widens to it, and anything else (null included) is an IllegalArgumentException
+rt("argp", ["L", "I", "I", "I"], "J", (cx, c) => {
+  c.lget(0).refIsNull().if_().lget(2).lget(3).i32(-1); cx.callThrower(c, "iarg"); c.end();
+  for (const target of Object.keys(WIDEN)) {
+    c.lget(1).i32(target.charCodeAt(0)).raw(OP.i32_eq).if_();
+    for (const from of Object.keys(WIDEN).filter((x) => WIDEN[x].includes(target))) {
+      const [cls, name, desc] = BOX[from], get = cx.prog.resolve(cls, name, desc), wide = from === "J" || from === "D";
+      c.lget(0).i32(cx.idOf(cls)).i32(cx.prog.chain(cls).length - 1).call(cx.helper("iof")).if_();
+      if (!get) cx.gap(c, `${cls}.${name}`); else {
+        c.lget(0); cx.callMethod(c, get);
+        // float and double values are their bits here: compute in f32 and f64
+        if (target === "J") { if (!wide) c.raw(OP.i64_extend_i32_s); }
+        else if (target === "F") { if (from !== "F") c.raw(wide ? OP.f32_convert_i64_s : OP.f32_convert_i32_s, OP.i32_reinterpret_f32); c.raw(OP.i64_extend_i32_u); }
+        else if (target === "D") {
+          if (from === "F") c.raw(OP.f32_reinterpret_i32, OP.f64_promote_f32, OP.i64_reinterpret_f64);
+          else if (from !== "D") c.raw(wide ? OP.f64_convert_i64_s : OP.f64_convert_i32_s, OP.i64_reinterpret_f64);
+        } else c.raw(OP.i64_extend_i32_s);
+        c.ret();
+      }
+      c.end();
+    }
+    c.end();
+  }
+  c.lget(2).lget(3).lget(0); vtId(cx, c); cx.callThrower(c, "iarg");
+  c.i64(0n);
+});

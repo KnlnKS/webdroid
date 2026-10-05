@@ -394,7 +394,7 @@ const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7
 /** Runtime.nativeLoad: `file` is a path (ClassLoader.findLibrary's, System.load's) or a bare name
  *  from the loader's class path; null once the library is loaded, else the linker's error */
 function nativeLoad(file: string, loader: JClassLoader | null): string | null | Promise<string | null> {
-  const owner = loader?.runtime ?? rt, lib = file.slice(file.lastIndexOf("/") + 1);
+  const owner = loader && "runtime" in loader ? loader.runtime : rt, lib = file.slice(file.lastIndexOf("/") + 1);
   if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return null;
   const have = loadedLibs.get(lib);
   if (have) return have.owner !== owner ? `Library ${lib} already loaded by another ClassLoader` : have.thread === curThread ? null : have.pending;

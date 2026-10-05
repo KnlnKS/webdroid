@@ -181,7 +181,7 @@ export class Natives implements NativeBinder {
     if (scratch >= 0) c.gget(scratch).lset(sp0);
     p.args.forEach((d, i) => {
       const t = abi(d);
-      if (t === undefined) { const a = this.copyIn(cx, c, i, d, scratch, p.ranges.get(i)); arrays.push(a); c.lget(a.ptr).lget(a.len); return; }
+      if (t === undefined) { const a = this.copyIn(cx, c, i, d, scratch, p.ranges.get(i), arrays); arrays.push(a); c.lget(a.ptr).lget(a.len); return; }
       c.lget(i);
       if (t === T.f32) c.raw(OP.f32_reinterpret_i32); else if (t === T.f64) c.raw(OP.f64_reinterpret_i64); else if (d === STRING) cx.str.toHost(c); else if (t === T.externref) c.externConvertAny();
     });
@@ -200,26 +200,38 @@ export class Natives implements NativeBinder {
         c.end();
       }
     }
-    else if (p.always) { c.call(imp); restore(); }
     else {
-      // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
-      c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).ifType(cx.mb.addFuncType(p.params, p.ret === null ? [] : [p.ret])).call(imp).else_().call(cx.nativeImports.get(p.id + "#s")!);
-      restore();
+      // a throw out of the call finds the globals as another strand left them: they are set again before it goes on
+      const results = p.ret === null ? [] : [p.ret], run = cx.mb.addFuncType(p.params, results), thrown = cx.mb.addFuncType(p.params, [T.exnref]);
+      c.blockType(run).blockType(thrown).tryTableType(run, [[3, 0, 0]]);
+      if (p.always) c.call(imp);
+      else {
+        // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
+        c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).ifType(run).call(imp).else_().call(cx.nativeImports.get(p.id + "#s")!).end();
+      }
+      c.end().br(1).end();
+      restore(); c.throwRef();
       c.end();
+      restore();
     }
     if (p.ret === T.f32) c.raw(OP.i32_reinterpret_f32); else if (p.ret === T.f64) c.raw(OP.i64_reinterpret_f64); else if (p.ret === T.externref) { if (p.retString) cx.str.fromHost(c); else c.anyConvertExtern(); }
     // an array result is copied from where the host left it, past the parameter regions; the arguments are copied back first
     const rlen = p.retArray ? c.newLocal(T.i32) : -1;
     if (p.retArray) c.lset(rlen);
-    for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.from).lget(a.count).call(this.copy(cx, a.ek, false)).end();
+    for (const a of arrays) c.lget(a.len).i32(0).raw(OP.i32_ge_s).lget(a.alias).raw(OP.i32_eqz).raw(OP.i32_and).if_().lget(a.data).refAsNonNull().lget(a.ptr).lget(a.from).lget(a.count).call(this.copy(cx, a.ek, false)).end();
     if (p.retArray) this.copyOut(cx, c, p.retArray, rlen, scratch);
     if (top >= 0) c.gget(scratch).lget(top).raw(OP.i32_le_u).if_().lget(sp0).gset(scratch).end();
     else if (scratch >= 0) c.lget(sp0).gset(scratch);
   }
   /** copies array parameter `i` of class `d` into a fresh scratch region, leaving its (pointer, length), or (0, -1) for null; only the
    *  elements [from, from + count) are copied when the native's contract names a range inside the array (RANGES), all of them otherwise */
-  private copyIn(cx: Compiler, c: Code, i: number, d: string, sp: number, range?: [number, number]) {
-    const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true }), ptr = c.newLocal(T.i32), len = c.newLocal(T.i32), from = c.newLocal(T.i32), count = c.newLocal(T.i32);
+  private copyIn(cx: Compiler, c: Code, i: number, d: string, sp: number, range: [number, number] | undefined, before: { i: number; data: number; ptr: number; len: number; ek: ElemKind; ranged: boolean }[]) {
+    const ek = elemKindOf(d), data = c.newLocal({ ht: cx.tData[ek], nullable: true }), ptr = c.newLocal(T.i32), len = c.newLocal(T.i32), from = c.newLocal(T.i32), count = c.newLocal(T.i32), alias = c.newLocal(T.i32);
+    // an array passed twice is one region: two copies would each be written back, the later over the first's changes
+    const same = range ? [] : before.filter((b) => b.ek === ek && !b.ranged);
+    for (const b of same) {
+      c.lget(i).lget(b.i).call(cx.helper("acmp")).if_().lget(b.ptr).lset(ptr).lget(b.len).lset(len).lget(b.data).lset(data).i32(1).lset(alias).else_();
+    }
     c.lget(i).refIsNull().if_().i32(-1).lset(len).else_()
       .lget(i).refCast(cx.tArr[ek]).structGet(cx.tArr[ek], 2).lset(data).lget(data).refAsNonNull().arrayLen().lset(len).lget(len).lset(count)
       .lget(len).i32(SIZE[ek]).raw(OP.i32_mul).call(this.reserveFn(cx, sp)).lset(ptr);
@@ -229,7 +241,8 @@ export class Natives implements NativeBinder {
         .lget(n).lget(len).lget(o).raw(OP.i32_sub).raw(OP.i32_le_s).raw(OP.i32_and).if_().lget(o).lset(from).lget(n).lset(count).end();
     }
     c.lget(data).refAsNonNull().lget(ptr).lget(from).lget(count).call(this.copy(cx, ek, true)).end();
-    return { data, ptr, len, from, count, ek };
+    same.forEach(() => c.end());
+    return { i, data, ptr, len, from, count, ek, alias, ranged: !!range };
   }
   /** the array result of the host call: `rlen` elements at the scratch top, or null */
   private copyOut(cx: Compiler, c: Code, d: string, rlen: number, sp: number): void {
@@ -340,7 +353,7 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     // a plain native with no arrays may answer a Promise: its scope is set aside, and the call site waits for the result the Promise settles to
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
-    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp)}X.give(own);` : parked ? park : "if(r instanceof Promise)return suspended();";
+    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"},sp=X.sp();try{r=await r}catch(e){back?.();X.setSp(sp);X.give(own);throw e}back?.();X.setSp(sp)}X.give(own);` : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
     make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};return raise(e)}
 try{${wait}${toJava}}catch(e){return raise(e)}finally{${scope[1]}}
 ${result}}`) as Maker;

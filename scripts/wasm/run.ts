@@ -15,6 +15,9 @@
 //   jbench       the scripts/jbench workloads, Wasm against the JS tier
 //   threads      threads, monitors, parking, class initialization waits and natives that wait, on JSPI strands (Java cases against the JDK and the JS tier)
 //   sweep        every method of the boot jars and FitNotes compiled alone, failures by cause
+//   conform      the scripts/conform suites on the Wasm tier against their baselines, the JS tier beside it: conform <suite|quick> [class]; conform-quick (a few classes of each kind) is in `all`
+//   fwtest       the framework delegates of scripts/fwtest.ts over a World (not part of `all`)
+//   desccheck    the registered descriptors against the baseline, and every intrinsic's key against the platform's methods
 //   g1           the jbench workloads timed in node and headless Chrome (not part of `all`)
 //   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
 //                (not part of `all`; needs a build from `bun run aot`)
@@ -30,7 +33,7 @@ interface Suite { node: boolean; all: boolean }
 const SUITES: Record<string, Suite> = {
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  threads: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  threads: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, "aot-profile": { node: false, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
@@ -60,6 +63,7 @@ async function buildAot(args: string[]): Promise<number> {
 }
 
 async function runSuite(name: string, args: string[]): Promise<number> {
+  if (name === "conform-quick") return exec("conform", ["quick"], process.env);
   if (name === "aot") return buildAot(args);
   if (name === "fuzz" && !args.length) {
     let status = 0;

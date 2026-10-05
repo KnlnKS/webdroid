@@ -5,8 +5,9 @@
 // baseline tests/conformance/<suite>.json, which holds a hash of every passing test's name per
 // class: one that passed there and fails now is a regression. --update rewrites it from this run;
 // --bytecode serves those prefixes from platform bytecode instead of native specs, for A/B cuts.
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { androidPlatform, androidTool } from "../android-sdk";
+import { existsSync, readdirSync } from "node:fs";
+import { CACHE, prepare } from "./prepare";
+import { hash, parseLines } from "./results";
 import { SUITES } from "./suites";
 import { consume } from "../args";
 
@@ -14,66 +15,9 @@ const [suiteName, ...rest] = process.argv.slice(2);
 const { option } = consume(rest);
 const cut = option("--bytecode"), one = option("--one");
 const update = rest.includes("--update"), filter = rest.find((a) => !a.startsWith("--")) ?? "";
-const suite = SUITES[suiteName as keyof typeof SUITES];
-if (!suite) throw new Error(`bun run conform <${Object.keys(SUITES).join("|")}> [filter] [--update]`);
+if (!SUITES[suiteName]) throw new Error(`bun run conform <${Object.keys(SUITES).join("|")}> [filter] [--update]`);
 
-const CACHE = "conform-cache", jarDir = `${CACHE}/jars`, dexDir = `${CACHE}/${suiteName}`;
-const JAVA_HOME = process.env.JAVA_HOME ?? "/opt/homebrew/opt/openjdk@21";
-const run = (cmd: string[]) => {
-  const r = Bun.spawnSync(cmd, { env: { ...process.env, JAVA_HOME, PATH: `${JAVA_HOME}/bin:${process.env.PATH}` }, stderr: "pipe" });
-  if (r.exitCode !== 0) throw new Error(`${cmd[0]} failed:\n${r.stderr.toString()}`);
-};
-
-mkdirSync(jarDir, { recursive: true });
-const jars = await Promise.all(suite.maven.map(async (coords) => {
-  const [group, artifact, version] = coords.split(":"), file = `${jarDir}/${artifact}-${version}.jar`;
-  if (!existsSync(file)) {
-    const res = await fetch(`https://repo1.maven.org/maven2/${group.replace(/\./g, "/")}/${artifact}/${version}/${artifact}-${version}.jar`);
-    if (!res.ok) throw new Error(`${coords}: HTTP ${res.status}`);
-    await Bun.write(file, res);
-  }
-  return file;
-}));
-const sources: string[] = [];
-let classes = suite.classes ?? [];
-if (suite.source) {
-  const srcDir = `${CACHE}/src/${suiteName}`, root = `${srcDir}/${suite.source.root}`;
-  if (!existsSync(root)) {
-    mkdirSync(srcDir, { recursive: true });
-    let res = await fetch(suite.source.archive);
-    for (let tries = 1; !res.ok && tries < 5; tries++) { await Bun.sleep(2000 * tries); res = await fetch(suite.source.archive); }
-    if (!res.ok) throw new Error(`${suite.source.archive}: HTTP ${res.status}`);
-    await Bun.write(`${srcDir}/src.tar.gz`, await res.arrayBuffer());
-    run(["tar", "xzf", `${srcDir}/src.tar.gz`, "-C", srcDir]);
-  }
-  for (const f of new Bun.Glob("**/*.java").scanSync(root)) {
-    if (suite.source.include && !suite.source.include.test(f) || suite.source.exclude?.test(f)) continue;
-    sources.push(`${root}/${f}`);
-    const base = f.slice(f.lastIndexOf("/") + 1);
-    if (!suite.source.tests.test(base)) continue;
-    // the package names the class: an archive may hold several source roots
-    const pkg = /^package\s+([\w.]+)\s*;/m.exec(readFileSync(`${root}/${f}`, "utf8"))?.[1];
-    classes.push((pkg ? pkg + "." : "") + base.slice(0, -5));
-  }
-  classes = classes.sort();
-}
-if (!existsSync(`${dexDir}/classes.dex`)) {
-  const out = `${dexDir}/classes`;
-  mkdirSync(out, { recursive: true });
-  // libcore's test sources also name android.* and test-selection annotations (scripts/conform/stubs)
-  const stubs = [...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/stubs`)].map((f) => `${import.meta.dir}/stubs/${f}`);
-  // hidden platform APIs the tests call: compiled against, never dexed, so the platform's own classes answer
-  const hidden = `${dexDir}/hidden`;
-  if (suite.source) run(["javac", "--release", "17", "-nowarn", "-cp", `${androidPlatform(35)}/android.jar`, "-d", hidden,
-    ...[...new Bun.Glob("**/*.java").scanSync(`${import.meta.dir}/hidden`)].map((f) => `${import.meta.dir}/hidden/${f}`)]);
-  // hidden java.* classes cannot come from the class path; they patch java.base as sources javac only reads
-  const patch = suite.source ? ["--patch-module", `java.base=${import.meta.dir}/patch/java.base`] : [];
-  run(["javac", "--release", "17", "-XDstringConcat=inline", "-nowarn", ...patch, "-cp", [...jars, `${androidPlatform(35)}/android.jar`, hidden].join(":"),
-    "-d", out, `${import.meta.dir}/ConformRunner.java`, ...(suite.source ? stubs : []),
-    ...(suite.testng ? [`${import.meta.dir}/NgRunner.java`] : []), ...sources]);
-  run([androidTool("d8"), "--min-api", "35", "--lib", `${androidPlatform(35)}/android.jar`, "--output", dexDir, ...jars,
-    ...[...new Bun.Glob("**/*.class").scanSync(out)].map((f) => `${out}/${f}`)]);
-}
+const { suite, classes, dexDir } = await prepare(suiteName);
 
 // a child process runs one class, so a class that never yields can be killed rather than stall the suite
 if (one) {
@@ -132,23 +76,18 @@ async function runClass(cls: string): Promise<void> {
   clearTimeout(timer);
   const marker = out.indexOf("\u0001");
   const text = marker >= 0 ? out.slice(marker + 1) : `F\t${cls}\t${proc.signalCode ? `killed after ${CLASS_TIMEOUT_MS / 1000}s` : "no result"}\n`;
-  let pass = 0, fail = 0;
   const tests = results[cls] = new Map();
-  for (const line of text.split("\n").filter(Boolean)) {
-    const [status, name, message] = line.split("\t");
-    if (process.env.CONFORM_DEBUG && status === "F") console.log(name, message);
-    if (status === "S") continue;
-    tests.set(name, status === "P");
-    if (status === "P") pass++; else fail++;
+  let pass = 0, fail = 0;
+  for (const [name, { ok, message }] of parseLines(text).tests) {
+    if (process.env.CONFORM_DEBUG && !ok) console.log(name, message);
+    tests.set(name, ok);
+    if (ok) pass++; else fail++;
   }
   console.log(`${cls}: ${pass} pass, ${fail} fail (${((performance.now() - t0) / 1000).toFixed(1)}s)`);
 }
 const queue = [...(named.length ? named : classes)];
 await Promise.all(Array.from({ length: JOBS }, async () => { while (queue.length) await runClass(queue.shift()!); }));
 
-// a parameter taken from the clock (Instant.now()) would rename its test on every run
-const clockFree = (name: string) => name.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, (t) => Math.abs(Date.parse(t) - Date.now()) < 864e5 ? "<now>" : t);
-const hash = (name: string) => Bun.hash.crc32(clockFree(name)).toString(16).padStart(8, "0");
 const baselinePath = `tests/conformance/${suiteName}.json`;
 const baseline: Record<string, string[]> = existsSync(baselinePath) ? await Bun.file(baselinePath).json() : {};
 let passes = 0, total = 0, before = 0;

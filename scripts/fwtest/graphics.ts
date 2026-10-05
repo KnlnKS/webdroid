@@ -704,7 +704,7 @@ await exercise("SurfaceTexture: states, errors and frame delivery without a cont
   same("detached releaseTexImage", await thrown(() => vcall(detached, "releaseTexImage", "()V")), "ok");
   // a queued frame reaches the listener through postEventFromNative and the listener's Handler
   let heard: unknown = null;
-  await vcall(detached, "setOnFrameAvailableListener", `(L${ST}$OnFrameAvailableListener;)V`, listener("onFrameAvailable", `(L${ST};)V`, (s: unknown) => { heard = s; }));
+  await vcall(detached, "setOnFrameAvailableListener", `(L${ST}$OnFrameAvailableListener;)V`, listener(`${ST}$OnFrameAvailableListener`, "onFrameAvailable", `(L${ST};)V`, (s: unknown) => { heard = s; }));
   presentSurface(surfaceTextureOf(detached)!.surface, { close() {} } as ImageBitmap);
   for (let i = 0; i < 50 && !heard; i++) await new Promise((r) => setTimeout(r, 10));
   same("onFrameAvailable", heard === detached, true);

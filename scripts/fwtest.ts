@@ -7,13 +7,10 @@
 import { existsSync } from "node:fs";
 import { BYTECODE, isBytecode } from "../src/jvm/provenance";
 import { nativeMethodSupport } from "./native-surface";
+import { DEFAULT_CUTS } from "./fwtest/cuts";
 
 const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-BYTECODE.push(...(CUTS.length ? CUTS : [
-  "android/graphics/Paint", "android/graphics/Canvas", "android/graphics/BaseCanvas",
-  "android/graphics/BaseRecordingCanvas", "android/graphics/Matrix", "android/graphics/Path",
-  "android/graphics/Typeface", "android/graphics/Bitmap",
-]));
+BYTECODE.push(...(CUTS.length ? CUTS : DEFAULT_CUTS));
 
 // imported AFTER the policy is set: rt.register consults it, so the specs never land
 const { rt, ACC } = await import("../src/jvm/runtime");

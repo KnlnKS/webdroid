@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 
 import { rt, declaredField, JObj } from "../../src/jvm/runtime";
-import { newObj, vcall, scall } from "../../src/jvm/natives/jentry";
+import { newObj, vcall, scall, iof } from "../../src/jvm/natives/jentry";
 import { Arsc } from "../../src/android/arsc";
 import { Resources } from "../../src/android/res";
 import { PackageRecord, packages } from "../../src/android/packages";
@@ -97,7 +97,7 @@ if (existsSync("vendor/aosp/framework-res.apk") && existsSync("apks/FitNotes.apk
     same("opacity", await vcall(d, "getOpacity", "()I"), -3);
     const targets = new Map(vectorProbeLines("target").map((l) => { const [name, ...v] = l.split(" "); return [name, v.map(Number)]; }));
     const read = async (v: unknown) => {
-      const group = rt.iof(v, "android/graphics/drawable/VectorDrawable$VGroup");
+      const group = iof(v, "android/graphics/drawable/VectorDrawable$VGroup");
       const getters = group ? ["Rotation", "PivotX", "PivotY", "ScaleX", "ScaleY", "TranslateX", "TranslateY"]
         : ["StrokeWidth", "StrokeColor", "StrokeAlpha", "FillColor", "FillAlpha", "TrimPathStart", "TrimPathEnd", "TrimPathOffset"];
       return Promise.all(getters.map((g) => vcall(v, "get" + g, g.endsWith("Color") ? "()I" : "()F")));
