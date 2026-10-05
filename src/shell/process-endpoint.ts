@@ -6,7 +6,7 @@ import { executePendingIntent, pendingTransport } from "../android/pendingintent
 import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
 import { appHost } from "../android/apphost";
-import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle } from "../android/binder";
+import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder";
 import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit } from "../process-exit";
 import { deathOf, lastExit, noteAppKill, exitRecordTransport } from "../android/server/appexitinfo";
@@ -37,6 +37,43 @@ const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerM
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
 function connectCommandTransports(): void {
+  pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
+  pendingTransport.cancel = id => brokerCalls().pendingCancel(id);
+  pendingTransport.send = (id, fill) => brokerCalls().pendingSend(id, fill);
+  pendingTransport.operation = id => brokerCalls().pendingOperation(id);
+  pendingTransport.kind = id => brokerCalls().pendingKind(id);
+  pendingTransport.flags = id => brokerCalls().pendingFlags(id);
+  pendingTransport.creator = id => brokerCalls().pendingCreator(id);
+  alarmTransport.schedule = (id, type, at, interval) => brokerCalls().alarmSchedule(id, type, at, interval);
+  alarmTransport.cancel = id => brokerCalls().alarmCancel(id);
+  const remoteStarts = {
+    created: (cls: string, intent: ParcelData) => brokerCalls().serviceCreated(cls, intent),
+    destroyed: (cls: string) => brokerCalls().serviceDestroyed(cls),
+    start: (cls: string, intent: ParcelData) => brokerCalls().serviceStart(cls, intent),
+    deliver: (cls: string) => brokerCalls().serviceDeliver(cls),
+    requested: (cls: string) => brokerCalls().serviceRequested(cls),
+    stop: (cls: string) => brokerCalls().serviceStop(cls),
+    stopSelf: (cls: string, id: number) => brokerCalls().serviceStopSelf(cls, id),
+    done: (cls: string, id: number, result: number) => brokerCalls().serviceDone(cls, id, result),
+    foreground: (cls: string, on: boolean) => brokerCalls().serviceForeground(cls, on),
+  };
+  serviceTransport.starts = () => remoteStarts;
+  serviceTransport.connected = (key, binder, dead) => brokerCalls().serviceConnected(key, exportBinder(binder), dead);
+  const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
+  serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
+    yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
+  });
+  serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
+  serviceTransport.start = driven(function* (owner, process, intent, foreground) { yield service(owner.pkg, process, { kind: "start", intent: yield* awaited(encodeIntent(intent)), foreground }); });
+  serviceTransport.stop = driven(function* (owner, process, cls, intent) { yield service(owner.pkg, process, { kind: "stop", cls, intent: yield* awaited(encodeIntent(intent)) }); });
+  serviceTransport.peek = driven(function* (owner, process, intent) {
+    return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
+  });
+  providerProcesses.get = (pkg, process, authority) => after(remote(brokerCalls().contentProvider(pkg, process, authority)), importBinder);
+  broadcastTransport.send = driven(function* (intent, permissions, ordered, initial) {
+    const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
+    return yield* awaited(broadcastResult(yield* awaited(remote(brokerCalls().broadcast(data, targets, permissions, ordered, from)))));
+  });
   binderTransport.transact = request => remote(brokerCalls().transact(request));
   sqliteTransport.call = request => brokerCalls().sqlite(request);
   cookieTransport.calls = brokerCalls;
@@ -158,11 +195,6 @@ export function connectProcess(): ProcessEndpoint {
   locationTransport.last = () => broker.location.last;
   locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
   locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
-  providerProcesses.get = (pkg, process, authority) => after(remote(brokerCalls().contentProvider(pkg, process, authority)), importBinder);
-  broadcastTransport.send = driven(function* (intent, permissions, ordered, initial) {
-    const data = yield* awaited(encodeIntent(intent)), targets = yield* receivers(intent), from = initial && (yield* awaited(resultData(initial)));
-    return yield* awaited(broadcastResult(yield* awaited(remote(brokerCalls().broadcast(data, targets, permissions, ordered, from)))));
-  });
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents, intentCodec));
@@ -181,20 +213,10 @@ export function connectProcess(): ProcessEndpoint {
   pendingTransport.flags = id => broker.intents.get(id)?.flags ?? 0;
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
-  const service = (pkg: string, process: string, request: ServiceRequest) => remote(brokerCalls().service(pkg, process, request));
-  serviceTransport.bind = driven(function* (owner, process, cls, intent, key, flags) {
-    yield service(owner.pkg, process, { kind: "bind", cls, intent: yield* awaited(encodeIntent(intent)), key, flags });
-  });
-  serviceTransport.unbind = async (owner, process, key) => { await service(owner.pkg, process, { kind: "unbind", key }); };
-  serviceTransport.start = driven(function* (owner, process, intent, foreground) { yield service(owner.pkg, process, { kind: "start", intent: yield* awaited(encodeIntent(intent)), foreground }); });
-  serviceTransport.stop = driven(function* (owner, process, cls, intent) { yield service(owner.pkg, process, { kind: "stop", cls, intent: yield* awaited(encodeIntent(intent)) }); });
-  // a process's services run once it is registered, which the page's is only after its boot starts
+  // The root retains its synchronous owner; Workers use acknowledged commands.
   let starts: ServiceStarts | undefined;
   serviceTransport.starts = () => starts ??= broker.serviceStarts(PROCESS_PID);
   serviceTransport.connected = (key, binder, dead) => broker.serviceConnected(PROCESS_PID, key, exportBinder(binder), dead);
-  serviceTransport.peek = driven(function* (owner, process, intent) {
-    return yield* awaited(importBinder(yield* awaited(service(owner.pkg, process, { kind: "peek", intent: yield* awaited(encodeIntent(intent)) }))));
-  });
   return createProcessEndpoint(requests);
 }
 

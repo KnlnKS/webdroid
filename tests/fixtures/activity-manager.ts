@@ -17,6 +17,15 @@ const { deliverBroadcast } = await import(W + "/src/android/server/broadcastqueu
 const { startMainLooper } = await import(W + "/src/android/mainloop");
 type JObj = InstanceType<typeof JObj>;
 console.warn = () => {};
+// Exercise the real Java lifecycle with delayed owner replies, not a synchronous replica.
+const {serviceTransport} = await import(W + "/src/android/server/activeservices");
+const {serveCalls,callProxy} = await import(W + "/src/shell/process-port");
+const starts = serviceTransport.starts(), ports = new MessageChannel();
+const stopStarts = serveCalls(ports.port1,Object.fromEntries(Object.entries(starts).map(([name,method]) =>
+  [name,async (...args:unknown[]) => { await new Promise(resolve=>setTimeout(resolve,1)); return (method as (...args:unknown[])=>unknown)(...args); }])));
+const remoteStarts = callProxy(ports.port2,Object.keys(starts));
+serviceTransport.starts = () => remoteStarts.endpoint;
+
 
 const PKG = "org.webdroid.test.am", SERVICE = PKG + ".Svc";
 const attr = (name: string, str: string | null, data = 0) => ({ name, str, ns: "", resId: 0, type: str === null ? TV.INT_DEC : TV.STRING, data });
@@ -122,5 +131,6 @@ const big = await serviceIntent();
 await vcall(big, "putExtra", `(${S}[B)${INTENT}`, "big", new Int8Array(2 << 20));
 out.tooLarge = await Promise.resolve().then(() => vcall(proxy, "startService", START, app, big, null, 0, PKG, null, 0))
   .then(() => null, (e: { constructor: { $i?: { name: string } }; msg?: string }) => `${e.constructor.$i?.name}: ${e.msg}`);
+remoteStarts.close();stopStarts();
 console.log(JSON.stringify(out));
 process.exit(0);

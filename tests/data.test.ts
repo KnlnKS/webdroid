@@ -8,6 +8,11 @@ import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type
 import { attachProcessBrokerPort, closeProcessBrokerPort, createProcessEndpoint } from "../src/shell/process-endpoint";
 import { exitRecordTransport } from "../src/android/server/appexitinfo";
 import { settingsStore, useSettingsStore } from "../src/android/settings";
+import { serviceTransport } from "../src/android/server/activeservices";
+import { providerProcesses } from "../src/android/server/am";
+import { broadcastTransport } from "../src/android/server/broadcastqueue";
+import { pendingTransport } from "../src/android/pendingintent";
+import { alarmTransport } from "../src/android/alarm";
 import { activityTransport } from "../src/android/server/atm";
 import { newIntent } from "../src/android/intent";
 import { decodeIntent } from "../src/android/intentipc";
@@ -159,6 +164,8 @@ test("account commands preserve credential ownership and await atomic owner muta
 test("Worker activity commands retain local results across reentrant replies and failed launch acknowledgment", async () => {
   const owner = await packageRecord("org.webdroid.test.activitycommands");
   await bootApp(owner);
+  const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
+  const previousPending = {...pendingTransport}, previousAlarms = {...alarmTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
     previousPrepare = vfs.prepare, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
@@ -209,6 +216,8 @@ test("Worker activity commands retain local results across reentrant replies and
     for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
     Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
     Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;Object.assign(clipboardTransport,previousClip);
+    Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
+    Object.assign(pendingTransport,previousPending); Object.assign(alarmTransport,previousAlarms);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
     filePathTransport.calls = previousPaths; vfs.prepare = previousPrepare;
     usePermissionStore(new PermissionStore()); useAccountStore(new AccountStore()); usePreferenceStore(previousPrefs);

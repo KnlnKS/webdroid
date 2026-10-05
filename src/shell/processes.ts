@@ -2,6 +2,7 @@
 // outlives them all. It registers each process and its frame, routes binder transactions, service,
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
+import type { PendingAccess } from "../android/pendingintent";
 import { PendingIntents, type PendingOperation } from "./pendingintents";
 import { Alarms } from "./alarms";
 import { AccountStore, canonicalAccountCommands, type AccountCalls } from "./accounts";
@@ -17,7 +18,7 @@ import { NOT_CRASHED, REASON_EXIT_SELF, recordRemoteExit, exitRecords, deathOf, 
 import type { PackageDataChange } from "./packagedata";
 import { logUncaught } from "../jvm/natives/jthrowable";
 import { createGuestClockPort, uptimeMillis } from "../guest-clock";
-import { ServiceRecords, type ServiceRequest, type ServiceStarts } from "./servicerecords";
+import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords";
 import { ActivityStack } from "./activitystack";
 import { apkPath, vfs } from "./vfs";
 import { device, formatScreen } from "./config";
@@ -84,7 +85,12 @@ export type ProcessEndpoint = {
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
+type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
+  (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
+export type BrokerCalls = ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
+  serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
+  alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
+  alarmCancel: (id: number) => Promise<void>;
   systemService: (name: string) => Promise<BinderHandle | null>;
   notificationForeground: (request: ForegroundNotificationRequest) => Promise<void>;
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
@@ -101,7 +107,7 @@ export type BrokerCalls = CookieCalls & SettingsCalls & AccountCalls & Permissio
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string}; canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -111,7 +117,7 @@ export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiag
   launcher: { assetKey: string } | null;
   /** what hears how it ended */
   watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void> };
-class ProcessBroker {
+export class ProcessBroker {
   readonly files = new PrivateFiles();
   readonly accounts = new AccountStore();
   readonly intents = new PendingIntents(intentCodec, async (operation, fill, alarmCount) => {
@@ -333,7 +339,37 @@ class ProcessBroker {
       const owner = privatePath?.[1] ?? external?.[1];
       return owner && packages.get(owner)?.uid !== caller.uid && caller.uid !== 0 && caller.uid !== 1000 ? 13 : 0;
     });
+    const starts = (cls: string) => {
+      const caller = this.entry(pid), owner = packages.get(caller.pkg), node = owner?.components.service.get(cls);
+      if (!node || owner!.process(node) !== caller.process)
+        throw rt.mkThrowable("java/lang/SecurityException", "Service start state belongs to another process");
+      return this.serviceStarts(pid);
+    };
     const stop = serveCalls<BrokerCalls>(port1, {
+      serviceCreated: async (cls, intent) => starts(cls).created(cls, intent),
+      serviceDestroyed: async cls => starts(cls).destroyed(cls),
+      serviceStart: async (cls, intent) => starts(cls).start(cls, intent),
+      serviceDeliver: async cls => starts(cls).deliver(cls),
+      serviceRequested: async cls => starts(cls).requested(cls),
+      serviceStop: async cls => starts(cls).stop(cls),
+      serviceStopSelf: async (cls, id) => starts(cls).stopSelf(cls, id),
+      serviceDone: async (cls, id, result) => starts(cls).done(cls, id, result),
+      serviceForeground: async (cls, on) => starts(cls).foreground(cls, on),
+      serviceConnected: async (key, binder, dead) => this.serviceConnected(pid, key, binder, dead),
+      // Intent.filterEquals and replaceExtras are Android framework operations on serialized
+      // Intents; the canonical Java owner keeps extras parcelled instead of borrowing a VM.
+      pendingCreate: (pkg, kind, code, flags, intent, intents) => this.createPending(pid, pkg, kind, code, flags, intent, intents, intentCodec),
+      pendingCancel: async id => { this.entry(pid); this.cancelPending(pid, id); },
+      pendingSend: async (id, fill) => { this.entry(pid); return this.intents.send(id, fill); },
+      pendingOperation: async id => this.takePending(pid, id),
+      pendingKind: async id => { this.entry(pid); return this.intents.get(id)?.kind ?? null; },
+      pendingFlags: async id => { this.entry(pid); return this.intents.get(id)?.flags ?? 0; },
+      pendingCreator: async id => {
+        this.entry(pid); const operation = this.intents.get(id);
+        return operation ? {pkg:operation.pkg,uid:operation.uid} : null;
+      },
+      alarmSchedule: async (id, type, at, interval) => { this.entry(pid); this.alarms.schedule(id, type, at, interval); },
+      alarmCancel: async id => { this.entry(pid); this.alarms.cancel(id); },
       systemService: async name => {
         this.entry(pid);
         if (name !== "notification") throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");

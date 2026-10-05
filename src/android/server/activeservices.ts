@@ -18,7 +18,7 @@ import { type JComponentName, type JIntent, componentParts, mkComponentName, new
 import { startForegroundNotification, stopForegroundNotification } from "../notification";
 import { scheduleOnApp, compatInfo, pms, runsHere } from "./am";
 import { processState, PROCESS_STATE_SERVICE } from "./atm";
-import { ServiceRecords, type ServiceBinding, type ServiceStarts } from "../../shell/servicerecords";
+import { ServiceRecords, type ServiceBinding, type ServiceStartAccess } from "../../shell/servicerecords";
 
 /** the services of another process, through the broker; `flags` are bindService's. A binding hears
  *  its service's binder through `connected`, which the broker sends again when the service restarts. */
@@ -29,7 +29,7 @@ export const serviceTransport: {
   stop: (owner: PackageRecord, process: string, cls: string, intent: JIntent) => unknown;
   peek: (owner: PackageRecord, process: string, intent: JIntent) => unknown;
   /** the start state of this process's services, which the broker keeps */
-  starts: () => ServiceStarts;
+  starts: () => ServiceStartAccess;
   /** what a binding of another process hears: the binder published, or that the service is gone */
   connected: (key: string, binder: JObj | null, dead: boolean) => unknown;
 } = { bind: notConnected, unbind: notConnected, start: notConnected, stop: notConnected, peek: notConnected,
@@ -47,7 +47,7 @@ interface Connection { id: JObj | string; autoCreate: boolean; connected: (binde
 interface Binding { intent: JObj; binder: JObj | null; requested: boolean; received: boolean; hasBound: boolean; doRebind: boolean; connections: Connection[] }
 /** this process's part of a ServiceRecord; `intents` are its starts' Intents, by start id, until delivered */
 interface ServiceRecord {
-  key: string; cls: string; info: JObj; intent: JObj; data: ParcelData; token: JObj; created: boolean;
+  key: string; cls: string; info: JObj; intent: JObj; data: ParcelData; token: JObj; created: boolean; creating?: Promise<void>;
   bindings: Binding[]; foregroundId: number; intents: Map<number, JObj>;
 }
 const services = new Map<string, ServiceRecord>();
@@ -111,34 +111,38 @@ function requestBind(s: ServiceRecord, b: Binding, rebind: boolean): Promise<voi
 /** Service.START_FLAG_REDELIVERY and START_FLAG_RETRY */
 const START_FLAG_REDELIVERY = 1, START_FLAG_RETRY = 2;
 /** sendServiceArgsLocked: each pending start is delivered, and stays delivered until it finishes */
-function sendArgs(s: ServiceRecord): Promise<void> | undefined {
-  const delivered = starts().deliver(s.cls);
+const sendArgs = driven(function* (s: ServiceRecord): Gen<void> {
+  const delivered = yield* awaited(starts().deliver(s.cls));
   if (!delivered.length) return;
-  const intents = delivered.map((si) => { const intent = s.intents.get(si.id); s.intents.delete(si.id); return intent; });
-  const args = rt.drive(function* () {
-    const list: JObj[] = [];
-    for (const [i, si] of delivered.entries()) {
-      const flags = (si.deliveries > 1 ? START_FLAG_RETRY : 0) | (si.done > 0 ? START_FLAG_REDELIVERY : 0);
-      const intent = intents[i] ?? (si.intent && (yield* awaited(decodeIntent(si.intent))));
-      list.push(yield newObj("android/app/ServiceStartArgs", `(ZII${INTENT})V`, 0, si.id, flags, intent));
-    }
-    return yield* awaited(parceledList(list));
-  }());
-  return scheduleOnApp("scheduleServiceArgs", `(${BINDER}Landroid/content/pm/ParceledListSlice;)V`, s.token, args);
-}
+  const list: JObj[] = [];
+  for (const si of delivered) {
+    const local = s.intents.get(si.id); s.intents.delete(si.id);
+    const flags = (si.deliveries > 1 ? START_FLAG_RETRY : 0) | (si.done > 0 ? START_FLAG_REDELIVERY : 0);
+    const intent = local ?? (si.intent && (yield* awaited(decodeIntent(si.intent))));
+    list.push(yield newObj("android/app/ServiceStartArgs", `(ZII${INTENT})V`, 0, si.id, flags, intent));
+  }
+  yield scheduleOnApp("scheduleServiceArgs", `(${BINDER}Landroid/content/pm/ParceledListSlice;)V`, s.token, yield* awaited(parceledList(list)));
+});
 /** bringUpServiceLocked: create, then request the bindings clients wait on, then deliver starts */
 function* bringUp(s: ServiceRecord): Gen<void> {
+  if (s.creating) { yield* awaited(s.creating); return; }
   if (s.created) return;
-  s.created = true;
-  starts().created(s.cls, s.data);
-  yield Promise.all([scheduleOnApp("scheduleCreateService", `(${BINDER}Landroid/content/pm/ServiceInfo;Landroid/content/res/CompatibilityInfo;I)V`,
-    s.token, s.info, compatInfo(), processState(PROCESS_STATE_SERVICE)), ...s.bindings.map((b) => requestBind(s, b, false)), sendArgs(s)]);
+  const made = Promise.resolve(rt.drive(function* (): Gen<void> {
+    yield* awaited(starts().created(s.cls, s.data));
+    s.created = true;
+    yield Promise.all([scheduleOnApp("scheduleCreateService", `(${BINDER}Landroid/content/pm/ServiceInfo;Landroid/content/res/CompatibilityInfo;I)V`,
+      s.token, s.info, compatInfo(), processState(PROCESS_STATE_SERVICE)), ...s.bindings.map((b) => requestBind(s, b, false)), sendArgs(s)]);
+  }()));
+  s.creating = made;
+  try { yield* awaited(made); }
+  finally { if (s.creating === made) s.creating = undefined; }
 }
 function* bringDownIfNeeded(s: ServiceRecord): Gen<void> {
-  if (starts().requested(s.cls) || s.bindings.some((b) => b.connections.some((c) => c.autoCreate))) return;
+  if (s.creating) yield* awaited(s.creating);
+  if ((yield* awaited(starts().requested(s.cls))) || s.bindings.some((b) => b.connections.some((c) => c.autoCreate))) return;
   services.delete(s.key);
   for (const b of s.bindings) for (const c of b.connections.splice(0)) c.connected(null, true);
-  starts().destroyed(s.cls);
+  yield* awaited(starts().destroyed(s.cls));
   if (s.created) yield Promise.all([...s.bindings.filter((b) => b.hasBound).map((b) => {
     b.hasBound = false;
     return scheduleOnApp("scheduleUnbindService", `(${BINDER}${INTENT})V`, s.token, b.intent);
@@ -147,18 +151,18 @@ function* bringDownIfNeeded(s: ServiceRecord): Gen<void> {
 }
 /** queue starts and deliver them, bringing the service up if it is not */
 function* deliver(s: ServiceRecord): Gen<void> {
-  if (!s.created) return yield* bringUp(s);
+  if (s.creating || !s.created) return yield* bringUp(s);
   yield sendArgs(s);
 }
 
 function* startLocal(t: Target, intent: JObj): Gen<void> {
   const s = yield* record(t, intent), data = yield* awaited(encodeIntent(intent));
-  s.intents.set(starts().start(s.cls, data), intent);
+  s.intents.set(yield* awaited(starts().start(s.cls, data)), intent);
   yield* deliver(s);
 }
 function* stopLocal(t: Target): Gen<void> {
   const s = services.get(keyOf(t));
-  if (s && starts().stop(s.cls)) yield* bringDownIfNeeded(s);
+  if (s && (yield* awaited(starts().stop(s.cls)))) yield* bringDownIfNeeded(s);
 }
 function* bindLocal(t: Target, intent: JObj, c: Connection): Gen<void> {
   const s = yield* record(t, intent), b = (yield* bindingFor(s, intent, true))!;
@@ -281,7 +285,7 @@ export const activeServiceMethods = {
   }),
   "stopServiceToken(Landroid/content/ComponentName;Landroid/os/IBinder;I)Z": driven(function* (_name: JObj, token: JObj, startId: number) {
     const s = byToken(token);
-    if (!s || !starts().stopSelf(s.cls, startId)) return 0;
+    if (!s || !(yield* awaited(starts().stopSelf(s.cls, startId)))) return 0;
     yield* bringDownIfNeeded(s);
     return 1;
   }),
@@ -324,11 +328,11 @@ export const activeServiceMethods = {
     else b.doRebind = true;
   }),
   // no service times out here
-  "serviceDoneExecuting(Landroid/os/IBinder;IIILandroid/content/Intent;)V": (token: JObj, type: number, startId: number, res: number) => {
+  "serviceDoneExecuting(Landroid/os/IBinder;IIILandroid/content/Intent;)V": driven(function* (token: JObj, type: number, startId: number, res: number) {
     const s = byToken(token);
-    if (s && type === DONE_EXECUTING_START && !starts().done(s.cls, startId, res))
+    if (s && type === DONE_EXECUTING_START && !(yield* awaited(starts().done(s.cls, startId, res))))
       throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown service start result: " + res);
-  },
+  }),
   "peekService(Landroid/content/Intent;Ljava/lang/String;Ljava/lang/String;)Landroid/os/IBinder;": driven(function* (intent: JObj, resolvedType: string | null, callingPackage: string) {
     const t = yield* resolve(intent, resolvedType);
     if (!t) return null;
@@ -340,7 +344,7 @@ export const activeServiceMethods = {
     driven(function* (_name: JObj, token: JObj, id: number, notification: JObj | null, flags: number) {
       const s = byToken(token);
       if (!s) return;
-      starts().foreground(s.cls, id !== 0);
+      yield* awaited(starts().foreground(s.cls, id !== 0));
       if (id) { s.foregroundId = id; yield startForegroundNotification(id, notification); return; }
       const posted = s.foregroundId;
       if (!posted) return;

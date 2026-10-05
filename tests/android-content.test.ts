@@ -20,6 +20,10 @@ import { Resources, NativeTheme, rvString, newSV } from "../src/android/res";
 import { TV, type XmlNode, type XmlAttr } from "../src/android/axml";
 import { mkComponentName, newIntent } from "../src/android/intent";
 import { decodeIntent, encodeIntent, intentCodec } from "../src/android/intentipc";
+import { uptimeMillis } from "../src/guest-clock";
+import { createProcessEndpoint } from "../src/shell/process-endpoint";
+import { ProcessBroker, brokerMethods, type BrokerCalls } from "../src/shell/processes";
+import { NOT_CRASHED } from "../src/android/server/appexitinfo";
 import { PendingIntents } from "../src/shell/pendingintents";
 import { pendingTransport, sendIntent, type PendingAccess } from "../src/android/pendingintent";
 import { alarmTransport } from "../src/android/alarm";
@@ -314,6 +318,78 @@ describe("pending-intents", () => {
     expect(await store.create({ ...operation, intent: rootData, intents: [rootData] })).not.toBe(first);
     expect(await store.send(first ?? 0)).toBe(true);
     expect(sent).toEqual([["RootActivity:root", "DetailActivity:second"]]);
+  });
+
+  test("canonical pending commands bind creator identity and preserve copied updates after caller death", async () => {
+    await app();
+    const broker = new ProcessBroker(), owner = packages.get(PKG)!;
+    const foreign = await packageRecord("org.webdroid.test.pendingforeign");
+    packages.set(foreign.pkg, foreign);
+    broker.connect(PKG, PKG + ":owner", 7701);
+    broker.connect(PKG, PKG + ":sibling", 7702);
+    broker.connect(foreign.pkg, foreign.pkg, 7703);
+    const clients = [7701,7702,7703].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods,
+      [], error => Object.assign(new Error(error.message ?? ""), {javaClass:error.javaClass})));
+    const [creator,sibling,other] = clients.map(client => client.endpoint);
+    const encoded = async (extra: string) => {
+      const intent = await newIntent("org.webdroid.test.PENDING");
+      await vcall(intent,"putExtra","(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;","extra",extra);
+      return encodeIntent(intent);
+    };
+    try {
+      const data = await encoded("original");
+      const cls = PKG + ".CanonicalService";
+      owner.components.service.set(cls,{name:"service",attrs:[
+        {name:"name",str:cls,ns:"",resId:0,type:TV.STRING,data:0},
+        {name:"process",str:PKG+":owner",ns:"",resId:0,type:TV.STRING,data:0}],children:[]});
+      expect(await sibling.serviceCreated(cls,data).catch(error=>error.javaClass)).toBe("java/lang/SecurityException");
+      await creator.serviceCreated(cls,data);
+      expect(await creator.serviceRequested(cls)).toBe(false);
+      const queued = await encoded("service");
+      const start = await creator.serviceStart(cls,queued);
+      queued.bytes.fill(0);
+      expect(await creator.serviceRequested(cls)).toBe(true);
+      const delivered = await creator.serviceDeliver(cls);
+      expect(delivered.map(item=>item.id)).toEqual([start]);
+      expect(await vcall(await decodeIntent(delivered[0].intent!),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("service");
+      expect(await creator.serviceStopSelf(cls,start+1)).toBe(false);
+      expect(await creator.serviceDone(cls,start,2)).toBe(true);
+      expect(await creator.serviceStop(cls)).toBe(true);
+      await creator.serviceForeground(cls,true);
+      await creator.serviceDestroyed(cls);
+
+      const id = (await creator.pendingCreate(PKG,"activity",7,0,data))!;
+      const denied = await other.pendingCreate(PKG,"activity",8,0,data).catch(error => error.javaClass);
+      expect(denied).toBe("java/lang/SecurityException");
+      expect(await creator.pendingCreator(id)).toEqual({pkg:PKG,uid:owner.uid});
+      expect(await sibling.pendingCreate(PKG,"activity",7,0x8000000,await encoded("updated"))).toBe(id);
+      const operation = (await sibling.pendingOperation(id))!;
+      expect(operation.process).toBe(PKG + ":owner");
+      expect(await vcall(await decodeIntent(operation.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
+      operation.intent.bytes.fill(0);
+      expect(await vcall(await decodeIntent(broker.intents.get(id)!.intent),"getStringExtra","(Ljava/lang/String;)Ljava/lang/String;","extra")).toBe("updated");
+      expect(await other.pendingCancel(id).catch(error => error.javaClass)).toBe("java/lang/SecurityException");
+      // Alarm ownership is canonical: closing a caller does not cancel its scheduled operation.
+      let receiveAlarm!: (request: unknown) => void;
+      const delivery = new Promise(resolve => receiveAlarm = resolve);
+      await creator.alarmSchedule(id,2,uptimeMillis()+50,0);
+      broker.fail(7701,"normal caller fixture death",NOT_CRASHED);
+      broker.connect(PKG,PKG + ":owner",7704);
+      broker.ready(7704,{...createProcessEndpoint(),service:async request => {receiveAlarm(request);return null;}});
+      const fired = await Promise.race([delivery,new Promise(resolve => setTimeout(()=>resolve(null),1000))]);
+      expect(fired).toMatchObject({kind:"pending",alarmCount:1,operation:{uid:owner.uid,process:PKG+":owner"}});
+      expect(await sibling.pendingKind(id)).toBe("activity");
+      await sibling.alarmCancel(id);
+      await sibling.pendingCancel(id);
+      expect(await sibling.pendingCreator(id)).toBeNull();
+      const single = (await sibling.pendingCreate(PKG,"broadcast",9,0x40000000,await encoded("single")))!;
+      expect((await sibling.pendingOperation(single))!.kind).toBe("broadcast");
+      expect(await sibling.pendingOperation(single)).toBeNull();
+    } finally {
+      for (const client of clients) client.close();
+      for (const pid of [7701,7702,7703,7704]) broker.fail(pid,"pending fixture cleanup",NOT_CRASHED);
+      broker.intents.remove(PKG); packages.delete(foreign.pkg);
+    }
   });
 
   test("PendingIntent reports its stored operation type", async () => {
