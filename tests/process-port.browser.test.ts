@@ -75,6 +75,13 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return endpointOwnership();
     });
     expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true });
+    const cookies = await page.evaluate(async () => {
+      const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return cookieOwnership();
+    });
+    expect(cookies).toEqual({ session: {value:true}, persisted: {value:true}, read: "session=one; saved=two", isolatedRead: "",
+      document: ["saved=two"], accept: {value:false}, denied: {value:false}, removed: {value:true}, afterSession: "saved=two",
+      saved: ["saved"], dead: true, pendingDead: true, survivor: "saved=two", empty: false, changes: 4 });
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);

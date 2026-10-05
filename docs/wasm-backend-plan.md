@@ -1501,6 +1501,15 @@ This is one canonical mutable-store contract. VFS/FD coherence (including the do
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
 
+
+### 4.24 Y2: canonical CookieManager commands (2026-10-05)
+
+CookieManager uses six typed, acknowledged commands on the existing reverse process port. The broker resolves the package from its bound PID; no package selector or jar object travels with the request. The page's existing WebCookies remains the sole owner, so CookieManager writes, WebView network/document reads and same-package processes observe the same jar. Get, set, acceptance, existence, removal and persistence all use that owner. The JVM waits for a write's result before posting its ValueCallback on the main looper. Local fallback uses the same operations and keeps tough-cookie loading lazy. A process death check runs after asynchronous jar loading and immediately before any operation; a dead caller cannot perform a late mutation, while surviving callers retain their jar.
+
+The existing Chromium process-port fixture now sends these commands from a real Worker and checks shared reads, package isolation, HttpOnly document filtering, shared acceptance policy, session-only removal, persistence, watcher notifications, pending/future rejection on death and surviving-owner visibility. The existing data fixture checks actual CookieManager JVM suspension and main-looper callback delivery after a delayed owner acknowledgment, then getters, denied writes and removal. Both selected core checks pass (12 assertions); full typecheck and diff check pass. Evidence: `webdroid-shots/y2-s5-endpoint/cookie-{port-test,manager-test,typecheck}.log`.
+
+This converts CookieManager's store access, not WebView presentation. WebView still receives the live jar and watcher functions in its iframe realm; its page-owned renderer, cookie notifications and network/document adapters need explicit Worker contracts. Other stores and FD/mapping coherence remain open. Parent owns `guest-clock.ts` and `shell/clock-port.ts`; Y2 will wire its provided API into process bootstrap. No JVM Worker is enabled, no new app/AOT acceptance is claimed, and integration requires a fresh AOT build before browser verification. No owned browser/server driver is running.
+
 ## 5. Unverified facts the executor must check first
 
 Resolved on 2026-10-04 with `research/wasm/probe.mjs` and `probe-tiering.mjs` (matrix and versions in

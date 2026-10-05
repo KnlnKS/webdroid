@@ -23,7 +23,7 @@ import { usePreferenceStore } from "../android/sharedprefs";
 import { useNotificationStore } from "../android/notification";
 import { useSettingsStore } from "../android/settings";
 import { awaited, rt, driven, type Gen } from "../jvm/runtime";
-import { useWebCookies } from "../android/cookies";
+import { cookieTransport, useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import { locationTransport } from "../android/locationmanager";
 import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
@@ -76,6 +76,7 @@ export function connectProcess(): ProcessEndpoint {
   };
   broker.files.attach(PROCESS_PID, vfs);
   sqliteTransport.call = request => brokerCalls().sqlite(request);
+  cookieTransport.calls = brokerCalls();
   usePreferenceStore(broker.preferences);
   useNotificationStore(broker.notifications);
   const stopAccounts = useAccountStore(broker.accounts), stopSettings = useSettingsStore(broker.settings);

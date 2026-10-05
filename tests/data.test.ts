@@ -5,6 +5,9 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, scall, vcallAsync } from "../src/jvm/natives/jentry";
 import { strArray } from "../src/jvm/abi";
 import { useSQLiteStore, sqliteTransport, sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../src/android/sqlite";
+import { cookieManager, cookieTransport } from "../src/android/cookies";
+import { cookieCalls, type CookieCalls } from "../src/shell/cookie-access";
+import { WebCookies } from "../src/shell/webcookies";
 import { NativeWindow } from "../src/android/cursorwindow";
 import { handle, release } from "../src/android/handles";
 import { callProxy, serveCalls } from "../src/shell/process-port";
@@ -20,6 +23,38 @@ rt.linkNatives();
 let sqlReady: ReturnType<typeof initSqlJs> | undefined;
 const loadSql = () => sqlReady ??= initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
 const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
+
+test("CookieManager waits for canonical mutation before its main-looper callback", async () => {
+  await bootApp(await packageRecord("org.webdroid.test.cookies"));
+  const jar = new WebCookies("org.webdroid.test.cookies"), previous = cookieTransport.calls;
+  let entered!: () => void, release!: () => void, received!: (value: JObj) => void, called = false;
+  const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+  const callback = new Promise<JObj>(resolve => received = resolve);
+  rt.register({ name: "test/CookieValueCallback", ctor: class extends JObj {}, ifaces: ["android/webkit/ValueCallback"], methods: {
+    "onReceiveValue(Ljava/lang/Object;)V": (value: JObj) => { called = true; received(value); },
+  } });
+  const { port1, port2 } = new MessageChannel();
+  const stop = serveCalls<CookieCalls>(port1, cookieCalls(async () => { entered(); await blocked; return jar; }));
+  const client = callProxy<CookieCalls>(port2, ["cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush"]);
+  cookieTransport.calls = client.endpoint;
+  try {
+    const manager = cookieManager(), url = "https://cookies.example/";
+    const write = vcallAsync(manager, "setCookie", "(Ljava/lang/String;Ljava/lang/String;Landroid/webkit/ValueCallback;)V",
+      url, "a=one; Path=/", rt.make("test/CookieValueCallback"));
+    await waiting;
+    expect(called).toBe(false); expect(jar.get(url)).toBe("");
+    release(); await write;
+    expect(await vcall(await callback, "booleanValue", "()Z")).toBe(1);
+    expect(await vcall(manager, "getCookie", "(Ljava/lang/String;)Ljava/lang/String;", url)).toBe("a=one");
+    await vcall(manager, "setAcceptCookie", "(Z)V", 0);
+    expect(await vcall(manager, "acceptCookie", "()Z")).toBe(0);
+    await vcall(manager, "setCookie", "(Ljava/lang/String;Ljava/lang/String;)V", url, "denied=two");
+    expect(jar.get(url)).toBe("a=one");
+    await vcall(manager, "removeAllCookie", "()V");
+    expect(await vcall(manager, "hasCookies", "()Z")).toBe(0);
+    expect(await vcall(manager, "getCookie", "(Ljava/lang/String;)Ljava/lang/String;", url)).toBeNull();
+  } finally { release(); cookieTransport.calls = previous; client.close(); stop(); jar.remove(); jar.forget(); }
+});
 
 describe("cursorwindow", () => {
   test("CursorWindow preserves absolute rows and typed fields through a parcel", async () => {

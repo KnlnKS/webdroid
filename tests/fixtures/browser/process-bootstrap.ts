@@ -5,6 +5,8 @@ import { TV } from "../../../src/android/axml";
 import { vfs } from "../../../src/shell/vfs";
 import { packedArchives } from "../../../src/shell/packedarchive";
 import { RemoteFile } from "../../../src/shell/remote-file";
+import { callProxy } from "../../../src/shell/process-port";
+import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes";
 import { NOT_CRASHED } from "../../../src/android/server/appexitinfo";
 
 export async function bootstrapOwnership() {
@@ -111,4 +113,69 @@ export async function endpointOwnership() {
   broker.fail(8002, "fixture cleanup", NOT_CRASHED);
   worker.terminate(); URL.revokeObjectURL(url);
   return { repeatedReady, reverseCaller, killed, alive: broker.alive(8001), pendingCause, otherAlive, removed };
+}
+
+/** Real Worker CookieManager commands share the page's WebView jar and survive a sibling's death. */
+export async function cookieOwnership() {
+  const broker = processBroker(), pkg = "test.cookies.shared", isolated = "test.cookies.other";
+  for (const [i, name] of [pkg, isolated].entries()) {
+    const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
+    packages.set(name, new PackageRecord(root, new Resources(null, {}), `/data/app/${name}/base.apk`, 14000 + i, async () => []));
+  }
+  for (const [i, name] of [pkg, pkg, isolated].entries()) broker.connect(name, name + ":" + i, 8101 + i);
+  const peers = [8102, 8103].map(pid => callProxy<BrokerCalls>(broker.brokerPort(pid), brokerMethods));
+  const jar = await broker.cookies(pkg), otherJar = await broker.cookies(isolated);
+  jar.remove(); otherJar.remove();
+  let changes = 0;
+  const unwatch = jar.watch(() => changes++);
+  const code = `import {callProxy} from ${JSON.stringify(location.origin + "/process-port.js")};
+    let client;
+    self.onmessage = async ({data}) => {
+      if(data.port) { client=callProxy(data.port,${JSON.stringify(brokerMethods)}); self.postMessage('ready'); return; }
+      try { self.postMessage({value:await client.endpoint[data.method](...data.args)}); }
+      catch(error) { self.postMessage({error:error.message}); }
+    };`;
+  const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"});
+  const ask = (method: keyof BrokerCalls, ...args: unknown[]) => new Promise<{value?: unknown; error?: string}>(resolve => {
+    worker.onmessage = ({data}) => resolve(data);
+    worker.postMessage({method,args});
+  });
+  try {
+    await new Promise<void>(resolve => {
+      worker.onmessage = () => resolve();
+      const port = broker.brokerPort(8101); worker.postMessage({port}, [port]);
+    });
+    const url = "https://cookies.example/dir/index";
+    const session = await ask("cookieSet", url, "session=one; Path=/; HttpOnly");
+    const persisted = await ask("cookieSet", url, "saved=two; Path=/; Max-Age=86400");
+    const read = await peers[0].endpoint.cookieGet(url), isolatedRead = await peers[1].endpoint.cookieGet(url);
+    const document = jar.document(url).map(cookie => cookie.text);
+    await peers[0].endpoint.cookieAccept(false);
+    const accept = await ask("cookieAccept"), denied = await ask("cookieSet", url, "denied=three");
+    await peers[0].endpoint.cookieAccept(true);
+    const removed = await ask("cookieRemove", true), afterSession = await peers[0].endpoint.cookieGet(url);
+    await ask("cookieFlush");
+    const saved = JSON.parse(localStorage.getItem("wd:web-cookies:" + pkg) ?? "{}").cookies.map((cookie: {key: string}) => cookie.key);
+    const original = broker.cookies;
+    let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>(resolve => entered = resolve), blocked = new Promise<void>(resolve => release = resolve);
+    broker.cookies = async name => { entered(); await blocked; return original.call(broker, name); };
+    let pending: {value?: unknown; error?: string};
+    try {
+      const write = ask("cookieSet", url, "late=no");
+      await waiting;
+      broker.fail(8101, "cookie fixture death", NOT_CRASHED);
+      release(); pending = await write;
+    } finally { release(); broker.cookies = original; }
+    const dead = await ask("cookieSet", url, "afterdeath=no");
+    const survivor = await peers[0].endpoint.cookieGet(url);
+    await peers[0].endpoint.cookieRemove(false);
+    const empty = await peers[0].endpoint.cookieHas();
+    return {session, persisted, read, isolatedRead, document, accept, denied, removed, afterSession, saved,
+      dead: !!dead.error, pendingDead: !!pending.error, survivor, empty, changes};
+  } finally {
+    unwatch(); for (const client of peers) client.close();
+    for (const pid of [8101, 8102, 8103]) broker.fail(pid, "cookie fixture cleanup", NOT_CRASHED);
+    worker.terminate(); URL.revokeObjectURL(url); jar.forget(); otherJar.forget(); packages.delete(pkg); packages.delete(isolated);
+  }
 }

@@ -30,6 +30,7 @@ import { notificationStore } from "../android/notification";
 import { settingsStore } from "../android/settings";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
 import type { WebCookies } from "./webcookies";
+import { cookieCalls, type CookieCalls } from "./cookie-access";
 import { BrowserLocation } from "./geolocation";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchiveIndex } from "./packedarchive";
@@ -74,14 +75,14 @@ export type ProcessEndpoint = {
   kill: (signal: number, note?: KillNote) => void;
 };
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
-export type BrokerCalls = {
+export type BrokerCalls = CookieCalls & {
   sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;
   service: (pkg: string, process: string, request: ServiceRequest) => Promise<BinderHandle | null>;
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite"] as const;
+export const brokerMethods = ["transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush"] as const;
 export type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -257,6 +258,7 @@ class ProcessBroker {
     let owned = this.callerPorts.get(pid);
     if (!owned) this.callerPorts.set(pid, owned = new Set());
     const stop = serveCalls<BrokerCalls>(port1, {
+      ...cookieCalls(() => this.cookies(this.entry(pid).pkg), () => { this.entry(pid); }),
       sqlite: request => {
         this.entry(pid);
         let session = this.sqliteSessions.get(pid);
