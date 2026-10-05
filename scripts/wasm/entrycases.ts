@@ -93,11 +93,11 @@ export async function entryCases(): Promise<string[]> {
   await line("wrapped", () => scall(E, "wrapped", "(I)I", -1));
   await line("cause", () => caught(() => scall(E, "wrapped", "(I)I", -2)).then((t) => { const c = (t as { cause: { msg: unknown } }).cause; return [classNameOf(c), c.msg, c !== t]; }));
   await line("rethrown", () => caught(() => scall(E, "boom", "(I)I", -5)).then((t) => { throw t; }));
-  // a thread the host made is a thread of its own, with its name, wherever it enters Java
+  // a thread the host made is a thread of its own, wherever it enters Java
   const thread = Object.assign(new JThread(), { jname: "Binder:7" }), current = () => scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;");
   await line("own thread", async () => {
     const main = await current(), mine = await callOn(thread, current), again = await callOn(thread, current);
-    return [mine !== main, mine === again, await vcall(mine, "getName", `()${STR}`), await vcall(main, "getName", `()${STR}`)];
+    return [mine !== main, mine === again];
   });
   return out;
 }

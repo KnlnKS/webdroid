@@ -18,7 +18,7 @@ const INNER = "dalvik/annotation/InnerClass", ENCLOSING_CLASS = "dalvik/annotati
 const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 
 export const enum MInfo { ExecCount = 300, ExecAt, ClassAnn, ExecAnn, FieldAnn, IsRecord, DeclaringClass, EnclosingClass, EnclosingIndex, CompareParams, ThrowsCount, ThrowsAt, EnclosingOwner, IsAnonymous }
-export const enum TextKind { SimpleName, ThreadName }
+const enum TextKind { SimpleName }
 
 type Annotations = ReturnType<NonNullable<JClass["dex"]>["classAnnotations"]>;
 const parsed = new WeakMap<JClass, Annotations>();
@@ -89,7 +89,6 @@ const present = (set: EncAnnotation[] | undefined, type: string) => visible(set)
 
 /** the strings the host answers (host.text) */
 export function hostText(w: World, kind: TextKind, a: number): string {
-  if (kind === TextKind.ThreadName) return w.sched.current().thread.name;
   const name = w.nameOf(a);
   if (name in PRIM) return PRIM[name][2];
   const jc = w.prog.get(name), inner = annotationsOf(jc)?.cls.find((x) => x.type === INNER);
