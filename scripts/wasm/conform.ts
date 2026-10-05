@@ -12,7 +12,7 @@ import { hash, parseLines, type Outcome } from "../conform/results";
 import { SUITES } from "../conform/suites";
 import { consume } from "../args";
 import { bundleForNode } from "./undernode";
-import { arrayProviderFailures } from "./conform-coverage";
+import { arrayProviderFailures, classFailureReason, classSetupFailures, noRunnableClass } from "./conform-coverage";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [
@@ -105,12 +105,14 @@ for (const [suiteName, classMatch] of plan) {
     const w = wasm.get(cls)!, j = js.get(cls), passed = new Set(baseline[cls] ?? []), explained = new Set<string>(), skips = skipped.get(cls)!;
     // a pin names a mechanism; one with `because` applies to the tests of the methods the Wasm tier skipped for that reason, or of a class it failed as a whole
     const pinOf = (name: string) => {
-      const stem = name.slice(0, name.search(/[[(]/)), reasons = [[...skips].find(([n]) => n.slice(0, n.search(/[[(]/)) === stem)?.[1], w.get(cls)?.message, w.get(name)?.message, w.size && [...w.values()].every((o) => !o.ok) ? [...w.values()][0].message : undefined];
+      const stem = name.slice(0, name.search(/[[(]/)), reasons = [[...skips].find(([n]) => n.slice(0, n.search(/[[(]/)) === stem)?.[1], classFailureReason(cls, w), w.get(name)?.message];
       return rules.find((r) => r.cls.test(cls) && r.test.test(name) && (!r.because || reasons.some((reason) => reason !== undefined && r.because!.test(reason))));
     };
     // These are provider setup failures, not absent baseline tests or baseline drift.
     // The runner marks adapted providers so a lost provider fails even when both tiers skip it.
     regressions.push(...arrayProviderFailures(cls, skips));
+    const pinnedNoRunnable = noRunnableClass(cls, w) && rules.some((r) => r.cls.test(cls) && r.test.source === "." && r.because?.test(classFailureReason(cls, w)!));
+    if (!testFilter) regressions.push(...classSetupFailures(cls, w, passed.size, pinnedNoRunnable));
     before += passed.size;
     for (const o of w.values()) { tests++; if (o.ok) wasmPass++; }
     for (const name of new Set([...w.keys(), ...(j?.keys() ?? [])])) {
