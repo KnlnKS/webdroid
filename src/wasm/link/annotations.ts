@@ -2,18 +2,17 @@
 // libcore's own AnnotationFactory.createAnnotation(type, AnnotationMember[]) (an InvocationHandler over a Proxy, see proxy.ts), whose members carry the
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
-import { OP } from "../compiler/code";
 import { javaName, type JClass } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName } from "./classes";
-import { BOX } from "./reflect";
+import { BOX, executableSlot, methodAt } from "./reflect";
 import { VIEWS } from "../compiler/copy";
 import type { EncAnnotation, EncVal } from "../../jvm/dex";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
 
-const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember", EXEC = "java/lang/reflect/Executable";
+const FACTORY = "libcore/reflect/AnnotationFactory", MEMBER = "libcore/reflect/AnnotationMember";
 const ANNOTATION_DEFAULT = "dalvik/annotation/AnnotationDefault", SIGNATURE = "dalvik/annotation/Signature";
 const RUNTIME = 1, SYSTEM = 2;
 
@@ -27,7 +26,7 @@ function elementOf(w: World, kind: Ann, a: number): { jc: JClass; set: EncAnnota
     const jc = classOf(a >>> 12), ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
     return { jc, set: jc.def ? jc.dex!.classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
   }
-  const jc = classOf(a >>> 16), m = jc.methods[a & 0xffff], all = jc.def ? jc.dex!.classAnnotations(jc.def) : undefined;
+  const m = methodAt(w, a), jc = w.prog.get(m.cls)!, all = jc.def ? jc.dex!.classAnnotations(jc.def) : undefined;
   return { jc, set: all?.methods.get(m.methodIdx) ?? [], params: all?.params.get(m.methodIdx) };
 }
 const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x.visibility === visibility);
@@ -117,7 +116,7 @@ export function hostObject(w: World, kind: Ann, a: number, b: number, filter: ob
   }
   if (kind === Ann.DefaultValue) {
     // the AnnotationDefault of the method's annotation class holds a nested annotation whose elements are the defaults
-    const jc = w.prog.get(w.nameOf(a >>> 16))!, m = jc.methods[a & 0xffff];
+    const m = methodAt(w, a), jc = w.prog.get(m.cls)!;
     const holder = jc.def ? jc.dex!.classAnnotations(jc.def).cls : [], def = ofKind(holder, SYSTEM).find((x) => x.type === ANNOTATION_DEFAULT)?.elements.value as { anno?: EncAnnotation } | undefined;
     const v = def?.anno?.elements[m.name];
     return v === undefined ? null : valueOf(w, s, jc.dex!, v, m.ret) as object;
@@ -144,16 +143,15 @@ function ask(cx: Compiler, c: Code, kind: Ann, element: () => void, filtered: bo
   c.call(cx.imp.obj).anyConvertExtern();
 }
 const classId = (cx: Compiler, c: Code) => { c.lget(0); idOfClass(cx, c); };
-const cookie = (cx: Compiler, c: Code) => { const st = cx.structFor(EXEC); c.lget(0).refCast(st).structGet(st, cx.fieldIndex(EXEC, { owner: EXEC, name: "artMethod", desc: "J" })).raw(OP.i32_wrap_i64); };
 const field = (cx: Compiler, c: Code) => { c.lget(0); fieldId(cx, c); };
 def("java/lang/Class.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Class, () => classId(cx, c), false));
 def("java/lang/Class.getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Class, () => classId(cx, c), true));
-def("java/lang/reflect/Executable.getDeclaredAnnotationsNative()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => cookie(cx, c), false));
-def("java/lang/reflect/Executable.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => cookie(cx, c), true));
-def("java/lang/reflect/Executable.getParameterAnnotationsNative()[[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.ExecutableParams, () => cookie(cx, c), false));
+def("java/lang/reflect/Executable.getDeclaredAnnotationsNative()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => executableSlot(cx, c), false));
+def("java/lang/reflect/Executable.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Executable, () => executableSlot(cx, c), true));
+def("java/lang/reflect/Executable.getParameterAnnotationsNative()[[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.ExecutableParams, () => executableSlot(cx, c), false));
 def("java/lang/reflect/Field.getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Field, () => field(cx, c), false));
 def("java/lang/reflect/Field.getAnnotationNative(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;", (cx, c) => ask(cx, c, Ann.Field, () => field(cx, c), true));
-def("java/lang/reflect/Method.getDefaultValue()Ljava/lang/Object;", (cx, c) => ask(cx, c, Ann.DefaultValue, () => cookie(cx, c), false));
+def("java/lang/reflect/Method.getDefaultValue()Ljava/lang/Object;", (cx, c) => ask(cx, c, Ann.DefaultValue, () => executableSlot(cx, c), false));
 def("java/lang/Class.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfClass, () => classId(cx, c), false));
-def("java/lang/reflect/Executable.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfExecutable, () => cookie(cx, c), false));
+def("java/lang/reflect/Executable.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfExecutable, () => executableSlot(cx, c), false));
 def("java/lang/reflect/Field.getSignatureAnnotation()[Ljava/lang/String;", (cx, c) => ask(cx, c, Ann.SignatureOfField, () => field(cx, c), false));

@@ -59,7 +59,18 @@ const r1 = await compare(pick(cases, false), (m) => entries.get(m)!, js, pick(jd
 let at = 0;
 const jdkOnly = async () => { const v = pick(jdk, true)[at++]; if (v === "throw") throw new Error("throw"); return Number(v); };
 const r2 = await compare(pick(cases, true), (m) => entries.get(m)!, jdkOnly, pick(jdk, true), hit);
-const bad = r1.bad + r2.bad, explained = r1.explained + r2.explained, blocked = r1.blocked + r2.blocked;
+let wideBad = 0;
+const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
+if (wideCases.length) {
+  const wide = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j))], { natives });
+  while (wide.names.length < 65536) wide.idOf("reflection/reserved/" + wide.names.length);
+  for (const i of wideCases) {
+    const { m, args } = cases[i], got = wide.entry(m.cls, m.name, m.desc)(Number(args[0]));
+    if (String(got) !== jdk[i]) { wideBad++; console.log(`MISMATCH full-width reflection ${m.name}: ${got} vs ${jdk[i]}`); }
+  }
+  console.log(`${wideCases.length - wideBad}/${wideCases.length} full-width reflection cases match the JDK`);
+}
+const bad = r1.bad + r2.bad + wideBad, explained = r1.explained + r2.explained, blocked = r1.blocked + r2.blocked;
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
