@@ -39,7 +39,7 @@ const innerFlags = (jc: JClass | undefined): number => {
 };
 
 // ---------- what the host answers (host.info(kind, a, b); a is a class id)
-export const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot, FieldDesc, CanAccess }
+export const enum Info { Flags, Primitive, Super, Component, NIfaces, Iface, Inner, NameLen, NameChar, NFields, FieldNameLen, FieldNameChar, FieldType, FieldFlags, AllocSlot, CloneSlot, ArraySlot, ArrayOf, EnsureSlot, FieldDesc, CanAccess, HasClinit }
 const ifaceCache = new WeakMap<World, Map<string, string[]>>();
 function interfaces(w: World, name: string): string[] {
   let m = ifaceCache.get(w); if (!m) ifaceCache.set(w, m = new Map());
@@ -73,6 +73,8 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.NIfaces: return interfaces(w, name).length;
     case Info.Iface: return w.idOf(interfaces(w, name)[b]);
     case Info.Inner: return innerFlags(jc);
+    // ObjectStreamClass.hasStaticInitializer: a <clinit> of the class, or with b set of a superclass
+    case Info.HasClinit: { for (let k = jc; k; k = b && k.sup ? w.prog.get(k.sup) : undefined) if (k.byKey.has("<clinit>()V")) return 1; return 0; }
     case Info.NameLen: return javaName(name).length;
     case Info.NameChar: return javaName(name).charCodeAt(b);
     case Info.NFields: return fields.length;
@@ -293,6 +295,7 @@ export function emitString(cx: Compiler, c: Code, len: () => void, char: (j: num
 
 def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); vtId(cx, c); cx.callRt(c, "classOf"); });
 
+def("java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;Z)Z", (cx, c) => { cx.info(c, Info.HasClinit, () => { c.lget(0); idOfClass(cx, c); }, () => c.lget(1)); });
 def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0); idOfClass(cx, c); c.lset(id);

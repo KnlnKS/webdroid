@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { dexesIn, isDexEntry } from "../../src/jvm/dex";
+import { dexesIn, isDexEntry, type DexFile } from "../../src/jvm/dex";
+import { vfs } from "../../src/shell/vfs";
 import { zipTree } from "../../src/jvm/natives/jzip";
 import { Program } from "../../src/wasm/compiler/program";
 import { World, type WorldOptions } from "../../src/wasm/link/world";
@@ -37,6 +38,14 @@ export function program(paths: string[]) {
 }
 /** what reach treats as a leaf: a method implemented without its bytecode */
 export const isIntrinsic = (natives: NativeBinder) => (m: MethodInfo) => !!intrinsicFor(intrinsics, natives, m);
+/** the dex files of the jar or dex file the VFS holds at `path`, for DexFile.openDexFileNative; none for a file without any (a jar of resources) */
+function vfsDexes(path: string): DexFile[] | undefined {
+  const bytes = vfs.readFile(path);
+  if (!(bytes instanceof Uint8Array)) return undefined;
+  if (path.endsWith(".dex")) return dexesIn(bytes, path);
+  const zip = zipTree(bytes), names = Object.keys(zip).filter(isDexEntry).sort();
+  return names.length ? names.flatMap((n) => dexesIn(zip[n], n)) : undefined;
+}
 export function world(src: string[] | Program, opts: Partial<WorldOptions> = {}) {
-  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts });
+  return new World(Array.isArray(src) ? program(src) : src, { intrinsics, natives: new Natives(), heapUsed, dexes: vfsDexes, collect: () => (globalThis as { gc?: () => void }).gc?.(), net: hostNet, guest: guestMemory, ...(AOT && { aot: aotStore(AOT) }), ...opts });
 }

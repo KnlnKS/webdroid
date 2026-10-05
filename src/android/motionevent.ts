@@ -303,6 +303,8 @@ function coordsFromNative(e: NativeMotionEvent, c: Coords, o: Record<string, any
     if (!values || values.length < count) { let size = 8; while (size < count) size *= 2; o[f.values] = values = new Float32Array(size); }
     let index = 0;
     for (let axis = 0; axis < 64; axis++) if (axis < 32 ? hi >>> (31 - axis) & 1 : lo >>> (63 - axis) & 1) values[index++] = c.v[axis];
+    // the array is stored back: on the Wasm tier a field's array is a copy
+    o[f.values] = values;
   }
   o[f.bits] = BigInt(hi >>> 0) << 32n | BigInt(lo >>> 0);
 }

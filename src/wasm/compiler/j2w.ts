@@ -8,7 +8,7 @@ import { compileMethod } from "./method";
 import type { ClassRt, World } from "../link/world";
 import { rtfns } from "./rtfns";
 import type { LinkFailure } from "./linkage";
-import { FUEL } from "../link/sched";
+import { Block, FUEL, emitBlock } from "../link/sched";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
 import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
 import type { NativeBinder } from "../link/hostapi";
@@ -308,6 +308,8 @@ export class Compiler implements Base {
   }
   /** push a new zeroed instance of class `cls` (vt, hash 0, default fields) */
   emitNew(c: Code, cls: string): void {
+    // a String is not an object with fields: ART's Unsafe.allocateInstance(String.class) is the empty string
+    if (cls === "java/lang/String") { this.str.literal(c, ""); return; }
     this.w.allocated.add(cls); this.allocs.add(cls);
     c.call(this.local("new:" + cls, [], "L", (n) => {
       const lay = this.prog.layout(cls);
@@ -476,10 +478,14 @@ export class Compiler implements Base {
         c.gget(g).lget(bytes).raw(OP.i32_wrap_i64, OP.i32_add).gset(g).gget(g).i32(0).raw(OP.i32_ge_s).if_().call(this.helper("allocSlow")).end();
         return c.lget(0).finish();
       }];
-      // allocSlow(): the allocation window is used up; the host decides whether the heap really is
+      // allocSlow(): the allocation window is used up; the host decides whether the heap really is full. Garbage that only a finalizer frees (a native handle
+      // its owner holds) counts until the event loop has run the finalizers, so a full heap gets two turns of the loop, each with a collection, before it is an error
       case "allocSlow": return [t([], []), () => {
         const c = new Code(0), g = this.global("rt", "alloc", T.i32, true);
-        c.i32(-ALLOC_WINDOW).gset(g).call(this.imp.heapCheck).if_().i64(BigInt(ALLOC_WINDOW)); this.callThrower(c, "oom"); c.end();
+        c.i32(-ALLOC_WINDOW).gset(g);
+        for (let turn = 0; turn < 2; turn++) { c.call(this.imp.heapCheck).if_(); emitBlock(this, c, Block.Yield, null, null, () => c.i32(1)); c.drop(); }
+        c.call(this.imp.heapCheck).if_().i64(BigInt(ALLOC_WINDOW)); this.callThrower(c, "oom"); c.end();
+        c.end().end();
         return c.finish();
       }];
     }

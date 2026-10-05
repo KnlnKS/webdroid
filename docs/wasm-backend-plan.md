@@ -952,6 +952,76 @@ for a receiver of a microG process (binder calling identity from a strand). (6) 
 `put` wrote array results at an unaligned scratch address; a process frame read a page file whose lazy source answers the page realm's Promise (`instanceof Promise` in `fdReadAt`); `Rect` edge names were cached by `constructor`, which every facade shares;
 `handles.ts` could not key a Wasm array; `pm.ts` cloned an ApplicationInfo as a JS object; `jcoll.ts` built ArrayLists as JS objects; the JS compile worker ran under `tier=wasm`; `VMRuntime.addressOf` took its receiver as the array.
 
+### 4.15 V1: the conformance suites, fwtest and the descriptor check on the Wasm tier (2026-10-04, `knlnks/wasm-v1`)
+
+**Commands.** `bun run wasm conform <suite|quick> [class-substring] [--test name] [--no-js] [--jobs n]`, `bun run wasm fwtest`, `bun run wasm desccheck`; `all` has `conform-quick` (one class of each of guava, ojluni-time,
+luni-util, jsr166 and luni-io, 15 s) and `desccheck`; the full suites and `fwtest` are not in it (the suites take 25 minutes together).
+**How.** `scripts/wasm/conform.ts` runs each class of a suite (the lists and the dex of `scripts/conform/prepare.ts`, which `run.ts` shares) in a process of its own on each tier: the Wasm one is `conformone.ts` under
+node (a World over the suite's dex and the boot jars, `ConformRunner` entered with `entryAsync`, so JUnit and its threads run on strands), the JS one is `scripts/conform/run.ts --one`. Per suite it reports the
+Wasm pass count beside the JS tier's and the baseline's, a **regression** (a baseline pass that does not pass on the Wasm tier and is not failing on the JS tier too), and a **divergence** (a test the two tiers answer
+differently). A divergence is *pinned* in `tests/conformance/wasm-pins.json` (class regex, test regex, an optional regex on the reason the Wasm tier did not pass it, and the mechanism) or the run fails it as
+*unexplained*; a pin that matches nothing is stale and fails too (flaky ones excepted). Classes get 600 s, then are killed. `fwtest` runs the exercises of `scripts/fwtest/*` (the same files as the JS tier's `bun run fwtest`, made
+tier-neutral where they touched the JS object model) over a World with the same cuts; `tests/conformance/wasm-fwtest.json` pins the exercises that fail and why. `desccheck` holds the registered descriptors to the
+checked-in baseline and every intrinsic's key (class, name, descriptor) to a method the platform class declares (it found seven `sun.misc.Unsafe` aliases that matched nothing).
+**Fixes** (each found as the first failing mechanism of a suite, generic, no suite-specific code):
+- `Thread.getContextClassLoader` was null on the main thread (testng's `Logger`, every `getResourceAsStream` through it): ART gives the main thread the system class loader (`sched.ts` `curThread`).
+- `Method.invoke` unboxed arguments with the parameter's own wrapper (an `Integer` for a `long` parameter was an illegal cast), checked neither the argument count, the receiver nor a reference argument's type: `argp` widens as the
+  language does, and the checks throw ART's `IllegalArgumentException`s (`iarg`, `iarity`, `recv`; `reflect.ts`, `exc.ts`).
+- `Constructor.newInstanceFromSerialization` was a gap, so nothing deserialized through `ObjectInputStream`: allocate without a constructor, run the first non-serializable superclass's (`reflect.ts`).
+- `sun.misc.Unsafe`'s accessors reached the production spec with a Wasm object (a `TypeError`): the intrinsics of `jdk.internal.misc.Unsafe` now also name `sun/misc/Unsafe`'s `Object` and `compareAndSwap` forms (`unsafe.ts`).
+- A Suspending native that answered a value (not a Promise) never wrote its array arguments back: `MessageDigest` answered zeros, so every default `serialVersionUID` was 0 (`natives.ts`).
+- An array passed to a native twice (`Matrix.mapPoints(src, dst)` with one array) was copied twice and the stale copy written back last: the second parameter shares the first's region (`natives.ts`).
+- A throw out of a Suspending native left the strand's globals as the strand that ran meanwhile set them (`sid` the host's), so the next natives took the plain path and failed with "native suspended" and
+  "blocking operation on a stack that cannot suspend": the call restores them in a `try_table` handler (`natives.ts`, `code.ts`).
+- A Promise a plain import abandoned could reject later and end the process: it is caught (`natives.ts`). A JS error escaping a native is the throwable the JS tier makes of it (`rt.jx`: NullPointerException for a `TypeError`
+  on null, OutOfMemoryError for a typed array too long), not a crash of the strand (`nativesource.ts`).
+- `new String(StringBuffer)` and `(StringBuilder)` went to the JS tier's string builder (`.s` of a Wasm object); they call the final classes' `toString` (`strings.ts`). `System.setIn/setOut/setErr` stored into the JS tier's statics
+  (`intrinsics.ts`). `ObjectStreamClass.hasStaticInitializer` asked the JS class model (`classes.ts`). `Unsafe.allocateInstance(String.class)` built a struct with four of the five fields (`j2w.ts`).
+- The heap limit: `heapUsed` counts garbage the engine has not swept and handles only a finalizer frees, so a test that allocates a lot hit the 512 MB limit while its live data was small. A full heap now collects (where the host can: `collect`,
+  node's `--expose-gc`), then gives the event loop two turns of the *timer* queue (a message-channel turn runs the engine's finalizers after the strand resumes, not before) before it is an `OutOfMemoryError` (`j2w.ts` `allocSlow`, `sched.ts`
+  `Block.Yield` with a timer). The conformance children raise the limit to 3 GB: the runner's own 60 MB output is 120 MB of `char[]` here (Latin-1 on ART).
+- `Thread.getState` of a thread that `join` had just woken answered RUNNABLE: the `alive` flag was cleared one microtask after the peer (`sched.ts`; JSR-166's `PhaserTest` and `RecursiveActionTest`).
+- `android_getaddrinfo` of a name the relay must look up was a gap: the strand waits for the answer (`Block.Net`, `host/inet.ts` `wait`) and asks again (`link/inet.ts`).
+- `jnet.ts` `headerMap` made its `HashMap` with `rt.make`, an object of the JS tier: it asks the entry (`newObj`), as for the JS tier it only skipped a constructor (cookies: 14 tests on both tiers).
+- `graphics.ts` cached a Rect's field names by `r.constructor`, which every facade shares (`Object`): by class name.
+- The list of natives that answer a Promise for some arguments (`suspend.ts` `MAY_SUSPEND`, the survey's flag C) grew by the 19 the suites reached (Linux `readBytes`, `preadBytes`, `poll`, `connect`, `recvfromBytes`, `getpwuid`, `FileDescriptor.sync`,
+  `FileChannelImpl.map0`, `Memory.peekIntNative`, `AndroidCharacter.*`, `BitmapFactory.nativeDecodeByteArray`, ...): a plain import that answers a Promise on a strand still fails that call once and is Suspending in modules built
+  after, so the list is what makes the first call work. The suites print the natives found (`CONFORM_DEBUG=1`).
+- Harness: node's `process.exit` after a `stdout.write` cut a class's output at the pipe's 512 KiB (the first Wasm counts of the big classes were short by that), `nodeshim.mjs` gives `fetch` of `file:` URLs and `Bun.file().text/bytes`.
+**Results** (`bun run wasm conform <suite>`, node 24, tests that ran on the Wasm tier; the JS tier's pass count is its run today, the baseline is `tests/conformance/<suite>.json`; a pinned divergence is a test the tiers answer
+differently with its mechanism recorded; 0 regressions and 0 unexplained in every suite; the full set takes about 25 minutes with four classes at a time on each tier):
+
+| suite | tests | Wasm pass | JS pass | baseline | pinned divergences |
+|---|---|---|---|---|---|
+| `guava` | 368,794 | 368,772 | 366,001 | 365,994 | 2,771 |
+| `ojluni-time` | 24,479 | 24,473 | 30,598 | 30,603 | 6,125 |
+| `jsr166` | 3,211 | 3,209 | 3,136 | 3,135 | 73 |
+| `luni-util` | 2,586 | 2,347 | 2,325 | 2,320 | 22 |
+| `luni-io` | 1,373 | 1,247 | 1,418 | 1,417 | 185 |
+| `luni-nio` | 2,747 | 2,650 | 2,712 | 2,712 | 62 |
+| `luni-nio-file` | 195 | 182 | 173 | 173 | 9 |
+| `luni-net` | 892 | 813 | 812 | 798 | 1 |
+| `luni-security` | 721 | 715 | 715 | 715 | 0 |
+| total | 404,792 | 404,403 | 407,891 | 407,867 | 9,248 |
+
+JSR-166 runs on strands (C1 and C2) and passes 3,209 of 3,211 (the two it fails fail on the JS tier too), 73 more than the JS tier's cooperative threads. The ojluni-time pass count is lower than the JS tier's for the two reasons below
+(about 6,100 data-provider rows skipped, about 950 behind the nested-entry limit); the other suites' counts agree to within the pinned tests.
+**Pinned divergences by mechanism** (the pin file has the details and the evidence of each):
+- *The JS tier is wrong, the Wasm tier answers as AOSP's bytecode does* (about 3,000 tests): `toArray(T[])` without `ArrayStoreException` (ArrayDeque, LinkedList, the queues, the guava collections: 2,753 in guava alone); `replaceAll` on a
+  `ConcurrentSkipListMap` submap (400); `CompletableFuture`'s asynchronous stages (`NoSuchMethodError` for `Thread.nextThreadNum`, 39); a Throwable's message or cause lost across serialization, and its golden stream (`nio.file` exceptions, `IOError`, `ZipError`,
+  `InputMismatchException`, ...); a `String` made with `new String(s)` that is `s` (IdentityHashMap, TreeMap, `writeUnshared`) and `Integer` against `String` without `ClassCastException`; `Class.getMethod` finding a private `suite()`
+  (124 tests of `OutputStreamTesterTest` and `WriterTesterTest` that JUnit does not run on AOSP); `values()` of an enum, a null thread name, a deserialized interface proxy, one NullPointerException of the JS tier's compiled code.
+- *The Wasm tier runs AOSP's bytecode and the test cannot*: TestNG reads a data provider's `Iterator<Object[]>` type argument, which libcore leaves a `GenericArrayTypeImpl` (as on a device), so 6,100 rows of `TCKLocalTime`,
+  `TCKLocalDateTime` and `TCKDateTimeFormatters` are skipped.
+- *Owned by another package*: a TS native calls Java through a plain entry and the Java waits (ICU: `CaseMapperNative`, `String.toLowerCase`'s locale, `HttpURLConnection`; `SuspendError`, about 1,000 tests of `ojluni-time`, `CalendarTest`,
+  `CurrencyTest`, `LocaleTest`, `StreamTokenizerTest`, `CertificateFactory3Test`): entries on strands, C3. Natives that read a direct buffer through the pinned array's address (`unmapped address 0x4000...`, 60 tests of `luni-nio`, `luni-nio-file`,
+  CRC32 and Adler32): B3. A flaky pair (`TestClock_System`) fails on either tier in some runs.
+When C3 or B3 lands these pins go stale and the run says so; delete them then.
+**fwtest.** All 31 exercises pass over a World after merging B2, B3 and C3 (the pins for pinned-array addresses, host classes and nested entries were deleted); `tests/conformance/wasm-fwtest.json` is empty. Remaining pins in `wasm-pins.json`: the JS tier's own faults, TestNG data providers (libcore's `GenericArrayTypeImpl` is never resolved to a Class, which ART's bytecode does too, so about 6,100 rows are skipped on the Wasm tier), the flaky `TestClock_System`, and `FileTest`/`CharsetTest`, where repeated entries accumulate JSPI stacks until a `StackOverflowError` (upstream repro: `File.list()` about 1,000 times inside one entry, also on eeb222b3).
+main looper running (C3), and four implement a Java interface with a host object or construct a host class with an argument (`ImageDecoder`, `SpannableStringBuilder`, `InputProbe`, the `DexFile` spec: B2). Declared natives with a host binding: 646 of 791, the
+JS tier's own count. The exercises need host code that waits (a font file, a decode), so the harness enters Java on strands (`scripts/wasm/strandentry.ts`, outside natives only; Track C3's entry replaces it).
+**Open.** The pinned divergences above; `desccheck` and `conform-quick` are in `all`, the full suites (25 minutes) and `fwtest` are not.
+
 ### 4.4 Do not trust
 
 Any speed claim for the prototype except those in 4.7, which are measured on a loaded host and carry their spreads. The remaining timing evidence is the microbenchmark table in 1.1 to 1.4.
@@ -989,6 +1059,12 @@ Supported on both measured engines: Wasm GC, exnref and legacy EH, tail calls, `
 (including the rule that suspending through a JS frame throws). Chrome-only of the features probed: memory64,
 multi-memory, relaxed SIMD. Do not use those on the default path. Custom descriptors are not shipped (flag-only).
 **A non-JSPI mode is not required for Chrome or the WebKit build.** Firefox is out of scope, so no fallback is built. Details in `platform-status.md`.
+
+### G2 result for `fwtest` and the conformance suites (V1, 2026-10-04)
+
+Nine conformance suites (404,112 tests on the Wasm tier) against their baselines and the JS tier: 0 regressions, 0 unexplained differences, 9,248 differences pinned with their mechanisms (about 3,000 where the JS tier is wrong, 6,100
+where TestNG's data providers meet libcore's `GenericArrayTypeImpl`, about 1,000 behind C3's entries on strands, 60 behind B3's pinned-array addresses). `fwtest`: all 31 exercises pass, none pinned (B3, B2, C3), native coverage 646 of 791 as on the JS tier.
+Details and the fixes it took: 4.15. The per-method differentials on framework.jar and the apps are 4.4b's (`sweep`, `libdiff`).
 
 ### G4 hint result
 
@@ -1040,7 +1116,8 @@ Follow AGENTS.md verification at each stage (`typecheck`, `test`, `smoke` with z
 - Convert natives in the order: primitive-only (1,014), reference-through (759), then the field-touching 711, starting
   with the ten files that hold 858 of the field sites.
 - **Accept:** `fwtest`, `desccheck`, and the conformance suites (`guava`, `jsr166`, `ojluni-time`, harmony suites)
-  match their baselines in Wasm mode.
+  match their baselines in Wasm mode. *Status (V1, 4.15): the nine suites run on the Wasm tier with 0 regressions against their baselines and 0 unexplained differences from the JS tier (9,248 pinned, each with its mechanism);
+  `desccheck` is clean; `fwtest` passes all 31 exercises; the pins attributed to B2, B3 and C3 were deleted after the merge.*
 
 ### S3. Suspension and threads
 - One `promising` stack per Java thread; blocking operations (monitor contention, `wait`, `park`, class-init waits,

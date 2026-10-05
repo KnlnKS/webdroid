@@ -15,7 +15,7 @@ public final class NgRunner {
                 String name = r.getMethod().getMethodName() + Arrays.deepToString(r.getParameters()) + "(" + r.getTestClass().getName() + ")";
                 if (filter != null && !filter.isEmpty() && !name.contains(filter)) return;
                 out.append(status).append('\t').append(name.replace('\n', ' ').replace('\t', ' '));
-                if (status == 'F') out.append('\t').append(String.valueOf(r.getThrowable()).replace('\n', ' ').replace('\t', ' '));
+                if (status == 'F' || status == 'S' && r.getThrowable() != null) out.append('\t').append(String.valueOf(r.getThrowable()).replace('\n', ' ').replace('\t', ' '));
                 out.append('\n');
             }
             @Override public void onTestSuccess(ITestResult r) { line('P', r); }

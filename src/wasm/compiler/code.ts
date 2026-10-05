@@ -58,6 +58,13 @@ export class Code {
     for (const [k, tag, lab] of catches) { this.b.push(k); if (k < 2) uleb(tag, this.b); uleb(lab, this.b); }
     return this;
   }
+  /** a block, and a try_table, whose type is the function type index `type` (the operands it takes and the results it leaves) */
+  blockType(type: number): this { this.b.push(0x02); sleb(type, this.b); return this; }
+  tryTableType(type: number, catches: [number, number, number][]): this {
+    this.b.push(0x1f); sleb(type, this.b); uleb(catches.length, this.b);
+    for (const [k, tag, lab] of catches) { this.b.push(k); if (k < 2) uleb(tag, this.b); uleb(lab, this.b); }
+    return this;
+  }
   private bt(t: number | VT | null): void {
     if (t === null) this.b.push(0x40);
     else if (typeof t === "number" && t >= 0x60 && t <= 0x7f) this.b.push(t);                 // value type byte
