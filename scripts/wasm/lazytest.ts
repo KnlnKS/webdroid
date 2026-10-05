@@ -50,12 +50,12 @@ const check = (what: string, got: unknown, want: unknown) => { if (got !== want)
 {
   const w = world([join(out, "classes.dex"), ...jars]), call = w.entry("Lz", "sum", "(I)I");
   let first = call(40000);
+  const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!), initial = w.table.get(slot);
   // the second tier waits until the program has been hot for a few ms
-  for (let i = 0; i < 1e4 && !w.stats.upgrades; i++) first = call(40000);
+  if (w.upgradeJob(slot)) for (let i = 0; i < 1e4 && w.table.get(slot) === initial; i++) first = call(40000);
   const up = w.stats.upgrades;
   check("hot loop upgraded", up >= 1, true);
   check("second tier answers the same", call(40000), first);
-  const slot = w.slotOf(w.prog.resolve("Lz", "sum", "(I)I")!);
   check("an upgraded method is not queued again", (call(40000), w.upgradeJob(slot)), undefined);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("a falsified assumption undoes the second tier too", w.stats.invalidated >= 1, true);
