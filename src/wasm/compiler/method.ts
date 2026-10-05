@@ -13,6 +13,7 @@ import { emitCustom } from "./custom";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
+import { NO_THROW } from "./opinfo";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
@@ -343,7 +344,7 @@ export class MC {
   private findCyclicRegions(): void {
     const { regions, blockAt } = this.flow, n = regions.length;
     if (n < 2) return;
-    const owner = new Int32Array(this.flow.starts.length);
+    const owner = new Int32Array(this.flow.starts.length).fill(-1);
     regions.forEach((r, k) => { for (const b of r.order) owner[b] = k; });
     const edges = Array.from({ length: n }, () => new Set<number>()), reverse = Array.from({ length: n }, () => new Set<number>());
     for (let k = 0; k < n; k++) for (const b of regions[k].order) {
@@ -353,6 +354,18 @@ export class MC {
       for (const pc of targets) {
         const to = owner[blockAt[pc]];
         if (to !== k) { edges[k].add(to); reverse[to].add(k); }
+      }
+    }
+    for (const t of this.item.tries) {
+      const handlers = [...t.handlers.map(([, pc]) => pc), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []];
+      let from = -1;
+      for (const ins of this.prepared.instructions) {
+        if (this.prepared.leaders[ins.pc]) from = owner[blockAt[ins.pc]];
+        if (from < 0 || ins.pc < t.start || ins.pc >= t.end || NO_THROW[ins.op]) continue;
+        for (const pc of handlers) {
+          const to = owner[blockAt[pc]];
+          if (to >= 0 && to !== from) { edges[from].add(to); reverse[to].add(from); }
+        }
       }
     }
     // Strong components identify dispatch cycles without outlining acyclic handler paths.
