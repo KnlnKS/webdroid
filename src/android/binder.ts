@@ -1,5 +1,6 @@
 // Binder and BinderProxy run from AOSP bytecode; this is libbinder under them: IPCThreadState's
 // calling identity, local binders exported to the broker and proxies to other processes' binders.
+import { shareable } from "../jvm/suspend";
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { callOn, curThread, JThread, scall, vcall, after, linkInit, linkClass, newObj, iof, classNameOf } from "../jvm/natives/jentry";
 import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable";
@@ -447,7 +448,11 @@ function localHostedService(name: string): JObj | Promise<JObj> | null {
   const service = binderServices.get(name);
   if (!service) { if (!absentServices.has(name)) rt.noteMissing(`service ${name} [binder]`); return null; }
   if (typeof service !== "function") return service;
-  const made = service();
+  const result = service();
+  // A cached service is shared across asks. Its constructor suspension belongs
+  // to the constructor: joining a caller to it would keep the cache pending
+  // until that caller returns, and a later ask in that caller waits on itself.
+  const made = result instanceof Promise ? shareable(result) : result;
   binderServices.set(name, made);
   if (made instanceof Promise) void made.then((binder: JObj) => binderServices.set(name, binder), () => binderServices.set(name, service));
   return made;
