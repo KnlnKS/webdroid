@@ -21,7 +21,7 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 | G5 | Open. The string representation comparison is measured; the required boundary share below 5% of a heavy tap has not been demonstrated. |
 | G6 | Not implemented. X1 records a measured decision to pursue module-loading reductions instead of a heap image; this is a design decision, not a successful image-loader measurement. |
 | G7 | Measured for Chrome and the WebKit build. Firefox is excluded by the user's instruction. |
-| G8 | Decision pending under `docs/decisions/`. The existing steady-state mean supports continuing Wasm GC, while G1's unresolved criteria must remain visible. |
+| G8 | Provisional decision recorded in [0004-wasm-heap.md](decisions/0004-wasm-heap.md): continue Wasm GC, keep G1 open, and reconsider a heap replacement only with measured attribution. |
 
 S0–S3 have substantial implementations and harness coverage. S4 has AOT delivery and worker compilation, but the Wasm cold interpreter and hot-loop re-entry deliverables still need an explicit audit. S5's process-per-Worker conversion and S6's default switch/removal are unfinished. Optional and open-ended work follows completion of the main stages and gates.
 

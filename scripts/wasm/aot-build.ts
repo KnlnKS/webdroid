@@ -20,7 +20,6 @@ import { Compiler } from "../../src/wasm/compiler/j2w";
 import { packModule, type CHeader, type DHeader } from "../../src/wasm/link/aot";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import { compileModule } from "../../src/wasm/link/module";
-import { mid } from "../../src/wasm/compiler/ids";
 import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
 import { AOSP } from "./paths";
 
@@ -117,7 +116,6 @@ const check = (bytes: Uint8Array): { fn: number; message: string } | undefined =
     return { fn: m ? +m[1] : -1, message };
   } finally { v8Ms += performance.now() - t; }
 };
-const skipped: string[] = [];
 const idsOf = (names: Iterable<string>) => [...names].filter((n) => n[0] !== "!").map((n) => w.idOf(n));
 const synthOf = (names: Iterable<string>) => [...names].filter((n) => n[0] === "!").map((n) => n.slice(1));
 const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k ? [i] : []));
@@ -128,22 +126,16 @@ const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
   const methods = blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => aotCompiles(m)));
   if (!methods.length) { empty.add(k); return; }
-  // a method the compiler emits invalid code for is left to the on-demand compiler, which fails the same way if it is ever called
-  const skip = new Set<string>();
-  let cx: Compiler, built: ReturnType<Compiler["buildUnit"]>, touch: Set<string>;
-  for (;;) {
-    cx = new Compiler(w);
-    w.beginTouch();
-    built = cx.buildUnit(methods.filter((m) => !skip.has(mid(m))), [], false, true);
-    touch = w.endTouch();
-    const bad = check(built.bytes);
-    if (!bad) break;
+  const cx = new Compiler(w);
+  w.beginTouch();
+  const built = cx.buildUnit(methods, [], false, true), touch = w.endTouch();
+  const bad = check(built.bytes);
+  if (bad) {
     const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs] : "";
-    if (!name || skip.has(name)) throw new Error(`C ${k}: ${bad.message}`);
-    skip.add(name); skipped.push(`${name}: ${bad.message}`);
+    throw new Error(`C ${k}${name ? ` (${name})` : ""}: ${bad.message}`);
   }
   const { bytes, traces } = built;
-  nMethods += methods.length - skip.size;
+  nMethods += methods.length;
   const seen = new Set<string>(), assumptions: CHeader["assumptions"] = [];
   for (const [decl, name, desc, target, owner] of cx.assumptions) {
     const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
@@ -151,7 +143,7 @@ cGroups.forEach((blocks, k) => {
   }
   const header: CHeader = { classes: blocks, touch: idsOf(touch), synth: synthOf(touch), natives: [...cx.nativeImports.keys()], mods: [...cx.deps.keys()],
     assumptions, allocs: [...cx.allocs], gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)), missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]),
-    absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m) || skip.has(mid(m))).map((m) => w.blockBase[b] + m.index)) };
+    absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
   cBytes += file.length; mapBytes += file.length - plain.length;
@@ -194,6 +186,5 @@ writeFileSync(join(out, "waiting.json"), JSON.stringify(waitingNatives()));
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
 console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
-if (skipped.length) console.log(`${skipped.length} methods left to the on-demand compiler:\n  ${skipped.join("\n  ")}`);
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));
 process.exit();

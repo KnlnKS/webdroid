@@ -18,7 +18,7 @@ import { AOSP, ROOT } from "./paths";
 const KNOWN = [/^native: /, /^String\.<init>\(/, /^invoke-custom .*LambdaMetafactory/];
 
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
-// the default covers the jars the AOT build compiles (aotbuild.ts leaves a method it cannot compile to the on-demand compiler, so only the sweep says one is invalid)
+// Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
 const targets = args.length ? args.map((a) => resolve(a)) : [...PLATFORM_JARS.slice(0, 6).map((j) => join(AOSP, j)), join(ROOT, "apks/FitNotes.apk")];
 const jars = PLATFORM_JARS.map((j) => join(AOSP, j));
 let unexplained = 0;
