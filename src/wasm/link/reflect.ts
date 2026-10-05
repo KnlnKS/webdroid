@@ -94,27 +94,28 @@ function invokeBody(cx: Compiler, c: Code, m: MethodInfo, wrap: boolean, direct:
     c.lget(given).i32(m.params.length).raw(OP.i32_ne).if_().i32(m.params.length).lget(given); cx.callThrower(c, "iarity"); c.end();
   }
   if (m.params.length) c.lget(1).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).lset(args);
-  if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
-  if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
-  else if (!m.isStatic) {
+  // the receiver and the arguments are checked, and converted, before the call and outside what InvocationTargetException wraps
+  if (!ctor && !m.isStatic) {
     c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
     if (wrap) { c.lget(0).call(cx.instanceOfFn(m.cls)).raw(OP.i32_eqz).if_().i32(cx.idOf(m.cls)).lget(0); vtId(cx, c); cx.callThrower(c, "recv"); c.end(); }
-    c.lget(0).lset(recv); c.lget(recv);
   }
-  else cx.emitEnsure(c, m.cls);
-  let i = 0;
-  for (const p of m.params) {
+  const values = m.params.map((p, i) => {
+    const v = c.newLocal(cx.vtOf(kindOf(p))), ty = cx.idOf(typeName(p));
     c.lget(args).refAsNonNull().i32(i).arrayGet(cx.tData.ref);
-    const ty = cx.idOf(typeName(p));
     if (BOX[p]) { c.i32(p.charCodeAt(0)).i32(i).i32(ty); cx.callRt(c, "argp"); if (kindOf(p) === "I") c.raw(OP.i32_wrap_i64); }
     else if (wrap && p !== "Ljava/lang/Object;") {
-      const v = c.newLocal(T.anyref);
-      c.lset(v).lget(v).refIsNull().raw(OP.i32_eqz).if_().lget(v).call(cx.instanceOfFn(p[0] === "L" ? descToName(p) : p)).raw(OP.i32_eqz).if_();
-      c.i32(i).i32(ty).lget(v); vtId(cx, c); cx.callThrower(c, "iarg"); c.end().end();
-      c.lget(v);
+      const a = c.newLocal(T.anyref);
+      c.lset(a).lget(a).refIsNull().raw(OP.i32_eqz).if_().lget(a).call(cx.instanceOfFn(p[0] === "L" ? descToName(p) : p)).raw(OP.i32_eqz).if_();
+      c.i32(i).i32(ty).lget(a); vtId(cx, c); cx.callThrower(c, "iarg"); c.end().end();
+      c.lget(a);
     }
-    i++;
-  }
+    return c.lset(v), v;
+  });
+  if (wrap) c.block(T.anyref).block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
+  if (ctor) { cx.emitEnsure(c, m.cls); cx.emitNew(c, m.cls); c.lset(recv); c.lget(recv); }
+  else if (!m.isStatic) { c.lget(0).lset(recv); c.lget(recv); }
+  else cx.emitEnsure(c, m.cls);
+  for (const v of values) c.lget(v);
   const prog = cx.prog, decl = prog.get(m.cls)!;
   if (m.isStatic || ctor || direct || m.flags & (ACC.PRIVATE | ACC.FINAL) || decl.flags & ACC.FINAL) cx.callMethod(c, m);
   else {

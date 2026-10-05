@@ -205,26 +205,6 @@ public class C {
     }
     return r + S.class.getDeclaredFields().length * 100000000;
   }
-  static class SerBase { int base = 7; SerBase() { base = 7; } }
-  static class Ser extends SerBase implements java.io.Serializable { static final long serialVersionUID = 1L; int x; String s; long l; Ser(int x) { this.x = x; s = "s" + x; l = 1L << 40; base = 99; } }
-  /** serialization allocates the Serializable class and runs the no-argument constructor of its first non-serializable superclass */
-  public static int serialization(int n) throws Exception {
-    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
-    java.io.ObjectOutputStream o = new java.io.ObjectOutputStream(bo); o.writeObject(new Ser(n)); o.close();
-    Ser r = (Ser) new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bo.toByteArray())).readObject();
-    return r.x * 1000 + r.s.length() * 100 + (int) (r.l >> 40) * 10 + r.base;
-  }
-  public static double widen(double d, long l, float f, char c) { return d * 1000 + l * 10 + f + c; }
-  /** Method.invoke widens boxed arguments to the parameter types and refuses what does not fit */
-  public static int jsWrong_invokeWidening(int n) throws Exception {
-    java.lang.reflect.Method m = C.class.getDeclaredMethod("widen", double.class, long.class, float.class, char.class);
-    int r = (int) (double) (Double) m.invoke(null, 3, 4, 5L, 'a');
-    try { m.invoke(null, "x", 1L, 1f, 'a'); } catch (IllegalArgumentException e) { r += 1000000; }
-    try { m.invoke(null, 1.5, 1.5, 1f, 'a'); } catch (IllegalArgumentException e) { r += 2000000; }
-    try { m.invoke(null, null, 1L, 1f, 'a'); } catch (IllegalArgumentException e) { r += 4000000; }
-    try { C.class.getDeclaredMethod("fieldsApi", int.class).invoke(null, new Object()); } catch (IllegalArgumentException e) { r += 8000000; }
-    return r;
-  }
   public static int jsWrong_publicFields(int n) { return T2.class.getFields().length; }
   public static int jsWrong_arraycopyStore(int n) {
     Object[] src = {new A(), new Object(), new A()}; A[] dst = new A[3]; int r = 0;

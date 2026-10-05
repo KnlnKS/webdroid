@@ -84,7 +84,6 @@ export function hostInfo(w: World, kind: number, a: number, b: number): number {
     case Info.FieldFlags: return fields[b].flags;
     case Info.FieldDesc: return fields[b].desc.charCodeAt(0);
     case Info.CanAccess: return +canAccess(w.nameOf(a), w.prog.get(w.nameOf(b >>> 12))!, w.prog.get(w.nameOf(b >>> 12))!.fields[b & 0xfff].flags, w);
-    case Info.HasClinit: { for (let k = jc; k; k = b && k.sup ? w.prog.get(k.sup) : undefined) if (k.byKey.has("<clinit>()V")) return 1; return 0; }
     case Info.AllocSlot: {
       const ctor = jc?.byKey.get("<init>()V");
       if (!jc || jc.isInterface || jc.flags & ACC.ABSTRACT || !ctor) return 0;
@@ -393,7 +392,6 @@ def("java/lang/Class.getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Fiel
   cx.callThrower(c, "nsfe");
 });
 def("java/lang/Class.getDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(0); cx.callRt(c, "declFields"); });
-def("java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;Z)Z", (cx, c) => { cx.info(c, Info.HasClinit, () => { c.lget(0); idOfClass(cx, c); }, () => c.lget(1)); });
 def("java/lang/Class.getPublicDeclaredFields()[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.i32(1); cx.callRt(c, "declFields"); });
 def("java/lang/Class.getDeclaredFieldsUnchecked(Z)[Ljava/lang/reflect/Field;", (cx, c) => { c.lget(0); idOfClass(cx, c); c.lget(1); cx.callRt(c, "declFields"); });
 export const fieldId = (cx: Compiler, c: Code) => { const fs = cx.structFor(FIELD); c.refCast(fs).structGet(fs, cx.fieldIndex(FIELD, { owner: FIELD, name: "artFieldIndex", desc: "I" })); };
