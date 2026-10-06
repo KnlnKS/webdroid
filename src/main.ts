@@ -41,6 +41,7 @@ import { connectProcess, registerForegroundProcess, processPresentation } from "
 import { guestNow, guestSleep, uptimeMillis } from "./guest-clock";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
+import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot";
 import { onProcessExit } from "./process-exit";
 import { deathOf, lastExit, type Death } from "./android/server/appexitinfo";
 
@@ -106,8 +107,10 @@ async function boot(file: string, local?: File) {
   try {
     mark("boot");
     const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
+    const workerMode = params.get("processMode") === "worker";
     void startZygote();
-    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, fixProcessBitness) : openInstallRemote("/apks/" + encodeURIComponent(file), fixProcessBitness), provisionPackages(), loadSkia(), displayRate]);
+    const bitness = workerMode ? undefined : fixProcessBitness;
+    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, bitness) : openInstallRemote("/apks/" + encodeURIComponent(file), bitness), provisionPackages(), loadSkia(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -118,6 +121,26 @@ async function boot(file: string, local?: File) {
     mark("installOpened");
     rollbackAssets = activateLocalAssets(assets);
     const t0 = performance.now();
+    if (workerMode) {
+      shell.setState({ kind: "loading", file, stage: "Starting system services…" });
+      await bootSystemOwner();
+      runtimeStarted = true;
+      const { pkg, label } = await prepareWorkerInstall(install);
+      const broker = processBroker();
+      const launch = () => {
+        shell.setState({ kind: "loading", file, stage: "Starting app…" });
+        const started = broker.launch(pkg, assets?.key ?? file);
+        broker.watch(started.pid, death => shell.setState({ kind: "exited", file, label, crashed: death.crashed,
+          crashDialog: death.crashed && death.repeated, retry: launch }));
+        return started.shown.then(() => { shell.setState({ kind: "running", file, label }); },
+          error => { shell.setState({ kind: "failed", file, error, retry: launch }); });
+      };
+      await launch();
+      perf.bootMs = performance.now() - t0;
+      void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
+        .then(() => broker.boot()).catch(error => console.error("[provision]", error));
+      return;
+    }
     connectProcess();
     runtimeStarted = true;
     let shown = file;

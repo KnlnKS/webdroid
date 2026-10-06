@@ -20,6 +20,7 @@ import { logUncaught } from "../jvm/natives/jthrowable";
 import { createGuestClockPort, uptimeMillis } from "../guest-clock";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords";
 import { ActivityStack } from "./activitystack";
+import type { FileSource } from "./lazyfile";
 import { apkPath, vfs } from "./vfs";
 import { device, formatScreen } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
@@ -269,6 +270,11 @@ export class ProcessBroker {
     const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid)).finally(() => { entry.foregroundClients--; });
     return { pid: entry.pid, shown };
   }
+  private packageSplits = new Map<string, readonly FileSource[]>();
+  setPackageSplits(pkg: string, sources: readonly FileSource[]): void {
+    if (!packages.has(pkg)) throw new Error("Package not installed: " + pkg);
+    this.packageSplits.set(pkg, [...sources]);
+  }
   async bootstrap(pid: number, worker = false): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     this.watchSettings(pid);
@@ -277,7 +283,7 @@ export class ProcessBroker {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
       if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
-      const splits = record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : [];
+      const splits = this.packageSplits.get(record.pkg) ?? (record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : []);
       return { certificates: record.certificates(), pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     });
     const ports: (() => void)[] = [];
@@ -584,6 +590,7 @@ export class ProcessBroker {
   }
   /** a removed package leaves every process's package manager, this one's too */
   async packageRemoved(pkg: string): Promise<void> {
+    this.packageSplits.delete(pkg);
     forgetRemoved(pkg);
     await this.each(() => true, (endpoint) => endpoint.packageRemoved(pkg));
   }
