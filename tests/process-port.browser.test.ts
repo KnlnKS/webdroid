@@ -111,7 +111,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return workerDiagnosticOwnership();
     });
     expect(diagnostic).toEqual({healthy:true,rejected:"owned diagnostic failure",hung:"Worker diagnostic timeout",phase:"Worker is not ready: packages",
-      secondHealthy:true,hungCalls:1,retained:"actual diagnostic fixture exit",identity:8401});
+      secondHealthy:true,hungCalls:1,queueBlocked:true,live:true,aliveCalls:2,retained:"actual diagnostic fixture exit",identity:8401});
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }
 }, 30_000);

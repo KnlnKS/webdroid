@@ -539,13 +539,13 @@ export class ProcessBroker {
     this.services.processDied(entry.pkg, entry.process, death);
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
     for (const key of this.locationTokens.keys()) if (key.startsWith(pid + ":")) this.locationTokens.delete(key);
-    this.workerReads.delete(pid);
+    this.workerReads.delete(pid); this.workerLiveness.delete(pid);
     entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.frame?.remove(); entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     this.activities.processDied(pid);
   }
   private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
-  workerSnapshots() {
-    return Promise.all([...this.entries.values()].flatMap(entry => {
+  workerSnapshots(entries = [...this.entries.values()]) {
+    return Promise.all(entries.flatMap(entry => {
       const worker = entry.worker;
       const url = worker?.url ?? entry.workerDiagnostic?.url;
       if (!url) return [];
@@ -573,6 +573,41 @@ export class ProcessBroker {
         } finally { clearTimeout(timer); }
       })()];
     }));
+  }
+  private workerLiveness = new Map<number, Promise<boolean>>();
+  private async workerAlive(entry: Entry, ms: number): Promise<boolean> {
+    const worker = entry.worker;
+    if (!worker || entry.dead) return false;
+    let read = this.workerLiveness.get(entry.pid);
+    if (!read) {
+      read = Promise.resolve().then(() => worker.control.alive());
+      this.workerLiveness.set(entry.pid, read);
+      const pending = read;
+      const clear = () => { if (this.workerLiveness.get(entry.pid) === pending) this.workerLiveness.delete(entry.pid); };
+      void read.then(clear, clear);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([read, new Promise<boolean>(resolve => {
+        timer = setTimeout(() => resolve(false), ms);
+      })]) && !entry.dead && entry.worker === worker;
+    } catch { return false; }
+    finally { clearTimeout(timer); }
+  }
+  /** A control reply is not evidence that the Java main queue can dispatch a job. */
+  async visibleWorkersAlive(ms = 1500): Promise<boolean | null> {
+    const entries = this.activities.shownEntries().filter(entry => entry.worker && !entry.dead);
+    return entries.length ? (await Promise.all(entries.map(entry => this.workerAlive(entry, ms)))).every(Boolean) : null;
+  }
+  async visibleWorkerProcesses(ms = 1500) {
+    const entries = this.activities.shownEntries().filter(entry => entry.worker && !entry.dead);
+    const [rows, alive] = await Promise.all([this.workerSnapshots(entries), Promise.all(entries.map(entry => this.workerAlive(entry, ms)))]);
+    return rows.map((row, i) => ({...row, alive: alive[i]}));
+  }
+  async foregroundWorkerSnapshot() {
+    const entry = this.entries.get(this.activities.foreground);
+    if (!entry?.worker && !entry?.workerDiagnostic) return null;
+    return (await this.workerSnapshots([entry]))[0] ?? null;
   }
   displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
     const layers = this.activities.shownEntries().flatMap(entry => {

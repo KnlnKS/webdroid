@@ -496,35 +496,42 @@ export async function workerDiagnosticOwnership() {
   const root={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
   packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,19000,async()=>[]));
   const code=`import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
-    let hungCalls=0;
+    let hungCalls=0,aliveCalls=0;
     self.onmessage=({data})=>{
-      if(data.count){self.postMessage({hungCalls});return;}
+      if(data.count){self.postMessage({hungCalls,aliveCalls});return;}
       serveCalls(data.port,{snapshot:async()=>{
         if(data.mode==='hang'){hungCalls++;return new Promise(()=>{});}
         if(data.mode==='reject')throw new Error('owned diagnostic failure');
-        return {phase:data.mode,dead:false,identity:{pid:data.pid}};
-      }});self.postMessage({ready:true});
+        return {phase:data.mode==='queueHang'?'ready':data.mode,dead:false,identity:{pid:data.pid}};
+      },alive:async()=>{aliveCalls++;if(data.mode==='queueHang')return new Promise(()=>{});return true;}});self.postMessage({ready:true});
     };`;
   const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
-  const pids=[8401,8402,8403,8404];
+  const pids=[8401,8402,8403,8404,8405],foreground=broker.activities.foreground;
   try {
-    for(const [i,mode] of ['ready','reject','hang','packages'].entries()) {
+    for(const [i,mode] of ['ready','reject','hang','packages','queueHang'].entries()) {
       const entry=broker.connect(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
       const client=callProxy(channel.port1,workerControlMethods);clients.push(client);
       Object.assign(entry,{worker:{url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close}});
       await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid},[channel.port2]);});
     }
     const first=await broker.workerSnapshots(),second=await broker.workerSnapshots();
-    const count=await new Promise<number>(resolve=>{worker.onmessage=({data})=>resolve(data.hungCalls);worker.postMessage({count:true});});
+    broker.activities.setForeground(8405);
+    const blocked=await broker.visibleWorkerProcesses(30);
+    const stillBlocked=await broker.visibleWorkersAlive(30);
+    broker.activities.setForeground(8401);
+    const live=await broker.visibleWorkersAlive(1000);
+    const count=await new Promise<{hungCalls:number;aliveCalls:number}>(resolve=>{worker.onmessage=({data})=>resolve(data);worker.postMessage({count:true});});
     broker.fail(8401,"actual diagnostic fixture exit",NOT_CRASHED);
     const ended=await broker.workerSnapshots();
     const row=(rows:typeof first,pid:number)=>rows.find(row=>row.pid===pid)!;
     const failure=(rows:typeof first,pid:number)=>{const value=row(rows,pid);return 'error' in value?value.error:null;};
     const healthy=row(first,8401);
     return {healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
-      phase:failure(first,8404),secondHealthy:'snapshot' in row(second,8401),hungCalls:count,
+      phase:failure(first,8404),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
+      queueBlocked:'snapshot' in blocked[0] && !blocked[0].alive && !stillBlocked,live,aliveCalls:count.aliveCalls,
       retained:failure(ended,8401),identity:'snapshot' in healthy?healthy.snapshot.identity.pid:null};
   } finally {
+    broker.activities.setForeground(foreground);
     for(const pid of pids)broker.fail(pid,"diagnostic fixture cleanup",NOT_CRASHED);
     clients.forEach(client=>client.close());worker.terminate();URL.revokeObjectURL(url);packages.delete(pkg);
   }

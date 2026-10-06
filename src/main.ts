@@ -207,6 +207,8 @@ const wd = {
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),
+  foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
+  visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
   background: (ms = 1000) => processBroker().activities.background(ms),
@@ -258,7 +260,9 @@ const wd = {
   },
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
   // looks exactly like a settled screen from outside.
-  alive: (ms = 1500) => {
+  alive: async (ms = 1500) => {
+    const workersAlive = await processBroker().visibleWorkersAlive(ms);
+    if (workersAlive !== null) return workersAlive;
     let id: ReturnType<typeof setTimeout>;
     return Promise.race([
       onMain(() => true).finally(() => clearTimeout(id)),

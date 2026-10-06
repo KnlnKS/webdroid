@@ -5,8 +5,11 @@ import { rt } from "../jvm/runtime";
 import { realmWd } from "./realmwd";
 import { processExited } from "../process-exit";
 import { dispatchPointer, pressBack, SCREEN_W, SCREEN_H } from "./device";
-import { mainDbg } from "../android/mainloop";
-import { recordVsync } from "../android/vsync";
+import { yieldStats, timedParks } from "../jvm/yield";
+import { webViewInfo } from "../android/webframes";
+import { pendingTransitions } from "../android/server/atm";
+import { mainDbg, onMain } from "../android/mainloop";
+import { recordVsync, vsyncScheduled } from "../android/vsync";
 import { perf } from "../perf";
 import { processPresentation } from "./process-endpoint";
 import { nativeRequirements } from "./diagnostics";
@@ -21,7 +24,10 @@ export function workerControl(logs: string[], phase: () => string) {
       missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
       placeholders: [...rt.placeholders], placeholderAt: Object.fromEntries([...rt.placeholderAt].map(([name,frames])=>[name,frames.slice()])),
       coverage: jvmCoverage.snapshot(), compositor: Reflect.get(local,"compositorStatus") ?? null,
+      vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),
+      yields: {pushes:yieldStats.pushes,fires:yieldStats.fires,pending:yieldStats.pending()}, timedParks: timedParks.size, web: webViewInfo(),
       main: { ...mainDbg }, perf: { ...perf }, missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
+    alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
     uiTree: local.uiTree,
     tap: local.tap,
     pointer: async (action: number, x: number, y: number) => { await dispatchPointer(action, x, y); },
