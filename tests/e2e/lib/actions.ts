@@ -1,5 +1,5 @@
 import type { Act } from "./probe";
-import type { Screen } from "../types";
+import type { Screen, UiNode } from "../types";
 
 export type EnvironmentConfig = { fixedMs: number | null; storage: [string, string][] };
 
@@ -52,6 +52,18 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   );
   // queries need the main loop too: a wedged loop must fail the step, not hold the run
   const query = <T>(p: T | Promise<T>, what: string) => withDeadline(Promise.resolve(p), deadlineMs, what);
+  const ready = async <T>(read: () => T | Promise<T>, what: string): Promise<NonNullable<T>> => {
+    const end = performance.now() + deadlineMs;
+    for (;;) {
+      const remaining = end - performance.now();
+      if (remaining <= 0) throw new Error(`${what} did not become ready within ${deadlineMs}ms`);
+      const value = await withDeadline(Promise.resolve().then(read), remaining, what);
+      if (value) return value as NonNullable<T>;
+      await withDeadline(sleep(16), Math.max(1, end - performance.now()), what);
+      if (input.controlled && wd.guestClock?.controlled)
+        await withDeadline(wd.testFrame(), Math.max(1, end - performance.now()), what);
+    }
+  };
   // act while `text` shows, first waiting up to appearMs for it, at most `times` times, until it
   // has stayed away quietMs
   const whileShown = async (text: string, appearMs = 0, times: number, interval: number, act: () => Promise<unknown>, quietMs = 400) => {
@@ -74,7 +86,9 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   switch (a.type) {
     case "boot": await run(wd.boot(a.apk)); return;
     case "tapText": {
-      const hit = await query(wd.locateText(a.text), "locateText") as { x: number; y: number } | null;
+      const hit = a.required
+        ? await ready(() => wd.locateText(a.text), `text ${JSON.stringify(a.text)}`)
+        : await query(wd.locateText(a.text), "locateText") as { x: number; y: number } | null;
       if (hit) await run(wd.tap(hit.x, hit.y));
       else if (a.fallback) await run(wd.tap(a.fallback.x * s.width, a.fallback.y * s.height));
       return !!hit;
@@ -90,7 +104,12 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
       }
       return;
     case "type":
-      if (a.x !== undefined && a.y !== undefined) { await run(wd.tap(a.x * s.width, a.y * s.height)); await sleep(250); }
+      if (a.x !== undefined && a.y !== undefined) {
+        const x = a.x * s.width, y = a.y * s.height;
+        if (input.controlled) await ready(async () => (await wd.uiTree()).some((node: UiNode) =>
+          node.editable && node.enabled && node.bounds[0] <= x && x < node.bounds[2] && node.bounds[1] <= y && y < node.bounds[3]), "editable target");
+        await run(wd.tap(x, y)); await sleep(250);
+      }
       await run(wd.type(a.text));
       return;
     case "back":

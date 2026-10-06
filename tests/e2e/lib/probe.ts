@@ -17,7 +17,7 @@ type ProbeConfig = {
 export type Act =
   | { type: "boot"; apk: string }
   | { type: "tap"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; appearMs?: number; quietMs?: number; unlessResource?: string }
-  | { type: "tapText"; text: string; fallback?: { x: number; y: number } }
+  | { type: "tapText"; text: string; required?: boolean; fallback?: { x: number; y: number } }
   | { type: "type"; text: string; x?: number; y?: number }
   | { type: "back"; whileText?: string; appearMs?: number }
   | { type: "enter" }

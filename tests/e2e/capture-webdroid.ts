@@ -107,7 +107,7 @@ export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act 
   const a = step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
-    case "tapText": return { type: "tapText", text: a.text, fallback: a.optional ? undefined : rec?.resolved };
+    case "tapText": return { type: "tapText", text: a.text, required: !a.optional, fallback: a.optional ? undefined : rec?.resolved };
     case "tapAt": return { type: "tap", x: a.x, y: a.y, repeat: a.repeat, everyMs: a.everyMs, whileText: a.whileText, appearMs: a.appearMs, quietMs: a.quietMs, unlessResource: a.unlessResource };
     case "typeInto": return { type: "type", x: a.x, y: a.y, text: a.text };
     case "back": return { type: "back", whileText: a.whileText, appearMs: a.appearMs };
@@ -122,9 +122,8 @@ export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act 
 export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
   const evidence = evidenceOf(step);
   const capture = mode === "full" || evidence.kind !== "semantic";
-  // the fast lane drops a semantic step's horizon, except a launch's: startup (a splash screen's
-  // minimum duration) is what it covers
-  const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent" && step.action.type !== "launch"
+  // Controlled gestures need their virtual horizon to finish flings before the next input.
+  const policy: WaitPolicy = mode === "fast" && flow.clock !== "controlled" && evidence.kind === "semantic" && step.wait.kind === "quiescent" && step.action.type !== "launch"
     ? { ...step.wait, maxVirtualMs: 0 }
     : step.wait;
   const quiescence = mode === "fast" && evidence.kind === "semantic"
