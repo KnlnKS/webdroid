@@ -29,7 +29,7 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
@@ -887,15 +887,15 @@ export class World {
     if (this.opts.compiler?.submit(this, slot)) { s.pending = true; reset(); return; }
     if (this.opts.holdUpgrades?.()) { reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
-    // again after another budget; the next compile the share allows goes to the method that has waited longest and asked again since, so it is still hot
+    // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
+    // else to the one that has waited longest and asked again since, so it is still hot
     const t0 = performance.now();
     this.hotSince ??= t0;
     const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
     if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) { wait(); return; }
-    let pick = slot;
-    for (const [w, n] of this.refused) {
-      const ws = this.slotAt(w);
-      if (ws?.k !== "method" || !ws.done || ws.hot || ws.pending) { this.refused.delete(w); continue; }
+    let pick = this.outermostWaiting() ?? slot;
+    if (pick === slot) for (const [w, n] of this.refused) {
+      if (!this.waits(w)) { this.refused.delete(w); continue; }
       if (n >= 2) { pick = w; break; }
     }
     this.refused.delete(pick);
@@ -906,6 +906,18 @@ export class World {
     this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, t0);
     this.upgradeMs += performance.now() - t0;
   }
+  /** the outermost Java frame of the running stack whose method waits for the second tier (V8 names Wasm frames by function, which are named by method id) */
+  private outermostWaiting(): number | undefined {
+    if (!this.refused.size || !namesWasmFrames()) return undefined;
+    let found: number | undefined;
+    for (const name of wasmFrameNames(new Error().stack ?? "")) {
+      const m = methodOf(this.prog, name.replace(/^\$dispatch:/, "").split("#")[0]), slot = m && this.slotOf(m);
+      if (slot !== undefined && this.refused.has(slot) && this.waits(slot)) found = slot;
+    }
+    return found;
+  }
+  /** whether the method in `slot` runs first-tier code and no second-tier unit for it is on its way */
+  private waits(slot: number): boolean { const s = this.slotAt(slot); return s?.k === "method" && s.done && !s.hot && !s.pending; }
   private requested = new Set<number>();
   /** the methods refused a second-tier compile, longest waiting first, with how often */
   private refused = new Map<number, number>();
