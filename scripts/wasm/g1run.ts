@@ -31,7 +31,7 @@ if (aotDir) {
 }
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string; cold?: boolean }
-export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
+export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
 let heapBase = 0;
@@ -60,6 +60,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     // the first call includes linking and compiling everything the workload reaches
     out.result = String(await call());
     out.times.push(performance.now() - t0);
+    if (w) out.first = structuredClone(w.stats);
     for (let i = 0; i < cfg.reps; i++) { const t = performance.now(); await call(); out.times.push(performance.now() - t); if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0)); }
   } catch (e) { const t = w?.throwable(e); out.error = hit ? `gap ${w!.gapList[0]}` : t ? `uncaught ${w!.classNameOf(t)}` : String(e).slice(0, 900); }
   if (w) { out.compileMs = w.stats.compileMs; out.units = w.stats.units; out.stats = structuredClone(w.stats); }

@@ -175,7 +175,9 @@ export function openAot(): Promise<FetchStore | undefined> {
   return pageShared("__wdAot", async () => {
     const current = await fetch("/aot/current.json");
     if (!current.ok) return undefined;
-    const store = new FetchStore(`/aot/${(await current.json() as { key: string }).key}/`);
+    // the cold interpreter deoptimizes into guarded code; other processes load the build without the guards
+    const manifest = await current.json() as { key: string; cold?: string };
+    const store = new FetchStore(`/aot/${browserCold() && manifest.cold ? manifest.cold : manifest.key}/`);
     const [, startup, waiting] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json"), store.fetchBytes("waiting.json")]);
     // the natives the modules import as Suspending were chosen when the build was made
     declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);
