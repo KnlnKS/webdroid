@@ -56,12 +56,13 @@ function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
 const ports: WorkerPort[] = [];
+const stopped = new WeakSet<WorkerPort>();
 /** a compile worker over a MessageChannel in this thread */
 function spawn(): WorkerPort {
   const { port1, port2 } = new MessageChannel();
   serveCompile(port2 as never, env);
   const port: WorkerPort = { postMessage: (m, t) => port1.postMessage(m, t as never), set onmessage(f) { port1.onmessage = f as never; }, get onmessage() { return port1.onmessage as never; },
-    onerror: null, terminate: () => { port1.close(); port2.close(); } };
+    onerror: null, terminate: () => { stopped.add(port); port1.close(); port2.close(); } };
   ports.push(port);
   return port;
 }
@@ -171,6 +172,7 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
   const t0 = performance.now(), first = await prepareApp(request);
   check("no build is saved for the app at first", first.hit, false);
   const made = await first.made!;
+  check("the transferred build retires its worker", stopped.has(ports.at(-1)!), true);
   check("the build is kept", made.kept, true);
   console.log(`  app build: ${made.methods} methods in ${made.modules} module(s), ${made.ms.toFixed(0)} ms in the worker (${(performance.now() - t0).toFixed(0)} ms with the worker's start)`);
   const second = await prepareApp(request);

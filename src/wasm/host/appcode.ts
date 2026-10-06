@@ -120,23 +120,27 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   return code;
 }
 
-/** the worker that builds the app, started by the first build and kept for the ones after it */
+/** A build owns a fresh numbering context; its worker is retired after transferring the result. */
 class Builder {
   private closed = false;
   private port?: WorkerPort;
   private waiting?: { resolve(built: Built): void; reject(error: Error): void };
+  private lease?: AbortController;
   constructor(private req: AppCodeRequest, private key: string) {}
   get busy(): boolean { return !!this.waiting; }
   /** builds with `demand`; the worker checks that the host's classes it applies are the ones `hostClasses` names */
   build(demand: Demand, hostClasses?: string[]): Promise<Built> {
     if (this.closed) return Promise.reject(new Error("App code closed"));
     if (this.waiting) return Promise.reject(new Error("An app build is already pending"));
-    return new Promise((resolve, reject) => {
+    const result = new Promise<Built>((resolve, reject) => {
       this.waiting = { resolve: (built) => { this.waiting = undefined; resolve(built); }, reject: (error) => { this.waiting = undefined; reject(error); } };
+    });
+    const pending = this.waiting;
+    const start = () => {
+      if (this.waiting !== pending || this.closed) return result.catch(() => {});
       try {
-        if (this.port) { this.port.postMessage({ type: "refine", demand }); return; }
         const port = this.req.spawn();
-        if (this.closed) { port.terminate(); return; }
+        if (this.closed) { port.terminate(); return result.catch(() => {}); }
         this.port = port;
         const list = containers(this.req.dexes);
         port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
@@ -145,17 +149,32 @@ class Builder {
           if (data.type === "failed") this.close(new Error(data.message), false);
           if (data.type !== "built") return;
           const pending = this.waiting;
+          this.stopWorker();
           const kept = !!await this.req.persist?.save(this.key, buildFiles(data.build)).catch(() => false);
           if (!this.closed && this.waiting === pending) pending?.resolve({ kept, methods: data.methods, modules: data.build.files.length, ms: data.ms });
         };
         port.onerror = (e) => this.close(new Error(e.message), false);
       } catch (error) { this.close(error instanceof Error ? error : new Error(String(error)), false); }
-    });
+      return result.catch(() => {});
+    };
+    // All process Workers share this origin's lock. Acquire before constructing their
+    // duplicate Program/World, and retain the lease until the worker has been retired.
+    const locks = globalThis.navigator?.locks;
+    if (locks) {
+      const lease = this.lease = new AbortController();
+      void locks.request("webdroid:wasm-app-build", { signal: lease.signal }, start)
+        .catch(error => { if (this.lease === lease) this.close(error instanceof Error ? error : new Error(String(error)), false); });
+    } else void start();
+    return result;
+  }
+  private stopWorker(): void {
+    if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }
   }
   close(error = new Error("App code closed"), terminal = true): void {
     if (this.closed) return;
     this.closed = terminal;
-    if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }
+    const lease = this.lease; this.lease = undefined; lease?.abort();
+    this.stopWorker();
     this.waiting?.reject(error);
   }
 }
