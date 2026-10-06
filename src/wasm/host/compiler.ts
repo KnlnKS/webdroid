@@ -57,7 +57,7 @@ export class CompileClient implements CompileService {
   private initialize(): void {
     const w = this.w!, { aotBase, app } = this.setup!;
     const dexes = new Set<DexFile>();
-    for (const c of w.prog.own()) if (c.dex) dexes.add(c.dex);
+    for (const c of w.prog.own()) { if (c.name.includes("@")) return this.retire("a class loader of its own"); if (c.dex) dexes.add(c.dex); }
     this.state = "starting";
     const t0 = performance.now(), sync = w.since(w.base), list = containers(dexes);
     this.marks = w.numbering();
