@@ -110,13 +110,16 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 
 // ---- second-tier units from the worker
 {
-  const w = world(app), client = new CompileClient(spawn());
+  const w = world(app), beforeSpawn = ports.length, client = new CompileClient(spawn);
   const hooked = hosted(app, { compiler: client });
   client.start(hooked, BASE, undefined);
-  await until("the worker starts", () => client.ready || !!client.retired);
+  check("an unused upgrade service creates no worker", ports.length, beforeSpawn);
+  hooked.addDexes(late);
   const hot = hooked.entry("Pst", "hot", "(I)I"), base = w.entry("Pst", "hot", "(I)I");
   for (let i = 0; i < 400 && !client.stats.adopted; i++) { check("hot answers while jobs run", hot(4000), base(4000)); await new Promise((r) => setTimeout(r, 1)); }
   await until("a unit is adopted", () => client.stats.adopted > 0);
+  check("the first hot request creates one worker", ports.length, beforeSpawn + 1);
+  check("late DEX before worker startup is visible", hooked.entry("Pst2", "sub", "()I")(), 500);
   check("the page compiled no second tier itself", hooked.stats.upgrades, client.stats.adopted);
   check("the answers are the same after", answers(hooked).join(), expected.join());
   check("no job failed", client.stats.failed, 0);
@@ -132,11 +135,11 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 }
 {
   // something the worker cannot follow stops it, and the page compiles inline from then on
-  const client = new CompileClient(spawn()), w = hosted(app, { compiler: client });
+  const beforeSpawn = ports.length, client = new CompileClient(spawn), w = hosted(app, { compiler: client });
   client.start(w, BASE, undefined);
-  await until("the worker starts", () => client.ready);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")), w.prog.newLoader(w.prog.root, null));
   check("a loader of its own retires the worker", client.ready, false);
+  check("an incompatible loader needs no worker allocation", ports.length, beforeSpawn);
   const call = w.entry("Pst", "hot", "(I)I");
   for (let i = 0; i < 4000 && !w.stats.upgrades; i++) call(4000);
   check("and the hot method is compiled inline", w.stats.upgrades > 0, true);

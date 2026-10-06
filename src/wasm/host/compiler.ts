@@ -31,7 +31,13 @@ export class CompileClient implements CompileService {
   private busy?: { id: number; slot: number; job: UpgradeJob; epoch: number; from: Marks };
   private nextId = 0;
 
-  constructor(private port: WorkerPort) {
+  private port?: WorkerPort;
+  private setup?: { aotBase: string | undefined; app: AppIndex | undefined };
+  constructor(private source: WorkerPort | (() => WorkerPort)) {
+    if (typeof source !== "function") this.attach(source);
+  }
+  private attach(port: WorkerPort): void {
+    this.port = port;
     port.onmessage = ({ data }: MessageEvent<CompileResponse>) => this.receive(data);
     port.onerror = (e) => this.retire(`the compile worker failed: ${e.message}`);
   }
@@ -42,9 +48,17 @@ export class CompileClient implements CompileService {
   /** starts the worker over `w`'s Program as it is now: `aotBase` is where the platform build's files are fetched from, and `w` has `app` attached if it says so */
   start(w: World, aotBase: string | undefined, app: AppIndex | undefined): void {
     if (this.state === "retired") return;
+    for (const c of w.prog.own()) if (c.name.includes("@")) return this.retire("a class loader of its own");
+    this.w = w; this.setup = { aotBase, app };
+    if (!this.port) return;
+    this.initialize();
+  }
+  // Capture current numbering and DEX only when real work arrives; an unused service owns no compiler World.
+  private initialize(): void {
+    const w = this.w!, { aotBase, app } = this.setup!;
     const dexes = new Set<DexFile>();
-    for (const c of w.prog.own()) { if (c.name.includes("@")) return this.retire("a class loader of its own"); if (c.dex) dexes.add(c.dex); }
-    this.w = w; this.state = "starting";
+    for (const c of w.prog.own()) if (c.dex) dexes.add(c.dex);
+    this.state = "starting";
     const t0 = performance.now(), sync = w.since(w.base), list = containers(dexes);
     this.marks = w.numbering();
     this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, initialized: w.newlyInitialized(), hostClasses: w.hostClassNames() }, list.map(([, b]) => b.buffer as ArrayBuffer));
@@ -52,21 +66,27 @@ export class CompileClient implements CompileService {
   }
   private loaded = false;
   private waiting: [CompileRequest, Transferable[]][] = [];
-  private post(m: CompileRequest, transfer: Transferable[] = []): void { if (this.loaded) this.port.postMessage(m, transfer); else this.waiting.push([m, transfer]); }
+  private post(m: CompileRequest, transfer: Transferable[] = []): void { if (this.loaded) this.port!.postMessage(m, transfer); else this.waiting.push([m, transfer]); }
 
   submit(_w: World, slot: number): boolean {
-    if (this.state !== "ready" || this.queue.length >= MAX_QUEUE) return false;
+    if (this.state === "idle" && this.w) {
+      try { this.attach((this.source as () => WorkerPort)()); this.initialize(); }
+      catch (e) { this.retire(`the compile worker could not start: ${String(e)}`); }
+    }
+    if ((this.state !== "ready" && this.state !== "starting") || this.queue.length >= MAX_QUEUE) return false;
     this.queue.push(slot);
     this.pump();
     return true;
   }
   added(dexes: DexFile[] | null): void {
-    if (this.state === "retired" || this.state === "idle") return;
+    if (this.state === "retired" || !this.w) return;
     if (!dexes) { this.retire("something the worker cannot follow was added"); return; }
+    if (this.state === "idle") return;
     const list = containers(dexes);
     this.post({ type: "add", dexes: list }, list.map(([, b]) => b.buffer as ArrayBuffer));
   }
   private pump(): void {
+    if (this.state !== "ready") return;
     const w = this.w!;
     while (!this.busy && this.queue.length) {
       const slot = this.queue.shift()!, job = w.upgradeJob(slot);
@@ -80,7 +100,7 @@ export class CompileClient implements CompileService {
   }
   private receive(m: CompileResponse): void {
     if (this.state === "retired") return;
-    if (m.type === "loaded") { this.loaded = true; for (const [req, transfer] of this.waiting.splice(0)) this.port.postMessage(req, transfer); return; }
+    if (m.type === "loaded") { this.loaded = true; for (const [req, transfer] of this.waiting.splice(0)) this.port!.postMessage(req, transfer); return; }
     const w = this.w!;
     if (m.type === "ready") { this.state = "ready"; this.stats.startMs = performance.now() - this.stats.startMs; this.pump(); return; }
     if (m.type === "failed" && m.id === undefined) { this.retire(m.message); return; }
@@ -110,9 +130,8 @@ export class CompileClient implements CompileService {
     this.state = "retired"; this.retired = reason;
     for (const slot of [...this.queue, ...this.busy ? [this.busy.slot] : []]) this.w?.release(slot);
     this.queue = []; this.busy = undefined;
-    this.waiting = []; this.w = undefined;
-    this.port.onmessage = null; this.port.onerror = null;
-    this.port.terminate();
+    this.waiting = []; this.w = undefined; this.setup = undefined;
+    if (this.port) { this.port.onmessage = null; this.port.onerror = null; this.port.terminate(); this.port = undefined; }
   }
   close(): void { this.retire("closed"); }
 }

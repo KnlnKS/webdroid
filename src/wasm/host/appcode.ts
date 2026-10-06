@@ -57,7 +57,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   const saved = files && await SavedBuild.open(files);
   req.signal?.throwIfAborted();
-  const compiler = new CompileClient(req.spawn()), builder = new Builder(req, key);
+  const compiler = new CompileClient(() => req.spawn()), builder = new Builder(req, key);
   let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
     if (closed) return;
