@@ -39,6 +39,7 @@ import { BrowserLocation, type LocationEvent } from "./geolocation";
 import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-path";
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors";
 import type { WorkerControl } from "./worker-control";
+import { StoredParcel, StoredParcelError } from "./stored-parcel";
 import { startProcessWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
@@ -107,6 +108,7 @@ export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & 
   activityPresentation: (translucent: boolean) => Promise<void>;
   clipboardSet: (data: ParcelData | null) => Promise<void>;
   clipboardGet: () => Promise<ParcelData | null>;
+  clipboardHas: () => Promise<boolean>;
   clipboardListen: (active: boolean) => Promise<void>;
   sqlite: (request: SQLiteRequest) => Promise<SQLiteReply>;
   transact: (request: Transaction) => Promise<TransactionReply>;
@@ -114,7 +116,7 @@ export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & 
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -141,6 +143,12 @@ export class ProcessBroker {
   /** `codec` is the creator's: its JVM compares and merges the intents */
   async createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: ParcelData, intents: ParcelData[] | undefined, codec: IntentCodec): Promise<number | null> {
     const caller = this.entry(pid), owner = packages.get(pkg);
+    const supplied=[intent,...(intents ?? [])];
+    // ActivityManagerService.getIntentSenderWithFeature refuses descriptor-bearing Intents.
+    if(supplied.some(data=>data.objects.some(([,object])=>object && ("descriptor" in object || "bytes" in object)))) {
+      await Promise.all(supplied.map(data=>this.discardDescriptors(pid,data,true)));
+      throw rt.mkThrowable("java/lang/IllegalArgumentException","File descriptors passed in Intent");
+    }
     if (!owner || owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "PendingIntent creator does not match caller");
     return this.intents.create({ pkg, kind, code, flags, intent, intents, uid: caller.uid, process: caller.process }, {
       filterEquals: (a, b) => this.whileAlive(caller, () => codec.filterEquals(a, b)),
@@ -173,7 +181,8 @@ export class ProcessBroker {
   private entries = new Map<number, Entry>();
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
-  private clipboard: ParcelData | null = null;
+  private clipboard: StoredParcel | null = null;
+  private clipboardQueue:Promise<void>=Promise.resolve();
   private clipboardWatchers = new Set<number>();
   private booted = false;
   private bootstrapPorts = new Map<number, (() => void)[]>();
@@ -214,20 +223,33 @@ export class ProcessBroker {
     await this.broadcast(null, data, targets, ["android.permission.RECEIVE_BOOT_COMPLETED"], false);
   }
 
-  private copyClipboard(data: ParcelData): ParcelData {
-    return { bytes: data.bytes.slice(), objects: data.objects.map(([at, handle]) => [at, handle && { ...handle }]) };
+  private clipboardWork<T>(run:()=>Promise<T>):Promise<T> {
+    const pending=this.clipboardQueue.then(run);
+    this.clipboardQueue=pending.then(()=>{},()=>{});return pending;
   }
-  setClipboard(pid: number, data: ParcelData | null): void {
-    this.entry(pid);
-    this.clipboard = data ? this.copyClipboard(data) : null;
-    for (const watcher of this.clipboardWatchers) {
-      if (this.alive(watcher)) unawaited(this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()));
-    }
+  setClipboard(pid: number, data: ParcelData | null): Promise<void> {
+    const copied=data && structuredClone(data);
+    return this.clipboardWork(async()=>{
+      this.entry(pid);
+      let next:StoredParcel|null=null;
+      try {next=copied && await StoredParcel.retain(this.fileDescriptors,pid,copied);}
+      catch(error) {
+        if(error instanceof StoredParcelError)throw rt.mkThrowable("android/os/BadParcelableException",error.message);
+        throw error;
+      }
+      try {this.entry(pid);} catch (error) {await next?.close();throw error;}
+      const previous=this.clipboard;this.clipboard=next;await previous?.close();
+      for (const watcher of this.clipboardWatchers) {
+        if (this.alive(watcher)) unawaited(this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()));
+      }
+    });
   }
-  getClipboard(pid: number): ParcelData | null {
+  hasClipboard(pid:number):boolean {
     const caller = this.entry(pid), foreground = this.entries.get(this.activities.foreground);
-    if (caller.uid !== foreground?.uid || !this.clipboard) return null;
-    return this.copyClipboard(this.clipboard);
+    return caller.uid === foreground?.uid && this.clipboard !== null;
+  }
+  getClipboard(pid: number): Promise<ParcelData | null> {
+    return this.clipboardWork(async()=>this.hasClipboard(pid) ? this.clipboard!.replay(pid) : null);
   }
   watchClipboard(pid: number, active: boolean): void {
     this.entry(pid);
@@ -489,6 +511,7 @@ export class ProcessBroker {
       activityPresentation: async translucent => { this.entry(pid); this.activities.presentation(pid,translucent); },
       clipboardSet: async data => this.setClipboard(pid, data),
       clipboardGet: async () => this.getClipboard(pid),
+      clipboardHas: async () => this.clipboardWork(async()=>this.hasClipboard(pid)),
       clipboardListen: async active => this.watchClipboard(pid, active),
       settingsGet: async (table, name) => { this.watchSettings(pid); return this.settings.get(table, name); },
       settingsEntries: async table => { this.watchSettings(pid); return this.settings.entries(table); },
@@ -506,6 +529,7 @@ export class ProcessBroker {
       broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
     }, () => { owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); }, async (method,value) => {
       if (method === "transact") await this.discardDescriptors(pid,(value as TransactionReply).data,false);
+      if (method === "clipboardGet" && value) await this.discardDescriptors(pid,value as ParcelData,false);
     });
     owned.add(stop);
     return { port: port2, close: stop };

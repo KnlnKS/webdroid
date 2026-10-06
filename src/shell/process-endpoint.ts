@@ -85,6 +85,7 @@ function connectCommandTransports(): void {
   cookieTransport.calls = brokerCalls;
   clipboardTransport.set = data => brokerCalls().clipboardSet(data);
   clipboardTransport.get = () => brokerCalls().clipboardGet();
+  clipboardTransport.has = () => brokerCalls().clipboardHas();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   if (typeof window === "undefined" || window !== window.top) {
     webStorageTransport.calls = brokerCalls;

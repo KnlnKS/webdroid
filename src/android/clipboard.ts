@@ -2,14 +2,16 @@
 // every process (processes.ts): a clip crosses as its parcel, as it does to ClipboardService.
 import { awaited, JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jentry";
-import { parcelled, unparcelled, type ParcelData } from "./binder";
+import { parcelledWithRights, releaseBinderParcel, unparcelled, type ParcelData } from "./binder";
 import { postMain } from "./mainloop";
 
 export const clipboardTransport: {
   set: (data: ParcelData | null) => void | Promise<void>;
   get: () => ParcelData | null | Promise<ParcelData | null>;
+  has?: () => boolean | Promise<boolean>;
   listen: (active: boolean) => void | Promise<void>;
 } = {
+  has:undefined,
   set: () => { throw new Error("Clipboard service unavailable"); },
   get: () => { throw new Error("Clipboard service unavailable"); },
   listen: () => { throw new Error("Clipboard service unavailable"); },
@@ -29,14 +31,16 @@ rt.register({ name: "webdroid/ClipboardService", ctor: class extends JObj {}, su
   // ClipboardService stamps the clip as copied now
   [`setPrimaryClip(Landroid/content/ClipData;${P})V`]: driven(function* (clip: JObj) {
     yield vcall(yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"), "setTimestamp", "(J)V", BigInt(Date.now()));
-    yield* awaited(clipboardTransport.set(yield* awaited(parcelled(clip))));
+    const data=yield* awaited(parcelledWithRights(clip));
+    try {yield* awaited(clipboardTransport.set(data));}
+    finally {yield* awaited(releaseBinderParcel(data));}
   }),
   [`getPrimaryClip(${P})Landroid/content/ClipData;`]: driven(current),
   [`getPrimaryClipDescription(${P})Landroid/content/ClipDescription;`]: driven(function* () {
     const clip = yield* current();
     return clip && (yield vcall(clip, "getDescription", "()Landroid/content/ClipDescription;"));
   }),
-  [`hasPrimaryClip(${P})Z`]: driven(function* () { return +((yield* awaited(clipboardTransport.get())) !== null); }),
+  [`hasPrimaryClip(${P})Z`]: driven(function* () { return +(clipboardTransport.has ? yield* awaited(clipboardTransport.has()) : (yield* awaited(clipboardTransport.get())) !== null); }),
   [`hasClipboardText(${P})Z`]: driven(function* () {
     const clip = yield* current();
     if (!clip || !(yield vcall(clip, "getItemCount", "()I"))) return 0;

@@ -30,6 +30,11 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     });
     expect(profileOwnership).toEqual({absent:null,untouched:true,copiedKey:"build-key",
       fresh:{key:"build-key",wanted:["c1.wasm"],worlds:[{linked:["LExample;"],called:["LCalled;"]}]}});
+    const retainedRights = await page.evaluate(async()=>{
+      const {storedClipboardRights}=await import(location.origin+"/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
+      return storedClipboardRights();
+    });
+    expect(retainedRights).toEqual({has:true,cleared:true,reads:[1,2,3,4],backing:[9,2,3,4],replacementRejected:true,pendingRejected:true});
     const result = await page.evaluate(async () => {
       const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();

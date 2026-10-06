@@ -188,6 +188,23 @@ export const parcelled = driven(function* parcelled(o: JObj): Gen<ParcelData> {
     return yield* awaited(exportParcel(nativeParcel(parcel)));
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
+/** A retaining broker consumes staged regular-FD rights; it must release them on failure. */
+export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj): Gen<ParcelData> {
+  const parcel=yield* awaited(newParcel()),data:ParcelData={bytes:new Uint8Array(),objects:[]};
+  try {
+    yield vcall(o,"writeToParcel","(Landroid/os/Parcel;I)V",parcel,0);
+    const native=nativeParcel(parcel);data.bytes=native.buf.slice(0,native.size);
+    for (const [at,object] of native.objects) {
+      if (!(object instanceof OwnedFd)) {data.objects.push([at,exportBinder(object)]);continue;}
+      if (ashmemProt(object.fd) !== undefined) throw rt.mkThrowable("android/os/BadParcelableException","Shared ashmem rights are not supported by this transport");
+      const token=yield* awaited(stageBinderFd(object.fd));
+      if (token === null || token < 0) throw rt.mkThrowable("android/os/BadParcelableException","Cannot retain descriptor right");
+      data.objects.push([at,{descriptor:token}]);
+    }
+    return data;
+  } catch (error) {yield* awaited(releaseBinderParcel(data));throw error;}
+  finally {yield vcall(parcel,"recycle","()V");}
+});
 /** a Parcelable of class `cls` read back by its CREATOR; the parcel, and the descriptors it
  *  imported, are released once read */
 export const unparcelled = driven(function* unparcelled(cls: string, data: ParcelData): Gen<JObj> {

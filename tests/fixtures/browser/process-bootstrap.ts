@@ -500,6 +500,66 @@ export async function clipboardOwnership() {
   }
 }
 
+export async function storedClipboardRights() {
+  const broker=processBroker(),pkg="test.clipboard.rights",pids=[8401,8402],path=`/data/data/${pkg}/retained.bin`;
+  const manifest={name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
+  packages.set(pkg,new PackageRecord(manifest,new Resources(null,{}),`/data/app/${pkg}/base.apk`,18000,async()=>[]));
+  vfs.mkdir("/data/data");
+  for(const pid of pids)broker.connect(pkg,pkg+":"+pid,pid);
+  broker.activities.setForeground(8402);
+  const code=`import {callProxy} from ${JSON.stringify(location.origin+"/process-port.js")};
+    let calls;self.onmessage=async({data})=>{
+      if(data.port){calls=callProxy(data.port,${JSON.stringify(brokerMethods)}).endpoint;self.postMessage({ready:true});return;}
+      try{self.postMessage({id:data.id,value:await calls[data.method](...data.args)});}
+      catch(error){self.postMessage({id:data.id,error:error.message});}
+    };`;
+  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  const reader=callProxy<BrokerCalls>(broker.brokerPort(8402),brokerMethods),waiting=new Map<number,(value:unknown)=>void>();
+  let ready!:()=>void,next=1;
+  worker.onmessage=({data})=>{if(data.ready){ready();return;}waiting.get(data.id)?.(data.error?{error:data.error}:data.value);waiting.delete(data.id);};
+  const ask=(method:string,...args:unknown[])=>new Promise<unknown>(resolve=>{const id=next++;waiting.set(id,resolve);worker.postMessage({id,method,args});});
+  const imported:number[]=[];
+  try {
+    const started=new Promise<void>(resolve=>ready=resolve),port=broker.brokerPort(8401);worker.postMessage({port},[port]);await started;
+    await ask("fileMkdir",`/data/data/${pkg}`);
+    const fd=(await ask("fileDescriptor",{kind:"open",path,flags:0x42}) as {result:number}).result;
+    if(fd<0)throw new Error("Stored clipboard open failed: "+fd);
+    await ask("fileDescriptor",{kind:"write",fd,bytes:Uint8Array.of(1,2,3,4)});
+    await ask("fileDescriptor",{kind:"seek",fd,offset:0,whence:0});
+    const deniedStage=(await ask("fileDescriptor",{kind:"stage",fd}) as {result:number}).result;
+    const denied=await ask("pendingCreate",pkg,"broadcast",0,0,{bytes:new Uint8Array(24),objects:[[0,{descriptor:deniedStage}]]}) as {error?:string};
+    const retired=(await ask("fileDescriptor",{kind:"stat",fd:deniedStage}) as {result:number}).result < 0;
+    const staged=(await ask("fileDescriptor",{kind:"stage",fd}) as {result:number}).result;
+    const published=await ask("clipboardSet",{bytes:new Uint8Array(24),objects:[[0,{descriptor:staged}]]}) as {error?:string}|undefined;
+    if(published?.error)throw new Error(published.error);
+    const candidate=(await ask("fileDescriptor",{kind:"stage",fd}) as {result:number}).result;
+    const failure=await ask("clipboardSet",{bytes:new Uint8Array(48),objects:[[0,{descriptor:candidate}],[24,{descriptor:-1}]]}) as {error?:string};
+    const replacementRejected=failure.error==="Invalid retained Parcel descriptor" &&
+      (await ask("fileDescriptor",{kind:"stat",fd:candidate}) as {result:number}).result < 0;
+    const has=await reader.endpoint.clipboardHas(),reads:number[]=[];
+    for(let i=0;i<2;i++) {
+      const data=await reader.endpoint.clipboardGet(),right=data!.objects[0][1];
+      if(!right || !("descriptor" in right))throw new Error("Missing retained clipboard right");
+      imported.push(right.descriptor);await reader.endpoint.fileDescriptor({kind:"take",fd:right.descriptor});
+      reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1})).bytes![0]);
+    }
+    worker.terminate();broker.fail(8401,"stored rights sender ended",NOT_CRASHED);
+    const data=await reader.endpoint.clipboardGet(),right=data!.objects[0][1];
+    if(!right || !("descriptor" in right))throw new Error("Retained clipboard lost on sender death");
+    imported.push(right.descriptor);await reader.endpoint.fileDescriptor({kind:"take",fd:right.descriptor});
+    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1})).bytes![0]);
+    await reader.endpoint.clipboardSet(null);
+    reads.push((await reader.endpoint.fileDescriptor({kind:"read",fd:imported[0],length:1})).bytes![0]);
+    await reader.endpoint.fileDescriptor({kind:"pwrite",fd:imported[0],offset:0,bytes:Uint8Array.of(9)});
+    return {has,cleared:!(await reader.endpoint.clipboardHas()),reads,backing:[...vfs.read(path)!],replacementRejected,pendingRejected:denied.error==="File descriptors passed in Intent" && retired};
+  } finally {
+    for(const fd of imported)await reader.endpoint.fileDescriptor({kind:"close",fd});
+    reader.close();worker.terminate();URL.revokeObjectURL(url);
+    for(const pid of pids)broker.fail(pid,"stored clipboard fixture cleanup",NOT_CRASHED);
+    vfs.delete(path);packages.delete(pkg);
+  }
+}
+
 export async function foregroundConnectionOwnership() {
   const broker = processBroker(), pkg = "test.foreground.connect", pid = 1000;
   const unregistered = !broker.alive(pid), previous = broker.activities.foreground;

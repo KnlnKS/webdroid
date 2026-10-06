@@ -1,7 +1,8 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mkPfd, pfdBackingBytes, fdContents } from "../src/android/os";
-import { parcelled, unparcelled, exportBinderParcel, importParcel } from "../src/android/binder";
+import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel } from "../src/android/binder";
+import { StoredParcel } from "../src/shell/stored-parcel";
 import { nativeParcel } from "../src/android/parcel";
 import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -53,6 +54,45 @@ describe("android-pfd", () => {
 
 describe("file-descriptor", () => {
   const FD = "()Ljava/io/FileDescriptor;";
+
+  test("retained Java Parcel rights replay shared offsets after sender death and survive store replacement",async()=>{
+    const path="/data/data/test/fd/retained.bin",kernel=new FileDescriptors();
+    vfs.write(path,Uint8Array.of(1,2,3,4));
+    const channels=[new MessageChannel(),new MessageChannel()];
+    const stops=channels.map((channel,i)=>serveCalls(channel.port1,kernel.session(1001+i,()=>0)));
+    const proxies=channels.map(channel=>callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]));
+    const previous={...descriptorTransport};let stored:StoredParcel|null=null;
+    const recipients:JObj[]=[];
+    try {
+      descriptorTransport.calls=()=>proxies[0].endpoint;
+      const fd=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",path,2,0);
+      const pfd=await newObj("android/os/ParcelFileDescriptor","(Ljava/io/FileDescriptor;)V",fd);
+      try {stored=await StoredParcel.retain(kernel,1001,await parcelledWithRights(pfd));}
+      finally {await vcall(pfd,"close","()V");}
+      kernel.close(1001);descriptorTransport.calls=()=>proxies[1].endpoint;
+      for(let i=0;i<2;i++) {
+        const replay=await stored.replay(1002);
+        const restored=await unparcelled("android/os/ParcelFileDescriptor",structuredClone(replay));
+        recipients.push(restored);
+        const received=await vcall(restored,"getFileDescriptor",FD),byte=new Int8Array(1);
+        expect(await scall("android/system/Os","read","(Ljava/io/FileDescriptor;[BII)I",received,byte,0,1)).toBe(1);
+        expect([...byte]).toEqual([i+1]);
+      }
+      const closing=stored.close();expect(stored.close()).toBe(closing);await closing;
+      await expect(stored.replay(1002)).rejects.toThrow("released");
+      const received=await vcall(recipients[0],"getFileDescriptor",FD),byte=new Int8Array(1);
+      expect(await scall("android/system/Os","read","(Ljava/io/FileDescriptor;[BII)I",received,byte,0,1)).toBe(1);
+      expect([...byte]).toEqual([3]);
+      await scall("android/system/Os","pwrite","(Ljava/io/FileDescriptor;[BIIJ)I",received,Int8Array.of(9),0,1,0n);
+      expect([...vfs.read(path)!]).toEqual([9,2,3,4]);
+      const rejected=await proxies[1].endpoint.fileDescriptor({kind:"stage",fd:-1});
+      await expect(StoredParcel.retain(kernel,1002,{bytes:new Uint8Array(),objects:[[0,{descriptor:rejected.result}]]})).rejects.toThrow("Invalid retained");
+    } finally {
+      for(const pfd of recipients)await vcall(pfd,"close","()V");await stored?.close();
+      descriptorTransport.calls=previous.calls;Object.assign(descriptorTransport,previous);proxies.forEach(proxy=>proxy.close());stops.forEach(stop=>stop());
+      kernel.close(1001);kernel.close(1002);vfs.delete(path);
+    }
+  });
 
   test("canonical descriptors share live bytes and offsets across ports and retain a recipient after owner death", async () => {
     const path = "/data/data/test/fd/port.bin", owner = new FileDescriptors();

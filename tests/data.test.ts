@@ -240,7 +240,7 @@ test("ClipboardService awaits canonical writes and reads null from an asynchrono
     clipboardGet: async () => clip, clipboardListen: async () => {},
   });
   const client = callProxy<Calls>(port2, ["clipboardSet", "clipboardGet", "clipboardListen"]);
-  Object.assign(clipboardTransport, {set:client.endpoint.clipboardSet,get:client.endpoint.clipboardGet,listen:client.endpoint.clipboardListen});
+  Object.assign(clipboardTransport, {set:client.endpoint.clipboardSet,get:client.endpoint.clipboardGet,has:undefined,listen:client.endpoint.clipboardListen});
   try {
     const service = rt.make("webdroid/ClipboardService"), P = "Ljava/lang/String;Ljava/lang/String;II", caller = ["org.webdroid.test.clipboard",null,0,0];
     expect(await vcall(service, "hasPrimaryClip", `(${P})Z`, ...caller)).toBe(0);

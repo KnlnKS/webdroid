@@ -20,6 +20,7 @@ export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNu
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
 type Session = { dead: boolean; descriptors: Map<number, Descriptor>; authorize(path: string, write: boolean): number; uid?: number };
+export type RetainedDescriptor = { readonly fd:number; readonly file:OpenFile; closed:boolean; closing?:Promise<void> };
 
 /** The page's kernel owns open files; process tokens never expose its descriptor numbers.
  * Duplication retains that open file (including position/status flags), rather than reopening
@@ -28,6 +29,32 @@ export class FileDescriptors {
   private next = 1;
   private sessions = new Map<number, Session>();
   private queues = new WeakMap<OpenFile, Promise<void>>();
+
+  /** A stored Parcel owns this reference independently of the originating PID. */
+  async retain(pid:number,token:number): Promise<RetainedDescriptor | null> {
+    const session=this.sessions.get(pid),descriptor=session?.descriptors.get(token);
+    if (!session || session.dead || !descriptor?.staged) return null;
+    session.descriptors.delete(token);
+    return this.ordered(descriptor.file,()=>{
+      if (session.dead) {javaCloseFd(descriptor.fd);return null;}
+      return {fd:descriptor.fd,file:descriptor.file,closed:false};
+    });
+  }
+  async replay(right:RetainedDescriptor,pid:number): Promise<number> {
+    const target=this.sessions.get(pid);
+    if (!target || target.dead || right.closed) return -E.BADF;
+    return this.ordered(right.file,()=>{
+      if (right.closed || target.dead) return -E.BADF;
+      const token=this.put(target,javaFcntlFd(right.fd,0x406,0));
+      if (token >= 0) target.descriptors.get(token)!.incoming=true;
+      return token;
+    });
+  }
+  release(right:RetainedDescriptor): Promise<void> {
+    if (right.closing) return right.closing;
+    right.closed=true;
+    return right.closing=this.ordered(right.file,()=>{javaCloseFd(right.fd);});
+  }
 
   session(pid: number, authorize: Session["authorize"], uid?: number): DescriptorCalls {
     let session = this.sessions.get(pid);
