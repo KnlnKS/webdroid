@@ -210,7 +210,7 @@ export class Program {
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
   addClass(jc: JClass): void {
     if (this.base?.has(jc.name)) this.shadowing = true;
-    jc.methods.forEach((m, i) => { m.index = i; });
+    jc.methods.forEach((m, i) => { m.index = i; jc.byKey.set(m.key, m); });
     this.classes.set(jc.name, jc);
     this.ancestorMemo.clear(); this.implMemo.clear();
   }
