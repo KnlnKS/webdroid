@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { UnitCompiler } from "../../src/wasm/link/unit";
+import { heapUsed } from "../../src/wasm/host/stats";
+import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
 import { loadDexes, world } from "./lib";
 import { DEOPT_ABI, type AotIndex } from "../../src/wasm/link/aot";
@@ -21,6 +23,8 @@ writeFileSync(join(out, "Osr.java"), `public class Osr {
   public static int nested(int n){effects++; synchronized(lock){int x=0; for(int i=0;i<n;i++)for(int j=0;j<3;j++){x++; if(i==n/2 && j==0)invalidate();} return x;}}
   public static long raw(long j,float f,double d,Object r){effects++; invalidate(); return j ^ Float.floatToRawIntBits(f) ^ Double.doubleToRawLongBits(d) ^ (r==null?0:9);}
   public static int wide(${Array.from({length:65},(_,i)=>`int a${i}`).join(',')}){effects++;invalidate();if(a0<0)return 0;return ${Array.from({length:65},(_,i)=>`a${i}`).join('+')};}
+  static char[] stringChars(){invalidate();return new char[]{'a','b'};}
+  public static int stringAliases(){String s=new String(stringChars());return s.length();}
   public static int captureFail(){synchronized(lock){effects++;try{invalidate();if(effects()<0)return 3;return 7;}catch(IllegalStateException e){return 11;}}}
   public static int state(int n,boolean fail){synchronized(lock){effects++; int x=0; for(int i=0;i<n;i++)x+=i; try{return await(x,fail)+7;}catch(IllegalArgumentException e){return x+9;}}}
 }`);
@@ -129,9 +133,10 @@ if(process.argv.includes("--aot")) {
   const files=[...PLATFORM_JARS.map(j=>join(AOSP,j)),join(out,"classes.dex")];
   check("cold runtime rejects previous capture ABI",!!world(files,{cold:true,aot:{get:(file:string)=>file==="index.json"?new TextEncoder().encode(JSON.stringify({...index,deopt:DEOPT_ABI-1})):store.get(file)}}).aot,false);
   for(const cold of [false,true]) for(const fail of [0,1]) {
-    let nativeCalls=0, rootTransfers=0, stateTransfers=0, makes=0, guards=0;
-    const page=world(files,{cold,holdUpgrades:()=>true,aot:store,natives:new Natives({
-      find:(cls,key)=>cls!=="Osr"?undefined:key==="invalidate()V"?()=>page.invalidate(page.slotOf(page.prog.resolve("Osr","nested","(I)I")!)):key==="await(IZ)I"?async(value:number,fail:number)=>{
+    let nativeCalls=0, rootTransfers=0, stateTransfers=0, makes=0, guards=0, heapReads=0, beforeWideHeap=0, wideBudgetChecked=false;
+    const page=world(files,{cold,heapUsed:()=>{heapReads++;return heapUsed();},holdUpgrades:()=>true,aot:store,natives:new Natives({
+      ...nativeSource,
+      find:(cls,key,isStatic,hasBody)=>cls!=="Osr"?nativeSource.find(cls,key,isStatic,hasBody):key==="invalidate()V"?()=>page.invalidate(page.slotOf(page.prog.resolve("Osr","nested","(I)I")!)):key==="await(IZ)I"?async(value:number,fail:number)=>{
         page.invalidate(page.slotOf(page.prog.resolve("Osr","state","(IZ)I")!));
         await Promise.resolve();if(fail)throw page.exception(page.makeThrowable("java/lang/IllegalArgumentException","AOT native throw"));return value+1;
       }:key==="late(LOsr$I;)LOsr$I;"?Object.assign(async()=>{
@@ -144,9 +149,16 @@ if(process.argv.includes("--aot")) {
     const make=page.deoptImports.make, blocked=page.deoptImports.blocked;
     page.deoptImports.make=(slot,depth)=>{makes++;if(!cold)throw new Error("disabled AOT called activation import");return make(slot,depth);};
     page.deoptImports.blocked=state=>{guards++;if(!cold)throw new Error("disabled AOT ran a guard");return blocked(state);};
+    const beginCapture=page.deoptImports.beginCapture;
+    page.deoptImports.beginCapture=(state,pc)=>{
+      beginCapture(state,pc);
+      // Leave less than the snapshot payload in the real allocation window.
+      if(state.method?.name==="wide"){page.rtImports().alloc.value=-1000;beforeWideHeap=heapReads;}
+    };
     const capture=page.deoptImports.captureIndexed;
     let captureFaults=0, capturePc=-1, captureFrames: ReturnType<typeof page.stackTrace>=[];
     page.deoptImports.captureIndexed=(...args)=>{
+      if(args[0].method?.name==="wide")wideBudgetChecked=heapReads>beforeWideHeap;
       if(args[0].method?.name==="captureFail" && !captureFaults++){
         const limit=Error.stackTraceLimit;Error.stackTraceLimit=128;
         let t:object;
@@ -168,11 +180,15 @@ if(process.argv.includes("--aot")) {
     check(`AOT root handoff policy cold=${cold}`,rootTransfers,+cold);
     if(!cold)check("disabled AOT allocates no interpreted activations",page.stats.coldCalls,0);
     check(`AOT activation imports follow cold=${cold}`,makes>0,cold);
+    const beforeStrings=page.stats.coldDeopts;
+    check(`AOT uninitialized String defers handoff cold=${cold}`,await page.entryAsync("Osr","stringAliases","()I")(),2);
+    check(`AOT committed String can hand off cold=${cold}`,page.stats.coldDeopts>beforeStrings,cold);
     check(`AOT epoch checks follow cold=${cold}`,guards>0,cold);
     const prior=page.stats.coldDeopts, prefix=Number(page.entry("Osr","effects","()I")());
     const j=fail?-0x123456789abcdefn:0x123456789abcdefn, f=fail?0x7fc12345:-2147483648, d=fail?0x7ff8123456789abcn:-9223372036854775808n;
     check(`AOT long/FP/reference bits cold=${cold}`,await page.entryAsync("Osr","raw","(JFDLjava/lang/Object;)J")(j,f,d,fail?null:lock),BigInt.asIntN(64,j ^ BigInt(f) ^ d ^ (fail?0n:9n)));
     check(`AOT wide carrier cold=${cold}`,await page.entryAsync("Osr","wide","("+"I".repeat(65)+")I")(...Array.from({length:65},(_,i)=>i)),2080);
+    check(`AOT snapshot payload consults real heap cold=${cold}`,wideBudgetChecked,cold);
     check(`AOT vector transfers cold=${cold}`,page.stats.coldDeopts-prior,2*+cold);
     check(`AOT vector effects execute once cold=${cold}`,page.entry("Osr","effects","()I")(),prefix+2);
     const effects=Number(page.entry("Osr","effects","()I")());

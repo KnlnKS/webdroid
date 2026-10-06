@@ -73,6 +73,7 @@ export class MC {
   private executedLocal = -1;
   private deoptState = -1;
   private deoptTarget = -1;
+  private stringAliases = false;
   private capturePC = -1;
   private captureLocals = new Map<number, VT>();
   constructor(public cx: Compiler, public m: MethodInfo, private resume?: { pc: number; bits: number; reference: number }) {
@@ -216,6 +217,8 @@ export class MC {
     }
     if (this.resume || this.deopt || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
     if (this.deopt) {
+      // Resume rejects uninitialized aliases; only this activation's String operations can block later handoff.
+      this.stringAliases = this.prepared.instructions.some(ins => ins.name === "new-instance" ? descToName(this.dex.type(ins.b)) === "java/lang/String" : ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && descToName(this.dex.type(this.dex.method(ins.b).cls)) === "java/lang/String");
       this.activationLocal = c.newLocal(T.externref); this.versionLocal = c.newLocal(T.i32); this.executedLocal = c.newLocal(T.i32); this.deoptState = c.newLocal(T.externref); this.deoptTarget = c.newLocal(T.funcref);
       c.gget(this.deopt.enabled).if_();
       if (this.resume) c.raw(0x20, 0);
@@ -572,7 +575,7 @@ export class MC {
     // Cleanup also covers host exceptions; Java exceptions then reach the original handler.
     c.block(T.exnref).tryTable(null, [[3, 0, 0]]);
     c.lget(this.activationLocal).lget(this.capturePC).lget(this.executedLocal).lget(this.entryDepth).lget(this.deoptState);
-    this.cx.captureIndexedValues(c, this.captureLayout().ordered, this.deoptState);
+    this.cx.captureIndexedValues(c, this.captureLayout().ordered, this.deoptState, this.item.regs);
     c.lset(this.deoptState).lget(this.deoptState).call(d.target).lset(this.deoptTarget);
     c.lget(this.activationLocal).call(d.endCapture);
     c.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(d.sig).returnCallRef(d.sig);
@@ -590,7 +593,7 @@ export class MC {
     c.pc = ins.pc;
     c.gget(d.enabled).if_(); this.push("deoptEnabled");
     c.gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne).if_(); this.push("deoptChanged");
-    c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe");
+    if (this.stringAliases) { c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe"); }
     const values = Array.from(this.typing.before(ins.pc)).flatMap((web, register) => web < 0 ? [] : [{ register, local: this.local(web), type: this.storage(this.typing.kind[web]) }]);
     this.cx.deoptWork.sites++; this.cx.deoptWork.values += values.length;
     if (this.capturePC >= 0) {
@@ -602,10 +605,11 @@ export class MC {
       this.transferDeopt();
     } else {
       c.lget(this.activationLocal).i32(ins.pc).lget(this.executedLocal).lget(this.entryDepth);
-      this.cx.captureValues(c, values); c.lset(this.deoptState);
+      this.cx.captureValues(c, values, this.item.regs); c.lset(this.deoptState);
       c.lget(this.deoptState).call(d.target).lset(this.deoptTarget); this.transferDeopt();
     }
-    this.pop(); c.end(); this.pop(); c.end(); this.pop(); c.end();
+    if (this.stringAliases) { this.pop(); c.end(); }
+    this.pop(); c.end(); this.pop(); c.end();
   }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];

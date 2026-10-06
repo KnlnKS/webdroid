@@ -113,7 +113,7 @@ export class Compiler implements Base {
   readonly deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0, carriers: 0, carrierValues: 0, maxCarrierValues: 0 };
   private captureMaps = new Map<string, number>();
   /** Only an invalidated activation constructs these vectors; ordinary execution has no carrier. */
-  captureValues(c: Code, values: { register: number; local: number; type: VT }[]): void {
+  captureValues(c: Code, values: { register: number; local: number; type: VT }[], registers: number): void {
     const bits = values.filter(v => v.type !== T.anyref), references = values.filter(v => v.type === T.anyref);
     const map = [...bits.map(v => v.register), ...references.map(v => v.register)], key = map.join(",");
     let data = this.captureMaps.get(key);
@@ -125,7 +125,7 @@ export class Compiler implements Base {
     }
     const ordered = [...bits, ...references];
     c.i32(0).i32(map.length).arrayNewData(this.tData.i16, data).externConvertAny();
-    this.captureCarrier(c, ordered, false);
+    this.captureCarrier(c, ordered, false, registers);
   }
   captureIndexedMap(c: Code, values: { register: number; local: number }[], indices: Map<number, number>): void {
     const bytes: number[] = [];
@@ -138,39 +138,42 @@ export class Compiler implements Base {
     }
     c.i32(0).i32(bytes.length).arrayNewData(this.tData.i8, data).externConvertAny();
   }
-  captureIndexedValues(c: Code, values: { local: number; type: VT }[], map: number): void {
-    this.captureCarrier(c, values, true, map);
+  captureIndexedValues(c: Code, values: { local: number; type: VT }[], map: number, registers: number): void {
+    this.captureCarrier(c, values, true, registers, map);
   }
-  private captureCarrier(c: Code, ordered: { local: number; type: VT }[], indexed: boolean, map = -1): void {
+  private captureCarrier(c: Code, ordered: { local: number; type: VT }[], indexed: boolean, registers: number, map = -1): void {
     this.deoptWork.carriers++; this.deoptWork.carrierValues += ordered.length; this.deoptWork.maxCarrierValues = Math.max(this.deoptWork.maxCarrierValues, ordered.length);
     const bits = ordered.filter(v => v.type !== T.anyref), references = ordered.filter(v => v.type === T.anyref);
-    const allocation = (c: Code, map: number) => this.allocBytes(c, () => {
+    // The canonical snapshot also owns bits, reference and kind arrays for every DEX register.
+    const snapshotBytes = 17 * registers;
+    const allocation = (c: Code, map: number, snapshot: () => void) => this.allocBytes(c, () => {
       c.i32(48 + 8 * ordered.length).lget(map).anyConvertExtern().refCast(indexed ? this.tData.i8 : this.tData.i16).arrayLen();
       if (!indexed) c.i32(1).raw(OP.i32_shl);
-      c.raw(OP.i32_add);
+      c.raw(OP.i32_add); snapshot(); c.raw(OP.i32_add);
     });
     if (ordered.length <= 64) {
       const key = `capture:${+indexed}:${bits.length}:${references.length}`;
       const f = this.memo(key, () => {
-        const params = [T.externref, T.i32, T.i32, T.i32, T.externref, ...ordered.map(v => v.type === T.anyref ? T.anyref : T.i64)];
+        const params = [T.externref, T.i32, T.i32, T.i32, T.externref, T.i32, ...ordered.map(v => v.type === T.anyref ? T.anyref : T.i64)];
         const f = this.mb.reserveFunc(this.mb.addFuncType(params, [T.externref]), "$capture"), body = new Code(params.length);
         const depth = body.newLocal(T.i32), weights = this.emitEnter(body, depth);
-        allocation(body, 4);
+        allocation(body, 4, () => body.lget(5));
         for (let i = 0; i < 5; i++) body.lget(i, false);
-        this.captureVectors(body, ordered.map((v, i) => ({ local: i + 5, type: v.type === T.anyref ? T.anyref : T.i64 })));
+        this.captureVectors(body, ordered.map((v, i) => ({ local: i + 6, type: v.type === T.anyref ? T.anyref : T.i64 })));
         body.call(indexed ? this.deopt!.captureIndexed : this.deopt!.capture);
         this.emitLeave(body, depth, false);
         for (const at of weights) body.patch(at, 4 + params.length + body.localTypes.length);
         this.mb.setBody(f, body.finish());
         return f;
       });
+      c.i32(snapshotBytes);
       for (const v of ordered) { if (v.type === T.anyref) c.lget(v.local, false); else this.captureBits(c, v); }
       c.call(f);
     } else {
       if (map < 0) {
         map = c.newLocal(T.externref); c.ltee(map);
       }
-      allocation(c, map);
+      allocation(c, map, () => c.i32(snapshotBytes));
       this.captureVectors(c, ordered); c.call(indexed ? this.deopt!.captureIndexed : this.deopt!.capture);
     }
   }
