@@ -9,7 +9,8 @@ import { vfs } from "../src/shell/vfs";
 import { mkAssetFd } from "../src/android/resnative";
 import { E } from "../src/native/abi";
 import { Cpu, setA64 } from "../src/native/cpu";
-import { defineHost } from "../src/native/host";
+import { defineHost, lookupHost } from "../src/native/host";
+import { libcInit } from "../src/native/libc";
 import { mem, guestAt } from "../src/native/mem";
 import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath } from "../src/native/fs";
 import { kernelInit } from "../src/native/syscall";
@@ -17,6 +18,8 @@ import { BytesFile } from "../src/shell/lazyfile";
 import { scall, loadLibcore } from "./java";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors";
 import { callProxy, serveCalls } from "../src/shell/process-port";
+import { descriptorTransport, isRemoteFd } from "../src/native/process-fd";
+import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path";
 
 rt.linkNatives();
 
@@ -114,6 +117,70 @@ describe("file-descriptor", () => {
       expect((await b.fileDescriptor({kind:"read",fd:second,length:1})).bytes).toEqual(Uint8Array.of(3));
       expect((await b.fileDescriptor({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(4));
     } finally { release(); owner.close(1001); owner.close(1002); vfs.delete(path); }
+  });
+
+  test("production Java and ARM descriptor entries share the canonical owner and await rename", async () => {
+    const path="/data/data/test/fd/java-owner.tmp", renamed="/data/data/test/fd/java-owner.bin";
+    const owner=new FileDescriptors(), paths=canonicalFilePaths(() => 0), channel=new MessageChannel();
+    const stop=serveCalls(channel.port1,owner.session(1001,() => 0));
+    const proxy=callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]);
+    const previous=descriptorTransport.calls, previousPaths=filePathTransport.calls;
+    descriptorTransport.calls=() => proxy.endpoint;
+    filePathTransport.calls=() => ({...paths,filePrepare:async () => {},fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
+      fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)});
+    vfs.mkdir("/data/data/test/fd");
+    const raf=await newObj("java/io/RandomAccessFile","(Ljava/lang/String;Ljava/lang/String;)V",path,"rw");
+    const fd=await vcall(raf,"getFD",FD);
+    const duplicate=await scall("android/system/Os","dup","(Ljava/io/FileDescriptor;)Ljava/io/FileDescriptor;",fd);
+    setA64(true); kernelInit();
+    const cpu=new Cpu(mainThread,"canonical-file-owner"),buffer=mem.malloc(16),pathPointer=mem.strdup(renamed);
+    let nativeFd=-1;
+    try {
+      expect(isRemoteFd(fdInt(fd))).toBe(true);
+      await vcall(raf,"write","([BII)V",Int8Array.of(1,2,3,4),0,4);
+      const seek=defineHost("canonical-lseek",FS_SYSCALLS.lseek),write=defineHost("canonical-write",FS_SYSCALLS.write);
+      expect(await cpu.call(seek,[fdInt(duplicate),1,0])).toBe(1);
+      expect(await vcall(raf,"read","()I")).toBe(2);
+      mem.st8(buffer,9);
+      expect(await cpu.call(write,[fdInt(duplicate),buffer,1])).toBe(1);
+      expect(await vcall(raf,"getFilePointer","()J")).toBe(3n);
+      await scall("android/system/Os","rename","(Ljava/lang/String;Ljava/lang/String;)V",path,renamed);
+      expect(vfs.exists(path)).toBe(false);
+      expect([...vfs.read(renamed)!]).toEqual([1,2,9,4]);
+      await vcall(raf,"seek","(J)V",0n);
+      const bytes=new Int8Array(4);
+      await vcall(raf,"readFully","([B)V",bytes);
+      expect([...bytes]).toEqual([1,2,9,4]);
+      nativeFd=await cpu.call(defineHost("canonical-openat",FS_SYSCALLS.openat),[-100,pathPointer,2]);
+      expect(isRemoteFd(nativeFd)).toBe(true);
+      expect(await cpu.call(defineHost("canonical-read",FS_SYSCALLS.read),[nativeFd,buffer,2])).toBe(2);
+      expect([...mem.bytes(buffer,2)]).toEqual([1,2]);
+      await cpu.call(defineHost("canonical-close",FS_SYSCALLS.close),[nativeFd]);nativeFd=-1;
+      await vcall(raf,"close","()V");
+      expect(await cpu.call(seek,[fdInt(duplicate),0,1])).toBe(4);
+      await scall("android/system/Os","close","(Ljava/io/FileDescriptor;)V",duplicate);
+      setA64(false);kernelInit();libcInit();
+      const arm=new Cpu(mainThread,"canonical-arm32-file-owner"),mode=mem.strdup("r+");
+      let stream=0;
+      try {
+        stream=await arm.call(lookupHost("fopen","libc.so")!,[pathPointer,mode]);
+        expect(stream).toBeGreaterThan(0);
+        expect(await arm.call(lookupHost("fseek","libc.so")!,[stream,1,0])).toBe(0);
+        mem.st8(buffer,7);
+        expect(await arm.call(lookupHost("fwrite","libc.so")!,[buffer,1,1,stream])).toBe(1);
+        expect(await arm.call(lookupHost("ftell","libc.so")!,[stream])).toBe(2);
+        expect(await arm.call(lookupHost("fclose","libc.so")!,[stream])).toBe(0);stream=0;
+        expect([...vfs.read(renamed)!]).toEqual([1,7,9,4]);
+      } finally {
+        if(stream)await arm.call(lookupHost("fclose","libc.so")!,[stream]);
+        mem.free(mode);arm.dispose();
+      }
+    } finally {
+      await vcall(raf,"close","()V"); if(nativeFd>=0)await cpu.call(defineHost("canonical-cleanup-close",FS_SYSCALLS.close),[nativeFd]);
+      owner.close(1001);proxy.close();stop();
+      descriptorTransport.calls=previous;filePathTransport.calls=previousPaths;
+      mem.free(buffer);mem.free(pathPointer);cpu.dispose();setA64(false);vfs.delete(path);vfs.delete(renamed);
+    }
   });
 
   test("a stream over a RandomAccessFile's descriptor writes at the file's shared pointer", async () => {

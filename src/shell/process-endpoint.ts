@@ -3,6 +3,7 @@ import { webStorageTransport } from "../android/webstorage";
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
 import { remoteLocation } from "./location-access";
 import { filePathTransport } from "./file-path";
+import { descriptorTransport } from "../native/process-fd";
 import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts";
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
@@ -91,6 +92,7 @@ function connectCommandTransports(): void {
     useSettingsAccess(remoteSettings(brokerCalls));
     if (typeof window === "undefined") {
       filePathTransport.calls = brokerCalls;
+      descriptorTransport.calls = brokerCalls;
       vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
     }
     usePreferenceAccess({

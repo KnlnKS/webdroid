@@ -33,6 +33,7 @@ import { NativeWindow } from "../src/android/cursorwindow";
 import { handle, release } from "../src/android/handles";
 import { callProxy, serveCalls } from "../src/shell/process-port";
 import { filePathTransport } from "../src/shell/file-path";
+import { descriptorTransport } from "../src/native/process-fd";
 import { vfs } from "../src/shell/vfs";
 import { mediaInsert, mediaPath, mediaUpdate } from "../src/android/mediastore";
 import { mkUri } from "../src/android/net";
@@ -171,7 +172,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousPending = {...pendingTransport}, previousAlarms = {...alarmTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
-    previousPrepare = vfs.prepare, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
+    previousPrepare = vfs.prepare, previousDescriptors = descriptorTransport.calls, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -223,7 +224,7 @@ test("Worker activity commands retain local results across reentrant replies and
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending); Object.assign(alarmTransport,previousAlarms);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
-    filePathTransport.calls = previousPaths; vfs.prepare = previousPrepare;
+    filePathTransport.calls = previousPaths; descriptorTransport.calls = previousDescriptors; vfs.prepare = previousPrepare;
     usePermissionStore(new PermissionStore()); useAccountStore(new AccountStore()); usePreferenceStore(previousPrefs);
   }
 });
@@ -653,6 +654,7 @@ test("libcore directory operations await their canonical owner and observe peer 
   let release!:()=>void;
   const gate=new Promise<void>(resolve=>release=resolve);
   filePathTransport.calls=()=>({filePrepare:async()=>{},fileStat:async p=>owner.fileStat(p),fileList:async p=>owner.fileList(p),
+    fileRename:async(a,b)=>owner.fileRename(a,b),fileRemove:async p=>owner.fileRemove(p),fileCreate:async p=>owner.fileCreate(p),
     fileAccess:async(p,mode)=>owner.fileAccess(p,mode),fileMkdir:async p=>{await gate;return owner.fileMkdir(p);}});
   try {
     const file=await onMain(()=>newObj("java/io/File","(Ljava/lang/String;)V",path));

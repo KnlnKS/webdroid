@@ -148,7 +148,7 @@ function setsockopt(cpu: Cpu, fd: number, level: number, name: number, value: nu
   return accepted(cpu, s.setOption(level, name, length >= 4 ? mem.ld32(value) : mem.u8[value]));
 }
 /** sendto(2): a descriptor that is no socket takes a plain write */
-function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): number {
+function sendto(cpu: Cpu, fd: number, source: number, length: number, flags: number, destination: number, destinationLength: number): number | Promise<number> {
   const s = socketOf(fd);
   if (typeof s === "number") return destination || destinationLength ? fail(cpu, E.ISCONN) : fdWrite(cpu, fd, source, length);
   return send(cpu, s, mem.bytes(source, length), destination, destinationLength, flags);

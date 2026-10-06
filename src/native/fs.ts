@@ -9,6 +9,7 @@ import type { Cpu } from "./cpu";
 import { fail, utf8, logLine, offArg, readTs, clockTime, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
 import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
+import { remoteFilePath } from "../shell/file-path";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat, utf8 as codec } from "../jvm/abi";
@@ -18,6 +19,8 @@ import { gather, MSG_NOSIGNAL, SOCK_STREAM } from "./socket/abi";
 import { SIGPIPE } from "./signals";
 import type { Socket, Received } from "./socket/core";
 import type { Epoll } from "./poll";
+import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd,
+  processSeekFd, processSyncFd, processTruncateFd, processFcntlFd, processFdStat, processIoctlIntFd, type RemoteDescriptor } from "./process-fd";
 
 export const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 export const POLLIN = 1, POLLPRI = 2, POLLOUT = 4, POLLERR = 8, POLLHUP = 16, POLLNVAL = 32, POLLRDHUP = 0x2000;
@@ -36,6 +39,7 @@ export interface OpenFile {
   proc?: boolean;
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
   socket?: Socket;
+  remote?: RemoteDescriptor;
   /** run when the last descriptor sharing this open file closes it */
   onLastClose?: () => void;
 }
@@ -161,10 +165,10 @@ export function accessPath(cpu: Cpu | null, path: string, mode: number): number 
   const p = vfs.norm(path);
   return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || isRandomDevice(p) ? 0 : fail(cpu, E.NOENT);
 }
-export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number {
+export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number | Promise<number> {
   const path = atPath(cpu, dirfd, name);
   if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
-  return typeof path === "string" ? accessPath(cpu, path, mode) : path;
+  return typeof path === "string" ? accessProcess(cpu, path, mode) : path;
 }
 /** a name for a new entry at normalized `p`: EEXIST if taken, ENOENT without its parent directory */
 function newName(cpu: Cpu | null, p: string): number {
@@ -273,7 +277,7 @@ const regularContent = (f: Fd | undefined): VfsFile | null =>
   !f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll || f.inotify || f.socket ? null : f.content;
 export function javaFdSource(fd: number): FileSource | null {
   const f = fds.get(fd), content = regularContent(f);
-  if (!content) return null;
+  if (!content || f?.remote) return null;
   return {
     get size() { return content.len; },
     read(offset, length) {
@@ -324,13 +328,14 @@ export function javaIoctlIntFd(fd: number, request: number): number {
 }
 export function javaFdStat(fd: number): { mode: number; size: number; path: string | null } | null {
   const f = fds.get(fd);
-  if (!f) return null;
+  if (!f || f.remote) return null;
   return { mode: fdMode(f), size: f.content.len, path: f.dir ? f.path : f.content.path };
 }
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
 export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
+  if (f?.remote) return null; // Binder needs a canonical capability, not copied local bytes.
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
   if (!f) return null;
   if (!f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll && !f.socket) {
@@ -349,7 +354,50 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   } finally { mem.free(guestAt(target)); }
 }
 
-export function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
+function kernelResult(cpu: Cpu | null, value: number | Promise<number>): number | Promise<number> {
+  const done = (result: number) => result < 0 ? fail(cpu,-result) : result;
+  return value instanceof Promise ? value.then(done) : done(value);
+}
+export const fdOpenProcess = (cpu: Cpu | null, path: string, flags: number): number | Promise<number> => kernelResult(cpu,processOpenFd(path,flags));
+export const fdCloseProcess = (cpu: Cpu | null, fd: number): number | Promise<number> => kernelResult(cpu,processCloseFd(fd));
+export const fdSeekProcess = (cpu: Cpu | null, fd: number, offset: number, whence: number): number | Promise<number> => kernelResult(cpu,processSeekFd(fd,offset,whence));
+export const truncateProcess = (cpu: Cpu | null, fd: number, length: number): number | Promise<number> => kernelResult(cpu,processTruncateFd(fd,length));
+export function mkdirProcess(cpu: Cpu | null, path: string): number | Promise<number> {
+  const calls = remoteFilePath(path);
+  return calls ? kernelResult(cpu,calls.fileMkdir(vfs.norm(path))) : mkdirPath(cpu,path);
+}
+export function renameProcess(cpu: Cpu | null, from: string, to: string): number | Promise<number> {
+  const calls = remoteFilePath(from) ?? remoteFilePath(to);
+  return calls ? kernelResult(cpu,calls.fileRename(vfs.norm(from),vfs.norm(to))) : renamePath(cpu,from,to);
+}
+export function accessProcess(cpu: Cpu | null, path: string, mode: number): number | Promise<number> {
+  if (mode & ~7) return fail(cpu,E.INVAL);
+  const calls = remoteFilePath(path);
+  return calls ? kernelResult(cpu,calls.fileAccess(vfs.norm(path),mode)) : accessPath(cpu,path,mode);
+}
+export function statProcess(cpu: Cpu, path: string, buf: number): number | Promise<number> {
+  const normalized = vfs.norm(path), calls = remoteFilePath(normalized);
+  if (!calls) return statPath(cpu,normalized,buf);
+  const destination = anchor(buf);
+  return calls.fileStat(normalized).then(reply => {
+    if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
+    const stat = reply.value;
+    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized);
+    return 0;
+  });
+}
+function remoteRead(cpu: Cpu | null, fd: number, p: number, n: number, offset?: number): number | Promise<number> {
+  const target = new Uint8Array(n), destination = anchor(p);
+  const done = (result: number) => {
+    if (result < 0) return fail(cpu,-result);
+    if (result) mem.write(destination(),target.subarray(0,result));
+    return result;
+  };
+  const value = offset === undefined ? processReadFd(fd,target) : processPreadFd(fd,target,offset);
+  return value instanceof Promise ? value.then(done) : done(value);
+}
+export function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
+  if (fds.get(fd)?.remote) return kernelResult(cpu,processWriteFd(fd,mem.u8.subarray(p,p+n)));
   return writeBytes(cpu, fds.get(fd), mem.u8.subarray(p, p + n));
 }
 /** write(2) of `bytes` to an open file, which copies what it keeps */
@@ -426,6 +474,7 @@ export function contentAt(content: VfsFile, off: number, n: number): Uint8Array 
 export function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
+  if (f.remote) return remoteRead(cpu,fd,p,n);
   if (f.socket) {
     const target = new Uint8Array(n), dst = anchor(p);
     const land = (r: number) => { if (r < 0) return fail(cpu, -r); mem.write(dst(), target.subarray(0, r)); return r; };
@@ -501,6 +550,7 @@ export function fdReadFully(cpu: Cpu, fd: number, p: number, n: number): number 
 }
 /** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
+  if (fds.get(fd)?.remote) return remoteRead(cpu,fd,dst,n,off);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   return f.content.source ? readLoop(dst, n, (q, k, done) => fdReadAt(cpu, f, q, k, off + done)) : fdReadAt(cpu, f, dst, n, off);
@@ -508,7 +558,7 @@ export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: numb
 /** the file a descriptor reads and writes, which a shared mapping of it shares */
 export function fdFile(fd: number): VfsFile | null {
   const f = fds.get(fd);
-  return f?.synthetic ? null : regularContent(f);
+  return f?.synthetic || f?.remote ? null : regularContent(f);
 }
 export function fdClose(cpu: Cpu | null, fd: number): number {
   const f = fds.get(fd);
@@ -646,7 +696,15 @@ export function statPath(cpu: Cpu, path: string, buf: number): number {
   fillStat(buf, false, file.size, Date.now(), path);
   return 0;
 }
-function statFd(cpu: Cpu, fd: number, buf: number): number {
+function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
+  if (fds.get(fd)?.remote) {
+    const destination = anchor(buf);
+    return Promise.resolve(processFdStat(fd)).then(stat => {
+      if (!stat) return fail(cpu,E.BADF);
+      fillStat(destination(),false,stat.size,Date.now(),stat.path ?? fds.get(fd)?.path ?? "");
+      return 0;
+    });
+  }
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   fillStat(buf, f.dir, f.content.len, Date.now(), f.path, f.content);
@@ -671,6 +729,7 @@ function positionalError(fd: number, f: Fd | undefined, off: number, write: bool
   return off < 0 ? E.INVAL : f.dir ? E.ISDIR : 0;
 }
 export function pread(cpu: Cpu, fd: number, p: number, n: number, off: number): number | Promise<number> {
+  if (fds.get(fd)?.remote) return remoteRead(cpu,fd,p,n,off);
   const f = fds.get(fd), error = positionalError(fd, f, off, false);
   return error ? fail(cpu, error) : fdReadAt(cpu, f!, p, n, off);
 }
@@ -684,7 +743,8 @@ function pwriteBytes(cpu: Cpu | null, fd: number, bytes: Uint8Array, off: number
   f!.pos = save;
   return r;
 }
-export const pwrite = (cpu: Cpu, fd: number, p: number, n: number, off: number): number => pwriteBytes(cpu, fd, mem.u8.subarray(p, p + n), off);
+export const pwrite = (cpu: Cpu, fd: number, p: number, n: number, off: number): number | Promise<number> =>
+  fds.get(fd)?.remote ? kernelResult(cpu,processPwriteFd(fd,mem.u8.subarray(p,p+n),off)) : pwriteBytes(cpu, fd, mem.u8.subarray(p, p + n), off);
 /** ftruncate(2): only a regular file open for writing */
 export function truncateFd(cpu: Cpu | null, fd: number, n: number): number {
   const f = fds.get(fd);
@@ -766,9 +826,9 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   openat: (cpu, a) => {
     const dirfd = a.i(), path = a.str(), flags = a.i();
     const resolved = atPath(cpu, dirfd, path);
-    return typeof resolved === "string" ? fdOpen(cpu, resolved, flags) : resolved;
+    return typeof resolved === "string" ? kernelResult(cpu,processOpenFd(resolved,flags)) : resolved;
   },
-  close: (cpu, a) => fdClose(cpu, a.i()),
+  close: (cpu, a) => kernelResult(cpu,processCloseFd(a.i())),
   read: (cpu, a) => fdRead(cpu, a.i(), a.p(), a.u()),
   write: (cpu, a) => fdWrite(cpu, a.i(), a.p(), a.u()),
   readv: (cpu, a) => { const fd = a.i(); return vectored(cpu, a.p(), a.i(), (p, n, moved) => moved && readWouldWait(fd) ? 0 : fdRead(cpu, fd, p, n)); },
@@ -779,24 +839,29 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   },
   pread64: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), Number(a.l())),
   pwrite64: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), Number(a.l())),
-  lseek: (cpu, a) => (PTR === 8 ? BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())) : fdSeek(cpu, a.i(), a.i(), a.i())),
+  lseek: (cpu, a) => {
+    const wide = PTR === 8, fd = a.i(), offset = wide ? Number(a.l()) : a.i(), whence = a.i();
+    const value = kernelResult(cpu,processSeekFd(fd,offset,whence));
+    const done = (result: number) => wide ? BigInt(result) : result;
+    return value instanceof Promise ? value.then(done) : done(value);
+  },
   fstat: (cpu, a) => statFd(cpu, a.i(), a.p()),
   fstatat: (cpu, a) => {
     const fd = a.i(), name = a.str(), buf = a.p(), flags = a.i();
     if (flags & ~(0x100 | 0x1000)) return fail(cpu, E.INVAL);
     if (!name) return flags & 0x1000 ? statFd(cpu, fd, buf) : fail(cpu, E.NOENT);
     const path = atPath(cpu, fd, name);
-    return typeof path === "string" ? statPath(cpu, path, buf) : path;
+    return typeof path === "string" ? statProcess(cpu, path, buf) : path;
   },
   fchmod: () => 0, fchown: () => 0, umask: () => 0o22,
   renameat: (cpu, a) => {
     const from = atPath(cpu, a.i(), a.str());
     if (typeof from !== "string") return from;
     const to = atPath(cpu, a.i(), a.str());
-    return typeof to !== "string" ? to : renamePath(cpu, from, to);
+    return typeof to !== "string" ? to : renameProcess(cpu, from, to);
   },
-  mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirPath(cpu, path) : path; },
-  ftruncate: (cpu, a) => truncateFd(cpu, a.i(), offArg(a)),
+  mkdirat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()); return typeof path === "string" ? mkdirProcess(cpu, path) : path; },
+  ftruncate: (cpu, a) => kernelResult(cpu,processTruncateFd(a.i(),offArg(a))),
   truncate: (cpu, a) => {
     const file = vfs.open(a.str()), n = offArg(a);
     if (!file) return fail(cpu, E.NOENT);
@@ -811,9 +876,9 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
       mem.st16(lock, 2);
       return 0;
     }
-    return fdFcntl(cpu, fd, cmd, a.i());
+    return kernelResult(cpu,processFcntlFd(fd,cmd,a.i()));
   },
-  fsync: (cpu, a) => syncFd(cpu, a.i()), fdatasync: (cpu, a) => syncFd(cpu, a.i()),
+  fsync: (cpu, a) => kernelResult(cpu,processSyncFd(a.i())), fdatasync: (cpu, a) => kernelResult(cpu,processSyncFd(a.i())),
   syncfs: (cpu, a) => fds.has(a.i()) ? 0 : fail(cpu, E.BADF),
   dup: (cpu, a) => fdDup(cpu, a.i()),
   dup3: (cpu, a) => {
@@ -859,6 +924,13 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   ioctl: (cpu, a) => {
     const fd = a.i(), request = a.i(), argument = a.p();
     if (request !== FIONREAD) return fail(cpu, fds.get(fd)?.socket ? E.NOTTY : E.NOSYS);
+    if (fds.get(fd)?.remote) {
+      const destination = anchor(argument);
+      return Promise.resolve(processIoctlIntFd(fd,request)).then(n => {
+        if(n < 0)return fail(cpu,-n);
+        mem.st32(destination(),n);return 0;
+      });
+    }
     const n = fionread(fd);
     if (n < 0) return fail(cpu, -n);
     mem.st32(argument, n);

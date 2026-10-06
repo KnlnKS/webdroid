@@ -80,7 +80,11 @@ export class FileDescriptors {
         case "pwrite": reply = {result:javaPwriteFd(fd,bytes!,request.offset)}; break;
         case "seek": reply = {result:javaSeekFd(fd,request.offset,request.whence)}; break;
         case "truncate": reply = {result:javaTruncateFd(fd,request.length)}; break;
-        case "sync": reply = {result:javaSyncFd(fd)}; break;
+        case "sync": {
+          const result = javaSyncFd(fd);
+          if (result === 0) await vfs.flush();
+          reply = {result}; break;
+        }
         case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat} : {result:-E.BADF}; break; }
         case "dup": reply = {result:this.put(session, request.cloexec ? javaFcntlFd(fd,0x406,0) : javaDupFd(fd))}; break;
         case "fcntl": reply = {result:request.command >= 1 && request.command <= 4 ? javaFcntlFd(fd,request.command,request.arg) : -E.INVAL}; break;

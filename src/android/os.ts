@@ -20,7 +20,8 @@ import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
-import { javaOnLastClose, javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaSyncFd, javaFcntlFd, javaIoctlIntFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
+import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd } from "../native/process-fd";
+import { javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, bufferBytes, isBuffer, resident } from "../jvm/natives/jnio";
 import { uptimeMillis, wallMillis } from "../guest-clock";
@@ -259,31 +260,31 @@ const structStatVfs = driven(function* structStatVfs(): Gen<JObj> {
 // libcore.io.Linux: the syscalls behind android.system.Os and Libcore.os, over the descriptor
 // table native code shares
 const linux: Record<string, (...args: never[]) => unknown> = {
-    "open(Ljava/lang/String;II)Ljava/io/FileDescriptor;": (path: string, flags: number) => {
+    "open(Ljava/lang/String;II)Ljava/io/FileDescriptor;": driven(function* (path: string, flags: number): Gen {
       if (path === null) rt.npe();
-      const fd = javaOpenFd(path, flags);
+      const fd = yield* awaited(processOpenFd(path, flags));
       if (fd < 0) throw errno("open", -fd);
-      return mkFd(fd);
-    },
-    [`fstat(${FD})Landroid/system/StructStat;`]: (d: JObj | null) => {
-      const st = javaFdStat(fdInt(d));
+      return yield* awaited(mkFd(fd));
+    }),
+    [`fstat(${FD})Landroid/system/StructStat;`]: driven(function* (d: JObj | null): Gen {
+      const st = yield* awaited(processFdStat(fdInt(d)));
       if (!st) throw errno("fstat", E.BADF);
-      return statOf(st.path, st.size, st.mode, st.path ? vfs.mtime(st.path) : 0);
-    },
+      return yield* awaited(statOf(st.path, st.size, st.mode, st.path ? vfs.mtime(st.path) : 0));
+    }),
     [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      readBytes("read", buffer, offset, count, (target) => javaReadFd(fdInt(d), target)),
+      readBytes("read", buffer, offset, count, (target) => processReadFd(fdInt(d), target)),
     [`preadBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      readBytes("pread", buffer, offset, count, (target) => javaPreadFd(fdInt(d), target, Number(position))),
+      readBytes("pread", buffer, offset, count, (target) => processPreadFd(fdInt(d), target, Number(position))),
     [`writeBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
-      writeBytes(buffer, offset, count, (bytes) => ioResult("write", javaWriteFd(fdInt(d), bytes))),
+      writeBytes(buffer, offset, count, (bytes) => after(processWriteFd(fdInt(d), bytes), n => ioResult("write", n))),
     [`pwriteBytes(${FD}Ljava/lang/Object;IIJ)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number, position: bigint) =>
-      writeBytes(buffer, offset, count, (bytes) => ioResult("pwrite", javaPwriteFd(fdInt(d), bytes, Number(position)))),
-    [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => sys("ftruncate", javaTruncateFd(fdInt(d), Number(length))),
-    [`fsync(${FD})V`]: (d: JObj | null) => sys("fsync", javaSyncFd(fdInt(d))),
-    [`fdatasync(${FD})V`]: (d: JObj | null) => sys("fdatasync", javaSyncFd(fdInt(d))),
-    [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => ioResult("ioctl", javaIoctlIntFd(fdInt(d), request)),
-    [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => ioResult("fcntl", javaFcntlFd(fdInt(d), cmd, arg)),
-    [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => ioResult("fcntl", javaFcntlFd(fdInt(d), cmd, 0)),
+      writeBytes(buffer, offset, count, (bytes) => after(processPwriteFd(fdInt(d), bytes, Number(position)), n => ioResult("pwrite", n))),
+    [`ftruncate(${FD}J)V`]: (d: JObj | null, length: bigint) => after(processTruncateFd(fdInt(d), Number(length)), n => sys("ftruncate", n)),
+    [`fsync(${FD})V`]: (d: JObj | null) => after(processSyncFd(fdInt(d)), n => sys("fsync", n)),
+    [`fdatasync(${FD})V`]: (d: JObj | null) => after(processSyncFd(fdInt(d)), n => sys("fdatasync", n)),
+    [`ioctlInt(${FD}I)I`]: (d: JObj | null, request: number) => after(processIoctlIntFd(fdInt(d), request), n => ioResult("ioctl", n)),
+    [`fcntlInt(${FD}II)I`]: (d: JObj | null, cmd: number, arg: number) => after(processFcntlFd(fdInt(d), cmd, arg), n => ioResult("fcntl", n)),
+    [`fcntlVoid(${FD}I)I`]: (d: JObj | null, cmd: number) => after(processFcntlFd(fdInt(d), cmd, 0), n => ioResult("fcntl", n)),
     [`android_fdsan_exchange_owner_tag(${FD}JJ)V`]: (d: JObj | null, expected: bigint, tag: bigint) =>
       fdsanExchangeOwnerTag(fdInt(d), expected, tag),
     [`android_fdsan_get_owner_tag(${FD})J`]: (d: JObj | null) => fdsanOwnerTag(fdInt(d)),
@@ -310,16 +311,21 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         return BigInt(written);
       });
     },
-    [`lseek(${FD}JI)J`]: (d: JObj | null, off: bigint, whence: number) => {
-      const r = javaSeekFd(fdInt(d), Number(off), whence);
+    [`lseek(${FD}JI)J`]: driven(function* (d: JObj | null, off: bigint, whence: number): Gen {
+      const r = yield* awaited(processSeekFd(fdInt(d), Number(off), whence));
       if (r < 0) throw errno("lseek", -r);
       return BigInt(r);
-    },
+    }),
     [`close(${FD})V`]: (d: JObj | null) => {
       if (d === null) return rt.npe();
       const fd = fdInt(d), owner = (d as unknown as Record<string, bigint | undefined>)[declaredField("java/io/FileDescriptor", "ownerId")];
       setFdInt(d, -1);
-      sys("close", fdsanClose(fd, owner ?? 0n, javaCloseFd));
+      let pending: number | Promise<number> | undefined;
+      const immediate = fdsanClose(fd, owner ?? 0n, fd => {
+        pending = processCloseFd(fd);
+        return pending instanceof Promise ? 0 : pending;
+      });
+      return after(pending ?? immediate, n => sys("close", n));
     },
     [`dup(${FD})${FD}`]: (d: JObj | null) => {
       const fd = javaDupFd(fdInt(d));
@@ -420,7 +426,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       if (path === null) rt.npe();
       return after(remoteFilePath(path)?.fileAccess(path, mode) ?? accessPath(null, path, mode), result => { sys("access", result); return 1; });
     },
-    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); sys("remove", removePath(null, path)); },
+    "remove(Ljava/lang/String;)V": (path: string) => { if (path === null) rt.npe(); return after(remoteFilePath(path)?.fileRemove(path) ?? removePath(null, path), n => sys("remove", n)); },
     // the VFS keeps no permission bits: the mode is not recorded
     "mkdir(Ljava/lang/String;I)V": (path: string) => {
       if (path === null) rt.npe();
@@ -428,7 +434,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     },
     "rename(Ljava/lang/String;Ljava/lang/String;)V": (from: string, to: string) => {
       if (from === null || to === null) rt.npe();
-      sys("rename", renamePath(null, from, to));
+      return after((remoteFilePath(from) ?? remoteFilePath(to))?.fileRename(from,to) ?? renamePath(null, from, to), n => sys("rename", n));
     },
 };
 /** a -errno result as the ErrnoException libcore's Os methods throw */
@@ -482,13 +488,13 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
     if (remote) return after(remote.fileList(p), reply => reply.value ? jarray(reply.value, "Ljava/lang/String;") : null);
     return vfs.isDir(p) ? jarray(vfs.list(p), "Ljava/lang/String;") : null;
   },
-  "createFileExclusively0(Ljava/lang/String;)Z": (path: string) => {
-    const r = createPath(null, path);
+  "createFileExclusively0(Ljava/lang/String;)Z": driven(function* (path: string): Gen {
+    const r = yield* awaited(remoteFilePath(path)?.fileCreate(path) ?? createPath(null, path));
     if (r === -E.EXIST) return 0;
     // JNU_ThrowIOExceptionWithLastError: an IOException carrying strerror
     if (r < 0) throw rt.mkThrowable("java/io/IOException", ERRSTR[-r] ?? path);
     return 1;
-  },
+  }),
   "createDirectory0(Ljava/io/File;)Z": (file: JObj) => {
     const p = pathOf(file);
     return after(remoteFilePath(p)?.fileMkdir(p) ?? mkdirPath(null, p), result => +(result === 0));
@@ -595,15 +601,15 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "getcwd()[B": () => bytesOf("/"),
   "strerror(I)[B": (e: number) => bytesOf(strerror(e)),
   "dup(I)I": (fd: number) => unixSys(javaDupFd(fd)),
-  "open0(JII)I": (path: bigint, flags: number) => unixSys(javaOpenFd(cpath(path), flags)),
-  "openat0(IJII)I": (dfd: number, path: bigint, flags: number) => unixSys(javaOpenFd(atPath(dfd, path), flags)),
-  "close(I)V": (fd: number) => { unixSys(javaCloseFd(fd)); },
+  "open0(JII)I": (path: bigint, flags: number) => after(processOpenFd(cpath(path),flags),unixSys),
+  "openat0(IJII)I": (dfd: number, path: bigint, flags: number) => after(processOpenFd(atPath(dfd,path),flags),unixSys),
+  "close(I)V": (fd: number) => after(processCloseFd(fd),n => {unixSys(n);}),
   "link0(JJ)V": () => { throw unixError(E.PERM); },
   "symlink0(JJ)V": () => { throw unixError(E.PERM); },
   "unlink0(J)V": (path: bigint) => unlinkPath(cpath(path)),
   "unlinkat0(IJI)V": (dfd: number, path: bigint, flags: number) => (flags & AT_REMOVEDIR ? rmdirPath : unlinkPath)(atPath(dfd, path)),
-  "rename0(JJ)V": (from: bigint, to: bigint) => { unixSys(renamePath(null, cpath(from), cpath(to))); },
-  "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { unixSys(renamePath(null, atPath(fromDir, from), atPath(toDir, to))); },
+  "rename0(JJ)V": (from: bigint, to: bigint) => { const a=cpath(from),b=cpath(to);return after((remoteFilePath(a)??remoteFilePath(b))?.fileRename(a,b)??renamePath(null,a,b),n => {unixSys(n);}); },
+  "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { const a=atPath(fromDir,from),b=atPath(toDir,to);return after((remoteFilePath(a)??remoteFilePath(b))?.fileRename(a,b)??renamePath(null,a,b),n => {unixSys(n);}); },
   "mkdir0(JI)V": (path: bigint) => { unixSys(mkdirPath(null, cpath(path))); },
   "rmdir0(J)V": (path: bigint) => rmdirPath(cpath(path)),
   // an existing path is never a link

@@ -10,7 +10,8 @@ import { isExternal, mapExternal, memoryAt, memorySync, unmapExternal, writeAt }
 import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
-import { javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaPreadFd, javaWriteFd, javaPwriteFd, javaTruncateFd, javaIsSocketFd, javaFcntlFd, javaSyncFd, javaFdStat, javaIoctlIntFd, fdFile, inoOf } from "../../native/fs";
+import { javaFdSource, javaIsSocketFd, fdFile, inoOf } from "../../native/fs";
+import { processCloseFd as javaCloseFd, processSeekFd as javaSeekFd, processReadFd as javaReadFd, processPreadFd as javaPreadFd, processWriteFd as javaWriteFd, processPwriteFd as javaPwriteFd, processTruncateFd as javaTruncateFd, processFcntlFd as javaFcntlFd, processSyncFd as javaSyncFd, processFdStat as javaFdStat, processIoctlIntFd as javaIoctlIntFd } from "../../native/process-fd";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
 export const pathOf = (file: JObj): string => vfs.norm(vcall(file, "getPath", "()Ljava/lang/String;"));
@@ -59,11 +60,13 @@ export function mkFd(fd: number): JObj | Promise<JObj> {
 }
 rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
 // OpenJDK tests the bits of F_GETFL's result as is, so a failure reads as appending
-rt.registerJni("java/io/FileDescriptor", "getAppend(I)Z", (fd: number) => +((javaFcntlFd(fd, 3 /* F_GETFL */, 0) & O_APPEND) !== 0));
+rt.registerJni("java/io/FileDescriptor", "getAppend(I)Z", (fd: number) => after(javaFcntlFd(fd,3,0),flags => +((flags & O_APPEND) !== 0)));
 // the bytes are already in the VFS; a sync is what asks for them to persist now
 rt.registerJni("java/io/FileDescriptor", "sync()V", function (this: JObj) {
-  if (javaSyncFd(fdInt(this)) < 0) throw rt.mkThrowable("java/io/SyncFailedException", "sync failed");
-  return vfs.flush();
+  return after(javaSyncFd(fdInt(this)), result => {
+    if (result < 0) throw rt.mkThrowable("java/io/SyncFailedException", "sync failed");
+    return vfs.flush();
+  });
 });
 /** OpenJDK's FileInputStream natives (io_util_md.c) over the stream's descriptor */
 function streamFd(stream: JObj): number {
@@ -79,28 +82,28 @@ function lastError(result: number, detail: string | null): number {
 const S_IFMT = 0o170000, S_IFCHR = 0o020000, S_IFIFO = 0o010000, S_IFSOCK = 0o140000, FIONREAD = 0x541b;
 const fisNatives: Record<string, (this: JObj, ...args: never[]) => unknown> = {
   // a character device, FIFO or socket answers FIONREAD; anything else, the distance to its end
-  "available0()I": function () {
-    const fd = streamFd(this), type = (javaFdStat(fd)?.mode ?? 0) & S_IFMT;
+  "available0()I": driven(function* (this: JObj): Gen {
+    const fd = streamFd(this), stat = yield* awaited(javaFdStat(fd)), type = (stat?.mode ?? 0) & S_IFMT;
     if (type === S_IFCHR || type === S_IFIFO || type === S_IFSOCK) {
-      const n = javaIoctlIntFd(fd, FIONREAD);
+      const n = yield* awaited(javaIoctlIntFd(fd, FIONREAD));
       if (n >= 0) return n;
     }
-    const cur = lastError(javaSeekFd(fd, 0, 1), null), end = lastError(javaSeekFd(fd, 0, 2), null);
-    lastError(javaSeekFd(fd, cur, 0), null);
+    const cur = lastError(yield* awaited(javaSeekFd(fd, 0, 1)), null), end = lastError(yield* awaited(javaSeekFd(fd, 0, 2)), null);
+    lastError(yield* awaited(javaSeekFd(fd, cur, 0)), null);
     return Math.max(0, Math.min(0x7fffffff, end - cur));
-  },
-  "length0()J": function () {
-    const st = javaFdStat(streamFd(this));
+  }),
+  "length0()J": driven(function* (this: JObj): Gen {
+    const st = yield* awaited(javaFdStat(streamFd(this)));
     if (!st) lastError(-E.BADF, "GetLength failed");
     return BigInt(st!.size);
-  },
-  "position0()J": function () { return BigInt(lastError(javaSeekFd(streamFd(this), 0, 1), "Seek failed")); },
-  "skip0(J)J": function (n: bigint) {
-    const fd = streamFd(this), cur = javaSeekFd(fd, 0, 1);
+  }),
+  "position0()J": function () { return after(javaSeekFd(streamFd(this),0,1),result => BigInt(lastError(result,"Seek failed"))); },
+  "skip0(J)J": driven(function* (this: JObj, n: bigint): Gen {
+    const fd = streamFd(this), cur = yield* awaited(javaSeekFd(fd, 0, 1));
     if (cur === -E.SPIPE) throw rt.mkThrowable("java/io/FileInputStream$UseManualSkipException", null);
     lastError(cur, "Seek error");
-    return BigInt(lastError(javaSeekFd(fd, Number(n), 1), "Seek error") - cur);
-  },
+    return BigInt(lastError(yield* awaited(javaSeekFd(fd, Number(n), 1)), "Seek error") - cur);
+  }),
 };
 rt.registerJnis("java/io/FileInputStream", fisNatives);
 
@@ -145,9 +148,9 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
   "pread0(Ljava/io/FileDescriptor;JIJ)I": (d: JObj, address: bigint, len: number, position: bigint) =>
     readInto(address, len, (t) => javaPreadFd(openFd(d), t, offset(position, len))),
   "write0(Ljava/io/FileDescriptor;JI)I": (d: JObj, address: bigint, len: number) =>
-    after(memoryAt(address, len), (bytes) => ioStatus(javaWriteFd(openFd(d), bytes), false)),
+    after(memoryAt(address, len), (bytes) => after(javaWriteFd(openFd(d),bytes),n => ioStatus(n,false))),
   "pwrite0(Ljava/io/FileDescriptor;JIJ)I": (d: JObj, address: bigint, len: number, position: bigint) =>
-    after(memoryAt(address, len), (bytes) => ioStatus(javaPwriteFd(openFd(d), bytes, offset(position, len)), false)),
+    after(memoryAt(address, len), (bytes) => after(javaPwriteFd(openFd(d),bytes,offset(position,len)),n => ioStatus(n,false))),
   // readv/writev over IOVecWrapper's iovecs: {base, len}, each as wide as Unsafe.addressSize
   "readv0(Ljava/io/FileDescriptor;JI)J": driven(function* (d: JObj, iov: bigint, count: number): Gen {
     let total = 0;
@@ -165,35 +168,33 @@ rt.registerJnis("sun/nio/ch/FileDispatcherImpl", {
     let total = 0;
     for (let i = 0; i < count; i++) {
       const [base, len] = iovec(iov, i);
-      const n = javaWriteFd(openFd(d), yield* awaited(memoryAt(base, len)));
+      const n = yield* awaited(javaWriteFd(openFd(d), yield* awaited(memoryAt(base, len))));
       if (n < 0) { if (total) break; return BigInt(ioStatus(n, false)); }
       total += n;
       if (n < len) break;
     }
     return BigInt(total);
   }),
-  "force0(Ljava/io/FileDescriptor;Z)I": (d: JObj) => {
-    lastError(javaSyncFd(openFd(d)), "Force failed");
-    return after(vfs.flush(), () => 0);
-  },
-  "truncate0(Ljava/io/FileDescriptor;J)I": (d: JObj, size: bigint) => { lastError(javaTruncateFd(openFd(d), Number(size)), "Truncation failed"); return 0; },
-  "size0(Ljava/io/FileDescriptor;)J": (d: JObj) => {
-    const st = javaFdStat(openFd(d));
+  "force0(Ljava/io/FileDescriptor;Z)I": (d: JObj) => after(javaSyncFd(openFd(d)),n => {
+    lastError(n,"Force failed"); return after(vfs.flush(),() => 0);
+  }),
+  "truncate0(Ljava/io/FileDescriptor;J)I": (d: JObj, size: bigint) => after(javaTruncateFd(openFd(d),Number(size)),n => {lastError(n,"Truncation failed");return 0;}),
+  "size0(Ljava/io/FileDescriptor;)J": (d: JObj) => after(javaFdStat(openFd(d)),st => {
     return BigInt(st ? st.size : lastError(-E.BADF, "Size failed"));
-  },
+  }),
   // one process holds every lock of a file here, which FileLockTable already arbitrates
   "lock0(Ljava/io/FileDescriptor;ZJJZ)I": (d: JObj) => { openFd(d); return 0 /* LOCKED */; },
   "release0(Ljava/io/FileDescriptor;JJ)V": (d: JObj) => { openFd(d); },
   "preClose0(Ljava/io/FileDescriptor;)V": () => {},
-  "close0(Ljava/io/FileDescriptor;)V": (d: JObj) => { const fd = fdInt(d); if (fd >= 0) lastError(javaCloseFd(fd), "Close failed"); },
-  "closeIntFD(I)V": (fd: number) => { lastError(javaCloseFd(fd), "Close failed"); },
+  "close0(Ljava/io/FileDescriptor;)V": (d: JObj) => { const fd=fdInt(d); return fd>=0 ? after(javaCloseFd(fd),n => {lastError(n,"Close failed");}) : undefined; },
+  "closeIntFD(I)V": (fd: number) => after(javaCloseFd(fd),n => {lastError(n,"Close failed");}),
 });
 const MAP_RO = 0, MAP_PV = 2;
 let channelFd: string | undefined;
 rt.registerJnis("sun/nio/ch/FileChannelImpl", {
   "initIDs()J": () => 4096n,
   "position0(Ljava/io/FileDescriptor;J)J": (d: JObj, offset: bigint) =>
-    BigInt(lastError(offset < 0n ? javaSeekFd(openFd(d), 0, 1) : javaSeekFd(openFd(d), Number(offset), 0), "Position failed")),
+    after(offset < 0n ? javaSeekFd(openFd(d),0,1) : javaSeekFd(openFd(d),Number(offset),0),n => BigInt(lastError(n,"Position failed"))),
   // sendfile is not offered: FileChannelImpl copies through buffers instead
   "transferTo0(Ljava/io/FileDescriptor;JJLjava/io/FileDescriptor;)J": () => BigInt(IOS_UNSUPPORTED),
   // An immutable file maps read-only outside guest memory, paged in as read; any other mapping is
@@ -217,11 +218,11 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
     return 0;
   },
 });
-rt.registerJni("sun/nio/ch/FileKey", "init(Ljava/io/FileDescriptor;)V", function (this: JObj, d: JObj) {
-  const st = javaFdStat(openFd(d)), o = this as unknown as Record<string, bigint>;
+rt.registerJni("sun/nio/ch/FileKey", "init(Ljava/io/FileDescriptor;)V", driven(function* (this: JObj, d: JObj): Gen {
+  const st = yield* awaited(javaFdStat(openFd(d))), o = this as unknown as Record<string, bigint>;
   o[declaredField("sun/nio/ch/FileKey", "st_dev")] = 1n;
   o[declaredField("sun/nio/ch/FileKey", "st_ino")] = BigInt(st?.path ? inoOf(st.path) : openFd(d));
-});
+}));
 rt.registerJnis("sun/nio/ch/IOUtil", {
   "fdVal(Ljava/io/FileDescriptor;)I": (d: JObj) => fdInt(d),
   "setfdVal(Ljava/io/FileDescriptor;I)V": (d: JObj, fd: number) => setFdInt(d, fd),

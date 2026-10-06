@@ -2,7 +2,7 @@
 // memory (bionic's __sFILE) so the getc/putc macros and __srget refills work; then dirent
 // streams, scandir, fts and the file calls only the libc wrappers have.
 
-import { mem, wrote } from "./mem";
+import { mem, wrote, anchor } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { utf8 as codec } from "../jvm/abi";
@@ -11,9 +11,13 @@ import { fail, utf8, logLine, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs } from "../shell/vfs";
-import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpen, fdRead, fdReadFully, fdWrite, fdClose, fdSeek, fdDup2, fdFallocate,
-  statPath, accessPath, faccessatPath, renamePath, mkdirPath, makeFifo, makePipe, truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
+import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdReadFully, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
+  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
+
+function complete<T>(value: number | Promise<number>, done: (value: number) => T | Promise<T>): T | Promise<T> {
+  return value instanceof Promise ? value.then(done) : done(value);
+}
 
 /** bionic's ARM32 __sFILE: the fields guest macros read */
 const FILE = { flags: 12, file: 14, size: 84 };
@@ -24,17 +28,18 @@ const pushback = new Map<number, number[]>();
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
 
 /** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
-function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number {
-  const t = mem.cstr(tpl);
+function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number | Promise<number> {
+  const t = mem.cstr(tpl), destination = anchor(tpl);
   if (!t.endsWith("XXXXXX")) return fail(cpu, E.INVAL);
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  for (let attempt = 0; attempt < 100; attempt++) {
-    let name = t.slice(0, -6);
-    for (let i = 0; i < 6; i++) name += chars[(Math.random() * chars.length) | 0];
-    const r = dir ? (vfs.exists(name) ? fail(cpu, E.EXIST) : mkdirPath(cpu, name)) : fdOpen(cpu, name, (flags & ~O_ACCMODE) | 2 | O_CREAT | O_EXCL);
-    if (r >= 0) { mem.write(tpl, utf8(name)); return r; }
-  }
-  return fail(cpu, E.EXIST);
+  const attempt = (count: number): number | Promise<number> => {
+    if (count === 100) return fail(cpu,E.EXIST);
+    let name = t.slice(0,-6);
+    for (let i=0;i<6;i++) name += chars[(Math.random()*chars.length)|0];
+    const pending = dir ? mkdirPath(cpu,name) : fdOpen(cpu,name,(flags & ~O_ACCMODE)|2|O_CREAT|O_EXCL);
+    return complete(pending,result => { if(result>=0){mem.write(destination(),utf8(name));return result;}return attempt(count+1); });
+  };
+  return attempt(0);
 }
 /** _PC_LINK_MAX 0 … NAME_MAX 4, PATH_MAX 5, PIPE_BUF 6 */
 const pathconfOf = (n: number) => (n === 4 ? 255 : n === 5 ? 4096 : n === 6 ? 4096 : n === 0 ? 127 : -1);
@@ -56,16 +61,14 @@ function newFile(fd: number, flags: number): number {
   return fp;
 }
 function fileFd(fp: number): number { return files.get(fp) ?? mem.ld16s(fp + FILE.file); }
-function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): number {
-  const r = fdSeek(cpu, fileFd(fp), off - (whence === 1 ? pushback.get(fp)?.length ?? 0 : 0), whence);
-  if (r < 0) return -1;
-  pushback.delete(fp);
-  mem.st16(fp + FILE.flags, mem.ld16u(fp + FILE.flags) & ~F_EOF);
-  return 0;
+function fileSeek(cpu: Cpu, fp: number, off: number, whence: number): number | Promise<number> {
+  return complete(fdSeek(cpu,fileFd(fp),off-(whence===1 ? pushback.get(fp)?.length??0 : 0),whence),result => {
+    if(result<0)return -1;
+    pushback.delete(fp);mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_EOF);return 0;
+  });
 }
-function fileTell(cpu: Cpu, fp: number): number {
-  const pos = fdSeek(cpu, fileFd(fp), 0, 1);
-  return pos < 0 ? -1 : pos - (pushback.get(fp)?.length ?? 0);
+function fileTell(cpu: Cpu, fp: number): number | Promise<number> {
+  return complete(fdSeek(cpu,fileFd(fp),0,1),position => position<0 ? -1 : position-(pushback.get(fp)?.length??0));
 }
 function setFlag(fp: number, f: number): void { mem.st16(fp + FILE.flags, mem.ld16u(fp + FILE.flags) | f); }
 function modeFlags(mode: string): { o: number; f: number } {
@@ -89,18 +92,19 @@ function fgetc(cpu: Cpu, fp: number): number | Promise<number> {
   const read = fdRead(cpu, fd, byte, 1);
   return read instanceof Promise ? read.then(done) : done(read);
 }
-function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number {
+function fwriteBytes(cpu: Cpu, fp: number, p: number, n: number): number | Promise<number> {
   const r = fdWrite(cpu, fileFd(fp), p, n);
-  if (r < 0) { setFlag(fp, F_ERR); return 0; }
-  return r;
+  const done = (written: number) => { if (written < 0) { setFlag(fp,F_ERR); return 0; } return written; };
+  return r instanceof Promise ? r.then(done) : done(r);
 }
-function fwriteStr(cpu: Cpu, fp: number, s: string): number {
+function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   const b = utf8(s);
   const tmp = mem.malloc(b.length + 1);
   mem.u8.set(b, tmp);
   const r = fwriteBytes(cpu, fp, tmp, b.length);
   mem.free(tmp);
-  return r < b.length ? -1 : b.length;
+  const done = (written: number) => written < b.length ? -1 : b.length;
+  return r instanceof Promise ? r.then(done) : done(r);
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 function openDir(path: string): number {
@@ -226,10 +230,10 @@ export function stdioInit(): void {
     creat: (cpu, a) => fdOpen(cpu, a.str(), 1 | O_CREAT | O_TRUNC),
     mkstemp: (cpu, a) => fdTemp(cpu, a.p(), 0, false),
     mkostemp: (cpu, a) => fdTemp(cpu, a.p(), a.i(), false),
-    mkdtemp: (cpu, a) => { const p = a.p(); return fdTemp(cpu, p, 0, true) < 0 ? 0 : p; },
+    mkdtemp: (cpu, a) => { const p = a.p(), destination = anchor(p); return complete(fdTemp(cpu,p,0,true),n => n < 0 ? 0 : destination()); },
     pread: (cpu, a) => pread(cpu, a.i(), a.p(), a.u(), a.i()),
     pwrite: (cpu, a) => pwrite(cpu, a.i(), a.p(), a.u(), a.i()),
-    lseek64: (cpu, a) => BigInt(fdSeek(cpu, a.i(), Number(a.l()), a.i())),
+    lseek64: (cpu, a) => complete(fdSeek(cpu,a.i(),Number(a.l()),a.i()),n => BigInt(n)),
     stat: (cpu, a) => statPath(cpu, a.str(), a.p()),
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
@@ -335,13 +339,16 @@ export function stdioInit(): void {
     fopen: (cpu, a) => {
       const path = a.str(), mode = a.str();
       const { o, f } = modeFlags(mode);
-      const fd = fdOpen(cpu, path, o);
-      if (fd < 0) return 0;
-      return newFile(fd, f);
+      return complete(fdOpen(cpu,path,o),fd => fd<0 ? 0 : newFile(fd,f));
     },
     fdopen: (_c, a) => { const fd = a.i(), mode = a.str(); return openFd(fd) ? newFile(fd, modeFlags(mode).f) : 0; },
-    freopen: (cpu, a) => { const path = a.str(), mode = a.str(), fp = a.p(); const { o, f } = modeFlags(mode); pushback.delete(fp); fdClose(cpu, fileFd(fp)); const fd = fdOpen(cpu, path, o); if (fd < 0) return 0; files.set(fp, fd); mem.st16(fp + FILE.file, fd); mem.st16(fp + FILE.flags, f); return fp; },
-    tmpfile: (cpu) => { const fd = fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC); return fd < 0 ? 0 : newFile(fd, F_RW); },
+    freopen: (cpu, a) => {
+      const path=a.str(),mode=a.str(),fp=a.p(),{o,f}=modeFlags(mode);pushback.delete(fp);
+      return complete(fdClose(cpu,fileFd(fp)),()=>complete(fdOpen(cpu,path,o),fd => {
+        if(fd<0)return 0;files.set(fp,fd);mem.st16(fp+FILE.file,fd);mem.st16(fp+FILE.flags,f);return fp;
+      }));
+    },
+    tmpfile: (cpu) => { return complete(fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC), fd => fd<0 ? 0 : newFile(fd,F_RW)); },
     fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (!isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
     fflush: (cpu, a) => { const fp = a.p(); return !fp || openFd(fileFd(fp)) ? 0 : fail(cpu, E.BADF); },
     fread: (cpu, a) => {
@@ -358,11 +365,11 @@ export function stdioInit(): void {
       const r = fdReadFully(cpu, fileFd(fp), p + used, total - used);
       return r instanceof Promise ? r.then(fin) : fin(r);
     },
-    fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return Math.floor(r / sz); },
+    fwrite: (cpu, a) => { const p = a.p(), sz = a.u(), n = a.u(), fp = a.p(); const total = sz * n; if (!total) return 0; const r = fwriteBytes(cpu, fp, p, total); return r instanceof Promise ? r.then(written => Math.floor(written / sz)) : Math.floor(r / sz); },
     fseek: (cpu, a) => { const fp = a.p(), off = a.i(); return fileSeek(cpu, fp, off, a.i()); },
     ftell: (cpu, a) => fileTell(cpu, a.p()),
-    rewind: (cpu, a) => { const fp = a.p(); fileSeek(cpu, fp, 0, 0); mem.st16(fp + FILE.flags, mem.ld16u(fp + FILE.flags) & ~F_ERR); },
-    fgetpos: (cpu, a) => { const fp = a.p(), pos = a.p(), value = fileTell(cpu, fp); if (value < 0) return -1; stp(pos, value); return 0; },
+    rewind: (cpu, a) => { const fp = a.p(); return complete(fileSeek(cpu,fp,0,0),()=>{mem.st16(fp+FILE.flags,mem.ld16u(fp+FILE.flags)&~F_ERR);}); },
+    fgetpos: (cpu, a) => { const fp=a.p(),destination=anchor(a.p());return complete(fileTell(cpu,fp),value => {if(value<0)return -1;stp(destination(),value);return 0;}); },
     fsetpos: (cpu, a) => { const fp = a.p(), pos = a.p(); return fileSeek(cpu, fp, mem.ld32(pos), 0); },
     feof: (_c, a) => (mem.ld16u(a.p() + FILE.flags) & F_EOF ? 1 : 0),
     ferror: (_c, a) => (mem.ld16u(a.p() + FILE.flags) & F_ERR ? 1 : 0),
@@ -394,9 +401,9 @@ export function stdioInit(): void {
       mem.st8(buf + i, 0);
       return ARG0;
     },
-    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },
-    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; return fwriteBytes(cpu, stdoutFp, scratch, 1) === 1 ? c : -1; },
-    fputs: (cpu, a) => { const s = a.str(), fp = a.p(); return fwriteStr(cpu, fp, s) < 0 ? -1 : 0; },
+    fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; const r=fwriteBytes(cpu,fp,scratch,1);return r instanceof Promise ? r.then(n => n===1 ? c : -1) : r===1 ? c : -1; },
+    putchar: (cpu, a) => { const c = a.i() & 255; mem.u8[scratch] = c; const r=fwriteBytes(cpu,stdoutFp,scratch,1);return r instanceof Promise ? r.then(n => n===1 ? c : -1) : r===1 ? c : -1; },
+    fputs: (cpu, a) => { const s = a.str(), fp = a.p(); const r=fwriteStr(cpu,fp,s);return r instanceof Promise ? r.then(n => n<0 ? -1 : 0) : r<0 ? -1 : 0; },
     puts: (cpu, a) => fwriteStr(cpu, stdoutFp, a.str() + "\n"),
     fprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, a)); },
     vfprintf: (cpu, a) => { const fp = a.p(), f = a.str(); return fwriteStr(cpu, fp, format(f, vaList(a.p()))); },

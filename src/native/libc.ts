@@ -13,6 +13,7 @@ import { abortThread, SIGNAL_SYSCALLS } from "./signals";
 import { format, scan } from "./printf";
 import { stdioInit } from "./stdio";
 import { FS_SYSCALLS, readInto, fdFile, contentAt } from "./fs";
+import { isRemoteFd } from "./process-fd";
 import { PTHREAD_SYSCALLS, pthreadInit } from "./pthread";
 import { KLAYOUT, syscallEntry } from "./syscall";
 import { zlibInit } from "./zlib";
@@ -215,6 +216,7 @@ export function fillSysinfo(p: number): void {
 const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn => (cpu, a) => {
   const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offOf(a);
   if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return mapFailed(cpu, E.INVAL);
+  if (flags & 1 && isRemoteFd(fd)) return mapFailed(cpu,E.NOTSUP);
   const reserve = (flags & 0x20) !== 0 && prot === 0;
   // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
   // low and made executable later, as V8's is) must not land in a plane above it.
