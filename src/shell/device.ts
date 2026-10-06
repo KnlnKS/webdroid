@@ -72,7 +72,7 @@ function present(): void {
   } else presentedFrame();
 }
 function presentedFrame(): void {
-  if (!perf.presentations++) { mark("firstPresented"); startupDone(); appLaunched(); firstFrame(); }
+  if (!perf.presentations++) { mark("firstPresented"); if (tier === "js") startupDone(); appLaunched(); firstFrame(); }
   notePresent();
 }
 
@@ -115,11 +115,14 @@ let zygote: Promise<void> | null = null;
  *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed. */
 export function startZygote(): Promise<void> {
   return zygote ??= (async () => {
-    const table = fetchLinkTable();
+    // the JS tier's link table and persisted bodies; the Wasm tier links and persists its own code (wasm/host/appcode.ts)
+    const table = tier === "js" ? fetchLinkTable() : null;
     // persisted platform bodies first: zygoteInit runs platform code, as a device's runs its boot image
-    await Promise.all([loadFramework(), loadPlatformDex(), loadPlatformCode()]);
-    useLinkTable(await table, rt.linkFingerprint());
-    if (tier === "js") await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+    await Promise.all([loadFramework(), loadPlatformDex(), tier === "js" && loadPlatformCode()]);
+    if (tier === "js") {
+      useLinkTable(await table, rt.linkFingerprint());
+      await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
+    }
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await processBitness;
@@ -161,7 +164,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcher ? launcherOrientation(appNode, launcher, pkg) : -1);
-  const code = loadCode(processName ?? pkg);
+  const code = tier === "js" ? loadCode(processName ?? pkg) : undefined;
   fixProcessBitness([...Object.keys(zip), ...rt.classpathSource?.names() ?? []]);
   await Promise.all([startZygote(), restoreRoots()]);
   rt.classpath = zip;
