@@ -78,7 +78,7 @@ export class Bridge implements HostBridge {
   begin(): number { this.saved.push(-1); this.tops.push(0); return this.undo.length; }
   /** stores back what the call wrote to the arrays it reached, and releases the scratch it used */
   end(mark: number): void {
-    try { for (const u of this.undo.splice(mark).reverse()) u(); } finally {
+    try { if (this.undo.length > mark) for (const u of this.undo.splice(mark).reverse()) u(); } finally {
       const sp = this.saved.pop()!, top = this.tops.pop()!;
       if (sp >= 0 && (this.w.sp.value as number) <= top) this.w.sp.value = sp;
       if (!this.saved.length) this.live.clear();
