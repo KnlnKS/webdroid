@@ -1,7 +1,7 @@
 // The request and error values the WebView provider hands its clients, and its clients' answer to a
 // request: WebViewClient.shouldInterceptRequest.
 import { awaited, rt, JObj, type Gen } from "../jvm/runtime";
-import { vcall, callOn, type JThread } from "../jvm/natives/jentry";
+import { vcall, callOn, newObj, type JThread } from "../jvm/natives/jentry";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { mkUri } from "./net";
@@ -27,7 +27,7 @@ export function interceptRequest(client: JObj, view: JObj, thread: JThread, requ
   return Promise.resolve(callOn(thread, () => rt.drive(function* (): Gen<WebResponse | null> {
     const req = mkRequest(request.url);
     req.main = request.main; req.method = request.method;
-    req.headers = inst("java/util/HashMap");
+    req.headers = yield newObj("java/util/HashMap");
     for (const [key, value] of Object.entries(request.headers)) yield vcall(req.headers, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
     const response: JObj | null = yield vcall(client, "shouldInterceptRequest", "(Landroid/webkit/WebView;Landroid/webkit/WebResourceRequest;)Landroid/webkit/WebResourceResponse;", view, req);
     if (!response) return null;

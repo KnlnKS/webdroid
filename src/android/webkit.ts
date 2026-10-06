@@ -8,8 +8,7 @@
 // nothing, posted.
 
 import { awaited, rt, JObj, stubs, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { mangleMethod, jmethod } from "../jvm/abi";
-import { after, vcall, newObj, staticField, JThread, iof } from "../jvm/natives/jentry";
+import { after, vcall, newObj, staticField, JThread, iof, classNameOf } from "../jvm/natives/jentry";
 import { toJsArray } from "../jvm/natives/jcoll";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
@@ -269,11 +268,9 @@ export class WebViewChromium extends JObj {
       // Chromium injects the interfaces a page loads with; a later add or remove applies at the next load
       const callbacks = WebViewChromium.pageCallbacks(this.ref);
       this.pageIfaces = { ...this.ifaces };
-      const base = rt.link("android/webkit/WebViewClient").ctor.prototype; // js-tier
-      const intercept = ["Landroid/webkit/WebResourceRequest;", "Ljava/lang/String;"].some(arg => {
-        const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
-        return jmethod(this.client, method) !== jmethod(base, method);
-      });
+      // The base client returns null. Subclasses run through the Java entry, including
+      // inherited defaults; comparing JS prototype functions cannot identify Wasm overrides.
+      const intercept = classNameOf(this.client) !== "android/webkit/WebViewClient";
       this.intercepting = intercept;
       const remote = this.hold.remote = new WebBridge(weakIfaces(callbacks.ifaces),
         intercept ? callbacks.intercept : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
