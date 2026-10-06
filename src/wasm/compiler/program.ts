@@ -199,9 +199,18 @@ export class Program {
     const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
     if (same(loader.before, before) && same(loader.after, after)) return [];
     loader.before = before; loader.after = after;
-    const names: string[] = [];
-    for (const [dex, owner] of this.dexLoader) if (owner === loader) dex.resolveType = d => this.rewrite(loader, d);
-    for (const c of this.classes.values()) if (c instanceof DexClass && this.loaderOfDex(c.dex) === loader) { c.refreshTypes(d => this.rewrite(loader, d)); names.push(c.name); }
+    const depends = (view: Loader, seen = new Set<Loader>()): boolean => {
+      if (view === loader) return true;
+      if (view === this.boot || seen.has(view)) return false;
+      seen.add(view);
+      return !!view.parent && depends(view.parent, seen) || [...view.before ?? [], ...view.after ?? []].some(l => depends(l, seen));
+    };
+    const affected = new Set(this.loaders.filter(l => depends(l))), names: string[] = [];
+    for (const [dex, owner] of this.dexLoader) if (affected.has(owner)) dex.resolveType = d => this.rewrite(owner, d);
+    for (const c of this.classes.values()) if (c instanceof DexClass) {
+      const owner = this.loaderOfDex(c.dex)!;
+      if (affected.has(owner)) { c.refreshTypes(d => this.rewrite(owner, d)); names.push(c.name); }
+    }
     this.ancestorMemo.clear(); this.implMemo.clear();
     return names;
   }

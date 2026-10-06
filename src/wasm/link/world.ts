@@ -1131,10 +1131,8 @@ export class World {
       const at = key.indexOf("(");
       return this.prog.implFor(name, key.slice(0, at), key.slice(at));
     }) }));
-    const existing = [...this.classes].filter(([name]) => {
-      const cls = this.prog.get(name);
-      return cls?.dex && this.prog.loaderOfDex(cls.dex) === loader;
-    }).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
+    const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
+    const existing = [...this.classes].filter(([name]) => own.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
     const names = this.prog.libraries(loader, before, after);
     if (!names.length) return;
     this.vslotCache.clear();
@@ -1169,7 +1167,7 @@ export class World {
     for (let b = 0; b < this.blockClass.length; b++) if (changed.has(this.blockClass[b])) {
       for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
     }
-    if (loader === this.prog.root) this.aot?.unbindApp();
+    if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();
     for (const assumption of this.assumptions.values()) for (const slot of assumption.slots) this.invalidate(slot);
     this.assumptions.clear(); this.late.clear();
     this.noteLate([...this.prog.own()].map(c => c.name));
