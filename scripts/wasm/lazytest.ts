@@ -9,6 +9,7 @@ import { HEAP_LIMIT } from "../../src/wasm/link/exc";
 import { AOSP, JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
 import { Natives } from "../../src/wasm/host/natives";
+import { bundleForNode } from "./undernode";
 
 const jars = PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j));
 const here = import.meta.dir, out = mkdtempSync(join(tmpdir(), "j2w-lz-"));
@@ -111,9 +112,7 @@ for (const hot of [false, true]) {
 // ---- stack traces need V8 frame offsets: run trace.ts under node
 const node = Bun.which("node");
 if (node) {
-  const built = await Bun.build({ entrypoints: [join(here, "trace.ts")], target: "node", outdir: out });
-  const polyfill = "data:text/javascript,Uint8Array.fromBase64??=s=>new Uint8Array(Buffer.from(s,'base64'));Uint8Array.prototype.toHex??=function(){return Buffer.from(this).toString('hex')}";
-  const r = Bun.spawnSync([node, "--import", polyfill, built.outputs[0].path, join(out, "classes.dex"), ...jars]);
+  const r = Bun.spawnSync(await bundleForNode(join(here, "trace.ts"), [join(out, "classes.dex"), ...jars]));
   console.log(r.stdout.toString().trim() + r.stderr.toString().trim());
   if (r.exitCode) failed++;
 } else console.log("trace: skipped, node (V8) not found");
