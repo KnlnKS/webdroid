@@ -30,7 +30,7 @@ import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, type JavaFrame, type Thrower } from "./exc";
-import { decodeInstructions } from "../../jvm/prepared";
+import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
@@ -87,10 +87,12 @@ export interface WorldOptions {
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
 type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d?: Synth; done: boolean; stub?: Function } | { k: "ensure" };
-/** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
-const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
-/** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it); a compiler that has not run yet is assumed to need UPGRADE_FIRST_MS */
-const UPGRADE_SHARE = 0.3, UPGRADE_FIRST_MS = 1;
+/** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees (size in code units) that ran at least COPY_MIN times, and guards for at most MAX_GUARDS
+ *  implementations per virtual call. A small method without a loop asks LEAF_WAITS more budgets before it is compiled alone */
+const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2, LEAF_WAITS = 3, COPY_MIN = 64;
+/** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it), a compile being expected to need UPGRADE_MS
+ *  (a mean of measured compiles would carry the first compile's warm-up of the compiler into every later decision) */
+const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
 /** `stands`: whether the classes added since the platform build leave it true, once a precompiled module has checked */
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty); `stands` is its answer for the classes added so far, once asked */
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number>; stands?: boolean }
@@ -873,21 +875,48 @@ export class World {
   private upgrade(slot: number): void {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
+    this.requested.add(slot);
     // a compile worker takes the job when there is one: the method keeps running its first-tier code until the unit arrives, and asks again if the unit is not taken
     const reset = () => { new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] = 0; };
     if (s.pending) { reset(); return; }
+    // a small method without a loop is worth most copied into the units of the callers that run it in their loops: alone it waits a few budgets for them
+    if (this.leaf(s.m)) {
+      const waited = this.leafWaits.get(slot) ?? 0;
+      if (waited < LEAF_WAITS) { this.leafWaits.set(slot, waited + 1); reset(); return; }
+    }
     if (this.opts.compiler?.submit(this, slot)) { s.pending = true; reset(); return; }
     if (this.opts.holdUpgrades?.()) { reset(); return; }
-    // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it, and a method that asks too soon asks again after another budget
+    // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
+    // again after another budget; the next compile the share allows goes to the method that has waited longest, which became hot first
     const t0 = performance.now();
     this.hotSince ??= t0;
-    const expect = this.stats.upgrades ? this.upgradeMs / this.stats.upgrades : UPGRADE_FIRST_MS;
-    if (this.upgradeMs + expect > UPGRADE_SHARE * (t0 - this.hotSince)) { reset(); return; }
-    const cx = new Compiler(this), { installed, copies } = this.group(s.m);
+    if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) {
+      if (!this.waitingHot.includes(slot)) this.waitingHot.push(slot);
+      reset(); return;
+    }
+    let pick = slot;
+    for (let w; (w = this.waitingHot.shift()) !== undefined;) {
+      const ws = this.slotAt(w);
+      if (ws?.k === "method" && ws.done && !ws.hot && !ws.pending) { pick = w; if (w !== slot) this.waitingHot.unshift(slot); break; }
+    }
+    const m = (this.slotAt(pick) as { m: MethodInfo }).m, cx = new Compiler(this), { installed, copies } = this.group(m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
-    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, slot, t0);
+    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, t0);
     this.upgradeMs += performance.now() - t0;
+  }
+  private requested = new Set<number>();
+  /** methods refused a second-tier compile, longest waiting first */
+  private waitingHot: number[] = [];
+  private leafWaits = new Map<number, number>();
+  private leaves = new Map<MethodInfo, boolean>();
+  private leaf(m: MethodInfo): boolean {
+    let r = this.leaves.get(m);
+    if (r === undefined) {
+      const code = m.codeOff ? m.dex.code(m.codeOff) : undefined;
+      this.leaves.set(m, r = !!code && this.inlinable(m) && !decodeInstructions(code.insns).some((ins) => branchTargets(code, ins).some((t) => t <= ins.pc)));
+    }
+    return r;
   }
   /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
   upgradeJob(slot: number): UpgradeJob | undefined {
@@ -1032,8 +1061,8 @@ export class World {
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
-      // the callees that have run, busiest first: code the first tier never saw run is not worth compiling into the unit
-      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) > 0);
+      // the callees that have run often, busiest first: code the first tier saw run a few times is not worth compiling into the unit
+      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) >= COPY_MIN);
       callees.sort((a, b) => this.ran(b) - this.ran(a));
       for (const t of callees) {
         if (out.length >= MAX_GROUP) break;
@@ -1048,7 +1077,8 @@ export class World {
   private ran(t: MethodInfo): number {
     const sl = this.slotAt(this.slotOf(t)) as { done: boolean; hot?: boolean };
     if (this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
-    if (sl.hot) return HOT_BUDGET;
+    // a method that has asked for the second tier has used up a budget, whatever its count since
+    if (sl.hot || this.requested.has(this.slotOf(t))) return HOT_BUDGET;
     return sl.done ? this.count(this.slotOf(t)) : 0;
   }
   /** the methods (ids) whose first-tier code ran a loop for 64 chunks in one entry: their second tier keeps loops in chunks, so a long activation of it is not held in the engine's baseline code */
