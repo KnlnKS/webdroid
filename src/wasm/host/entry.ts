@@ -60,7 +60,7 @@ export function wasmEntry(w: World): Entry {
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
     if (sched.current().root && !sched.running) hostCurrent = curThread;
-    const s = sched.strand(threadNow(), nativeOf());
+    const thread = threadNow(), s = sched.strand(thread, nativeOf() ?? thread.native);
     let r: T;
     try { r = f(s); } catch (e) { s.end(); throw e; }
     if (r instanceof Promise) void r.then(() => s.end(), () => s.end()); else s.end();
