@@ -96,6 +96,12 @@ class DexClass implements JClass {
     const m = i < 0 ? undefined : this.dex.declaredAt(this.idx, i);
     return m && this.methodInfo(m, m.index);
   }
+  /** the method at `index` (direct methods first, then virtual), without building the others */
+  methodAt(index: number): MethodInfo | undefined {
+    if (this.members_) return this.members_.methods[index];
+    const def = this.def, m = index < def.directMethods.length ? def.directMethods[index] : def.virtualMethods[index - def.directMethods.length];
+    return m && this.methodInfo(m, index);
+  }
   private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
     const cached = this.methodInfos?.get(index);
     if (cached) return cached;
@@ -125,6 +131,8 @@ class DexClass implements JClass {
 }
 /** how many methods (and so table slots) a class has */
 export const methodCount = (c: JClass): number => (c instanceof DexClass ? c.nMethods : c.methods.length);
+/** the method a class declares at `index` (its table slot's offset), without materializing the others */
+export const methodAt = (c: JClass, index: number): MethodInfo | undefined => (c instanceof DexClass ? c.methodAt(index) : c.methods[index]);
 /** One declared method without materializing unrelated members. */
 export const declaredMethod = (c: JClass | undefined, key: string): MethodInfo | undefined => (c instanceof DexClass ? c.method(key) : c?.byKey.get(key));
 /** the class_def of a class in its dex, or -1 for a class no dex defines */

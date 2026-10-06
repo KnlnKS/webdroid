@@ -14,7 +14,7 @@ import type { ColdSnapshot } from "../cold/state";
 import { coldUnit, supportsColdBody } from "../cold/runtime";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
+import { Program, ACC, kindOf, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
@@ -330,7 +330,7 @@ export class World {
     if (b < 0) return undefined;
     const i = slot - this.blockBase[b];
     if (i === this.blockSize[b] - 1) return this.slots[slot] = { k: "ensure" };
-    const m = this.prog.get(this.blockClass[b])!.methods[i];
+    const m = methodAt(this.prog.get(this.blockClass[b])!, i)!;
     return this.slots[slot] = { k: "method", m, done: !!this.aot?.installed(b, m) };
   }
 
@@ -565,17 +565,18 @@ export class World {
     let rt = this.classes.get(name);
     if (rt) return rt;
     const aot = this.aot?.linkClass(name);
-    if (aot) { this.classes.set(name, aot); this.unreported.push(name); this.repairVtable(name); return aot; }
+    if (aot) { this.classes.set(name, aot); this.noteInit(aot); this.repairVtable(name); return aot; }
     const t0 = performance.now();
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
     if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.tail.push([name, methods.length + 1]); }
     rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} };
-    this.classes.set(name, rt); this.unreported.push(name);
+    this.classes.set(name, rt);
     if (this.aot?.building || this.opts.compileOnly) return rt;
     const bytes = this.classModule([rt]);
     this.stats.phase.classBuild += performance.now() - t0;
     rt.exports = this.instantiate(bytes, { rt: this.rtImports(), host: this.host }).exports;
+    this.noteInit(rt);
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
     if (jc?.dex && id > (this.aot?.nSeeded ?? 0) && !name.includes("@")) this.demand.classes.push(name);
     return rt;
@@ -616,7 +617,8 @@ export class World {
       const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [];
       const vtG = name[0] === "[" || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
       if (vtG >= 0) mb.export(id + ":vt", "global", vtG);
-      const initG = mb.addGlobal(T.i32, true, [0x41, 0]);
+      // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
+      const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
       mb.export(id + ":init", "global", initG);
       const statics = new Map<string, number>();
       for (const f of jc?.fields ?? []) if (f.isStatic) {
@@ -627,7 +629,7 @@ export class World {
         const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
         return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link));
       });
-      if (jc && this.needsInit(name)) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc, initG, statics, consts, fromChars, rt, sid, iw, tag)));
+      if (initialize) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc!, initG, statics, consts, fromChars, rt, sid, iw, tag)));
       else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
       if (vtG >= 0) {
         const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
@@ -943,16 +945,19 @@ export class World {
     const called = this.blockClass.filter((name, b) => { const n = this.prog.get(name)?.methods.length ?? 0; for (let i = 0; i < n; i++) if ((this.slots[this.blockBase[b] + i] as { done?: boolean } | undefined)?.done) return true; return false; });
     return { linked: [...this.classes.keys()], called };
   }
-  /** the classes linked whose finished initialization has not been reported yet */
-  private unreported: string[] = [];
+  /** the classes linked whose initialization has not finished or not been reported yet, with their init words: a class with nothing to initialize starts initialized and is not one */
+  private unreported: { rt: ClassRt; init: WebAssembly.Global }[] = [];
+  private noteInit(rt: ClassRt): void {
+    const init = rt.exports[rt.id + ":init"] as WebAssembly.Global | undefined;
+    if (init && init.value !== INIT_DONE) this.unreported.push({ rt, init });
+  }
   /** the classes whose initialization finished since the last job */
   newlyInitialized(): string[] {
     const out: string[] = [];
-    this.unreported = this.unreported.filter((name) => {
-      const rt = this.classes.get(name);
-      if (!rt) return false;
-      if ((rt.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value !== INIT_DONE) return true;
-      out.push(name);
+    this.unreported = this.unreported.filter((u) => {
+      if (this.classes.get(u.rt.name) !== u.rt) return false;
+      if (u.init.value !== INIT_DONE) return true;
+      out.push(u.rt.name);
       return false;
     });
     return out;
