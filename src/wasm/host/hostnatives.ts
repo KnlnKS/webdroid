@@ -10,6 +10,7 @@ import { BytesFile } from "../../shell/lazyfile";
 import { deref } from "../../android/handles";
 import type { NativeLooper } from "../../android/mainloop";
 import { vcall } from "../../jvm/natives/jentry";
+import { awaited, driven, type Gen } from "../../jvm/runtime";
 import type { HostFn } from "../link/hostapi";
 
 /** a read of a file held in memory: production queues every read of a file that has a source behind a Promise, so here it is a positional
@@ -25,19 +26,22 @@ function readResident(fd: number, target: Uint8Array): number | Promise<number> 
 export const extraBootEntries: string[] = [];
 
 /** Class.getPublicFieldRecursive, as ART searches: the public fields the class declares, then its interfaces', then its superclass's */
-function publicField(cls: object, name: string): object | null {
-  for (const f of vcall(cls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;") as object[]) {
-    if ((vcall(f, "getModifiers", "()I") as number) & 1 && vcall(f, "getName", "()Ljava/lang/String;") === name) return f;
+function* publicField(cls: object, name: string): Gen<object | null> {
+  const fields = yield* awaited<object[]>(vcall(cls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;"));
+  for (const f of fields) {
+    const modifiers = yield* awaited<number>(vcall(f, "getModifiers", "()I"));
+    if (modifiers & 1 && (yield* awaited<string>(vcall(f, "getName", "()Ljava/lang/String;"))) === name) return f;
   }
-  for (const i of vcall(cls, "getInterfaces", "()[Ljava/lang/Class;") as object[]) { const f = publicField(i, name); if (f) return f; }
-  const sup = vcall(cls, "getSuperclass", "()Ljava/lang/Class;") as object | null;
-  return sup && publicField(sup, name);
+  const interfaces = yield* awaited<object[]>(vcall(cls, "getInterfaces", "()[Ljava/lang/Class;"));
+  for (const i of interfaces) { const f = yield* publicField(i, name); if (f) return f; }
+  const sup = yield* awaited<object | null>(vcall(cls, "getSuperclass", "()Ljava/lang/Class;"));
+  return sup && (yield* publicField(sup, name));
 }
 
 export const hostNatives = new Map<string, HostFn>([
   // no class loader context to report to the runtime, which BaseDexClassLoader.reportClassLoaderChain takes as nothing to do
   ["dalvik/system/BaseDexClassLoader.computeClassLoaderContextsNative()[Ljava/lang/String;", () => jarray([], "Ljava/lang/String;")],
-  ["java/lang/Class.getPublicFieldRecursive(Ljava/lang/String;)Ljava/lang/reflect/Field;", function (this: object, name: string) { return publicField(this, name); }],
+  ["java/lang/Class.getPublicFieldRecursive(Ljava/lang/String;)Ljava/lang/reflect/Field;", driven(function* (this: object, name: string): Gen<object | null> { return yield* publicField(this, name); })],
   // Looper.loop waits here: the main thread's strand is suspended until a message, a callback or the timeout, which is a Suspending import
   ["android/os/MessageQueue.nativePollOnce(JI)V", async (ptr: bigint, timeout: number) => { await deref<NativeLooper>(ptr).pollOnce(timeout); }],
   // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (bridge.ts)
