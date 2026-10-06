@@ -16,7 +16,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(server.url.href);
     const result = await page.evaluate(async () => {
-      const { processProxy, serveProcess } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
+      const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
       const code = `import {processProxy, serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
         import {pageShared} from ${JSON.stringify(location.origin + "/pageshared.js")};
@@ -34,13 +34,14 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
               if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
               if(request.code===3)throw {$javaClass:'java/lang/SecurityException',msg:'denied'};
               if(request.code===4)return {handled:1,data:()=>{}};
+              if(request.code===6){function originatingHostFailure(){throw new TypeError('undefined.hasTransform');}originatingHostFailure();}
               self.postMessage('entered'); return new Promise(()=>{});
             }
           });
         };`;
       const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
       const worker = new Worker(url, { type: "module" });
-      const proxy = processProxy(endpointPorts.port1, fault => Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }));
+      const proxy = processProxy(endpointPorts.port1, fault => fault.javaClass ? Object.assign(new Error(fault.message ?? ""), { javaClass: fault.javaClass, name: fault.name }) : processError(fault));
       const empty = { bytes: new Uint8Array(0), objects: [] };
       const stopCallbacks = serveProcess(callbacks.port1, {
         activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
@@ -58,17 +59,20 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
         const copied = await call(1), callback = await call(2);
         const failure = await call(3).catch(error => ({ javaClass: error.javaClass, message: error.message }));
         const cloneError = await call(4).catch(error => error.name);
+        const hostError = await call(6).catch(error => ({ name:error.name, message:error.message,
+          origin:error.stack.includes("originatingHostFailure"), caller:error.stack.includes("processError") }));
         const entered = new Promise<void>(resolve => worker.onmessage = () => resolve());
         const pending = call(5).catch(error => error.javaClass);
         await entered;
         proxy.close();
         const death = await pending, later = await call(1).catch(error => error.javaClass);
         return { source: Array.from(source), copied: { cached: Reflect.get(copied,"cached"), handled: copied.handled, bytes: Array.from(copied.data.bytes), objects: copied.data.objects },
-          callback: Array.from(callback.data.bytes), failure, cloneError, death, later };
+          callback: Array.from(callback.data.bytes), failure, cloneError, hostError, death, later };
       } finally { proxy.close(); stopCallbacks(); worker.terminate(); URL.revokeObjectURL(url); }
     });
     expect(result).toEqual({ source: [1, 2], copied: { cached: true, handled: 12000, bytes: [99, 2], objects: [[0, { pid: 10, id: 4 }]] },
       callback: [21, 1], failure: { javaClass: "java/lang/SecurityException", message: "denied" }, cloneError: "DataCloneError",
+      hostError:{name:"TypeError",message:"undefined.hasTransform",origin:true,caller:false},
       death: "android/os/DeadObjectException", later: "android/os/DeadObjectException" });
     const foreground = await page.evaluate(async () => {
       const { foregroundConnectionOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");

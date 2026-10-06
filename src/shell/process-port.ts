@@ -6,7 +6,7 @@ type Message = { kind: "call" | "notify"; id: number; method: string; args: unkn
   | { kind: "error"; id: number; error: ProcessFailure } | { kind: "close"; error?: ProcessFailure };
 const methods = ["locationChanged", "activity", "transact", "service", "serviceConnected", "contentProvider", "broadcast", "clipboardChanged", "settingsChanged", "accountsChanged", "packageRemoved", "kill"] as const;
 
-export type ProcessFailure = { javaClass: string | null; name: string; message: string | null };
+export type ProcessFailure = { javaClass: string | null; name: string; message: string | null; stack?: string };
 
 /** Java exceptions cross as class/message data, never as objects belonging to another VM. */
 export function processFailure(error: unknown): ProcessFailure {
@@ -15,13 +15,15 @@ export function processFailure(error: unknown): ProcessFailure {
     const javaClass: unknown = info && typeof info === "object" ? Reflect.get(info, "name") : Reflect.get(error, "$javaClass");
     const name: unknown = Reflect.get(error, "name"), message: unknown =
       (typeof javaClass === "string" ? Reflect.get(error, "msg") : undefined) ?? Reflect.get(error, "message");
+    const stack = typeof javaClass === "string" ? undefined : Reflect.get(error, "stack");
     return { javaClass: typeof javaClass === "string" ? javaClass : null,
-      name: typeof name === "string" ? name : "Error", message: typeof message === "string" ? message : null };
+      name: typeof name === "string" ? name : "Error", message: typeof message === "string" ? message : null, ...(typeof stack === "string" ? { stack } : {}) };
   }
   return { javaClass: null, name: "Error", message: String(error) };
 }
 export function processError(error: ProcessFailure): Error {
   const result = new Error(error.message ?? ""); result.name = error.name;
+  if (!error.javaClass && typeof error.stack === "string") result.stack = error.stack;
   return result;
 }
 const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectException", name: "Error", message: "Process endpoint closed" };
