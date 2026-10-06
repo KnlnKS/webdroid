@@ -15,7 +15,9 @@ await jsTier([]);
 for (const workload of process.argv.slice(2)) {
   const w = world(program([dex, ...PLATFORM_JARS.map((j) => join(AOSP, j))]), { natives });
   await processStateAsync(w);
-  await w.entryAsync("Bench", `w_${workload}`, "()I")();
+  const cls = ["Bench", "G1"].find((c) => w.prog.get(c)?.byKey.has(`w_${workload}()I`));
+  if (!cls) throw new Error(`no workload ${workload}`);
+  await w.entryAsync(cls, `w_${workload}`, "()I")();
   for (const f of w.aot!.loaded) files.add(f);
 }
 writeFileSync(join(dir, "startup.json"), JSON.stringify([...files]));
