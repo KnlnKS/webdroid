@@ -50,27 +50,30 @@ export function unbridge(h: FrameHold) {
 }
 function release(h: FrameHold) { unbridge(h); h.el?.remove(); h.el = null; releaseFunctor(h.functor); }
 /** the views with a frame */
-const live = new Set<FrameView>();
+const live = new Map<FrameHold, WeakRef<FrameView>>();
 // a page's renderer ends with its app's process, closing what it held open on its origin
-onProcessExit(() => { for (const view of live) release(view.hold); live.clear(); });
+onProcessExit(() => { for (const hold of live.keys()) release(hold); live.clear(); });
 // Chromium destroys an AwContents once its WebView is garbage collected (a CleanupReference), so
 // an app that drops a WebView without destroy() does not keep its page. Page-side callbacks and the
 // bridge therefore reach a provider only weakly; detaching alone keeps the page, as apps reattach.
-const collected = new FinalizationRegistry<FrameHold>(release);
+const collected = new FinalizationRegistry<FrameHold>(hold => { live.delete(hold); release(hold); });
 /** `view`'s frame, made over the display once the shell has a layer */
 export function viewFrame(view: FrameView): WebSurface | null {
   if (view.hold.el || !layer && !surfaceFactory) return view.hold.el;
   const el = view.hold.el = surfaceFactory ? surfaceFactory() : domWebSurface(layer!);
   if (view.background) el.style({background:view.background});
   collected.register(view, view.hold, view.hold);
-  live.add(view);
+  live.set(view.hold, new WeakRef(view));
   return el;
 }
 /** `view`'s frame removed, with everything its page held */
-export function dropFrame(view: FrameView) { collected.unregister(view.hold); release(view.hold); live.delete(view); }
+export function dropFrame(view: FrameView) { collected.unregister(view.hold); release(view.hold); live.delete(view.hold); }
 /** debug: the canvas capture cannot see frame pixels, so this is how a harness proves a page loaded */
 export function webViewInfo(): { url: string | null; title: string; loaded: boolean; progress: number; rect: Rect | null }[] {
-  return [...live].map((v) => ({ url: v.url, title: v.title, loaded: v.loaded, progress: v.progress, rect: v.rect }));
+  return [...live.values()].flatMap(ref => {
+    const v = ref.deref();
+    return v ? [{ url: v.url, title: v.title, loaded: v.loaded, progress: v.progress, rect: v.rect }] : [];
+  });
 }
 
 /** `value` as the answer on `port`, its only one */

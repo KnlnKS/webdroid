@@ -87,6 +87,7 @@ function receiveSurface(port:MessagePort, layer:HTMLElement, retired:()=>void) {
         forget(data.bridge);
         const bridge = data.bridge;
         watches.set(bridge,surface.ready(bridge,event => {
+          if (closed) return;
           // Keep the Window identity here; repeated announcements replace its app-side port.
           const previous = [...frames].find(([,old])=>old.frame===event.frame);
           const id = previous?.[0] ?? crypto.randomUUID();

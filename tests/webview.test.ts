@@ -767,3 +767,38 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
     expect(result).toEqual({origins:["https://one.example","https://two.example"],foreignOrigins:[],distinct:true,local:"undefined",before:true,usage:0});
   }finally{await page.close();await server.stop(true);}
 });
+
+test("dropped WebView frame owners release their surface without destroy", async () => {
+  const build = await Bun.build({entrypoints:[new URL("../src/android/webframes.ts",import.meta.url).pathname],target:"browser",format:"esm"});
+  if (!build.success) throw new AggregateError(build.logs,"WebView lifetime build");
+  const server = Bun.serve({port:0,fetch(request) {
+    const path = new URL(request.url).pathname;
+    const output = build.outputs.find(out=>out.path.endsWith(path));
+    return output ? new Response(output,{headers:{"content-type":"text/javascript"}}) : new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
+  }});
+  const gcBrowser = await chromium.launch({headless:true,args:["--js-flags=--expose-gc"]});
+  const page = await gcBrowser.newPage();
+  try {
+    await page.goto(`http://localhost:${server.port}/`);
+    await page.evaluate(async () => {
+      const frames = await import(location.origin+"/webframes.js") as typeof import("../src/android/webframes");
+      (globalThis as any).frames = frames;
+      (globalThis as any).removed = 0;
+      frames.useWebSurfaces(()=>({style(){},load(){},ready(){return ()=>{};},open(){},replace(){},remove(){(globalThis as any).removed++;}}));
+      const view = {hold:{el:null,remote:null,frames:new Map(),functor:0,ends:[]},url:"https://dropped.example",title:"dropped",loaded:true,progress:100,rect:null,background:null};
+      frames.viewFrame(view);
+      (globalThis as any).owner = view;
+    });
+    expect(await page.evaluate(()=>(globalThis as any).frames.webViewInfo().length)).toBe(1);
+    await page.evaluate(()=>{delete (globalThis as any).owner;});
+    let released = false;
+    for (let i=0;i<20;i++) {
+      await page.evaluate(()=>(globalThis as any).gc());
+      await new Promise(resolve=>setTimeout(resolve,10));
+      released = await page.evaluate(()=>(globalThis as any).removed===1);
+      if (released) break;
+    }
+    expect(released).toBe(true);
+    expect(await page.evaluate(()=>(globalThis as any).frames.webViewInfo())).toEqual([]);
+  } finally {await gcBrowser.close();await server.stop(true);}
+});
