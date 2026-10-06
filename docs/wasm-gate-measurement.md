@@ -34,13 +34,13 @@ The only V8 flag is compilation tracing; there is no forced tiering budget or ea
 
 ## G1: matched first call and steady state
 
-Use the current guarded build's absolute directory in `WEBDROID_AOT`; do not set `G1_STARTUP=all`, supply a historical `--ref`, or change V8 budgets for acceptance. Standard startup/module misses and compile/instantiate work remain visible.
+`bun run aot` makes two builds; `vendor/wasm-aot/current.json` names the unguarded one as `key` (what a process without the cold interpreter loads) and the guarded one as `cold`. Use the absolute directory of `key` in `WEBDROID_AOT`, and that of `cold` with `--cold`; do not set `G1_STARTUP=all`, supply a historical `--ref`, or change V8 budgets for acceptance. Standard startup/module misses and compile/instantiate work remain visible. `--phases` splits the World's work into boot, the first call and the calls after it.
 
 ```sh
 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH \
 WEBDROID_AOT=/Users/kunalan/Projects/webdroid-wasm-y1/vendor/wasm-aot/KEY \
   bun run wasm g1 listAddGet listIter mapInt deque sort linkedList treeMap random casts jsonParse \
-  --engines chrome --runs 5 --reps 100 \
+  --engines chrome --runs 5 --reps 100 --phases \
   --json tests/e2e/actual/y1-recovery/idle-g1.json
 ```
 
