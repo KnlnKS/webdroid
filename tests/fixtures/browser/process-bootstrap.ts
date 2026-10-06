@@ -52,8 +52,11 @@ export async function bootstrapOwnership() {
     return new RemoteFile(source);
   };
   const first = file(await broker.bootstrap(7001, true)), other = file(await broker.bootstrap(7002, true));
+  const firstIme=broker.entry(7001).ime!,otherIme=broker.entry(7002).ime!;
   const eagerReads = reads;
   const replacement = file(await broker.bootstrap(7001, true));
+  const replacementIme=broker.entry(7001).ime!;
+  const imeReplaced=firstIme!==replacementIme && !firstIme.input.isConnected;
   const superseded = await first.read(0, 1).catch(error => error.message);
   // A failed handoff must dispose its new exports while retaining the published owner set.
   const clone = globalThis.structuredClone;
@@ -71,10 +74,12 @@ export async function bootstrapOwnership() {
   finally { globalThis.structuredClone = clone; }
   const discarded = await Promise.all(unpublished.map(file => file.read(0, 1).catch(error => error.message)));
   const retained = Array.from(await replacement.read(0, 1));
+  const imeRetained=broker.entry(7001).ime===replacementIme && replacementIme.input.isConnected;
   const pending = replacement.read(7, 1).catch(error => error.message);
   await waiting;
   broker.fail(7001, "fixture process exit", NOT_CRASHED);
   const ended = await pending;
+  const imeDeadClosed=!replacementIme.input.isConnected,imePeerSurvives=otherIme.input.isConnected;
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
   await Promise.all([...clocks,...displays]);
@@ -82,7 +87,7 @@ export async function bootstrapOwnership() {
   const clockPending = guestClockControl.pending();
   const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired, callersClosed, displaysClosed:displays.length,displayErrors };
+  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired, callersClosed, displaysClosed:displays.length,displayErrors };
 }
 
 export async function endpointOwnership() {
@@ -600,4 +605,43 @@ export async function locationOwnership() {
     client.close();deniedClient.close();peerClient.close();worker.terminate();URL.revokeObjectURL(url);broker.permissions.clear(pkg);
     if(oldGeo)Object.defineProperty(navigator,"geolocation",oldGeo);else Reflect.deleteProperty(navigator,"geolocation");
   }
+}
+
+export async function imeOwnership() {
+  const {receiveIme} = await import(location.origin+"/ime-port.js") as typeof import("../../../src/shell/ime-port");
+  const canvas = document.createElement("canvas"); document.body.append(canvas);
+  const port = new MessageChannel(), owner = receiveIme(port.port1,canvas), inputs:string[]=[];
+  let entered!:()=>void; const first = new Promise<void>(resolve=>entered=resolve);
+  const workerCode = `import {serveCalls} from ${JSON.stringify(location.origin+"/process-port.js")};
+    let generation=1, release;
+    self.onmessage=({data})=>{
+      if(data.kind==='release'){release?.();return;}
+      if(data.kind==='switch'){generation=2;self.port.postMessage({kind:'imeState',state:{generation,text:'new editor',start:10,end:10,active:true,hasAction:false}});return;}
+      if(data.kind==='hide'){self.port.postMessage({kind:'imeState',state:{generation,text:'new editor',start:10,end:10,active:false,hasAction:false}});return;}
+      self.port=data.port;
+      serveCalls(data.port,{input:async(g,text,start,end)=>{
+        if(g!==generation)return;
+        self.postMessage({input:text});
+        if(text==='a')await new Promise(resolve=>release=resolve);
+        data.port.postMessage({kind:'imeState',state:{generation,text,start,end,active:true,hasAction:false}});
+      },selection:async()=>{},finish:async()=>{},action:async()=>true});
+      data.port.postMessage({kind:'imeState',state:{generation,text:'',start:0,end:0,active:true,hasAction:false}});
+    };`;
+  const url=URL.createObjectURL(new Blob([workerCode],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+  worker.onmessage=({data})=>{if(data.input){inputs.push(data.input);if(data.input==='a')entered();}};
+  const wait = async (ready:()=>boolean) => {const until=performance.now()+2000;while(!ready()){if(performance.now()>until)throw new Error("IME core deadline");await new Promise(resolve=>setTimeout(resolve,0));}};
+  try {
+    const forwarded=structuredClone({port:port.port2},{transfer:[port.port2]});
+    worker.postMessage(forwarded,[forwarded.port]);
+    await wait(()=>!owner.input.disabled);
+    const edit=(text:string)=>{owner.input.value=text;owner.input.setSelectionRange(text.length,text.length);owner.input.dispatchEvent(new InputEvent("input",{isComposing:false}));};
+    edit("a");await first;edit("ab");edit("abc");worker.postMessage({kind:"release"});
+    await wait(()=>inputs.length===2&&owner.input.value==="abc");
+    worker.postMessage({kind:"switch"});await wait(()=>owner.input.value==="new editor");
+    const switched=owner.input.value;
+    worker.postMessage({kind:"hide"});await wait(()=>owner.input.disabled);
+    const inactive=owner.input.disabled;
+    owner.close();edit("closed");await new Promise(resolve=>setTimeout(resolve,0));
+    return {inputs,switched,inactive,closed:!owner.input.isConnected};
+  }finally{owner.close();worker.terminate();URL.revokeObjectURL(url);canvas.remove();}
 }

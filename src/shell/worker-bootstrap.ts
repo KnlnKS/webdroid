@@ -5,7 +5,7 @@ import type { BrokerCalls } from "./processes";
 /** Time is attached before loading natives, process identity or any other JVM module. */
 export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<BrokerCalls> {
   let attachedClock = false;
-  let closeDisplay = () => {};
+  let closeDisplay = () => {}, closeIme = () => {};
   try {
     if (!data.clock || !data.broker) throw new Error("Worker bootstrap is missing clock or command capabilities");
     attachGuestClockPort(data.clock);
@@ -22,12 +22,13 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
       const display = sendFrames(data.display);closeDisplay = display.close;
       setScreenSink(bitmap => display.present(bitmap));
     }
+    if (data.ime) closeIme = await (await import("./ime-port")).serveIme(data.ime);
     const { onProcessExit } = await import("../process-exit");
     // AppExitInfoTracker publishes the real record first, then these received owners close.
-    onProcessExit(() => { closeDisplay(); guestClockControl.dispose(); closeProcessBrokerPort(); closeProcessBootstrap(data); });
+    onProcessExit(() => { closeIme(); closeDisplay(); guestClockControl.dispose(); closeProcessBrokerPort(); closeProcessBootstrap(data); });
     return broker;
   } catch (error) {
-    closeDisplay();
+    closeIme(); closeDisplay();
     if (attachedClock) guestClockControl.dispose();
     closeProcessBootstrap(data);
     throw error;

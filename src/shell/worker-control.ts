@@ -7,9 +7,12 @@ import { processExited } from "../process-exit";
 import { dispatchPointer, pressBack, SCREEN_W, SCREEN_H } from "./device";
 import { yieldStats, timedParks } from "../jvm/yield";
 import { webViewInfo } from "../android/webframes";
-import { pendingTransitions } from "../android/server/atm";
 import { mainDbg, onMain } from "../android/mainloop";
-import { recordVsync, vsyncScheduled } from "../android/vsync";
+import { recordVsync } from "../android/vsync";
+import { swipe } from "./gesture";
+import { imeInput, imeAction, imeState } from "../android/ime";
+import { vsyncScheduled } from "../android/vsync";
+import { pendingTransitions } from "../android/server/atm";
 import { perf } from "../perf";
 import { processPresentation } from "./process-endpoint";
 import { nativeRequirements } from "./diagnostics";
@@ -30,6 +33,10 @@ export function workerControl(logs: string[], phase: () => string) {
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
     uiTree: local.uiTree,
     tap: local.tap,
+    swipe,
+    type: async (text: string) => { await imeInput(text, text.length, text.length, false, imeState().generation); },
+    enter: async () => imeAction(imeState().generation),
+    imeState: async () => imeState(),
     pointer: async (action: number, x: number, y: number) => { await dispatchPointer(action, x, y); },
     back: async () => { await pressBack(); },
     frame: async (time: number) => { if (processPresentation.visible && !processExited() && recordVsync(time)) ticks++; },

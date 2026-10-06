@@ -13,7 +13,7 @@ import { newObj, vcall, scall, strictThreadOwnership } from "./jvm/natives/jentr
 import { threadStates } from "./jvm/natives/jthread";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
-import { bootApk, firstPresented, startZygote, redraw, dispatchPointer, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, firstPresented, startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -38,7 +38,7 @@ import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { processBroker } from "./shell/processes";
 import { connectProcess, registerForegroundProcess, processPresentation } from "./shell/process-endpoint";
-import { guestNow, guestSleep, uptimeMillis } from "./guest-clock";
+import { swipe } from "./shell/gesture";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot";
@@ -210,10 +210,10 @@ const wd = {
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),
-  foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
-  visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
+  foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
+  visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
@@ -246,19 +246,9 @@ const wd = {
     return `tapped ${s} @ ${hit.x},${hit.y}`;
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
-    // one move per display frame, as a finger on a panel of this rate reports them
-    const steps = Math.max(2, Math.round(ms * device.refreshRate / 1000));
-    const t0 = guestNow();
-    const eventStart = uptimeMillis();
-    void dispatchPointer(0, x1, y1, eventStart);
-    for (let i = 1; i <= steps; i++) {
-      const at = t0 + ms * i / steps, t = i / steps;
-      await guestSleep(Math.max(0, at - guestNow()));
-      // Samples keep the finger's time when host work delays their delivery; catch-up
-      // timers must not turn a constant-speed drag into an accelerating fling.
-      void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, eventStart + ms * t);
-    }
-    await dispatchPointer(1, x2, y2, eventStart + ms);
+    const worker = processBroker().foregroundWorker();
+    if (worker) await worker.control.swipe(x1, y1, x2, y2, ms);
+    else await swipe(x1, y1, x2, y2, ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
@@ -284,12 +274,13 @@ const wd = {
   clearData: async (pkg: string) => (await onMain(() => clearUserData(pkg, false, false, null))).done,
   uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
   type: async (s: string) => {
-    kbd.value = s;
-    await imeInput(s);
+    const worker = processBroker().foregroundWorker();
+    if (worker) await worker.control.type(s);
+    else { kbd.value = s; await imeInput(s); }
     return "typed " + s;
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
-  enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
+  enter: async () => "action " + ((await (processBroker().foregroundWorker()?.control.enter() ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
   threads: threadStates,
   redraw,

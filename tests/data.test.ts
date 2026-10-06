@@ -665,3 +665,56 @@ test("libcore directory operations await their canonical owner and observe peer 
     expect(await onMain(()=>vcall(parent,"list","()[Ljava/lang/String;"))).toEqual(["created"]);
   }finally{release();filePathTransport.calls=previous;vfs.rmdir(path);vfs.rmdir(root);}
 });
+
+test("queued IME edits retain their editor generation through the Java main queue", async () => {
+  const { serveInput, showInput, imeInput, imeState, imeTransport } = await import("../src/android/ime");
+  const { onMain } = await import("../src/android/mainloop");
+  const first = await newObj("android/view/inputmethod/BaseInputConnection", "(Landroid/view/inputmethod/InputMethodManager;Z)V", null, 1);
+  const second = await newObj("android/view/inputmethod/BaseInputConnection", "(Landroid/view/inputmethod/InputMethodManager;Z)V", null, 1);
+  const session = (connection: JObj) => ({text:"",offset:0,start:0,end:0,compStart:-1,compEnd:-1,imeOptions:1,actionId:0,
+    call:(name:string,args:string,...values:unknown[]) => vcall(connection,name,`(${args})Z`,...values)});
+  const previous = imeTransport.changed, states: ReturnType<typeof imeState>[] = [];
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  let blocker: Promise<void> | undefined;
+  try {
+    imeTransport.changed = state => states.push(state);
+    serveInput(session(first)); showInput(true);
+    const generation = imeState().generation;
+    blocker = onMain(() => {entered.resolve();return release.promise;});
+    await entered.promise;
+    const edit = imeInput("stale",5,5,false,generation);
+    serveInput(session(second));
+    release.resolve(); await blocker; await edit;
+    const text = async (connection:JObj) => vcall(await vcall(connection,"getEditable","()Landroid/text/Editable;"),"toString","()Ljava/lang/String;");
+    expect(await text(first)).toBe(""); expect(await text(second)).toBe("");
+    await imeInput("owned",5,5,false,imeState().generation);
+    expect(await text(second)).toBe("owned"); expect(imeState().text).toBe("owned");
+    expect(states.at(-1)?.generation).not.toBe(generation);
+    expect(states.at(-1)?.text).toBe("owned");
+  } finally { release.resolve(); await blocker; serveInput(null); showInput(false); imeTransport.changed=previous; }
+});
+
+test("late partial extracted-text reports use the last reported baseline, not the optimistic edit", async () => {
+  const {serveInput,imeInput,imeState,extractedInput}=await import("../src/android/ime");
+  const {declaredField}=await import("../src/jvm/runtime");
+  const {csText}=await import("../src/jvm/natives/jchars");
+  const connection=await newObj("android/view/inputmethod/BaseInputConnection","(Landroid/view/inputmethod/InputMethodManager;Z)V",null,1);
+  const session={text:"",offset:0,start:0,end:0,compStart:-1,compEnd:-1,imeOptions:1,actionId:0,
+    call:(name:string,args:string,...values:unknown[])=>vcall(connection,name,`(${args})Z`,...values)};
+  const report=async(text:string,start:number,end:number,selection:number)=>{
+    const value=await newObj("android/view/inputmethod/ExtractedText");
+    const fields={text,startOffset:0,partialStartOffset:start,partialEndOffset:end,selectionStart:selection,selectionEnd:selection};
+    for(const [name,content] of Object.entries(fields))Reflect.set(value,declaredField("android/view/inputmethod/ExtractedText",name),content);
+    await extractedInput(session,value);
+  };
+  try {
+    serveInput(session);
+    await imeInput("60");
+    await report("60",0,0,2);
+    expect(imeState().text).toBe("60");
+    expect(await csText(await vcall(connection,"getEditable","()Landroid/text/Editable;"))).toBe("60");
+    await imeInput("65");await report("5",1,2,2);
+    expect(imeState().text).toBe("65");
+    expect(await csText(await vcall(connection,"getEditable","()Landroid/text/Editable;"))).toBe("65");
+  }finally{serveInput(null);}
+});

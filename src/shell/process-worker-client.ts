@@ -6,16 +6,20 @@ import { attachPointerInput, type PointerGeometry } from "./pointer-input";
 
 /** Page-owned Worker, input and control ports. JVM endpoint ownership passes to the broker on ready. */
 export function startProcessWorker(url: string, canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
-  bootstrap: () => Promise<ProcessBootstrap>, ready: (port: MessagePort) => void, failed: (message: string) => void) {
+  bootstrap: () => Promise<ProcessBootstrap>, ready: (port: MessagePort) => void, failed: (message: string) => void, focusInput: () => void = () => {}) {
   const worker = new Worker(url, { type: "module" });
   const endpoint = new MessageChannel(), control = new MessageChannel();
   let closed = false, published = false, transferred = false, ticking = false, frame = 0;
   const client = callProxy<WorkerControl>(control.port1, workerControlMethods, [], processError,
     error => { if (!closed) failed(error.message ?? "Process Worker control closed"); });
-  const pointers = attachPointerInput(canvas, geometry, client.endpoint.pointer);
+  let focusTimer: ReturnType<typeof setTimeout> | undefined;
+  const pointers = attachPointerInput(canvas, geometry, client.endpoint.pointer, () => {
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(() => { focusTimer = undefined; if (!closed) focusInput(); }, 0);
+  });
   const close = () => {
     if (closed) return;
-    closed = true; window.removeEventListener("pagehide", pagehide); cancelAnimationFrame(frame); pointers.close(); client.close(); worker.terminate();
+    closed = true; clearTimeout(focusTimer); window.removeEventListener("pagehide", pagehide); cancelAnimationFrame(frame); pointers.close(); client.close(); worker.terminate();
     if (!published) endpoint.port2.close();
     if (!transferred) { endpoint.port1.close(); control.port2.close(); }
   };

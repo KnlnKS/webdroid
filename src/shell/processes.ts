@@ -42,6 +42,7 @@ import { startProcessWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
+import { receiveIme } from "./ime-port";
 import { receiveFrames, canvasFrameSink } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
 import type { SettingsCalls, SettingsTable } from "./settings";
@@ -111,7 +112,7 @@ export type BrokerCalls = LocationCalls & ServiceStartCalls & PendingCalls & Coo
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 export const brokerMethods = ["locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string}; canvas?: HTMLCanvasElement; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
@@ -245,7 +246,7 @@ export class ProcessBroker {
       try {
         entry.worker = startProcessWorker(url, canvas, () => device,
           () => this.bootstrap(entry.pid, true), port => this.readyPort(entry.pid, port),
-          message => this.fail(entry.pid, message, NOT_CRASHED));
+          message => this.fail(entry.pid, message, NOT_CRASHED), () => entry.ime?.focus());
       } catch (error) { this.fail(entry.pid,String(error),NOT_CRASHED); throw error; }
     } else if (pid === undefined) {
       const frame = document.createElement("iframe"); entry.frame = frame;
@@ -299,15 +300,20 @@ export class ProcessBroker {
       if (clock) ports.push(clock.close);
       const broker = worker ? this.serveBrokerPort(pid) : undefined;
       if (broker) ports.push(broker.close);
-      let display: MessagePort | undefined;
+      let display: MessagePort | undefined, ime: MessagePort | undefined;
+      let imeOwner: ReturnType<typeof receiveIme> | undefined;
       if (worker && entry.canvas) {
         const sink = canvasFrameSink(entry.canvas);
         const {port1,port2} = new MessageChannel();
         ports.push(receiveFrames(port1,sink));display=port2;
+        const input = new MessageChannel();
+        const inputOwner = receiveIme(input.port1, entry.canvas); imeOwner = inputOwner;
+        ports.push(() => { inputOwner.close(); if (entry.ime === inputOwner) entry.ime = undefined; }); ime=input.port2;
       }
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port, display };
+        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port, display, ime };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
+      if (imeOwner) entry.ime = imeOwner;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
       for (const close of this.bootstrapPorts.get(pid) ?? []) close();
       this.bootstrapPorts.set(pid, ports);
@@ -608,6 +614,10 @@ export class ProcessBroker {
     const entry = this.entries.get(this.activities.foreground);
     if (!entry?.worker && !entry?.workerDiagnostic) return null;
     return (await this.workerSnapshots([entry]))[0] ?? null;
+  }
+  foregroundWorker(): Entry["worker"] {
+    const entry = this.entries.get(this.activities.foreground);
+    return entry && !entry.dead ? entry.worker : undefined;
   }
   displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
     const layers = this.activities.shownEntries().flatMap(entry => {

@@ -13,23 +13,40 @@ export interface ImeSession {
   imeOptions: number; actionId: number;
   call(name: string, args: string, ...values: unknown[]): unknown;
 }
+export type ImeState = { generation: number; text: string; start: number; end: number; active: boolean; hasAction: boolean };
+let generation = 0;
 let served: ImeSession | null = null;
+// ExtractedText partial updates describe the last reported text. Local optimistic
+// edits may already have advanced session.text before the editor reports its delta.
+const reportedText = new WeakMap<ImeSession, {text:string;offset:number}>();
+export const imeTransport: { changed: ((state: ImeState) => void) | null } = { changed: null };
+export function imeState(): ImeState {
+  return { generation, text: served?.text ?? "", start: served ? served.start - served.offset : 0,
+    end: served ? served.end - served.offset : 0, active: imeActive(), hasAction: imeHasAction() };
+}
 let inputEl: HTMLInputElement | HTMLTextAreaElement | null = null;
 export function setInputElement(el: HTMLInputElement | HTMLTextAreaElement) { inputEl = el; }
 let imeVisible = false;
 let editing = false;
 /** the page's text control takes the served editor's text and selection */
 export function mirrorInput() {
-  if (!inputEl || !served || editing) return;
+  if (editing) return;
+  imeTransport.changed?.(imeState());
+  if (!inputEl || !served) return;
   inputEl.value = served.text;
   inputEl.setSelectionRange(served.start - served.offset, served.end - served.offset);
 }
 /** the IME serves `session`'s editor, or none */
-export function serveInput(session: ImeSession | null) { served = session; mirrorInput(); }
+export function serveInput(session: ImeSession | null) {
+  if (served !== session) generation++;
+  if (session && !reportedText.has(session)) reportedText.set(session,{text:session.text,offset:session.offset});
+  served = session; mirrorInput();
+}
 /** the keyboard shows or hides: the page's text control takes or gives up focus */
 export function showInput(visible: boolean) {
   imeVisible = visible;
-  if (visible) { mirrorInput(); inputEl?.focus(); } else inputEl?.blur();
+  mirrorInput();
+  if (visible) inputEl?.focus(); else inputEl?.blur();
 }
 const ET = "android/view/inputmethod/ExtractedText";
 /** an ExtractedText the editor reported: all of its text, or a changed part of it */
@@ -37,10 +54,14 @@ let reports = 0;
 export const extractedInput = driven(function* extractedInput(session: ImeSession, extracted: JObj): Gen {
   reports++;
   const f = (name: string) => (extracted as unknown as Record<string, number>)[declaredField(ET, name)];
-  const text = yield* awaited(csText(f("text"))), partialStart = f("partialStartOffset"), startOffset = f("startOffset");
+  const content = f("text"), partialStart = f("partialStartOffset"), partialEnd = f("partialEndOffset"),
+    startOffset = f("startOffset"), selectionStart = f("selectionStart"), selectionEnd = f("selectionEnd");
+  const text = yield* awaited(csText(content));
+  const previous = reportedText.get(session) ?? {text:session.text,offset:session.offset};
   if (partialStart < 0) { session.text = text; session.offset = startOffset; }
-  else session.text = session.text.slice(0, partialStart - session.offset) + text + session.text.slice(f("partialEndOffset") - session.offset);
-  session.start = f("selectionStart") + startOffset; session.end = f("selectionEnd") + startOffset;
+  else session.text = previous.text.slice(0, partialStart - previous.offset) + text + previous.text.slice(partialEnd - previous.offset);
+  reportedText.set(session,{text:session.text,offset:session.offset});
+  session.start = selectionStart + startOffset; session.end = selectionEnd + startOffset;
   mirrorInput();
 });
 /** the changed range between two texts: previous[a, b) became text[a, c) */
@@ -53,10 +74,10 @@ function textDiff(previous: string, text: string): [number, number, number] {
 const IME_FLAG_NO_ENTER_ACTION = 0x40000000, IME_ACTION_NONE = 1;
 export const imeActive = () => !!served && imeVisible;
 export const imeHasAction = () => !!served && !(served.imeOptions & IME_FLAG_NO_ENTER_ACTION) && (served.imeOptions & 0xff) !== IME_ACTION_NONE;
-export function imeInput(text: string, start = text.length, end = start, composing = false) {
+export function imeInput(text: string, start = text.length, end = start, composing = false, expectedGeneration?: number) {
   return onMain(() => rt.drive(function* (): Gen<void> {
     const session = served;
-    if (!session) return;
+    if (!session || expectedGeneration !== undefined && expectedGeneration !== generation) return;
     const previous = session.text, offset = session.offset;
     let [a, b, c] = textDiff(previous, text);
     if (session.compStart >= 0) {
@@ -82,17 +103,18 @@ export function imeInput(text: string, start = text.length, end = start, composi
     mirrorInput();
   }()));
 }
-export function imeSelection(start: number, end: number) {
+export function imeSelection(start: number, end: number, expectedGeneration?: number) {
   return onMain(() => rt.drive(function* (): Gen<void> {
     const session = served;
-    if (!session || start + session.offset === session.start && end + session.offset === session.end) return;
+    if (!session || expectedGeneration !== undefined && expectedGeneration !== generation || start + session.offset === session.start && end + session.offset === session.end) return;
     yield session.call("setSelection", "II", start + session.offset, end + session.offset);
     session.start = start + session.offset; session.end = end + session.offset;
+    mirrorInput();
   }()));
 }
-export const imeFinishComposition = () => onMain(() => rt.drive(function* (): Gen<void> {
-  if (served) { yield served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
+export const imeFinishComposition = (expectedGeneration?: number) => onMain(() => rt.drive(function* (): Gen<void> {
+  if (served && (expectedGeneration === undefined || expectedGeneration === generation)) { yield served.call("finishComposingText", ""); served.compStart = served.compEnd = -1; }
 }()));
-export const imeAction = () => onMain(() => rt.drive(function* (): Gen<boolean> {
-  return !!served && !!(yield served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
+export const imeAction = (expectedGeneration?: number) => onMain(() => rt.drive(function* (): Gen<boolean> {
+  return (expectedGeneration === undefined || expectedGeneration === generation) && !!served && !!(yield served.call("performEditorAction", "I", served.actionId || served.imeOptions & 0xff));
 }()));
