@@ -33,7 +33,12 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
       archive = packageArchive(zip, await apkCertificates(bytes, zip)); vfs.write(path, bytes);
       base = { zip, base: bytes };
     }
-    if (own) boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
+    if (own) {
+      boot = await openInstallApks(snapshot.splits.map((split) => new RemoteFile(split)), base);
+      // AssetManager may cache this package before bootApk constructs its resources.
+      for (const split of boot.splits) if (split.resources) archive.res.arsc?.add(split.resources);
+      for (const [name, source] of boot.lazyEntries) archive.res.lazyEntries.set(name, source);
+    }
     const record = registerPackage(archive, path, snapshot.uid);
     record.system = snapshot.system;
     for (const grant of snapshot.grants) record.grants.add(grant);
