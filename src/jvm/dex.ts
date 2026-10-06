@@ -176,6 +176,23 @@ export class DexFile {
     return s;
   }
 
+  /** the index of string `s`, or -1. string_ids sort by UTF-16 code units, which is how JS compares strings (ART's verifier rejects any other order). */
+  findString(s: string): number {
+    let lo = 0, hi = this.stringCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1, t = this.string(mid);
+      if (t === s) return mid;
+      if (t < s) lo = mid + 1; else hi = mid;
+    }
+    return -1;
+  }
+  /** the method_ids whose name is string `nameIdx` */
+  methodsNamed(nameIdx: number): number[] {
+    const out: number[] = [], v = this.view, at = this.methodIdsOff + 4;
+    for (let i = 0, n = this.methodCount; i < n; i++) if (v.getUint32(at + i * 8, true) === nameIdx) out.push(i);
+    return out;
+  }
+
   private typeResolver?: (descriptor: string) => string;
   /** How the defining loader resolves references. Its library graph may arrive after metadata was inspected; raw DEX descriptors never change. */
   get resolveType(): ((descriptor: string) => string) | undefined { return this.typeResolver; }
@@ -298,6 +315,21 @@ export class DexFile {
     const r = new Reader(this.bytes, classDataOff);
     r.uleb(); r.uleb();
     return r.uleb() + r.uleb();
+  }
+
+  /** the access flags with which class_def `i` declares method_id `methodIdx`, or -1 if it does not */
+  declaredFlags(i: number, methodIdx: number): number {
+    const classDataOff = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
+    if (!classDataOff) return -1;
+    const r = new Reader(this.bytes, classDataOff);
+    const nf = r.uleb() + r.uleb(), nd = r.uleb(), nv = r.uleb();
+    for (let j = 0; j < nf; j++) { r.uleb(); r.uleb(); }
+    for (const n of [nd, nv]) for (let j = 0, idx = 0; j < n; j++) {
+      idx += r.uleb();
+      const flags = r.uleb(); r.uleb();
+      if (idx === methodIdx) return flags;
+    }
+    return -1;
   }
 
   classDef(i: number): ClassDef {

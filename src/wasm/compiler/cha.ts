@@ -1,21 +1,53 @@
-import { ACC, declaredMethod, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
+import type { DexFile } from "../../jvm/dex";
+import { ACC, classDefIdx, declaredMethod, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
 
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
 class Index {
   readonly subs = new Map<string, string[]>();                 // direct subtypes (subclasses and implementors)
   private classes: JClass[] = [];
-  /** every method that can be an implementation (not static, not abstract), by name+descriptor: the classes that declare one. Built on first use. */
+  /** the classes by dex and type id; classes no dex defines (stubs, host and proxy classes) under null */
+  private byType?: Map<DexFile | null, Map<number, JClass>>;
+  /** every method that can be an implementation (not static, not abstract), by name+descriptor: the classes that declare one */
   private implementors?: Map<string, string | string[]>;
+  /** the full index decodes every method of every class (about 200 ms for the platform); until MAX_SCANS keys were asked for, a key is answered from the dexes' ids instead */
+  private scans = 0;
   add(c: JClass): void {
     this.classes.push(c);
+    if (this.byType) this.note(c);
     for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
     if (this.implementors) this.declare(c);
   }
-  declaring(key: string): string[] {
+  declaring(key: string): Iterable<string> {
+    if (!this.implementors && this.scans++ < MAX_SCANS) return this.scan(key);
     if (!this.implementors) { this.implementors = new Map(); for (const c of this.classes) this.declare(c); }
     const l = this.implementors.get(key);
     return l === undefined ? [] : typeof l === "string" ? [l] : l;
+  }
+  private note(c: JClass): void {
+    const i = classDefIdx(c), dex = i < 0 ? null : c.dex!;
+    let m = this.byType!.get(dex);
+    if (!m) this.byType!.set(dex, m = new Map());
+    m.set(dex ? dex.classDef2Type(i) : m.size, c);
+  }
+  /** a class declares its methods with method_ids of its own dex and type: those of the key's name that a class here declares */
+  private *scan(key: string): Generator<string> {
+    if (!this.byType) { this.byType = new Map(); for (const c of this.classes) this.note(c); }
+    const name = key.slice(0, key.indexOf("("));
+    for (const [dex, classes] of this.byType) {
+      if (!dex) {
+        for (const c of classes.values()) { const m = declaredMethod(c, key); if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name; }
+        continue;
+      }
+      const n = dex.findString(name);
+      if (n < 0) continue;
+      for (const i of dex.methodsNamed(n)) {
+        const c = classes.get(dex.method(i).cls);
+        if (!c || dex.methodKey(i) !== key) continue;
+        const flags = dex.declaredFlags(classDefIdx(c), i);
+        if (flags >= 0 && !(flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name;
+      }
+    }
   }
   private declare(c: JClass): void {
     for (const [key, flags] of declaredMethods(c)) if (!(flags & (ACC.STATIC | ACC.ABSTRACT))) {
@@ -48,7 +80,10 @@ export class Cha {
     for (const b of this.base) { const x = b.subs.get(n); if (x) out = out ? [...x, ...out] : x; }
     return out ?? [];
   }
-  private declaring(key: string): string[] { return [...this.base.flatMap((b) => b.declaring(key)), ...this.own.declaring(key)]; }
+  private *declaring(key: string): Generator<string> {
+    for (const b of this.base) yield* b.declaring(key);
+    yield* this.own.declaring(key);
+  }
 
   /** The distinct implementations a call of decl.name+desc can reach among the concrete subtypes of decl (decl included),
    *  cut off at two: callers only distinguish none, one and many. */
@@ -71,9 +106,8 @@ export class Cha {
       found.clear();
       const key = mkey(name, desc);
       for (const cls of this.declaring(key)) {
-        if (found.size >= 2) break;
         const m = declaredMethod(this.prog.get(cls), key)!;
-        if (this.reaches(decl, m)) found.add(m);
+        if (this.reaches(decl, m) && found.add(m).size >= 2) break;
       }
     }
     this.memo.set(key, out = [...found]);
@@ -99,7 +133,7 @@ export class Cha {
     return false;
   }
 }
-const WALK = 64;
+const WALK = 64, MAX_SCANS = 128;
 
 const sharedIndex = (p: Program): Index => {
   let x = p.shared.get("cha") as Index | undefined;
