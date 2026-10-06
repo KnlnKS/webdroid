@@ -4,7 +4,7 @@
 import { webViewBrands } from "./clienthints";
 import type { RendererContext } from "./protocol";
 
-type Client = { id: string; url: string; postMessage(data: unknown, transfer: Transferable[]): void };
+type Client = { id: string; url: string; type: string; postMessage(data: unknown, transfer: Transferable[]): void };
 type FetchEvent = Event & { request: Request; clientId: string; respondWith(response: Promise<Response>): void };
 type ExtendableEvent = Event & { waitUntil(work: Promise<unknown>): void };
 const worker = globalThis as unknown as { location: Location; navigator: Navigator & { userAgentData?: { brands?: { brand: string; version: string }[] } };
@@ -58,10 +58,13 @@ worker.addEventListener("fetch", (event) => {
     return;
   }
   const localProxy = original.origin === worker.location.origin && original.pathname === "/proxy";
-  if (original.origin === worker.location.origin && !localProxy) return;
+  if (original.origin === worker.location.origin && ["/webview", "/webview-worker.js"].includes(original.pathname)) return;
   event.respondWith((async () => {
     const client = await worker.clients.get(event.clientId);
     if (!client) return fetch(request);
+    // JVM/compiler Workers have no document renderer context. Their local modules
+    // and archives keep the shell fetch path, as before resource URL translation.
+    if (original.origin === worker.location.origin && !localProxy && client.type !== "window") return fetch(request);
     // the shell's own pages (its Java networking) are no WebView: nothing to rewrite
     if (!client.url.includes("__wd_bridge") && ["/", "/process"].includes(new URL(client.url).pathname)) return fetch(request);
     const { page, agent, id, intercept, sub } = await context(client), isolated = !!id;
@@ -74,6 +77,12 @@ worker.addEventListener("fetch", (event) => {
     headers.set("x-wd-sec-fetch-mode", frame ? "navigate" : request.mode);
     headers.set("x-wd-sec-fetch-dest", frame ? "document" : request.destination || "empty");
     let target = (localProxy ? original.searchParams.get("url") : request.url)!;
+    // A script cached on the renderer can resolve resources against its own URL.
+    // Those paths still belong to the document's upstream site, not the DOM owner.
+    if (original.origin === worker.location.origin && !localProxy) {
+      if (!isolated || !/^https?:/.test(page)) return fetch(request);
+      target = new URL(original.pathname + original.search, new URL(page).origin).href;
+    }
     if (page && /^https?:/.test(page) && !frame) {
       const source = new URL(page);
       if (request.mode === "cors") headers.set("x-wd-origin", source.origin);

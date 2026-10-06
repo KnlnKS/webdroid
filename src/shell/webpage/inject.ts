@@ -73,6 +73,7 @@ function start(config: PageConfig | undefined) {
   // applies here and reaches the jar in order, whose answer replaces them once it has every write.
   let cookies = config.cookies ?? [], written = 0;
   Object.defineProperty(document, "cookie", {
+    configurable: true,
     get: () => cookies.filter((c) => !c.expires || c.expires > Date.now()).map((c) => c.text).join("; "),
     set: (value) => {
       value = String(value);

@@ -383,6 +383,11 @@ describe("WebView cookies", () => {
       expect(await page.evaluate(() => {
         const posted: unknown[] = [], app = (window as unknown as { appPort: MessagePort }).appPort;
         app.addEventListener("message", (event) => { if (event.data?.kind === "cookie") posted.push(event.data.seq); });
+        const descriptor = Object.getOwnPropertyDescriptor(document, "cookie")!;
+        Object.defineProperty(document, "cookie", { ...descriptor,
+          get: () => descriptor.get!.call(document),
+          set: value => descriptor.set!.call(document, value),
+        });
         const before = document.cookie;
         for (const value of ["b=2; Path=/dir", "a=; Max-Age=0", "c=3; Path=/other", "d=4; Domain=elsewhere.example", "e=5; HttpOnly"]) document.cookie = value;
         const written = document.cookie;
@@ -416,7 +421,7 @@ describe("WebView isolation", () => {
       const url = new URL(req.url);
       if (url.pathname === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript" } });
       if (url.pathname === "/webview") return new Response(WEB_FRAME, { headers: html });
-      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async () => new Response(
+      if (url.pathname === "/proxy") return proxyRequest(req, { bridgeCall: async () => new Response(null, { status: 503 }), fetchUpstream: async target => target === "https://upstream.example/site.css" ? new Response("upstream-style", {headers:{"content-type":"text/css"}}) : new Response(
         "<script>parent.postMessage({kind: 'upstream', storage: (() => { try { return top.localStorage.getItem('secret'); } catch (e) { return e.name; } })()}, '*')</script>", { headers: html }) });
       return new Response("<!doctype html><body>app", { headers: html });
     } });
@@ -428,6 +433,7 @@ describe("WebView isolation", () => {
         const out = {}, id = window.__wdWebView.id, attempt = f => { try { return f(); } catch (e) { return e.name; } };
         out.storage = localStorage.getItem("secret");
         out.cookie = document.cookie;
+        out.resource = await (await fetch("http://partition.localhost:${server.port}/site.css", {credentials: "omit"})).text();
         out.parentStorage = attempt(() => parent.localStorage.getItem("secret"));
         out.topDocument = attempt(() => typeof top.document);
         // a frame of the app's own origin is no renderer: it never takes a document from this page
@@ -465,13 +471,13 @@ describe("WebView isolation", () => {
         frame.src = `http://partition.localhost:${port}/webview?__wd_bridge=${id}`;
         const result = new Promise((resolve) => addEventListener("message", (event) => {
           if (event.source !== frame.contentWindow || event.data?.bridge !== id) return;
-          if (event.data.kind === "ready") frame.contentWindow!.postMessage({ bridge: id, kind: "load", page: "about:blank", document: { html: "<!doctype html><body>" + probe } },
+          if (event.data.kind === "ready") frame.contentWindow!.postMessage({ bridge: id, kind: "load", page: "https://upstream.example/", document: { html: "<!doctype html><body>" + probe } },
             event.origin, [new MessageChannel().port2]);
           else if (event.data.kind === "probe") resolve({ ...event.data, bridge: undefined, kind: undefined, location: location.href });
         }));
         document.body.append(frame);
         return result;
-      }, { id, port: server.port, sandbox: WEB_FRAME_SANDBOX, probe })).toEqual({ storage: null, cookie: "", parentStorage: "SecurityError", topDocument: "SecurityError",
+      }, { id, port: server.port, sandbox: WEB_FRAME_SANDBOX, probe })).toEqual({ storage: null, cookie: "", resource: "upstream-style", parentStorage: "SecurityError", topDocument: "SecurityError",
         appFrame: "silent", proxiedFrame: "SecurityError", siblingFrame: "silent", topNavigation: "SecurityError", location: `http://localhost:${server.port}/`, bridge: undefined, kind: undefined });
     } finally { await page.close(); await server.stop(true); }
   });
