@@ -4798,3 +4798,11 @@ A traced actual Calculator Worker launch at8582d306 spends substantial active CP
 Private slow-operation snapshots now reuse their activation's register arrays. Normal snapshots used for restoration and optimized resume stay independent; completion and handoff discard private storage. Slow-operation instruction lookup indexes the already retained prepared instructions byPC instead of scanning them three times per operation. Existing validation, attempted-instruction boundaries, commit-on-success, monitor ownership and suspension ordering remain in force.
 
 A temporary alternating five-round probe of100,000 snapshots with32 registers has median214ms fresh versus152ms reused; published snapshot independence, updated register values and distinct activation storage are also checked. The probe and raw logs are retained with the recovery evidence; this micro measurement is not an application speedup claim. Full typecheck,241 existing cold-slow checks,153 shipping AOT resume checks and canonical ready-async-native turn delivery pass before the final handoff cleanup. Actual application startup comparison remains required; no timing budget, quota or golden is changed.
+
+
+
+### Y1 G1 shipping bootstrap entry (2026-10-05)
+
+The shipping-AOT G1 runner used plain `processState`, reproducing `SuspendError: trying to suspend without WebAssembly.promising` during System/ICU boot before a workload ran. Use canonical `processStateAsync` when an AOT directory is selected; the ordinary on-demand control retains its plain entry. A fresh Node run of listAddGet (one repetition, one run) now matches JS and completes both calls with no failures or blocked rows. This is execution coverage only: other agents and the TikTok diagnostic were active, so its timings are not accepted.
+
+The idle G1 command must select exactly `listAddGet listIter mapInt deque sort linkedList treeMap random casts jsonParse`, use `--engines node,chrome --reps 100 --runs 5 --phases --json <isolated-output>`, and point `WEBDROID_AOT` at the matching fresh shipping build. Leave `G1_STARTUP` unset: the standard startup manifest is the preload policy. Retain all ten rows, first calls, steady distributions, completed-call counts and failures; supplemental workloads are separate. These measurements still require a coordinated idle host window.
