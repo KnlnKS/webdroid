@@ -5,9 +5,8 @@
 // bound a widget id, so every id is unknown, updates to one reach nothing, and pinning is
 // unsupported.
 import { awaited, JObj, getDeclared, setDeclared, rt, noops, driven, type Gen } from "../jvm/runtime";
-import { newArrayList } from "../jvm/natives/jcoll";
 import { newObj, scall, staticField, vcall } from "../jvm/natives/jentry";
-import { callingIdentity, hostStub, serviceContext } from "./binder";
+import { callingIdentity, parceledList, hostStub, serviceContext } from "./binder";
 import { packages } from "./packages";
 
 const S = "Ljava/lang/String;", CN = "Landroid/content/ComponentName;", RV = "Landroid/widget/RemoteViews;";
@@ -95,7 +94,7 @@ rt.register({ name: "webdroid/AppWidgetService", ctor: class extends JObj {}, su
       const provider = getDeclared<JObj>(info, INFO, "provider");
       if ((getDeclared<number>(info, INFO, "widgetCategory") & categories) && (pkg === null || (yield vcall(provider, "getPackageName", `()${S}`)) === pkg)) matching.push(info);
     }
-    return newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(matching));
+    return parceledList(matching);
   }),
   [`getAppWidgetIds(${CN})[I`]: () => new Int32Array(0),
   [`getAppWidgetInfo(${S}I)L${INFO};`]: (pkg: string) => { enforceCallFromPackage(pkg); return null; },

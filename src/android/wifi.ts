@@ -16,7 +16,7 @@ import { DNS_SERVER, netUp, theNetwork } from "./services";
 
 const WIFI_STATE_ENABLED = 3, WIFI_STANDARD_LEGACY = 1, SECURITY_TYPE_OPEN = 0, REDACT_FOR_ACCESS_FINE_LOCATION = 1n;
 const S = "Ljava/lang/String;", SLICE = "com/android/wifi/x/com/android/modules/utils/ParceledListSlice";
-const emptySlice = () => newObj(SLICE, "(Ljava/util/List;)V", newArrayList());
+const emptySlice = () => after(newArrayList(), list => newObj(SLICE, "(Ljava/util/List;)V", list));
 
 const enforce = (permission: string) => enforceCallingOrSelfPermission(permission, "WifiService");
 const enforceAccess = () => enforce("android.permission.ACCESS_WIFI_STATE");

@@ -257,7 +257,7 @@ const call = driven(function* call$(method: string, name: string | null, args: J
     resolveUser(c, requested);
     if (verb === "GET") return yield* bundle([["String", "value", yield* readSetting(c, table, key)]]);
     if (verb === "LIST")
-      return yield* bundle([["StringArrayList", "result_settings_list", newArrayList((yield* readableRows(c, table)).map(([, n, v]) => `${n}=${v}`))]]);
+      return yield* bundle([["StringArrayList", "result_settings_list", yield newArrayList((yield* readableRows(c, table)).map(([, n, v]) => `${n}=${v}`))]]);
     if (verb === "PUT") { yield* writeSetting(c, table, key, args ? yield string(args, "value") : null, SYSTEM_INSERT); return null; }
     return yield* bundle([["Int", "result_rows_deleted", (yield* writeSetting(c, table, key, null, SYSTEM_DELETE)) ? 1 : 0]]);
   }

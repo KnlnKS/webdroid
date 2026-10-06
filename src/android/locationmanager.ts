@@ -182,7 +182,7 @@ rt.register({ name: "webdroid/LocationManagerService", ctor: class extends JObj 
       yield* awaited(enforce(pkg));
       const name = yield* awaited(requireProvider(provider));
       yield* awaited(subscribe(listener, name, yield* readRequest(name, request), {
-        location: (fix) => after(location(fix, name), (l: JObj) => vcall(listener, "onLocationChanged", "(Ljava/util/List;Landroid/os/IRemoteCallback;)V", newArrayList([l]), null)),
+        location: (fix) => after(location(fix, name), (l: JObj) => after(newArrayList([l]), list => vcall(listener, "onLocationChanged", "(Ljava/util/List;Landroid/os/IRemoteCallback;)V", list, null))),
         enabled: (enabled) => vcall(listener, "onProviderEnabledChanged", "(Ljava/lang/String;Z)V", name, +enabled),
       }));
     }),

@@ -3,7 +3,7 @@
 import { jarray, mangleField, stringHash } from "../abi";
 import { rt, driven, type Gen } from "../runtime";
 import { intrinsicCompiler } from "./jbox";
-import { vcall, scall, newObj } from "./jentry";
+import { vcall, scall, newObj, after } from "./jentry";
 import { tier } from "../tier";
 
 const AL = "java/util/ArrayList", HM = "java/util/HashMap", NODE = "java/util/HashMap$Node", ITR = "java/util/ArrayList$Itr";
@@ -22,19 +22,20 @@ function arrayList(): new () => Obj {
   return arrayListCtor = info.ctor as new () => Obj; // js-tier
 }
 
-/** A java.util.ArrayList over `items`, which it takes as its backing array. */
-export function newArrayList(items: unknown[] = []): Obj {
-  // the Wasm tier's objects are not JS objects with these fields: the list is built through its Java API, which answers at once as nothing here waits
-  if (tier === "wasm") {
-    const list = newObj(AL, "(I)V", items.length) as Obj;
-    for (const item of items) if (vcall(list, "add", "(Ljava/lang/Object;)Z", item) instanceof Promise) throw new Error("ArrayList.add waited");
-    return list;
-  }
+/** A java.util.ArrayList containing `items` in order. */
+export function newArrayList(items: unknown[] = []): Obj | Promise<Obj> {
+  if (tier === "wasm") return javaArrayList(items);
   const l = new (arrayList())();
   l[DATA] = jarray(items);
   l[SIZE] = items.length;
   return l;
 }
+
+const javaArrayList = driven(function* (items: unknown[]): Gen<Obj> {
+  const list = yield newObj(AL, "(I)V", items.length);
+  for (const item of items) yield vcall(list, "add", "(Ljava/lang/Object;)Z", item);
+  return list;
+});
 
 /** a Java Collection's elements, in its iteration order; their type, which Java's generics erase,
  *  is the caller's to assert */
@@ -52,7 +53,7 @@ const iterateAll = driven(function* iterateAll(c: unknown): Gen<unknown[]> {
 
 /** a java.util.Enumeration over `items` */
 export const mkEnumeration = (items: unknown[]): unknown =>
-  scall("java/util/Collections", "enumeration", "(Ljava/util/Collection;)Ljava/util/Enumeration;", newArrayList(items));
+  after(newArrayList(items), list => scall("java/util/Collections", "enumeration", "(Ljava/util/Collection;)Ljava/util/Enumeration;", list));
 
 /** a Java collection of class `cls` holding `items`, added in order */
 const newCollection = driven(function* newCollection(cls: string, items: Iterable<unknown>): Gen<Obj> {

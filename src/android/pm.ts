@@ -189,7 +189,7 @@ function* buildApplicationInfo$(record: PackageRecord, flags: number): Gen<JObj>
     };
     const used: JObj[] = [];
     for (const name of record.usesLibraries) used.push(yield* library$(name));
-    setDeclared(ai, APP, { sharedLibraryFiles: strArray(files), sharedLibraryInfos: newArrayList(used) });
+    setDeclared(ai, APP, { sharedLibraryFiles: strArray(files), sharedLibraryInfos: yield newArrayList(used) });
   }
   return ai;
 }
@@ -774,7 +774,7 @@ rt.register({ name: "webdroid/PackageManagerService", ctor: class extends JObj {
     const checksums: JObj[] = [];
     for (const [split, type, value] of yield* awaited(apkDigests(record, includeSplits !== 0, required)))
       checksums.push(yield newObj(PKG + "ApkChecksum", `(${S}I[B)V`, split, type, new Int8Array(value)));
-    yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", newArrayList(checksums));
+    yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", yield newArrayList(checksums));
   }),
   ...noops(`notifyPackageUse(${S}I)V`, `notifyDexLoad(${S}Ljava/util/Map;${S})V`),
 } });

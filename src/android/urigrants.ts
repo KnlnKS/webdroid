@@ -113,7 +113,7 @@ rt.register({ name: "webdroid/UriGrantsManagerService", ctor: class extends JObj
   "takePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri | null, modes: number) => after(uriText(u), (uri) => takePersistable(uri, modes)),
   "releasePersistableUriPermission(Landroid/net/Uri;ILjava/lang/String;I)V": (u: JUri | null, modes: number) => after(uriText(u), (uri) => releasePersistable(uri, modes)),
   "getUriPermissions(Ljava/lang/String;ZZ)Landroid/content/pm/ParceledListSlice;": driven(function* (_pkg: string, incoming: number) {
-    return yield newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? yield* persistedPermissions() : newArrayList());
+    return yield newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", incoming ? yield* persistedPermissions() : yield newArrayList());
   }),
 } });
 hostStub("uri_grants", "webdroid/UriGrantsManagerService");

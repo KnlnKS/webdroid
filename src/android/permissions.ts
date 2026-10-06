@@ -185,7 +185,7 @@ rt.register({ name: "webdroid/PermissionManagerService", ctor: class extends JOb
   "getSplitPermissions()Ljava/util/List;": driven(function* getSplitPermissions$(): Gen {
     const splits: JObj[] = [];
     for (const [name, target, added] of SPLIT_PERMISSIONS) splits.push(yield newObj("android/content/pm/permission/SplitPermissionInfoParcelable",
-      `(${S}Ljava/util/List;I)V`, permissionName(name), newArrayList([permissionName(added)]), target));
+      `(${S}Ljava/util/List;I)V`, permissionName(name), yield newArrayList([permissionName(added)]), target));
     return newArrayList(splits);
   }),
   ...noops("addOnPermissionsChangeListener(Landroid/permission/IOnPermissionsChangeListener;)V",

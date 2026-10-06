@@ -105,8 +105,8 @@ rt.register({ name: "webdroid/InputMethodSession", ctor: class extends JObj {}, 
 } });
 const methodSession = once(() => newObj("webdroid/InputMethodSession"));
 
-const emptyInfoList = () => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
-  "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", newArrayList());
+const emptyInfoList = () => after(newArrayList(), list => scall("com/android/internal/inputmethod/InputMethodInfoSafeList", "create",
+  "(Ljava/util/List;)Lcom/android/internal/inputmethod/InputMethodInfoSafeList;", list));
 rt.register({ name: "webdroid/InputMethodManagerService", ctor: class extends JObj {}, sup: "com/android/internal/view/IInputMethodManager$Stub", methods: {
   [`startInputOrWindowGainedFocus${START})L${BIND};`]:
     (_reason: number, _client: JObj, window: JObj, _flags: number, mode: number, _windowFlags: number, info: JObj | null, connection: JObj | null) =>

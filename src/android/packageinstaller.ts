@@ -6,12 +6,11 @@ import { scall, vcall, after, newObj } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { jarray } from "../jvm/abi";
 import { newFile } from "../jvm/natives/jio";
-import { newArrayList } from "../jvm/natives/jcoll";
 import { vfs } from "../shell/vfs";
 import { installPackageArchive } from "./pm";
 import { broadcastIntent } from "./server/broadcastqueue";
 import { sendIntent } from "./pendingintent";
-import { callingIdentity, newStub, binderEscape } from "./binder";
+import { callingIdentity, newStub, binderEscape, parceledList } from "./binder";
 import { packages } from "./packages";
 import { checkUidPermission } from "./permissions";
 import { deleteObserver, deleteVersioned, mayDeletePackages, notHeld } from "./appdata";
@@ -111,7 +110,7 @@ function* sessionInfo$(s: Session): Gen<JObj> {
 function* sessionList$(installer: string | null | undefined): Gen {
   const infos: JObj[] = [];
   for (const s of sessions.values()) if (installer === undefined || s.installer === installer) infos.push(yield* sessionInfo$(s));
-  return newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(infos));
+  return parceledList(infos);
 }
 rt.register({ name: "webdroid/PackageInstallerService", ctor: class extends JObj {}, sup: "android/content/pm/IPackageInstaller$Stub", methods: {
   [`createSession(L${PI}$SessionParams;${S}${S}I)I`]: (params: JObj, installer: string | null) => {

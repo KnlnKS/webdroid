@@ -457,7 +457,7 @@ rt.registerJnis("android/os/BinderProxy", {
 // returns for an absent service, and is reported as a boundary gap.
 const binderServices = new Map<string, JObj | Promise<JObj> | (() => JObj | Promise<JObj>)>();
 /** a ParceledListSlice over `items`, as a service returns a list too long for one transaction */
-export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", newArrayList(items));
+export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => after(newArrayList(items), list => newObj("android/content/pm/ParceledListSlice", "(Ljava/util/List;)V", list));
 /** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
  *  methods declare @EnforcePermission takes its enforcer at construction (its no-argument
  *  constructor asks the system context for one); none of the hosted methods calls it. */

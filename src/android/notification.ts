@@ -222,7 +222,7 @@ function* createGroup(prefs: Preferences, group: JObj): Gen<void> {
 function* groupWithChannels(prefs: Preferences, id: string | null, includeDeleted: boolean): Gen<JObj | null> {
   const group = id === null ? null : yield* prefs.read(GROUP_KEY, id);
   if (!group) return null;
-  yield vcall(group, "setChannels", "(Ljava/util/List;)V", newArrayList());
+  yield vcall(group, "setChannels", "(Ljava/util/List;)V", yield newArrayList());
   for (const channel of yield* prefs.channels(includeDeleted)) {
     if ((yield vcall(channel, "getGroup", "()Ljava/lang/String;")) === id) yield vcall(group, "addChannel", "(Landroid/app/NotificationChannel;)V", channel);
   }
@@ -735,7 +735,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
       const id: string | null = yield vcall(channel, "getGroup", "()Ljava/lang/String;");
       if (id === null || !(yield* awaited(prefs.has(GROUP_KEY, id)))) continue;
       let group = groups.get(id);
-      if (!group) { group = (yield* prefs.read(GROUP_KEY, id))!; yield vcall(group, "setChannels", "(Ljava/util/List;)V", newArrayList()); groups.set(id, group); }
+      if (!group) { group = (yield* prefs.read(GROUP_KEY, id))!; yield vcall(group, "setChannels", "(Ljava/util/List;)V", yield newArrayList()); groups.set(id, group); }
       yield vcall(group, "addChannel", "(Landroid/app/NotificationChannel;)V", channel);
     }
     for (const id of yield* awaited(prefs.ids(GROUP_KEY))) if (!groups.has(id)) groups.set(id, (yield* prefs.read(GROUP_KEY, id))!);

@@ -58,7 +58,7 @@ const bind = driven(function* (app: JObj): Gen<void> {
   noteApplicationFlags(getDeclared(info, APP_INFO, "flags"));
   const slice = yield vcall(pm, "queryContentProviders", "(Ljava/lang/String;IJLjava/lang/String;)Landroid/content/pm/ParceledListSlice;", process, PROCESS_UID, APP_PROVIDER_FLAGS, null);
   const providers = yield scall("android/content/pm/ProviderInfoList", "fromList", "(Ljava/util/List;)Landroid/content/pm/ProviderInfoList;",
-    slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : newArrayList());
+    slice ? yield vcall(slice, "getList", "()Ljava/util/List;") : yield newArrayList());
   const { global } = yield* awaited(configurations());
   const compat = yield* awaited(compatInfo());
   const now = BigInt(Math.floor(uptimeMillis()));

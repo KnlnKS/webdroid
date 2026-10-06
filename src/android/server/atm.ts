@@ -94,7 +94,7 @@ function* resume(r: ActivityRecord): Gen<void> {
   if (displayHooks.requestOrientation?.(r.orientation)) yield configurationChanged();
   const top = yield topResumedItem(r, true);
   if (yield* ensureConfiguration(r, results, yield resumeItem(r), top)) return;
-  const delivery = results.length ? yield item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, newArrayList(results)) : null;
+  const delivery = results.length ? yield item("ActivityResultItem", "Landroid/os/IBinder;Ljava/util/List;", r.token, yield newArrayList(results)) : null;
   yield* schedule(r.app, [delivery, top], yield resumeItem(r));
 }
 
@@ -114,7 +114,7 @@ function* ensureConfiguration(r: ActivityRecord, results: JObj[], lifecycle: JOb
   }
   const merged = yield newObj("android/util/MergedConfiguration", `(${CFG}${CFG})V`, global, override);
   yield* schedule(r.app, [yield item("ActivityRelaunchItem", "Landroid/os/IBinder;Ljava/util/List;Ljava/util/List;ILandroid/util/MergedConfiguration;ZLandroid/window/ActivityWindowInfo;",
-    r.token, results.length ? newArrayList(results) : null, null, changes, merged, 1, windowInfo), after], lifecycle);
+    r.token, results.length ? yield newArrayList(results) : null, null, changes, merged, 1, windowInfo), after], lifecycle);
   return true;
 }
 /** the shell's display: turns it for an orientation request, answering whether it turned */
@@ -208,7 +208,7 @@ function* clearAbove(target: ActivityRecord | null): Gen<void> {
 /** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a temporary pause when resumed */
 function* newIntent(r: ActivityRecord, intent: JObj): Gen<void> {
   const referrer = yield newObj("com/android/internal/content/ReferrerIntent", "(Landroid/content/Intent;Ljava/lang/String;)V", intent, appHost!.pkg);
-  yield* schedule(r.app, yield item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", r.token, newArrayList([referrer]), +(r.state === "resumed")), null);
+  yield* schedule(r.app, yield item("NewIntentItem", "Landroid/os/IBinder;Ljava/util/List;Z", r.token, yield newArrayList([referrer]), +(r.state === "resumed")), null);
 }
 
 /** ActivityStarter: a resolved activity on top of this process's task, or the instance already there that takes the intent */
