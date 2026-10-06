@@ -61,6 +61,9 @@ export class MC {
   shadows = new Map<string, number>();
   private root!: Code;
   private reentryRegions = new Set<number>();
+  /** loops and dispatch cycles run in functions of their own, re-entered every chunk of iterations, so a long activation reaches the engine's optimized code (G4).
+   *  The second tier runs code that has already been hot: its loops stay in the method. */
+  private outlining: boolean;
   private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number };
   private chunks: NonNullable<MC["chunk"]>[] = [];
   private resultLocal = -1;
@@ -84,6 +87,7 @@ export class MC {
       this.deopt = { ...cx.deopt, sig: cx.mb.addFuncType([T.externref], m.ret === "V" ? [] : [cx.vtOf(kindOf(m.ret))]) };
     }
     this.tries = this.item.tries.length > 0;
+    this.outlining = cx.counting || !!resume;
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
@@ -221,8 +225,8 @@ export class MC {
     }
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    this.findCyclicRegions();
-    const hasLoops = this.reentryRegions.size > 0 || flow.regions.some((r) => r.scopes.some((s) => s.loop));
+    if (this.outlining) this.findCyclicRegions();
+    const hasLoops = this.outlining && (this.reentryRegions.size > 0 || flow.regions.some((r) => r.scopes.some((s) => s.loop)));
     if (hasLoops) {
       c.nullableLocals = true;
       this.controlLocal = c.newLocal(T.i32);
@@ -490,14 +494,14 @@ export class MC {
       let outlined = false;
       for (; next < scopes.length && scopes[next].open === p; next++) {
         const s = scopes[next];
-        if (s.loop) {
+        if (s.loop && this.outlining) {
           let last = next + 1;
           while (last < scopes.length && scopes[last].open < s.close) last++;
           this.outline(r, s, scopes.slice(next + 1, last));
           next = last; p = s.close; outlined = true;
           break;
         }
-        open.push(s); this.blk(s.label, false);
+        open.push(s); this.blk(s.label, s.loop);
       }
       if (outlined) continue;
       if (p < end) this.emitBlock(r.order[p]);
