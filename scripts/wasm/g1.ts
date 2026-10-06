@@ -11,6 +11,8 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
 import { AOSP, G1_DIR, JAVA, ROOT } from "./paths";
 import { cutWorkloads, dexAndroid, shellIn } from "./tools";
+import { sourceKey } from "./aot-key";
+import { createHash } from "node:crypto";
 
 const here = import.meta.dir;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
@@ -83,13 +85,13 @@ async function chromeRun() {
 // ---- measure
 const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
-interface Sample { first: number; warm: number; steady: number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; boot?: Stats; stats?: Stats }
+interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; boot?: Stats; stats?: Stats }
 type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
-const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, boot: r.boot as Stats, stats: r.stats as Stats });
+const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, boot: r.boot as Stats, stats: r.stats as Stats });
 const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
-const report: Record<string, unknown> = { cores: cpus().length, reps, runs, loadStart: loadavg()[0], engines: {} };
+const report: Record<string, unknown> = { source:sourceKey(), dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], cold:process.argv.includes("--cold"), aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
 
 for (const engine of engines) {
   let run: (c: G1Config) => G1Result | Promise<G1Result>, label = "node " + Bun.spawnSync(["node", "-p", "process.version + ' (V8 ' + process.versions.v8 + ')'"]).stdout.toString().trim(), close = async () => {};
@@ -99,14 +101,14 @@ for (const engine of engines) {
   const got = new Map<string, { js: Sample[]; wasm: Sample[]; blocked: boolean }>();
   for (const w of todo) if (!ref || refRows.has(w)) {
     const r = refRows.get(w);
-    got.set(w, { js: r ? r.jsFirst.map((first, i) => ({ first, warm: 0, steady: r.jsSteady[i], result: r.result })) : [], wasm: [], blocked: false });
+    got.set(w, { js: r ? r.jsFirst.map((first, i) => ({ first, warm: 0, steady: r.jsSteady[i], completedCalls:0, result: r.result })) : [], wasm: [], blocked: false });
   }
   for (let i = 0; i < runs; i++) {
-    for (const w of got.keys()) for (const mode of ["js", "wasm"] as const) {
+    for (const w of got.keys()) for (const mode of (i%2?["wasm","js"]:["js","wasm"]) as ("js"|"wasm")[]) {
       const entry = got.get(w)!;
       if (ref && mode === "js") continue;
       if (entry.blocked && (mode === "wasm" || i > 0)) continue;
-      const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT }));
+      const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }));
       entry[mode].push(r);
       if (mode === "wasm" && i === 0 && ((r.error && !r.result) || r.result !== entry.js[0].result)) entry.blocked = true;
     }
@@ -142,7 +144,8 @@ for (const engine of engines) {
     }
   }
   for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over ${r.steady.length} matching ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
-  (report.engines as Record<string, unknown>)[engine] = { label, rows, geoFirst: ratios.first.length ? geo(ratios.first) : null, geoSteady: ratios.steady.length ? geo(ratios.steady) : null };
+  const failures=[...got].flatMap(([workload,e])=>["js","wasm"].flatMap(mode=>e[mode as "js"|"wasm"].flatMap((s,run)=>s.error||(!ref&&s.completedCalls!==reps+1)?[{workload,mode,run,error:s.error??"incomplete call count",completedCalls:s.completedCalls}]:[])));
+  (report.engines as Record<string, unknown>)[engine] = { label, selected:got.size, blocked:[...got].filter(([,e])=>e.blocked).map(([w])=>w), failures, reference:refPath||null, rows, geoFirst: ratios.first.length ? geo(ratios.first) : null, geoSteady: ratios.steady.length ? geo(ratios.steady) : null };
   await close();
 }
 const peak = Math.max(...loads), noisy = peak > 2;

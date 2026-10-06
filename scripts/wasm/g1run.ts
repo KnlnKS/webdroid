@@ -30,7 +30,7 @@ if (aotDir) {
   (globalThis as { G1_AHEAD?: number }).G1_AHEAD = performance.now() - t0;
 }
 
-export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string }
+export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string; cold?: boolean }
 export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
@@ -50,7 +50,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   const prog = cfg.mode === "wasm" ? program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]) : null;
   // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
   heapBase = heapUsed();
-  const w = prog ? world(prog, { natives, heapUsed: collectedHeap }) : null;
+  const w = prog ? world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold!==undefined&&{cold:cfg.cold}) }) : null;
   let hit = 0;
   if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { processState(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
   const name = `w_${cfg.workload}`;
