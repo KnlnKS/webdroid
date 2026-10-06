@@ -316,15 +316,16 @@ export class ColdInterpreter {
     if (index < 0) throw new Error(`not a DEX instruction boundary: ${pc}`);
     this.api.cursor(frame, index); state.done = false;
   }
-  snapshot(frame: Handle): ColdSnapshot {
+  snapshot(frame: Handle, reuse?: Pick<ColdSnapshot, "bits" | "references" | "kinds">): ColdSnapshot {
     const state = this.frames.get(frame);
     if (!state || state.done || state.busy) throw new Error("no committed cold activation to snapshot");
     const pc = state.pcs[this.api.index(frame)];
     if (pc === undefined) throw new Error("cold activation left its code");
-    const bits = new BigInt64Array(state.item.regs), references: unknown[] = [], kinds = new Uint8Array(state.item.regs);
+    const bits = reuse?.bits ?? new BigInt64Array(state.item.regs), references = reuse?.references ?? new Array<unknown>(state.item.regs), kinds = reuse?.kinds ?? new Uint8Array(state.item.regs);
+    if (bits.length !== state.item.regs || references.length !== state.item.regs || kinds.length !== state.item.regs) throw new Error("incompatible cold snapshot storage");
     for (let i = 0; i < bits.length; i++) {
       bits[i] = this.api.readBits(frame, i); kinds[i] = this.api.kind(frame, i);
-      references.push(this.api.readObject(frame, i));
+      references[i] = this.api.readObject(frame, i);
     }
     return { item: state.item, ...state.context, monitors: state.context.monitors.map(m => ({ ...m })), uninitialized: state.context.uninitialized.map(a => ({ ...a })), result: state.context.result && { ...state.context.result }, exception: state.context.exception && { ...state.context.exception }, pc, executedPc: this.api.pc(frame), edges: this.api.edges(frame), bits, references, kinds };
   }

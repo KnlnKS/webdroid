@@ -111,10 +111,13 @@ function activationImports(w: World, m: MethodInfo, cold: ColdInterpreter, make:
   const slowOps = new ColdSlowOps(w);
   const handed = new WeakMap<object, NonNullable<ReturnType<World["promoteCold"]>>>();
   const callers = new WeakMap<object, Error>();
+  // Private slow-operation buffers never back snapshots published to resume entries.
+  const snapshots = new WeakMap<object, ColdSnapshot>();
   const step = (frame: object) => {
     let caller = callers.get(frame);
     if (!caller) { callers.set(frame, caller = new Error()); w.stats.coldCallerCaptures++; }
-    const state = cold.snapshot(frame), owner = state.owner!; w.stats.coldSnapshotRegisters += registers;
+    const state = cold.snapshot(frame, snapshots.get(frame)), owner = state.owner!;
+    snapshots.set(frame, state); w.stats.coldSnapshotRegisters += registers;
     cold.inFlight(frame, true); cold.attempt(frame, state.pc);
     let busy = true;
     const unlock = () => { if (busy) { cold.inFlight(frame, false); busy = false; } };
@@ -126,11 +129,11 @@ function activationImports(w: World, m: MethodInfo, cold: ColdInterpreter, make:
     } catch (error) { unlock(); throw error; }
   };
   const imports = {
-    target: (frame: object, edges: number) => { const next = w.promoteCold(m, cold, frame, edges); if (next) handed.set(frame, next); return next?.fn ?? null; },
+    target: (frame: object, edges: number) => { const next = w.promoteCold(m, cold, frame, edges); if (next) { snapshots.delete(frame); handed.set(frame, next); } return next?.fn ?? null; },
     snapshot: (frame: object) => { const next = handed.get(frame)!; handed.delete(frame); return next.state; },
     peer: (frame: object) => cold.owner(frame)?.thread.obj ?? null,
     synchronous: (frame: object) => +cold.synchronous(frame),
-    finish: (frame: object) => cold.finish(frame),
+    finish: (frame: object) => { snapshots.delete(frame); cold.finish(frame); },
     slow: step, slowAsync: hasJspi() ? w.sched.suspending(step) : step,
     make: (state?: ColdSnapshot) => { if (resuming) return w.enterColdDeopt(state!, cold); w.stats.coldCalls++; const frame = make(); cold.context(frame, m, w.sched.current(), w.inSynchronousJava(), Number(w.rtImports().depth.value)); return frame; },
   };

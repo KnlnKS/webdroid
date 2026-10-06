@@ -15,7 +15,7 @@ import type { World } from "../link/world";
 
 
 export class UnsupportedSlowOperation extends Error {}
-type Analysis = { prepared: ReturnType<typeof prepareMethod>; typing: Typing };
+type Analysis = { prepared: ReturnType<typeof prepareMethod>; typing: Typing; instructions: Map<number, PreparedInstruction> };
 type Adapter = { call: (strand: Strand, sync: boolean, depth: number, peer: unknown, ...args: unknown[]) => unknown; inputs: { reg: number; kind: Kind }[]; output: Kind | "V"; successor: number; producer: boolean };
 type SlowBody = (cx: Compiler, c: Code, arg: (i: number) => void) => number[];
 type Batch = { entries: { body: SlowBody; ctor?: MethodInfo }[]; call: (strand: Strand, sync: boolean, selector: number, depth: number, peer: unknown, ...args: unknown[]) => unknown };
@@ -56,7 +56,7 @@ export class ColdSlowOps {
       const start = performance.now(), item = m.dex.code(m.codeOff), prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
       this.w.stats.phase.prepare += performance.now() - start;
       const infer = performance.now();
-      this.analyses.set(m, found = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions) });
+      this.analyses.set(m, found = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions), instructions: new Map(prepared.instructions.map(ins => [ins.pc, ins])) });
       this.w.stats.phase.infer += performance.now() - infer; this.w.stats.coldTypingMethods++;
     }
     return found;
@@ -261,7 +261,7 @@ export class ColdSlowOps {
       throw new Error("incompatible cold slow activation");
     this.validate(state, strand);
     if (this.busy.has(state)) throw new Error("cold operation already in flight");
-    const ins = this.analysis(m).prepared.instructions.find(i => i.pc === state.pc);
+    const ins = this.analysis(m).instructions.get(state.pc);
     if (!ins) throw new Error(`not a DEX instruction boundary: ${state.pc}`);
     if (ins.name.startsWith("move-result")) {
       const result = state.result;
@@ -293,7 +293,7 @@ export class ColdSlowOps {
         state.uninitialized = state.uninitialized.filter(a => a.reference !== receiver);
       } else if (adapter.output !== "V") {
         if (adapter.producer) {
-          const next = this.analysis(m).prepared.instructions.find(i => i.pc === adapter.successor);
+          const next = this.analysis(m).instructions.get(adapter.successor);
           if (next?.name.startsWith("move-result")) state.result = { pc: ins.pc, kind: adapter.output, value: result };
         } else this.write(state, ins.a, adapter.output, result);
       }
@@ -311,7 +311,7 @@ export class ColdSlowOps {
       if (!throwable) throw error;
       const target = this.handler(m, ins.pc, throwable);
       if (target === undefined) throw error;
-      state.exception = this.analysis(m).prepared.instructions.find(i => i.pc === target)?.name === "move-exception" ? { pc: ins.pc, value: throwable } : undefined; state.executedPc = ins.pc; state.pc = target;
+      state.exception = this.analysis(m).instructions.get(target)?.name === "move-exception" ? { pc: ins.pc, value: throwable } : undefined; state.executedPc = ins.pc; state.pc = target;
       return "handler";
     };
     this.w.stats.coldSlowCalls++;
