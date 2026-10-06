@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { dexesFrom } from "../dexes";
 import type { AotStore } from "../../src/wasm/link/aot";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { dexesIn, dexEntryNames, type DexFile } from "../../src/jvm/dex";
@@ -17,10 +18,7 @@ import { heapUsed } from "../../src/wasm/host/stats";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 
 export function loadDexes(path: string) {
-  const bytes = new Uint8Array(readFileSync(path));
-  if (path.endsWith(".dex")) return dexesIn(bytes, path);
-  const zip = zipTree(bytes);
-  return dexEntryNames(Object.keys(zip)).flatMap((n) => dexesIn(zip[n], n));
+  return dexesFrom(new Uint8Array(readFileSync(path)), path);
 }
 /** WEBDROID_AOT=<dir> runs the harnesses over the precompiled platform assets (aot-build.ts) in <dir> */
 const AOT = typeof process === "undefined" ? (globalThis as { G1_AOT?: string }).G1_AOT : process.env.WEBDROID_AOT;

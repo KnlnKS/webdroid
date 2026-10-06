@@ -8,6 +8,11 @@ import { descToName } from "../src/jvm/abi";
 import { need } from "./args";
 
 const [path] = need("bun run smoke <apk> [--cold]");
+if (process.env.WEBDROID_TIER === "wasm") {
+  if (process.argv.includes("--cold")) throw new Error("Wasm smoke validates compiled modules; use bun run wasm cold for cold execution checks");
+  const child = Bun.spawn(["bun", "scripts/wasm/run.ts", "sweep", path], { stdio: ["inherit", "inherit", "inherit"] });
+  process.exit(await child.exited);
+}
 const cold = process.argv.includes("--cold");
 setLazyMethods(cold);
 
@@ -45,3 +50,5 @@ const sorted = [...failures.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
 for (const [msg, n] of sorted) console.log(`  ${n}× ${msg}`);
 console.log(`missing (first 30 of ${rt.missing.size}):`);
 console.log([...rt.missing].slice(0, 30).join("\n"));
+
+if (fail) process.exit(1);

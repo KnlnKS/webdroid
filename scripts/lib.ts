@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
-import { dexesIn, dexEntryNames, isDexEntry, DexFile } from "../src/jvm/dex";
-import { zipTree } from "../src/jvm/natives/jzip";
+import type { DexFile } from "../src/jvm/dex";
+import { dexesFrom } from "./dexes";
+export { dexesOf } from "./dexes";
 import { openInstall } from "../src/shell/install";
 import { rt } from "../src/jvm/runtime";
 import type { XmlNode } from "../src/android/axml";
@@ -19,14 +20,8 @@ export async function openApk(path: string): Promise<Zip> {
   return openInstall(new Uint8Array(await Bun.file(path).arrayBuffer())).zip;
 }
 
-export function dexesOf(zip: Zip): DexFile[] {
-  return dexEntryNames(Object.keys(zip)).flatMap((name) => dexesIn(zip[name], name));
-}
-
 export async function openDexes(path: string): Promise<DexFile[]> {
-  const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-  const zip = zipTree(bytes);
-  return dexesOf(Object.keys(zip).some(isDexEntry) ? zip : openInstall(bytes).zip);
+  return dexesFrom(new Uint8Array(await Bun.file(path).arrayBuffer()), path);
 }
 
 export async function loadDexes(path: string): Promise<DexFile[]> {
