@@ -62,3 +62,17 @@ bun scripts/wasm/boundary-profile.ts --profile TARGET.cpuprofile \
 ```
 
 The optional ownership file maps node IDs to `{ "category": "boundary", "evidence": "mapped source/function ..." }` (or `nativeWork`, `java`, `runtime`, `idle`, `unattributed`). Review bundled/generated frames against their actual source or module/function map. Only **self** samples count as boundary cost. Native body descendants stay native work, even when called from a bridge. Unmapped Wasm may be Java, native stubs, accessors or the ARM core and therefore remains unattributed. The analyzer reports a known-boundary lower bound and a conservative upper bound including all unattributed samples. Sum sampled active CPU and boundary CPU over every relevant target; do not average process percentages or use whole-native inclusive time. G5 remains open if unresolved ownership/coverage prevents proving boundary cost below 5% of the actual heavy tap's CPU.
+
+### Owned full-step tap diagnostic
+
+`boundary-tap.ts` runs the unchanged full-flow setup through the canonical probe, then profiles one ordinary `tapText` step across every current target. For example:
+
+```sh
+WEBDROID_TIER=wasm WEBDROID_URL='http://localhost:4197/?processMode=worker' \
+  bun scripts/wasm/boundary-tap.ts --flow fitnotes --after 2-save --tap tab-history \
+  --out tests/e2e/actual/y1-recovery/boundary-fitnotes
+```
+
+Use a fresh matching AOT manifest and an owned server. The script preserves screenshots, UI/step telemetry, browser errors, raw profiles and canonical process snapshots. It does not force GC, repeat the tap, modify the flow's horizon or change tiering budgets. It uses the full flow's pinned date and real timers, rather than enabling the controlled-clock selector. Its profile covers action **and** settle, liveness, pixel capture and telemetry. Target attachment/start and stop are sequential, so raw profiles include different amounts of work outside the step. Compare each profile's timestamps and retain these limits; summing this raw window does not establish the input-only boundary percentage. In particular, page-side pixel readback/hash CPU is harness work rather than native dispatch cost. Final idle attribution needs a common action window and reviewed leaf ownership.
+
+For an emitted Bun bundle, source-owner comments and the profiled function's exact generated line can provide reviewed ownership evidence; preserve the exact bundle and its hash. Count LF lines, not Python `splitlines()` (embedded Unicode separators otherwise shift these offsets). Unnamed JS stubs, builtins and Wasm helpers stay unresolved without their source/module identity. Whole Java method samples cannot distinguish guard instructions from Java work; a method-name map alone cannot prove hot guard cost.
