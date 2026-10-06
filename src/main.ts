@@ -42,6 +42,9 @@ import { swipe } from "./shell/gesture";
 import { device } from "./shell/config";
 import { appHost } from "./android/apphost";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot";
+import { hasFocusedWindow, hasTouchWindow, dispatchKey } from "./android/server/wm";
+import { imeActive } from "./android/ime";
+import { systemInputLayer } from "./shell/system-input";
 import { onProcessExit } from "./process-exit";
 import { deathOf, lastExit, type Death } from "./android/server/appexitinfo";
 
@@ -53,13 +56,16 @@ configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(par
 configureJvmCoverage(params.get("fuzzCoverage") === "1");
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
+const systemWindows = params.get("processMode") === "worker";
 const back = async () => {
+  if (systemWindows && hasFocusedWindow()) { await pressBack(); return; }
   const routed = processBroker().activities.back(PROCESS_PID);
   if (routed) await routed; else await pressBack();
 };
 const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });
 const { canvas, kbd } = shell;
 setScreenCanvas(canvas);
+const systemInput = systemWindows ? systemInputLayer(canvas, () => device) : undefined;
 setWebLayer(shell.webLayer);
 setDisplayChangeHandler(shell.resizeDisplay);
 
@@ -194,6 +200,7 @@ const framed = (): RealmWd[] => processBroker().activities.shownWindows().flatMa
 });
 // the process on top takes the tap, as it takes the browser's own pointer events
 const tap = (x: number, y: number): Promise<void> => {
+  if (systemWindows && hasTouchWindow(x, y)) return local.tap(x, y);
   const worker = processBroker().activities.shownEntries().at(-1)?.worker;
   if (worker) return worker.control.tap(x, y);
   const top = processBroker().activities.shownWindows().at(-1);
@@ -224,10 +231,11 @@ const wd = {
   web: () => webViewInfo(),
   // the processes the broker shows stack above this one in their frames, as their windows do on a display
   uiTree: async (): Promise<Awaited<ReturnType<RealmWd["uiTree"]>>> => {
-    const nodes = await local.uiTree();
+    const root = await local.uiTree();
+    const nodes = systemWindows ? [] : root;
     for (const child of framed()) nodes.push(...await child.uiTree());
     for (const entry of processBroker().activities.shownEntries()) if (entry.worker) nodes.push(...await entry.worker.control.uiTree());
-    return nodes;
+    return systemWindows ? [...nodes, ...root] : nodes;
   },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
   // the space wd.tap takes), topmost window first.
@@ -251,7 +259,7 @@ const wd = {
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
     const worker = processBroker().foregroundWorker();
-    if (worker) await worker.control.swipe(x1, y1, x2, y2, ms);
+    if (worker && !(systemWindows && hasTouchWindow(x1, y1))) await worker.control.swipe(x1, y1, x2, y2, ms);
     else await swipe(x1, y1, x2, y2, ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
@@ -280,12 +288,12 @@ const wd = {
   uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
   type: async (s: string) => {
     const worker = processBroker().foregroundWorker();
-    if (worker) await worker.control.type(s);
+    if (worker && !(systemWindows && hasFocusedWindow())) await worker.control.type(s);
     else { kbd.value = s; await imeInput(s); }
     return "typed " + s;
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
-  enter: async () => "action " + ((await (processBroker().foregroundWorker()?.control.enter() ?? imeAction())) ? "handled" : "ignored"),
+  enter: async () => "action " + ((await ((systemWindows && hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
   threads: threadStates,
   redraw,
@@ -313,7 +321,22 @@ setInterval(() => {
   if (performance.now() - lastVsync > 40) vsync(performance.now());
 }, 33);
 
-attachIme(canvas, kbd);
+attachIme(canvas, kbd, systemInput?.element);
+if (systemWindows) {
+  const keys = new Map([["Escape", 4], ["BrowserBack", 4], ["Enter", 66], ["Tab", 61],
+    ["ArrowUp", 19], ["ArrowDown", 20], ["ArrowLeft", 21], ["ArrowRight", 22]]);
+  const listeners = new AbortController();
+  document.addEventListener("keydown", event => {
+    if (!hasFocusedWindow() || event.isComposing) return;
+    const key = keys.get(event.key);
+    if (key === undefined || key !== 4 && event.target === kbd && imeActive()) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    void dispatchKey(key).catch(error => console.error("[input]", error));
+  }, { capture: true, signal: listeners.signal });
+  const close = () => listeners.abort();
+  window.addEventListener("pagehide", close, { once: true });
+  onProcessExit(close);
+}
 
 mountSystemCertificates();
 mountPlatformData();

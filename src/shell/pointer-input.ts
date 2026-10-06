@@ -3,14 +3,14 @@ import { queuePointer, type PointerSample } from "./pointer-queue";
 
 export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number };
 export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
-  dispatch: (action: number, x: number, y: number) => Promise<void>, onDown: () => void = () => {}) {
+  dispatch: (action: number, x: number, y: number) => Promise<void>, onDown: () => void = () => {}, source: HTMLElement = canvas) {
   const listeners = new AbortController();
   let closed = false;
   const device = { get width() { return geometry().width; }, get height() { return geometry().height; },
     get scrollUnit() { return geometry().scrollUnit; }, get touchSlop() { return geometry().touchSlop; } };
   function listenOn<K extends keyof HTMLElementEventMap>(name: K, handler: (event: HTMLElementEventMap[K]) => void,
     options: AddEventListenerOptions = {}) {
-    canvas.addEventListener(name, handler, { ...options, signal: listeners.signal });
+    source.addEventListener(name, handler, { ...options, signal: listeners.signal });
   }
   // getBoundingClientRect forces layout, so the rect a gesture maps through is read once when the
   // gesture starts, not per move.
@@ -63,7 +63,7 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
       if (live) cancelWheel();
       down = true;
       rect = canvas.getBoundingClientRect();
-      try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
+      try { source.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
       const [x, y] = at(e);
       sendPointer({ action: 0, x, y });
       onDown();

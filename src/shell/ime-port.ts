@@ -28,11 +28,11 @@ type Edit = { generation: number; kind: "input"; text: string; start: number; en
   | { generation: number; kind: "selection"; start: number; end: number }
   | { generation: number; kind: "finish" | "action" };
 /** A text control belongs to exactly one page-side process owner. */
-export function receiveIme(port: MessagePort, canvas: HTMLCanvasElement) {
-  const input = document.createElement("textarea");
+export function receiveIme(port: MessagePort, canvas: HTMLCanvasElement, suppliedInput?: HTMLTextAreaElement) {
+  const input = suppliedInput ?? document.createElement("textarea");
   input.className = "sr-only"; input.setAttribute("aria-label", "Android keyboard input");
   input.tabIndex = -1; input.autocomplete = "off"; input.disabled = true;
-  (canvas.parentElement ?? document.body).append(input);
+  if (!suppliedInput) (canvas.parentElement ?? document.body).append(input);
   const events = new AbortController();
   let closed = false, pending = false;
   let state: ImeState = { generation: 0, text: "", start: 0, end: 0, active: false, hasAction: false };
@@ -89,7 +89,7 @@ export function receiveIme(port: MessagePort, canvas: HTMLCanvasElement) {
   }, {signal:events.signal});
   function close() {
     if (closed) return;
-    closed = true; queue.length = 0; visibility.disconnect(); events.abort(); port.removeEventListener("message", receive); proxy.close(); input.remove();
+    closed = true; queue.length = 0; visibility.disconnect(); events.abort(); port.removeEventListener("message", receive); proxy.close(); input.disabled = true; input.blur(); if (!suppliedInput) input.remove();
   }
   return { close, focus() { mirror(); if (!input.disabled) input.focus(); }, input };
 }

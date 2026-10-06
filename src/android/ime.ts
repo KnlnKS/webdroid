@@ -25,7 +25,7 @@ export function imeState(): ImeState {
     end: served ? served.end - served.offset : 0, active: imeActive(), hasAction: imeHasAction() };
 }
 let inputEl: HTMLInputElement | HTMLTextAreaElement | null = null;
-export function setInputElement(el: HTMLInputElement | HTMLTextAreaElement) { inputEl = el; }
+export function setInputElement(el: HTMLInputElement | HTMLTextAreaElement | null) { inputEl = el; }
 let imeVisible = false;
 let editing = false;
 /** the page's text control takes the served editor's text and selection */

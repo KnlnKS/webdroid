@@ -238,12 +238,26 @@ function topFirst(): WindowState[] {
     .sort((a, b) => { const [a0, a1] = key(a), [b0, b1] = key(b); return b0 - a0 || b1 - a1; });
 }
 let focused: WindowState | null = null;
+const inputWatchers = new Set<() => void>();
+/** Copied hit regions for the owning page; Java input channels stay in this realm. */
+export function inputWindowRegions(): { left: number; top: number; right: number; bottom: number }[] {
+  return topFirst().filter(ws => ws.channel && !(flags(ws) & FLAG_NOT_TOUCHABLE)).map(ws =>
+    flags(ws) & (FLAG_NOT_TOUCH_MODAL | FLAG_NOT_FOCUSABLE) ? { ...ws.frame } : { left: 0, top: 0, right: device.width, bottom: device.height });
+}
+export function watchInputWindows(changed: () => void): () => void {
+  inputWatchers.add(changed); changed();
+  return () => { inputWatchers.delete(changed); };
+}
+export const hasFocusedWindow = (): boolean => !!focused?.channel;
+export const hasTouchWindow = (x: number, y: number): boolean => !!touchedWindow(x, y)?.channel;
 function updateFocus(): void {
   const next = topFirst().find((ws) => !(flags(ws) & FLAG_NOT_FOCUSABLE)) ?? null;
-  if (next === focused) return;
-  if (focused?.channel) sendFocus(focused.channel, false);
-  focused = next;
-  if (next?.channel) sendFocus(next.channel, true);
+  if (next !== focused) {
+    if (focused?.channel) sendFocus(focused.channel, false);
+    focused = next;
+    if (next?.channel) sendFocus(next.channel, true);
+  }
+  for (const changed of inputWatchers) changed();
 }
 let touchTarget: WindowState | null = null;
 function touchedWindow(x: number, y: number): WindowState | null {
