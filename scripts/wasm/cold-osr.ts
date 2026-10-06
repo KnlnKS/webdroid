@@ -25,6 +25,7 @@ writeFileSync(join(out, "Osr.java"), `public class Osr {
   public static int wide(${Array.from({length:65},(_,i)=>`int a${i}`).join(',')}){effects++;invalidate();if(a0<0)return 0;return ${Array.from({length:65},(_,i)=>`a${i}`).join('+')};}
   static char[] stringChars(){invalidate();return new char[]{'a','b'};}
   public static int stringAliases(){String s=new String(stringChars());return s.length();}
+  public static int edge(boolean b){effects++;invalidate();if(b)return effects+3;return effects+5;}
   public static int captureFail(){synchronized(lock){effects++;try{invalidate();if(effects()<0)return 3;return 7;}catch(IllegalStateException e){return 11;}}}
   public static int state(int n,boolean fail){synchronized(lock){effects++; int x=0; for(int i=0;i<n;i++)x+=i; try{return await(x,fail)+7;}catch(IllegalArgumentException e){return x+9;}}}
 }`);
@@ -168,7 +169,7 @@ if(process.argv.includes("--aot")) {
       return capture(...args);
     };
     const enter=page.enterColdDeopt.bind(page);
-    page.enterColdDeopt=(s,c)=>{if(!cold)throw new Error("disabled runtime attempted cold handoff");if(s.method?.cls==="Osr"){if(s.method.name==="run")rootTransfers++;if(s.method.name==="state")stateTransfers++;}return enter(s,c);};
+    page.enterColdDeopt=(s,c)=>{if(!cold)throw new Error("disabled runtime attempted cold handoff");if(s.method?.cls==="Osr"){if(s.method.name==="run")rootTransfers++;if(s.method.name==="state")stateTransfers++;if(s.method.name==="edge"){const op=s.item.insns[s.executedPc]&255;check("AOT branch commits before either outgoing edge",op>=0x32&&op<=0x3d,true);}}return enter(s,c);};
     check(`AOT native/EH result and monitor cold=${cold} fail=${fail}`,await page.entryAsync("Osr","state","(IZ)I")(100,fail),4958+fail);
     check(`AOT committed result/EH handoff cold=${cold} fail=${fail}`,stateTransfers,+cold);
     const lock=page.entry("Osr","lock","()Ljava/lang/Object;")() as object;
@@ -184,6 +185,7 @@ if(process.argv.includes("--aot")) {
     check(`AOT uninitialized String defers handoff cold=${cold}`,await page.entryAsync("Osr","stringAliases","()I")(),2);
     check(`AOT committed String can hand off cold=${cold}`,page.stats.coldDeopts>beforeStrings,cold);
     check(`AOT epoch checks follow cold=${cold}`,guards>0,cold);
+    for(const branch of [false,true]){const prefix=Number(page.entry("Osr","effects","()I")());check(`AOT branch handoff cold=${cold} taken=${branch}`,await page.entryAsync("Osr","edge","(Z)I")(branch),prefix+1+(branch?3:5));}
     const prior=page.stats.coldDeopts, prefix=Number(page.entry("Osr","effects","()I")());
     const j=fail?-0x123456789abcdefn:0x123456789abcdefn, f=fail?0x7fc12345:-2147483648, d=fail?0x7ff8123456789abcn:-9223372036854775808n;
     check(`AOT long/FP/reference bits cold=${cold}`,await page.entryAsync("Osr","raw","(JFDLjava/lang/Object;)J")(j,f,d,fail?null:lock),BigInt.asIntN(64,j ^ BigInt(f) ^ d ^ (fail?0n:9n)));

@@ -587,13 +587,14 @@ export class MC {
     else if (this.capturePC >= 0) this.code.br(this.depth("$captureRoot"));
     else this.code.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(this.deopt!.sig).returnCallRef(this.deopt!.sig);
   }
-  private deoptAt(ins: Ins): void {
+  private deoptAt(ins: Ins, previous?: number): void {
     const d = this.deopt, c = this.code;
     if (!d || !this.typing.reached(ins.pc) || ins.op >= 0x0a && ins.op <= 0x0d) return;
     c.pc = ins.pc;
     c.gget(d.enabled).if_(); this.push("deoptEnabled");
     c.gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne).if_(); this.push("deoptChanged");
     if (this.stringAliases) { c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe"); }
+    if (!this.tries && previous !== undefined) c.i32(previous).lset(this.executedLocal);
     const values = Array.from(this.typing.before(ins.pc)).flatMap((web, register) => web < 0 ? [] : [{ register, local: this.local(web), type: this.storage(this.typing.kind[web]) }]);
     this.cx.deoptWork.sites++; this.cx.deoptWork.values += values.length;
     if (this.capturePC >= 0) {
@@ -616,8 +617,12 @@ export class MC {
     this.block = b;
     if (this.tries) c.i32(inss[0].pc).lset(this.pcLocal);
     this.facts = cloneFacts(this.entryFacts[b]);
+    let previous: number | undefined;
     for (const [i, ins] of inss.entries()) {
-      if (!this.consumed.has(ins.pc) && (ins === inss[0] || ins.name.startsWith("invoke"))) this.deoptAt(ins);
+      const active = !this.consumed.has(ins.pc), transfer = !!NO_THROW[ins.op] && (endsBlock(ins.op) || branchTargets(this.item, ins).length > 0);
+      if (active && (ins === inss[0] || ins.name.startsWith("invoke"))) this.deoptAt(ins, previous);
+      // A nonthrowing transfer must record its PC before taking the outgoing edge.
+      if (this.deopt && !this.tries && active && transfer && this.typing.reached(ins.pc)) c.i32(ins.pc).lset(this.executedLocal);
       this.emit(ins);
       if (this.deopt && !this.consumed.has(ins.pc) && this.typing.reached(ins.pc)) {
         const d = this.deopt; this.cur = ins;
@@ -629,10 +634,11 @@ export class MC {
         if (allocation || constructor) c.gget(d.enabled).if_().lget(this.activationLocal).i32(allocation ? 1 : -1).call(d.allocation).end();
         let j = i + 1; while (j < inss.length && this.consumed.has(inss[j].pc)) j++;
         const next = inss[j];
-        // A pure straight-line successor cannot observe last-PC through a poll or handler.
-        // Keep the write before calls, throwing instructions and all control-flow edges.
-        if (!next || !NO_THROW[next.op] || endsBlock(next.op) || branchTargets(this.item, next).length)
-          c.i32(this.consumed.has(ins.pc + ins.len) ? ins.pc + ins.len : ins.pc).lset(this.executedLocal);
+        // Handlers need the last committed PC even when a throwing instruction never exits
+        // its block. Without handlers, internal polls materialize it only on invalidation.
+        const committed = this.consumed.has(ins.pc + ins.len) ? ins.pc + ins.len : ins.pc;
+        if (this.tries ? !next || !NO_THROW[next.op] || endsBlock(next.op) || branchTargets(this.item, next).length : !next && !transfer && !endsBlock(ins.op)) c.i32(committed).lset(this.executedLocal);
+        previous = committed;
       }
       step(this, ins, this.facts);
     }
