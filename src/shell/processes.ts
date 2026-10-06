@@ -576,6 +576,28 @@ export class ProcessBroker {
     this.activities.processDied(pid);
   }
   private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
+  workerAotProfiles() {
+    return Promise.all([...this.entries.values()].flatMap(entry => {
+      const worker = entry.worker, url = worker?.url ?? entry.workerDiagnostic?.url;
+      if (!url) return [];
+      return [(async () => {
+        const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          if (!worker || entry.dead) throw new Error("Worker has exited");
+          const result = await Promise.race([worker.control.aotProfile(),new Promise<never>((_,reject) => {
+            timer = setTimeout(() => reject(new Error("Worker AOT profile timeout")),5000);
+          })]);
+          if (entry.dead || result.dead) throw new Error("Worker has exited");
+          if (result.identity.pid !== entry.pid || result.identity.pkg !== entry.pkg || result.identity.process !== entry.process)
+            throw new Error("Worker AOT profile identity mismatch");
+          return {...identity,result};
+        } catch (error) {
+          return {...identity,error:error instanceof Error ? error.message : String(error)};
+        } finally {clearTimeout(timer);}
+      })()];
+    }));
+  }
   workerSnapshots(entries = [...this.entries.values()]): Promise<WorkerDiagnosticRow[]> {
     return Promise.all(entries.flatMap<Promise<WorkerDiagnosticRow>>(entry => {
       const worker = entry.worker;

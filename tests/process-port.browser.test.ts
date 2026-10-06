@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm" });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
   if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -15,6 +15,21 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     const page = await browser.newPage(), errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(server.url.href);
+    const profileOwnership = await page.evaluate(async () => {
+      const source = `import {existingAotProfile} from ${JSON.stringify(location.origin+"/aot-profile.js")};
+        import {pageShared,peekPageShared} from ${JSON.stringify(location.origin+"/pageshared.js")};
+        const absent=await existingAotProfile(), untouched=peekPageShared('__wdAot')===undefined;
+        const linked=['LExample;'],called=['LCalled;'];
+        const owner={key:'build-key',wanted:new Set(['c1.wasm']),worlds:new Set([()=>({linked,called})]),ready:new Promise(()=>{})};
+        pageShared('__wdAot',()=>Promise.resolve(owner));
+        const copied=await existingAotProfile();copied.wanted.push('foreign');copied.worlds[0].linked.push('foreign');
+        self.postMessage({absent,untouched,copiedKey:copied.key,fresh:await existingAotProfile()});`;
+      const url=URL.createObjectURL(new Blob([source],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+      try { return await new Promise((resolve,reject)=>{worker.onmessage=e=>resolve(e.data);worker.onerror=e=>reject(new Error(e.message));}); }
+      finally {worker.terminate();URL.revokeObjectURL(url);}
+    });
+    expect(profileOwnership).toEqual({absent:null,untouched:true,copiedKey:"build-key",
+      fresh:{key:"build-key",wanted:["c1.wasm"],worlds:[{linked:["LExample;"],called:["LCalled;"]}]}});
     const result = await page.evaluate(async () => {
       const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();

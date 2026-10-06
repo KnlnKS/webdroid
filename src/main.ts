@@ -221,6 +221,7 @@ const wd = {
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),
+  workerAotProfiles: () => processBroker().workerAotProfiles(),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
   foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
@@ -355,4 +356,3 @@ const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : ne
   };
   requestAnimationFrame(sample);
 });
-

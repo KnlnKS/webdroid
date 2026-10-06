@@ -16,12 +16,16 @@ import { pendingTransitions } from "../android/server/atm";
 import { perf } from "../perf";
 import { processPresentation } from "./process-endpoint";
 import { nativeRequirements } from "./diagnostics";
+import { existingAotProfile } from "./aot-profile";
 
 /** Copies only observable data; a page never receives this JVM's objects or callbacks. */
 export function workerControl(logs: string[], phase: () => string) {
   let ticks = 0;
   const local = realmWd();
   return {
+    aotProfile: async () => ({phase:phase(),dead:processExited(),
+      identity:{pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
+      profile:await existingAotProfile()}),
     snapshot: async () => ({ phase: phase(), dead: processExited(), ticks, width: SCREEN_W, height: SCREEN_H,
       identity: {pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
       missingAt: Object.fromEntries([...rt.missingAt].map(([name,frames])=>[name,frames.slice()])),
