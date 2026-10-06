@@ -14,7 +14,7 @@ import { rt } from "../jvm/runtime";
 import { dexesIn, dexEntryNames, isDexEntry, type DexFile } from "../jvm/dex";
 import { Resources, setFramework } from "./res";
 import { PLATFORM_JARS } from "../jvm/provenance";
-import { loadDex, tier } from "../jvm/tier";
+import { loadDex } from "../jvm/tier";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
 import { pageShared } from "../shell/pageshared";
@@ -41,8 +41,7 @@ export function jarDexes(jar: Uint8Array, label: string): DexFile[] {
 export function loadPlatformJar(bytes: Uint8Array, i: number): void {
   const jar = BOOT_JAR_PATHS[i];
   vfs.mount(jar, new BytesFile(bytes));
-  // the Wasm tier's platform classes are the tab's Program (wasm/host/boot.ts platformProgram)
-  if (tier === "js") for (const d of jarDexes(bytes, PLATFORM_JARS[i])) loadDex(rt, d, true);
+  for (const d of jarDexes(bytes, PLATFORM_JARS[i])) loadDex(rt, d, true);
   for (const [name, entry] of centralDir(bytes)) {
     if (!name.endsWith("/") && !isDexEntry(name) && !rt.bootResources.has(name)) rt.bootResources.set(name, { jar, read: () => entryBytes(bytes, entry) });
   }
