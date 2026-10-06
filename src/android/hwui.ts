@@ -5,7 +5,7 @@
 // the UI thread, as hwui's RenderThread does.
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall, scall, callOn, JThread } from "../jvm/natives/jentry";
-import { handle, deref, release } from "./handles";
+import { handle, deref, release, refBaseHandle } from "./handles";
 import { NativeRenderNode, drawNodeInto, positionUpdates } from "./rendernode";
 import { textureLayerNatives } from "./texturelayer";
 import { animateRenderThread } from "./rtanimator";
@@ -87,7 +87,7 @@ rt.registerJnis("android/graphics/HardwareRendererObserver", {
   "nGetNextBuffer(J[J)I": () => -1,
 });
 rt.registerJnis("android/graphics/HardwareRenderer", {
-  "nCreateRootRenderNode()J": () => handle(new NativeRenderNode("RootRenderNode")),
+  "nCreateRootRenderNode()J": () => refBaseHandle(new NativeRenderNode("RootRenderNode"), 1),
   "nCreateProxy(ZJ)J": (translucent: number, root: bigint) => handle({
     root: deref<NativeRenderNode>(root), surface: null, opaque: !translucent, stopped: false, frame: 0n,
     drawCallback: null, commitCallback: null, completeCallback: null, animating: false, running: false,

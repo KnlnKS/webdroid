@@ -8,7 +8,7 @@
 
 import { Recorder, displayListLength, isRecording, recordOrRun, replay, replayingCanvas, replayFor, transformOf, type Ctx2D, type DisplayList } from "./recording";
 import { rt } from "../jvm/runtime";
-import { handle, deref, release, ownedHandle, FINALIZER } from "./handles";
+import { handle, deref, ownedHandle, refBaseHandle, incStrong, decStrong, REFBASE_FINALIZER } from "./handles";
 import { NativePath } from "./path";
 import { perf } from "../perf";
 import type { NativeRenderEffect } from "./rendereffect";
@@ -231,8 +231,8 @@ const transformSetter = (key: "tx" | "ty" | "rotation" | "rotationX" | "rotation
 const sideSetter = (key: "left" | "top" | "right" | "bottom") => (h: bigint, v: number) => nodeAt(h).setSide(key, v);
 
 rt.registerJnis("android/graphics/RenderNode", {
-  "nCreate(Ljava/lang/String;)J": (name: string | null) => handle(new NativeRenderNode(name)),
-  "nGetNativeFinalizer()J": () => FINALIZER,
+  "nCreate(Ljava/lang/String;)J": (name: string | null) => refBaseHandle(new NativeRenderNode(name), 1),
+  "nGetNativeFinalizer()J": () => REFBASE_FINALIZER,
   // RenderNode::output: the node's properties, to the log
   "nOutput(J)V": (h: bigint) => {
     const n = nodeAt(h);
@@ -494,8 +494,8 @@ rt.registerJnis("android/graphics/CanvasProperty", {
   "nCreateFloat(F)J": (value: number) => ownedHandle({ value }),
   "nCreatePaint(J)J": (p: bigint) => { const value = new NativePaint(); copyPaint(paintAt(p), value); return ownedHandle({ value }); },
 });
-// VirtualRefBasePtr holds its object's only reference here: the handle it stores is released with it
+// A VirtualRefBasePtr adds its own reference to a JNI-created RefBase object.
 rt.registerJnis("com/android/internal/util/VirtualRefBasePtr", {
-  "nIncStrong(J)V": () => {},
-  "nDecStrong(J)V": release,
+  "nIncStrong(J)V": incStrong,
+  "nDecStrong(J)V": decStrong,
 });

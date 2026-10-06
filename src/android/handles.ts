@@ -107,3 +107,22 @@ rt.claimHandle = (owner: object, h: bigint) => {
 /** A finalizer is a function pointer the class hands to NativeAllocationRegistry, which only
  *  ever passes it back to us. One shared handle to the release function is enough. */
 export const FINALIZER = handle((h: bigint) => release(h));
+
+// RefBase natives opt in with the reference already acquired by their JNI creator.
+// Other handle kinds retain their existing ownership/finalizer contracts.
+const strongRefs = new WeakMap<object, number>();
+export function refBaseHandle(o: object, initial: number): bigint {
+  strongRefs.set(o, initial);
+  return handle(o);
+}
+export function incStrong(h: bigint): void {
+  const o = deref<object>(h);
+  if (o && strongRefs.has(o)) strongRefs.set(o, strongRefs.get(o)! + 1);
+}
+export function decStrong(h: bigint): void {
+  const o = deref<object>(h), count = o && strongRefs.get(o);
+  if (count === undefined) { release(h); return; }
+  if (count > 1) strongRefs.set(o, count - 1);
+  else { strongRefs.delete(o); release(h); }
+}
+export const REFBASE_FINALIZER = handle(decStrong);
