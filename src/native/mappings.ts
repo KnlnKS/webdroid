@@ -32,13 +32,16 @@ export class SharedMaps {
     for (const m of this.maps) {
       const base = m.base;
       if (!base) continue;
-      const at = guestAt(m.va), words = m.n >>> 2;
+      // The last mapped page includes bytes past EOF. Stores there belong to the
+      // mapping/page cache and must not extend the backing file when flushed.
+      const length = Math.max(0, Math.min(m.n, this.file.len - m.off));
+      const at = guestAt(m.va), words = length >>> 2;
       const cur32 = new Uint32Array(mem.buf, at, words), base32 = new Uint32Array(base.buffer, 0, words);
-      for (let i = 0; i < m.n;) {
+      for (let i = 0; i < length;) {
         if (i < words << 2 && !(i & 3) && cur32[i >>> 2] === base32[i >>> 2]) { i += 4; continue; }
         if (mem.u8[at + i] === base[i]) { i++; continue; }
         let j = i + 1;
-        while (j < m.n && mem.u8[at + j] !== base[j]) j++;
+        while (j < length && mem.u8[at + j] !== base[j]) j++;
         const bytes = mem.u8.slice(at + i, at + j);
         base.set(bytes, i);
         this.from = m;

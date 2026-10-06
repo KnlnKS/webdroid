@@ -5,7 +5,7 @@ import { Cpu, setA64 } from "./cpu";
 import { defineHost, lookupHost, stp, type HostFn } from "./host";
 import { LIBC_SYSCALLS, libcInit } from "./libc";
 import { mem } from "./mem";
-import { FS_SYSCALLS, fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath } from "./fs";
+import { FS_SYSCALLS, fdFile, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, javaReadFd, renamePath } from "./fs";
 import { kernelInit } from "./syscall";
 
 /** a 64-bit process's calls are the kernel's: no HLE libc serves them */
@@ -25,13 +25,20 @@ test("printf renders unmapped guest pointer values without dereferencing them", 
 test("fixed file remapping preserves dirty shared bytes before replacing pages", async () => {
   setA64(true); kernelInit();
   const path = "/fixed-mapping-test";
-  vfs.write(path, new Uint8Array(4096));
+  vfs.write(path, new Uint8Array(3));
   const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "fixed-mapping-test");
   const mmap = kernel("mmap"), munmap = kernel("munmap");
   let address = 0;
   try {
     address = await cpu.call(mmap, [0, 4096, 3, 1, fd, 0]);
     mem.st8(address, 17);
+    mem.st8(address + 2, 18);
+    mem.st8(address + 7, 99);
+    const bytes = new Uint8Array(16);
+    expect(await javaReadFd(fd,bytes)).toBe(3);
+    expect([...bytes.subarray(0,3)]).toEqual([17,0,18]);
+    expect(vfs.stat(path)?.size).toBe(3);
+    expect(await javaReadFd(fd,bytes)).toBe(0);
     expect(await cpu.call(mmap, [address, 4096, 3, 0x11, fd, 0])).toBe(address);
     expect(mem.ld8u(address)).toBe(17);
     expect(vfs.read(path)?.[0]).toBe(17);
