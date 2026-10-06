@@ -26,7 +26,6 @@ export function supportsColdBody(m: MethodInfo, cache = true): boolean {
 export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resuming = false) {
   const { item, decoded } = program(m);
   const make = cold.prepare(item, true, decoded);
-  const slowOps = new ColdSlowOps(w);
   const slot = w.slotOf(m), cx = new Compiler(w), kinds = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)];
   const imp = (name: string, params: VT[], results: VT[]) => cx.mb.importFunc("cold", "ext:" + name, cx.mb.addFuncType(params, results));
   const slow = cx.mb.importFunc("activation", "slow", cx.mb.addFuncType([T.externref], []));
@@ -42,7 +41,6 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
   const edges = imp("edges", [T.externref], [T.i32]);
   const ret = m.ret === "V" ? "V" : kindOf(m.ret);
   const resumeSig = cx.mb.addFuncType([T.externref], ret === "V" ? [] : [cx.vtOf(ret)]);
-  const handed = new WeakMap<object, NonNullable<ReturnType<World["promoteCold"]>>>();
   const built = cx.buildSynthetic((resuming ? "cold-resume:" : "cold:") + mid(m), resuming ? ["L"] : kinds, c => {
     const frame = c.newLocal(T.externref), done = c.newLocal(T.i32), prior = c.newLocal(T.i32), iterations = c.newLocal(T.i32);
     const sid = cx.global("rt", "sid", T.i32, true), thr = cx.global("rt", "thr", T.anyref, true), depth = cx.global("rt", "depth", T.i32, true);
@@ -92,12 +90,20 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
     if (ret === "L") c.lget(frame).call(reference).anyConvertExtern();
     else if (ret !== "V") { c.lget(frame).call(result); if (ret === "I") c.raw(OP.i32_wrap_i64); }
   }, ret, resuming ? "resume" : "m" + slot, resuming ? [T.externref] : undefined);
-  for (const trace of built.traces) { trace.m = m; trace.currentPcs = () => cold.tracePcs(m, w.sched.current()); }
+  const activation = activationImports(w, m, cold, make, item.regs, resuming);
+  for (const trace of built.traces) { trace.m = m; trace.currentPcs = activation.currentPcs; }
+  return { cx, built, imports: { cold: cold.imports, activation: activation.imports } };
+}
+
+// Long-lived activation callbacks must not share the emitter's lexical scope.
+function activationImports(w: World, m: MethodInfo, cold: ColdInterpreter, make: () => object, registers: number, resuming: boolean) {
+  const slowOps = new ColdSlowOps(w);
+  const handed = new WeakMap<object, NonNullable<ReturnType<World["promoteCold"]>>>();
   const callers = new WeakMap<object, Error>();
   const step = (frame: object) => {
     let caller = callers.get(frame);
     if (!caller) { callers.set(frame, caller = new Error()); w.stats.coldCallerCaptures++; }
-    const state = cold.snapshot(frame), owner = state.owner!; w.stats.coldSnapshotRegisters += item.regs;
+    const state = cold.snapshot(frame), owner = state.owner!; w.stats.coldSnapshotRegisters += registers;
     cold.inFlight(frame, true); cold.attempt(frame, state.pc);
     let busy = true;
     const unlock = () => { if (busy) { cold.inFlight(frame, false); busy = false; } };
@@ -108,7 +114,7 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
       commit();
     } catch (error) { unlock(); throw error; }
   };
-  const imports = { cold: cold.imports, activation: {
+  const imports = {
     target: (frame: object, edges: number) => { const next = w.promoteCold(m, cold, frame, edges); if (next) handed.set(frame, next); return next?.fn ?? null; },
     snapshot: (frame: object) => { const next = handed.get(frame)!; handed.delete(frame); return next.state; },
     peer: (frame: object) => cold.owner(frame)?.thread.obj ?? null,
@@ -116,6 +122,6 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
     finish: (frame: object) => cold.finish(frame),
     slow: step, slowAsync: hasJspi() ? w.sched.suspending(step) : step,
     make: (state?: ColdSnapshot) => { if (resuming) return w.enterColdDeopt(state!, cold); w.stats.coldCalls++; const frame = make(); cold.context(frame, m, w.sched.current(), w.inSynchronousJava(), Number(w.rtImports().depth.value)); return frame; },
-  } };
-  return { cx, built, imports };
+  };
+  return { imports, currentPcs: () => cold.tracePcs(m, w.sched.current()) };
 }

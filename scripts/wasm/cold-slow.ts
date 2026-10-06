@@ -13,7 +13,7 @@ import { Natives } from "../../src/wasm/host/natives";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { hostThrowable } from "../../src/wasm/host/entry";
 import { rt } from "../../src/jvm/runtime";
-import type { Compiler } from "../../src/wasm/compiler/j2w";
+import { Compiler } from "../../src/wasm/compiler/j2w";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import type { HostFn } from "../../src/wasm/link/hostapi";
 import { defaultLoop } from "../../src/wasm/link/sched";
@@ -225,5 +225,20 @@ expect("first invocation yielded before lock", yielded, true);
 expect("pre-lock yield admission agrees with JDK", shifted.join(","), orderOracle("first").join(","));
 expect("suspended monitor increments linearize", acquisitions.map(a => a.old).join(","), Array.from({ length: 20 }, (_, i) => i).join(","));
 expect("every suspended increment owns its monitor", acquisitions.map(a => a.depth).join(","), Array(20).fill(1).join(","));
+// Installed cold code retains activation callbacks and traces, not its emitter.
+const lifetime = world(paths, { cold: true });
+const emit = Compiler.prototype.buildSynthetic, compilerRefs: WeakRef<object>[] = [];
+Compiler.prototype.buildSynthetic = function (...args: Parameters<typeof emit>) {
+  if (args[0] === "cold:ColdSlow.plus(I)I") compilerRefs.push(new WeakRef(this));
+  return emit.apply(this, args);
+};
+try { expect("installed cold lifetime method", await lifetime.entryAsync("ColdSlow", "plus", "(I)I")(7), 12); }
+finally { Compiler.prototype.buildSynthetic = emit; }
+expect("cold emitter observed", compilerRefs.length, 1);
+const collect = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+if (!collect) throw new Error("cold lifetime check requires --expose-gc");
+for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
+expect("installed cold emitter collected", compilerRefs.filter(ref => ref.deref()).length, 0);
+expect("cold code remains executable after collection", await lifetime.entryAsync("ColdSlow", "plus", "(I)I")(8), 13);
 console.log("cold counters",JSON.stringify({slowAdapters:wc.stats.coldSlowAdapters,slowModules:wc.stats.coldSlowModules,slowCalls:wc.stats.coldSlowCalls,slowWaits:wc.stats.coldSlowWaits,typingMethods:wc.stats.coldTypingMethods,snapshotRegisters:wc.stats.coldSnapshotRegisters,nativeDeclarationWords:measuredNatives.declarationWords,nativeDeclarations:measuredNatives.declarations}));
 console.log(`cold slow: ${checks} checks, ${wc.stats.coldMethods} methods / ${wc.stats.coldCalls} activations; object/fields/arrays/dispatch/EH/monitors/class initialization/JSPI and pending-result snapshot validation`);
