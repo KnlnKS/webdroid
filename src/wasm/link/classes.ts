@@ -235,7 +235,6 @@ rt("cnfe", ["L"], "V", (cx, c) => {
 
 // ---------- class initialization (the state machine is World.ensureBody)
 rt("initErroneous", ["I"], "V", (cx, c) => { c.lget(0); cx.callThrower(c, "ncdfe"); });
-rt("initWait", ["I"], "V", (cx, c) => cx.gap(c, "class initialization owned by another thread: needs the thread scheduler"));
 // initFail(e): <clinit> threw e. An Error propagates as it is; anything else is wrapped in ExceptionInInitializerError, which here only
 // stores the cause (ART's constructor also fills in the stack trace)
 rt("initFail", ["L"], "V", (cx, c) => {
