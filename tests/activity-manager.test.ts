@@ -16,6 +16,7 @@ test("the activity manager drives a process's services and ordered receivers thr
     connected: ["published 0", "published 0"],
     // still started: only the binding goes, and only the last start id stops it
     unbound: ["unbind"], staleStop: 0, stop: 1, down: ["stop"],
+    concurrent: { second: 1, firstFinished: false, creates: 1 },
     ordered: { calls: ["receive a", "receive b", "receive abort"], code: 3, data: "ababort", aborted: true },
     foreign: [],
     copied: { proxy: "android/app/IActivityManager$Stub$Proxy", same: false, size: 0 },

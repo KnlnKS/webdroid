@@ -20,9 +20,10 @@ console.warn = () => {};
 // Exercise the real Java lifecycle with delayed owner replies, not a synchronous replica.
 const {serviceTransport} = await import(W + "/src/android/server/activeservices");
 const {serveCalls,callProxy} = await import(W + "/src/shell/process-port");
+let creationGate: { entered: () => void; wait: Promise<void> } | undefined;
 const starts = serviceTransport.starts(), ports = new MessageChannel();
 const stopStarts = serveCalls(ports.port1,Object.fromEntries(Object.entries(starts).map(([name,method]) =>
-  [name,async (...args:unknown[]) => { await new Promise(resolve=>setTimeout(resolve,1)); return (method as (...args:unknown[])=>unknown)(...args); }])));
+  [name,async (...args:unknown[]) => { await new Promise(resolve=>setTimeout(resolve,1)); if (name === "created" && creationGate) { creationGate.entered(); await creationGate.wait; } return (method as (...args:unknown[])=>unknown)(...args); }])));
 const remoteStarts = callProxy(ports.port2,Object.keys(starts));
 serviceTransport.starts = () => remoteStarts.endpoint;
 
@@ -101,6 +102,35 @@ out.staleStop = await vcall(am, "stopServiceToken", `(Landroid/content/Component
 out.stop = await vcall(am, "stopServiceToken", `(Landroid/content/ComponentName;${BINDER}I)Z`, name, token, 1);
 await settle();
 out.down = calls.splice(0);
+
+// Two real Java bind chains wait for one delayed creation. The first caller then
+// suspends independently; it must not keep the second bind waiting on its stack.
+const creationEntered = Promise.withResolvers<void>(), allowCreation = Promise.withResolvers<void>();
+const allowCaller = Promise.withResolvers<void>();
+creationGate = { entered: creationEntered.resolve, wait: allowCreation.promise };
+const concurrentIntent = await serviceIntent(), ca = await newObj("webdroid/test/Connection"), cb = await newObj("webdroid/test/Connection");
+let firstFinished = false;
+const firstBind = rt.drive(function* (): import("../../src/jvm/runtime").Gen<void> {
+  yield vcall(am, "bindServiceInstance", BIND, app, null, concurrentIntent, null, ca, 1n, null, PKG, 0);
+  yield allowCaller.promise;
+  firstFinished = true;
+}());
+await creationEntered.promise;
+const secondBind = rt.drive(function* (): import("../../src/jvm/runtime").Gen<number> {
+  return yield vcall(am, "bindServiceInstance", BIND, app, null, concurrentIntent, null, cb, 1n, null, PKG, 0);
+}());
+// The existing owner channel delays requested/created acknowledgments by one task.
+await new Promise(resolve => setTimeout(resolve, 25));
+allowCreation.resolve();
+let concurrentTimer: ReturnType<typeof setTimeout> | undefined;
+try {
+  const second = await Promise.race([secondBind, new Promise(resolve => { concurrentTimer = setTimeout(() => resolve("timeout"), 1000); })]);
+  out.concurrent = { second, firstFinished, creates: calls.filter(call => call.startsWith("create ")).length };
+} finally { clearTimeout(concurrentTimer); allowCaller.resolve(); }
+await firstBind;
+creationGate = undefined;
+for (const conn of [ca, cb]) await vcall(am, "unbindService", "(Landroid/app/IServiceConnection;)Z", conn);
+await settle(); calls.splice(0);
 
 // an ordered broadcast reaches registered receivers by priority, each from the last one's result
 for (const [tag, priority] of [["b", 1], ["a", 2], ["abort", 0], ["never", -1]] as const) {

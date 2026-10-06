@@ -5,6 +5,7 @@
 // ServiceRecords own what outlives this process: each service's start state, which this process
 // changes there as it starts, delivers and finishes, and other processes' bindings, which it
 // recreates in a restarted process.
+import { shareable } from "../../jvm/suspend";
 import { awaited, rt, JObj, getDeclared, driven, type Gen } from "../../jvm/runtime";
 import { newObj, vcall } from "../../jvm/natives/jentry";
 import { logUncaught, detached } from "../../jvm/natives/jthrowable";
@@ -127,7 +128,9 @@ const sendArgs = driven(function* (s: ServiceRecord): Gen<void> {
 function* bringUp(s: ServiceRecord): Gen<void> {
   if (s.creating) { yield* awaited(s.creating); return; }
   if (s.created) return;
-  const made = Promise.resolve(rt.drive(function* (): Gen<void> {
+  // Creation is shared by independent Java callers; keep their continuations
+  // off the cached creation promise.
+  const made = shareable(rt.drive(function* (): Gen<void> {
     yield* awaited(starts().created(s.cls, s.data));
     s.created = true;
     yield Promise.all([scheduleOnApp("scheduleCreateService", `(${BINDER}Landroid/content/pm/ServiceInfo;Landroid/content/res/CompatibilityInfo;I)V`,
