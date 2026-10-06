@@ -39,6 +39,21 @@ function loaderFor(w: World, obj: object | null): Loader {
   return w.prog.boot;
 }
 
+/** a namespace for the ClassLoader object `loader` under its Java parent: the nearest ancestor that opened dex files (or the boot loader). A ClassLoader of
+ *  another kind on the way answers by its own loadClass, which ART calls and a static view cannot (microG's dynamite modules keep the app's classes out
+ *  that way): the namespace then sees the boot classes and its own first, and the ancestor's only for names neither defines */
+function newLoader(w: World, parent: object | null, loader: object): Loader {
+  const s = stateOf(w);
+  let custom = false;
+  for (let o = parent; o; o = s.parentOf(o)) {
+    const ancestor = s.byObject.get(o);
+    if (ancestor) return custom ? w.prog.newLoader(w.prog.boot, loader, ancestor) : w.prog.newLoader(ancestor, loader);
+    const cls = w.classNameOf(o);
+    custom ||= cls !== "java/lang/BootClassLoader" && !w.prog.isSubclass(cls, "dalvik/system/BaseDexClassLoader");
+  }
+  return w.prog.newLoader(w.prog.boot, loader);
+}
+
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const s = stateOf(w), prior = s.libraries.get(object);
   if (prior) return prior;
@@ -92,7 +107,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
     let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
     if (!loader) {
       const ownApp = !s.appLoader && dexes.some(d => w.prog.loaderOfDex(d) === w.prog.root);
-      loader = ownApp ? w.prog.root : w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
+      loader = ownApp ? w.prog.root : newLoader(w, s.parentOf(loaderObject!), loaderObject!);
       s.byObject.set(loaderObject!, loader);
     }
     if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
