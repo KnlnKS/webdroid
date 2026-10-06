@@ -725,7 +725,7 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
     const path=new URL(request.url).pathname;
     if(path==="/webview-origin")return Response.json(`http://*.localhost:${server.port}`);
     if(path==="/webview")return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
-    if(path==="/write")return new Response("<script>const r=indexedDB.open('canonical');r.onupgradeneeded=()=>r.result.createObjectStore('s');r.onsuccess=()=>{r.result.close();parent.postMessage('written','*');};</script>",{headers:{"content-type":"text/html"}});
+    if(path==="/write")return new Response("<script>const r=indexedDB.open('canonical');r.onupgradeneeded=()=>r.result.createObjectStore('s').put(new Uint8Array(8192),'data');r.onsuccess=()=>{r.result.close();parent.postMessage('written','*');};</script>",{headers:{"content-type":"text/html"}});
     const output=build.outputs.find(out=>out.path.endsWith(path));
     return output?new Response(output,{headers:{"content-type":"text/javascript"}}):new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
   }});
@@ -735,6 +735,8 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
     const result=await page.evaluate(async()=>{
       const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage");
       const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port");
+      localStorage.setItem("wd:install:org.webdroid.surface.owner","1000");
+      localStorage.setItem("wd:install:org.webdroid.surface.foreign","1000");
       const owner=canonicalWebStorage("org.webdroid.surface.owner"),foreign=canonicalWebStorage("org.webdroid.surface.foreign");
       const channel=new MessageChannel();const stop=serveCalls(channel.port1,owner);
       const code=`import {webRenderer,webStorageTransport} from '${location.origin}/webstorage.js';
@@ -748,19 +750,20 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
         worker.postMessage({port:channel.port2},[channel.port2]);const row=await answer;
         const origins=webOrigins("org.webdroid.surface.owner"),foreignOrigins=webOrigins("org.webdroid.surface.foreign");
         const other=await foreign.webRenderer("https://one.example");
-        const frame=document.createElement("iframe");frame.src=row.a+"/write";document.body.append(frame);
+        const frame=document.createElement("iframe");document.body.append(frame);
         // Persist an IndexedDB database in the actual renderer partition.
         const ready=new Promise<void>(resolve=>{
           const listener=(event:MessageEvent)=>{if(event.source===frame.contentWindow&&event.origin===row.a&&event.data==='written'){removeEventListener('message',listener);resolve();}};
           addEventListener('message',listener);
         });
         frame.src=row.a+"/write?owner=1";await ready;
+        const before=await owner.webStorage("usage","https://one.example");
         const remove=owner.webStorage("origin","https://one.example"),read=owner.webStorage("usage","https://one.example");
         await remove;const usage=await read;
         frame.remove();
-        return {origins,foreignOrigins,distinct:row.a!==row.b&&row.a!==other,local:row.local,usage:usage[0]?.[1]?.usage};
+        return {origins,foreignOrigins,distinct:row.a!==row.b&&row.a!==other,local:row.local,before:!!before[0]?.[1]?.usage,usage:usage[0]?.[1]?.usage};
       }finally{stop();worker.terminate();URL.revokeObjectURL(url);}
     });
-    expect(result).toEqual({origins:["https://one.example","https://two.example"],foreignOrigins:[],distinct:true,local:"undefined",usage:0});
+    expect(result).toEqual({origins:["https://one.example","https://two.example"],foreignOrigins:[],distinct:true,local:"undefined",before:true,usage:0});
   }finally{await page.close();await server.stop(true);}
 });
