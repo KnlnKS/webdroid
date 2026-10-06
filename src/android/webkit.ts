@@ -50,6 +50,10 @@ const navigationKeys: Record<number, readonly [string, number]> = {
 };
 const MS_MODE = 0xc0000000, MS_EXACTLY = 0x40000000, MS_AT_MOST = 0x80000000 | 0, MEASURED_STATE_TOO_SMALL = 0x01000000;
 
+function weakPlacement(ref: WeakRef<WebViewChromium>) {
+  return { w: 0, h: 0, place: (rect: Rect | null) => ref.deref()?.place(rect) };
+}
+
 /** Chromium's WebViewChromium: a WebView's WebViewProvider and its view and scroll delegates */
 export class WebViewChromium extends JObj {
   view!: JObj;
@@ -76,7 +80,7 @@ export class WebViewChromium extends JObj {
   private readonly ref = new WeakRef(this);
   readonly hold: FrameHold = { el: null, remote: null, frames: new Map(), functor: 0, ends: [] };
   /** the view's size, which its draw functor covers */
-  readonly size = { w: 0, h: 0, place: (rect: Rect | null) => this.ref.deref()?.place(rect) };
+  readonly size = weakPlacement(this.ref);
   background: string | null = null;
   /** the page's content size, in CSS pixels */
   remoteWidth = 0;
@@ -98,6 +102,21 @@ export class WebViewChromium extends JObj {
   /** the app's cookie jar, which every page of its WebViews shares */
   private get jar() { return this.cookieJar ??= webCookies(runningApp().pkg); }
 
+  private static frameReceiver(ref: WeakRef<WebViewChromium>, frame: RendererFrame) {
+    return ({ data, ports }: MessageEvent) => {
+      const message = parsePageMessage(data);
+      if (message) ref.deref()?.frameMessage(frame, message, ports[0]);
+    };
+  }
+  private static pageCallbacks(ref: WeakRef<WebViewChromium>) {
+    return {
+      ifaces: () => ref.deref()?.pageIfaces,
+      intercept: async (request: WebRequest) => ref.deref()?.intercept(request) ?? null,
+      ready: (event: FrameAnnouncement) => ref.deref()?.rendererReady(event),
+      cookies: (jar: WebCookies) => () => ref.deref()?.sendCookies(jar),
+    };
+  }
+
   /** a renderer document announced itself: the main frame's, or a subframe's within it */
   private rendererReady(event: FrameAnnouncement) {
     const surface = this.hold.el, remote = this.hold.remote, token = event.data.sub, win = event.frame;
@@ -106,10 +125,7 @@ export class WebViewChromium extends JObj {
     if (!load || event.origin !== load.origin || token !== null && event.main) return;
     if (token === null) this.loading = null;
     const g = this.gen, channel = new MessageChannel(), ref = this.ref, frame = new RendererFrame(token !== null, load.entry.url, win, channel.port1);
-    channel.port1.onmessage = ({ data, ports }) => {
-      const message = parsePageMessage(data);
-      if (message) ref.deref()?.frameMessage(frame, message, ports[0]);
-    };
+    channel.port1.onmessage = WebViewChromium.frameReceiver(ref, frame);
     void this.loadMessage(frame, load).then((task) => {
       if (this.gen !== g) { channel.port1.close(); return; }
       this.hold.frames.get(win)?.port.close();
@@ -251,7 +267,7 @@ export class WebViewChromium extends JObj {
     if (el) {
       this.closeBridge();
       // Chromium injects the interfaces a page loads with; a later add or remove applies at the next load
-      const ref = this.ref;
+      const callbacks = WebViewChromium.pageCallbacks(this.ref);
       this.pageIfaces = { ...this.ifaces };
       const base = rt.link("android/webkit/WebViewClient").ctor.prototype; // js-tier
       const intercept = ["Landroid/webkit/WebResourceRequest;", "Ljava/lang/String;"].some(arg => {
@@ -259,11 +275,11 @@ export class WebViewChromium extends JObj {
         return jmethod(this.client, method) !== jmethod(base, method);
       });
       this.intercepting = intercept;
-      const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
-        intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
-      this.hold.ends.push(el.ready(remote.id, event => ref.deref()?.rendererReady(event)));
+      const remote = this.hold.remote = new WebBridge(weakIfaces(callbacks.ifaces),
+        intercept ? callbacks.intercept : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
+      this.hold.ends.push(el.ready(remote.id, callbacks.ready));
       void this.jar.then((jar) => {
-        if (this.hold.remote === remote) this.hold.ends.push(jar.watch(() => ref.deref()?.sendCookies(jar)));
+        if (this.hold.remote === remote) this.hold.ends.push(jar.watch(callbacks.cookies(jar)));
       });
       void remote.ready.then((origin) => {
         if (this.gen !== g) return;

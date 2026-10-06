@@ -769,7 +769,7 @@ test("Worker WebStorage commands retain canonical package origins and ordered de
 });
 
 test("dropped WebView frame owners release their surface without destroy", async () => {
-  const build = await Bun.build({entrypoints:[new URL("../src/android/webframes.ts",import.meta.url).pathname],target:"browser",format:"esm"});
+  const build = await Bun.build({entrypoints:[new URL("../src/android/webframes.ts",import.meta.url).pathname,new URL("../src/android/webkit.ts",import.meta.url).pathname,new URL("../src/android/webfunctor.ts",import.meta.url).pathname],target:"browser",format:"esm",splitting:true});
   if (!build.success) throw new AggregateError(build.logs,"WebView lifetime build");
   const server = Bun.serve({port:0,fetch(request) {
     const path = new URL(request.url).pathname;
@@ -785,7 +785,11 @@ test("dropped WebView frame owners release their surface without destroy", async
       (globalThis as any).frames = frames;
       (globalThis as any).removed = 0;
       frames.useWebSurfaces(()=>({style(){},load(){},ready(){return ()=>{};},open(){},replace(){},remove(){(globalThis as any).removed++;}}));
-      const view = {hold:{el:null,remote:null,frames:new Map(),functor:0,ends:[]},url:"https://dropped.example",title:"dropped",loaded:true,progress:100,rect:null,background:null};
+      const {WebViewChromium} = await import(location.origin+"/webkit.js") as typeof import("../src/android/webkit");
+      const {createFunctor} = await import(location.origin+"/webfunctor.js") as typeof import("../src/android/webfunctor");
+      const view = new WebViewChromium();
+      view.url = "https://dropped.example";
+      view.hold.functor = createFunctor(view.size);
       frames.viewFrame(view);
       (globalThis as any).owner = view;
     });
