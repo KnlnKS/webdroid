@@ -42,7 +42,7 @@ class DexClass implements JClass {
   private def_?: ClassDef;
   private members_?: { fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private methodInfos?: Map<number, MethodInfo>;
-  constructor(readonly name: string, readonly dex: DexFile, private readonly idx: number) {}
+  constructor(readonly name: string, readonly dex: DexFile, readonly idx: number) {}
   refreshTypes(resolve: (desc: string) => string): void {
     this.header_ = undefined;
     const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
@@ -89,16 +89,12 @@ class DexClass implements JClass {
     const def = this.dex.classDef(this.idx);
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
-  /** Implementation checks often miss: do not retain every member of each candidate class. */
+  /** Implementation checks often miss: they look the method up in the dex's ids rather than build the class's members. */
   method(key: string): MethodInfo | undefined {
     if (this.members_) return this.members_.byKey.get(key);
-    const def = this.def_ ?? this.dex.classDef(this.idx);
-    let index = 0;
-    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
-      if (this.dex.methodKey(m.methodIdx) === key) return this.methodInfo(m, index);
-      index++;
-    }
-    return undefined;
+    const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at));
+    const m = i < 0 ? undefined : this.dex.declaredAt(this.idx, i);
+    return m && this.methodInfo(m, m.index);
   }
   private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
     const cached = this.methodInfos?.get(index);
@@ -131,6 +127,8 @@ class DexClass implements JClass {
 export const methodCount = (c: JClass): number => (c instanceof DexClass ? c.nMethods : c.methods.length);
 /** One declared method without materializing unrelated members. */
 export const declaredMethod = (c: JClass | undefined, key: string): MethodInfo | undefined => (c instanceof DexClass ? c.method(key) : c?.byKey.get(key));
+/** the class_def of a class in its dex, or -1 for a class no dex defines */
+export const classDefIdx = (c: JClass): number => (c instanceof DexClass ? c.idx : -1);
 /** the keys and access flags of the methods a class declares */
 export const declaredMethods = (c: JClass): [string, number][] => (c instanceof DexClass ? c.declared() : c.methods.map((m) => [m.key, m.flags]));
 

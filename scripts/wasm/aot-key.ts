@@ -30,5 +30,5 @@ export function sourceKey(): string {
 /** the key of a build: the sources, the natives it was bound to (`natives`: their sorted keys) and its options */
 export const buildKey = (source: string, natives: string[], options: string): string => createHash("sha256").update(source).update(natives.join("\n")).update(options).digest("hex").slice(0, 16);
 
-/** what /aot/current.json says: the build to fetch and the sources it was made from */
-export interface AotManifest { key: string; source: string }
+/** what /aot/current.json says: the build to fetch, the sources it was made from and, when it has no deoptimization guards, the guarded build a process with the cold interpreter fetches */
+export interface AotManifest { key: string; source: string; cold?: string }

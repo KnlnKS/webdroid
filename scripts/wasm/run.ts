@@ -21,16 +21,16 @@
 //   conform      the scripts/conform suites on the Wasm tier against their baselines, the JS tier beside it: conform <suite|quick> [class]; conform-quick (a few classes of each kind) is in `all`
 //   fwtest       the framework delegates of scripts/fwtest.ts over a World (not part of `all`)
 //   desccheck    the registered descriptors against the baseline, and every intrinsic's key against the platform's methods
-//   g1           the jbench workloads timed in node and headless Chrome (not part of `all`)
+//   g1           the jbench workloads timed in node and headless Chrome (not part of `all`); g1startup writes the startup list of a build made with the G1 dex as its app
 //   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
 //                (not part of `all`; needs a build from `bun run aot`)
 // Tools: watdump prints the code generated for a method; `aot` (bun run aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process
 // loads (aot-build, then aot-startup), and makes that build the one the server offers. `aot-profile --classes`, `bun run aot`, `aot-profile` (in this order, with the server
 // running) regroup the build by what launches of apps use and write its startup list.
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AOT_ROOT } from "./aot-key";
+import { AOT_ROOT, type AotManifest } from "./aot-key";
 import { runUnderNode } from "./undernode";
 
 interface Suite { node: boolean; all: boolean }
@@ -38,7 +38,7 @@ const SUITES: Record<string, Suite> = {
   cold: { node: true, all: true }, "cold-osr": { node: true, all: false }, "cold-init": { node: true, all: false }, "cold-binder": { node: true, all: false }, "cold-turns": { node: true, all: false }, "cold-vsync": { node: true, all: false }, "cold-slow": { node: true, all: false },
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, g1startup: { node: true, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, "aot-profile": { node: false, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
@@ -50,19 +50,26 @@ async function exec(name: string, args: string[], env: Env): Promise<number> {
   return Bun.spawnSync(["bun", file, ...args], { stdio: ["inherit", "inherit", "inherit"], env }).exitCode ?? 1;
 }
 
-/** builds the platform assets, records which of their modules a start loads and makes the build the current one */
+/** builds the platform assets, records which of their modules a start loads and makes the build the current one. Without an explicit --deopt the delivery is two builds:
+ *  one without deoptimization guards, which a process without the cold interpreter loads (a third fewer code bytes and no guard checks), and the guarded one for `?cold=1` */
 async function buildAot(args: string[]): Promise<number> {
-  const status = await exec("aot-build", args, process.env);
-  if (status) return status;
-  const at = args.indexOf("--out"), keyed = at < 0, key = keyed ? (JSON.parse(readFileSync(join(AOT_ROOT, "latest.json"), "utf8")) as { key: string }).key : "";
-  const dir = keyed ? join(AOT_ROOT, key) : args[at + 1];
-  if (!existsSync(join(dir, "startup.json"))) {
-    const startup = await exec("aot-startup", [], { ...process.env, WEBDROID_AOT: dir });
-    if (startup) return startup;
+  const at = args.indexOf("--out"), keyed = at < 0, latest = join(AOT_ROOT, "latest.json");
+  const policies = keyed && !args.includes("--deopt") ? ["off", "guarded"] : [undefined];
+  const built: AotManifest[] = [];
+  for (const policy of policies) {
+    const status = await exec("aot-build", policy ? [...args, "--deopt", policy] : args, process.env);
+    if (status) return status;
+    const manifest = keyed ? JSON.parse(readFileSync(latest, "utf8")) as AotManifest : undefined, dir = manifest ? join(AOT_ROOT, manifest.key) : args[at + 1];
+    if (!existsSync(join(dir, "startup.json"))) {
+      const startup = await exec("aot-startup", [], { ...process.env, WEBDROID_AOT: dir });
+      if (startup) return startup;
+    }
+    if (manifest) built.push(manifest);
   }
   if (keyed) {
-    copyFileSync(join(AOT_ROOT, "latest.json"), join(AOT_ROOT, "current.json"));
-    for (const old of readdirSync(AOT_ROOT).filter((f) => f !== key && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
+    const [main, cold] = built, keep = new Set(built.map((b) => b.key));
+    writeFileSync(join(AOT_ROOT, "current.json"), JSON.stringify({ ...main, ...(cold && { cold: cold.key }) } satisfies AotManifest));
+    for (const old of readdirSync(AOT_ROOT).filter((f) => !keep.has(f) && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
   }
   return 0;
 }

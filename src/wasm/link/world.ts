@@ -29,8 +29,8 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, type JavaFrame, type Thrower } from "./exc";
-import { decodeInstructions } from "../../jvm/prepared";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
+import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
@@ -87,10 +87,12 @@ export interface WorldOptions {
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
 type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
   | { k: "synth"; name: string; d?: Synth; done: boolean; stub?: Function } | { k: "ensure" };
-/** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees that ran (callee size in code units), and guards for at most MAX_GUARDS implementations per virtual call */
-const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2;
-/** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it); a compiler that has not run yet is assumed to need UPGRADE_FIRST_MS */
-const UPGRADE_SHARE = 0.3, UPGRADE_FIRST_MS = 1;
+/** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees (size in code units) that ran at least COPY_MIN times, and guards for at most MAX_GUARDS
+ *  implementations per virtual call. A small method without a loop asks LEAF_WAITS more budgets before it is compiled alone */
+const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2, LEAF_WAITS = 3, COPY_MIN = 64;
+/** second-tier compiling may take at most this share of the time the program has been hot (since the first request for it), a compile being expected to need UPGRADE_MS
+ *  (a mean of measured compiles would carry the first compile's warm-up of the compiler into every later decision) */
+const UPGRADE_SHARE = 0.3, UPGRADE_MS = 1;
 /** `stands`: whether the classes added since the platform build leave it true, once a precompiled module has checked */
 /** a class-hierarchy decision: calls of decl.name+desc run only the method `tk` of class `tc` (none if empty); `stands` is its answer for the classes added so far, once asked */
 interface Assumption { decl: string; name: string; desc: string; tc: string; tk: string; slots: Set<number>; stands?: boolean }
@@ -190,6 +192,7 @@ export class World {
         try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
       }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
+      long: (slot: number) => { const s = this.slotAt(slot); if (s?.k === "method") this.longLoops.add(mid(s.m)); },
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
       info: (kind: number, a: number, b: number) => {
@@ -872,28 +875,68 @@ export class World {
   private upgrade(slot: number): void {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
+    this.requested.add(slot);
     // a compile worker takes the job when there is one: the method keeps running its first-tier code until the unit arrives, and asks again if the unit is not taken
     const reset = () => { new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] = 0; };
     if (s.pending) { reset(); return; }
+    // a small method without a loop is worth most copied into the units of the callers that run it in their loops: alone it waits a few budgets for them
+    if (this.leaf(s.m)) {
+      const waited = this.leafWaits.get(slot) ?? 0;
+      if (waited < LEAF_WAITS) { this.leafWaits.set(slot, waited + 1); reset(); return; }
+    }
     if (this.opts.compiler?.submit(this, slot)) { s.pending = true; reset(); return; }
     if (this.opts.holdUpgrades?.()) { reset(); return; }
-    // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it, and a method that asks too soon asks again after another budget
+    // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
+    // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
+    // else to the one that has waited longest and asked again since, so it is still hot
     const t0 = performance.now();
     this.hotSince ??= t0;
-    const expect = this.stats.upgrades ? this.upgradeMs / this.stats.upgrades : UPGRADE_FIRST_MS;
-    if (this.upgradeMs + expect > UPGRADE_SHARE * (t0 - this.hotSince)) { reset(); return; }
-    const cx = new Compiler(this), { installed, copies } = this.group(s.m);
+    const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
+    if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) { wait(); return; }
+    let pick = this.outermostWaiting() ?? slot;
+    if (pick === slot) for (const [w, n] of this.refused) {
+      if (!this.waits(w)) { this.refused.delete(w); continue; }
+      if (n >= 2) { pick = w; break; }
+    }
+    this.refused.delete(pick);
+    if (pick !== slot) wait();
+    const m = (this.slotAt(pick) as { m: MethodInfo }).m, cx = new Compiler(this), { installed, copies } = this.group(m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
-    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, slot, t0);
+    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, t0);
     this.upgradeMs += performance.now() - t0;
+  }
+  /** the outermost Java frame of the running stack whose method waits for the second tier (V8 names Wasm frames by function, which are named by method id) */
+  private outermostWaiting(): number | undefined {
+    if (!this.refused.size || !namesWasmFrames()) return undefined;
+    let found: number | undefined;
+    for (const name of wasmFrameNames(new Error().stack ?? "")) {
+      const m = methodOf(this.prog, name.replace(/^\$dispatch:/, "").split("#")[0]), slot = m && this.slotOf(m);
+      if (slot !== undefined && this.refused.has(slot) && this.waits(slot)) found = slot;
+    }
+    return found;
+  }
+  /** whether the method in `slot` runs first-tier code and no second-tier unit for it is on its way */
+  private waits(slot: number): boolean { const s = this.slotAt(slot); return s?.k === "method" && s.done && !s.hot && !s.pending; }
+  private requested = new Set<number>();
+  /** the methods refused a second-tier compile, longest waiting first, with how often */
+  private refused = new Map<number, number>();
+  private leafWaits = new Map<number, number>();
+  private leaves = new Map<MethodInfo, boolean>();
+  private leaf(m: MethodInfo): boolean {
+    let r = this.leaves.get(m);
+    if (r === undefined) {
+      const code = m.codeOff ? m.dex.code(m.codeOff) : undefined;
+      this.leaves.set(m, r = !!code && this.inlinable(m) && !decodeInstructions(code.insns).some((ins) => branchTargets(code, ins).some((t) => t <= ins.pc)));
+    }
+    return r;
   }
   /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
   upgradeJob(slot: number): UpgradeJob | undefined {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return undefined;
     const { installed, copies } = this.group(s.m);
-    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized() };
+    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
@@ -1031,8 +1074,8 @@ export class World {
     for (let i = 0; i < out.length && out.length < MAX_GROUP; i++) {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
-      // the callees that have run, busiest first: code the first tier never saw run is not worth compiling into the unit
-      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) > 0);
+      // the callees that have run often, busiest first: code the first tier saw run a few times is not worth compiling into the unit
+      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) >= COPY_MIN);
       callees.sort((a, b) => this.ran(b) - this.ran(a));
       for (const t of callees) {
         if (out.length >= MAX_GROUP) break;
@@ -1047,9 +1090,12 @@ export class World {
   private ran(t: MethodInfo): number {
     const sl = this.slotAt(this.slotOf(t)) as { done: boolean; hot?: boolean };
     if (this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
-    if (sl.hot) return HOT_BUDGET;
+    // a method that has asked for the second tier has used up a budget, whatever its count since
+    if (sl.hot || this.requested.has(this.slotOf(t))) return HOT_BUDGET;
     return sl.done ? this.count(this.slotOf(t)) : 0;
   }
+  /** the methods (ids) whose first-tier code ran a loop for 64 chunks in one entry: their second tier keeps loops in chunks, so a long activation of it is not held in the engine's baseline code */
+  longLoops = new Set<string>();
   /** classes some compiled code allocates: the ones a virtual call is likely to find */
   allocated = new Set<string>();
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
@@ -1098,16 +1144,27 @@ export class World {
     }
     return out;
   }
-  /** the small implementations of decl.name+desc among the allocated subclasses, most common first, unless there are more kinds than guards to test */
+  /** the small implementations of decl.name+desc among the allocated subclasses that have run, busiest first, unless more of them have run than guards test */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {
-    const count = new Map<MethodInfo, number>();
+    // an implementation whose class is not linked has not run (and asking would link it)
+    const ran = [...this.implementations(decl, name, desc).keys()].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) > 0);
+    if (ran.length > MAX_GUARDS) return [];
+    return ran.filter((t) => this.inlinable(t)).sort((a, b) => this.ran(b) - this.ran(a));
+  }
+  private implemented = new Map<string, { seen: number; count: Map<MethodInfo, number> }>();
+  /** the implementations of decl.name+desc among the allocated subclasses, with how many of those classes use each. The allocated classes only grow, so each is looked at once */
+  private implementations(decl: string, name: string, desc: string): Map<MethodInfo, number> {
+    const key = `${decl}.${name}${desc}`;
+    let memo = this.implemented.get(key);
+    if (!memo) this.implemented.set(key, memo = { seen: 0, count: new Map() });
+    let i = 0;
     for (const cls of this.allocated) {
-      if (cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
+      if (i++ < memo.seen || cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
       const t = this.prog.implFor(cls, name, desc);
-      if (t) count.set(t, (count.get(t) ?? 0) + 1);
+      if (t) memo.count.set(t, (memo.count.get(t) ?? 0) + 1);
     }
-    if (count.size > MAX_GUARDS) return [];
-    return [...count].filter(([t]) => this.inlinable(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    memo.seen = i;
+    return memo.count;
   }
   /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
   private inlinable(t: MethodInfo): boolean {
@@ -1159,7 +1216,7 @@ export class World {
     }
     this.epoch++;
     this.opts.compiler?.added(null);
-    this.cha = new Cha(this.prog);
+    this.cha = new Cha(this.prog); this.implemented.clear();
     this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace. Platform code retains its defining boot namespace.
@@ -1228,7 +1285,7 @@ export class World {
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
-    this.coldResumes.clear();
+    this.coldResumes.clear(); this.implemented.clear();
     this.cha.index(added);
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
     const now = this.noteLate(added);

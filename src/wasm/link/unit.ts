@@ -19,6 +19,8 @@ export interface UpgradeJob {
   plan: [string, string[]][];
   /** the classes whose initialization has finished since the previous job */
   initialized: string[];
+  /** the methods of the unit that ran a long loop (World.longLoops) */
+  long: string[];
 }
 export interface UnitResult {
   header: UnitHeader;
@@ -46,6 +48,7 @@ export class UnitCompiler {
     const w = this.w, method = (id: string) => methodOf(w.prog, id)!;
     job.initialized.forEach((c) => w.preInitialized.add(c));
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
+    w.longLoops = new Set(job.long);
     w.stats.units = job.unit;
     w.opts.cold = !!job.cold;
     const cx = new Compiler(w);
