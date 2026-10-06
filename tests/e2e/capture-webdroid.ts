@@ -154,6 +154,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
     const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles, aborted };
     return Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   };
+  await persist();
   let executing = "";
   try {
     for (const [i, step] of flow.steps.entries()) {
@@ -197,6 +198,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
                   newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
                   processes: await readProcesses(drv.page), frameHash: r.frameHash ?? undefined,
                   presentation: r.presentation, evidence, phases: { ...r.phases, hostWriteMs } });
+      await persist();
       const p = r.perf;
       const flags = [
         r.semanticHit === false && !(action.type === "tapText" && action.optional) ? "coord-fallback" : "",

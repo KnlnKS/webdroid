@@ -1,3 +1,4 @@
+import { diagnostics, browserFailures } from "./lib/diagnostics";
 // `bun run e2e --full` — capture webdroid, diff against the committed goldens, report.
 // Never starts, queries, or requires an Android emulator. Every flow runs in its own browser;
 // `--jobs` bounds how many at once, and each is scored as soon as it has captured.
@@ -37,8 +38,13 @@ async function captureAndScore(app: string, log: (line: string) => void): Promis
   let scored = false, failed = false;
   try {
     const { runs, errors } = await captureFlow(flow, drv, { jobs, shots, log });
-    for (const error of errors) log(`  ${app}: ${error}`);
-    failed = errors.length > 0;
+    const observed = diagnostics(flow, runs);
+    const browserErrors = browserFailures(flow, drv.errors);
+    const failures = [...errors, ...observed.errors, ...(flow.clock === "live" ? [] : browserErrors)];
+    const gaps = [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])];
+    for (const error of failures) log(`  ${app}: ${error}`);
+    for (const gap of gaps) log(`  ${app}: observed gap: ${gap}`);
+    failed = failures.length > 0;
     // A flow without goldens is a smoke target: rendered/wedged/missing/fps, no pixel score. So
     // is a flow the run pinned to some other geometry: the goldens are pixels at one size, so a
     // run at any other size measures cost, never fidelity — and saying so here means the gate
