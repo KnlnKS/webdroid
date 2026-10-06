@@ -43,8 +43,8 @@ export async function bootstrapOwnership() {
     clocks.push(new Promise<void>(resolve => port.addEventListener("message", ({data}) => { if (data.kind === "close") resolve(); })));
     connectClock(data.clock!)!.schedule(() => fired++, 5);
   };
-  broker.connect("test.archive.one", "test.archive.one", 7001).canvas=document.createElement("canvas");
-  broker.connect("test.archive.two", "test.archive.two", 7002).canvas=document.createElement("canvas");
+  const ownerOne=broker.connect("test.archive.one", "test.archive.one", 7001);ownerOne.canvas=document.createElement("canvas");
+  const ownerTwo=broker.connect("test.archive.two", "test.archive.two", 7002);ownerTwo.canvas=document.createElement("canvas");
   const file = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
     watchClock(data);
     const source = data.registry[0].source;
@@ -52,10 +52,10 @@ export async function bootstrapOwnership() {
     return new RemoteFile(source);
   };
   const first = file(await broker.bootstrap(7001, true)), other = file(await broker.bootstrap(7002, true));
-  const firstIme=broker.entry(7001).ime!,otherIme=broker.entry(7002).ime!;
+  const firstIme=ownerOne.ime!,otherIme=ownerTwo.ime!;
   const eagerReads = reads;
   const replacement = file(await broker.bootstrap(7001, true));
-  const replacementIme=broker.entry(7001).ime!;
+  const replacementIme=ownerOne.ime!;
   const imeReplaced=firstIme!==replacementIme && !firstIme.input.isConnected;
   const superseded = await first.read(0, 1).catch(error => error.message);
   // A failed handoff must dispose its new exports while retaining the published owner set.
@@ -74,7 +74,7 @@ export async function bootstrapOwnership() {
   finally { globalThis.structuredClone = clone; }
   const discarded = await Promise.all(unpublished.map(file => file.read(0, 1).catch(error => error.message)));
   const retained = Array.from(await replacement.read(0, 1));
-  const imeRetained=broker.entry(7001).ime===replacementIme && replacementIme.input.isConnected;
+  const imeRetained=ownerOne.ime===replacementIme && replacementIme.input.isConnected;
   const pending = replacement.read(7, 1).catch(error => error.message);
   await waiting;
   broker.fail(7001, "fixture process exit", NOT_CRASHED);
