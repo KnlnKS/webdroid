@@ -46,6 +46,8 @@ WEBDROID_AOT=/Users/kunalan/Projects/webdroid-wasm-y1/vendor/wasm-aot/KEY \
 
 Repeat with `--cold` and a distinct output. JS/Wasm order alternates between passes. The report records source/DEX identity, cold policy, AOT directory, first/steady samples and compilation work. Require every selected workload, matching results, full call counts, empty `blocked`/`failures`, steady geometric mean at least 1.3x, no workload more than 10% slower, and first-call performance no worse. Matching an unsupported subset cannot pass the gate. Use additional workload rows required by the current plan rather than replacing this set with convenient kernels.
 
+For byte attribution, `bun scripts/wasm/aot-size.ts --guarded DIR --off DIR --out FILE` accounts for every C-module byte by Wasm section, including framing, names, AOT headers and traces. Use full builds from matching source/settings with only the guarded policy changed. This measures serialized size, not heap retention or CPU cost.
+
 ## G5: conversions and an actual heavy tap
 
 The mechanism harness's `scalarCalls`, `textCalls`, `emptyArrayCalls`, `arrayCalls` (4,096 ints) and `fieldCalls` use descriptor-generated production native stubs, real string/array conversion and the actual facade accessor. Loop results are checked independently; host-body calls and canonical native crossings are counted separately. Run those methods with identical input/repetitions in an idle window. Their total per-call cost includes guest dispatch and trivial native work: it is a microcost diagnostic, **not** a subtraction proving the heavy-tap boundary fraction.
