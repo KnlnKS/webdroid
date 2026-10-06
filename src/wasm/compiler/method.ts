@@ -591,8 +591,7 @@ export class MC {
     const d = this.deopt, c = this.code;
     if (!d || !this.typing.reached(ins.pc) || ins.op >= 0x0a && ins.op <= 0x0d) return;
     c.pc = ins.pc;
-    c.gget(d.enabled).if_(); this.push("deoptEnabled");
-    c.gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne).if_(); this.push("deoptChanged");
+    c.gget(d.enabled).gget(d.epoch).lget(this.versionLocal).raw(OP.i32_ne, OP.i32_and).if_(); this.push("deoptChanged");
     if (this.stringAliases) { c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe"); }
     if (!this.tries && previous !== undefined) c.i32(previous).lset(this.executedLocal);
     const values = Array.from(this.typing.before(ins.pc)).flatMap((web, register) => web < 0 ? [] : [{ register, local: this.local(web), type: this.storage(this.typing.kind[web]) }]);
@@ -610,7 +609,7 @@ export class MC {
       c.lget(this.deoptState).call(d.target).lset(this.deoptTarget); this.transferDeopt();
     }
     if (this.stringAliases) { this.pop(); c.end(); }
-    this.pop(); c.end(); this.pop(); c.end();
+    this.pop(); c.end();
   }
   emitBlock(b: number) {
     const flow = this.flow, c = this.code, inss = this.blockIns[b];
