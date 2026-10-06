@@ -44,10 +44,15 @@ function deliverFocus(client: Channel): void {
   r.looper.post(() => vcall(r.receiver, "onFocusEvent", "(Z)V", +focus));
 }
 /** each native InputChannel (a dup too) is its own reference to the shared channel end */
-const channel = (h: bigint) => deref<{ end: Channel }>(h).end;
+interface NativeInputChannel { end: Channel | null }
+const channel = (h: bigint) => deref<NativeInputChannel>(h)?.end ?? null;
 const ref = (end: Channel) => handle({ end });
 /** the channel end behind a Java InputChannel */
-export const channelOf = (input: JObj): Channel => channel((input as unknown as Record<string, bigint>)[mangleField("android/view/InputChannel", "mPtr")]);
+export const channelOf = (input: JObj): Channel => {
+  const end = channel((input as unknown as Record<string, bigint>)[mangleField("android/view/InputChannel", "mPtr")]);
+  if (!end) throw rt.mkThrowable("java/lang/RuntimeException", "NativeInputChannel has no corresponding InputChannel");
+  return end;
+};
 const PTR = mangleField("android/os/MessageQueue", "mPtr");
 
 rt.registerJnis("android/view/InputChannel", {
@@ -58,14 +63,20 @@ rt.registerJnis("android/view/InputChannel", {
     return BigInt64Array.of(ref(server), ref(client));
   },
   "nativeGetFinalizer()J": () => FINALIZER,
-  "nativeDispose(J)V": (h: bigint) => release(h),
-  "nativeDup(J)J": (h: bigint) => ref(channel(h)),
-  "nativeGetName(J)Ljava/lang/String;": (h: bigint) => channel(h).name,
-  "nativeGetToken(J)Landroid/os/IBinder;": (h: bigint) => channel(h).token,
+  // JNI dispose resets the channel; NAR alone destroys its still-addressable wrapper.
+  "nativeDispose(J)V": (h: bigint) => { const native = deref<NativeInputChannel>(h); if (native) native.end = null; },
+  "nativeDup(J)J": (h: bigint) => {
+    const end = channel(h);
+    if (!end) throw rt.mkThrowable("java/lang/RuntimeException", "NativeInputChannel has no corresponding InputChannel");
+    return ref(end);
+  },
+  "nativeGetName(J)Ljava/lang/String;": (h: bigint) => channel(h)?.name ?? null,
+  "nativeGetToken(J)Landroid/os/IBinder;": (h: bigint) => channel(h)?.token ?? null,
   "nativeWriteToParcel(Landroid/os/Parcel;J)V": (parcel: JObj, h: bigint) => {
     const p = nativeParcel(parcel);
-    writeInt(p, h ? 1 : 0);
-    if (h) writeLocalObject(p, channel(h));
+    const end = channel(h);
+    writeInt(p, end ? 1 : 0);
+    if (end) writeLocalObject(p, end);
   },
   "nativeReadFromParcel(Landroid/os/Parcel;)J": (parcel: JObj) => {
     const p = nativeParcel(parcel), end = readInt(p) ? readLocalObject<Channel>(p) : null;

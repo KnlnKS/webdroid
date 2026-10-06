@@ -17,6 +17,25 @@ import { useEntry } from "../../src/jvm/natives/jentry";
 const dir = mkdtempSync(join(tmpdir(), "nar-static-"));
 writeFileSync(join(dir, "NARGC.java"), `import android.graphics.RenderNode;
 public class NARGC {
+  static Object[] channels;
+  public static void setupChannels() throws Exception {
+    channels = (Object[])Class.forName("android.view.InputChannel").getDeclaredMethod("openInputChannelPair", String.class).invoke(null, "ownership");
+  }
+  public static void disposeChannel() throws Exception {
+    Class<?> c = channels[0].getClass();
+    c.getDeclaredMethod("dispose").invoke(channels[0]); c.getDeclaredMethod("dispose").invoke(channels[0]);
+  }
+  public static int checkChannels() throws Exception {
+    Class<?> c = channels[0].getClass();
+    int result = c.getDeclaredMethod("getToken").invoke(channels[0]) == null
+      && c.getDeclaredMethod("getName").invoke(channels[0]).equals("uninitialized") ? 1 : 0;
+    try { c.getDeclaredMethod("dup").invoke(channels[0]); }
+    catch (java.lang.reflect.InvocationTargetException expected) { if (expected.getCause() instanceof RuntimeException) result |= 2; }
+    if (c.getDeclaredMethod("getToken").invoke(channels[1]) != null
+      && c.getDeclaredMethod("getName").invoke(channels[1]) != null) result |= 4;
+    return result;
+  }
+  public static void dropChannels() { channels = null; }
   static class Holder { RenderNode node; }
   static Holder owner;
   static Object pin;
@@ -36,17 +55,27 @@ public class NARGC {
 }`);
 dexAndroid(shellIn(dir), dir, [join(dir, "NARGC.java")]);
 let ptr = 0n, hostRegistrations = 0;
+let inputPtrs: bigint[] = [];
+const inputReleases: bigint[] = [];
 const releases: bigint[] = [];
 const source = { ...nativeSource, find: (cls: string, key: string, s: boolean, b: boolean) => {
   const fn = nativeSource.find(cls, key, s, b);
   if (!fn) return fn;
+  if (cls === "android/view/InputChannel" && key === "nativeOpenInputChannelPair(Ljava/lang/String;)[J")
+    return async function(this: unknown, ...args: unknown[]) {
+      const pair = await fn.apply(this, args) as BigInt64Array; inputPtrs = Array.from(pair); return pair;
+    };
   if (cls === "android/graphics/RenderNode" && key === "nCreate(Ljava/lang/String;)J")
     return function(this: unknown, ...args: unknown[]) { ptr = fn.apply(this, args) as bigint; return ptr; };
   if (cls === "libcore/util/NativeAllocationRegistry") {
     if (key === "registerNativeAllocation(Ljava/lang/Object;J)Ljava/lang/Runnable;")
       return function(this: unknown, ...args: unknown[]) { hostRegistrations++; return fn.apply(this, args); };
     if (key === "applyFreeFunction(JJ)V")
-      return function(this: unknown, ...args: unknown[]) { if (args[1] === ptr) releases.push(ptr); return fn.apply(this, args); };
+      return function(this: unknown, ...args: unknown[]) {
+        if (args[1] === ptr) releases.push(ptr);
+        if (inputPtrs.includes(args[1] as bigint)) inputReleases.push(args[1] as bigint);
+        return fn.apply(this, args);
+      };
   }
   return fn;
 }};
@@ -61,6 +90,20 @@ const gcTurn = async () => {
   (globalThis as typeof globalThis & {gc: () => void}).gc();
   await new Promise(r => setTimeout(r, 5));
 };
+await w.entryAsync("NARGC", "setupChannels", "()V")();
+await w.entryAsync("NARGC", "disposeChannel", "()V")();
+if (!deref(inputPtrs[0]) || deref<{ end: unknown }>(inputPtrs[0]).end !== null)
+  throw new Error("InputChannel dispose freed its NAR-owned wrapper");
+if (await w.entryAsync("NARGC", "checkChannels", "()I")() !== 7) throw new Error("InputChannel disposal semantics");
+for (let i = 0; i < 30; i++) {
+  await gcTurn();
+  if (!deref(inputPtrs[0]) || inputReleases.length) throw new Error("live InputChannel wrapper freed");
+}
+await w.entryAsync("NARGC", "dropChannels", "()V")();
+for (let i = 0; i < 100 && inputPtrs.some(h => deref(h)); i++) await gcTurn();
+if (inputPtrs.some(h => deref(h)) || inputPtrs.some(h => inputReleases.filter(p => p === h).length !== 1))
+  throw new Error("InputChannel wrapper must be destroyed exactly once by NAR");
+console.log("InputChannel disposal keeps wrapper until real NAR GC; idempotence, disposed queries/dup, peer and exactly-once destruction pass");
 const setup = w.entryAsync("NARGC", "setup", "()V"), check = w.entryAsync("NARGC", "check", "()I");
 const clear = w.entryAsync("NARGC", "clear", "()V"), pin = w.entryAsync("NARGC", "pin", "(J)V");
 const unpin = w.entryAsync("NARGC", "unpin", "()V");
