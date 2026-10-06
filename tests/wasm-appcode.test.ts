@@ -14,12 +14,13 @@ class CompilePort implements WorkerPort {
   terminate(): void { this.terminated++; }
 }
 
-test('app code death closes both workers, rejects its build and prevents late restart', async () => {
+test('app code death closes its builder, rejects its build and prevents late restart', async () => {
   const fetchMock = spyOn(globalThis, 'fetch').mockResolvedValue(Response.json([]));
   const ports: CompilePort[] = [], signal = new AbortController();
   const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-close.invalid/', key: 'platform'} as FetchStore,
     spawn: () => { const port = new CompilePort(); ports.push(port); return port; }, persist: new Persist(memoryBackend()), roots: {launch: []}, signal: signal.signal});
-  const compilerReply = ports[0]!.onmessage!, builderReply = ports[1]!.onmessage!;
+  expect(ports).toHaveLength(1);
+  const builderReply = ports[0]!.onmessage!;
   const timers: (() => void)[] = [];
   const timeout = spyOn(globalThis, 'setTimeout').mockImplementation(((f: () => void) => {
     timers.push(f); return timers.length;
@@ -34,12 +35,11 @@ test('app code death closes both workers, rejects its build and prevents late re
     timers[0]!();
     expect(timers).toHaveLength(1);
     await expect(code.made!).rejects.toThrow('App code closed');
-    expect(ports.map(port => port.terminated)).toEqual([1, 1]);
-    await compilerReply({data: {type: 'loaded'}} as MessageEvent);
+    expect(ports.map(port => port.terminated)).toEqual([1]);
     await builderReply({data: {type: 'loaded'}} as MessageEvent);
     code.start({} as World);
     expect(await code.refine({} as World)).toBeUndefined();
-    expect(ports.map(port => port.posts)).toEqual([0, 0]);
+    expect(ports.map(port => port.posts)).toEqual([0]);
     expect(code.compiler.ready).toBe(false);
   } finally { timeout.mockRestore(); clear.mockRestore(); fetchMock.mockRestore(); code.close(); }
 });
@@ -49,10 +49,10 @@ test('death reentering builder creation closes its newly returned port', async (
   const signal = new AbortController(), ports: CompilePort[] = [];
   try {
     const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-reentrant.invalid/', key: 'platform'} as FetchStore,
-      spawn: () => { const port = new CompilePort(); ports.push(port); if (ports.length === 2) signal.abort(); return port; },
+      spawn: () => { const port = new CompilePort(); ports.push(port); if (ports.length === 1) signal.abort(); return port; },
       roots: {launch: []}, signal: signal.signal});
     await expect(code.made!).rejects.toThrow('App code closed');
-    expect(ports.map(port => port.terminated)).toEqual([1, 1]);
+    expect(ports.map(port => port.terminated)).toEqual([1]);
     code.close();
   } finally { fetchMock.mockRestore(); }
 });
