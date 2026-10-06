@@ -43,7 +43,10 @@ w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = ["W", ...(namesWasmFrames() ? ["S", "N"] : [])].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC));
 const js = await jsTier(loadDexes(dex));
 (globalThis as any).__dbgw = w;
-const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
+// Precompiled native imports retain their suspension ABI after oracle values settle.
+const asyncEntries = !!process.env.WEBDROID_AOT;
+const entry = asyncEntries ? w.entryAsync.bind(w) : w.entry.bind(w);
+const entries = new Map(methods.map((m) => [m, entry(m.cls, m.name, m.desc)]));
 const small: Record<string, number[]> = {
   fib: [0, 1, 2, 10, 20], sieve: [0, 1, 2, 10, 1000, 100000], xorshift: [0, 1, 10, 1000], mandel: [0, 1, 5, 24], swsum: [0, 1, 7, 100, 1000],
   basics: [0, 1, 2, 5, 17], wide: [0, 1, 2, 9, 33], parts: [0, 1, 4, 9, 20], sb: [0, 1, 3, 12, 40], sw: [0, 1, 2, 3, 4, 7], cmp: [0, 1, 6, 15], bytes: [0, 1, 7, 64], chars: [0, 1, 4, 30],
@@ -63,9 +66,10 @@ let wideBad = 0;
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
   const wide = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j))], { natives });
+  const wideEntry = asyncEntries ? wide.entryAsync.bind(wide) : wide.entry.bind(wide);
   while (wide.names.length < 65536) wide.idOf("reflection/reserved/" + wide.names.length);
   for (const i of wideCases) {
-    const { m, args } = cases[i], got = wide.entry(m.cls, m.name, m.desc)(Number(args[0]));
+    const { m, args } = cases[i], call = wideEntry(m.cls, m.name, m.desc), got = await call(Number(args[0]));
     if (String(got) !== jdk[i]) { wideBad++; console.log(`MISMATCH full-width reflection ${m.name}: ${got} vs ${jdk[i]}`); }
   }
   console.log(`${wideCases.length - wideBad}/${wideCases.length} full-width reflection cases match the JDK`);
