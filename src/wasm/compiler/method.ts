@@ -86,12 +86,25 @@ export class MC {
     this.tries = this.item.tries.length > 0;
   }
 
-  // ---------- registers: each live range (web) has a local of its own kind
+  // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
   storage(k: number): VT { return k === KR ? T.anyref : k === KJ || (k === KD && !FLOAT_LOCALS) ? T.i64 : k === KD ? T.f64 : k === KF && FLOAT_LOCALS ? T.f32 : T.i32; }
   local(web: number): number {
     let l = this.webLocal[web];
     if (l === undefined) this.webLocal[web] = l = this.code.newLocal(this.storage(this.typing.kind[web]));
     return l;
+  }
+  private allocateWebs() {
+    const { start, end } = this.typing.ranges(), reserved = new Set<number>();
+    for (let r = this.item.regs - this.item.ins; r < this.item.regs; r++) { const w = this.typing.param(r); if (w >= 0) reserved.add(w); }
+    const pools = new Map<VT, { local: number; end: number }[]>();
+    const webs = start.map((_, w) => w).filter(w => start[w] !== undefined && !reserved.has(w)).sort((a, b) => start[a] - start[b] || a - b);
+    for (const w of webs) {
+      const type = this.storage(this.typing.kind[w]);
+      let pool = pools.get(type); if (!pool) pools.set(type, pool = []);
+      let slot = pool.find(slot => slot.end < start[w]);
+      if (!slot) { slot = { local: this.root.newLocal(type), end: -1 }; pool.push(slot); }
+      this.webLocal[w] = slot.local; slot.end = end[w];
+    }
   }
   useWeb(reg: number, ins = this.cur): number {
     const w = this.typing.use(ins.pc, reg);
@@ -185,6 +198,7 @@ export class MC {
     };
     if (!m.isStatic) param(false);
     for (const p of m.params) param(isWide(p));
+    this.allocateWebs();
     if (this.resume) {
       c.nullableLocals = true;
       const seen = new Set<number>();

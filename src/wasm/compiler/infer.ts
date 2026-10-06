@@ -38,6 +38,7 @@ interface WebAnalysis {
   reached: Uint8Array;
   entryNodes?: Int32Array;
   before(pc: number): Int32Array;
+  ranges(visit: (node: number, instruction: number) => void): void;
 }
 
 /** analysis of the method, or why it was skipped */
@@ -184,7 +185,28 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     return entryNodes;
   };
   const entryNodes = entryPc === undefined ? undefined : before(entryPc);
-  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useReg, paramNode, links, reached, entryNodes, before };
+  const ranges = (visit: (node: number, instruction: number) => void) => {
+    const touch = (node: number, i: number) => { if (node >= 0) visit(find(node), i); };
+    for (const node of paramNode) touch(node, 0);
+    for (let b = 0; b < B; b++) {
+      if (!inState[b]) continue;
+      const st = Int32Array.from(inState[b]!);
+      for (const r of liveList[b]) touch(st[r], cfg.firstIdx[b]);
+      for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
+        if (!reached[i]) continue;
+        // EH observes the pre-state even when the normal result overwrites a register.
+        if (!NO_THROW[ins[i].op]) for (const h of handlerOfIdx[i] ?? []) for (const r of liveList[h]) touch(st[r], i);
+        for (const node of useNode[i]) touch(node, i);
+        const e = effs[i];
+        if (e.d >= 0 && e.d < R_) {
+          touch(defNode[i], i); st[e.d] = defNode[i];
+          if (e.dm & WIDE && e.d + 1 < R_) st[e.d + 1] = defNode[i];
+        }
+      }
+      for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
+    }
+  };
+  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useReg, paramNode, links, reached, entryNodes, before, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -208,13 +230,15 @@ export function components(a: WebAnalysis): Components {
   return { kf, roots, mask, used, zero };
 }
 
-/** What the compiler needs: one local per used web, of the web's kind. */
+/** Typed webs and conservative instruction intervals for local storage. */
 export interface Typing {
   /** kind (I, F, R, J or D) of each web */
   kind: number[];
   /** Register webs immediately before the requested resume instruction. */
   entry?: Int32Array;
   before(pc: number): Int32Array;
+  /** Inclusive intervals include definitions, uses, block edges and EH pre-state. */
+  ranges(): { start: number[]; end: number[] };
   /** whether the instruction at `pc` can execute at all */
   reached(pc: number): boolean;
   /** the web the instruction at `pc` reads register `reg` through, -1 if it does not */
@@ -245,6 +269,11 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   return {
     kind, entry: a.entryNodes?.map(web),
     before(pc) { return a.before(pc).map(web); },
+    ranges() {
+      const start: number[] = [], end: number[] = [];
+      a.ranges((node, i) => { const w = web(node); if (w >= 0) { start[w] = Math.min(start[w] ?? i, i); end[w] = Math.max(end[w] ?? i, i); } });
+      return { start, end };
+    },
     reached(pc) { return !!a.reached[idxOfPc.get(pc)!]; },
     use(pc, reg) { const i = idxOfPc.get(pc)!, k = a.useReg[i].indexOf(reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
     def(pc) { return web(a.defNode[idxOfPc.get(pc)!]); },
