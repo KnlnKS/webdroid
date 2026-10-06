@@ -125,7 +125,7 @@ const synthOf = (names: Iterable<string>) => [...names].filter((n) => n[0] === "
 const classesOf = (keys: number[], k: number) => keys.flatMap((g, i) => (g === k ? [i] : []));
 
 // ---- code modules first: they number the selectors, gaps and runtime functions the class modules' vtables then use
-const deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0 };
+const deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0, carriers: 0, carrierValues: 0, maxCarrierValues: 0 };
 const empty = new Set<number>();
 const cGroups = aot.cKeys.map((_, k) => classesOf(aot.cGroupOf, k));
 cGroups.forEach((blocks, k) => {
@@ -140,7 +140,7 @@ cGroups.forEach((blocks, k) => {
     throw new Error(`C ${k}${name ? ` (${name})` : ""}: ${bad.message}`);
   }
   const { bytes, traces } = built;
-  for (const k of Object.keys(deoptWork) as (keyof typeof deoptWork)[]) deoptWork[k] += cx.deoptWork[k];
+  for (const k of Object.keys(deoptWork) as (keyof typeof deoptWork)[]) deoptWork[k] = k === "maxCarrierValues" ? Math.max(deoptWork[k], cx.deoptWork[k]) : deoptWork[k] + cx.deoptWork[k];
   nMethods += methods.length;
   const seen = new Set<string>(), assumptions: CHeader["assumptions"] = [];
   for (const [decl, name, desc, target, owner] of cx.assumptions) {

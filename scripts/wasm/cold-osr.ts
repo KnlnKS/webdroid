@@ -21,6 +21,7 @@ writeFileSync(join(out, "Osr.java"), `public class Osr {
   public static int nested(int n){effects++; synchronized(lock){int x=0; for(int i=0;i<n;i++)for(int j=0;j<3;j++){x++; if(i==n/2 && j==0)invalidate();} return x;}}
   public static long raw(long j,float f,double d,Object r){effects++; invalidate(); return j ^ Float.floatToRawIntBits(f) ^ Double.doubleToRawLongBits(d) ^ (r==null?0:9);}
   public static int wide(${Array.from({length:65},(_,i)=>`int a${i}`).join(',')}){effects++;invalidate();if(a0<0)return 0;return ${Array.from({length:65},(_,i)=>`a${i}`).join('+')};}
+  public static int captureFail(){synchronized(lock){effects++;try{invalidate();if(effects()<0)return 3;return 7;}catch(IllegalStateException e){return 11;}}}
   public static int state(int n,boolean fail){synchronized(lock){effects++; int x=0; for(int i=0;i<n;i++)x+=i; try{return await(x,fail)+7;}catch(IllegalArgumentException e){return x+9;}}}
 }`);
 writeFileSync(join(out, "Late.java"), `public class Late extends Osr.Base {public int f(){return 2;} public static Osr.I make(){return new Late();}}`);
@@ -143,6 +144,17 @@ if(process.argv.includes("--aot")) {
     const make=page.deoptImports.make, blocked=page.deoptImports.blocked;
     page.deoptImports.make=(slot,depth)=>{makes++;if(!cold)throw new Error("disabled AOT called activation import");return make(slot,depth);};
     page.deoptImports.blocked=state=>{guards++;if(!cold)throw new Error("disabled AOT ran a guard");return blocked(state);};
+    const capture=page.deoptImports.captureIndexed;
+    let captureFaults=0, capturePc=-1, captureFrames: ReturnType<typeof page.stackTrace>=[];
+    page.deoptImports.captureIndexed=(...args)=>{
+      if(args[0].method?.name==="captureFail" && !captureFaults++){
+        const limit=Error.stackTraceLimit;Error.stackTraceLimit=128;
+        let t:object;
+        try{t=page.makeThrowable("java/lang/IllegalStateException","capture fault");}finally{Error.stackTraceLimit=limit;}
+        capturePc=args[1];captureFrames=page.stackTrace(page.fieldReader<object>("java/lang/Throwable","backtrace","Ljava/lang/Object;")(t));throw page.exception(t);
+      }
+      return capture(...args);
+    };
     const enter=page.enterColdDeopt.bind(page);
     page.enterColdDeopt=(s,c)=>{if(!cold)throw new Error("disabled runtime attempted cold handoff");if(s.method?.cls==="Osr"){if(s.method.name==="run")rootTransfers++;if(s.method.name==="state")stateTransfers++;}return enter(s,c);};
     check(`AOT native/EH result and monitor cold=${cold} fail=${fail}`,await page.entryAsync("Osr","state","(IZ)I")(100,fail),4958+fail);
@@ -163,6 +175,17 @@ if(process.argv.includes("--aot")) {
     check(`AOT wide carrier cold=${cold}`,await page.entryAsync("Osr","wide","("+"I".repeat(65)+")I")(...Array.from({length:65},(_,i)=>i)),2080);
     check(`AOT vector transfers cold=${cold}`,page.stats.coldDeopts-prior,2*+cold);
     check(`AOT vector effects execute once cold=${cold}`,page.entry("Osr","effects","()I")(),prefix+2);
+    const effects=Number(page.entry("Osr","effects","()I")());
+    const capResult=await page.entryAsync("Osr","captureFail","()I")();
+    check(`shared capture Java handler cold=${cold}`,capResult,cold?11:7);
+    check(`shared capture fault reached cold=${cold}`,captureFaults>0,cold);
+    if(cold){
+      const frames=captureFrames.filter(f=>f.cls==="Osr"&&f.method==="captureFail");
+      check("shared capture keeps one Java activation",frames.length,1);
+      check("shared capture retains exact protected PC",frames[0]?.pc,capturePc);
+    }
+    check(`shared capture handler prefix once cold=${cold}`,page.entry("Osr","effects","()I")(),effects+1);
+    check(`shared capture handler releases monitor cold=${cold}`,page.sched.monitors.tryEnter(lock,page.sched.root),0);page.sched.monitors.exit(lock,page.sched.root);
     console.log("AOT activation work",JSON.stringify({cold,fail,makes,guards,methods:page.stats.methods,bytes:page.stats.bytes,compileMs:page.stats.compileMs,aotC:page.stats.aot.c,deopts:page.stats.coldDeopts}));
   }
   const stale={get:(file:string)=>file==="index.json"?new TextEncoder().encode(JSON.stringify({...index,deopt:0})):store.get(file)};

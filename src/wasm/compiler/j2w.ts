@@ -1,5 +1,5 @@
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
-import { ModuleBuilder, T, ref, refNull, type VT } from "./wasmbin";
+import { ModuleBuilder, T, ref, refNull, uleb, type VT } from "./wasmbin";
 import { Code, OP } from "./code";
 import { Program, kindOf, type Kind, type MethodInfo } from "./program";
 import { mid } from "./ids";
@@ -78,7 +78,7 @@ export class Compiler implements Base {
   private sigType = new Map<string, number>();
   private globalImports = new Map<string, number>();
   private helpers = new Map<string, number>();
-  readonly deopt?: { make: number; version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; target: number; epoch: number; enabled: number };
+  readonly deopt?: { make: number; version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; captureIndexed: number; beginCapture: number; endCapture: number; target: number; epoch: number; enabled: number };
   constructor(public w: World, deopt = !!w.opts.cold || !!w.opts.deopt) {
     const mb = this.mb;
     Object.assign(this, declareBase(mb));
@@ -97,7 +97,7 @@ export class Compiler implements Base {
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     if (deopt) {
       const imp = (name: string, params: VT[], results: VT[]) => mb.importFunc("deopt", name, mb.addFuncType(params, results));
-      this.deopt = { make: imp("make", [T.i32, T.i32], [T.externref]), version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), capture: imp("capture", [T.externref, T.i32, T.i32, T.i32, T.externref, T.externref, T.externref], [T.externref]), target: imp("target", [T.externref], [T.funcref]), epoch: this.global("rt", "deoptEpoch", T.i32, true), enabled: this.global("rt", "deoptEnabled", T.i32, false) };
+      this.deopt = { make: imp("make", [T.i32, T.i32], [T.externref]), version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), capture: imp("capture", [T.externref, T.i32, T.i32, T.i32, T.externref, T.externref, T.externref], [T.externref]), captureIndexed: imp("captureIndexed", [T.externref, T.i32, T.i32, T.i32, T.externref, T.externref, T.externref], [T.externref]), beginCapture: imp("beginCapture", [T.externref, T.i32], []), endCapture: imp("endCapture", [T.externref], []), target: imp("target", [T.externref], [T.funcref]), epoch: this.global("rt", "deoptEpoch", T.i32, true), enabled: this.global("rt", "deoptEnabled", T.i32, false) };
     }
     this.str.importBuiltins();
     // the imports that cannot run Java code
@@ -110,7 +110,7 @@ export class Compiler implements Base {
     const methods = new Set(this.fn.values());
     return c.indirect > 0 || c.targets.some((f) => (f < this.mb.nImportedFuncs ? !this.hostSafe.has(f) : methods.has(f)));
   }
-  readonly deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0 };
+  readonly deoptWork = { sites: 0, values: 0, layouts: 0, metadataBytes: 0, carriers: 0, carrierValues: 0, maxCarrierValues: 0 };
   private captureMaps = new Map<string, number>();
   /** Only an invalidated activation constructs these vectors; ordinary execution has no carrier. */
   captureValues(c: Code, values: { register: number; local: number; type: VT }[]): void {
@@ -125,16 +125,40 @@ export class Compiler implements Base {
     }
     const ordered = [...bits, ...references];
     c.i32(0).i32(map.length).arrayNewData(this.tData.i16, data).externConvertAny();
+    this.captureCarrier(c, ordered, false);
+  }
+  captureIndexedMap(c: Code, values: { register: number; local: number }[], indices: Map<number, number>): void {
+    const bytes: number[] = [];
+    for (const v of values) { uleb(v.register, bytes); uleb(indices.get(v.local)!, bytes); }
+    const key = "indexed:" + bytes.join(",");
+    let data = this.captureMaps.get(key);
+    if (data === undefined) {
+      this.captureMaps.set(key, data = this.mb.addDataPassive(Uint8Array.from(bytes)));
+      this.deoptWork.layouts++; this.deoptWork.metadataBytes += bytes.length;
+    }
+    c.i32(0).i32(bytes.length).arrayNewData(this.tData.i8, data).externConvertAny();
+  }
+  captureIndexedValues(c: Code, values: { local: number; type: VT }[], map: number): void {
+    this.captureCarrier(c, values, true, map);
+  }
+  private captureCarrier(c: Code, ordered: { local: number; type: VT }[], indexed: boolean, map = -1): void {
+    this.deoptWork.carriers++; this.deoptWork.carrierValues += ordered.length; this.deoptWork.maxCarrierValues = Math.max(this.deoptWork.maxCarrierValues, ordered.length);
+    const bits = ordered.filter(v => v.type !== T.anyref), references = ordered.filter(v => v.type === T.anyref);
+    const allocation = (c: Code, map: number) => this.allocBytes(c, () => {
+      c.i32(48 + 8 * ordered.length).lget(map).anyConvertExtern().refCast(indexed ? this.tData.i8 : this.tData.i16).arrayLen();
+      if (!indexed) c.i32(1).raw(OP.i32_shl);
+      c.raw(OP.i32_add);
+    });
     if (ordered.length <= 64) {
-      const key = `capture:${bits.length}:${references.length}`;
+      const key = `capture:${+indexed}:${bits.length}:${references.length}`;
       const f = this.memo(key, () => {
         const params = [T.externref, T.i32, T.i32, T.i32, T.externref, ...ordered.map(v => v.type === T.anyref ? T.anyref : T.i64)];
         const f = this.mb.reserveFunc(this.mb.addFuncType(params, [T.externref]), "$capture"), body = new Code(params.length);
         const depth = body.newLocal(T.i32), weights = this.emitEnter(body, depth);
-        this.allocBytes(body, () => body.i32(48 + 10 * ordered.length));
+        allocation(body, 4);
         for (let i = 0; i < 5; i++) body.lget(i, false);
         this.captureVectors(body, ordered.map((v, i) => ({ local: i + 5, type: v.type === T.anyref ? T.anyref : T.i64 })));
-        body.call(this.deopt!.capture);
+        body.call(indexed ? this.deopt!.captureIndexed : this.deopt!.capture);
         this.emitLeave(body, depth, false);
         for (const at of weights) body.patch(at, 4 + params.length + body.localTypes.length);
         this.mb.setBody(f, body.finish());
@@ -143,8 +167,11 @@ export class Compiler implements Base {
       for (const v of ordered) { if (v.type === T.anyref) c.lget(v.local, false); else this.captureBits(c, v); }
       c.call(f);
     } else {
-      this.allocBytes(c, () => c.i32(48 + 10 * ordered.length));
-      this.captureVectors(c, ordered); c.call(this.deopt!.capture);
+      if (map < 0) {
+        map = c.newLocal(T.externref); c.ltee(map);
+      }
+      allocation(c, map);
+      this.captureVectors(c, ordered); c.call(indexed ? this.deopt!.captureIndexed : this.deopt!.capture);
     }
   }
   private captureVectors(c: Code, values: { local: number; type: VT }[]): void {
@@ -678,4 +705,4 @@ export class Compiler implements Base {
 }
 
 /** the side table that maps a Wasm frame offset of one function back to a DEX pc: offsets ascend, pcs[i] belongs to offsets[i] */
-export interface FnTrace { name: string; m?: MethodInfo; currentPcs?: () => readonly number[]; offsets: Int32Array; pcs: Int32Array }
+export interface FnTrace { name: string; m?: MethodInfo; currentPcs?: () => readonly number[]; capturePcs?: () => readonly number[]; offsets: Int32Array; pcs: Int32Array }

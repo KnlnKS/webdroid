@@ -124,7 +124,11 @@ export class World {
   private vslotCache = new Map<string, string[]>();
   traces = new Map<string, FnTrace>();
   /** the traces of functions by name: those of precompiled modules are read when a stack needs them */
-  private frameTraces = { get: (name: string) => this.traces.get(name) ?? this.aot?.trace(name) } as Map<string, FnTrace>;
+  private frameTraces = { get: (name: string) => {
+    const t = this.traces.get(name) ?? this.aot?.trace(name);
+    if (t?.m && !t.capturePcs) t.capturePcs = () => (this.captureScopes.get(this.sched.current()) ?? []).filter(s => s.state.method === t.m).map(s => s.pc).reverse();
+    return t;
+  } } as Map<string, FnTrace>;
   private stacks = new WeakMap<object, Error | JavaFrame[]>();
   private bridgeStacks = new WeakMap<Strand, BridgeStack>();
   private bridgeCaller?: Error;
@@ -220,7 +224,7 @@ export class World {
       excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id])),
       capture: (exn: object) => {
         const stack = new Error();
-        this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) ? this.javaStack(stack.stack ?? "") : stack);
+        this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) || this.captureScopes.get(this.sched.current())?.length ? this.javaStack(stack.stack ?? "") : stack);
       },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
       stString: (i: number, which: number) => (which ? this.frames[i].method : javaName(this.frames[i].cls)),
@@ -728,6 +732,7 @@ export class World {
     return { fn: entry.fn, state: loaded };
   }
   private deoptFrames = new WeakMap<object, { version: number; blocked: number; claimed: boolean; monitors: ColdSnapshot["monitors"] }>();
+  private captureScopes = new WeakMap<Strand, { state: CompiledActivation; pc: number }[]>();
   private deoptCaptures = new WeakMap<object, { source: CompiledActivation; entered: boolean }>();
   private coldDeoptEntries = new Map<MethodInfo, Function>();
   private deoptFrame(state: CompiledActivation) {
@@ -735,14 +740,14 @@ export class World {
     if (!this.opts.cold || !frame || frame.claimed || state.owner !== this.sched.current()) throw new Error("foreign compiled activation");
     return frame;
   }
-  private captureReaders?: { length: (a: object) => number; register: (a: object, i: number) => number; bits: (a: object, i: number) => bigint; reference: (a: object, i: number) => object | null };
+  private captureReaders?: { length: (a: object) => number; register: (a: object, i: number) => number; byte: (a: object, i: number) => number; bits: (a: object, i: number) => bigint; reference: (a: object, i: number) => object | null };
   private captureReader() {
     if (this.captureReaders) return this.captureReaders;
     const mb = new ModuleBuilder(), b = declareBase(mb);
-    const exports: [string, number, VT][] = [["register", b.tData.i16, T.i32], ["bits", b.tData.i64, T.i64], ["reference", b.tData.ref, T.anyref]];
+    const exports: [string, number, VT][] = [["register", b.tData.i16, T.i32], ["byte", b.tData.i8, T.i32], ["bits", b.tData.i64, T.i64], ["reference", b.tData.ref, T.anyref]];
     for (const [name, type, result] of exports) {
       const c = new Code(2); c.lget(0).refCast(type).lget(1);
-      if (name === "register") c.arrayGetU(type); else c.arrayGet(type);
+      if (name === "register" || name === "byte") c.arrayGetU(type); else c.arrayGet(type);
       mb.export(name, "func", mb.addFunc(mb.addFuncType([T.anyref, T.i32], [result]), c.finish(), "$capture:" + name));
     }
     const c = new Code(1); c.lget(0).refCast(T.arrayref - 0x80).arrayLen();
@@ -750,6 +755,17 @@ export class World {
     return this.captureReaders = this.instantiate(mb.build(), {}).exports as unknown as NonNullable<World["captureReaders"]>;
   }
   readonly deoptImports = {
+    beginCapture: (state: CompiledActivation, pc: number) => {
+      this.deoptFrame(state);
+      let scopes = this.captureScopes.get(state.owner!);
+      if (!scopes) this.captureScopes.set(state.owner!, scopes = []);
+      scopes.push({ state, pc });
+    },
+    endCapture: (state: CompiledActivation) => {
+      const scopes = this.captureScopes.get(this.sched.current());
+      if (scopes?.at(-1)?.state !== state) throw new Error("compiled capture scope mismatch");
+      scopes.pop();
+    },
     make: (slot: number, depth: number): CompiledActivation | null => {
       if (!this.opts.cold) return null;
       const sl = this.slotAt(slot);
@@ -791,6 +807,27 @@ export class World {
         else this.deoptImports.bits(state, r, read.bits(bits, bi++));
       }
       if (bi !== nb || ri !== nr) throw new Error("compiled capture value mismatch");
+      return state;
+    },
+    captureIndexed: (s: CompiledActivation, pc: number, last: number, depth: number, map: object, bits: object, references: object): ColdSnapshot => {
+      this.deoptFrame(s);
+      const read = this.captureReader(), n = read.length(map), nb = read.length(bits), nr = read.length(references);
+      const state = this.deoptImports.snapshot(s, pc, last, depth), seen = new Uint8Array(s.item.regs);
+      let offset = 0;
+      const word = () => {
+        let value = 0;
+        for (let shift = 0; shift < 35 && offset < n; shift += 7) {
+          const b = read.byte(map, offset++); value += (b & 127) * 2 ** shift;
+          if (b < 128 && value <= 0xffffffff) return value;
+        }
+        throw new Error("compiled indexed capture word mismatch");
+      };
+      while (offset < n) {
+        const r = word(), i = word();
+        if (r >= s.item.regs || seen[r]++ || i >= nb + nr) throw new Error("compiled indexed capture register mismatch");
+        if (i < nb) this.deoptImports.bits(state, r, read.bits(bits, i));
+        else this.deoptImports.reference(state, r, read.reference(references, i - nb));
+      }
       return state;
     },
     target: (s: ColdSnapshot): Function => {

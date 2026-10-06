@@ -124,7 +124,7 @@ export interface JavaFrame { cls: string; method: string; line: number; pc: numb
 const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
 /** The Java frames of a V8 `Error.stack`, innermost first (the first `count` of them, with their line numbers unless `lines` is false): wasm frames are named by method id and carry a module offset */
 export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = Infinity, lines = true): JavaFrame[] {
-  const out: JavaFrame[] = [], occurrences = new Map<string, number>();
+  const out: JavaFrame[] = [], occurrences = new Map<string, number>(), captures = new Map<string, number>();
   let chunk: string | undefined;
   for (const line of stack.split("\n")) {
     if (out.length >= count) break;
@@ -141,7 +141,12 @@ export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = 
     let lo = 0, hi = t.offsets.length - 1, at = -1;       // last mark at or before the frame's offset
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
     const occurrence = occurrences.get(t.name) ?? 0; occurrences.set(t.name, occurrence + 1);
-    const pc = t.currentPcs?.()[occurrence] ?? (at < 0 ? 0 : t.pcs[at]);
+    const marked = at < 0 ? 0 : t.pcs[at];
+    let pc = t.currentPcs?.()[occurrence] ?? marked;
+    if (marked === -2) {
+      const capture = captures.get(id) ?? 0; captures.set(id, capture + 1);
+      pc = t.capturePcs?.()[capture] ?? 0;
+    }
     out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
   }
   return out;

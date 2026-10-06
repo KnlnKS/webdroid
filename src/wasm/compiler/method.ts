@@ -67,12 +67,14 @@ export class MC {
   private controlLocal = -1;
   private stateType = -1;
   private stateLocal = -1;
-  private deopt?: { version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; target: number; epoch: number; enabled: number; sig: number };
+  private deopt?: { version: number; last: number; blocked: number; allocation: number; monitor: number; capture: number; beginCapture: number; endCapture: number; target: number; epoch: number; enabled: number; sig: number };
   private activationLocal = -1;
   private versionLocal = -1;
   private executedLocal = -1;
   private deoptState = -1;
   private deoptTarget = -1;
+  private capturePC = -1;
+  private captureLocals = new Map<number, VT>();
   constructor(public cx: Compiler, public m: MethodInfo, private resume?: { pc: number; bits: number; reference: number }) {
     this.dex = m.dex; this.item = m.dex.code(m.codeOff);
     this.root = this.code = new Code((m.isStatic ? 0 : 1) + m.params.length);
@@ -221,12 +223,13 @@ export class MC {
       c.ltee(this.activationLocal).call(this.deopt.version).lset(this.versionLocal);
       c.lget(this.activationLocal).call(this.deopt.last).lset(this.executedLocal); c.end();
     }
+    if (this.deopt && this.blockIns.reduce((n, block) => n + block.filter((ins, i) => (i === 0 || ins.name.startsWith("invoke")) && !(ins.op >= 0x0a && ins.op <= 0x0d) && this.typing.reached(ins.pc)).length, 0) > 1) this.capturePC = c.newLocal(T.i32);
     if (cx.counting) cx.emitCount(c, m);
     const regions = flow.regions;
     regions.forEach((r, i) => this.regionOfPc.set(flow.starts[r.entry], i));
     if (regions.length === 1 && !this.tries) {
-      this.emitRegion(0);
-      c.unreachable();
+      this.beginCapture(); this.emitRegion(0);
+      c.unreachable(); this.finishCapture();
       return c;
     }
     this.regionLocal = c.newLocal(T.i32);
@@ -237,6 +240,7 @@ export class MC {
       this.push("$caught"); c.block(T.anyref);
       c.tryTable(null, [[0, cx.tag, 0]]); this.push("$try");
     }
+    this.beginCapture();
     // the method's own entry is region 0 and falls into it; only a jump from a handler or another region chooses by region (and gives other strands a turn)
     const n = regions.length;
     for (let k = n - 1; k >= 1; k--) { this.push("$R" + k); c.block(); }
@@ -248,6 +252,7 @@ export class MC {
     }
     this.emitRegion(0); c.unreachable();
     for (let k = 1; k < n; k++) { this.pop(); c.end(); this.emitRegion(k); c.unreachable(); }
+    this.finishCapture();
     if (this.tries) {
       this.pop(); c.end();                          // try_table
       c.unreachable();
@@ -547,8 +552,36 @@ export class MC {
       this.chunkReturn(2);
     } else { this.leave(); this.code.ret(); }
   }
+  private captureOrder?: { ordered: { local: number; type: VT }[]; indices: Map<number, number> };
+  private captureLayout() {
+    if (this.captureOrder) return this.captureOrder;
+    const locals = [...this.captureLocals].sort(([a], [b]) => a - b).map(([local, type]) => ({ local, type }));
+    const ordered = [...locals.filter(v => v.type !== T.anyref), ...locals.filter(v => v.type === T.anyref)];
+    return this.captureOrder = { ordered, indices: new Map(ordered.map((v, i) => [v.local, i])) };
+  }
+  private beginCapture(): void {
+    if (this.capturePC >= 0) { this.push("$captureRoot"); this.code.block(); }
+  }
+  private finishCapture(): void {
+    if (this.capturePC < 0) return;
+    const c = this.code, d = this.deopt!;
+    this.pop(); c.end();
+    // Shared payload calls resolve their Java PC from the owned capture scope.
+    c.pc = -2;
+    c.lget(this.activationLocal).lget(this.capturePC).call(d.beginCapture);
+    // Cleanup also covers host exceptions; Java exceptions then reach the original handler.
+    c.block(T.exnref).tryTable(null, [[3, 0, 0]]);
+    c.lget(this.activationLocal).lget(this.capturePC).lget(this.executedLocal).lget(this.entryDepth).lget(this.deoptState);
+    this.cx.captureIndexedValues(c, this.captureLayout().ordered, this.deoptState);
+    c.lset(this.deoptState).lget(this.deoptState).call(d.target).lset(this.deoptTarget);
+    c.lget(this.activationLocal).call(d.endCapture);
+    c.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(d.sig).returnCallRef(d.sig);
+    c.end().unreachable().end();
+    c.lget(this.activationLocal).call(d.endCapture).throwRef();
+  }
   private transferDeopt(): void {
     if (this.chunk) this.chunkReturn(-1);
+    else if (this.capturePC >= 0) this.code.br(this.depth("$captureRoot"));
     else this.code.lget(this.deoptState).lget(this.deoptTarget).refAsNonNull().refCast(this.deopt!.sig).returnCallRef(this.deopt!.sig);
   }
   private deoptAt(ins: Ins): void {
@@ -560,10 +593,18 @@ export class MC {
     c.lget(this.activationLocal).call(d.blocked).raw(OP.i32_eqz).if_(); this.push("deoptSafe");
     const values = Array.from(this.typing.before(ins.pc)).flatMap((web, register) => web < 0 ? [] : [{ register, local: this.local(web), type: this.storage(this.typing.kind[web]) }]);
     this.cx.deoptWork.sites++; this.cx.deoptWork.values += values.length;
-    c.lget(this.activationLocal).i32(ins.pc).lget(this.executedLocal).lget(this.entryDepth);
-    this.cx.captureValues(c, values);
-    c.lset(this.deoptState);
-    c.lget(this.deoptState).call(d.target).lset(this.deoptTarget); this.transferDeopt();
+    if (this.capturePC >= 0) {
+      for (const v of values) this.captureLocals.set(v.local, v.type);
+      c.locals.add(this.executedLocal);
+      c.defer(c => this.cx.captureIndexedMap(c, values, this.captureLayout().indices));
+      c.lset(this.deoptState).i32(ins.pc).lset(this.capturePC);
+      if (this.tries) c.i32(ins.pc).lset(this.pcLocal);
+      this.transferDeopt();
+    } else {
+      c.lget(this.activationLocal).i32(ins.pc).lget(this.executedLocal).lget(this.entryDepth);
+      this.cx.captureValues(c, values); c.lset(this.deoptState);
+      c.lget(this.deoptState).call(d.target).lset(this.deoptTarget); this.transferDeopt();
+    }
     this.pop(); c.end(); this.pop(); c.end(); this.pop(); c.end();
   }
   emitBlock(b: number) {
