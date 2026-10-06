@@ -186,7 +186,7 @@ export class Program {
   lookup(loader: Loader, name: string, seen = new Set<Loader>()): string | undefined {
     if (seen.has(loader)) return undefined;
     seen.add(loader);
-    if (loader === this.boot) return (this.base ? this.base.has(name) : this.has(name)) ? name : undefined;
+    if (loader === this.boot) return this.inBoot(name) ? name : undefined;
     const parent = loader.parent ? this.lookup(loader.parent, name, seen) : this.base?.has(name) ? name : undefined;
     if (parent) return parent;
     for (const library of loader.before ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
@@ -223,9 +223,11 @@ export class Program {
   }
   /** the key of the class `name` that `loader` itself defines (not its ancestors) */
   definedBy(loader: Loader, name: string): string | undefined {
-    if (loader === this.boot) return (this.base ? this.base.has(name) : this.has(name)) ? name : undefined;
+    if (loader === this.boot) return this.inBoot(name) ? name : undefined;
     return loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
   }
+  /** the boot namespace: the platform base and the classes the host makes without a dex */
+  private inBoot(name: string): boolean { return this.base ? this.base.has(name) || this.classes.get(name)?.dex === null : this.has(name); }
   has(name: string): boolean { return this.classes.has(name) || !!this.base?.has(name); }
   /** every class, the base's first */
   *all(): Generator<JClass> {
