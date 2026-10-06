@@ -187,7 +187,8 @@ function installProbe(cfg: ProbeConfig): void {
   });
   const screenPng = () => encode(readDisplay(displayCanvases()));
 
-  const busy = (dueBefore: number, stableMs: number): string[] => {
+  const foreground = () => g.wd.foregroundWorkerSnapshot?.() ?? Promise.resolve(null);
+  const busy = async (dueBefore: number, stableMs: number): Promise<string[]> => {
     const now = performance.now();
     const wd = g.wd, d = wd.mainDbg;
     const r: string[] = [];
@@ -196,6 +197,18 @@ function installProbe(cfg: ProbeConfig): void {
     if (wd.vsyncScheduled?.()) r.push("vsync");
     if (wd.pendingTransitions?.()) r.push("transition");
     if (wd.yields.pending()) r.push("yields");
+    const worker = await foreground();
+    if (worker) {
+      const snapshot = worker.snapshot;
+      if (worker.error || !snapshot) r.push("queued");
+      else {
+        if (snapshot.main.depth > 0) r.push("job:" + snapshot.main.phase);
+        if (snapshot.main.queued > 0) r.push("queued");
+        if (snapshot.vsyncScheduled) r.push("vsync");
+        if (snapshot.pendingTransitions) r.push("transition");
+        if (snapshot.yields.pending) r.push("yields");
+      }
+    }
     if (inflight) r.push("inflight");
     if (awaitingSockets()) r.push("sockets");
     const due = Math.max(dueBefore, now + stableMs);
@@ -307,7 +320,7 @@ function installProbe(cfg: ProbeConfig): void {
         // often until a frame repeats
         interval = hashes.length === q.stableFrames * 2 && new Set(hashes).size === hashes.length ? Math.min(interval * 2, 1000) : q.intervalMs;
       }
-      const b = busy(dueBefore, q.stableMs);
+      const b = await busy(dueBefore, q.stableMs);
       if (!b.length) return done("idle", seen);
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
       // a still screen settles past timers and network, not past work under way: a main-thread job
@@ -330,8 +343,9 @@ function installProbe(cfg: ProbeConfig): void {
   const act = (a: Act, screen: Screen, deadlineMs: number, controlled = false) => performAction({ a, screen, deadlineMs, controlled });
   const seen = { missing: new Set<string>(), placeholders: new Set<string>(), native: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
-    const out = all.filter((x) => !seen[key].has(x));
-    seen[key] = new Set(all);
+    const unique = new Set(all);
+    const out = [...unique].filter((x) => !seen[key].has(x));
+    seen[key] = unique;
     return out;
   };
   // a phase that can wait on the main looper (settle's test frames, the UI dump) past this bound
@@ -348,10 +362,13 @@ function installProbe(cfg: ProbeConfig): void {
   const hangOf = async (phase: string, afterMs: number): Promise<Hang> => {
     const within = <U>(p: Promise<U>) => Promise.race([p, new Promise<string>((r) => rawSetTimeout(() => r("no answer in 3 s"), 3000))]);
     const native = g.wd.native?.regs?.().filter((c: { state: string }) => c.state && c.state !== "park").map((c: { name: string; pc: string }) => `${c.name} ${c.pc}`);
-    return { phase, afterMs, looper: await within(Promise.resolve().then(() => g.wd.looperDump())).catch(String), threads: g.wd.threads?.(), native };
+    const worker = await within(Promise.resolve().then(foreground)).catch(String);
+    const looper = await within(Promise.resolve().then(() => g.wd.looperDump())).catch(String);
+    return { phase, afterMs, looper: worker ? { root: looper, worker } : looper, threads: g.wd.threads?.(), native };
   };
   const step = async (spec: StepSpec): Promise<StepResult> => {
     const wd = g.wd, hangs: Hang[] = [];
+    const beforeWorker = await foreground();
     wd.perfReset();
     shots.length = 0; shotHash = -1; shooting = cfg.shots;
     const t0 = performance.now();
@@ -388,16 +405,21 @@ function installProbe(cfg: ProbeConfig): void {
     const captureMs = performance.now() - captureAt;
     const telemetryAt = performance.now();
     const uiTree: UiNode[] = await bounded("uiTree", wd.uiTree(), PHASE_BOUND_MS, [], hangs);
-    const counters = { ...wd.perf };
+    const worker = await foreground(), snapshot = worker?.snapshot;
+    const previous = beforeWorker?.pid === worker?.pid ? beforeWorker?.snapshot?.perf : undefined;
+    const counters = snapshot ? Object.fromEntries(Object.entries(snapshot.perf).map(([name, value]) =>
+      [name, (value as number) - (previous?.[name] ?? 0)])) : { ...wd.perf };
+    if (snapshot) counters.bootMs = wd.perf.bootMs;
+    const workerErrors = worker?.error ? ["error: Worker diagnostics: " + worker.error] : snapshot?.logs ?? [];
     const result = {
       png, frameHash: lastHash < 0 ? null : lastHash.toString(16).padStart(8, "0"), presentation,
       settled, semanticHit, wedged, error, hang: hangs[0],
       perf: counters,
-      newMissing: fresh("missing", [...wd.rt.missing]),
-      newPlaceholders: fresh("placeholders", [...wd.rt.placeholders]),
-      nativeRequired: fresh("native", wd.nativeRequirements()),
-      newErrors: fresh("errors", (wd.logs as string[]).filter((l) => l.startsWith("error:"))),
-      web: (wd.web() as StepResult["web"]).map(({ url, title, loaded }) => ({ url, title, loaded })),
+      newMissing: fresh("missing", [...wd.rt.missing, ...snapshot?.missing ?? []]),
+      newPlaceholders: fresh("placeholders", [...wd.rt.placeholders, ...snapshot?.placeholders ?? []]),
+      nativeRequired: fresh("native", [...wd.nativeRequirements(), ...snapshot?.nativeRequired ?? []]),
+      newErrors: fresh("errors", [...wd.logs as string[], ...workerErrors].filter((l) => /^(error:|window.error:|unhandledrejection:)/.test(l))),
+      web: [...wd.web() as StepResult["web"], ...snapshot?.web ?? []].map(({ url, title, loaded }) => ({ url, title, loaded })),
       uiTree,
       frames,
     };
