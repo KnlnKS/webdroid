@@ -35,7 +35,8 @@ type Capture = Awaited<ReturnType<Awaited<ReturnType<typeof startBoundaryProfile
 let capture: Capture | undefined, result: unknown, failure: string | undefined;
 const epoch = { sourceKey: sourceKey(), aot: await Bun.file(join(AOT_ROOT, "current.json")).json(),
   git: Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
-  harnessSHA256: createHash("sha256").update(await Bun.file(import.meta.path).text()).digest("hex") };
+  harnessSHA256: createHash("sha256").update(await Bun.file(import.meta.path).text()).digest("hex"),
+  profilerSHA256: createHash("sha256").update(await Bun.file(join(import.meta.dir,"boundary-capture.ts")).text()).digest("hex") };
 const saveResult = async (id: string, r: Awaited<ReturnType<typeof runStep>>) => {
   if (r.png) await Bun.write(join(values.out!, `${id}.png`), Buffer.from(r.png, 'base64'));
   const { png: _png, frames: _frames, ...record } = r;
@@ -50,7 +51,7 @@ try {
     setup.push({ id: step.id, ...await saveResult(step.id, r) });
     console.log(`setup ${step.id}`);
   }
-  const stop = await startBoundaryProfiles(browser, () => readProcesses(drv.page));
+  const stop = await startBoundaryProfiles(browser, () => readProcesses(drv.page), {window:true,sources:true});
   try {
     const r = await runStep(drv, flow, tap, manifest?.steps.find(s => s.id === tap.id));
     result = await saveResult(tap.id, r);
@@ -58,8 +59,11 @@ try {
 
 } catch (e) { failure = String(e); }
 finally {
-  for (let i = 0; i < (capture?.profiles.length ?? 0); i++)
+  for (let i = 0; i < (capture?.profiles.length ?? 0); i++) {
     await Bun.write(join(values.out, `target-${i}.cpuprofile`), JSON.stringify(capture!.profiles[i].profile));
+    for(const source of capture!.profiles[i].sources)
+      await Bun.write(join(values.out, `target-${i}-script-${source.scriptId}.js`),source.source);
+  }
   await Bun.write(join(values.out, 'capture.json'), JSON.stringify({ accepted: false,
     sharedLoad: true, ...epoch, chrome: browser.version(),
     clock: 'canonical full-flow date pin; real timers, no testClock override',
@@ -67,4 +71,4 @@ finally {
     flow: flow.app, after: values.after, tap: values.tap, setup, result, capture, browserErrors, failure }, null, 2));
   await drv.close();
 }
-if (failure || browserErrors.length) process.exitCode = 1;
+if (failure || browserErrors.length || (capture && (!capture.completeCoverage || !capture.window?.valid))) process.exitCode = 1;

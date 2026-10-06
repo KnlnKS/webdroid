@@ -1,15 +1,15 @@
 // Attribute SELF samples, never the inclusive subtree of a native call, to the boundary.
 // --owners is an optional reviewed node-id -> {category,evidence} map for bundled/generated frames.
 import { readFileSync, writeFileSync } from "node:fs";
-type Category="boundary"|"nativeWork"|"java"|"runtime"|"idle"|"unattributed";
+type Category="boundary"|"nativeWork"|"java"|"runtime"|"harness"|"idle"|"unattributed";
 interface Node {id:number;children?:number[];callFrame:{functionName:string;url:string;lineNumber:number;columnNumber:number}}
-interface Profile {nodes:Node[];samples:number[];timeDeltas:number[]}
+interface Profile {nodes:Node[];samples:number[];timeDeltas:number[];startTime:number;endTime:number}
 interface Owner {category:Category;evidence:string}
 const flag=(key:string)=>{const i=process.argv.indexOf(key);return i<0?undefined:process.argv[i+1];};
 const path=flag("--profile");if(!path)throw new Error("--profile <cpuprofile> required");
 const profile=JSON.parse(readFileSync(path,"utf8")) as Profile;
 const owners:Record<string,Owner>=flag("--owners")?JSON.parse(readFileSync(flag("--owners")!,"utf8")):{};
-const categories:Category[]=["boundary","nativeWork","java","runtime","idle","unattributed"];
+const categories:Category[]=["boundary","nativeWork","java","runtime","harness","idle","unattributed"];
 const classify=(n:Node):Category=>{
   const explicit=owners[n.id];if(explicit){if(!categories.includes(explicit.category)||!explicit.evidence)throw new Error(`unreviewed owner ${n.id}`);return explicit.category;}
   const {url,functionName:name}=n.callFrame;
@@ -27,10 +27,20 @@ const classify=(n:Node):Category=>{
 };
 const nodes=new Map(profile.nodes.map(n=>[n.id,n])), totals=Object.fromEntries(categories.map(c=>[c,0])) as Record<Category,number>;
 const self=new Map<number,number>();
+const windowPath=flag("--window");
+const capture=windowPath?JSON.parse(readFileSync(windowPath,"utf8")):undefined;
+const window=capture?.capture?.window??capture?.window;
+if(windowPath&&(!window?.valid||!Number.isFinite(window.startUs)||!Number.isFinite(window.endUs)||window.endUs<=window.startUs))throw new Error("valid capture clock window required");
+if(window&&!(profile.startTime<=window.startUs&&profile.endTime>=window.endUs))throw new Error("target profile does not cover common window");
+let at=profile.startTime,maxSampleGapUs=0,sampledUs=0;
 if(profile.samples.length!==profile.timeDeltas.length)throw new Error("sample/time delta mismatch");
-for(let i=0;i<profile.samples.length;i++){const id=profile.samples[i],n=nodes.get(id);if(!n)throw new Error(`missing node ${id}`);const dt=profile.timeDeltas[i];if(dt<0)throw new Error("negative sample interval");totals[classify(n)]+=dt;self.set(id,(self.get(id)??0)+dt);}
-const active=Object.entries(totals).filter(([k])=>k!=="idle").reduce((n,[,v])=>n+v,0);
-const report={profile:path,accepted:false,activeSampleUs:active,selfSampleUs:totals,
+for(let i=0;i<profile.samples.length;i++){const id=profile.samples[i],n=nodes.get(id);if(!n)throw new Error(`missing node ${id}`);const raw=profile.timeDeltas[i];if(raw<0||!Number.isFinite(raw))throw new Error("invalid sample interval");
+const next=at+raw,dt=window?Math.max(0,Math.min(next,window.endUs)-Math.max(at,window.startUs)):raw;
+at=next;if(!dt)continue;maxSampleGapUs=Math.max(maxSampleGapUs,raw);sampledUs+=dt;
+totals[classify(n)]+=dt;self.set(id,(self.get(id)??0)+dt);}
+const active=Object.entries(totals).filter(([k])=>k!=="idle"&&k!=="harness").reduce((n,[,v])=>n+v,0);
+const report={profile:path,accepted:false,window:window??null,sampledUs,maxSampleGapUs,
+  unsampledTailUs:window?Math.max(0,window.endUs-Math.max(window.startUs,at)):null,activeSampleUs:active,rawActiveSampleUs:active+totals.harness,selfSampleUs:totals,
   boundaryLowerPercent:active?100*totals.boundary/active:null,
   boundaryUpperPercent:active?100*(totals.boundary+totals.unattributed)/active:null,
   remaining:"Unmapped/generated frames need reviewed ownership. Actual tap completion, every active process and an idle window are separate prerequisites.",
