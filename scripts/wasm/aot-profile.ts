@@ -125,11 +125,13 @@ async function readProfiles(page: import("playwright").Page): Promise<AotProfile
     const url = new URL(frame.url());
     return url.origin === origin && ["/", "/process"].includes(url.pathname);
   });
-  const profiles = await Promise.all(frames.map(frame => frame.evaluate(async () => {
+  const profiles = (await Promise.all(frames.map(frame => frame.evaluate(async () => {
+    // a same-origin process frame shares the page's store (pageShared), which the page reads
+    if (!window.__wdAot && window.parent !== window && window.parent.__wdAot) return null;
     const store = await window.__wdAot;
     if (!store) throw new Error("AOT profile unavailable");
     return {key:store.key,wanted:[...store.wanted],worlds:[...store.worlds].map(read => read())};
-  })));
+  })))).filter((profile): profile is AotProfile => profile !== null);
   const workers = await page.evaluate(async () => {
     const read = globalThis.wd && Reflect.get(globalThis.wd,"workerAotProfiles") as (() => Promise<WorkerProfile[]>) | undefined;
     if (read) return read();
