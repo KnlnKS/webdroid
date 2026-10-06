@@ -887,18 +887,19 @@ export class World {
     if (this.opts.compiler?.submit(this, slot)) { s.pending = true; reset(); return; }
     if (this.opts.holdUpgrades?.()) { reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
-    // again after another budget; the next compile the share allows goes to the method that has waited longest, which became hot first
+    // again after another budget; the next compile the share allows goes to the method that has waited longest and asked again since, so it is still hot
     const t0 = performance.now();
     this.hotSince ??= t0;
-    if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) {
-      if (!this.waitingHot.includes(slot)) this.waitingHot.push(slot);
-      reset(); return;
-    }
+    const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
+    if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) { wait(); return; }
     let pick = slot;
-    for (let w; (w = this.waitingHot.shift()) !== undefined;) {
+    for (const [w, n] of this.refused) {
       const ws = this.slotAt(w);
-      if (ws?.k === "method" && ws.done && !ws.hot && !ws.pending) { pick = w; if (w !== slot) this.waitingHot.unshift(slot); break; }
+      if (ws?.k !== "method" || !ws.done || ws.hot || ws.pending) { this.refused.delete(w); continue; }
+      if (n >= 2) { pick = w; break; }
     }
+    this.refused.delete(pick);
+    if (pick !== slot) wait();
     const m = (this.slotAt(pick) as { m: MethodInfo }).m, cx = new Compiler(this), { installed, copies } = this.group(m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
@@ -906,8 +907,8 @@ export class World {
     this.upgradeMs += performance.now() - t0;
   }
   private requested = new Set<number>();
-  /** methods refused a second-tier compile, longest waiting first */
-  private waitingHot: number[] = [];
+  /** the methods refused a second-tier compile, longest waiting first, with how often */
+  private refused = new Map<number, number>();
   private leafWaits = new Map<number, number>();
   private leaves = new Map<MethodInfo, boolean>();
   private leaf(m: MethodInfo): boolean {
