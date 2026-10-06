@@ -140,6 +140,22 @@ for(const opcode of [0xfe,0xff]) {
   const dex=new Proxy(method.dex,{get(target,key){return key==="code"?()=>unsupported:Reflect.get(target,key);}});
   expect("unsupported constant preflight",supportsColdBody({...method,dex}),false);
 }
+{
+  let reads=0;
+  const supported={regs:1,ins:0,tries:[],insns:new Uint16Array([0x000e])};
+  const unsupported={...supported,insns:new Uint16Array([0xfe,0,0x000e])};
+  const dex=new Proxy(method.dex,{get(target,key){return key==="code"?(off:number)=>{reads++;return off===1?supported:unsupported}:Reflect.get(target,key);}});
+  const candidate={...method,dex,codeOff:1};
+  expect("eligibility checks original body",supportsColdBody(candidate,false),true);
+  expect("eligibility reuses original body",supportsColdBody(candidate,false),true);
+  expect("eligibility avoids repeated body reads",reads,1);
+  candidate.codeOff=2;
+  expect("eligibility checks replacement body offset",supportsColdBody(candidate,false),false);
+  expect("eligibility preserves unsupported result",supportsColdBody(candidate,false),false);
+  expect("unsupported eligibility avoids repeated body reads",reads,2);
+  candidate.dex=method.dex;candidate.codeOff=method.codeOff;
+  expect("eligibility checks replacement DEX identity",supportsColdBody(candidate,false),true);
+}
 for(const mutate of [(s: typeof state)=>{s.pc++},(s: typeof state)=>{s.kinds[0]=2},(s: typeof state)=>{s.result=undefined},(s: typeof state)=>{s.edges=-1},(s: typeof state)=>{s.result!.pc++}]) {
   const bad={...state,bits:state.bits.slice(),references:[...state.references],kinds:state.kinds.slice(),result:state.result&&{...state.result}};
   mutate(bad); let rejected=false; try{cold.restore(item,bad);}catch{rejected=true;} expect("reject malformed snapshot",rejected,true);

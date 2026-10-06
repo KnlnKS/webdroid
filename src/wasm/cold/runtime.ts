@@ -12,15 +12,22 @@ import { hasJspi } from "../link/module";
 import { coldCode, type ColdInterpreter } from "./interpreter";
 
 const programs = new WeakMap<MethodInfo, { item: ReturnType<MethodInfo["dex"]["code"]>; decoded: ReturnType<typeof coldCode> }>();
+const eligibility = new WeakMap<MethodInfo, { dex: MethodInfo["dex"]; codeOff: number; supported: boolean }>();
 function program(m: MethodInfo) {
   let p = programs.get(m);
   if (!p) { const item = m.dex.code(m.codeOff); programs.set(m, p = { item, decoded: coldCode(item) }); }
   return p;
 }
 export function supportsColdBody(m: MethodInfo, cache = true): boolean {
+  const prior = eligibility.get(m);
+  if (prior?.dex === m.dex && prior.codeOff === m.codeOff) return prior.supported;
   // AOT preflight must not retain a decoded program for every platform method.
+  // Slow adapter construction also asks about its enclosing body repeatedly.
+  // DEX bodies are immutable; retain only eligibility and the body identity.
   const item = m.dex.code(m.codeOff), decoded = cache ? program(m).decoded : coldCode(item), slow = new Set(decoded.slowPcs);
-  return decodeInstructions(item.insns).every(ins => !slow.has(ins.pc) || ColdSlowOps.supports(ins));
+  const supported = decodeInstructions(item.insns).every(ins => !slow.has(ins.pc) || ColdSlowOps.supports(ins));
+  eligibility.set(m, { dex: m.dex, codeOff: m.codeOff, supported });
+  return supported;
 }
 
 export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resuming = false) {
