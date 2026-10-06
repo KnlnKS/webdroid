@@ -18,6 +18,8 @@ export type ExitRecord = {
   description: string | null; state: string | null; tombstone: string | null;
   /** AppErrors showed the crash dialog: the process had crashed within MIN_CRASH_INTERVAL */
   dialog: boolean;
+  /** Copied fatal report retained after the process realm is destroyed. */
+  crash?: CrashInfo;
 };
 /** how a process ended, as the broker and the shell tell it: whether it crashed, and whether
  *  AppErrors found it crashed within MIN_CRASH_INTERVAL of its last crash */
@@ -56,7 +58,7 @@ export function recordRemoteExit(record: ExitRecord): ExitRecord {
   const crashed = record.reason === REASON_CRASH || record.reason === REASON_CRASH_NATIVE;
   const last = crashed ? exitRecords(record.pkg).find(r => r.process === record.process &&
     (r.reason === REASON_CRASH || r.reason === REASON_CRASH_NATIVE)) : undefined;
-  const canonical = {...record, dialog: crashed && !!last && record.timestamp - last.timestamp < MIN_CRASH_INTERVAL_MS};
+  const canonical = {...copyExitRecord(record), dialog: crashed && !!last && record.timestamp - last.timestamp < MIN_CRASH_INTERVAL_MS};
   save(canonical);
   return canonical;
 }
@@ -78,10 +80,21 @@ export function setProcessStateSummary(state: Uint8Array | null): void { stateSu
 /** the bound application's ApplicationInfo.flags, which am_crash records (-1 with none bound) */
 let appFlags = -1;
 export function noteApplicationFlags(flags: number): void { appFlags = flags; }
-export type CrashInfo = { exceptionClassName: string | null; exceptionMessage: string | null; throwFileName: string | null; throwLineNumber: number };
+export type CrashInfo = { exceptionClassName: string | null; exceptionMessage: string | null; throwFileName: string | null; throwLineNumber: number; stackTrace?: string | null };
+const crashText = (value: string | null | undefined, limit: number): string | null => typeof value === "string" ? value.slice(0,limit) : null;
+function copyCrashInfo(info: CrashInfo): CrashInfo {
+  return {exceptionClassName:crashText(info.exceptionClassName,512),exceptionMessage:crashText(info.exceptionMessage,8192),
+    throwFileName:crashText(info.throwFileName,4096),throwLineNumber:Number.isSafeInteger(info.throwLineNumber) ? info.throwLineNumber : 0,
+    stackTrace:crashText(info.stackTrace,65536)};
+}
+export function copyExitRecord(record: ExitRecord): ExitRecord {
+  return {...record,...(record.crash ? {crash:copyCrashInfo(record.crash)} : {})};
+}
+let fatalCrash: CrashInfo | undefined;
 /** AppErrors.crashApplicationInner for this process: logged as am_crash, its death noted as a crash,
  *  and the dialog policy run (AppErrors.handleAppCrashLocked and handleShowAppErrorUi) */
 export function appCrashed(info: CrashInfo, native: boolean): void {
+  fatalCrash ??= copyCrashInfo(info);
   if (noted) return;
   const process = processName(), now = wallMillis();
   logLine(4, "am_crash", `[${PROCESS_PID},0,${process},${appFlags},${info.exceptionClassName ?? ""},${info.exceptionMessage ?? ""},${info.throwFileName ?? ""},${info.throwLineNumber},0]`);
@@ -108,6 +121,7 @@ function recordExit(status: ExitStatus): void {
     importance: foreground() ? IMPORTANCE_FOREGROUND : IMPORTANCE_CACHED, timestamp: wallMillis(),
     description: noted?.description ?? null, state: stateSummary && stateSummary.toBase64(),
     tombstone: status.signal !== undefined && status.tombstone ? status.tombstone.toBase64() : null, dialog: noted?.dialog ?? false,
+    ...(fatalCrash ? {crash:copyCrashInfo(fatalCrash)} : {}),
   };
   if (exitRecordTransport.publish) exitRecordTransport.publish(lastExit);
   else save(lastExit);

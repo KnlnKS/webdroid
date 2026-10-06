@@ -153,7 +153,7 @@ export const activityManagerMethods = {
   "handleApplicationCrash(Landroid/os/IBinder;Landroid/app/ApplicationErrorReport$ParcelableCrashInfo;)V": (_app: JObj | null, info: JObj | null) => {
     const field = <T>(name: string) => (info ? getDeclared<T>(info, CRASH_INFO, name) : null);
     appCrashed({ exceptionClassName: field("exceptionClassName"), exceptionMessage: field("exceptionMessage"),
-      throwFileName: field("throwFileName"), throwLineNumber: field<number>("throwLineNumber") ?? 0 }, false);
+      throwFileName: field("throwFileName"), throwLineNumber: field<number>("throwLineNumber") ?? 0, stackTrace:field("stackTrace") }, false);
   },
   "setProcessStateSummary([B)V": (state: Int8Array | null) => {
     if (state && state.length > MAX_STATE_SUMMARY) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Data size is too large");

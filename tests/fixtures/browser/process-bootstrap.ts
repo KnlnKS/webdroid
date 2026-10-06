@@ -239,6 +239,9 @@ export async function clockBootstrapOwnership() {
       if(data.finish!==undefined){const {exitProcess}=await import(${JSON.stringify(location.origin + "/process-exit.js")});exitProcess({code:data.finish});return;}
       const {attachWorkerBootstrap,serveWorkerEndpoint} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
       const broker = await attachWorkerBootstrap(data);
+      const {appCrashed} = await import(${JSON.stringify(location.origin + "/appexitinfo.js")});
+      const fatal={exceptionClassName:"fixture.FatalException",exceptionMessage:"fatal fixture",throwFileName:"Fixture.java",throwLineNumber:17,stackTrace:${JSON.stringify("fixture.FatalException: fatal fixture\n at fixture.run(Fixture.java:17)")}};
+      if(data.pid===8201){appCrashed(fatal,false);fatal.exceptionMessage="changed local report";}
       const endpoint = new MessageChannel();
       await serveWorkerEndpoint(endpoint.port1);
       const {PROCESS_PID,PROCESS_UID,PROCESS_NAME} = await import(${JSON.stringify(location.origin + "/os.js")});
@@ -283,7 +286,10 @@ export async function clockBootstrapOwnership() {
     reader.close();broker.fail(survivor.pid,"exit reader cleanup",NOT_CRASHED);
     worker.terminate();
     const crashRow=(await broker.workerSnapshots()).find(row=>row.pid===pid)!;
-    const crash={expected:crashRow.terminal?.expected,reason:crashRow.terminal?.record?.reason,error:"error" in crashRow};
+    const fatal=crashRow.terminal!.record!.crash!;
+    const crash={expected:crashRow.terminal?.expected,reason:crashRow.terminal?.record?.reason,error:"error" in crashRow,fatal:{...fatal},copied:false};
+    fatal.exceptionMessage="changed terminal copy";
+    crash.copied=(await broker.workerSnapshots()).find(row=>row.pid===pid)!.terminal!.record!.crash!.exceptionMessage==="fatal fixture";
     const terminals=[];
     for(const [i,status] of [0,7,null].entries()) {
       const nextPid=8203+i,next=broker.connect(pkg,pkg+":"+nextPid,nextPid);

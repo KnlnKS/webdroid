@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("lazy archive reads cross a Worker without sharing buffers and fail on process teardown", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/process-exit.ts", import.meta.dir + "/../src/shell/remote-file.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts", import.meta.dir + "/../src/guest-clock.ts", import.meta.dir + "/../src/shell/worker-bootstrap.ts", import.meta.dir + "/../src/android/os.ts", import.meta.dir + "/../src/shell/frame-port.ts"], splitting: true, target: "browser", format: "esm" });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/process-exit.ts", import.meta.dir + "/../src/android/server/appexitinfo.ts", import.meta.dir + "/../src/shell/remote-file.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts", import.meta.dir + "/../src/guest-clock.ts", import.meta.dir + "/../src/shell/worker-bootstrap.ts", import.meta.dir + "/../src/android/os.ts", import.meta.dir + "/../src/shell/frame-port.ts"], splitting: true, target: "browser", format: "esm" });
   if (!build.success) throw new AggregateError(build.logs, "archive transport build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -76,7 +76,7 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return clockBootstrapOwnership();
     });
-    expect(clock).toEqual({crash:{expected:false,reason:4,error:true},terminals:[{expected:true,reason:1,status:0,error:false,copied:true},{expected:false,reason:1,status:7,error:true,copied:true},{expected:true,reason:10,status:9,error:false,copied:true}],display:true,exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],
+    expect(clock).toEqual({crash:{expected:false,reason:4,error:true,fatal:{exceptionClassName:"fixture.FatalException",exceptionMessage:"fatal fixture",throwFileName:"Fixture.java",throwLineNumber:17,stackTrace:"fixture.FatalException: fatal fixture\n at fixture.run(Fixture.java:17)"},copied:true},terminals:[{expected:true,reason:1,status:0,error:false,copied:true},{expected:false,reason:1,status:7,error:true,copied:true},{expected:true,reason:10,status:9,error:false,copied:true}],display:true,exit:{pid:8201,uid:15000,process:"test.clock.worker",pkg:"test.clock.worker",reason:4,status:0,dialog:true,description:"crash"}, controlled: true, archive: [31], origin: true, wall: true, uptime: true, identity: [8201,15000,"test.clock.worker"], commands: {cookies:false,clipboard:null}, ticks: ["first", "nested"],
       advanced: 2, pendingBeforeDeath: 2, pendingAfterDeath: 1, brokerTimer: 1, pendingAfterAdvance: 0 });
     expect(errors).toEqual([]);
   } finally { await browser.close(); server.stop(true); }

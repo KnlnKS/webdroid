@@ -14,7 +14,7 @@ import { appHost } from "../android/apphost";
 import { ownedSystemService, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
-import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
+import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, copyExitRecord, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
 import { logUncaught } from "../jvm/natives/jthrowable";
 import { createGuestClockPort, uptimeMillis } from "../guest-clock";
@@ -549,7 +549,7 @@ export class ProcessBroker {
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
     if (entry.worker || entry.workerDiagnostic) entry.workerDiagnostic = {
       url:entry.worker?.url ?? entry.workerDiagnostic!.url,error:message,
-      terminal:{cause:message,record:record && {...record},expected:!!record && !death.crashed &&
+      terminal:{cause:message,record:record && copyExitRecord(record),expected:!!record && !death.crashed &&
         (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED)},
     };
     entry.dead = true; entry.reject(error);
@@ -607,7 +607,7 @@ export class ProcessBroker {
   }
   private terminalWorker(entry: Entry, identity: WorkerIdentity): WorkerDiagnosticRow {
     const owned = entry.workerDiagnostic?.terminal;
-    const terminal = owned && {...owned,record:owned.record && {...owned.record}};
+    const terminal = owned && {...owned,record:owned.record && copyExitRecord(owned.record)};
     return terminal?.expected ? {...identity,terminal} :
       {...identity,terminal,error:entry.workerDiagnostic?.error ?? "Worker owner unavailable"};
   }
