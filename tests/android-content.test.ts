@@ -2,6 +2,7 @@ import { expect, test, describe } from "bun:test";
 import { zipSync } from "fflate";
 import "../src/natives";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
+import { jarray } from "../src/jvm/abi";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jentry";
 import { checkUriPermission, grantUriPermission, revokeUriPermission } from "../src/android/urigrants";
 import { mkUri } from "../src/android/net";
@@ -412,6 +413,20 @@ describe("pending-intents", () => {
     alarmTransport.schedule = client.endpoint.alarmSchedule;
     alarmTransport.cancel = client.endpoint.alarmCancel;
     try {
+      const path = "/data/data/test/pending-fd.bin";
+      vfs.write(path, Uint8Array.of(7));
+      const fd = await scall("android/system/Os", "open", "(Ljava/lang/String;II)Ljava/io/FileDescriptor;", path, 0, 0);
+      const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", fd);
+      try {
+        const supplied = await newIntent();
+        await vcall(supplied, "putExtra", "(Ljava/lang/String;Landroid/os/Parcelable;)Landroid/content/Intent;", "fd", pfd);
+        const activityManager = await hostedService("activity");
+        const rejected = await Promise.resolve().then(() => vcall(activityManager, "getIntentSenderWithFeature",
+          "(ILjava/lang/String;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;I[Landroid/content/Intent;[Ljava/lang/String;ILandroid/os/Bundle;I)Landroid/content/IIntentSender;",
+          1, PKG, null, null, null, 2, jarray([supplied], "Landroid/content/Intent;"), null, 0x4000000, null, 0)).then(() => null, (error: unknown) => error);
+        expect(rt.iof(rejected, "java/lang/IllegalArgumentException")).toBe(1);
+        expect(await vcall(pfd, "getFd", "()I")).toBeGreaterThanOrEqual(0);
+      } finally { await vcall(pfd, "close", "()V"); }
       const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
       const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
       const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);

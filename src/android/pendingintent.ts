@@ -78,6 +78,8 @@ export const intentSenderMethods = {
       const kind = KIND_OF[type];
       if (!kind) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad PendingIntent type: " + type);
       if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
+      for (const intent of intents) if (yield vcall(intent, "hasFileDescriptors", "()Z"))
+        throw rt.mkThrowable("java/lang/IllegalArgumentException", "File descriptors passed in Intent");
       const encoded: ParcelData[] = [];
       for (const intent of intents) encoded.push(yield* awaited(encodeIntent(intent)));
       const id = yield* awaited(pendingTransport.create(pkg, kind, code, flags, encoded.at(-1)!, kind === "activity" && encoded.length > 1 ? encoded : undefined));
