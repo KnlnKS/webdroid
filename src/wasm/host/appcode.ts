@@ -37,7 +37,7 @@ export interface AppCode {
   refine(world: World, min?: number): Promise<Built | undefined>;
   /** from the first frame of the app on: looks at the launch every so often, and refines once it has gone quiet */
   watch(world: World): void;
-  /** waits for a build in progress, then refines with everything `world` built on demand since (a profile run exports the result: scripts/wasm/aot-profile.ts) */
+  /** waits for a build in progress, then builds again with everything `world` built on demand and decided since (a profile run exports the result: scripts/wasm/aot-profile.ts) */
   settle(world: World): Promise<Built | undefined>;
   /** the builds made so far, the last first */
   builds: Built[];
@@ -103,7 +103,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
     if (closed || fresh(world) < min) return undefined;
-    const at = size(), built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses);
+    const at = size(), built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()], verdicts: world.aot?.verdictList() }, hostClasses);
     builds.unshift(built);
     if (built.kept) covered = at;
     return built;
@@ -111,7 +111,8 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   async function settle(world: World): Promise<Built | undefined> {
     await code.made?.catch(() => {});
     while (builder.busy && !closed) await new Promise((r) => setTimeout(r, 100));
-    return refine(world, 1);
+    // the verdicts found since are worth a build without new demand
+    return refine(world, 0);
   }
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
