@@ -221,6 +221,7 @@ export async function clockBootstrapOwnership() {
   const data = await broker.bootstrap(pid, true), start = guestClockControl.now(), wall = wallMillis();
   const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout} from ${JSON.stringify(location.origin + "/guest-clock.js")};
     self.onmessage = async ({data}) => {
+      if(data.finish!==undefined){const {exitProcess}=await import(${JSON.stringify(location.origin + "/process-exit.js")});exitProcess({code:data.finish});return;}
       const {attachWorkerBootstrap,serveWorkerEndpoint} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
       const broker = await attachWorkerBootstrap(data);
       const endpoint = new MessageChannel();
@@ -237,7 +238,8 @@ export async function clockBootstrapOwnership() {
       self.postMessage({ready:true,display:!!data.display,archive,controlled:guestClockControl.controlled,bootTime,
         identity:[PROCESS_PID,PROCESS_UID,PROCESS_NAME],commands:{cookies:await broker.cookieHas(),clipboard:await broker.clipboardGet()},endpoint:endpoint.port2},[endpoint.port2]);
     };`;
-  const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"});
+  const url = URL.createObjectURL(new Blob([code], {type:"text/javascript"})), worker = new Worker(url, {type:"module"}), workers=[worker];
+  entry.workerDiagnostic={url};
   const ticks: {tick:string;now:number;wall?:number}[] = [];
   try {
     const ready = await new Promise<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
@@ -265,12 +267,35 @@ export async function clockBootstrapOwnership() {
     const exit = {pid:stored.pid,uid:stored.uid,process:stored.process,pkg:stored.pkg,reason:stored.reason,status:stored.status,dialog:stored.dialog,description:stored.description};
     reader.close();broker.fail(survivor.pid,"exit reader cleanup",NOT_CRASHED);
     worker.terminate();
+    const crashRow=(await broker.workerSnapshots()).find(row=>row.pid===pid)!;
+    const crash={expected:crashRow.terminal?.expected,reason:crashRow.terminal?.record?.reason,error:"error" in crashRow};
+    const terminals=[];
+    for(const [i,status] of [0,7,null].entries()) {
+      const nextPid=8203+i,next=broker.connect(pkg,pkg+":"+nextPid,nextPid);
+      next.workerDiagnostic={url};
+      const nextData=await broker.bootstrap(nextPid,true),peer=new Worker(url,{type:"module"});workers.push(peer);
+      await new Promise<void>((resolve,reject)=>{
+        peer.onerror=event=>reject(new Error(event.message));
+        peer.onmessage=({data})=>{if(data.ready){broker.readyPort(nextPid,data.endpoint);resolve();}};
+        peer.postMessage(nextData,bootstrapTransfers(nextData));
+      });
+      const ended=new Promise<void>(resolve=>broker.watch(nextPid,()=>resolve()));
+      if(status===null)await broker.forceStop(pkg);else peer.postMessage({finish:status});
+      await ended;
+      const row=(await broker.workerSnapshots()).find(row=>row.pid===nextPid)!;
+      if(!row.terminal?.record)throw new Error("missing canonical terminal record");
+      const record=row.terminal.record;
+      const result={expected:row.terminal.expected,reason:record.reason,status:record.status,error:"error" in row,copied:false};
+      record.status=99;
+      result.copied=(await broker.workerSnapshots()).find(row=>row.pid===nextPid)!.terminal!.record!.status!==99;
+      terminals.push(result);peer.terminate();
+    }
     const pendingAfterDeath = guestClockControl.pending();
     await guestClockControl.advanceBy(10);
-    return {exit,display:ready.display,controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
+    return {crash,terminals,exit,display:ready.display,controlled:ready.controlled,archive:ready.archive,origin:ready.bootTime===bootTime,identity:ready.identity,commands:ready.commands,
       wall:ticks[0]?.wall===wall+10,uptime:ticks.every(tick=>tick.now===start+10),ticks:ticks.map(tick=>tick.tick),advanced,pendingBeforeDeath,pendingAfterDeath,
       brokerTimer,pendingAfterAdvance:guestClockControl.pending()};
-  } finally { worker.terminate(); broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }
+  } finally { workers.forEach(peer=>peer.terminate());for(const nextPid of [8203,8204,8205])broker.fail(nextPid,"exit fixture cleanup",NOT_CRASHED);broker.fail(pid,"clock fixture cleanup",NOT_CRASHED); URL.revokeObjectURL(url); packages.delete(pkg); }
 }
 
 export async function clipboardOwnership() {
@@ -526,12 +551,21 @@ export async function workerDiagnosticOwnership() {
     broker.activities.setForeground(8401);
     const live=await broker.visibleWorkersAlive(1000);
     const count=await new Promise<{hungCalls:number;aliveCalls:number}>(resolve=>{worker.onmessage=({data})=>resolve(data);worker.postMessage({count:true});});
+    const hanging=broker.connect(pkg,pkg+":2",8403);
+    const held=broker.workerSnapshots([hanging]);
+    const publish=callProxy<BrokerCalls>(broker.brokerPort(hanging.pid),brokerMethods);clients.push(publish);
+    const died=new Promise<void>(resolve=>broker.watch(hanging.pid,()=>resolve()));
+    void Promise.resolve(publish.endpoint.processExited({pid:9999,uid:0,pkg:"foreign",process:"foreign",reason:1,status:0,
+      importance:400,timestamp:Date.now(),description:null,state:null,tombstone:null,dialog:false})).catch(()=>{});
+    await died;
+    const terminal=(await held)[0].terminal!;
+    const pendingTerminal={expected:terminal.expected,reason:terminal.record!.reason,status:terminal.record!.status,pid:terminal.record!.pid};
     broker.fail(8401,"actual diagnostic fixture exit",NOT_CRASHED);
     const ended=await broker.workerSnapshots();
     const row=(rows:typeof first,pid:number)=>rows.find(row=>row.pid===pid)!;
     const failure=(rows:typeof first,pid:number)=>{const value=row(rows,pid);return 'error' in value?value.error:null;};
     const healthy=row(first,8401);
-    return {healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
+    return {pendingTerminal,healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
       phase:failure(first,8404),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
       queueBlocked:'snapshot' in blocked[0] && !blocked[0].alive && !stillBlocked,live,aliveCalls:count.aliveCalls,
       retained:failure(ended,8401),identity:'snapshot' in healthy?healthy.snapshot.identity.pid:null};

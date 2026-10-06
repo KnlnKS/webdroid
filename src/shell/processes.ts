@@ -14,7 +14,7 @@ import { appHost } from "../android/apphost";
 import { ownedSystemService, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
-import { NOT_CRASHED, REASON_EXIT_SELF, recordRemoteExit, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
+import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
 import { logUncaught } from "../jvm/natives/jthrowable";
 import { createGuestClockPort, uptimeMillis } from "../guest-clock";
@@ -112,7 +112,12 @@ export type BrokerCalls = LocationCalls & ServiceStartCalls & PendingCalls & Coo
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
 export const brokerMethods = ["locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
+type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
+export type WorkerDiagnosticRow = WorkerIdentity & (
+  {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
+  {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
@@ -461,7 +466,7 @@ export class ProcessBroker {
       processExited: record => {
         const caller = this.entry(pid);
         const canonical = recordRemoteExit({...record,pid:caller.pid,uid:caller.uid,pkg:caller.pkg,process:caller.process});
-        this.fail(pid,`Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`,deathOf(canonical));
+        this.fail(pid,`Process has died: ${canonical.reason === REASON_EXIT_SELF ? "exit " : "status "}${canonical.status}`,deathOf(canonical),canonical);
       },
       // Acknowledgment means queued in ActivityStack; waiting for its lifecycle work here
       // would hold the launching main job while that same process is asked to pause.
@@ -524,12 +529,16 @@ export class ProcessBroker {
     }));
   }
   /** a process ended, or its frame failed: ActivityManagerService.appDiedLocked */
-  fail(pid: number, message: string, death: Death): void {
+  fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
-    if (entry.worker || entry.workerDiagnostic) entry.workerDiagnostic = {url:entry.worker?.url ?? entry.workerDiagnostic!.url,error:message};
+    if (entry.worker || entry.workerDiagnostic) entry.workerDiagnostic = {
+      url:entry.worker?.url ?? entry.workerDiagnostic!.url,error:message,
+      terminal:{cause:message,record:record && {...record},expected:!!record && !death.crashed &&
+        (record.reason === REASON_EXIT_SELF && record.status === 0 || record.reason === REASON_USER_REQUESTED)},
+    };
     entry.dead = true; entry.reject(error);
     this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
     this.settingsClients.get(pid)?.(); this.settingsClients.delete(pid);
@@ -550,13 +559,13 @@ export class ProcessBroker {
     this.activities.processDied(pid);
   }
   private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
-  workerSnapshots(entries = [...this.entries.values()]) {
-    return Promise.all(entries.flatMap(entry => {
+  workerSnapshots(entries = [...this.entries.values()]): Promise<WorkerDiagnosticRow[]> {
+    return Promise.all(entries.flatMap<Promise<WorkerDiagnosticRow>>(entry => {
       const worker = entry.worker;
       const url = worker?.url ?? entry.workerDiagnostic?.url;
       if (!url) return [];
       const identity = {pid:entry.pid,pkg:entry.pkg,process:entry.process,url};
-      if (!worker) return [Promise.resolve({...identity,error:entry.workerDiagnostic?.error ?? "Worker owner unavailable"})];
+      if (!worker) return [Promise.resolve(this.terminalWorker(entry,identity))];
       let read = this.workerReads.get(entry.pid);
       if (!read) {
         read = Promise.resolve().then(() => worker.control.snapshot());
@@ -571,14 +580,22 @@ export class ProcessBroker {
           const snapshot = await Promise.race([read, new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error("Worker diagnostic timeout")), 5000);
           })]);
-          if (entry.dead || snapshot.dead || snapshot.phase !== "ready")
+          if (entry.dead) return this.terminalWorker(entry,identity);
+          if (snapshot.dead || snapshot.phase !== "ready")
             throw new Error(`Worker is ${snapshot.dead || entry.dead ? "dead" : "not ready: " + snapshot.phase}`);
           return {...identity,snapshot};
         } catch (error) {
+          if (entry.dead) return this.terminalWorker(entry,identity);
           return {...identity,error: error instanceof Error ? error.message : String(error)};
         } finally { clearTimeout(timer); }
       })()];
     }));
+  }
+  private terminalWorker(entry: Entry, identity: WorkerIdentity): WorkerDiagnosticRow {
+    const owned = entry.workerDiagnostic?.terminal;
+    const terminal = owned && {...owned,record:owned.record && {...owned.record}};
+    return terminal?.expected ? {...identity,terminal} :
+      {...identity,terminal,error:entry.workerDiagnostic?.error ?? "Worker owner unavailable"};
   }
   private workerLiveness = new Map<number, Promise<boolean>>();
   private async workerAlive(entry: Entry, ms: number): Promise<boolean> {
@@ -635,7 +652,7 @@ export class ProcessBroker {
   }
   /** forceStopPackageLocked: the package's services go without restarting, and every process of its
    *  uid dies */
-  async forceStop(pkg: string, note?: KillNote): Promise<void> {
+  async forceStop(pkg: string, note: KillNote = {reason:REASON_USER_REQUESTED,description:`force stop ${pkg}`}): Promise<void> {
     this.services.forceStop(pkg);
     const uid = packages.get(pkg)?.uid;
     await this.each((e) => e.pkg === pkg || e.uid === uid, (endpoint, entry) => this.kill(entry, endpoint, 9, note));
