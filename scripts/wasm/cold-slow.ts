@@ -16,6 +16,7 @@ import { rt } from "../../src/jvm/runtime";
 import type { Compiler } from "../../src/wasm/compiler/j2w";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import type { HostFn } from "../../src/wasm/link/hostapi";
+import { defaultLoop } from "../../src/wasm/link/sched";
 
 const out = mkdtempSync(join(tmpdir(), "cold-slow-")), sh = shellIn(out);
 writeFileSync(join(out, "ColdSlow.java"), `
@@ -80,7 +81,9 @@ class MeasuredNatives extends Natives {
 }
 const measuredNatives = new MeasuredNatives({ ...nativeSource, find: (cls,key,s,b) => cls === "ColdSlow" && natives[key] ? natives[key] : nativeSource.find(cls,key,s,b) });
 rt.mkThrowable = hostThrowable;
-const wc = world(paths, { cold: true, natives: measuredNatives });
+let queueingMonitorCalls = false;
+const wc = world(paths, { cold: true, natives: measuredNatives,
+  loop: { ...defaultLoop, due: () => !queueingMonitorCalls && defaultLoop.due() } });
 const warm = world(paths, { natives: new Natives(nativeSource) });
 const jdk=sh(["java","-cp",out,"ColdSlow"]).trim().split("\n");
 let jdkAt=0;
@@ -94,7 +97,12 @@ for (const name of ["objects","arrays","dispatch","catches","caughtObject","cast
 expect("suspended invoke",await run(wc,"suspended",7),20);
 expect("suspended Java throw",await run(wc,"suspendedCatch",7),44);
 expect("actual native suspension",gates,1);
-const serial=await Promise.all(Array.from({length:20},(_,i)=>run(wc,"serialAwait",i)));
+// This assertion concerns an already queued monitor, not the wall-clock turn
+// at which an invocation reaches its first lock. Test that pre-lock yield below.
+queueingMonitorCalls = true;
+let serial: unknown[];
+try { serial = await Promise.all(Array.from({length:20},(_,i)=>run(wc,"serialAwait",i))); }
+finally { queueingMonitorCalls = false; }
 expect("contended suspended monitor",serial.join(","),Array.from({length:20},(_,i)=>i+1).join(","));
 expect("recursive suspended call",await run(wc,"suspendedRecursive",150),151);
 const before={adapters:wc.stats.coldSlowAdapters,modules:wc.stats.coldSlowModules,bytes:wc.stats.bytes};
@@ -170,5 +178,52 @@ expect("explicit release consumes monitor state",resumed.monitors.length,0);
 expect("canonical monitor actually released",wc.sched.monitors.depth(lock as object,strand),0);
 wc.sched.end(strand);
 expect("slow adapters do not rescan caller bodies for native imports",measuredNatives.callerDeclarationWords,0);
+// The same two admission schedules on real Java monitors provide the oracle.
+writeFileSync(join(out, "MonitorOrder.java"), `import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+public class MonitorOrder {
+  static final Object lock = new Object();
+  static final CountDownLatch ready = new CountDownLatch(1), release = new CountDownLatch(1);
+  static int serial; static boolean delayed;
+  static int serialAwait(int request) throws Exception {
+    if (delayed && request == 0) { ready.countDown(); release.await(); }
+    synchronized (lock) {
+      int old = serial;
+      Thread.sleep(1);
+      serial = old + 1;
+      if (!delayed && request == 0) ready.countDown();
+      return serial;
+    }
+  }
+  public static void main(String[] args) throws Exception {
+    delayed = args[0].equals("first");
+    int[] result = new int[20];
+    Thread first = new Thread(() -> { try { result[0] = serialAwait(0); } catch (Exception e) { throw new RuntimeException(e); } });
+    first.start(); ready.await();
+    for (int n = 1; n < result.length; n++) result[n] = serialAwait(n);
+    release.countDown(); first.join();
+    System.out.println(Arrays.toString(result));
+  }
+}
+`);
+sh(["javac", "--release", "11", "-d", out, join(out, "MonitorOrder.java")]);
+const orderOracle = (mode: string): number[] => JSON.parse(sh(["java", "-cp", out, "MonitorOrder", mode]).trim());
+expect("queued monitor agrees with JDK", serial.join(","), orderOracle("none").join(","));
+let ordered: ReturnType<typeof world>, orderedLock: object, armed = false, yielded = false;
+const acquisitions: { old: number; depth: number }[] = [];
+const orderedAwait = async (old: number) => {
+  acquisitions.push({ old, depth: ordered.sched.monitors.depth(orderedLock, ordered.sched.current()) });
+  await Promise.resolve(); return old + 1;
+};
+ordered = world(paths, { cold: true, natives: new Natives({ ...nativeSource,
+  find: (cls, key, stat, bound) => cls === "ColdSlow" && key === "await(I)I" ? orderedAwait : nativeSource.find(cls, key, stat, bound) }),
+  loop: { ...defaultLoop, due: () => { if (armed && !yielded) { yielded = true; return true; } return false; } } });
+orderedLock = await ordered.entryAsync("ColdSlow", "lockObject", "()Ljava/lang/Object;")() as object;
+armed = true;
+const shifted = await Promise.all(Array.from({ length: 20 }, (_, i) => run(ordered, "serialAwait", i)));
+expect("first invocation yielded before lock", yielded, true);
+expect("pre-lock yield admission agrees with JDK", shifted.join(","), orderOracle("first").join(","));
+expect("suspended monitor increments linearize", acquisitions.map(a => a.old).join(","), Array.from({ length: 20 }, (_, i) => i).join(","));
+expect("every suspended increment owns its monitor", acquisitions.map(a => a.depth).join(","), Array(20).fill(1).join(","));
 console.log("cold counters",JSON.stringify({slowAdapters:wc.stats.coldSlowAdapters,slowModules:wc.stats.coldSlowModules,slowCalls:wc.stats.coldSlowCalls,slowWaits:wc.stats.coldSlowWaits,typingMethods:wc.stats.coldTypingMethods,snapshotRegisters:wc.stats.coldSnapshotRegisters,nativeDeclarationWords:measuredNatives.declarationWords,nativeDeclarations:measuredNatives.declarations}));
 console.log(`cold slow: ${checks} checks, ${wc.stats.coldMethods} methods / ${wc.stats.coldCalls} activations; object/fields/arrays/dispatch/EH/monitors/class initialization/JSPI and pending-result snapshot validation`);
