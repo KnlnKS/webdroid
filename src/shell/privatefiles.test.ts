@@ -10,6 +10,8 @@ test("appends keep the writer's spare capacity while every realm reads the new b
   // cache files are shared between realms but never scheduled for persistence
   const path = "/data/data/test.pkg/cache/log";
   vfs.write(path, new Uint8Array(0));
+  vfs.setAttributes(path,{uid:12345,gid:1078,mode:0o660});
+  expect(other.attributes(path)).toEqual({uid:12345,gid:1078,mode:0o660});
   const file = vfs.open(path)!, buffers = new Set<ArrayBufferLike>();
   for (let i = 0; i < 4096; i++) {
     vfs.writeAt(file, i * 16, new Uint8Array(16).fill(i & 255));
@@ -24,4 +26,6 @@ test("appends keep the writer's spare capacity while every realm reads the new b
   vfs.writeAt(file, file.len, Uint8Array.of(9));
   expect(other.read(path)!.subarray(-1)[0]).toBe(9);
   expect(other.read(path)![0]).toBe(7);
+  other.setAttributes(path,{mode:0o640});
+  expect(vfs.open(path)!.attributes).toEqual({uid:12345,gid:1078,mode:0o640});
 });

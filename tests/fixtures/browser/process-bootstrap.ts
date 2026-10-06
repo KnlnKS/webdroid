@@ -346,6 +346,8 @@ export async function clockBootstrapOwnership() {
 
 export async function clipboardOwnership() {
   const broker = processBroker(), pkg = "test.clipboard.shared", foreign = "test.clipboard.other";
+  const fileHooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
+  broker.files.attach(8302,vfs);
   for (const [i, name] of [pkg, foreign].entries()) {
     const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:name}],children:[]};
     packages.set(name,new PackageRecord(root,new Resources(null,{}),`/data/app/${name}/base.apk`,16000+i,async()=>[]));
@@ -453,6 +455,20 @@ export async function clipboardOwnership() {
     const directory=`/data/data/${pkg}/databases`;
     const made=await ask("fileMkdir",directory),repeated=await ask("fileMkdir",directory);
     const ownerStat=await peers[0].endpoint.fileStat(directory);
+    const remoteStat=await ask("fileStat",directory) as {value:{uid:number,gid:number,mode:number}};
+    const metadata = remoteStat.value.uid === packages.get(pkg)!.uid && remoteStat.value.gid === packages.get(pkg)!.uid && remoteStat.value.mode === 0o755;
+    remoteStat.value.uid = 0;
+    const retainedMetadata = (await peers[0].endpoint.fileStat(directory)).value?.uid === packages.get(pkg)!.uid;
+    const changedMode = await ask("fileSetAttributes",directory,{mode:0o700}) === 0 && (await peers[0].endpoint.fileStat(directory)).value?.mode === 0o700;
+    await broker.files.flush();
+    const {PrivateFiles} = await import("../../../src/shell/privatefiles");
+    const restarted = new PrivateFiles(), hooks = {prepare:vfs.prepare,flush:vfs.flush,onWrite:vfs.onWrite};
+    let restoredMetadata = false;
+    try {
+      vfs.metadata.delete(directory);restarted.attach(8399,vfs);await restarted.prepare(pkg);
+      const restored = vfs.attributes(directory,true);
+      restoredMetadata = restored.uid === packages.get(pkg)!.uid && restored.gid === packages.get(pkg)!.uid && restored.mode === 0o700;
+    } finally {restarted.detach(8399);Object.assign(vfs,hooks);}
     const listed=await ask("fileList",`/data/data/${pkg}`) as {value:string[]};
     listed.value.length=0;
     const freshList=await peers[0].endpoint.fileList(`/data/data/${pkg}`);
@@ -466,7 +482,7 @@ export async function clipboardOwnership() {
     const changesBefore=accountChanges;broker.accounts.persist();
     await peers[0].endpoint.accountExists(key);
     const cleaned=accountChanges===changesBefore;
-    return {prefs,paths:{made,repeated,directory:ownerStat.value?.directory,copied:freshList.value?.includes("databases"),foreignPath},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
+    return {prefs,paths:{made,repeated,directory:ownerStat.value?.directory,copied:freshList.value?.includes("databases"),foreignPath,metadata,retainedMetadata,changedMode,restoredMetadata},permissions:{before,own,foreignDenied:!!foreignDenied.error,privileged},accounts:{publicOnly,exists,token:cached.token,deniedRead:!!deniedRead.error,deniedWrite:!!deniedWrite.error,
       renamed:renamed.account.name,survivor:accountSurvivor?.account.name,changes:accountChanges,cleaned},source,fresh:Array.from(fresh!.bytes),denied,foreground:Array.from(foreground!.bytes),absent,
       changes,peerChanges,survivor:Array.from(survivor!.bytes),
       settings:{written:settingsWritten,read:settingsRead,sameKey,changes:settingChanges,survivor:settingsSurvivor}};
@@ -480,6 +496,7 @@ export async function clipboardOwnership() {
     broker.preferences.remove(pkg); broker.preferences.delete("android:notification-policy:"+foreign);
     broker.permissions.clear(pkg);broker.permissions.clear(foreign);
     packages.delete(pkg);packages.delete(foreign);
+    await broker.files.flush();Object.assign(vfs,fileHooks);
   }
 }
 

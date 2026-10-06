@@ -1,10 +1,12 @@
 import { expect, test, beforeAll, describe } from "bun:test";
 import "../src/natives";
-import { rt, JObj } from "../src/jvm/runtime";
+import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { newObj, scall, staticField, vcall } from "../src/jvm/natives/jentry";
 import { packageUid } from "../src/android/packages";
 import { grantPermissions } from "../src/android/permissions";
 import { bootApp, packageRecord, thrown } from "./java";
+import { vfs } from "../src/shell/vfs";
+import { procIdentity } from "../src/shell/procfs";
 
 const pkg = "org.webdroid.test.services";
 let app: JObj, phone: JObj, subscriptions: JObj, wifi: JObj;
@@ -106,6 +108,35 @@ describe("system health", () => {
 });
 
 describe("storage stats", () => {
+  test("StorageManager repairs existing external app ownership through the canonical mount alias", async () => {
+    const root = `/sdcard/Android/data/${pkg}`, dir = root + "/files", file = dir + "/owned.bin", sibling = root + "/cache/untouched.bin";
+    for (const path of [root,dir,root+"/cache"]) vfs.mkdir(path);
+    for (const path of [file,sibling]) vfs.write(path,Uint8Array.of(9));
+    for (const path of [root,dir,file,sibling]) vfs.setAttributes(path,{uid:0,gid:0,mode:0o700});
+    const opened = vfs.open(file)!, previousUid = procIdentity.uid;
+    try {
+      const storage = await vcall(app,"getSystemService","(Ljava/lang/String;)Ljava/lang/Object;","storage");
+      const directory = await newObj("java/io/File","(Ljava/lang/String;)V",dir);
+      expect(await vcall(directory,"getCanonicalPath","()Ljava/lang/String;")).toBe(`/storage/emulated/0/Android/data/${pkg}/files`);
+      await vcall(storage,"fixupAppDir","(Ljava/io/File;)V",directory);
+      expect(opened.attributes).toEqual({uid:packageUid(pkg),gid:1078,mode:0o2770});
+      expect(vfs.attributes(root,true)).toEqual(opened.attributes!);
+      expect(vfs.attributes(sibling)).toEqual({uid:0,gid:0,mode:0o700});
+      procIdentity.uid = 0;
+      const stat = await scall("android/system/Os","stat","(Ljava/lang/String;)Landroid/system/StructStat;",file);
+      expect(["st_uid","st_gid","st_mode"].map(name=>getDeclared(stat,"android/system/StructStat",name))).toEqual([packageUid(pkg),1078,0o102770]);
+      const missing = dir + "/missing";
+      await vcall(storage,"fixupAppDir","(Ljava/io/File;)V",await newObj("java/io/File","(Ljava/lang/String;)V",missing));
+      expect(vfs.exists(missing)).toBe(false);
+      procIdentity.uid = packageUid(pkg);
+      await scall("android/system/Os","chmod","(Ljava/lang/String;I)V",file,0o640);
+      expect(opened.attributes).toEqual({uid:packageUid(pkg),gid:1078,mode:0o640});
+    } finally {
+      procIdentity.uid = previousUid;
+      for (const path of [file,sibling]) vfs.delete(path);
+      for (const path of [dir,root+"/cache",root]) vfs.rmdir(path);
+    }
+  });
   test("an app reads its own package's stats, and the user's need PACKAGE_USAGE_STATS", async () => {
     const stats = await vcall(app, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "storagestats");
     const user = await scall("android/os/Process", "myUserHandle", "()Landroid/os/UserHandle;");

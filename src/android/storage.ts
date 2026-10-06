@@ -10,10 +10,36 @@ import { newFile } from "../jvm/natives/jio";
 import { hostStub } from "./binder";
 import { vfs } from "../shell/vfs";
 import { storageEstimate, uuidDefault } from "./os";
+import { packages } from "./packages";
+import { logLine } from "../native/libc";
 
 const SHARED = "/sdcard", USER = 0;
 const VI = "android/os/storage/VolumeInfo";
 const bytes = (n: number) => BigInt(Math.floor(n));
+
+/** StorageManagerService validates the package/user path; vold repairs each existing
+ * app-directory component and its immediate entries, without creating a missing target. */
+function fixupAppDir(path: string): void {
+  const match = /^\/storage\/([^/]+)\/(?:(\d+)\/)?Android\/(data|media|obb|sandbox)\/([^/]+)(\/.*)?$/i.exec(path);
+  const failed = (message: string) => logLine(6,"StorageManagerService",message);
+  if (!match || path.split("/").some(part => part === "." || part === "..")) { failed("Path " + path + " is not a valid application-specific directory");return; }
+  if (match[2] === undefined) { failed("Asked to fixup an app dir without a userId: " + path);return; }
+  const user = Number(match[2]), pkg = packages.get(match[4]);
+  if (!Number.isSafeInteger(user) || !pkg || Math.floor(pkg.uid / 100000) !== user) { failed("Couldn't find package to fixup app dir " + path);return; }
+  if (match[1] !== "emulated" || user !== USER || !["data","media","obb"].includes(match[3])) { failed("Failed to fixup app dir on an unavailable volume: " + path);return; }
+  const dir = vfs.norm(path);
+  if (!vfs.exists(dir)) return;
+  if (!vfs.isDir(dir)) { failed("Failed to fixup app dir: " + path);return; }
+  const root = `${SHARED}/Android/${match[3]}/${match[4]}`, gid = match[3] === "data" ? 1078 : match[3] === "obb" ? 1079 : 1023;
+  const attributes = {uid:pkg.uid,gid,mode:0o2770};
+  let at = root;
+  const suffix = dir.slice(root.length).split("/").filter(Boolean);
+  for (let i = 0; i <= suffix.length; i++) {
+    if (i) at += "/" + suffix[i-1];
+    vfs.setAttributes(at,attributes);
+    for (const name of vfs.list(at)) vfs.setAttributes(at + "/" + name,attributes);
+  }
+}
 
 const storageVolume = driven(function* storageVolume$(): Gen<JObj> {
   return newObj("android/os/storage/StorageVolume",
@@ -40,6 +66,7 @@ rt.register({ name: "webdroid/StorageManagerService", ctor: class extends JObj {
   "getAllocatableBytes(Ljava/lang/String;ILjava/lang/String;)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).free); }),
   "getCacheQuotaBytes(Ljava/lang/String;I)J": driven(function* (): Gen { return bytes((yield* awaited(storageEstimate())).total / 20); }),
   "getCacheSizeBytes(Ljava/lang/String;I)J": () => 0n,
+  "fixupAppDir(Ljava/lang/String;)V": fixupAppDir,
   // vold creates an app's own external data, obb and media directories for it, and nothing else
   "mkdirs(Ljava/lang/String;Ljava/lang/String;)V": (pkg: string, path: string) => {
     const dir = vfs.norm(path);

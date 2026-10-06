@@ -114,7 +114,7 @@ export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & 
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -366,8 +366,8 @@ export class ProcessBroker {
       const owner = privatePath?.[1] ?? external?.[1];
       return owner && packages.get(owner)?.uid !== caller.uid && caller.uid !== 0 && caller.uid !== 1000 ? 13 : 0;
     };
-    const paths = canonicalFilePaths(authorizePath);
-    const descriptors = this.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13);
+    const paths = canonicalFilePaths(authorizePath,this.entry(pid).uid);
+    const descriptors = this.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13,this.entry(pid).uid);
     const locationAllowed = async () => {
       const caller = this.entry(pid);
       const granted = await permissions.permissionCheck(caller.pkg,["android.permission.ACCESS_FINE_LOCATION","android.permission.ACCESS_COARSE_LOCATION"]);
@@ -436,7 +436,7 @@ export class ProcessBroker {
       alarmCancel: async id => { this.entry(pid); this.alarms.cancel(id); },
       systemService: async name => {
         this.entry(pid);
-        if (name !== "notification") throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
+        if (name !== "notification" && name !== "mount") throw rt.mkThrowable("java/lang/SecurityException", "Unsupported canonical service lookup");
         const handle = await asSystem(() => ownedSystemService(name));
         this.entry(pid);
         return handle;
@@ -451,6 +451,7 @@ export class ProcessBroker {
         await this.files.prepare(pkg); this.entry(pid);
         for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
       },
+      fileSetAttributes: async (path,change) => paths.fileSetAttributes(path,change),
       fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
       fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
       fileRename: async (from,to) => paths.fileRename(from,to), fileRemove: async path => paths.fileRemove(path), fileCreate: async path => paths.fileCreate(path),

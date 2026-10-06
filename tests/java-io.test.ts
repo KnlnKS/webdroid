@@ -100,7 +100,9 @@ describe("file-descriptor", () => {
       await b({kind:"truncate",fd:passed,length:3});
       expect((await b({kind:"stat",fd:passed})).stat?.size).toBe(3);
       expect((await b({kind:"read",fd:passed,length:1})).result).toBe(0);
+      vfs.setAttributes(path,{uid:12345,gid:1078,mode:0o660});
       vfs.delete(path);
+      expect((await b({kind:"stat",fd:passed})).stat).toMatchObject({uid:12345,gid:1078,mode:0o100660,path:null});
       await b({kind:"pwrite",fd:passed,bytes:Uint8Array.of(8),offset:0});
       expect((await b({kind:"pread",fd:passed,length:1,offset:0})).bytes).toEqual(Uint8Array.of(8));
       expect(vfs.exists(path)).toBe(false);
@@ -145,7 +147,7 @@ describe("file-descriptor", () => {
     const proxy=callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]);
     const previous=descriptorTransport.calls, previousPaths=filePathTransport.calls;
     descriptorTransport.calls=() => proxy.endpoint;
-    filePathTransport.calls=() => ({...paths,filePrepare:async () => {},fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
+    filePathTransport.calls=() => ({...paths,filePrepare:async () => {},fileSetAttributes:async (p,c) => paths.fileSetAttributes(p,c),fileStat:async p => paths.fileStat(p),fileMkdir:async p => paths.fileMkdir(p),
       fileAccess:async (p,m) => paths.fileAccess(p,m),fileList:async p => paths.fileList(p),fileCreate:async p => paths.fileCreate(p),fileRemove:async p => paths.fileRemove(p),fileRename:async (a,b) => paths.fileRename(a,b)});
     vfs.mkdir("/data/data/test/fd");
     const raf=await newObj("java/io/RandomAccessFile","(Ljava/lang/String;Ljava/lang/String;)V",path,"rw");

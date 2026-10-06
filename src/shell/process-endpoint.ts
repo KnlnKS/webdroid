@@ -88,7 +88,7 @@ function connectCommandTransports(): void {
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   if (typeof window === "undefined" || window !== window.top) {
     webStorageTransport.calls = brokerCalls;
-    useSystemServiceAccess(["notification"], name => brokerCalls().systemService(name));
+    useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
     notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
     useSettingsAccess(remoteSettings(brokerCalls));
     if (typeof window === "undefined") {

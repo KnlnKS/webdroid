@@ -4,6 +4,7 @@ import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
 import { procIdentity, procList, procText } from "./procfs";
 import type { SharedMaps } from "../native/mappings";
 import { utf8 } from "../jvm/abi";
+import { knownUid } from "../android/packages";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -12,7 +13,8 @@ export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk
 /** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file;
  *  `sharedMaps` are MAP_SHARED copies of its pages (Java and native), told of every
  *  write and flushed before a read */
-export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps }
+export type FileAttributes = { uid: number; gid: number; mode: number };
+export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes }
 export const EMPTY = new Uint8Array(0);
 /** room for `size` bytes, doubling so appends stay linear */
 function reserve(file: VfsFile, size: number) {
@@ -35,25 +37,43 @@ export const vfs = {
   dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
   /** each path's last modification, epoch ms: when its bytes last changed or it appeared */
   mtimes: new Map<string, number>(),
+  metadata: new Map<string, FileAttributes>(),
   mtime(p: string): number { return this.mtimes.get(this.norm(p)) ?? 0; },
-  /** a file's owning uid and gid: the platform's files are root's, as on a device (bionic maps the
-   *  property area only if it is), the rest the app's */
-  owner(p: string | null): number { return p !== null && /^\/(?:system|apex|vendor|product|dev)\//.test(this.norm(p)) ? 0 : procIdentity.uid; },
+  attributes(p: string | null, directory?: boolean): FileAttributes {
+    directory ??= p !== null && this.isDir(p);
+    const path = p === null ? null : this.norm(p), stored = path === null ? undefined : this.metadata.get(path);
+    if (stored) return stored;
+    const pkg = path === null ? undefined : /^(?:\/data\/(?:data|user\/0|user_de\/0)|\/sdcard\/Android\/(?:data|media|obb))\/([^/]+)(?:\/|$)/.exec(path)?.[1];
+    const uid = path !== null && /^\/(?:system|apex|vendor|product|dev)(?:\/|$)/.test(path) ? 0 : (pkg ? knownUid(pkg) : undefined) ?? procIdentity.uid;
+    const attributes = {uid, gid:uid, mode:directory ? 0o755 : 0o644};
+    if (path !== null && this.exists(path)) this.metadata.set(path,attributes);
+    return attributes;
+  },
+  owner(p: string | null): number { return this.attributes(p).uid; },
+  setAttributes(p: string, change: Partial<FileAttributes>, notify = true): void {
+    const path = this.norm(p);
+    if (this.isDir(path)) this.dirs.add(path);
+    Object.assign(this.attributes(path,this.isDir(path)),change);
+    if (notify) this.onWrite(path,"modify");
+  },
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
   markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
   norm(p: string): string {
     // already normal: absolute, with no empty, "." or ".." segment
-    if (p.charCodeAt(0) === 47 && !/\/\.{0,2}(?:\/|$)/.test(p)) return p;
-    const parts: string[] = [];
-    for (const seg of p.split("/")) {
-      if (seg === "" || seg === ".") continue;
-      if (seg === "..") parts.pop();
-      else parts.push(seg);
+    if (p.charCodeAt(0) !== 47 || /\/\.{0,2}(?:\/|$)/.test(p)) {
+      const parts: string[] = [];
+      for (const seg of p.split("/")) {
+        if (seg === "" || seg === ".") continue;
+        if (seg === "..") parts.pop();
+        else parts.push(seg);
+      }
+      p = "/" + parts.join("/");
     }
-    return "/" + parts.join("/");
+    return p.replace(/^\/storage\/(?:emulated\/0|self\/primary)(?=\/|$)/,"/sdcard");
   },
+  canonical(p: string): string { return this.norm(p).replace(/^\/sdcard(?=\/|$)/,"/storage/emulated/0"); },
   read(p: string): Uint8Array | null { const path = this.norm(p); flushMapped(path); return this.files.get(path) ?? procBytes(path); },
   readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
     const path = this.norm(p);
@@ -77,7 +97,7 @@ export const vfs = {
     const path = this.norm(p), data = this.files.get(path), source = data ? undefined : this.lazyFiles.get(path);
     if (!data && !source) return null;
     let file = openFiles.get(path);
-    if (!file) { file = { path, data: data ?? EMPTY, len: data?.length ?? source!.size, source }; openFiles.set(path, file); }
+    if (!file) { file = { path, data: data ?? EMPTY, len: data?.length ?? source!.size, source, attributes:this.attributes(path) }; openFiles.set(path, file); }
     return file;
   },
   /** before reading an open file's bytes directly */
@@ -113,6 +133,7 @@ export const vfs = {
     const path = this.norm(p), file = openFiles.get(path);
     this.files.delete(path);
     this.lazyFiles.set(path, source);
+    this.attributes(path);
     this.mtimes.set(path, Date.now());
     if (file) { file.data = EMPTY; file.len = source.size; file.source = source; }
   },
@@ -121,6 +142,7 @@ export const vfs = {
     const existed = this.files.has(path) || this.lazyFiles.has(path);
     this.lazyFiles.delete(path);
     this.files.set(path, data);
+    this.attributes(path);
     this.mtimes.set(path, Date.now());
     const file = openFiles.get(path);
     if (file) {
@@ -134,6 +156,7 @@ export const vfs = {
     const path = this.norm(p);
     this.delete(path, false);
     this.lazyFiles.set(path, source);
+    this.attributes(path);
     this.mtimes.set(path, Date.now());
   },
   under(p: string): boolean {
@@ -158,6 +181,7 @@ export const vfs = {
     if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
     this.mtimes.delete(path);
+    this.metadata.delete(path);
     if (removed && notify && !volatile) this.onWrite(path, "delete");
     return removed;
   },
@@ -166,7 +190,7 @@ export const vfs = {
     if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
     if (from === to) return true;
     this.delete(to, false);
-    for (const files of [this.files, this.lazyFiles, this.mtimes]) {
+    for (const files of [this.files, this.lazyFiles, this.mtimes, this.metadata]) {
       const value = files.get(from);
       if (value) { files.delete(from); files.set(to, value as never); }
     }
@@ -175,8 +199,8 @@ export const vfs = {
     this.onWrite(from, "delete"); this.onWrite(to, "create");
     return true;
   },
-  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.mtimes.set(path, Date.now()); this.onWrite(path, "create"); } },
-  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) { this.mtimes.delete(path); this.onWrite(path, "delete"); } return removed; },
+  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.attributes(path,true); this.mtimes.set(path, Date.now()); this.onWrite(path, "create"); } },
+  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) { this.mtimes.delete(path); this.metadata.delete(path); this.onWrite(path, "delete"); } return removed; },
   list(p: string): string[] {
     p = this.norm(p);
     const proc = procList(p);

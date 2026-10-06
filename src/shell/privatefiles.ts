@@ -1,8 +1,9 @@
-import type { vfs } from "./vfs";
+import type { vfs, FileAttributes } from "./vfs";
+import { knownUid } from "../android/packages";
 import { openDb, txDone } from "./idb";
 import { DiskFile, DiskStore } from "./diskstore";
 
-type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number };
+type FileValue = ({ kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" }) & { mtime?: number; attributes?: FileAttributes };
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
 const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
 const FLUSH_SETTLE_MS = 100, FLUSH_MAX_MS = 2000;
@@ -47,14 +48,15 @@ export class PrivateFiles {
   /** what `view` holds at `path`; a file grown through a descriptor past SPILL_BYTES moves to disk */
   private valueOf(view: typeof vfs, path: string, streamed: boolean): FileValue | null {
     const bytes = view.files.get(path), source = view.lazyFiles.get(path), mtime = view.mtimes.get(path);
+    const attributes = {...view.attributes(path,view.dirs.has(path))};
     if (bytes && streamed && bytes.length >= SPILL_BYTES) {
       const disk = this.disk.create();
       disk.write(0, bytes.slice());
-      return { kind: "disk", id: disk.id, size: disk.size, mtime };
+      return { kind: "disk", id: disk.id, size: disk.size, mtime,attributes };
     }
-    if (bytes) return { kind: "file", bytes, mtime };
-    if (source instanceof DiskFile) return { kind: "disk", id: source.id, size: source.size, mtime };
-    return view.dirs.has(path) ? { kind: "directory", mtime } : null;
+    if (bytes) return { kind: "file", bytes, mtime,attributes };
+    if (source instanceof DiskFile) return { kind: "disk", id: source.id, size: source.size, mtime,attributes };
+    return view.dirs.has(path) ? { kind: "directory", mtime,attributes } : null;
   }
   /** A burst of writes (a download's chunks) settles into one transaction, and a steady stream
    *  still persists every FLUSH_MAX_MS: each flush stores whole files, so per-write flushing is
@@ -75,12 +77,16 @@ export class PrivateFiles {
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
     // the writing view already holds these bytes; reinstalling would trim its open file's
     // spare capacity, so every append would copy the whole file
-    if (value?.kind === "file" && view.files.get(path) === value.bytes) return;
+    if (value?.kind === "file" && view.files.get(path) === value.bytes) {
+      if (value.attributes) view.setAttributes(path,value.attributes,false);
+      return;
+    }
     view.dirs.delete(path);
     if (value?.kind === "file") view.write(path, value.bytes, false);
     else if (value?.kind === "disk") view.adopt(path, this.disk.file(value.id, value.size));
     else { view.delete(path, false); if (value) view.dirs.add(path); }
     if (value?.mtime !== undefined) view.mtimes.set(path, value.mtime);
+    if (value?.attributes) view.setAttributes(path,value.attributes,false);
   }
   private update(path: string, value: FileValue | null): void {
     const previous = this.values.get(path);
@@ -104,9 +110,20 @@ export class PrivateFiles {
             const path = cursor.key, value: unknown = cursor.value;
             if (typeof path === "string" && include(path) && !this.values.has(path) && !this.pending.has(path) && value && typeof value === "object" && "kind" in value) {
               const mtime = "mtime" in value && typeof value.mtime === "number" ? value.mtime : undefined;
-              if (value.kind === "directory") this.update(path, { kind: "directory", mtime });
-              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") this.update(path, { kind: "disk", id: value.id, size: value.size, mtime });
-              else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes, mtime });
+              let attributes: FileAttributes | undefined;
+              const a = "attributes" in value ? value.attributes : null;
+              if (a && typeof a === "object" && "uid" in a && "gid" in a && "mode" in a &&
+                typeof a.uid === "number" && Number.isSafeInteger(a.uid) && a.uid >= 0 &&
+                typeof a.gid === "number" && Number.isSafeInteger(a.gid) && a.gid >= 0 &&
+                typeof a.mode === "number" && Number.isInteger(a.mode) && a.mode >= 0 && a.mode <= 0o7777)
+                attributes = {uid:a.uid,gid:a.gid,mode:a.mode};
+              else {
+                const pkg = /^(?:\/data\/(?:data|user\/0|user_de\/0)|\/sdcard\/Android\/data)\/([^/]+)/.exec(path)?.[1], uid = pkg ? knownUid(pkg) : undefined;
+                if (uid !== undefined) attributes = {uid,gid:uid,mode:value.kind === "directory" ? 0o755 : 0o644};
+              }
+              if (value.kind === "directory") this.update(path, { kind: "directory", mtime,attributes });
+              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") this.update(path, { kind: "disk", id: value.id, size: value.size, mtime,attributes });
+              else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes, mtime,attributes });
             }
             cursor.continue();
           };

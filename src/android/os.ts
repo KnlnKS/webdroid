@@ -18,8 +18,8 @@ import { E, ERRSTR, strerror } from "../native/abi";
 import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
-import { vfs } from "../shell/vfs";
-import { remoteFilePath } from "../shell/file-path";
+import { vfs, type FileAttributes } from "../shell/vfs";
+import { remoteFilePath, changeFileAttributes } from "../shell/file-path";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd } from "../native/process-fd";
 import { javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
@@ -240,10 +240,11 @@ function timespec(ms: number): JObj {
 }
 export const FD = "Ljava/io/FileDescriptor;";
 /** a StructStat as libcore's JNI fills one: a file's stat in 4K blocks of 512-byte units, one link */
-function statOf(path: string | null, size: number, mode: number, mtimeMs: number): JObj {
-  const owner = vfs.owner(path), seconds = BigInt(Math.floor(mtimeMs / 1000)), time = timespec(mtimeMs);
+function statOf(path: string | null, size: number, mode: number, mtimeMs: number, attributes?: FileAttributes): JObj {
+  const a = attributes ?? (path !== null ? vfs.metadata.get(vfs.norm(path)) : undefined) ?? {...vfs.attributes(path),mode:mode & 0o7777};
+  const seconds = BigInt(Math.floor(mtimeMs / 1000)), time = timespec(mtimeMs);
   return setDeclared(rt.make("android/system/StructStat"), "android/system/StructStat", {
-    st_dev: 0n, st_ino: 0n, st_mode: mode, st_nlink: 1n, st_uid: owner, st_gid: owner, st_size: BigInt(size), st_blksize: 4096n,
+    st_dev: 0n, st_ino: 0n, st_mode: (mode & ~0o7777) | a.mode, st_nlink: 1n, st_uid: a.uid, st_gid: a.gid, st_size: BigInt(size), st_blksize: 4096n,
     st_blocks: (BigInt(size) + 511n) / 512n, st_atime: seconds, st_mtime: seconds, st_ctime: seconds, st_atim: time, st_mtim: time, st_ctim: time,
   });
 }
@@ -269,7 +270,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     [`fstat(${FD})Landroid/system/StructStat;`]: driven(function* (d: JObj | null): Gen {
       const st = yield* awaited(processFdStat(fdInt(d)));
       if (!st) throw errno("fstat", E.BADF);
-      return yield* awaited(statOf(st.path, st.size, st.mode, st.path ? vfs.mtime(st.path) : 0));
+      return yield* awaited(statOf(st.path, st.size, st.mode, st.mtime,{...st,mode:st.mode & 0o7777}));
     }),
     [`readBytes(${FD}Ljava/lang/Object;II)I`]: (d: JObj | null, buffer: IoBuffer, offset: number, count: number) =>
       readBytes("read", buffer, offset, count, (target) => processReadFd(fdInt(d), target)),
@@ -392,20 +393,18 @@ const linux: Record<string, (...args: never[]) => unknown> = {
       const remote = remoteFilePath(path);
       if (remote) return after(remote.fileStat(path), reply => {
         if (!reply.value) throw errno("stat", reply.errno);
-        return statOf(path, reply.value.size, reply.value.directory ? 0o40755 : 0o100644, reply.value.mtime);
+        return statOf(path, reply.value.size, reply.value.directory ? 0o40000 : 0o100000, reply.value.mtime,reply.value);
       });
       const st = existing("stat", path);
       return statOf(path, st?.size ?? 0, st ? 0o100644 : 0o40755, vfs.mtime(path));
     },
-    // the VFS keeps no permission bits or owners: an existing file takes any mode, and the groups an app may own
-    "chmod(Ljava/lang/String;I)V": (path: string) => {
+    "chmod(Ljava/lang/String;I)V": (path: string, mode: number) => {
       if (path === null) rt.npe();
-      existing("chmod", path);
+      return after(remoteFilePath(path)?.fileSetAttributes(path,{mode}) ?? changeFileAttributes(path,{mode}), result => { sys("chmod",result); });
     },
     "chown(Ljava/lang/String;II)V": (path: string, uid: number, gid: number) => {
       if (path === null) rt.npe();
-      existing("chown", path);
-      if (!mayChown(uid, gid)) throw errno("chown", E.PERM);
+      return after(remoteFilePath(path)?.fileSetAttributes(path,{uid,gid}) ?? changeFileAttributes(path,{uid,gid}), result => { sys("chown",result); });
     },
     // the VFS keeps no extended attributes, as a filesystem without xattr support
     "setxattr(Ljava/lang/String;Ljava/lang/String;[BI)V": (path: string, name: string) => {
@@ -476,7 +475,7 @@ rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD
 const BA_EXISTS = 1, BA_REGULAR = 2, BA_DIRECTORY = 4;
 const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "initIDs()V": () => {},
-  "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.norm(path),
+  "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.canonical(path),
   "getBooleanAttributes0(Ljava/lang/String;)I": (path: string) => {
     const p = vfs.norm(path), remote = remoteFilePath(p);
     if (remote) return after(remote.fileStat(p), reply => reply.value ? BA_EXISTS | (reply.value.directory ? BA_DIRECTORY : BA_REGULAR) : 0);
@@ -545,7 +544,8 @@ function fillAttrs(attrs: JObj, path: string, mode: number, size: number): void 
   const a = attrs as unknown as Record<string, number | bigint>;
   const p = attrProps ??= ATTR_FIELDS.map((name) => declaredField("sun/nio/fs/UnixFileAttributes", name));
   const ms = vfs.mtime(path), sec = BigInt(Math.floor(ms / 1000)), nsec = BigInt((ms % 1000) * 1e6);
-  a[p[0]] = mode; a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = a[p[5]] = procIdentity.uid; a[p[6]] = BigInt(size);
+  const attributes = vfs.attributes(path,(mode & S_IFDIR) !== 0);
+  a[p[0]] = (mode & ~0o7777) | attributes.mode; a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = attributes.uid; a[p[5]] = attributes.gid; a[p[6]] = BigInt(size);
   for (let i = 7; i < 13; i += 2) { a[p[i]] = sec; a[p[i + 1]] = nsec; }
 }
 /** stat(2) of a path: a directory, or a file (procfs included) */

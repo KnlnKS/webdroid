@@ -19,7 +19,7 @@ export type DescriptorRequest = { kind: "open"; path: string; flags: number }
 export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>> };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
-type Session = { dead: boolean; descriptors: Map<number, Descriptor>; authorize(path: string, write: boolean): number };
+type Session = { dead: boolean; descriptors: Map<number, Descriptor>; authorize(path: string, write: boolean): number; uid?: number };
 
 /** The page's kernel owns open files; process tokens never expose its descriptor numbers.
  * Duplication retains that open file (including position/status flags), rather than reopening
@@ -29,10 +29,10 @@ export class FileDescriptors {
   private sessions = new Map<number, Session>();
   private queues = new WeakMap<OpenFile, Promise<void>>();
 
-  session(pid: number, authorize: Session["authorize"]): DescriptorCalls {
+  session(pid: number, authorize: Session["authorize"], uid?: number): DescriptorCalls {
     let session = this.sessions.get(pid);
-    if (!session) this.sessions.set(pid, session = {dead:false, descriptors:new Map(), authorize});
-    else session.authorize = authorize;
+    if (!session) this.sessions.set(pid, session = {dead:false, descriptors:new Map(), authorize,uid});
+    else { session.authorize = authorize;session.uid = uid; }
     const owner = session;
     return {fileDescriptor: request => this.dispatch(owner, request)};
   }
@@ -60,7 +60,10 @@ export class FileDescriptors {
     if (request.kind === "open") {
       const path = vfs.norm(request.path);
       const denied = session.authorize(path, !!(request.flags & (O_ACCMODE | O_CREAT | O_TRUNC)));
-      return {result: denied ? -denied : this.put(session, javaOpenFd(path,request.flags))};
+      if (denied) return {result:-denied};
+      const existed = vfs.exists(path), fd = javaOpenFd(path,request.flags);
+      if (fd >= 0 && !existed && session.uid !== undefined) vfs.setAttributes(path,{uid:session.uid,gid:session.uid});
+      return {result:this.put(session,fd)};
     }
     const descriptor = session.descriptors.get(request.fd);
     if (!descriptor) return {result:-E.BADF};

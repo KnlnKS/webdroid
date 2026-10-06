@@ -8,7 +8,7 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { fail, utf8, logLine, offArg, readTs, clockTime, randomBytes } from "./libc";
 import { KLAYOUT } from "./syscall";
-import { vfs, EMPTY, type VfsFile } from "../shell/vfs";
+import { vfs, EMPTY, type VfsFile, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath } from "../shell/file-path";
 import { procMemory, procText, procWritable, procWrite } from "../shell/procfs";
 import { readFully, writable, type FileSource } from "../shell/lazyfile";
@@ -148,7 +148,10 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
     for (const m of [vfs.files, vfs.lazyFiles]) {
       for (const k of [...m.keys()]) if (k.startsWith(prefix)) vfs.rename(k, to + k.slice(from.length));
     }
-    for (const d of [...vfs.dirs]) if (d === from || d.startsWith(prefix)) { vfs.dirs.delete(d); vfs.dirs.add(to + d.slice(from.length)); }
+    for (const d of [...vfs.dirs]) if (d === from || d.startsWith(prefix)) {
+      const dest = to + d.slice(from.length), attributes = vfs.attributes(d,true);
+      vfs.dirs.delete(d); vfs.dirs.add(dest);vfs.metadata.delete(d);vfs.metadata.set(dest,attributes);
+    }
     vfs.dirs.add(to);
     vfs.onWrite(from); vfs.onWrite(to);
     return 0;
@@ -326,10 +329,11 @@ export const javaFcntlFd = (fd: number, cmd: number, arg: number): number => fdF
 export function javaIoctlIntFd(fd: number, request: number): number {
   return fds.has(fd) && request !== FIONREAD ? -E.NOTTY : fionread(fd);
 }
-export function javaFdStat(fd: number): { mode: number; size: number; path: string | null } | null {
+export function javaFdStat(fd: number): { mode: number; size: number; path: string | null; uid: number; gid: number; mtime: number } | null {
   const f = fds.get(fd);
   if (!f || f.remote) return null;
-  return { mode: fdMode(f), size: f.content.len, path: f.dir ? f.path : f.content.path };
+  const path = f.dir ? f.path : f.content.path, attributes = f.content.attributes ?? vfs.attributes(path,f.dir);
+  return { mode: fdMode(f), size: f.content.len, path, uid:attributes.uid,gid:attributes.gid,mtime:path ? vfs.mtime(path) : 0 };
 }
 
 /** Read from the current offset without moving seekable descriptors; streams are consumed. */
@@ -382,7 +386,7 @@ export function statProcess(cpu: Cpu, path: string, buf: number): number | Promi
   return calls.fileStat(normalized).then(reply => {
     if (reply.errno || !reply.value) return fail(cpu,reply.errno || E.NOENT);
     const stat = reply.value;
-    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized);
+    fillStat(destination(),stat.directory,stat.directory ? 4096 : stat.size,stat.mtime,normalized,undefined,stat);
     return 0;
   });
 }
@@ -620,13 +624,12 @@ export function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number)
 }
 /** an inode per path: a runtime's own share table keys on st_dev/st_ino */
 export function inoOf(path: string): number { let h = 0x811c9dc5; for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193); return (h >>> 0) || 1; }
-export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path)): void {
+export function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, path: string, file = vfs.opened(path), attributes: FileAttributes = file?.attributes ?? vfs.attributes(path,isDir)): void {
   mem.memset(buf, 0, KLAYOUT.STAT_SIZE);
   mem.st32(buf, 1);                                                                  // st_dev
-  mem.st32(buf + KLAYOUT.ST_MODE, isDir ? S_IFDIR | 0o755 : file && fifos.has(file) ? S_IFIFO | 0o600 : S_IFREG | 0o644);
+  mem.st32(buf + KLAYOUT.ST_MODE, (isDir ? S_IFDIR : file && fifos.has(file) ? S_IFIFO : S_IFREG) | attributes.mode);
   mem.st32(buf + KLAYOUT.ST_NLINK, 1);
-  const owner = vfs.owner(path);
-  mem.st32(buf + KLAYOUT.ST_UID, owner); mem.st32(buf + KLAYOUT.ST_GID, owner);
+  mem.st32(buf + KLAYOUT.ST_UID, attributes.uid); mem.st32(buf + KLAYOUT.ST_GID, attributes.gid);
   mem.st32(buf + KLAYOUT.ST_SIZE, size); mem.st32(buf + KLAYOUT.ST_SIZE + 4, 0);
   mem.st32(buf + KLAYOUT.ST_BLKSIZE, 4096);
   mem.st32(buf + KLAYOUT.ST_BLOCKS, (size + 511) >> 9);
@@ -701,7 +704,7 @@ function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
     const destination = anchor(buf);
     return Promise.resolve(processFdStat(fd)).then(stat => {
       if (!stat) return fail(cpu,E.BADF);
-      fillStat(destination(),false,stat.size,Date.now(),stat.path ?? fds.get(fd)?.path ?? "");
+      fillStat(destination(),false,stat.size,stat.mtime,stat.path ?? fds.get(fd)?.path ?? "",undefined,{...stat,mode:stat.mode & 0o7777});
       return 0;
     });
   }
@@ -714,11 +717,11 @@ function statFd(cpu: Cpu, fd: number, buf: number): number | Promise<number> {
 /** st_mode of an open file: /dev/null stdio and /dev/random are character devices, and eventfd,
  *  epoll, timerfd and inotify descriptors are anonymous inodes, which carry no file type */
 function fdMode(f: Fd): number {
-  if (f.dir) return S_IFDIR | 0o755;
+  if (f.dir) return S_IFDIR | vfs.attributes(f.path,true).mode;
   if (f.random || f.log || f.path === "/dev/stdin") return S_IFCHR | 0o666;
   if (f.socket) return S_IFSOCK | 0o777;
   if (f.event || f.epoll || f.timer || f.inotify) return 0o600;
-  return f.rpipe || f.wpipe ? S_IFIFO | 0o600 : S_IFREG | 0o644;
+  return f.rpipe || f.wpipe ? S_IFIFO | 0o600 : S_IFREG | (f.content.attributes ?? vfs.attributes(f.content.path)).mode;
 }
 
 /** why pread/pwrite at `off` cannot reach fd's file, 0 when they can: streams have no offsets */
