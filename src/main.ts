@@ -207,6 +207,8 @@ const wd = {
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),
+  displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
+  displayCanvases: () => processBroker().displayCanvases(canvas),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded

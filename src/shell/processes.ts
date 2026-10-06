@@ -574,6 +574,13 @@ export class ProcessBroker {
       })()];
     }));
   }
+  displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
+    const layers = this.activities.shownEntries().flatMap(entry => {
+      const canvas = entry.canvas ?? entry.frame?.contentDocument?.querySelector<HTMLCanvasElement>("#screen");
+      return canvas && !(entry.canvas ?? entry.frame)?.hidden ? [canvas] : [];
+    });
+    return [root, ...layers.filter(canvas => canvas !== root)];
+  }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
    *  its other processes); other signals are ART's to handle in the target and are not modelled */
