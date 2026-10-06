@@ -2,6 +2,12 @@
 import { stableFrame } from "./settle";
 export const E2E_DIR = new URL("..", import.meta.url).pathname;
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
+export function webdroidUrl(): URL {
+  const url = new URL(BASE_URL);
+  if (process.env.WEBDROID_BYTECODE) url.searchParams.set("bytecode", process.env.WEBDROID_BYTECODE);
+  if (process.env.WEBDROID_TIER) url.searchParams.set("tier", process.env.WEBDROID_TIER);
+  return url;
+}
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** `run` over items, `jobs` at a time and heaviest first; results keep the items' order. */

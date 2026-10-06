@@ -3,7 +3,7 @@
 import { type Page } from "playwright";
 import { readdirSync } from "node:fs";
 import { argv } from "./args";
-import { BASE_URL } from "../tests/e2e/lib/util";
+import { webdroidUrl } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
 
@@ -38,17 +38,24 @@ async function boot(page: Page, apk: string): Promise<Row> {
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (message) => { if (message.type() === "error") errors.push(`${message.location().url}: ${message.text()}`); });
   try {
-    const cut = process.env.WEBDROID_BYTECODE ? `&bytecode=${encodeURIComponent(process.env.WEBDROID_BYTECODE)}` : "";
-    await page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}${cut}`, { waitUntil: "load", timeout: 60000 });
-    // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
-    // shell that never got an activity up
-    await page.waitForFunction("window.wd && window.wd.perf.draws > 0", null, { timeout: waitMs }).catch(() => {});
-    await page.waitForTimeout(observeMs);
-    const s = await page.evaluate(() => {
-      const w = globalThis.wd!;
-      return { ticks: w.ticks, draws: w.perf.draws, bootMs: w.perf.bootMs, classes: w.perf.classesCompiled,
+    const url = webdroidUrl(); url.searchParams.set("apk", apk);
+    await page.goto(url.href, { waitUntil: "load", timeout: 60000 });
+    await page.waitForFunction(() => !!globalThis.wd, null, { timeout: waitMs });
+    await page.evaluate(file => { void globalThis.wd!.boot(file); }, apk);
+    const readRender = () => page.evaluate(async () => {
+      const w = globalThis.wd!, foreground = (await w.foregroundWorkerSnapshot?.())?.snapshot, perf = foreground?.perf ?? w.perf;
+      return { ticks: foreground?.ticks ?? w.ticks, draws: perf.draws, bootMs: w.perf.bootMs, classes: perf.wasmClasses || perf.classesCompiled,
         missing: [...w.rt.missing], logs: (w.logs || []).filter((line: string) => /error/i.test(line)).slice(-6) };
     });
+    const deadline = Date.now() + waitMs;
+    let s = await readRender();
+    while (!s.draws && Date.now() < deadline) {
+      await page.waitForTimeout(100);
+      s = await readRender();
+    }
+    if (!s.draws) row.note = `no rendered frame within ${waitMs}ms`;
+    await page.waitForTimeout(observeMs);
+    s = await readRender();
     row.ticks = s.ticks; row.drew = s.draws > 0; row.bootMs = s.bootMs; row.classes = s.classes;
     row.missing = s.missing; row.errors = s.logs;
     row.ok = row.drew;
@@ -57,11 +64,12 @@ async function boot(page: Page, apk: string): Promise<Row> {
   }
   const relevant = row.processes = await readProcesses(page);
   const available = relevant.flatMap((process) => process.diagnostics.status === "ok" ? [process.diagnostics] : []);
-  row.diagnostics = relevant.length > 0 && available.length === relevant.length ? "ok" : "unavailable";
+  row.diagnostics = relevant.length > 0 && relevant.every(process => ["ok", "exited"].includes(process.diagnostics.status)) ? "ok" : "unavailable";
   row.missing = [...new Set([...row.missing, ...available.flatMap((diagnostics) => diagnostics.missing)])];
   row.nativeRequired = [...new Set(available.flatMap((diagnostics) => diagnostics.native))];
   const diagnosticErrors = relevant.flatMap((process) => process.diagnostics.status === "ok"
     ? process.diagnostics.errors ?? []
+    : process.diagnostics.status === "exited" ? []
     : [process.diagnostics.status === "failure" ? process.diagnostics.message : "diagnostics unavailable"]);
   row.errors = [...new Set([...row.errors, ...errors, ...diagnosticErrors])];
   row.browserErrors = errors;

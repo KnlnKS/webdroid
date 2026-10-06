@@ -3,15 +3,9 @@
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
 import { chromium, type Browser, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types";
-import { BASE_URL } from "../lib/util";
+import { BASE_URL, webdroidUrl } from "../lib/util";
 import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
 
-// WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
-// bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
-// is how a cut becomes a measurement rather than an edit and a rebuild.
-const CUT = process.env.WEBDROID_BYTECODE;
-/** `WEBDROID_TIER=wasm` runs every flow on the Wasm tier */
-const TIER = process.env.WEBDROID_TIER;
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
 export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
@@ -19,9 +13,7 @@ export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
 /** Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
  *  the second parameter, and the run then measures the wrong geometry against the right pixels. */
 function pageUrl(screen: CaptureScreen, controlled: boolean): string {
-  const u = new URL(BASE_URL);
-  if (CUT) u.searchParams.set("bytecode", CUT);
-  if (TIER) u.searchParams.set("tier", TIER);
+  const u = webdroidUrl();
   u.searchParams.set("screen", screenParam(screen));
   u.searchParams.set("statusBarDp", String(screen.statusBarDp));
   if (controlled) u.searchParams.set("testClock", "controlled");
