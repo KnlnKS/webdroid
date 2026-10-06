@@ -199,7 +199,8 @@ const hostClasses = new Map<string, typeof JObj>();
 const hostClass = (cls: string, base: typeof JObj): typeof JObj => {
   const key = (base === JThrowable ? "throwable " : "") + cls;
   let ctor = hostClasses.get(key);
-  if (!ctor) hostClasses.set(key, ctor = Object.assign(class extends base {}, { $i: { name: cls } as never }));
+  // named for the Java class, which is what the browser's console shows of one of its objects
+  if (!ctor) hostClasses.set(key, ctor = Object.defineProperty(Object.assign(class extends base {}, { $i: { name: cls } as never }), "name", { value: cls }));
   return ctor;
 };
 /** the throwable a TS native raises by class name, made without Java code: it carries the name that natives.ts turns into the Java throwable */
