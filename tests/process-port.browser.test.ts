@@ -83,7 +83,8 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const { endpointOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return endpointOwnership();
     });
-    expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true });
+    expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true,
+      fileDescriptors:{opened:true,foreign:-13,written:55,read:{pid:66,id:1}} });
     const cookies = await page.evaluate(async () => {
       const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return cookieOwnership();

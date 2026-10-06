@@ -111,13 +111,20 @@ export async function endpointOwnership() {
     kill: () => { setTimeout(() => { killed = true; broker.fail(pid, "fixture kill delivered", NOT_CRASHED); }, 10); },
   });
   const workerCode = `import {serveProcess,callProxy} from ${JSON.stringify(location.origin + "/process-port.js")};
-    let removed = false, clips = 0;
+    let removed = false, clips = 0, fd = -1;
     self.onmessage = ({data}) => {
-      const broker = callProxy(data.broker,["transact","service","contentProvider","broadcast"]).endpoint;
+      const broker = callProxy(data.broker,["transact","service","contentProvider","broadcast","fileDescriptor"]).endpoint;
       serveProcess(data.port, {
       activity:async()=>{}, transact:async()=>new Promise(()=>{}),
       service:async(request)=>{
         if(request.intent?.bytes[0]===42){const reply=await broker.transact({handle:{pid:8001,id:1},code:2,flags:0,data:request.intent,caller:{pid:9999,uid:9999}});return {pid:reply.handled,id:clips};}
+        if(request.intent?.bytes[0]===43){
+          fd=(await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.two/fd.bin',flags:2})).result;
+          const foreign=await broker.fileDescriptor({kind:'open',path:'/data/data/test.endpoint.one/fd.bin',flags:2});
+          await broker.fileDescriptor({kind:'pwrite',fd,bytes:Uint8Array.of(55),offset:0});
+          return {pid:fd,id:foreign.result};
+        }
+        if(request.intent?.bytes[0]===44){const reply=await broker.fileDescriptor({kind:'pread',fd,length:1,offset:0});return {pid:reply.bytes?.[0]??-1,id:reply.result};}
         return {pid:8002,id:removed?2:1};
       }, serviceConnected:async()=>{}, contentProvider:async()=>null,
       broadcast:async(_i,_c,_o,r)=>r, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
@@ -131,6 +138,12 @@ export async function endpointOwnership() {
   broker.ready(8001, endpoint(9999));
   const first = await entries[0].ready, other = await entries[1].ready;
   const request = { kind: "peek" as const, intent: { bytes: new Uint8Array(0), objects: [] } };
+  const filePath = "/data/data/test.endpoint.two/fd.bin";
+  vfs.write(filePath,Uint8Array.of(1));
+  const fileOpened = await other.service({...request,intent:{bytes:Uint8Array.of(43),objects:[]}});
+  const fileWritten = vfs.read(filePath)?.[0];
+  vfs.writeAt(vfs.open(filePath)!,0,Uint8Array.of(66));
+  const fileRead = await other.service({...request,intent:{bytes:Uint8Array.of(44),objects:[]}});
   const repeatedReady = (await first.service(request))?.pid === 8001;
   const reverseCaller = await other.service({...request,intent:{bytes:Uint8Array.of(42),objects:[]}});
   const pending = broker.transact(8002, { handle: { pid: 8001, id: 1 }, code: 1, flags: 0, data: request.intent })
@@ -142,8 +155,10 @@ export async function endpointOwnership() {
   await broker.packageRemoved("test.removed.package");
   removed = (await other.service(request))?.id === 2;
   broker.fail(8002, "fixture cleanup", NOT_CRASHED);
+  vfs.delete(filePath);
   worker.terminate(); URL.revokeObjectURL(url);
-  return { repeatedReady, reverseCaller, killed, alive: broker.alive(8001), pendingCause, otherAlive, removed };
+  return { repeatedReady, reverseCaller, killed, alive: broker.alive(8001), pendingCause, otherAlive, removed,
+    fileDescriptors:{opened:!!fileOpened && fileOpened.pid>0,foreign:fileOpened?.id,written:fileWritten,read:fileRead} };
 }
 
 /** Real Worker CookieManager commands share the page's WebView jar and survive a sibling's death. */

@@ -36,7 +36,8 @@ import type { WebCookies } from "./webcookies";
 import { cookieCalls, type CookieCalls } from "./cookie-access";
 import type { LocationCalls } from "./location-access";
 import { BrowserLocation, type LocationEvent } from "./geolocation";
-import { canonicalFilePaths, type FilePathCalls } from "./file-path";
+import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-path";
+import { FileDescriptors, type DescriptorCalls } from "./file-descriptors";
 import type { WorkerControl } from "./worker-control";
 import { startProcessWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
@@ -93,7 +94,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
+export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
   alarmCancel: (id: number) => Promise<void>;
@@ -113,7 +114,7 @@ export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & 
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -178,6 +179,7 @@ export class ProcessBroker {
   private bootstrapPorts = new Map<number, (() => void)[]>();
   private endpointPorts = new Map<number, () => void>();
   private sqliteSessions = new Map<number, ReturnType<typeof createSQLiteSession>>();
+  private fileDescriptors = new FileDescriptors();
   private accountClients = new Map<number, () => void>();
   private settingsClients = new Map<number, () => void>();
   private callerPorts = new Map<number, Set<() => void>>();
@@ -357,13 +359,15 @@ export class ProcessBroker {
     };
     const webStorage = canonicalWebStorage(this.entry(pid).pkg);
     const preferences = canonicalPreferenceCommands(this.preferences, authorizePreference);
-    const paths = canonicalFilePaths(path => {
+    const authorizePath = (path: string): number => {
       const caller = this.entry(pid);
       const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/([^/]+)(?:\/|$)/.exec(path);
       const external = /^\/sdcard\/Android\/data\/([^/]+)(?:\/|$)/.exec(path);
       const owner = privatePath?.[1] ?? external?.[1];
       return owner && packages.get(owner)?.uid !== caller.uid && caller.uid !== 0 && caller.uid !== 1000 ? 13 : 0;
-    });
+    };
+    const paths = canonicalFilePaths(authorizePath);
+    const descriptors = this.fileDescriptors.session(pid, path => isMutablePath(path) ? authorizePath(path) : 13);
     const locationAllowed = async () => {
       const caller = this.entry(pid);
       const granted = await permissions.permissionCheck(caller.pkg,["android.permission.ACCESS_FINE_LOCATION","android.permission.ACCESS_COARSE_LOCATION"]);
@@ -449,6 +453,7 @@ export class ProcessBroker {
       },
       fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
       fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
+      fileDescriptor: request => { this.entry(pid); return descriptors.fileDescriptor(request); },
       webRenderer: async origin => { this.entry(pid); return webStorage.webRenderer(origin); },
       webStorage: async (op, origin) => { this.entry(pid); return webStorage.webStorage(op,origin); },
       preferenceRead: async (name, key) => preferences.preferenceRead(name, key),
@@ -548,6 +553,7 @@ export class ProcessBroker {
     };
     entry.dead = true; entry.reject(error);
     this.sqliteSessions.get(pid)?.close(); this.sqliteSessions.delete(pid);
+    this.fileDescriptors.close(pid);
     this.settingsClients.get(pid)?.(); this.settingsClients.delete(pid);
     this.accountClients.get(pid)?.(); this.accountClients.delete(pid);
     this.endpointPorts.get(pid)?.(); this.endpointPorts.delete(pid);

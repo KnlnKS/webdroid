@@ -15,6 +15,8 @@ import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwrit
 import { kernelInit } from "../src/native/syscall";
 import { BytesFile } from "../src/shell/lazyfile";
 import { scall, loadLibcore } from "./java";
+import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors";
+import { callProxy, serveCalls } from "../src/shell/process-port";
 
 rt.linkNatives();
 
@@ -47,6 +49,72 @@ describe("android-pfd", () => {
 
 describe("file-descriptor", () => {
   const FD = "()Ljava/io/FileDescriptor;";
+
+  test("canonical descriptors share live bytes and offsets across ports and retain a recipient after owner death", async () => {
+    const path = "/data/data/test/fd/port.bin", owner = new FileDescriptors();
+    vfs.write(path, Uint8Array.of(1,2,3,4));
+    const source = owner.session(1001, () => 0), recipient = owner.session(1002, () => E.ACCES);
+    const channels = [new MessageChannel(), new MessageChannel()];
+    const stops = [serveCalls(channels[0].port1,source),serveCalls(channels[1].port1,recipient)];
+    const proxies = channels.map(channel => callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"]));
+    const [a,b] = proxies.map(proxy => proxy.endpoint.fileDescriptor);
+    try {
+      expect((await b({kind:"open",path,flags:2})).result).toBe(-E.ACCES);
+      const fd = (await a({kind:"open",path,flags:2})).result;
+      const copy = (await a({kind:"dup",fd,cloexec:true})).result;
+      expect((await a({kind:"fcntl",fd:copy,command:1,arg:0})).result).toBe(1);
+      expect((await a({kind:"fcntl",fd,command:1,arg:0})).result).toBe(0);
+      const passed = await owner.duplicateTo(1001,copy,1002);
+      expect(passed).toBeGreaterThan(0);
+      expect((await b({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(1));
+      expect((await a({kind:"read",fd,length:1})).bytes).toEqual(Uint8Array.of(2));
+      await b({kind:"pwrite",fd:passed,bytes:Uint8Array.of(9),offset:0});
+      expect((await a({kind:"pread",fd,length:2,offset:0})).bytes).toEqual(Uint8Array.of(9,2));
+      expect((await a({kind:"seek",fd:copy,offset:0,whence:1})).result).toBe(2);
+      await a({kind:"fcntl",fd:copy,command:4,arg:0x400});
+      expect((await b({kind:"fcntl",fd:passed,command:3,arg:0})).result & 0x400).toBe(0x400);
+      await a({kind:"fcntl",fd,command:4,arg:0});
+      expect((await b({kind:"stat",fd})).result).toBe(-E.BADF);
+      owner.close(1001);
+      expect((await a({kind:"read",fd,length:1})).result).toBe(-E.BADF);
+      expect((await b({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(3));
+      await b({kind:"truncate",fd:passed,length:3});
+      expect((await b({kind:"stat",fd:passed})).stat?.size).toBe(3);
+      expect((await b({kind:"read",fd:passed,length:1})).result).toBe(0);
+      vfs.delete(path);
+      await b({kind:"pwrite",fd:passed,bytes:Uint8Array.of(8),offset:0});
+      expect((await b({kind:"pread",fd:passed,length:1,offset:0})).bytes).toEqual(Uint8Array.of(8));
+      expect(vfs.exists(path)).toBe(false);
+      expect((await b({kind:"close",fd:passed})).result).toBe(0);
+      expect((await b({kind:"close",fd:passed})).result).toBe(-E.BADF);
+    } finally {
+      owner.close(1001); owner.close(1002);
+      proxies.forEach(proxy => proxy.close()); stops.forEach(stop => stop()); vfs.delete(path);
+    }
+  });
+
+  test("canonical descriptor death retires pending replies without closing another process's shared open file", async () => {
+    const path = "/data/data/test/fd/pending.bin", owner = new FileDescriptors();
+    let release!: () => void, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { release=resolve; });
+    const started = new Promise<void>(resolve => { entered=resolve; });
+    vfs.mount(path,{size:4,read:async (offset,length) => { entered(); await waiting; return Uint8Array.of(1,2,3,4).slice(offset,offset+length); }});
+    const a = owner.session(1001,() => 0), b = owner.session(1002,() => 0);
+    try {
+      const fd = (await a.fileDescriptor({kind:"open",path,flags:0})).result;
+      const passed = await owner.duplicateTo(1001,fd,1002);
+      const read = a.fileDescriptor({kind:"read",fd,length:2});
+      await started;
+      const position = b.fileDescriptor({kind:"seek",fd:passed,offset:0,whence:1});
+      const duplicate = b.fileDescriptor({kind:"dup",fd:passed,cloexec:false});
+      owner.close(1001); release();
+      expect((await read).result).toBe(-E.BADF);
+      expect((await position).result).toBe(2);
+      const second = (await duplicate).result;
+      expect((await b.fileDescriptor({kind:"read",fd:second,length:1})).bytes).toEqual(Uint8Array.of(3));
+      expect((await b.fileDescriptor({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(4));
+    } finally { release(); owner.close(1001); owner.close(1002); vfs.delete(path); }
+  });
 
   test("a stream over a RandomAccessFile's descriptor writes at the file's shared pointer", async () => {
     vfs.write("/data/data/test/fd/raf.bin", new Uint8Array(0));
