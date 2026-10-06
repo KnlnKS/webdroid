@@ -61,7 +61,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       for (const f of wanted) ordered.add(f);
       const mb = (kind: string) => (wanted.filter((f) => f[0] === kind).reduce((n, f) => n + statSync(join(AOT_ROOT, key, f)).size, 0) / 1e6).toFixed(1);
       console.log(`${apk} ${launch}: ${wanted.length} files wanted (C ${wanted.filter((f) => f[0] === "c").length}, ${mb("c")} MB; D ${wanted.filter((f) => f[0] === "d").length}, ${mb("d")} MB), ${ordered.size - before} new`);
-      if (launch === "settled") await exportBundles(page);
+      if (launch === "settled") { await settleBuilds(page); await exportBundles(page); }
       await page.close();
     }
   } catch (e) {
@@ -83,6 +83,17 @@ if (classes) {
   const files = [...ordered].filter((f) => /^[cd]\d+\.wasm$/.test(f));
   writeFileSync(join(AOT_ROOT, key, "startup.json"), JSON.stringify(files));
   console.log(`${files.length} files in ${key}/startup.json`);
+}
+
+/** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */
+async function settleBuilds(page: import("playwright").Page): Promise<void> {
+  for (const frame of page.frames()) {
+    const built = await frame.evaluate(async () => {
+      const settle = window.__wdCold?.appSettle;
+      return settle ? (await settle()) ?? null : undefined;
+    }).catch(() => undefined);
+    if (built !== undefined) console.log(`${frame.url()}: ${built ? `settled build ${built.methods} methods, ${built.modules} modules${built.kept ? "" : ", not kept"}` : "nothing to settle"}`);
+  }
 }
 
 /** the app builds in the page's store, written beside the platform build's modules */

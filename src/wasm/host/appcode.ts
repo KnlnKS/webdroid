@@ -37,6 +37,10 @@ export interface AppCode {
   refine(world: World, min?: number): Promise<Built | undefined>;
   /** from the first frame of the app on: looks at the launch every so often, and refines once it has gone quiet */
   watch(world: World): void;
+  /** waits for a build in progress, then refines with everything `world` built on demand since (a profile run exports the result: scripts/wasm/aot-profile.ts) */
+  settle(world: World): Promise<Built | undefined>;
+  /** the builds made so far, the last first */
+  builds: Built[];
   /** stops watching and both compiler workers; outstanding builds reject */
   close(): void;
 }
@@ -70,30 +74,44 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   if (req.signal?.aborted) close();
   /** the classes the host implements, as the World began with them: a worker that builds applies the same ones */
   let hostClasses: string[] | undefined;
-  /** what the saved build was asked to include, which the next one includes too */
-  let covered: Demand = saved?.index.demand ?? { methods: [], classes: [], infos: [] };
+  /** what the saved build was asked to include and what the World built on demand since, merged as the launch goes: a look at it reads only what is new.
+   *  `covered` is how much of it the saved build holds. */
+  const initial = saved?.index.demand;
+  const merged = { methods: new Set(initial?.methods), classes: new Set(initial?.classes), infos: new Map(initial?.infos.map((r) => [r.join("\0"), r])) };
+  const size = () => merged.methods.size + merged.classes.size + merged.infos.size;
+  let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
+  const builds: Built[] = [];
   const code: AppCode = { hit: !!saved, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
-    refine, watch: (world) => { if (!closed && !watching && req.persist) { watching = true; watch(world); } }, close };
+    refine, watch: (world) => { if (!closed && !watching && req.persist) { watching = true; watch(world); } }, settle, builds, close };
   if (!saved && !closed) {
     code.made = builder.build({ methods: [], classes: [], infos: [] });
-    code.made.catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); });
+    code.made.then((built) => { builds.unshift(built); }, (e) => { if (!closed) console.warn("[webdroid] the app build failed", e); });
   }
 
-  /** what `world` built on demand that the saved build lacks, with the build's own demand before it */
-  function demanded(world: World): { merged: Demand; fresh: number } {
-    const methods = new Set(covered.methods), classes = new Set(covered.classes), infos = new Map(covered.infos.map((r) => [r.join("\0"), r])), before = methods.size + classes.size + infos.size;
-    for (const m of world.demand.methods) if (m.codeOff || world.intrinsic(m)) methods.add(mid(m));
-    for (const c of world.demand.classes) classes.add(c);
-    for (const r of world.demand.infos) infos.set(r.join("\0"), r);
-    return { merged: { methods: [...methods], classes: [...classes], infos: [...infos.values()] }, fresh: methods.size + classes.size + infos.size - before };
+  /** how much `world` built on demand that the saved build lacks */
+  function fresh(world: World): number {
+    const d = world.demand;
+    if (seen.world !== world) seen = { world, methods: 0, classes: 0, infos: 0 };
+    if (d.methods.size > seen.methods) {
+      let i = 0;
+      for (const m of d.methods) if (i++ >= seen.methods && (m.codeOff || world.intrinsic(m))) merged.methods.add(mid(m));
+      seen.methods = d.methods.size;
+    }
+    for (; seen.classes < d.classes.length; seen.classes++) merged.classes.add(d.classes[seen.classes]);
+    for (; seen.infos < d.infos.length; seen.infos++) { const r = d.infos[seen.infos]; merged.infos.set(r.join("\0"), r); }
+    return size() - covered;
   }
   async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
-    if (closed) return undefined;
-    const { merged, fresh } = demanded(world);
-    if (fresh < min) return undefined;
-    const built = await builder.build(merged, hostClasses);
-    if (built.kept) covered = merged;
+    if (closed || fresh(world) < min) return undefined;
+    const at = size(), built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses);
+    builds.unshift(built);
+    if (built.kept) covered = at;
     return built;
+  }
+  async function settle(world: World): Promise<Built | undefined> {
+    await code.made?.catch(() => {});
+    while (builder.busy && !closed) await new Promise((r) => setTimeout(r, 100));
+    return refine(world, 1);
   }
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
@@ -104,15 +122,15 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
       if (closed) return;
       if (performance.now() > until && !building && !builder.busy) { builder.close(undefined, false); return; }
       if (building || builder.busy) { again(); return; }
-      const { fresh } = demanded(world);
+      const now = fresh(world);
       // the launch has gone quiet: what it compiled since the last look is all there is for now
-      if (fresh >= MIN_FRESH && fresh === last) {
+      if (now >= MIN_FRESH && now === last) {
         building = true;
         refine(world).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
           .finally(() => { building = false; if (++refines >= MAX_REFINES) builder.close(undefined, false); else again(); });
         return;
       }
-      last = fresh;
+      last = now;
       again();
     };
     again();

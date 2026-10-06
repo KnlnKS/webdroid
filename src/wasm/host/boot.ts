@@ -25,7 +25,7 @@ import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
 import { natives, nativeSource } from "./nativesource";
 import { bindWorld, count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
-import { prepareApp, type AppCode } from "./appcode";
+import { prepareApp, type AppCode, type Built } from "./appcode";
 import { prefetchInWorker } from "./aotload";
 import { openPersist } from "./persist";
 import type { CompileClient, WorkerPort } from "./compiler";
@@ -35,7 +35,7 @@ import { onProcessExit, processExited } from "../../process-exit";
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
 
-declare global { interface Window { __wdCold?: { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; aotKey?: string }; __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
+declare global { interface Window { __wdCold?: { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string }; __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
 
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
@@ -91,7 +91,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
     code?.start(made);
-    if (typeof window !== "undefined" && window.__wdCold) Object.assign(window.__wdCold, { worker: code?.compiler.stats, appSaved: code?.hit, aotKey: store?.key });
+    if (typeof window !== "undefined" && window.__wdCold) Object.assign(window.__wdCold, { worker: code?.compiler.stats, appSaved: code?.hit, appAttached: made.appAttached, appBuilds: code?.builds, appSettle: code && (() => code!.settle(made)), aotKey: store?.key });
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
     return made;
