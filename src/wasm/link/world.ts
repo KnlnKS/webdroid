@@ -1132,11 +1132,12 @@ export class World {
     }
     return out;
   }
-  /** the small implementations of decl.name+desc among the allocated subclasses, most common first, unless there are more kinds than guards to test */
+  /** the small implementations of decl.name+desc among the allocated subclasses that have run, busiest first, unless more of them have run than guards test */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {
-    const count = this.implementations(decl, name, desc);
-    if (count.size > MAX_GUARDS) return [];
-    return [...count].filter(([t]) => this.inlinable(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    // an implementation whose class is not linked has not run (and asking would link it)
+    const ran = [...this.implementations(decl, name, desc).keys()].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) > 0);
+    if (ran.length > MAX_GUARDS) return [];
+    return ran.filter((t) => this.inlinable(t)).sort((a, b) => this.ran(b) - this.ran(a));
   }
   private implemented = new Map<string, { seen: number; count: Map<MethodInfo, number> }>();
   /** the implementations of decl.name+desc among the allocated subclasses, with how many of those classes use each. The allocated classes only grow, so each is looked at once */
