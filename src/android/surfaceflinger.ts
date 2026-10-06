@@ -65,9 +65,9 @@ const releaseFrame = (f: Frame | null) => { if (f && !(f instanceof OffscreenCan
 const roots = new Set<Layer>();
 
 // ── composition
-let target: { ctx: OffscreenCanvasRenderingContext2D; present: () => void } | null = null;
+let target: { ctx: OffscreenCanvasRenderingContext2D; present: () => void; transparent: boolean } | null = null;
 /** where the display composes: the realm's frame, and what shows it */
-export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: () => void): void { target = { ctx, present }; }
+export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: () => void, transparent = target?.transparent ?? overlaid): void { target = { ctx, present, transparent }; }
 let composing = false;
 const overlaid = typeof window !== "undefined" && window.top !== window;
 /** compose the display once the current turn's transactions and draws are done */
@@ -85,7 +85,7 @@ function composite(): void {
   ctx.save();
   // a process's frame stacks over the processes below it (processes.ts), which show through
   // wherever its windows draw nothing; the bottom one shows black there, as a display does
-  if (overlaid) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  if (target.transparent) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
   placed.clear();
   for (const layer of [...roots].filter((l) => l.layerStack === 0 && !l.relativeOf).sort(byZ)) drawTree(ctx, layer);

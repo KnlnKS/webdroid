@@ -126,6 +126,10 @@ async function boot(file: string, local?: File) {
     const t0 = performance.now();
     if (workerMode) {
       shell.setState({ kind: "loading", file, stage: "Starting system services…" });
+      canvas.style.position = "relative";
+      canvas.style.zIndex = "2147483647";
+      canvas.style.background = "transparent";
+      canvas.style.pointerEvents = "none";
       await bootSystemOwner();
       runtimeStarted = true;
       const { pkg, label } = await prepareWorkerInstall(install);
@@ -254,13 +258,14 @@ const wd = {
   // Is the main-looper queue still draining? A wedged job stops input and repaint alike, which
   // looks exactly like a settled screen from outside.
   alive: async (ms = 1500) => {
-    const workersAlive = await processBroker().visibleWorkersAlive(ms);
-    if (workersAlive !== null) return workersAlive;
+    const workersAlive = processBroker().visibleWorkersAlive(ms);
     let id: ReturnType<typeof setTimeout>;
-    return Promise.race([
+    const rootAlive = Promise.race([
       onMain(() => true).finally(() => clearTimeout(id)),
       new Promise((r) => { id = setTimeout(() => r(false), ms); }),
     ]);
+    const [root, workers] = await Promise.all([rootAlive, workersAlive]);
+    return Boolean(root) && workers !== false;
   },
   // a fresh install of every app: each package's data and install state as its removal takes them,
   // with the shared storage and the picked directories

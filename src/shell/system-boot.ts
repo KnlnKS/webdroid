@@ -7,7 +7,7 @@ import { initDeviceLocales } from "../android/resnative";
 import { scall } from "../jvm/natives/jentry";
 import { fixProcessBitness } from "../jvm/natives/jvmruntime";
 import { loadAppCode, loadTier, tier } from "../jvm/tier";
-import { startZygote } from "./device";
+import { startZygote, setSystemDisplayTarget } from "./device";
 import { connectProcess } from "./process-endpoint";
 import { processBroker } from "./processes";
 import { hostWindowManager } from "../android/server/wm";
@@ -26,6 +26,7 @@ export function bootSystemOwner(): Promise<void> {
     await Promise.all([loadFramework(), loadPlatformDex()]);
     if (tier === "wasm") await loadAppCode({ launch: [] });
     hostWindowManager();
+    setSystemDisplayTarget();
     await startZygote();
     await onMain(() => rt.drive(loadSystemFontMap()));
     await onMain(initDeviceLocales);

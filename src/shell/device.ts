@@ -58,6 +58,8 @@ export function setScreenCanvas(c: HTMLCanvasElement): void {
   const context = c.getContext("bitmaprenderer");
   screen = context ? bitmap => context.transferFromImageBitmap(bitmap) : null;
 }
+/** System windows compose over app process canvases rather than an opaque app background. */
+export function setSystemDisplayTarget(): void { setDisplayTarget(frame, present, true); }
 let firstFrame!: () => void;
 /** resolves once the screen first shows the app: work a device did before the app launched waits for it */
 export const firstPresented = new Promise<void>((resolve) => { firstFrame = resolve; });

@@ -648,7 +648,8 @@ export class ProcessBroker {
       const canvas = entry.canvas ?? entry.frame?.contentDocument?.querySelector<HTMLCanvasElement>("#screen");
       return canvas && !(entry.canvas ?? entry.frame)?.hidden ? [canvas] : [];
     });
-    return [root, ...layers.filter(canvas => canvas !== root)];
+    const apps = layers.filter(canvas => canvas !== root);
+    return new URLSearchParams(location.search).get("processMode") === "worker" ? [...apps, root] : [root, ...apps];
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
