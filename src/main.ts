@@ -53,7 +53,10 @@ configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(par
 configureJvmCoverage(params.get("fuzzCoverage") === "1");
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
-const back = () => { if (!processBroker().activities.back(PROCESS_PID)) return pressBack(); };
+const back = async () => {
+  const routed = processBroker().activities.back(PROCESS_PID);
+  if (routed) await routed; else await pressBack();
+};
 const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });
 const { canvas, kbd } = shell;
 setScreenCanvas(canvas);

@@ -73,10 +73,11 @@ export class ActivityStack {
   processDied(pid: number): void {
     for (const activity of this.activities.filter((a) => a.pid === pid)) void this.finish(pid, activity.id, 0, null);
   }
-  back(caller: number): boolean {
-    if (!this.top || this.top === caller) return false;
-    void this.enqueue(() => this.port.activity(this.port.entry(this.top), { kind: "back" }));
-    return true;
+  back(caller: number): Promise<void> | null {
+    if (!this.top || this.top === caller) return null;
+    return new Promise<void>((resolve, reject) => {
+      void this.enqueue(() => this.port.activity(this.port.entry(this.top), { kind: "back" }).then(resolve, reject));
+    });
   }
   background(ms: number): Promise<void> {
     const pid = this.top;
