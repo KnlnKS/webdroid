@@ -214,6 +214,11 @@ export class Program {
     this.ancestorMemo.clear(); this.implMemo.clear();
     return names;
   }
+  /** a type or method descriptor in binary names (JNI's) as the loader of class `cls` sees it: each class it names by the key that loader sees under that name */
+  viewOf(cls: string, desc: string): string {
+    const loader = this.loaderOf(cls);
+    return loader.id ? desc.replace(/L([^;]+);/g, (whole, name: string) => { const key = this.lookup(loader, name); return key === undefined ? whole : `L${key};`; }) : desc;
+  }
   /** a descriptor of a dex file of `loader`, with the class names it names replaced by the keys of the classes the loader sees under them */
   private rewrite(loader: Loader, desc: string): string {
     const m = /^(\[*)L(.+);$/.exec(desc);

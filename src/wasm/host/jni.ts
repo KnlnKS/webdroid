@@ -23,6 +23,8 @@ export function wasmJni(w: World): JniVm {
   /** a Java exception raised from the host's side of a call */
   const fail = (name: string, msg: string): never => { throw w.exception(w.makeThrowable(name, msg)); };
   const noSuchMethod = (name: string, sig: string) => fail("java/lang/NoSuchMethodError", name + sig);
+  /** JNI names classes by binary name; a class of a loader's own namespace names them as that loader sees them */
+  const view = (c: JniClass, sig: string): string => prog.viewOf(c.name, sig);
 
   /** whether the class named `name`, a class or an array class, exists */
   const exists = (name: string): boolean => {
@@ -89,18 +91,18 @@ export function wasmJni(w: World): JniVm {
     },
 
     hasMethod(c, name, sig, isStatic) {
-      const m = prog.resolve(c.name, name, sig);
+      const m = prog.resolve(c.name, name, view(c, sig));
       return !!m && m.isStatic === isStatic;
     },
     field(c, name, sig, isStatic): WasmField | null {
-      const info = prog.resolveField(c.name, name, sig);
+      const info = prog.resolveField(c.name, name, view(c, sig));
       return info && info.isStatic === isStatic ? { cls: cls(info.owner), key: (isStatic ? "static " : "") + name + ":" + sig, type: sig, isStatic, info } : null;
     },
     get(f, o) { const info = (f as WasmField).info; return bridge.read(info, info.isStatic ? null : o as object); },
     set(f, o, v) { const info = (f as WasmField).info; bridge.write(info, info.isStatic ? null : o as object, v); },
     invoke(c, name, sig, isStatic, self, args, nonvirtual) {
       if (!isStatic && (self === null || self === undefined)) return fail("java/lang/NullPointerException", "JNI call on null " + name);
-      const m = isStatic || nonvirtual ? prog.resolve(c.name, name, sig) : prog.implFor(w.classNameOf(self as object), name, sig);
+      const desc = view(c, sig), m = isStatic || nonvirtual ? prog.resolve(c.name, name, desc) : prog.implFor(w.classNameOf(self as object), name, desc);
       if (!m || m.isStatic !== isStatic) return noSuchMethod(name, sig);
       return nest((s) => bridge.callOn(s, m, isStatic ? null : self as object, args));
     },
@@ -112,14 +114,14 @@ export function wasmJni(w: World): JniVm {
         const mark = bridge.begin();
         try { return w.javaString(make(...args.map((a) => bridge.toHost(a)))); } finally { bridge.end(mark); }
       }
-      const ctor = prog.get(c.name)?.byKey.get("<init>" + sig);
+      const ctor = prog.get(c.name)?.byKey.get("<init>" + view(c, sig));
       if (!ctor) return noSuchMethod("<init>", sig);
       const o = alloc(c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
       return done instanceof Promise ? done.then(() => o) : o;
     },
     allocate: (c) => alloc(c.name),
     reflect(c, name, desc) {
-      const params = desc.slice(1, desc.indexOf(")")).match(/\[*(?:L[^;]+;|.)/g) ?? [], types = bridge.newArray("[Ljava/lang/Class;", params.length);
+      const own = view(c, desc), params = own.slice(1, own.indexOf(")")).match(/\[*(?:L[^;]+;|.)/g) ?? [], types = bridge.newArray("[Ljava/lang/Class;", params.length);
       params.forEach((p, i) => bridge.setElement(types, i, mirror(cls(typeName(p)))));
       const owner = mirror(c) as object;
       return name === "<init>" ? call(owner, "getDeclaredConstructorInternal", "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;", types)
@@ -140,12 +142,12 @@ export function wasmJni(w: World): JniVm {
       return vm.field(owner, name, descriptor(call(object, "getType", "()Ljava/lang/Class;")), ((call(object, "getModifiers", "()I") as number) & ACC.STATIC) !== 0) as WasmField | null;
     },
     nativeKind(c, name, sig) {
-      const jc = prog.get(c.name), m = jc?.byKey.get(name + sig);
+      const jc = prog.get(c.name), m = jc?.byKey.get(name + view(c, sig));
       if (!jc || !m) return { isStatic: false, critical: false };
       const critical = m.isStatic && !!jc.dex?.classAnnotations(jc.def!).methods.get(m.methodIdx)?.some((a) => a.type === "dalvik/annotation/optimization/CriticalNative");
       return { isStatic: m.isStatic, critical };
     },
-    bind(c, name, sig, _isStatic, entry) { rt.registerJni(c.name, name + sig, entry); },
+    bind(c, name, sig, _isStatic, entry) { rt.registerJni(c.name, name + view(c, sig), entry); },
 
     string: (js) => w.javaString(js),
     chars: (s) => bridge.toHost(s) as string,
