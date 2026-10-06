@@ -190,6 +190,7 @@ export class World {
         try { this.sched.running = this.sched.current(); return this.sched.block(op, obj, a, b); } finally { this.sched.idle(); }
       }) : () => { throw new Error("blocking needs JSPI (WebAssembly.Suspending)"); },
       hot: (slot: number) => this.upgrade(slot),
+      long: (slot: number) => { const s = this.slotAt(slot); if (s?.k === "method") this.longLoops.add(mid(s.m)); },
       imtMiss: (cls: number, sel: number) => this.imtMiss(cls, sel),
       heapCheck: () => (heap() - heapBase > limit && (opts.collect?.(), heap() - heapBase > limit) ? 1 : 0),
       info: (kind: number, a: number, b: number) => {
@@ -893,7 +894,7 @@ export class World {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return undefined;
     const { installed, copies } = this.group(s.m);
-    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized() };
+    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
@@ -1050,6 +1051,8 @@ export class World {
     if (sl.hot) return HOT_BUDGET;
     return sl.done ? this.count(this.slotOf(t)) : 0;
   }
+  /** the methods (ids) whose first-tier code ran a loop for 64 chunks in one entry: their second tier keeps loops in chunks, so a long activation of it is not held in the engine's baseline code */
+  longLoops = new Set<string>();
   /** classes some compiled code allocates: the ones a virtual call is likely to find */
   allocated = new Set<string>();
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
