@@ -6,7 +6,7 @@ import { T } from "../compiler/wasmbin";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Loader } from "../compiler/program";
-import type { DexFile } from "../../jvm/dex";
+import { dexesIn, type DexFile } from "../../jvm/dex";
 import type { World } from "./world";
 import { emitSave } from "./sched";
 
@@ -19,13 +19,16 @@ interface State {
   byObject: WeakMap<object, Loader>;
   cookies: Map<string, { loader: Loader; dexes: DexFile[] }>;
   parentOf: (loader: object) => object | null;
+  libraries: WeakMap<object, [Loader[], Loader[]]>;
+  copies: WeakMap<object, Map<DexFile, DexFile>>;
+  initiated: Map<Loader, Map<string, string>>;
   /** the ClassLoader object that opened the app's own dex files, which the classes of the default namespace that the app defines answer to getClassLoader */
   appLoader: object | null;
 }
 const states = new WeakMap<World, State>();
 function stateOf(w: World): State {
   let s = states.get(w);
-  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), appLoader: null });
+  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), initiated: new Map(), appLoader: null });
   return s;
 }
 
@@ -33,7 +36,23 @@ function stateOf(w: World): State {
 function loaderFor(w: World, obj: object | null): Loader {
   const s = stateOf(w);
   for (let o = obj; o; o = s.parentOf(o)) { const l = s.byObject.get(o); if (l) return l; }
-  return w.prog.root;
+  return w.prog.boot;
+}
+
+function librariesOf(w: World, object: object): [Loader[], Loader[]] {
+  const s = stateOf(w), prior = s.libraries.get(object);
+  if (prior) return prior;
+  const mark = w.bridge.begin();
+  try {
+    const read = (name: string): Loader[] => {
+      const array = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", name, "[Ljava/lang/ClassLoader;")(object);
+      const values = array ? w.bridge.toHost(array, "[Ljava/lang/ClassLoader;") as unknown[] : [];
+      return values.map(value => loaderFor(w, w.bridge.toJava(value, "Ljava/lang/ClassLoader;") as object));
+    };
+    const graph: [Loader[], Loader[]] = [read("sharedLibraryLoaders"), read("sharedLibraryLoadersAfter")];
+    s.libraries.set(object, graph);
+    return graph;
+  } finally { w.bridge.end(mark); }
 }
 
 /** host.classByName(name, scope, mode): the id of the class a binary name ("a.B$C", "[La.B;") stands for in the scope, or 0 */
@@ -44,9 +63,13 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
   const loader = mode === Lookup.Cookie ? cookie?.loader : loaderFor(w, scope as object | null);
   if (!loader) return 0;
   const find = (cls: string): string | undefined => {
-    if (mode === Lookup.Visible) return prog.lookup(loader, cls);
-    const key = prog.definedBy(loader, cls);
-    return key !== undefined && (!cookie || cookie.dexes.includes(prog.get(key)!.dex!)) ? key : undefined;
+    if (mode === Lookup.Defined) return s.initiated.get(loader)?.get(cls);
+    const key = mode === Lookup.Visible ? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
+    if (key === undefined || cookie && !cookie.dexes.includes(prog.get(key)!.dex!)) return undefined;
+    let loaded = s.initiated.get(loader);
+    if (!loaded) s.initiated.set(loader, loaded = new Map());
+    loaded.set(cls, key);
+    return key;
   };
   const e = n.replace(/^\[+/, "");
   if (e === n) { const key = find(n); return key === undefined ? 0 : w.idOf(key); }
@@ -68,10 +91,24 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
     // dex files the Program holds already stay in their namespace, and a loader that opens only those is that namespace
     let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
     if (!loader) {
-      loader = dexes.map((d) => w.prog.loaderOfDex(d)).find((l) => l) ?? w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
+      const ownApp = !s.appLoader && dexes.some(d => w.prog.loaderOfDex(d) === w.prog.root);
+      loader = ownApp ? w.prog.root : w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
       s.byObject.set(loaderObject!, loader);
     }
     if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
+    if (loaderObject) {
+      const [before, after] = librariesOf(w, loaderObject);
+      w.bindLibraries(loader, before, after);
+      dexes = dexes.map(d => {
+        const owner = w.prog.loaderOfDex(d);
+        if (!owner || owner === loader) return d;
+        let copies = s.copies.get(loaderObject);
+        if (!copies) s.copies.set(loaderObject, copies = new Map());
+        let copy = copies.get(d);
+        if (!copy) { copy = dexesIn(d.bytes, d.name).find(candidate => candidate.id === d.id)!; copies.set(d, copy); }
+        return copy;
+      });
+    }
     const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
     if (fresh.length) w.addDexes(fresh, loader);
     const id = `dex:${s.cookies.size}`;

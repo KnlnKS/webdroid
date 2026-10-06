@@ -176,8 +176,15 @@ export class DexFile {
     return s;
   }
 
-  /** how a class loader sees the classes this file names (the Wasm tier's loaders, program.ts): `type` answers the descriptor it maps the file's to. Set before the file is used. */
-  resolveType?: (descriptor: string) => string;
+  private typeResolver?: (descriptor: string) => string;
+  /** How the defining loader resolves references. Its library graph may arrive after metadata was inspected; raw DEX descriptors never change. */
+  get resolveType(): ((descriptor: string) => string) | undefined { return this.typeResolver; }
+  set resolveType(resolve: ((descriptor: string) => string) | undefined) {
+    if (this.typeResolver === resolve) return;
+    this.typeResolver = resolve;
+    this.typeCache.fill(undefined);
+    this.descCache.length = this.paramTypeCache.length = 0;
+  }
   /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
   type(i: number): string {
     let s = this.typeCache[i];

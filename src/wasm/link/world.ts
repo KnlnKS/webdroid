@@ -1122,6 +1122,60 @@ export class World {
   }
 
   // ---------- open world
+  /** A BaseDexClassLoader supplies its immutable library graph before opening its own DEX path. Metadata and ahead-of-time code may already exist. */
+  bindLibraries(loader: Loader, before: Loader[], after: Loader[]): void {
+    const priorBefore = loader.before ?? [], priorAfter = loader.after ?? [];
+    const same = (a: Loader[], b: Loader[]) => a.length === b.length && a.every((l, i) => l === b[i]);
+    if (same(priorBefore, before) && same(priorAfter, after)) return;
+    const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {
+      const at = key.indexOf("(");
+      return this.prog.implFor(name, key.slice(0, at), key.slice(at));
+    }) }));
+    const existing = [...this.classes].filter(([name]) => {
+      const cls = this.prog.get(name);
+      return cls?.dex && this.prog.loaderOfDex(cls.dex) === loader;
+    }).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
+    const names = this.prog.libraries(loader, before, after);
+    if (!names.length) return;
+    this.vslotCache.clear();
+    for (const old of dispatch) {
+      const methods = this.vslots(old.name).map(key => { const at = key.indexOf("("); return this.prog.implFor(old.name, key.slice(0, at), key.slice(at)); });
+      if (methods.length !== old.methods.length || methods.some((m, i) => m !== old.methods[i])) {
+        this.prog.libraries(loader, priorBefore, priorAfter); this.vslotCache.clear();
+        throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader libraries changed linked dispatch of ${old.name}`));
+      }
+    }
+    // A changed superclass would change the physical GC layout of already linked instances. Constructor-time library binding must precede that resolution.
+    for (const old of existing) {
+      const cls = this.prog.get(old.name)!;
+      if (cls.sup !== old.sup || cls.ifaces.join("\0") !== old.ifaces.join("\0")) {
+        this.prog.libraries(loader, priorBefore, priorAfter); this.vslotCache.clear();
+        throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader libraries changed linked hierarchy of ${old.name}`));
+      }
+    }
+    for (const old of existing) {
+      for (const { field, desc } of old.fields) if (field.isStatic && desc !== field.desc) {
+        const oldKey = `${old.rt.id}:s:${field.name}:${desc}`, newKey = `${old.rt.id}:s:${field.name}:${field.desc}`;
+        old.rt.exports = { ...old.rt.exports, [newKey]: old.rt.exports[oldKey] };
+      }
+    }
+    this.epoch++;
+    this.opts.compiler?.added(null);
+    this.cha = new Cha(this.prog);
+    this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
+    this.vslotCache.clear(); this.imtCache.clear();
+    // Existing code and app builds used the previous namespace. Platform code retains its defining boot namespace.
+    const changed = new Set(names);
+    for (let b = 0; b < this.blockClass.length; b++) if (changed.has(this.blockClass[b])) {
+      for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
+    }
+    if (loader === this.prog.root) this.aot?.unbindApp();
+    for (const assumption of this.assumptions.values()) for (const slot of assumption.slots) this.invalidate(slot);
+    this.assumptions.clear(); this.late.clear();
+    this.noteLate([...this.prog.own()].map(c => c.name));
+    for (const slots of this.absent.values()) for (const slot of slots) this.invalidate(slot);
+    this.absent.clear();
+  }
   /** load more dexes. A CHA decision that one of their classes falsifies is undone: its callers go back to lazy-link stubs, so the next call
    *  compiles against the new hierarchy. Frames already executing keep the old code. */
   addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {

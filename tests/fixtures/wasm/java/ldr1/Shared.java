@@ -1,5 +1,6 @@
 public class Shared implements Tag {
   public static int counter;
+  public Shared peer;
   public static int bump() { return ++counter; }
   public static Shared make() { return new Shared(); }
   public static boolean same(Shared x, Shared y) { return x == y; }

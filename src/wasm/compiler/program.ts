@@ -18,8 +18,7 @@ export interface JClass {
 }
 export const mkey = (name: string, desc: string) => name + desc;
 
-/** A class loader's namespace. The default loader (id 0) holds the platform and the app's own classes, first definition winning; any other loader holds what its dex files define
- *  that its parent does not, and a class it defines is keyed `name@id`, so that every class of a Program has one key whatever loader defines it. */
+/** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
 export interface Loader {
   readonly id: number;
   readonly parent: Loader | null;
@@ -27,6 +26,8 @@ export interface Loader {
   object: object | null;
   /** class name -> key of the classes this loader defines */
   readonly defined: Map<string, string>;
+  before?: Loader[];
+  after?: Loader[];
 }
 const SUFFIX = /@(\d+);?$/;
 /** the name Java code sees for a class key (and for the key of an array class) */
@@ -42,6 +43,28 @@ class DexClass implements JClass {
   private members_?: { fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private methodInfos?: Map<number, MethodInfo>;
   constructor(readonly name: string, readonly dex: DexFile, private readonly idx: number) {}
+  refreshTypes(resolve: (desc: string) => string): void {
+    this.header_ = undefined;
+    const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
+    for (const m of this.members_?.methods ?? this.methodInfos?.values() ?? []) {
+      if (m.dex !== this.dex || m.methodIdx < 0) continue;
+      const old = m.key, desc = this.dex.methodDesc(m.methodIdx), parsed = parseMethodDesc(desc);
+      m.desc = desc; m.params = parsed.params; m.ret = parsed.ret; m.key = mkey(m.name, desc);
+      this.members_?.byKey.delete(old); this.members_?.byKey.set(m.key, m);
+    }
+    for (const [key, method] of aliases) {
+      const at = key.indexOf("("), resolved = key.slice(0, at) + key.slice(at).replace(/L[^;]+;/g, descriptor => resolve(javaName(descriptor)));
+      if (key !== resolved) this.members_!.byKey.delete(key);
+      this.members_!.byKey.set(resolved, method);
+    }
+    if (this.members_) {
+      let i = 0;
+      for (const list of [this.def.staticFields, this.def.instanceFields]) for (const f of list) {
+        if (this.name === "java/lang/Object" && list === this.def.instanceFields) continue;
+        this.members_.fields[i++].desc = this.dex.type(this.dex.field(f.fieldIdx).type);
+      }
+    }
+  }
   private get header() {
     if (!this.header_) {
       const h = this.dex.classHeader(this.idx), dex = this.dex;
@@ -115,6 +138,7 @@ export class Program {
   /** the classes this Program adds to its base's, by key */
   private classes = new Map<string, JClass>();
   readonly root: Loader = { id: 0, parent: null, object: null, defined: new Map() };
+  readonly boot: Loader = { id: 0, parent: null, object: null, defined: new Map() };
   private loaders: Loader[] = [this.root];
   private dexLoader = new Map<DexFile, Loader>();
   private sealed = false;
@@ -139,7 +163,7 @@ export class Program {
       if (loader !== this.root) dex.resolveType ??= (d) => this.rewrite(loader, d);
       for (let i = 0; i < dex.classDefCount; i++) {
         const name = descToName(dex.rawType(dex.classDef2Type(i)));
-        if (this.lookup(loader, name) !== undefined) continue;
+        if (loader === this.root ? this.has(name) : loader.defined.has(name)) continue;
         const key = loader.id ? `${name}@${loader.id}` : name;
         loader.defined.set(name, key);
         this.classes.set(key, new DexClass(key, dex, i));
@@ -159,9 +183,27 @@ export class Program {
   /** the loader that defines the class with this key */
   loaderOf(key: string): Loader { return this.loaders[loaderIdOf(key)]; }
   /** the key of the class `name` as `loader` sees it: the first of its ancestors (parent first) and itself that defines it */
-  lookup(loader: Loader, name: string): string | undefined {
-    if (!loader.parent) return this.has(name) ? name : undefined;
-    return this.lookup(loader.parent, name) ?? loader.defined.get(name);
+  lookup(loader: Loader, name: string, seen = new Set<Loader>()): string | undefined {
+    if (seen.has(loader)) return undefined;
+    seen.add(loader);
+    if (loader === this.boot) return (this.base ? this.base.has(name) : this.has(name)) ? name : undefined;
+    const parent = loader.parent ? this.lookup(loader.parent, name, seen) : this.base?.has(name) ? name : undefined;
+    if (parent) return parent;
+    for (const library of loader.before ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
+    const own = loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
+    if (own) return own;
+    for (const library of loader.after ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
+    return undefined;
+  }
+  libraries(loader: Loader, before: Loader[], after: Loader[]): string[] {
+    const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
+    if (same(loader.before, before) && same(loader.after, after)) return [];
+    loader.before = before; loader.after = after;
+    const names: string[] = [];
+    for (const [dex, owner] of this.dexLoader) if (owner === loader) dex.resolveType = d => this.rewrite(loader, d);
+    for (const c of this.classes.values()) if (c instanceof DexClass && this.loaderOfDex(c.dex) === loader) { c.refreshTypes(d => this.rewrite(loader, d)); names.push(c.name); }
+    this.ancestorMemo.clear(); this.implMemo.clear();
+    return names;
   }
   /** a descriptor of a dex file of `loader`, with the class names it names replaced by the keys of the classes the loader sees under them */
   private rewrite(loader: Loader, desc: string): string {
@@ -171,7 +213,10 @@ export class Program {
     return key === undefined || key === m[2] ? desc : `${m[1]}L${key};`;
   }
   /** the key of the class `name` that `loader` itself defines (not its ancestors) */
-  definedBy(loader: Loader, name: string): string | undefined { return loader.parent ? loader.defined.get(name) : this.has(name) ? name : undefined; }
+  definedBy(loader: Loader, name: string): string | undefined {
+    if (loader === this.boot) return (this.base ? this.base.has(name) : this.has(name)) ? name : undefined;
+    return loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
+  }
   has(name: string): boolean { return this.classes.has(name) || !!this.base?.has(name); }
   /** every class, the base's first */
   *all(): Generator<JClass> {

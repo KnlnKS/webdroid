@@ -5,6 +5,7 @@ import { pageShared } from "../../shell/pageshared";
 import { FetchStore } from "../link/aotstore";
 import { rt, fieldNames } from "../../jvm/runtime";
 import { useEntry, type Entry } from "../../jvm/natives/jentry";
+import { appArchives } from "../../jvm/natives/jdex";
 import type { TierBackend } from "../../jvm/tier";
 import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex";
 import { centralDir, entryBytes } from "../../jvm/natives/jzip";
@@ -148,9 +149,10 @@ const ENTRY_NAMES = ["vcall", "scall", "newObj", "staticField", "linkInit", "lin
 
 /** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
  *  after its bytes have arrived */
-function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>): DexFile[] | undefined | Promise<DexFile[] | undefined> {
+export function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>): DexFile[] | undefined | Promise<DexFile[] | undefined> {
+  path = vfs.norm(path);
   if (!opened.has(path)) {
-    const own = /^\/data\/app\/.*\.apk$/.test(path) && app.length > 0;
+    const own = appArchives.has(path) && app.length > 0;
     const bytes = own ? null : vfs.readFile(path);
     const decode = (bytes: Uint8Array | null) => bytes === null ? own ? app : undefined : bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? dexesOf(bytes, path) : dexesIn(bytes, path);
     opened.set(path, bytes instanceof Promise ? bytes.then(decode).catch(error => { opened.delete(path); throw error; }) : decode(bytes));

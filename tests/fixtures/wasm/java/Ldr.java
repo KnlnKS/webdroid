@@ -1,4 +1,5 @@
 import dalvik.system.DexClassLoader;
+import dalvik.system.PathClassLoader;
 import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -10,6 +11,19 @@ interface Tag { int tag(); }
 public class Ldr {
   static int failed;
   static void expect(int bit, boolean ok) { if (!ok) failed |= 1 << bit; }
+
+  public static int libraries(String pathA, String pathB) throws Exception {
+    ClassLoader library = new PathClassLoader(pathB, null);
+    ClassLoader[] libraries = new ClassLoader[] { library };
+    java.lang.reflect.Constructor<?> ctor = PathClassLoader.class.getDeclaredConstructor(String.class, String.class, ClassLoader.class, ClassLoader[].class, ClassLoader[].class);
+    ClassLoader before = (ClassLoader) ctor.newInstance(pathA, null, null, libraries, null);
+    ClassLoader after = (ClassLoader) ctor.newInstance(pathA, null, null, null, libraries);
+    Class<?> ca = before.loadClass("Shared"), cb = after.loadClass("Shared");
+    Object a = ca.newInstance(), b = cb.newInstance();
+    int x = (Integer) ca.getMethod("tag").invoke(a), y = (Integer) cb.getMethod("tag").invoke(b);
+    if (ca.getClassLoader() != library || cb.getClassLoader() != after || ca == cb) return -1;
+    return x * 10 + y;
+  }
 
   /** a bit set for each check that failed */
   public static int check(String pathA, String pathB) throws Exception {

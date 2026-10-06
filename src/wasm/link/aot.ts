@@ -469,6 +469,13 @@ export class AotRuntime {
   }
 
   // ---- invalidation
+  /** App units were compiled before the runtime loader's library graph was known. Keep platform modules and stable numbering, but discard the app's old resolution. */
+  unbindApp(): void {
+    for (let c = this.appFrom; c < this.cState.length; c++) this.cState[c] = DEAD;
+    this.appDOf.clear();
+    this.patchesOver.clear();
+    this.synthIn.clear();
+  }
   /** the lazy-link stub for a slot whose precompiled code was undone */
   stub(slot: number): Function | undefined {
     const w = this.w, s = w.peek(slot);
