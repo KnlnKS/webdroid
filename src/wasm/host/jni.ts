@@ -157,7 +157,7 @@ export function wasmJni(w: World): JniVm {
     fromGuest: (array, type, start, n, p) => copy(false, type)(array, start, n, p, 0),
 
     throwable: (name, msg) => w.makeThrowable(name, msg),
-    noClass: (name) => w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`),
+    noClass: (name) => { rt.noteMissing("class " + name); return w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`); },
     caught: (e) => w.throwable(w.boundary(e)) ?? w.makeThrowable("java/lang/InternalError", e instanceof Error ? e.message : String(e)),
     raise: (t) => bridge.toHost(t),
     describe: (t) => bridge.toHost(call(t as object, "toString", "()Ljava/lang/String;")) as string,

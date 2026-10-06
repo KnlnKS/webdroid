@@ -33,6 +33,7 @@ import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, 
 import { decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
+import { unresolvedClass } from "../compiler/linkage";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
@@ -104,6 +105,8 @@ export class World {
   /** the gaps of the code in this World by id; precompiled code numbers all of its gaps, but only those of modules that are loaded are listed */
   gapList: string[] = [];
   onGap: (id: number) => void = () => {};
+  /** a site naming a class, method or field the loaded classes lack ran (linkage.ts): ART's message, and the class when that is what is missing */
+  onUnresolved: (message: string, cls: string | undefined) => void = () => {};
   /** the gap site that ran last, which the UnsatisfiedLinkError the code throws next names */
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
@@ -225,7 +228,11 @@ export class World {
         if (!namesWasmFrames()) this.onGap(this.gapId("caller class: the engine's stack names no Wasm frames"));
         return f ? this.idOf(f.cls.replace(/\./g, "/")) : 0;
       },
-      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => (this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id])),
+      excMessage: (kind: number, a: number, b: number, c: number, d: number, e: number) => {
+        const message = this.lastMessage = excMessage(kind, a, b, c, d, e, names, (id) => id < 0 ? this.gapList[this.lastGap] : this.linkMessages[id]);
+        if (message !== null && (kind === SLOT.ncdfr || kind === SLOT.nsme || kind === SLOT.nsfer)) this.onUnresolved(message, kind === SLOT.ncdfr ? unresolvedClass(message) : undefined);
+        return message;
+      },
       capture: (exn: object) => {
         const stack = new Error();
         this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) || this.captureScopes.get(this.sched.current())?.length ? this.javaStack(stack.stack ?? "") : stack);
@@ -1352,7 +1359,7 @@ export class World {
     return javaFrames(parts.join("\n"), this.frameTraces, count, lines);
   }
   /** the innermost `count` Java frames, including callers suspended at host bridges */
-  private callerFrames(count: number): JavaFrame[] {
+  callerFrames(count: number): JavaFrame[] {
     const full = Error.stackTraceLimit;
     try {
       for (const limit of [16, 48]) {

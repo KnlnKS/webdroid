@@ -496,7 +496,7 @@ export class Runtime {
   placeholderAt = new Map<string, string[]>();
   /** `fn` itself, or for a placeholder a wrapper that records its first hit and then asks
    *  `uninstall` to put `fn` back, so later calls cost what they did before */
-  private trackPlaceholder<F extends Function>(what: string, fn: F, uninstall: (wrapper: F) => void): F {
+  trackPlaceholder<F extends Function>(what: string, fn: F, uninstall: (wrapper: F) => void = () => {}): F {
     if (!placeholderMethods.has(fn)) return fn;
     const R = this;
     const wrapper = function (this: unknown, ...args: unknown[]) {
