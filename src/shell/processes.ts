@@ -42,6 +42,8 @@ import { startProcessWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
+import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage";
+import { receiveWebSurfaces } from "./web-surface-port";
 import { receiveIme } from "./ime-port";
 import { receiveFrames, canvasFrameSink } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
@@ -91,7 +93,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
+export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
   alarmCancel: (id: number) => Promise<void>;
@@ -111,7 +113,7 @@ export type BrokerCalls = LocationCalls & ServiceStartCalls & PendingCalls & Coo
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -305,7 +307,7 @@ export class ProcessBroker {
       if (clock) ports.push(clock.close);
       const broker = worker ? this.serveBrokerPort(pid) : undefined;
       if (broker) ports.push(broker.close);
-      let display: MessagePort | undefined, ime: MessagePort | undefined;
+      let display: MessagePort | undefined, ime: MessagePort | undefined, web: MessagePort | undefined;
       let imeOwner: ReturnType<typeof receiveIme> | undefined;
       if (worker && entry.canvas) {
         const sink = canvasFrameSink(entry.canvas);
@@ -314,9 +316,11 @@ export class ProcessBroker {
         const input = new MessageChannel();
         const inputOwner = receiveIme(input.port1, entry.canvas); imeOwner = inputOwner;
         ports.push(() => { inputOwner.close(); if (entry.ime === inputOwner) entry.ime = undefined; }); ime=input.port2;
+        const frames = new MessageChannel();
+        ports.push(receiveWebSurfaces(frames.port1,entry.canvas,()=>device)); web=frames.port2;
       }
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port, display, ime };
+        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port, display, ime, web };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       if (imeOwner) entry.ime = imeOwner;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
@@ -351,6 +355,7 @@ export class ProcessBroker {
       if (caller.uid === 0 || caller.uid === 1000 || packages.get(pkg)?.uid === caller.uid || !write && publicRead) return;
       throw rt.mkThrowable("java/lang/SecurityException", "Preferences belong to another UID");
     };
+    const webStorage = canonicalWebStorage(this.entry(pid).pkg);
     const preferences = canonicalPreferenceCommands(this.preferences, authorizePreference);
     const paths = canonicalFilePaths(path => {
       const caller = this.entry(pid);
@@ -444,6 +449,8 @@ export class ProcessBroker {
       },
       fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
       fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
+      webRenderer: async origin => { this.entry(pid); return webStorage.webRenderer(origin); },
+      webStorage: async (op, origin) => { this.entry(pid); return webStorage.webStorage(op,origin); },
       preferenceRead: async (name, key) => preferences.preferenceRead(name, key),
       preferenceKeys: async name => preferences.preferenceKeys(name),
       preferenceChange: async (name, changes) => preferences.preferenceChange(name, changes),

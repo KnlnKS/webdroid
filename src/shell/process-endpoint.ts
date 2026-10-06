@@ -1,3 +1,4 @@
+import { webStorageTransport } from "../android/webstorage";
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
 import { remoteLocation } from "./location-access";
@@ -84,6 +85,7 @@ function connectCommandTransports(): void {
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
   if (typeof window === "undefined" || window !== window.top) {
+    webStorageTransport.calls = brokerCalls;
     useSystemServiceAccess(["notification"], name => brokerCalls().systemService(name));
     notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
     useSettingsAccess(remoteSettings(brokerCalls));

@@ -16,8 +16,8 @@ import { onMain } from "./mainloop";
 import { runningApp } from "./apphost";
 import { webCookies, thirdPartyCookies } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
-import { onRendererReady, openRenderer, rendererPattern, rendererUrl } from "../shell/webrenderer";
-import { parsePageMessage, type AppMessage, type LoadMessage, type PageMessage, type RendererReady } from "../shell/webpage/protocol";
+import { rendererPattern, rendererUrl } from "../shell/webrenderer";
+import { parsePageMessage, type AppMessage, type LoadMessage, type PageMessage } from "../shell/webpage/protocol";
 import type { WebCookies } from "../shell/webcookies";
 import { webRenderer } from "./webstorage";
 import { webPrintAdapter } from "./printing";
@@ -31,7 +31,9 @@ import { webAsset, webFonts } from "./webfonts";
 import { javaInterface, weakIfaces } from "./webjavabridge";
 import { WebHistory, documentFor, srcEntry, srcFor, srcdoc, webOrigin, type Entry } from "./webnavigation";
 import { interceptRequest, mkError, mkRequest } from "./webrequests";
-import { RendererFrame, Subframes, dropFrame, inside, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes";
+import { RendererFrame, Subframes, dropFrame, reply, unbridge, viewFrame, type FrameHold, type FrameLoad } from "./webframes";
+
+import type { FrameAnnouncement } from "../shell/web-surface";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
@@ -97,11 +99,11 @@ export class WebViewChromium extends JObj {
   private get jar() { return this.cookieJar ??= webCookies(runningApp().pkg); }
 
   /** a renderer document announced itself: the main frame's, or a subframe's within it */
-  private rendererReady(event: MessageEvent<RendererReady>, win: Window) {
-    const main = this.hold.el?.contentWindow, remote = this.hold.remote, token = event.data.sub;
-    if (!main || !remote) return;
-    const load = token === null ? win === main ? this.loading : null : this.subframes.get(token);
-    if (!load || event.origin !== load.origin || token !== null && !inside(win, main)) return;
+  private rendererReady(event: FrameAnnouncement) {
+    const surface = this.hold.el, remote = this.hold.remote, token = event.data.sub, win = event.frame;
+    if (!surface || !remote) return;
+    const load = token === null ? event.main ? this.loading : null : this.subframes.get(token);
+    if (!load || event.origin !== load.origin || token !== null && event.main) return;
     if (token === null) this.loading = null;
     const g = this.gen, channel = new MessageChannel(), ref = this.ref, frame = new RendererFrame(token !== null, load.entry.url, win, channel.port1);
     channel.port1.onmessage = ({ data, ports }) => {
@@ -113,7 +115,7 @@ export class WebViewChromium extends JObj {
       this.hold.frames.get(win)?.port.close();
       this.hold.frames.set(win, frame);
       frame.cookies.sent = JSON.stringify(task.cookies);
-      openRenderer(win, load.origin, remote.id, task, channel.port2);
+      surface.open(win, load.origin, remote.id, task, channel.port2);
     });
   }
   /** what a frame loads: its document, the interfaces (and which methods return a value), as
@@ -217,8 +219,8 @@ export class WebViewChromium extends JObj {
   }
   stop() {
     this.gen++;
-    const win = this.hold.el?.contentWindow;
-    if (win) this.hold.frames.get(win)?.port.postMessage({ kind: "stop" } satisfies AppMessage);
+    const main = [...this.hold.frames.values()].find(frame => !frame.sub);
+    if (main) main.port.postMessage({ kind: "stop" } satisfies AppMessage);
   }
   private closeBridge() {
     unbridge(this.hold);
@@ -234,12 +236,12 @@ export class WebViewChromium extends JObj {
     const was = this.rect;
     this.rect = rect;
     // hidden, the page keeps its layout, which its content size reports
-    if (!rect) { if (was) el.style.visibility = "hidden"; return; }
-    if (!was) el.style.visibility = "visible";
+    if (!rect) { if (was) el.style({visibility:"hidden"}); return; }
+    if (!was) el.style({visibility:"visible"});
     if (was && was[0] === rect[0] && was[1] === rect[1] && was[2] === rect[2] && was[3] === rect[3]) return;
-    const [l, t, r, b] = rect, s = el.style;
-    s.left = l / device.width * 100 + "%"; s.top = t / device.height * 100 + "%";
-    s.width = (r - l) / device.density + "px"; s.height = (b - t) / device.density + "px";
+    const [l, t, r, b] = rect;
+    el.style({left:l / device.width * 100 + "%", top:t / device.height * 100 + "%",
+      width:(r - l) / device.density + "px", height:(b - t) / device.density + "px"});
   }
   /** load `e`; `prefetched` is its document, already fetched by a frame that redirected to it */
   go(e: Entry, push = true, prefetched?: string) {
@@ -259,14 +261,14 @@ export class WebViewChromium extends JObj {
       this.intercepting = intercept;
       const remote = this.hold.remote = new WebBridge(weakIfaces(() => ref.deref()?.pageIfaces),
         intercept ? async request => ref.deref()?.intercept(request) ?? null : undefined, webRenderer(runningApp().pkg, webOrigin(e)));
-      this.hold.ends.push(onRendererReady(remote.id, (event, win) => ref.deref()?.rendererReady(event, win)));
+      this.hold.ends.push(el.ready(remote.id, event => ref.deref()?.rendererReady(event)));
       void this.jar.then((jar) => {
         if (this.hold.remote === remote) this.hold.ends.push(jar.watch(() => ref.deref()?.sendCookies(jar)));
       });
       void remote.ready.then((origin) => {
         if (this.gen !== g) return;
         this.loading = { entry: e, origin, prefetched };
-        el.src = rendererUrl(origin, remote.id);
+        el.load(rendererUrl(origin, remote.id));
       }).catch(() => { if (this.gen === g) this.finishLoad(null, "", "WebView bridge unavailable"); });
     }
     if (prefetched === undefined) void onMain(() => this.gen === g && vcall(this.client, "onPageStarted", "(Landroid/webkit/WebView;Ljava/lang/String;Landroid/graphics/Bitmap;)V", this.view, url, null));
@@ -390,7 +392,7 @@ export class WebViewChromium extends JObj {
     this.measured = { width: wMode !== MS_EXACTLY, height: hMode === MS_EXACTLY ? -1 : hMode === MS_AT_MOST ? hSize : Infinity };
     // until it shows, the page lays out at the width it is measured at, its height its content's
     const el = this.hold.el;
-    if (el && !this.rect && wMode) { el.style.width = wSize / device.density + "px"; el.style.height = hMode === MS_EXACTLY ? hSize / device.density + "px" : "0"; }
+    if (el && !this.rect && wMode) { el.style({width:wSize / device.density + "px", height:hMode === MS_EXACTLY ? hSize / device.density + "px" : "0"}); }
     let w = wMode === 0 ? cw : wSize, h = hMode === MS_EXACTLY || hMode === MS_AT_MOST && ch > hSize ? hSize : ch;
     if (w < cw) w |= MEASURED_STATE_TOO_SMALL;
     if (h < ch) h |= MEASURED_STATE_TOO_SMALL;
@@ -508,7 +510,7 @@ rt.register({
     "onMeasure(II)V": function (this: P, ws: number, hs: number) { return this.measure(ws, hs); },
     "setBackgroundColor(I)V": function (this: P, color: number) {
       this.background = cssColor(color);
-      if (this.hold.el) this.hold.el.style.background = this.background;
+      if (this.hold.el) this.hold.el.style({background:this.background});
     },
     "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": function (this: P, event: JObj) { return this.keyEvent(event); },
     "setFrame(IIII)Z": viaAccess("super_setFrame", "(IIII)Z"),

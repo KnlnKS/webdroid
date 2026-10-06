@@ -658,3 +658,109 @@ describe("WebView isolation", () => {
     } finally { await page.close(); await server.stop(true); }
   });
 });
+
+test("Worker WebView surfaces transfer real renderer ports and retire only their process DOM", async () => {
+  const build = await Bun.build({entrypoints:[new URL("../src/shell/web-surface-port.ts",import.meta.url).pathname],target:"browser",format:"esm"});
+  if (!build.success) throw new AggregateError(build.logs,"WebView surface build");
+  const server = Bun.serve({port:0,fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/webview") return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
+    if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER,{headers:{"content-type":"text/javascript"}});
+    const output = build.outputs.find(out=>out.path.endsWith(path));
+    if (output) return new Response(output,{headers:{"content-type":"text/javascript"}});
+    return new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
+  }});
+  const page = await browser.newPage();
+  try {
+    await page.goto(`http://localhost:${server.port}/`);
+    const result = await page.evaluate(async ({origin,html}) => {
+      const {receiveWebSurfaces} = await import(location.origin+"/web-surface-port.js") as typeof import("../src/shell/web-surface-port");
+      const canvas = document.createElement("canvas"); canvas.width=720;canvas.height=1280;canvas.style.zIndex="3";document.body.append(canvas);
+      const channel = new MessageChannel();
+      const close = receiveWebSurfaces(channel.port1,canvas,()=>({density:2,width:720}));
+      const transferred = structuredClone({port:channel.port2},{transfer:[channel.port2]});
+      const code = `import {sendWebSurfaces} from '${location.origin}/web-surface-port.js';
+        onmessage=({data})=>{
+          const owner=sendWebSurfaces(data.port),surface=owner.create(),bridge='worker-owned';
+          let ready=0;
+          surface.style({visibility:'visible',width:'360px',height:'640px'});
+          surface.ready(bridge,event=>{
+            ready++;
+            const c=new MessageChannel();
+            c.port1.onmessage=({data:m})=>{
+              if(m.kind==='script-ready') {
+                const reply=new MessageChannel();reply.port1.onmessage=({data:value})=>{reply.port1.close();postMessage({ready,main:event.main,value});};
+                c.port1.postMessage({kind:'eval',script:'document.body.textContent'},[reply.port2]);
+              }
+            };
+            surface.open(event.frame,event.origin,bridge,{kind:'load',page:'https://upstream.example/',userAgent:'WebView',intercept:false,interfaces:{},cookies:[],clientHints:{},frames:'',fonts:{faces:[],css:''},document:{html:data.html}},c.port2);
+          });
+          surface.load(data.origin+'/webview?__wd_bridge='+bridge);
+          onmessage=()=>{owner.close();postMessage('closed');};
+        };`;
+      const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"}));
+      const worker=new Worker(url,{type:"module"});
+      try {
+        // A sibling renderer announcing the same bridge must not reach this surface.
+        const sibling=document.createElement("iframe");sibling.src=origin+"/webview?__wd_bridge=worker-owned";document.body.append(sibling);
+        const answer = new Promise<unknown>(resolve=>worker.onmessage=({data})=>resolve(data));
+        worker.postMessage({...transferred,origin,html},[transferred.port]);
+        const value=await answer;
+        const layer=canvas.nextElementSibling as HTMLElement;
+        canvas.hidden=true;canvas.style.zIndex="7";await new Promise(resolve=>setTimeout(resolve,0));
+        const hidden=layer.hidden,z=layer.style.zIndex;
+        const closed=new Promise(resolve=>worker.onmessage=({data})=>resolve(data));worker.postMessage("close");await closed;
+        await new Promise(resolve=>setTimeout(resolve,0));close();
+        return {value,hidden,z,frames:layer.querySelectorAll("iframe").length,removed:!layer.isConnected,sibling:sibling.isConnected};
+      } finally {worker.terminate();URL.revokeObjectURL(url);}
+    },{origin:`http://surface.localhost:${server.port}`,html:await webDocument('<body>Worker page</body>',"https://upstream.example/")});
+    expect(result).toEqual({value:{ready:1,main:true,value:'"Worker page"'},hidden:true,z:"7",frames:0,removed:true,sibling:true});
+  } finally {await page.close();await server.stop(true);}
+});
+
+test("Worker WebStorage commands retain canonical package origins and ordered deletion", async () => {
+  const build=await Bun.build({entrypoints:[new URL("../src/android/webstorage.ts",import.meta.url).pathname,new URL("../src/shell/process-port.ts",import.meta.url).pathname],target:"browser",format:"esm",splitting:true});
+  if(!build.success)throw new AggregateError(build.logs,"WebStorage owner build");
+  const server=Bun.serve({port:0,fetch(request):Response {
+    const path=new URL(request.url).pathname;
+    if(path==="/webview-origin")return Response.json(`http://*.localhost:${server.port}`);
+    if(path==="/webview")return new Response(WEB_FRAME,{headers:{"content-type":"text/html"}});
+    if(path==="/write")return new Response("<script>const r=indexedDB.open('canonical');r.onupgradeneeded=()=>r.result.createObjectStore('s');r.onsuccess=()=>{r.result.close();parent.postMessage('written','*');};</script>",{headers:{"content-type":"text/html"}});
+    const output=build.outputs.find(out=>out.path.endsWith(path));
+    return output?new Response(output,{headers:{"content-type":"text/javascript"}}):new Response("<!doctype html><body>",{headers:{"content-type":"text/html"}});
+  }});
+  const page=await browser.newPage();
+  try {
+    await page.goto(`http://localhost:${server.port}/`);
+    const result=await page.evaluate(async()=>{
+      const {canonicalWebStorage,webOrigins}=await import(location.origin+"/webstorage.js") as typeof import("../src/android/webstorage");
+      const {serveCalls}=await import(location.origin+"/process-port.js") as typeof import("../src/shell/process-port");
+      const owner=canonicalWebStorage("org.webdroid.surface.owner"),foreign=canonicalWebStorage("org.webdroid.surface.foreign");
+      const channel=new MessageChannel();const stop=serveCalls(channel.port1,owner);
+      const code=`import {webRenderer,webStorageTransport} from '${location.origin}/webstorage.js';
+        import {callProxy} from '${location.origin}/process-port.js';
+        onmessage=async({data})=>{const proxy=callProxy(data.port,['webRenderer','webStorage']);webStorageTransport.calls=()=>proxy.endpoint;
+          const [a,b]=await Promise.all([webRenderer('ignored-wire-package','https://one.example'),webRenderer('ignored-wire-package','https://two.example')]);
+          postMessage({a,b,local:typeof localStorage});};`;
+      const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
+      try {
+        const answer=new Promise<any>(resolve=>worker.onmessage=({data})=>resolve(data));
+        worker.postMessage({port:channel.port2},[channel.port2]);const row=await answer;
+        const origins=webOrigins("org.webdroid.surface.owner"),foreignOrigins=webOrigins("org.webdroid.surface.foreign");
+        const other=await foreign.webRenderer("https://one.example");
+        const frame=document.createElement("iframe");frame.src=row.a+"/write";document.body.append(frame);
+        // Persist an IndexedDB database in the actual renderer partition.
+        const ready=new Promise<void>(resolve=>{
+          const listener=(event:MessageEvent)=>{if(event.source===frame.contentWindow&&event.origin===row.a&&event.data==='written'){removeEventListener('message',listener);resolve();}};
+          addEventListener('message',listener);
+        });
+        frame.src=row.a+"/write?owner=1";await ready;
+        const remove=owner.webStorage("origin","https://one.example"),read=owner.webStorage("usage","https://one.example");
+        await remove;const usage=await read;
+        frame.remove();
+        return {origins,foreignOrigins,distinct:row.a!==row.b&&row.a!==other,local:row.local,usage:usage[0]?.[1]?.usage};
+      }finally{stop();worker.terminate();URL.revokeObjectURL(url);}
+    });
+    expect(result).toEqual({origins:["https://one.example","https://two.example"],foreignOrigins:[],distinct:true,local:"undefined",usage:0});
+  }finally{await page.close();await server.stop(true);}
+});

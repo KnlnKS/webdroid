@@ -9,13 +9,15 @@ import { runningApp } from "./apphost";
 import { onProcessExit } from "../process-exit";
 import type { WebBridge, WebRequest, WebResponse } from "../shell/webbridge";
 import { rendererUrl } from "../shell/webrenderer";
-import { WEB_FRAME_SANDBOX } from "../shell/webinject";
+import { domWebSurface, type WebSurface, type FrameIdentity } from "../shell/web-surface";
 import { webRenderer } from "./webstorage";
 import { releaseFunctor, type Rect } from "./webfunctor";
 import { mkError, mkRequest } from "./webrequests";
 import { srcdoc, webOrigin, type Entry, type SrcEntry } from "./webnavigation";
 
 // ── the frame layer (shell-owned)
+let surfaceFactory: (() => WebSurface) | null = null;
+export function useWebSurfaces(factory: (() => WebSurface) | null) { surfaceFactory = factory; }
 let layer: HTMLElement | null = null;
 let layerObserver: ResizeObserver | null = null;
 /** the shell's <div> that sits exactly over the canvas; without one every WebView stays inert */
@@ -33,10 +35,10 @@ export function setWebLayer(el: HTMLElement) {
 export class RendererFrame {
   /** the document.cookie last sent, and the page's last write it answers */
   cookies = { ack: 0, sent: "" };
-  constructor(readonly sub: boolean, public url: string, readonly win: Window, readonly port: MessagePort) {}
+  constructor(readonly sub: boolean, public url: string, readonly win: FrameIdentity, readonly port: MessagePort) {}
 }
 /** what a WebView's page holds on the host side, by its frames' windows; it never references the provider itself */
-export interface FrameHold { el: HTMLIFrameElement | null; remote: WebBridge | null; frames: Map<Window, RendererFrame>; functor: number; ends: (() => void)[] }
+export interface FrameHold { el: WebSurface | null; remote: WebBridge | null; frames: Map<FrameIdentity, RendererFrame>; functor: number; ends: (() => void)[] }
 /** what the frame layer reads of a WebView */
 export interface FrameView { readonly hold: FrameHold; url: string | null; title: string; loaded: boolean; progress: number; rect: Rect | null; background: string | null }
 /** a page's end: its bridge, what it watched and its frames' ports */
@@ -56,14 +58,10 @@ onProcessExit(() => { for (const view of live) release(view.hold); live.clear();
 // bridge therefore reach a provider only weakly; detaching alone keeps the page, as apps reattach.
 const collected = new FinalizationRegistry<FrameHold>(release);
 /** `view`'s frame, made over the display once the shell has a layer */
-export function viewFrame(view: FrameView): HTMLIFrameElement | null {
-  if (view.hold.el || !layer) return view.hold.el;
-  const el = view.hold.el = document.createElement("iframe");
-  el.referrerPolicy = "no-referrer";
-  el.setAttribute("sandbox", WEB_FRAME_SANDBOX);
-  el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1));visibility:hidden";
-  if (view.background) el.style.background = view.background;
-  layer.appendChild(el);
+export function viewFrame(view: FrameView): WebSurface | null {
+  if (view.hold.el || !layer && !surfaceFactory) return view.hold.el;
+  const el = view.hold.el = surfaceFactory ? surfaceFactory() : domWebSurface(layer!);
+  if (view.background) el.style({background:view.background});
   collected.register(view, view.hold, view.hold);
   live.add(view);
   return el;
@@ -75,11 +73,6 @@ export function webViewInfo(): { url: string | null; title: string; loaded: bool
   return [...live].map((v) => ({ url: v.url, title: v.title, loaded: v.loaded, progress: v.progress, rect: v.rect }));
 }
 
-/** whether `win` is a frame within `main`'s document */
-export function inside(win: Window, main: Window): boolean {
-  for (let w = win, depth = 0; w !== w.parent && depth < 32; w = w.parent, depth++) if (w.parent === main) return true;
-  return false;
-}
 /** `value` as the answer on `port`, its only one */
 export const reply = (port: MessagePort, value: unknown) => { port.postMessage(value); port.close(); };
 
@@ -119,7 +112,7 @@ export class Subframes {
   }
   /** a subframe's own navigation, which stays in it */
   navigate(frame: RendererFrame, entry: SrcEntry, prefetched?: string) {
-    void this.src(entry, prefetched).then((src) => { if (src) frame.win.location.replace(src); }, () => {});
+    void this.src(entry, prefetched).then((src) => { if (src) this.owner.hold.el?.replace(frame.win, src); }, () => {});
   }
   /** a client's response for a subframe: an HTML document on the opaque renderer, which carries the
    *  page script, or the bytes as they are */

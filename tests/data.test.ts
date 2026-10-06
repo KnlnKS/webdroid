@@ -1,3 +1,4 @@
+import { webStorageTransport } from "../src/android/webstorage";
 import { expect, test, jest, describe, beforeAll } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
@@ -169,7 +170,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousService = {...serviceTransport}, previousProvider = providerProcesses.get, previousBroadcast = broadcastTransport.send;
   const previousPending = {...pendingTransport}, previousAlarms = {...alarmTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
-    previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
+    previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
     previousPrepare = vfs.prepare, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
@@ -217,7 +218,7 @@ test("Worker activity commands retain local results across reentrant replies and
     for(const key of Object.keys(activityTransport)) Reflect.deleteProperty(activityTransport,key);
     for(const key of Object.keys(exitRecordTransport)) Reflect.deleteProperty(exitRecordTransport,key);
     Object.assign(exitRecordTransport,previousExit);useSettingsStore(previousSettings);
-    Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;Object.assign(clipboardTransport,previousClip);
+    Object.assign(activityTransport,previous);sqliteTransport.call=previousSql;cookieTransport.calls=previousCookies;webStorageTransport.calls=previousWebStorage;Object.assign(clipboardTransport,previousClip);
     Object.assign(locationTransport,previousLocation);
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending); Object.assign(alarmTransport,previousAlarms);

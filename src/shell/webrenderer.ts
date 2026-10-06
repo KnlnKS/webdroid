@@ -48,11 +48,12 @@ export function rendererStorage(origin: string, op: StorageOp): Promise<StorageA
   frame.style.display = "none";
   frame.src = rendererUrl(origin, id);
   return new Promise<StorageAnswer | null>((resolve) => {
+    let channel: MessageChannel | null = null;
     const timer = setTimeout(() => done(null), 10_000);
-    const done = (value: StorageAnswer | null) => { clearTimeout(timer); forget(); frame.remove(); resolve(value); };
+    const done = (value: StorageAnswer | null) => { clearTimeout(timer); forget(); channel?.port1.close(); channel?.port2.close(); frame.remove(); resolve(value); };
     const forget = onRendererReady(id, (event, win) => {
       if (win !== frame.contentWindow || event.origin !== origin) return;
-      const channel = new MessageChannel();
+      channel = new MessageChannel();
       channel.port1.onmessage = ({ data }) => done({ usage: Number(data?.usage) || 0, quota: Number(data?.quota) || 0 });
       openRenderer(win, origin, id, { kind: "storage", op }, channel.port2);
     });

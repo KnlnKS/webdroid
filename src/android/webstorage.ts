@@ -27,13 +27,36 @@ export function webOrigins(pkg: string): string[] {
  *  reinstall starts on origins of its own. */
 const rendererOf = (pkg: string, webOrigin: string) => rendererOrigin(`${pkg} ${installTime(pkg)} ${webOrigin}`);
 /** the renderer origin of `pkg`'s pages of `webOrigin`, noted among those its data holds */
-export function webRenderer(pkg: string, webOrigin: string): Promise<string> {
+function localWebRenderer(pkg: string, webOrigin: string): Promise<string> {
   const known = webOrigins(pkg);
   if (!known.includes(webOrigin)) {
     try { globalThis.localStorage?.setItem(originsKey(pkg), JSON.stringify([...known, webOrigin])); } catch { /* storage can be unavailable */ }
   }
   return rendererOf(pkg, webOrigin);
 }
+
+export type WebStorageCalls = {
+  webRenderer(origin: string): Promise<string>;
+  webStorage(op: StorageOp, origin?: string): Promise<[string, {usage:number;quota:number}|null][]>;
+};
+export const webStorageTransport: {calls:(()=>WebStorageCalls)|null} = {calls:null};
+export function webRenderer(pkg: string, webOrigin: string): Promise<string> {
+  return webStorageTransport.calls ? webStorageTransport.calls().webRenderer(webOrigin) : localWebRenderer(pkg,webOrigin);
+}
+/** Bound to the registered process package, never an identity supplied by a renderer. */
+export function canonicalWebStorage(pkg:string): WebStorageCalls {
+  return {
+    webRenderer:origin=>localWebRenderer(pkg,origin),
+    webStorage:(op,origin)=>inOrder(async () => {
+      if (!["usage","origin","data","all"].includes(op)) throw new Error("invalid WebStorage operation");
+      const parsed = origin === undefined ? undefined : URL.parse(origin)?.origin;
+      const known = webOrigins(pkg);
+      const selected = origin === undefined ? known : [known.find(o=>o===parsed || o===origin) ?? (op === "usage" && parsed !== "null" ? parsed : undefined)].filter((o):o is string=>o!==undefined);
+      return Promise.all(selected.filter(o=>op!=="usage" || origin!==undefined || /^(https?|file):/.test(o)).map(async o=>[o,await storageOf(pkg,o,op)] as [string,{usage:number;quota:number}|null]));
+    }),
+  };
+}
+const storageCalls = () => webStorageTransport.calls?.() ?? canonicalWebStorage(runningApp().pkg);
 
 // the quota manager runs its tasks in order: a query after a delete sees it done
 let lane: Promise<unknown> = Promise.resolve();
@@ -54,26 +77,17 @@ export const webData: PackageState = {
 };
 
 // ── WebStorage, as AwQuotaManagerBridge answers it over the noted origins
-const pkg = () => runningApp().pkg;
-/** a noted web origin matching the origin string an app passes (Chromium takes it as a URL) */
-const noted = (origin: string): string | undefined => {
-  const parsed = URL.parse(origin)?.origin;
-  return webOrigins(pkg()).find((o) => o === parsed || o === origin);
-};
 const answer = (callback: JObj | null, value: () => unknown) => {
   if (callback) void onMain(() => rt.drive(function* (): Gen { yield vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", yield value()); }()));
 };
 /** usage and quota of an origin; the quota manager answers an origin without data with no usage */
-const usageAndQuota = (origin: string) => inOrder(async () => {
-  const web = URL.parse(origin)?.origin, known = noted(origin) ?? (web !== "null" ? web : undefined);
-  return known ? storageOf(pkg(), known, "usage") : null;
-});
+const usageAndQuota = async (origin:string) => (await storageCalls().webStorage("usage",origin))[0]?.[1] ?? null;
 rt.register({
   name: "webdroid/WebStorage", ctor: class extends JObj {}, sup: "android/webkit/WebStorage",
   methods: {
     // GetAllStorageKeys: the origins holding quota-managed data, each named by its URL spec
     "getOrigins(Landroid/webkit/ValueCallback;)V": (callback: JObj | null) => {
-      void inOrder(() => Promise.all(webOrigins(pkg()).filter((o) => /^(https?|file):/.test(o)).map(async (o) => [o, await storageOf(pkg(), o, "usage")] as const)))
+      void storageCalls().webStorage("usage")
         .then((usages) => answer(callback, driven(function* (): Gen {
           const map: JObj = yield newObj("java/util/HashMap");
           for (const [o, u] of usages) {
@@ -93,11 +107,10 @@ rt.register({
     },
     // DeleteOriginFramework: its file systems and IndexedDB
     "deleteOrigin(Ljava/lang/String;)V": (origin: string) => {
-      const known = noted(origin);
-      if (known) void inOrder(() => storageOf(pkg(), known, "origin"));
+      void storageCalls().webStorage("origin",origin);
     },
     // DeleteAllDataFramework: every origin's file systems, IndexedDB and localStorage
-    "deleteAllData()V": () => { void inOrder(() => Promise.all(webOrigins(pkg()).map((o) => storageOf(pkg(), o, "data")))); },
+    "deleteAllData()V": () => { void storageCalls().webStorage("data"); },
   },
 });
 
