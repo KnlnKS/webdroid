@@ -12,7 +12,7 @@ export interface FileBackend {
   write(path: string, bytes: Uint8Array): Promise<void>;
   remove(path: string): Promise<void>;
 }
-export const LIMITS = { entry: 64 << 20, total: 256 << 20 };
+export const LIMITS = { entry: 256 << 20, total: 1024 << 20 };
 /** `clock` counts uses, so that the order of use does not depend on the time resolution */
 interface Meta { clock: number; entries: Record<string, { files: Record<string, number>; used: number }> }
 
