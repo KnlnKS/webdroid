@@ -52,7 +52,10 @@ public class ColdSlow {
   public static int suspended(int n){return await(n)+plus(n);}
   public static int suspendedCatch(int n){try{return rejected(n);}catch(IllegalArgumentException e){return n+37;}}
   public static IllegalArgumentException problem(){return new IllegalArgumentException();}
-  public static void main(String[] args){for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
+  public static void main(String[] args){for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail","batchedFields"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
+  static class BatchFields { int f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15,f16,f17,f18,f19; }
+  public static int batchedFields(int n){BatchFields b=new BatchFields(); b.f0=n+0; b.f1=n+1; b.f2=n+2; b.f3=n+3; b.f4=n+4; b.f5=n+5; b.f6=n+6; b.f7=n+7; b.f8=n+8; b.f9=n+9; b.f10=n+10; b.f11=n+11; b.f12=n+12; b.f13=n+13; b.f14=n+14; b.f15=n+15; b.f16=n+16; b.f17=n+17; b.f18=n+18; b.f19=n+19; return b.f0+b.f1+b.f2+b.f3+b.f4+b.f5+b.f6+b.f7+b.f8+b.f9+b.f10+b.f11+b.f12+b.f13+b.f14+b.f15+b.f16+b.f17+b.f18+b.f19;}
+  public static int batchedWaits(int n){try{return await(n)*10+plus(n)+rejected(n);}catch(IllegalArgumentException e){return await(n+2)+100;}}
   static class Vol { volatile int value; }
   public static int repeatedFields(int n){Vol a=new Vol(); int r=0; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; a.value+=n; r+=a.value; return r;}
   public static int payloads(int n){int[] a={11,12,13,14,15}; int[] b={21,22,23,24,25}; return a[n]+b[n];}
@@ -90,13 +93,20 @@ let jdkAt=0;
 let checks = 0;
 const expect = (what: string, got: unknown, want: unknown) => { if(got !== want)throw new Error(`${what}: ${got} != ${want}`); checks++; };
 const run = async (w: typeof wc, name: string, n: number) => {try{return await w.entryAsync("ColdSlow",name,"(I)I")(n);}catch(e){const t=w.throwable(e); return t ? "throw:"+w.classNameOf(t) : (()=>{throw e;})();}};
-for (const name of ["objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail"]) {
+for (const name of ["objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail","batchedFields"]) {
+  const modulesBefore=wc.stats.coldSlowModules;
   for(const n of [-1,0,1,2,4]) { const want=await run(warm,name,n); const got=await run(wc,name,n); expect(`JDK ${name}(${n})`,String(got),jdk[jdkAt++]); expect(`${name}(${n})`,got,want); }
+  if(name === "batchedFields") {
+    const modules=wc.stats.coldSlowModules-modulesBefore;
+    console.log("distinct-field batch modules",modules);
+    expect("twenty distinct field operands use bounded batches",modules<=12,true);
+  }
   console.log("pass",name);
 }
 expect("suspended invoke",await run(wc,"suspended",7),20);
 expect("suspended Java throw",await run(wc,"suspendedCatch",7),44);
 expect("actual native suspension",gates,1);
+expect("batched suspended/caught/reentered invoke",await run(wc,"batchedWaits",7),110);
 // This assertion concerns an already queued monitor, not the wall-clock turn
 // at which an invocation reaches its first lock. Test that pre-lock yield below.
 queueingMonitorCalls = true;
@@ -243,18 +253,25 @@ expect("suspended monitor increments linearize", acquisitions.map(a => a.old).jo
 expect("every suspended increment owns its monitor", acquisitions.map(a => a.depth).join(","), Array(20).fill(1).join(","));
 // Installed cold code retains activation callbacks and traces, not its emitter.
 const lifetime = world(paths, { cold: true });
-const emit = Compiler.prototype.buildSynthetic, compilerRefs: WeakRef<object>[] = [];
+const emit = Compiler.prototype.buildSynthetic, compilerRefs: WeakRef<object>[] = [], batchRefs: WeakRef<object>[] = [];
 Compiler.prototype.buildSynthetic = function (...args: Parameters<typeof emit>) {
   if (args[0] === "cold:ColdSlow.plus(I)I") compilerRefs.push(new WeakRef(this));
+  if (args[0].startsWith("cold:slow:ColdSlow.batchedFields(I)I:")) batchRefs.push(new WeakRef(this));
   return emit.apply(this, args);
 };
-try { expect("installed cold lifetime method", await lifetime.entryAsync("ColdSlow", "plus", "(I)I")(7), 12); }
+try {
+  expect("installed cold lifetime method", await lifetime.entryAsync("ColdSlow", "plus", "(I)I")(7), 12);
+  expect("installed batch lifetime method", await lifetime.entryAsync("ColdSlow", "batchedFields", "(I)I")(2), 230);
+}
 finally { Compiler.prototype.buildSynthetic = emit; }
 expect("cold emitter observed", compilerRefs.length, 1);
+expect("multiple batch emitters observed", batchRefs.length > 1, true);
 const collect = (globalThis as typeof globalThis & { gc?: () => void }).gc;
 if (!collect) throw new Error("cold lifetime check requires --expose-gc");
 for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
 expect("installed cold emitter collected", compilerRefs.filter(ref => ref.deref()).length, 0);
+expect("installed batch emitters collected", batchRefs.filter(ref => ref.deref()).length, 0);
 expect("cold code remains executable after collection", await lifetime.entryAsync("ColdSlow", "plus", "(I)I")(8), 13);
+expect("batch code remains executable after collection", await lifetime.entryAsync("ColdSlow", "batchedFields", "(I)I")(3), 250);
 console.log("cold counters",JSON.stringify({slowAdapters:wc.stats.coldSlowAdapters,slowModules:wc.stats.coldSlowModules,slowCalls:wc.stats.coldSlowCalls,slowWaits:wc.stats.coldSlowWaits,typingMethods:wc.stats.coldTypingMethods,snapshotRegisters:wc.stats.coldSnapshotRegisters,nativeDeclarationWords:measuredNatives.declarationWords,nativeDeclarations:measuredNatives.declarations}));
 console.log(`cold slow: ${checks} checks, ${wc.stats.coldMethods} methods / ${wc.stats.coldCalls} activations; object/fields/arrays/dispatch/EH/monitors/class initialization/JSPI and pending-result snapshot validation`);

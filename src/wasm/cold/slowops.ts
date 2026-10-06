@@ -17,6 +17,9 @@ import type { World } from "../link/world";
 export class UnsupportedSlowOperation extends Error {}
 type Analysis = { prepared: ReturnType<typeof prepareMethod>; typing: Typing };
 type Adapter = { call: (strand: Strand, sync: boolean, depth: number, peer: unknown, ...args: unknown[]) => unknown; inputs: { reg: number; kind: Kind }[]; output: Kind | "V"; successor: number; producer: boolean };
+type SlowBody = (cx: Compiler, c: Code, arg: (i: number) => void) => number[];
+type Batch = { entries: { body: SlowBody; ctor?: MethodInfo }[]; call: (strand: Strand, sync: boolean, selector: number, depth: number, peer: unknown, ...args: unknown[]) => unknown };
+const BATCH_SIZE = 16;
 const abi = (kind: number): Kind => kind === R ? "L" : kind === J || kind === D ? "J" : "I";
 
 // Slow adapters contain no copied callees. Always resolve virtual calls through
@@ -39,6 +42,7 @@ export class ColdSlowOps {
   private analyses = new WeakMap<MethodInfo, Analysis>();
   private adapters = new WeakMap<MethodInfo, Map<number, Adapter>>();
   private calls = new WeakMap<MethodInfo, Map<string, Adapter["call"]>>();
+  private batches = new WeakMap<MethodInfo, Map<string, Batch[]>>();
   private busy = new WeakSet<ColdSnapshot>();
   constructor(private readonly w: World) {}
 
@@ -83,7 +87,16 @@ export class ColdSlowOps {
 
   private adapter(m: MethodInfo, ins: PreparedInstruction): Adapter {
     let cache = this.adapters.get(m);
-    if (!cache) this.adapters.set(m, cache = new Map());
+    if (!cache) {
+      this.adapters.set(m, cache = new Map());
+      // Seal deterministic, bounded ABI batches before any helper is emitted.
+      // Snapshot-only operations and String allocation do not need an adapter.
+      for (const op of this.analysis(m).prepared.instructions) {
+        if (!ColdSlowOps.supports(op) || /^(move-result|move-exception)/.test(op.name)
+          || op.name === "new-instance" && descToName(m.dex.type(op.b)) === "java/lang/String") continue;
+        this.adapter(m, op);
+      }
+    }
     let found = cache.get(ins.pc);
     if (found) return found;
     const { prepared, typing } = this.analysis(m), output = this.output(m, ins), inputs: { reg: number; kind: Kind; web: number }[] = [];
@@ -133,7 +146,7 @@ export class ColdSlowOps {
       // Account for the bridge frame and restore depth on both normal and tagged
       // exceptional exits, rather than mutating another strand's globals in JS.
       const entry = c.newLocal(T.i32), thrown = c.newLocal(T.anyref);
-      for (const at of cx.emitEnter(c, entry)) c.patch(at, 4 + 3 * inputs.length);
+      const weights = cx.emitEnter(c, entry);
       c.block().block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
       mc.emit(ins);
       if (this.stringConstructor(m, ins)) c.lget(mc.local(mc.useWeb(ins.regs[0]))).lset(mc.outputLocal);
@@ -143,25 +156,55 @@ export class ColdSlowOps {
       c.lset(thrown); cx.emitLeave(c, entry, false); c.lget(thrown).throw_(cx.tag);
       c.end();
       if (output !== "V") c.lget(mc.outputLocal);
+      return weights;
     };
-    const name = `cold:slow:${mid(m)}:${ins.pc}`, params: Kind[] = ["I", "L", ...inputs.map(i => i.kind)];
+    const signature = inputs.map(i => i.kind).join("") + ":" + output;
+    let groups = this.batches.get(m);
+    if (!groups) this.batches.set(m, groups = new Map());
+    let list = groups.get(signature);
+    if (!list) groups.set(signature, list = []);
+    let batch = list.at(-1);
+    if (!batch || batch.entries.length === BATCH_SIZE) {
+      batch = this.batch(`cold:slow:${mid(m)}:${ins.pc}`, ["I", "L", "I", ...inputs.map(i => i.kind)], output);
+      list.push(batch);
+    }
+    const selector = batch.entries.length;
+    const ctor = this.stringConstructor(m, ins)
+      ? declaredMethod(this.w.prog.get("java/lang/String"), "<init>" + m.dex.methodDesc(ins.b)) : undefined;
+    batch.entries.push({ body, ctor });
+    const call: Adapter["call"] = (strand, sync, depth, peer, ...args) => batch!.call(strand, sync, selector, depth, peer, ...args);
+    calls.set(key, call);
+    return finish(call);
+  }
+
+  private batch(name: string, params: Kind[], output: Kind | "V"): Batch {
+    const entries: Batch["entries"] = [];
     let rootCall: ((...args: unknown[]) => unknown) | undefined;
     let strandCall: ((strand: Strand, ...args: unknown[]) => unknown) | undefined;
     const prepare = (cx: Compiler) => {
       this.w.stats.coldSlowModules++;
-      // Ordinary calls use method-table entries with their own native imports.
-      // Only String construction embeds a native factory in this adapter; reserve
-      // its imports before emission, without rescanning the caller's whole body.
-      if (this.stringConstructor(m, ins)) {
-        const ctor = declaredMethod(cx.prog.get("java/lang/String"), "<init>" + m.dex.methodDesc(ins.b));
-        if (ctor) cx.natives.declare(cx, [ctor]);
-      }
+      // Only String factories embed native imports. Reserve those declarations
+      // once per batch; ordinary invokes still use canonical method-table slots.
+      const ctors = [...new Set(entries.flatMap(e => e.ctor ? [e.ctor] : []))];
+      if (ctors.length) cx.natives.declare(cx, ctors);
     };
-    const call = (strand: Strand, sync: boolean, depth: number, peer: unknown, ...args: unknown[]) => strand.root || sync
-      ? this.w.synchronous(() => (rootCall ??= this.w.hostFn(name, params, output, (cx, c) => body(cx, c, i => { c.lget(i); }), prepare))(depth, peer, ...args))
-      : (strandCall ??= this.w.callFn(name, params, output, body, prepare))(strand, depth, peer, ...args);
-    calls.set(key, call);
-    return finish(call);
+    const emit = (cx: Compiler, c: Code, arg: (i: number) => void) => {
+      const weights: number[] = [];
+      c.block(output === "V" ? undefined : cx.vtOf(output));
+      entries.forEach((entry, selector) => {
+        arg(2); c.i32(selector).raw(OP.i32_eq).if_();
+        weights.push(...entry.body(cx, c, i => arg(i < 2 ? i : i + 1)));
+        c.br(1).end();
+      });
+      c.unreachable().end();
+      // All branches share the function's declared locals, including inactive
+      // cases. Charge the actual frame rather than one opcode's old estimate.
+      for (const at of weights) c.patch(at, 4 + c.nparams + c.localTypes.length);
+    };
+    const call: Batch["call"] = (strand, sync, selector, depth, peer, ...args) => strand.root || sync
+      ? this.w.synchronous(() => (rootCall ??= this.w.hostFn(name, params, output, (cx, c) => emit(cx, c, i => { c.lget(i); }), prepare))(depth, peer, selector, ...args))
+      : (strandCall ??= this.w.callFn(name, params, output, emit, prepare))(strand, depth, peer, selector, ...args);
+    return { entries, call };
   }
 
   private read(state: ColdSnapshot, reg: number, kind: Kind): unknown {
