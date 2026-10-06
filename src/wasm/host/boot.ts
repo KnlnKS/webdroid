@@ -128,7 +128,10 @@ export async function bootWasmTier(): Promise<TierBackend> {
     },
     launched() { starting = false; if (world) code?.watch(world); },
     async appCode(roots) {
-      if (world || !store || !appDexes.length) return;
+      if (world || !store) return;
+      // System realms have no app DEX, but their first Java entry still needs the
+      // prefetched platform modules before AOT.ready can mark a module missed.
+      if (!appDexes.length) { await store.ready; return; }
       try {
         code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }) as unknown as WorkerPort, roots, signal: lifetime.signal });
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
