@@ -1,11 +1,11 @@
 import { peekPageShared } from "./pageshared";
-import type { FetchStore } from "../wasm/link/aotstore";
 
 export interface AotProfile {
   key: string;
   wanted: string[];
   worlds: {linked:string[];called:string[]}[];
 }
+type FetchStore = {key:string;wanted:Iterable<string>;worlds:Iterable<() => {linked:string[];called:string[]}>};
 
 /** Explicit diagnostic read: never opens AOT, prefetches modules or waits for startup prefetch. */
 export async function existingAotProfile(): Promise<AotProfile | null> {
