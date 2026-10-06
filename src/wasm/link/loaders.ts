@@ -8,6 +8,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Loader } from "../compiler/program";
 import type { DexFile } from "../../jvm/dex";
 import type { World } from "./world";
+import { emitSave } from "./sched";
 
 /** how host.classByName reads its scope: the loader whose view of the names is asked for, the loader whose own classes are asked for, or the dex files of a cookie */
 export const enum Lookup { Visible, Defined, Cookie }
@@ -54,26 +55,29 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
 }
 
 /** host.dexOpen(path, loader): the cookie of the dex files at `path`, whose classes are defined in the namespace of the ClassLoader object `loader` */
-export function dexOpen(w: World, path: unknown, loaderObject: object | null): object {
+export function dexOpen(w: World, path: unknown, loaderObject: object | null): object | Promise<object> {
   const s = stateOf(w), file = w.hostString(path) as string;
   if (!w.opts.dexes) {
     w.onGap(w.gapId("DexFile.openDexFileNative: the host has no dex files to open"));
     throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "dalvik.system.DexFile.openDexFileNative"));
   }
   const dexes = w.opts.dexes(file);
-  if (!dexes) throw w.exception(w.makeThrowable("java/io/IOException", `Unable to open DEX file '${file}'`));
-  // dex files the Program holds already stay in their namespace, and a loader that opens only those is that namespace
-  let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
-  if (!loader) {
-    loader = dexes.map((d) => w.prog.loaderOfDex(d)).find((l) => l) ?? w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
-    s.byObject.set(loaderObject!, loader);
+  return dexes instanceof Promise ? dexes.then(open) : open(dexes);
+  function open(dexes: DexFile[] | undefined): object {
+    if (!dexes) throw w.exception(w.makeThrowable("java/io/IOException", `Unable to open DEX file '${file}'`));
+    // dex files the Program holds already stay in their namespace, and a loader that opens only those is that namespace
+    let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
+    if (!loader) {
+      loader = dexes.map((d) => w.prog.loaderOfDex(d)).find((l) => l) ?? w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
+      s.byObject.set(loaderObject!, loader);
+    }
+    if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
+    const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
+    if (fresh.length) w.addDexes(fresh, loader);
+    const id = `dex:${s.cookies.size}`;
+    s.cookies.set(id, { loader, dexes });
+    return w.javaString(id) as object;
   }
-  if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
-  const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
-  if (fresh.length) w.addDexes(fresh, loader);
-  const id = `dex:${s.cookies.size}`;
-  s.cookies.set(id, { loader, dexes });
-  return w.javaString(id) as object;
 }
 
 /** host.obj(LOADER_OF_CLASS, id): the ClassLoader object of the loader that defines class `id`, or null for the boot loader and the platform's classes */
@@ -88,7 +92,12 @@ const def = (key: string, f: (cx: Compiler, c: Code) => void) => loaderIntrinsic
 
 def("dalvik/system/DexFile.openDexFileNative(Ljava/lang/String;Ljava/lang/String;ILjava/lang/ClassLoader;[Ldalvik/system/DexPathList$Element;)Ljava/lang/Object;", (cx, c) => {
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(0); cx.str.toHost(c); c.lget(3).externConvertAny(); c.call(cx.imp.dexOpen).anyConvertExtern();
+  const restore = emitSave(cx, c);
+  const wait = cx.global("rt", "wait", T.i32, true);
+  c.lget(0); cx.str.toHost(c); c.lget(3).externConvertAny(); c.call(cx.imp.dexOpen);
+  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
+  c.end().anyConvertExtern(); restore();
 });
 // the classes of an opened dex are in the Program already: defining one is finding it among the cookie's
 def("dalvik/system/DexFile.defineClassNative(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Object;Ldalvik/system/DexFile;)Ljava/lang/Class;", (cx, c) => {

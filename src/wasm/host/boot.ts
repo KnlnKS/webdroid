@@ -83,7 +83,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   onProcessExit(close);
   if (processExited()) close();
   if (typeof window !== "undefined") window.addEventListener("pagehide", close, { once: true });
-  const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined>();
+  const appDexes: DexFile[] = [], opened = new Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>();
   const dexes = (path: string) => openDexes(path, appDexes, opened);
   const install = (made: World) => {
     world = made;
@@ -147,11 +147,13 @@ export async function bootWasmTier(): Promise<TierBackend> {
 const ENTRY_NAMES = ["vcall", "scall", "newObj", "staticField", "linkInit", "linkClass", "initClass", "iof", "classNameOf", "callOn", "after"] as const satisfies readonly (keyof Entry)[];
 
 /** the dex files of the archive at `path`, for the DexFile natives of class loaders: the app's own are the ones the World holds already, any other archive is read from the file system
- *  when its bytes are resident */
-function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined>): DexFile[] | undefined {
+ *  after its bytes have arrived */
+function openDexes(path: string, app: DexFile[], opened: Map<string, DexFile[] | undefined | Promise<DexFile[] | undefined>>): DexFile[] | undefined | Promise<DexFile[] | undefined> {
   if (!opened.has(path)) {
-    const bytes = /^\/data\/app\/.*\.apk$/.test(path) && app.length ? null : vfs.readFile(path);
-    opened.set(path, bytes === null ? app : bytes instanceof Uint8Array ? bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? dexesOf(bytes, path) : dexesIn(bytes, path) : undefined);
+    const own = /^\/data\/app\/.*\.apk$/.test(path) && app.length > 0;
+    const bytes = own ? null : vfs.readFile(path);
+    const decode = (bytes: Uint8Array | null) => bytes === null ? own ? app : undefined : bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? dexesOf(bytes, path) : dexesIn(bytes, path);
+    opened.set(path, bytes instanceof Promise ? bytes.then(decode).catch(error => { opened.delete(path); throw error; }) : decode(bytes));
   }
   return opened.get(path);
 }

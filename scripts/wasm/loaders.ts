@@ -53,5 +53,12 @@ try { got = w.entry("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("
   process.exit(1);
 }
 for (const [bit, what] of CHECKS.entries()) if (got & (1 << bit)) { failed++; console.log(`FAIL ${what}`); }
+// Lazy platform archives wait for their bytes before defining the loader's classes.
+w.opts.dexes = async (path) => {
+  await new Promise<void>(resolve => queueMicrotask(resolve));
+  return files.has(path) ? loadDexes(files.get(path)!) : undefined;
+};
+const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
+if (deferred) { failed++; console.log(`FAIL deferred archive checks: ${deferred}`); }
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);

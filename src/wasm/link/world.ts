@@ -69,7 +69,7 @@ export interface WorldOptions {
   loop?: HostLoop;
   /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
-  dexes?: (path: string) => DexFile[] | undefined;
+  dexes?: (path: string) => DexFile[] | undefined | Promise<DexFile[] | undefined>;
   /** whether the inline second-tier compile waits: the host is starting an app, and what is hot now is mostly code that runs once */
   holdUpgrades?: () => boolean;
   /** an app compiled ahead on top of `aot` (apps.ts): used when this World is where it starts, the platform build attached and nothing numbered since */
@@ -213,7 +213,11 @@ export class World {
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string, scope: unknown, mode: number) => classByName(this, this.hostString(name) as string, scope, mode),
-      dexOpen: (path: unknown, loader: object | null) => dexOpen(this, path, loader),
+      dexOpen: (path: unknown, loader: object | null) => {
+        const value = dexOpen(this, path, loader);
+        if (!(value instanceof Promise)) return value;
+        this.sched.parkNative(value); return null;
+      },
       // the class `n` frames out from the caller of the native; 0 when the stack is not that deep
       stackClass: (n: number) => {
         const frames = this.callerFrames(n + 2), f = frames[n + 1];
