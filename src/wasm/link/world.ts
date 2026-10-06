@@ -1350,12 +1350,9 @@ export class World {
     const prior = this.bridgeCaller; this.bridgeCaller = stack;
     try { return run(); } finally { this.bridgeCaller = prior; }
   }
-  /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
-   *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
-   *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
-  callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void): (s: Strand, ...a: any[]) => unknown {
-    let f = this.callFns.get(name);
-    if (f) return f;
+  // The compiled call must not retain the emitter closure and its Compiler.
+  // Build it in a separate activation from the persistent token/caller state.
+  private buildCallFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void) {
     const cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
     prepare?.(cx);
     const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "externref", mutable: true }, null);
@@ -1372,6 +1369,15 @@ export class World {
       c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
     }, ret);
     const fn = (this.instantiate(bytes, { ...this.unitImports(cx), call: { d, v, x: thr } }).exports as Record<string, any>).m as Function;
+    return { fn, d, v, thr };
+  }
+  /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
+   *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
+   *  call's token says are this call's: a promising export answers a Promise even when it never waited. */
+  callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void): (s: Strand, ...a: any[]) => unknown {
+    let f = this.callFns.get(name);
+    if (f) return f;
+    const { fn, d, v, thr } = this.buildCallFn(name, params, ret, body, prepare);
     const enter = (s: Strand, ...args: unknown[]) => s.call(fn, ...args);
     Object.defineProperty(enter, "name", { value: "webdroid:callFn" });
     let token = 0;

@@ -116,6 +116,16 @@ async function madeByPendingBridge(thrown: boolean): Promise<WeakRef<object>[]> 
 }
 if (!await collected(await madeByPendingBridge(false))) fail("pending bridge retains its last reference result");
 if (!await collected(await madeByPendingBridge(true))) fail("pending bridge retains its last throwable");
+// The World keeps the executable bridge, not the Compiler used to build it.
+async function bridgeCompiler(): Promise<WeakRef<object>[]> {
+  const refs: WeakRef<object>[] = [];
+  const call = w.callFn("lifetime:compiler", [], "I", (_cx, c) => { c.i32(7); }, cx => refs.push(new WeakRef(cx)));
+  const strand = w.sched.strand();
+  try { if (await call(strand) !== 7) fail("compiler lifetime bridge result"); }
+  finally { strand.end(); }
+  return refs;
+}
+if (!await collected(await bridgeCompiler())) fail("callFn retains its helper Compiler");
 // Java holds the object: the host object it stands for is the same one when the host asks again, however long it was not referenced
 const kept = await (async () => { const h = new JCounter(); h.n = 3; scall("Hc", "keep", "(Ljava/lang/Object;)Ljava/lang/Object;", h); return new WeakRef(h); })();
 await turn(); gc(); await turn(); gc();
