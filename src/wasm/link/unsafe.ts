@@ -22,7 +22,8 @@ const cookies = new WeakMap<World, { ofField: Map<number, number>; fields: numbe
 export function fieldCookie(w: World, id: number): number {
   let t = cookies.get(w); if (!t) cookies.set(w, t = { ofField: new Map(), fields: [] });
   let c = t.ofField.get(id);
-  if (c === undefined) { t.ofField.set(id, c = t.fields.push(id) + 7); }
+  // Byte accessors align the offset down to a word before reading an int.
+  if (c === undefined) { t.ofField.set(id, c = t.fields.push(id) * 8); }
   return c;
 }
 type Ty = "Z" | "B" | "S" | "C" | "I" | "F" | "J" | "D" | "L";
@@ -39,7 +40,7 @@ export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, Al
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
 export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number {
   // the offset of an Unsafe access names its field by the number fieldCookie gave it; reflection passes the field's id itself
-  if (kind >= UInfo.ObjGet && (a = cookies.get(w)?.fields[a - 8] ?? -1) < 0) return 0;
+  if (kind >= UInfo.ObjGet && (a = cookies.get(w)?.fields[a / 8 - 1] ?? -1) < 0) return 0;
   const name = w.nameOf(kind === UInfo.AllocInstance || kind === UInfo.ComponentScale ? a : a >>> 12);
   if (kind === UInfo.ComponentScale) return name[0] === "#" ? WIDTH[name[1] as Ty] : 4;
   if (kind === UInfo.AllocInstance) {
