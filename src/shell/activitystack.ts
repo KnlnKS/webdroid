@@ -75,9 +75,7 @@ export class ActivityStack {
   }
   back(caller: number): Promise<void> | null {
     if (!this.top || this.top === caller) return null;
-    return new Promise<void>((resolve, reject) => {
-      void this.enqueue(() => this.port.activity(this.port.entry(this.top), { kind: "back" }).then(resolve, reject));
-    });
+    return this.enqueue(() => this.port.activity(this.port.entry(this.top), { kind: "back" }));
   }
   background(ms: number): Promise<void> {
     const pid = this.top;
@@ -94,11 +92,9 @@ export class ActivityStack {
   }
   /** a process the home screen started, in front once the one there has paused */
   bringToFront(pid: number): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      void this.enqueue(async () => {
-        if (this.port.alive(this.top) && this.top !== pid) await this.visibility(this.port.entry(this.top), "pause", PAUSE_TIMEOUT_MS);
-        await this.show(pid).then(resolve, reject);
-      });
+    return this.enqueue(async () => {
+      if (this.port.alive(this.top) && this.top !== pid) await this.visibility(this.port.entry(this.top), "pause", PAUSE_TIMEOUT_MS);
+      await this.show(pid);
     });
   }
   /**
@@ -117,8 +113,9 @@ export class ActivityStack {
     });
   }
   private enqueue(run: () => Promise<void>): Promise<void> {
-    this.queue = this.queue.then(run).catch((error) => console.error("[activity process]", error));
-    return this.queue;
+    const pending = this.queue.then(run);
+    this.queue = pending.catch((error) => console.error("[activity process]", error));
+    return pending;
   }
   private async restore(activity: Activity, code: number, data: ParcelData | null): Promise<void> {
     const target = this.port.alive(activity.previous) ? activity.previous : activity.caller;

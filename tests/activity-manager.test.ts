@@ -42,8 +42,8 @@ test("routed back awaits its process acknowledgment and preserves queue order af
   const { ActivityStack } = await import("../src/shell/activitystack");
   const entry = {pid:1001} as import("../src/shell/processes").Entry;
   const first = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
-  let calls = 0;
-  const stack = new ActivityStack({entry:()=>entry,alive:()=>true,entries:()=>[entry],connect:()=>entry,
+  let calls = 0, available = true;
+  const stack = new ActivityStack({entry:()=>{if(!available)throw new Error("target died");return entry;},alive:()=>true,entries:()=>[entry],connect:()=>entry,
     activity:async (_entry,request)=>{expect(request.kind).toBe("back");calls++;
       if(calls===1){entered.resolve();await first.promise;} else if(calls===2)throw new Error("owner back failure");}});
   stack.setForeground(entry.pid);
@@ -55,5 +55,9 @@ test("routed back awaits its process acknowledgment and preserves queue order af
   const rejection=failed.then(()=>"unexpected success",error=>error.message);
   expect(done).toBe(false);expect(calls).toBe(1);
   first.resolve();await back;expect(await rejection).toBe("owner back failure");
-  await stack.back(1000);expect(calls).toBe(3);expect(done).toBe(true);
+  available=false;
+  expect(await stack.back(1000)!.then(()=>"unexpected success",error=>error.message)).toBe("target died");
+  expect(calls).toBe(2);
+  expect(await stack.bringToFront(1002).then(()=>"unexpected success",error=>error.message)).toBe("target died");
+  available=true;await stack.back(1000);expect(calls).toBe(3);expect(done).toBe(true);
 });
