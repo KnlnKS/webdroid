@@ -83,7 +83,15 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
   }));
   const workers = bounded(page.evaluate(async () => {
     const read = globalThis.wd?.workerProcesses;
-    if (read) return read();
+    if (read) {
+      const deadline = performance.now() + 2000;
+      let rows = await read();
+      while (rows.some((row: WorkerProcess) => row.error?.startsWith("Worker is not ready:")) && performance.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        rows = await read();
+      }
+      return rows;
+    }
     if (new URLSearchParams(location.search).get("processMode") === "worker") throw new Error("Worker diagnostics unavailable");
     return [];
   }) as Promise<WorkerProcess[]>).then(result => Array.isArray(result)
