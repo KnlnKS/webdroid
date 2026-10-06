@@ -28,6 +28,7 @@ export const jsVm: JniVm = {
     return c.stub ? null : c;
   },
   owner: (c) => info(c).owner ?? null,
+  binaryName: (name) => name,
   mirror: (c, owner) => (owner ?? info(c).owner ?? rt).classFor(c.name),
   classOf(mirror) {
     if (!(mirror instanceof JClass)) return null;

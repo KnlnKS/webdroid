@@ -458,7 +458,7 @@ export class Runtime {
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary
    *  consults it before giving up). `thread` is the Java thread that asked: its Cpu runs the
    *  initialisers, whichever thread is current by then. */
-  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime) => Promise<void>) | null = null;
+  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime, caller?: unknown) => Promise<void>) | null = null;
   /** the ABIs the native tier can actually execute, most-preferred first. Empty until
    *  src/native/loader.ts is imported, which is the only thing that can answer it. */
   nativeAbis: readonly string[] = [];

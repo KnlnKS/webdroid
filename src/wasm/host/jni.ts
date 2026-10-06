@@ -1,7 +1,7 @@
 // JNI over the Wasm tier (native/jnivm.ts): a Java object in a JNI table is the Wasm reference itself, a class is its key in the Program, and fields, methods
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime";
-import type { Bridge } from "./bridge";
+import { refOf, type Bridge } from "./bridge";
 import { constClass, idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
@@ -39,7 +39,11 @@ export function wasmJni(w: World): JniVm {
   };
   const mirror = (c: JniClass): unknown => w.hostFn("j:class:" + c.name, [], "L", (cx, code) => { constClass(cx, code, c.name); })();
   const classId = w.hostFn("j:cid", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); });
-  const classOf = (m: unknown): JniClass | null => (m === null || m === undefined || w.classNameOf(m as object) !== CLASS ? null : cls(w.nameOf(classId(m))));
+  /** a Class as JNI holds it, or as a native's argument holds it (the host form of the object) */
+  const classOf = (mirror: unknown): JniClass | null => {
+    const m = refOf(mirror) ?? mirror;
+    return m === null || m === undefined || w.classNameOf(m as object) !== CLASS ? null : cls(w.nameOf(classId(m)));
+  };
   /** the descriptor of the type a Class stands for */
   const descriptor = (m: unknown): string => {
     const name = javaName(classOf(m)!.name);
@@ -67,6 +71,8 @@ export function wasmJni(w: World): JniVm {
       return key === undefined ? null : cls(key);
     },
     owner: () => null,
+    // a class key carries the namespace of its loader (program.ts), which is no part of its name
+    binaryName: javaName,
     mirror: (c) => mirror(c),
     classOf,
     objectClass: (o) => mirror(cls(w.classNameOf(o as object))),
