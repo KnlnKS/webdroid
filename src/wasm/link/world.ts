@@ -1100,14 +1100,24 @@ export class World {
   }
   /** the small implementations of decl.name+desc among the allocated subclasses, most common first, unless there are more kinds than guards to test */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {
-    const count = new Map<MethodInfo, number>();
-    for (const cls of this.allocated) {
-      if (cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
-      const t = this.prog.implFor(cls, name, desc);
-      if (t) count.set(t, (count.get(t) ?? 0) + 1);
-    }
+    const count = this.implementations(decl, name, desc);
     if (count.size > MAX_GUARDS) return [];
     return [...count].filter(([t]) => this.inlinable(t)).sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  }
+  private implemented = new Map<string, { seen: number; count: Map<MethodInfo, number> }>();
+  /** the implementations of decl.name+desc among the allocated subclasses, with how many of those classes use each. The allocated classes only grow, so each is looked at once */
+  private implementations(decl: string, name: string, desc: string): Map<MethodInfo, number> {
+    const key = `${decl}.${name}${desc}`;
+    let memo = this.implemented.get(key);
+    if (!memo) this.implemented.set(key, memo = { seen: 0, count: new Map() });
+    let i = 0;
+    for (const cls of this.allocated) {
+      if (i++ < memo.seen || cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
+      const t = this.prog.implFor(cls, name, desc);
+      if (t) memo.count.set(t, (memo.count.get(t) ?? 0) + 1);
+    }
+    memo.seen = i;
+    return memo.count;
   }
   /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
   private inlinable(t: MethodInfo): boolean {
@@ -1159,7 +1169,7 @@ export class World {
     }
     this.epoch++;
     this.opts.compiler?.added(null);
-    this.cha = new Cha(this.prog);
+    this.cha = new Cha(this.prog); this.implemented.clear();
     this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace. Platform code retains its defining boot namespace.
@@ -1228,7 +1238,7 @@ export class World {
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
-    this.coldResumes.clear();
+    this.coldResumes.clear(); this.implemented.clear();
     this.cha.index(added);
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
     const now = this.noteLate(added);

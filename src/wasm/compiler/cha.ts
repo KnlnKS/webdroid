@@ -44,8 +44,8 @@ class Index {
       for (const i of dex.methodsNamed(n)) {
         const c = classes.get(dex.method(i).cls);
         if (!c || dex.methodKey(i) !== key) continue;
-        const flags = dex.declaredFlags(classDefIdx(c), i);
-        if (flags >= 0 && !(flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name;
+        const m = dex.declaredAt(classDefIdx(c), i);
+        if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name;
       }
     }
   }

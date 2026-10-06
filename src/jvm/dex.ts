@@ -317,17 +317,33 @@ export class DexFile {
     return r.uleb() + r.uleb();
   }
 
-  /** the access flags with which class_def `i` declares method_id `methodIdx`, or -1 if it does not */
-  declaredFlags(i: number, methodIdx: number): number {
+  /** how class_def `i` declares method_id `methodIdx` (its position among the direct then virtual methods), if it does */
+  declaredAt(i: number, methodIdx: number): EncodedMethod & { index: number } | undefined {
     const classDataOff = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
-    if (!classDataOff) return -1;
+    if (!classDataOff) return undefined;
     const r = new Reader(this.bytes, classDataOff);
     const nf = r.uleb() + r.uleb(), nd = r.uleb(), nv = r.uleb();
     for (let j = 0; j < nf; j++) { r.uleb(); r.uleb(); }
-    for (const n of [nd, nv]) for (let j = 0, idx = 0; j < n; j++) {
+    let index = 0;
+    for (const n of [nd, nv]) for (let j = 0, idx = 0; j < n; j++, index++) {
       idx += r.uleb();
-      const flags = r.uleb(); r.uleb();
-      if (idx === methodIdx) return flags;
+      const flags = r.uleb(), codeOff = r.uleb();
+      if (idx === methodIdx) return { methodIdx, flags, codeOff, index };
+    }
+    return undefined;
+  }
+  /** the method_id of class `typeIdx` named `name` with descriptor `desc`, or -1. method_ids sort by class, then name, then proto */
+  findMethod(typeIdx: number, name: string, desc: string): number {
+    const n = this.findString(name);
+    if (n < 0) return -1;
+    const v = this.view, at = (i: number) => this.methodIdsOff + i * 8;
+    let lo = 0, hi = this.methodCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1, c = v.getUint16(at(mid), true), s = v.getUint32(at(mid) + 4, true);
+      if (c < typeIdx || c === typeIdx && s < n) lo = mid + 1; else hi = mid;
+    }
+    for (let i = lo; i < this.methodCount && v.getUint16(at(i), true) === typeIdx && v.getUint32(at(i) + 4, true) === n; i++) {
+      if (this.protoDesc(v.getUint16(at(i) + 2, true)) === desc) return i;
     }
     return -1;
   }

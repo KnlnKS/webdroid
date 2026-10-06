@@ -89,16 +89,12 @@ class DexClass implements JClass {
     const def = this.dex.classDef(this.idx);
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
-  /** Implementation checks often miss: do not retain every member of each candidate class. */
+  /** Implementation checks often miss: they look the method up in the dex's ids rather than build the class's members. */
   method(key: string): MethodInfo | undefined {
     if (this.members_) return this.members_.byKey.get(key);
-    const def = this.def_ ?? this.dex.classDef(this.idx);
-    let index = 0;
-    for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
-      if (this.dex.methodKey(m.methodIdx) === key) return this.methodInfo(m, index);
-      index++;
-    }
-    return undefined;
+    const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at));
+    const m = i < 0 ? undefined : this.dex.declaredAt(this.idx, i);
+    return m && this.methodInfo(m, m.index);
   }
   private methodInfo(m: ClassDef["directMethods"][number], index: number): MethodInfo {
     const cached = this.methodInfos?.get(index);
