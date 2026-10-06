@@ -613,6 +613,7 @@ export class ProcessBroker {
             timer = setTimeout(() => reject(new Error("Worker AOT profile timeout")),5000);
           })]);
           if (entry.dead || result.dead) throw new Error("Worker has exited");
+          if (result.phase !== "ready") throw new Error("Worker is not ready: " + result.phase);
           if (result.identity.pid !== entry.pid || result.identity.pkg !== entry.pkg || result.identity.process !== entry.process)
             throw new Error("Worker AOT profile identity mismatch");
           return {...identity,result};

@@ -656,7 +656,9 @@ export async function workerDiagnosticOwnership() {
         if(data.mode==='hang'){hungCalls++;return new Promise(()=>{});}
         if(data.mode==='reject')throw new Error('owned diagnostic failure');
         return {phase:data.mode==='queueHang'?'ready':data.mode,dead:false,identity:{pid:data.pid}};
-      },alive:async()=>{aliveCalls++;if(data.mode==='queueHang')return new Promise(()=>{});return true;}});self.postMessage({ready:true});
+      },aotProfile:async()=>({phase:data.mode==='queueHang'?'ready':data.mode,dead:false,
+        identity:{pid:data.pid,pkg:data.mode==='ready'?data.pkg:null,process:data.process},profile:null}),
+        alive:async()=>{aliveCalls++;if(data.mode==='queueHang')return new Promise(()=>{});return true;}});self.postMessage({ready:true});
     };`;
   const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
   const pids=[8401,8402,8403,8404,8405],foreground=broker.activities.foreground;
@@ -665,9 +667,11 @@ export async function workerDiagnosticOwnership() {
       const entry=broker.connect(pkg,pkg+":"+i,pids[i]),channel=new MessageChannel();
       const client=callProxy(channel.port1,workerControlMethods);clients.push(client);
       Object.assign(entry,{worker:{url:location.origin+"/process-worker.js?pid="+entry.pid,control:client.endpoint,close:client.close}});
-      await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid},[channel.port2]);});
+      await new Promise<void>(resolve=>{worker.onmessage=()=>resolve();worker.postMessage({port:channel.port2,mode,pid:entry.pid,pkg:entry.pkg,process:entry.process},[channel.port2]);});
     }
     const first=await broker.workerSnapshots(),second=await broker.workerSnapshots();
+    const profiles=await broker.workerAotProfiles();
+    const profileFailure=(pid:number)=>{const row=profiles.find(row=>row.pid===pid)!;return 'error' in row?row.error:null;};
     broker.activities.setForeground(8405);
     const blocked=await broker.visibleWorkerProcesses(30);
     const stillBlocked=await broker.visibleWorkersAlive(30);
@@ -689,7 +693,7 @@ export async function workerDiagnosticOwnership() {
     const failure=(rows:typeof first,pid:number)=>{const value=row(rows,pid);return 'error' in value?value.error:null;};
     const healthy=row(first,8401);
     return {pendingTerminal,healthy:'snapshot' in healthy,rejected:failure(first,8402),hung:failure(first,8403),
-      phase:failure(first,8404),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
+      phase:failure(first,8404),profilePending:profileFailure(8404),profileIdentity:profileFailure(8405),secondHealthy:'snapshot' in row(second,8401),hungCalls:count.hungCalls,
       queueBlocked:'snapshot' in blocked[0] && !blocked[0].alive && !stillBlocked,live,aliveCalls:count.aliveCalls,
       retained:failure(ended,8401),identity:'snapshot' in healthy?healthy.snapshot.identity.pid:null};
   } finally {
