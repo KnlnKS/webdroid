@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
@@ -35,6 +35,15 @@ public class ColdSlow {
   static class Fail { static int n = fail(); static int fail(){throw new IllegalArgumentException();} }
   static native int await(int n);
   static native int rejected(int n);
+  static native int missingNative(int n);
+  static int initCount;
+  static class DormantInit { static { initCount++; } static int read(int n){return n+100;} }
+  public static int dormant(int n){int r=plus(n);if(n<0)r=DormantInit.read(n);return r+initCount*1000;}
+  public static int optional(int n){int r=plus(n);return n<0?OptionalMissing.read(n):r;}
+  public static int optionalNative(int n){int r=plus(n);return n<0?missingNative(n):r;}
+  static Object choose(Object a,Object b){return a;}
+  public static int optionalCtor(int n){ColdSlow a=new ColdSlow();char[] b={'a'};Object x=a.ref;if(x!=null)return -99;Object r=choose(a,b);if(n<0)r=new String(b);return r instanceof String?42:plus(n);}
+  public static int dead(int n){return plus(n);}
   static int plus(int n){return n+5;}
   public static int objects(int n){ColdSlow a=new ColdSlow(); a.value=n; a.wide=0x123456789abcdefL; a.ref=a; a.f=1.25f; a.d=-2.5; return a.value+(a.ref==a?2:0)+(int)(a.wide>>48)+(int)(a.f*4)+(int)(a.d*2);}
   public static int arrays(int n){int[] a=new int[]{n,2,3}; long[] b=new long[]{123456789012L}; Object[] c=new ColdSlow[2]; c[0]=new ColdSlow(); return a.length+a[0]+(int)(b[0]%97)+(c[0] instanceof ColdSlow?7:0);}
@@ -52,7 +61,7 @@ public class ColdSlow {
   public static int suspended(int n){return await(n)+plus(n);}
   public static int suspendedCatch(int n){try{return rejected(n);}catch(IllegalArgumentException e){return n+37;}}
   public static IllegalArgumentException problem(){return new IllegalArgumentException();}
-  public static void main(String[] args){for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail","batchedFields"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
+  public static void main(String[] args){if(args.length>0){System.out.println(dormant(2));System.out.println(dormant(-1));return;}for(String name:new String[]{"objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail","batchedFields","optional","optionalNative","optionalCtor"})for(int n:new int[]{-1,0,1,2,4})try{System.out.println(ColdSlow.class.getDeclaredMethod(name,int.class).invoke(null,n));}catch(Exception e){System.out.println("throw:"+e.getCause().getClass().getName().replace('.','/'));}}
   static class BatchFields { int f0,f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,f14,f15,f16,f17,f18,f19; }
   public static int batchedFields(int n){BatchFields b=new BatchFields(); b.f0=n+0; b.f1=n+1; b.f2=n+2; b.f3=n+3; b.f4=n+4; b.f5=n+5; b.f6=n+6; b.f7=n+7; b.f8=n+8; b.f9=n+9; b.f10=n+10; b.f11=n+11; b.f12=n+12; b.f13=n+13; b.f14=n+14; b.f15=n+15; b.f16=n+16; b.f17=n+17; b.f18=n+18; b.f19=n+19; return b.f0+b.f1+b.f2+b.f3+b.f4+b.f5+b.f6+b.f7+b.f8+b.f9+b.f10+b.f11+b.f12+b.f13+b.f14+b.f15+b.f16+b.f17+b.f18+b.f19;}
   public static int batchedWaits(int n){try{return await(n)*10+plus(n)+rejected(n);}catch(IllegalArgumentException e){return await(n+2)+100;}}
@@ -61,8 +70,10 @@ public class ColdSlow {
   public static int payloads(int n){int[] a={11,12,13,14,15}; int[] b={21,22,23,24,25}; return a[n]+b[n];}
   public static int mainTest(int n){return objects(n);}
 }
+class OptionalMissing { static int read(int n){return n+100;} }
 `);
 sh(["javac", "--release", "11", "-d", out, join(out, "ColdSlow.java")]);
+rmSync(join(out,"OptionalMissing.class"));
 sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).filter(n => n.endsWith(".class")).map(n => join(out,n))]);
 const paths = [join(out,"classes.dex"), ...PLATFORM_JARS.slice(0,2).map(j => join(AOSP,j))];
 let gates = 0;
@@ -93,7 +104,14 @@ let jdkAt=0;
 let checks = 0;
 const expect = (what: string, got: unknown, want: unknown) => { if(got !== want)throw new Error(`${what}: ${got} != ${want}`); checks++; };
 const run = async (w: typeof wc, name: string, n: number) => {try{return await w.entryAsync("ColdSlow",name,"(I)I")(n);}catch(e){const t=w.throwable(e); return t ? "throw:"+w.classNameOf(t) : (()=>{throw e;})();}};
-for (const name of ["objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail","batchedFields"]) {
+const optionalWorld=world(paths,{cold:true,natives:new Natives(nativeSource)}),missingBefore=rt.missing.size,requiredBefore=rt.nativeRequired.size;
+let optionalGaps=0; optionalWorld.onGap=()=>{optionalGaps++;};
+for(const name of ["optional","optionalNative","optionalCtor"]) expect("dormant missing target leaves taken branch healthy",await run(optionalWorld,name,2),7);
+expect("dormant missing targets report no executed gap",optionalGaps,0);
+expect("dormant missing targets report no missing native",rt.missing.size,missingBefore);
+expect("dormant missing targets report no required native",rt.nativeRequired.size,requiredBefore);
+
+for (const name of ["objects","arrays","dispatch","catches","caughtObject","casts","throwing","monitorCatch","strings","stringBytes","stringBounds","init","initFail","batchedFields","optional","optionalNative","optionalCtor"]) {
   const modulesBefore=wc.stats.coldSlowModules;
   for(const n of [-1,0,1,2,4]) { const want=await run(warm,name,n); const got=await run(wc,name,n); expect(`JDK ${name}(${n})`,String(got),jdk[jdkAt++]); expect(`${name}(${n})`,got,want); }
   if(name === "batchedFields") {
@@ -121,6 +139,27 @@ const work={adapters:wc.stats.coldSlowAdapters-before.adapters,modules:wc.stats.
 console.log("repeated-field construction work",JSON.stringify(work));
 expect("repeated fields share compiled adapters",work.modules < work.adapters/2,true);
 for(const n of [0,2,4]) expect("distinct PC-relative array payloads",await run(wc,"payloads",n),await run(warm,"payloads",n));
+let allowFactory=false,factoryLookups=0;
+const factoryWorld=world(paths,{cold:true,natives:new Natives({...nativeSource,find:(cls,key,stat,bound)=>{
+  if(cls==="java/lang/String"&&key==="<init>([C)V") {factoryLookups++;if(!allowFactory)throw new Error("unexecuted String factory bound early");}
+  return nativeSource.find(cls,key,stat,bound);
+}})});
+expect("unexecuted factory leaves taken branch healthy",await run(factoryWorld,"optionalCtor",2),7);
+expect("unexecuted factory performs no native lookup",factoryLookups,0);
+allowFactory=true;
+expect("executed factory retains actual String construction",await run(factoryWorld,"optionalCtor",-1),42);
+expect("executed factory binds canonical native",factoryLookups>0,true);
+const dormantWorld=world(paths,{cold:true,natives:new Natives(nativeSource)});
+const dormantOracle=sh(["java","-cp",out,"ColdSlow","dormant"]).trim().split("\n");
+for(const [i,n] of [2,-1].entries()) expect("batch linking defers dormant class initialization",String(await run(dormantWorld,"dormant",n)),dormantOracle[i]);
+// A real DEX invoke after an unconditional return has no reaching webs. It must
+// not be emitted into the live invoke's batch or cause the absent native to bind.
+const deadWorld=world(paths,{cold:true,natives:new Natives(nativeSource)}),dead=deadWorld.prog.resolve("ColdSlow","dead","(I)I")!;
+const oldDex=dead.dex,oldItem=oldDex.code(dead.codeOff),plus=deadWorld.prog.resolve("ColdSlow","plus","(I)I")!,missing=deadWorld.prog.resolve("ColdSlow","missingNative","(I)I")!;
+const deadItem={...oldItem,regs:2,ins:1,tries:[],insns:new Uint16Array([0x1071,plus.methodIdx,1,0x000a,0x000f,0x1071,missing.methodIdx,1,0x000a,0x000f])};
+dead.dex=new Proxy(oldDex,{get(target,key){return key==="code"?(off:number)=>off===dead.codeOff?deadItem:target.code(off):Reflect.get(target,key);}});
+try { expect("unreachable invoke cannot poison live batch",await run(deadWorld,"dead",2),7); }
+finally { dead.dex=oldDex; }
 const cold = new ColdInterpreter(), method=wc.prog.resolve("ColdSlow","suspended","(I)I")!, item=method.dex.code(method.codeOff);
 const frame=cold.prepare(item,true)(); const strand=wc.sched.strand(); cold.context(frame,method,strand);
 const call=decodeInstructions(item.insns).find(i=>i.name.startsWith("invoke-static"))!;

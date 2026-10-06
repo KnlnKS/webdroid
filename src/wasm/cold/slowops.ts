@@ -86,13 +86,15 @@ export class ColdSlowOps {
   }
 
   private adapter(m: MethodInfo, ins: PreparedInstruction): Adapter {
+    const analysis = this.analysis(m);
+    if (!analysis.typing.reached(ins.pc)) throw new UnsupportedSlowOperation(`unreachable cold opcode at ${ins.pc}`);
     let cache = this.adapters.get(m);
     if (!cache) {
       this.adapters.set(m, cache = new Map());
       // Seal deterministic, bounded ABI batches before any helper is emitted.
       // Snapshot-only operations and String allocation do not need an adapter.
-      for (const op of this.analysis(m).prepared.instructions) {
-        if (!ColdSlowOps.supports(op) || /^(move-result|move-exception)/.test(op.name)
+      for (const op of analysis.prepared.instructions) {
+        if (!analysis.typing.reached(op.pc) || !ColdSlowOps.supports(op) || /^(move-result|move-exception)/.test(op.name)
           || op.name === "new-instance" && descToName(m.dex.type(op.b)) === "java/lang/String") continue;
         this.adapter(m, op);
       }
@@ -158,7 +160,10 @@ export class ColdSlowOps {
       if (output !== "V") c.lget(mc.outputLocal);
       return weights;
     };
-    const signature = inputs.map(i => i.kind).join("") + ":" + output;
+    // String factories embed native imports: an unexecuted constructor must
+    // not reserve a native declaration when another case first runs.
+    const constructor = this.stringConstructor(m, ins);
+    const signature = inputs.map(i => i.kind).join("") + ":" + output + (constructor ? ":factory:" + ins.pc : "");
     let groups = this.batches.get(m);
     if (!groups) this.batches.set(m, groups = new Map());
     let list = groups.get(signature);
@@ -169,7 +174,7 @@ export class ColdSlowOps {
       list.push(batch);
     }
     const selector = batch.entries.length;
-    const ctor = this.stringConstructor(m, ins)
+    const ctor = constructor
       ? declaredMethod(this.w.prog.get("java/lang/String"), "<init>" + m.dex.methodDesc(ins.b)) : undefined;
     batch.entries.push({ body, ctor });
     const call: Adapter["call"] = (strand, sync, depth, peer, ...args) => batch!.call(strand, sync, selector, depth, peer, ...args);
