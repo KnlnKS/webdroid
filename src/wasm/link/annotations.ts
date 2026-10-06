@@ -21,16 +21,17 @@ const RUNTIME = 1, SYSTEM = 2;
 
 const enum Ann { Class, Executable, Field, ExecutableParams, DefaultValue, SignatureOfClass, SignatureOfExecutable, SignatureOfField }
 
-/** the annotations of the element whose object the host was given, and the dex that holds them */
-function elementOf(w: World, kind: Ann, a: number): { jc: JClass; set: EncAnnotation[]; params?: EncAnnotation[][] } {
-  const classOf = (id: number) => w.prog.get(w.nameOf(id))!;
-  if (kind === Ann.Class || kind === Ann.SignatureOfClass) { const jc = classOf(a); return { jc, set: jc.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
+/** the annotations of the element whose object the host was given */
+function elementOf(w: World, kind: Ann, a: number): { set: EncAnnotation[]; params?: EncAnnotation[][] } {
+  const classOf = (id: number): JClass | undefined => w.prog.get(w.nameOf(id));
+  // an array or primitive class has no definition, so no annotations
+  if (kind === Ann.Class || kind === Ann.SignatureOfClass) { const jc = classOf(a); return { set: jc?.dex && jc.def ? jc.dex.classAnnotations(jc.def).cls : [] }; }
   if (kind === Ann.Field || kind === Ann.SignatureOfField) {
-    const jc = classOf(a >>> 12), ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
-    return { jc, set: jc.def ? jc.dex!.classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
+    const jc = classOf(a >>> 12)!, ids = jc.def ? [...jc.def.staticFields, ...jc.def.instanceFields] : [];
+    return { set: jc.def ? jc.dex!.classAnnotations(jc.def).fields.get(ids[a & 0xfff].fieldIdx) ?? [] : [] };
   }
   const m = methodAt(w, a), jc = w.prog.get(m.cls)!, all = jc.def ? jc.dex!.classAnnotations(jc.def) : undefined;
-  return { jc, set: all?.methods.get(m.methodIdx) ?? [], params: all?.params.get(m.methodIdx) };
+  return { set: all?.methods.get(m.methodIdx) ?? [], params: all?.params.get(m.methodIdx) };
 }
 const ofKind = (set: EncAnnotation[], visibility: number) => set.filter((x) => x.visibility === visibility);
 
