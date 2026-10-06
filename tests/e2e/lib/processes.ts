@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import type { WorkerControl } from "../../../src/shell/worker-control";
+import type { WorkerTerminal } from "../../../src/shell/processes";
 
 export type ProcessDiagnostics = {
   status: "ok";
@@ -17,11 +18,12 @@ export type ProcessDiagnostics = {
   queue: { queued: number; depth: number } | null;
   compositor: unknown;
   coverage: { enabled: boolean; methods: string[] } | null;
-} | { status: "unavailable" } | { status: "failure"; message: string };
+} | { status: "exited"; pid: number; pkg: string; process: string; terminal: WorkerTerminal }
+  | { status: "unavailable" } | { status: "failure"; message: string; terminal?: WorkerTerminal };
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
 type WorkerSnapshot = Awaited<ReturnType<WorkerControl["snapshot"]>>;
-type WorkerProcess = { pid: number; pkg: string; process: string; url?: string; snapshot?: WorkerSnapshot; error?: string };
+type WorkerProcess = { pid: number; pkg: string; process: string; url?: string; snapshot?: WorkerSnapshot; error?: string; terminal?: WorkerTerminal };
 
 async function bounded<T>(read: Promise<T>): Promise<T | { status: "failure"; message: string }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -34,6 +36,15 @@ async function bounded<T>(read: Promise<T>): Promise<T | { status: "failure"; me
 }
 
 function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
+  const terminal = worker.terminal;
+  if (terminal) {
+    const record = terminal.record;
+    if (worker.error || !terminal.expected || !record)
+      return { status: "failure", message: worker.error ?? terminal.cause, terminal };
+    if (worker.snapshot || record.pid !== worker.pid || record.pkg !== worker.pkg || record.process !== worker.process)
+      return { status: "failure", message: `Worker ${worker.pid}: terminal identity mismatch`, terminal };
+    return { status: "exited", pid: worker.pid, pkg: worker.pkg, process: worker.process, terminal };
+  }
   const snapshot = worker.snapshot;
   if (worker.error || !snapshot) return { status: "failure", message: worker.error ?? "Worker snapshot unavailable" };
   if (snapshot.dead || snapshot.phase !== "ready") return { status: "failure", message: `Worker ${worker.pid}: ${snapshot.dead ? "dead" : snapshot.phase}` };

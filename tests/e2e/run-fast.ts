@@ -45,6 +45,7 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
     if (!processes.length) errors.push(`${prefix}: no webdroid process diagnostics`);
     for (const process of processes) {
       const diagnostics = process.diagnostics;
+      if (diagnostics.status === "exited") continue;
       if (diagnostics.status !== "ok") {
         errors.push(`${prefix}: ${process.url} diagnostics ${diagnostics.status}`);
         continue;
