@@ -350,8 +350,8 @@ export class Compiler implements Base {
   }
   /** the fuel check of a loop head: every FUEL iterations of its activation (`count`, a local the method started at 0) the strand gives other strands and the
    *  event loop a turn (sched.ts). The count is a local because a global written on every iteration cost tight loops up to 2x */
-  emitFuel(c: Code, count: number): void {
-    c.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(FUEL - 1).raw(OP.i32_and).raw(OP.i32_eqz).if_(); this.callRt(c, "yieldFuel"); c.end();
+  emitFuel(c: Code, count: number, tick?: () => void): void {
+    c.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(FUEL - 1).raw(OP.i32_and).raw(OP.i32_eqz).if_(); this.callRt(c, "yieldFuel"); tick?.(); c.end();
   }
   /** emit "ensure class initialized" at a use site, unless it cannot do anything: the class has nothing to run, is already initialized (it
    *  never goes back), is the compiled method's own class or a superclass (code of a class runs only once its initialization has begun), or is in `known`,
