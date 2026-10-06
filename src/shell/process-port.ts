@@ -30,7 +30,8 @@ const closedFailure: ProcessFailure = { javaClass: "android/os/DeadObjectExcepti
 
 /** One process's endpoint. Calls are dispatched independently: a Binder callback may reenter
  *  this endpoint while the request that caused it is suspended. */
-export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {}): () => void {
+export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, onClose: () => void = () => {},
+  onUndelivered?: (method: string, value: unknown) => void | Promise<void>): () => void {
   const allowed = new Set(Object.keys(endpoint));
   let closed = false;
   const close = (error?: ProcessFailure) => {
@@ -47,7 +48,11 @@ export function serveCalls<C extends Contract>(port: MessagePort, endpoint: C, o
       if (!allowed.has(data.method) || !Array.isArray(data.args)) throw new Error("Unknown process endpoint method");
       const invoke = endpoint[data.method] as (...args: unknown[]) => unknown;
       const value = await invoke.apply(endpoint, data.args);
-      if (!closed && data.kind === "call") port.postMessage({ kind: "result", id: data.id, value } satisfies Message);
+      if (data.kind === "call") {
+        if (closed) await onUndelivered?.(data.method,value);
+        else try { port.postMessage({ kind: "result", id: data.id, value } satisfies Message); }
+        catch (error) { await onUndelivered?.(data.method,value);throw error; }
+      }
     } catch (error) {
       if (data.kind === "notify") close(processFailure(error));
       else if (!closed) port.postMessage({ kind: "error", id: data.id, error: processFailure(error) } satisfies Message);

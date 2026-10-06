@@ -8,6 +8,7 @@ import { exitProcess, processExited } from "../process-exit";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
 import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
+import { stageBinderFd, takeBinderFd, unstageBinderFd, discardBinderFd } from "../native/process-fd";
 import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel";
 import { jarray, i8, u8 } from "../jvm/abi";
 import { handle, release, FINALIZER } from "./handles";
@@ -22,7 +23,8 @@ export type BinderHandle = { pid: number; id: number };
  *  for a writable one the binder that writes them back to the descriptor it came from, and for an
  *  ashmem region its protection */
 type FileHandle = { bytes: Uint8Array; writer: BinderHandle | null; prot?: number };
-export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | null][] };
+export type DescriptorHandle = { descriptor: number };
+export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | FileHandle | DescriptorHandle | null][] };
 /** `system`: sent by a service hosted here on system_server's behalf, so it carries the system's identity */
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData; system?: boolean };
 export type TransactionReply = { handled: number; data: ParcelData };
@@ -99,8 +101,15 @@ export function systemToken(): JObj | Promise<JObj> {
 }
 /** the binder a writable descriptor's importer sends its final bytes back through */
 class JFileWriter extends JObj { fd = -1; }
-function* exportObject(o: unknown): Gen<BinderHandle | FileHandle | null> {
+function* exportObject(o: unknown, descriptors = false): Gen<BinderHandle | FileHandle | DescriptorHandle | null> {
   if (!(o instanceof OwnedFd)) return exportBinder(o);
+  if (descriptors && ashmemProt(o.fd) === undefined) {
+    const token = yield* awaited(stageBinderFd(o.fd));
+    if (token !== null) {
+      if (token < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Cannot stage Binder descriptor: " + token);
+      return {descriptor:token};
+    }
+  }
   const contents = yield* awaited(fdContents(o.fd));
   if (!contents) throw rt.mkThrowable("java/lang/RuntimeException", "Not allowed to write file descriptors here");
   // Own the wire buffer: FileSource views may alias guest memory. This copy does not
@@ -112,7 +121,11 @@ function* exportObject(o: unknown): Gen<BinderHandle | FileHandle | null> {
   const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
   return { bytes, writer: exportBinder(writer), ...region };
 }
-function importObject(o: BinderHandle | FileHandle | null): unknown {
+function importObject(o: BinderHandle | FileHandle | DescriptorHandle | null): unknown {
+  if (o && "descriptor" in o) return after(takeBinderFd(o.descriptor),fd => {
+    if (fd < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Cannot import Binder descriptor: " + fd);
+    return new OwnedFd(fd);
+  });
   if (!o || !("bytes" in o)) return importBinder(o);
   return after(o.writer && importBinder(o.writer), (writer) => {
     const sink = writer && driven(function* (bytes: Uint8Array): Gen<void> {
@@ -130,11 +143,37 @@ export const exportParcel = driven(function* exportParcel(p: NativeParcel): Gen<
   for (const [at, o] of p.objects) objects.push([at, yield* exportObject(o)]);
   return { bytes: p.buf.slice(0, p.size), objects };
 });
+/** Staged rights are consumed by the broker before Binder delivery. Other serialized
+ * stores require their own retained-Parcel lifecycle and cannot use these one-shot rights. */
+export const exportBinderParcel = driven(function* exportBinderParcel(p: NativeParcel): Gen<ParcelData> {
+  const data: ParcelData = {bytes:p.buf.slice(0,p.size),objects:[]};
+  try {
+    for (const [at,o] of p.objects) data.objects.push([at,yield* exportObject(o,true)]);
+    return data;
+  } catch (error) {
+    try { yield* awaited(releaseBinderParcel(data)); } catch (cleanup) { logUncaught(cleanup); }
+    throw error;
+  }
+});
+export async function releaseBinderParcel(data: ParcelData): Promise<void> {
+  await Promise.all(data.objects.map(async ([,object]) => {
+    if (object && "descriptor" in object) await unstageBinderFd(object.descriptor);
+  }));
+}
 const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData): Gen<void> {
   const objects: [number, unknown][] = [];
-  for (const [at, o] of data.objects) objects.push([at, yield importObject(o)]);
-  setParcelBytes(p, data.bytes, objects);
+  try {
+    for (const [at, o] of data.objects) objects.push([at, yield importObject(o)]);
+    setParcelBytes(p, data.bytes, objects);
+  } catch (error) {
+    for (const [,o] of objects) if (o instanceof OwnedFd) javaCloseFd(o.fd);
+    try { yield* awaited(discardReceivedDescriptors(data)); } catch (cleanup) { logUncaught(cleanup); }
+    throw error;
+  }
 });
+async function discardReceivedDescriptors(data: ParcelData): Promise<void> {
+  await Promise.all(data.objects.map(([,object]) => object && "descriptor" in object ? discardBinderFd(object.descriptor) : undefined));
+}
 /** a Parcel holding what another process sent, read from its start */
 export const importParcel = driven(function* importParcel(data: ParcelData): Gen<JObj> {
   const parcel = yield* awaited(newParcel());
@@ -247,7 +286,7 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
   const run = () => withCallingIdentity(caller, () => rt.drive(function* (): Gen<TransactionReply> {
     // an escaped exception leaves the caller UNKNOWN_TRANSACTION
     const { handled, reply } = yield* execTransact(binder, request.code, request.flags, request.data.bytes.length, (data) => fillParcel(data, request.data),
-      oneway ? null : exportParcel, (error) => reportException(error, UNCAUGHT_REMOTE));
+      oneway ? null : exportBinderParcel, (error) => reportException(error, UNCAUGHT_REMOTE));
     return { handled, data: reply! };
   }()));
   if (!oneway) return run();
@@ -373,9 +412,15 @@ const transact = driven(function* transact(target: BinderHandle, code: number, d
   checkBuffer(data, (flags & FLAG_ONEWAY) !== 0, data.size);
   const binder = target.pid === PROCESS_PID ? local.get(target.id) : undefined;
   if (binder && isSystemBinder(binder)) return yield localTransact(binder, code, data, reply, flags);
-  const result = yield* awaited(binderTransport.transact({ handle: target, code, data: yield* awaited(exportParcel(data)), flags, system: ipc().system }));
-  if (reply) yield fillParcel(reply, result.data);
-  return result.handled;
+  const sent = yield* awaited(exportBinderParcel(data));
+  try {
+    const result = yield* awaited(binderTransport.transact({ handle: target, code, data:sent, flags, system: ipc().system }));
+    if (reply) yield fillParcel(reply, result.data);
+    else yield* awaited(discardReceivedDescriptors(result.data));
+    return result.handled;
+  } finally {
+    try { yield* awaited(releaseBinderParcel(sent)); } catch (error) { logUncaught(error); }
+  }
 });
 rt.registerJnis("android/os/BinderProxy", {
   "getNativeFinalizer()J": () => FINALIZER,

@@ -503,7 +503,9 @@ export class ProcessBroker {
       service: (pkg, process, request) => this.service(pid, pkg, process, request),
       contentProvider: (pkg, process, authority) => this.contentProvider(pid, pkg, process, authority),
       broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
-    }, () => { owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); });
+    }, () => { owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); }, async (method,value) => {
+      if (method === "transact") await this.discardDescriptors(pid,(value as TransactionReply).data,false);
+    });
     owned.add(stop);
     return { port: port2, close: stop };
   }
@@ -719,14 +721,50 @@ export class ProcessBroker {
   }
   async transact(callerPid: number, request: Transaction): Promise<TransactionReply> {
     const caller = this.entry(callerPid);
-    if (request.handle.pid === 0) {
-      if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
-      const reply = new NativeParcel(), handled = +(request.code === INTERFACE_TRANSACTION);
-      if (handled) writeString(reply, "android.content.IIntentSender");
-      return { handled, data: await exportParcel(reply) };
-    }
-    const target = this.entry(request.handle.pid);
-    return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.transact(request, request.system ? SYSTEM_CALLER : { pid: caller.pid, uid: caller.uid })));
+    let delivered: ParcelData | null = null;
+    try {
+      if (request.handle.pid === 0) {
+        if (!this.intents.known(request.handle.id)) throw rt.mkThrowable("android/os/DeadObjectException", "Unknown system Binder");
+        const reply = new NativeParcel(), handled = +(request.code === INTERFACE_TRANSACTION);
+        if (handled) writeString(reply, "android.content.IIntentSender");
+        return { handled, data: await exportParcel(reply) };
+      }
+      const target = this.entry(request.handle.pid);
+      delivered = await this.transferDescriptors(caller.pid,target.pid,request.data);
+      return await this.inherit(caller, target, () => this.request(target, async endpoint => {
+        const reply = await endpoint.transact({...request,data:delivered!},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
+        try { return {...reply,data:await this.transferDescriptors(target.pid,caller.pid,reply.data)}; }
+        finally { await this.discardDescriptors(target.pid,reply.data,true); }
+      }));
+    } catch (error) {
+      if (delivered) await this.discardDescriptors(request.handle.pid,delivered,false);
+      throw error;
+    } finally { await this.discardDescriptors(callerPid,request.data,true); }
+  }
+  stageDescriptor(pid: number, fd: number): number {
+    this.entry(pid);this.fileDescriptors.ensureReceiver(pid);
+    return this.fileDescriptors.stageLocal(pid,fd);
+  }
+  takeDescriptor(pid: number, token: number): number {
+    this.entry(pid);return this.fileDescriptors.takeLocal(pid,token);
+  }
+  unstageDescriptor(pid: number, token: number): Promise<number> { return this.fileDescriptors.discard(pid,token,true); }
+  discardDescriptor(pid: number, token: number): Promise<number> { return this.fileDescriptors.discard(pid,token,false); }
+  private async discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
+    await Promise.all(data.objects.map(([,object]) => object && "descriptor" in object ? this.fileDescriptors.discard(pid,object.descriptor,staged) : undefined));
+  }
+  private async transferDescriptors(from: number, to: number, data: ParcelData): Promise<ParcelData> {
+    this.entry(from);this.entry(to);this.fileDescriptors.ensureReceiver(to);
+    const transferred: ParcelData = {bytes:data.bytes.slice(),objects:[]};
+    try {
+      for (const [at,object] of data.objects) {
+        if (!object || !("descriptor" in object)) { transferred.objects.push([at,object]);continue; }
+        const token = await this.fileDescriptors.receive(from,object.descriptor,to);
+        if (token < 0) throw rt.mkThrowable("android/os/BadParcelableException","Invalid Binder descriptor right: " + token);
+        transferred.objects.push([at,{descriptor:token}]);
+      }
+      return transferred;
+    } catch (error) { await this.discardDescriptors(to,transferred,false);throw error; }
   }
   async service(pid: number | null, pkg: string, process: string, request: ServiceRequest): Promise<BinderHandle | null> {
     if (pid !== null) this.entry(pid);

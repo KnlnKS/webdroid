@@ -80,6 +80,7 @@ function connectCommandTransports(): void {
     return yield* awaited(broadcastResult(yield* awaited(remote(brokerCalls().broadcast(data, targets, permissions, ordered, from)))));
   });
   binderTransport.transact = request => remote(brokerCalls().transact(request));
+  descriptorTransport.importCalls = brokerCalls;
   sqliteTransport.call = request => brokerCalls().sqlite(request);
   cookieTransport.calls = brokerCalls;
   clipboardTransport.set = data => brokerCalls().clipboardSet(data);
@@ -187,6 +188,10 @@ export function connectProcess(): ProcessEndpoint {
   };
   broker.files.attach(PROCESS_PID, vfs);
   if (typeof window !== "undefined" && window === window.top) {
+    descriptorTransport.stageLocal = fd => broker.stageDescriptor(PROCESS_PID,fd);
+    descriptorTransport.takeLocal = token => broker.takeDescriptor(PROCESS_PID,token);
+    descriptorTransport.unstageLocal = token => broker.unstageDescriptor(PROCESS_PID,token);
+    descriptorTransport.discardLocal = token => broker.discardDescriptor(PROCESS_PID,token);
     useSystemServiceAccess([]);
     notificationTransport.foreground = null;
     useNotificationStore(broker.notifications);

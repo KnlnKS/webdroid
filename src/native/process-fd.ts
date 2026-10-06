@@ -7,26 +7,59 @@ import type { DescriptorCalls, DescriptorReply, DescriptorRequest } from "../she
 
 export type RemoteDescriptor = { token: number; calls: () => DescriptorCalls; close: Promise<number> | null };
 /** Bound lazily after the process is registered; the page's kernel never installs this. */
-export const descriptorTransport: { calls?: () => DescriptorCalls } = {};
+export const descriptorTransport: {
+  calls?: () => DescriptorCalls;
+  importCalls?: () => DescriptorCalls;
+  stageLocal?: (fd: number) => number;
+  takeLocal?: (token: number) => number;
+  unstageLocal?: (token: number) => Promise<number>;
+  discardLocal?: (token: number) => Promise<number>;
+} = {};
 type Operation = DescriptorRequest extends infer R ? R extends {fd:number} ? Omit<R,"fd"> : never : never;
 const request = (remote: RemoteDescriptor, operation: Operation) => remote.calls().fileDescriptor({...operation,fd:remote.token} as DescriptorRequest);
 const result = (remote: RemoteDescriptor, operation: Operation) => request(remote,operation).then(reply => reply.result);
 export const isRemoteFd = (fd: number): boolean => !!openFd(fd)?.remote;
+
+function installRemote(token: number, calls: () => DescriptorCalls, path: string, flags: number, cloexec = !!(flags & O_CLOEXEC)): number {
+  const remote: RemoteDescriptor = {token,calls,close:null};
+  const file: OpenFile = {...fdBase(path),write:!!(flags & O_ACCMODE),statusFlags:flags,remote};
+  file.onLastClose = () => {
+    remote.close = result(remote,{kind:"close"});
+    void remote.close.catch(() => {});
+  };
+  return installFile(file,cloexec);
+}
+export function stageBinderFd(fd: number): number | Promise<number> | null {
+  const remote = openFd(fd)?.remote;
+  return remote ? result(remote,{kind:"stage"}) : descriptorTransport.stageLocal?.(fd) ?? null;
+}
+export function unstageBinderFd(token: number): Promise<number> {
+  const calls = descriptorTransport.calls ?? descriptorTransport.importCalls;
+  return descriptorTransport.unstageLocal?.(token) ?? (calls ? calls().fileDescriptor({kind:"unstage",fd:token}).then(reply=>reply.result) : Promise.resolve(-E.BADF));
+}
+export function discardBinderFd(token: number): Promise<number> {
+  const calls = descriptorTransport.importCalls ?? descriptorTransport.calls;
+  return descriptorTransport.discardLocal?.(token) ?? (calls ? calls().fileDescriptor({kind:"close",fd:token}).then(reply=>reply.result) : Promise.resolve(-E.BADF));
+}
+export async function takeBinderFd(token: number): Promise<number> {
+  if (descriptorTransport.takeLocal) return descriptorTransport.takeLocal(token);
+  const calls = descriptorTransport.importCalls ?? descriptorTransport.calls;
+  if (!calls) return -E.BADF;
+  const stat = await calls().fileDescriptor({kind:"stat",fd:token});
+  if (stat.result < 0 || !stat.stat) return stat.result < 0 ? stat.result : -E.BADF;
+  const flags = await calls().fileDescriptor({kind:"fcntl",fd:token,command:3,arg:0});
+  if (flags.result < 0) { await calls().fileDescriptor({kind:"close",fd:token}); return flags.result; }
+  const taken = await calls().fileDescriptor({kind:"take",fd:token});
+  if (taken.result < 0) return taken.result;
+  return installRemote(token,calls,stat.stat.path ?? "",flags.result,true);
+}
 
 export function processOpenFd(path: string, flags: number): number | Promise<number> {
   const normalized = vfs.norm(path), calls = isMutablePath(normalized) ? descriptorTransport.calls : undefined;
   if (!calls) return javaOpenFd(normalized,flags);
   return calls().fileDescriptor({kind:"open",path:normalized,flags}).then(reply => {
     if (reply.result < 0) return reply.result;
-    const remote: RemoteDescriptor = {token:reply.result,calls,close:null};
-    const file: OpenFile = {...fdBase(normalized),write:!!(flags & O_ACCMODE),statusFlags:flags,remote};
-    file.onLastClose = () => {
-      remote.close = result(remote,{kind:"close"});
-      // Parcel/native owners can release a reference without waiting for close. Keep
-      // rejection handled while an explicit syscall still receives the original Promise.
-      void remote.close.catch(() => {});
-    };
-    return installFile(file,!!(flags & O_CLOEXEC));
+    return installRemote(reply.result,calls,normalized,flags);
   });
 }
 

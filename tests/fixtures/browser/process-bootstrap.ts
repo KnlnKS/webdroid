@@ -103,6 +103,19 @@ export async function endpointOwnership() {
   const endpoint = (pid: number): ProcessEndpoint => ({
     activity: async () => {}, transact: async (request, caller) => {
       if (request.code === 2) { await other.clipboardChanged(); return {handled:caller.pid,data:{bytes:Uint8Array.of(caller.uid & 255),objects:[]}}; }
+      if (request.code === 3) {
+        const right=request.data.objects[0]?.[1];
+        if(!right || !("descriptor" in right))throw new Error("missing driver FD right");
+        const owner=callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods);
+        try {
+          const read=await owner.endpoint.fileDescriptor({kind:"read",fd:right.descriptor,length:1});
+          await owner.endpoint.fileDescriptor({kind:"pwrite",fd:right.descriptor,offset:0,bytes:Uint8Array.of(77)});
+          await owner.endpoint.fileDescriptor({kind:"seek",fd:right.descriptor,offset:0,whence:0});
+          const stage=await owner.endpoint.fileDescriptor({kind:"stage",fd:right.descriptor});
+          await owner.endpoint.fileDescriptor({kind:"close",fd:right.descriptor});
+          return {handled:read.bytes![0],data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage.result}]]}};
+        } finally {owner.close();}
+      }
       entered(); return new Promise(() => {});
     },
     service: async () => ({ pid, id: 1 }), serviceConnected: async () => {}, contentProvider: async () => null,
@@ -111,7 +124,7 @@ export async function endpointOwnership() {
     kill: () => { setTimeout(() => { killed = true; broker.fail(pid, "fixture kill delivered", NOT_CRASHED); }, 10); },
   });
   const workerCode = `import {serveProcess,callProxy} from ${JSON.stringify(location.origin + "/process-port.js")};
-    let removed = false, clips = 0, fd = -1;
+    let removed = false, clips = 0, fd = -1, received = -1;
     self.onmessage = ({data}) => {
       const broker = callProxy(data.broker,["transact","service","contentProvider","broadcast","fileDescriptor"]).endpoint;
       serveProcess(data.port, {
@@ -125,6 +138,16 @@ export async function endpointOwnership() {
           return {pid:fd,id:foreign.result};
         }
         if(request.intent?.bytes[0]===44){const reply=await broker.fileDescriptor({kind:'pread',fd,length:1,offset:0});return {pid:reply.bytes?.[0]??-1,id:reply.result};}
+        if(request.intent?.bytes[0]===45){
+          const stage=await broker.fileDescriptor({kind:'stage',fd});
+          const reply=await broker.transact({handle:{pid:8001,id:1},code:3,flags:0,data:{bytes:new Uint8Array(0),objects:[[0,{descriptor:stage.result}]]}});
+          received=reply.data.objects[0][1].descriptor;
+          const read=await broker.fileDescriptor({kind:'read',fd:received,length:1});
+          const position=await broker.fileDescriptor({kind:'seek',fd,offset:0,whence:1});
+          await broker.fileDescriptor({kind:'close',fd});
+          return {pid:read.bytes[0],id:position.result};
+        }
+        if(request.intent?.bytes[0]===46){const read=await broker.fileDescriptor({kind:'pread',fd:received,length:1,offset:0});await broker.fileDescriptor({kind:'close',fd:received});return {pid:read.bytes[0],id:read.result};}
         return {pid:8002,id:removed?2:1};
       }, serviceConnected:async()=>{}, contentProvider:async()=>null,
       broadcast:async(_i,_c,_o,r)=>r, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
@@ -144,6 +167,7 @@ export async function endpointOwnership() {
   const fileWritten = vfs.read(filePath)?.[0];
   vfs.writeAt(vfs.open(filePath)!,0,Uint8Array.of(66));
   const fileRead = await other.service({...request,intent:{bytes:Uint8Array.of(44),objects:[]}});
+  const binderFile=await other.service({...request,intent:{bytes:Uint8Array.of(45),objects:[]}});
   const repeatedReady = (await first.service(request))?.pid === 8001;
   const reverseCaller = await other.service({...request,intent:{bytes:Uint8Array.of(42),objects:[]}});
   const pending = broker.transact(8002, { handle: { pid: 8001, id: 1 }, code: 1, flags: 0, data: request.intent })
@@ -152,13 +176,14 @@ export async function endpointOwnership() {
   await broker.forceStop(names[0]);
   const pendingCause = await pending;
   const otherAlive = broker.alive(8002) && (await other.service(request))?.pid === 8002;
+  const binderSurvivor=await other.service({...request,intent:{bytes:Uint8Array.of(46),objects:[]}});
   await broker.packageRemoved("test.removed.package");
   removed = (await other.service(request))?.id === 2;
   broker.fail(8002, "fixture cleanup", NOT_CRASHED);
   vfs.delete(filePath);
   worker.terminate(); URL.revokeObjectURL(url);
   return { repeatedReady, reverseCaller, killed, alive: broker.alive(8001), pendingCause, otherAlive, removed,
-    fileDescriptors:{opened:!!fileOpened && fileOpened.pid>0,foreign:fileOpened?.id,written:fileWritten,read:fileRead} };
+    fileDescriptors:{opened:!!fileOpened && fileOpened.pid>0,foreign:fileOpened?.id,written:fileWritten,read:fileRead,binder:binderFile,survivor:binderSurvivor} };
 }
 
 /** Real Worker CookieManager commands share the page's WebView jar and survive a sibling's death. */

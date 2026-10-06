@@ -1,7 +1,8 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mkPfd, pfdBackingBytes, fdContents } from "../src/android/os";
-import { parcelled, unparcelled } from "../src/android/binder";
+import { parcelled, unparcelled, exportBinderParcel, importParcel } from "../src/android/binder";
+import { nativeParcel } from "../src/android/parcel";
 import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio";
@@ -64,6 +65,7 @@ describe("file-descriptor", () => {
     try {
       expect((await b({kind:"open",path,flags:2})).result).toBe(-E.ACCES);
       const fd = (await a({kind:"open",path,flags:2})).result;
+      expect(await owner.receive(1001,fd,1002)).toBe(-E.BADF);
       const copy = (await a({kind:"dup",fd,cloexec:true})).result;
       expect((await a({kind:"fcntl",fd:copy,command:1,arg:0})).result).toBe(1);
       expect((await a({kind:"fcntl",fd,command:1,arg:0})).result).toBe(0);
@@ -78,6 +80,20 @@ describe("file-descriptor", () => {
       expect((await b({kind:"fcntl",fd:passed,command:3,arg:0})).result & 0x400).toBe(0x400);
       await a({kind:"fcntl",fd,command:4,arg:0});
       expect((await b({kind:"stat",fd})).result).toBe(-E.BADF);
+      const stagedLate = (await a({kind:"stage",fd})).result;
+      const late = await owner.receive(1001,stagedLate,1002), channel = new MessageChannel();
+      let enter!: () => void, release!: () => void, dispose!: () => void;
+      const entered = new Promise<void>(resolve => { enter=resolve; });
+      const waiting = new Promise<void>(resolve => { release=resolve; });
+      const disposed = new Promise<void>(resolve => { dispose=resolve; });
+      const stop = serveCalls(channel.port1,{reply:async () => { enter();await waiting;return late; }},undefined,
+        async (_method,value) => { await owner.discard(1002,value as number,false);dispose(); });
+      const pending = callProxy<{reply():Promise<number>}>(channel.port2,["reply"]);
+      try {
+        const result = pending.endpoint.reply().catch(() => -1);
+        await entered;stop();release();await disposed;await result;
+        expect((await b({kind:"stat",fd:late})).result).toBe(-E.BADF);
+      } finally { release();pending.close();stop(); }
       owner.close(1001);
       expect((await a({kind:"read",fd,length:1})).result).toBe(-E.BADF);
       expect((await b({kind:"read",fd:passed,length:1})).bytes).toEqual(Uint8Array.of(3));
@@ -106,12 +122,15 @@ describe("file-descriptor", () => {
     try {
       const fd = (await a.fileDescriptor({kind:"open",path,flags:0})).result;
       const passed = await owner.duplicateTo(1001,fd,1002);
+      const staged = (await a.fileDescriptor({kind:"stage",fd})).result;
       const read = a.fileDescriptor({kind:"read",fd,length:2});
       await started;
+      const receive = owner.receive(1001,staged,1002);
       const position = b.fileDescriptor({kind:"seek",fd:passed,offset:0,whence:1});
       const duplicate = b.fileDescriptor({kind:"dup",fd:passed,cloexec:false});
       owner.close(1001); release();
       expect((await read).result).toBe(-E.BADF);
+      expect(await receive).toBe(-E.BADF);
       expect((await position).result).toBe(2);
       const second = (await duplicate).result;
       expect((await b.fileDescriptor({kind:"read",fd:second,length:1})).bytes).toEqual(Uint8Array.of(3));
@@ -174,6 +193,42 @@ describe("file-descriptor", () => {
       } finally {
         if(stream)await arm.call(lookupHost("fclose","libc.so")!,[stream]);
         mem.free(mode);arm.dispose();
+      }
+      const channel2=new MessageChannel(),stop2=serveCalls(channel2.port1,owner.session(1002,()=>E.ACCES));
+      const recipient=callProxy<DescriptorCalls>(channel2.port2,["fileDescriptor"]);
+      let incoming: JObj | null=null,passed: JObj | null=null;
+      try {
+        const original=await scall("android/system/Os","open","(Ljava/lang/String;II)Ljava/io/FileDescriptor;",renamed,2,0);
+        const outgoing=await scall("android/os/Parcel","obtain","()Landroid/os/Parcel;");
+        await vcall(outgoing,"writeFileDescriptor","(Ljava/io/FileDescriptor;)V",original);
+        const data=await exportBinderParcel(nativeParcel(outgoing));
+        await vcall(outgoing,"recycle","()V");
+        const right=data.objects[0]![1];
+        if(!right || !("descriptor" in right))throw new Error("canonical Binder right missing");
+        expect(await owner.receive(1002,right.descriptor,1001)).toBe(-E.BADF);
+        const received=await owner.receive(1001,right.descriptor,1002);
+        expect(received).toBeGreaterThan(0);
+        expect((await recipient.endpoint.fileDescriptor({kind:"fcntl",fd:received,command:1,arg:0})).result).toBe(1);
+        expect(await owner.receive(1001,right.descriptor,1002)).toBe(-E.BADF);
+        descriptorTransport.calls=()=>recipient.endpoint;
+        incoming=await importParcel({...data,objects:[[data.objects[0]![0],{descriptor:received}]]});
+        expect(await owner.discard(1002,received,false)).toBe(-E.BADF);
+        passed=await vcall(incoming,"readFileDescriptor","()Landroid/os/ParcelFileDescriptor;");
+        await vcall(incoming,"recycle","()V");incoming=null;
+        const d=await vcall(passed,"getFileDescriptor",FD);
+        expect(await scall("android/system/Os","lseek","(Ljava/io/FileDescriptor;JI)J",d,1n,0)).toBe(1n);
+        expect(await scall("android/system/Os","lseek","(Ljava/io/FileDescriptor;JI)J",original,0n,1)).toBe(1n);
+        await scall("android/system/Os","close","(Ljava/io/FileDescriptor;)V",original);
+        owner.close(1001);
+        const read=new Int8Array(1);
+        expect(await scall("android/system/Os","read","(Ljava/io/FileDescriptor;[BII)I",d,read,0,1)).toBe(1);
+        expect([...read]).toEqual([7]);
+        await scall("android/system/Os","write","(Ljava/io/FileDescriptor;[BII)I",d,Int8Array.of(8),0,1);
+        expect([...vfs.read(renamed)!]).toEqual([1,7,8,4]);
+      } finally {
+        if(incoming)await vcall(incoming,"recycle","()V");
+        if(passed)await vcall(passed,"close","()V");
+        recipient.close();stop2();owner.close(1002);descriptorTransport.calls=()=>proxy.endpoint;
       }
     } finally {
       await vcall(raf,"close","()V"); if(nativeFd>=0)await cpu.call(defineHost("canonical-cleanup-close",FS_SYSCALLS.close),[nativeFd]);

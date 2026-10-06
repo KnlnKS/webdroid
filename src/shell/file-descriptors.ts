@@ -13,10 +13,12 @@ export type DescriptorRequest = { kind: "open"; path: string; flags: number }
   | { kind: "truncate"; fd: number; length: number }
   | { kind: "fcntl"; fd: number; command: number; arg: number }
   | { kind: "dup"; fd: number; cloexec: boolean }
+  | { kind: "stage" | "unstage"; fd: number }
+  | { kind: "take"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
 export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>> };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
-type Descriptor = { fd: number; file: OpenFile };
+type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
 type Session = { dead: boolean; descriptors: Map<number, Descriptor>; authorize(path: string, write: boolean): number };
 
 /** The page's kernel owns open files; process tokens never expose its descriptor numbers.
@@ -30,9 +32,11 @@ export class FileDescriptors {
   session(pid: number, authorize: Session["authorize"]): DescriptorCalls {
     let session = this.sessions.get(pid);
     if (!session) this.sessions.set(pid, session = {dead:false, descriptors:new Map(), authorize});
+    else session.authorize = authorize;
     const owner = session;
     return {fileDescriptor: request => this.dispatch(owner, request)};
   }
+  ensureReceiver(pid: number): void { if (!this.sessions.has(pid)) this.session(pid,()=>E.ACCES); }
 
   private put(session: Session, fd: number): number {
     if (fd < 0) return fd;
@@ -60,34 +64,46 @@ export class FileDescriptors {
     }
     const descriptor = session.descriptors.get(request.fd);
     if (!descriptor) return {result:-E.BADF};
+    if (request.kind === "take") {
+      if (!descriptor.incoming) return {result:-E.BADF};
+      descriptor.incoming = false;
+      return {result:0};
+    }
+    if (request.kind === "unstage" && !descriptor.staged) return {result:-E.BADF};
     // Retire the public token at dispatch. Already-dispatched operations still own
     // their descriptor until the ordered close, preventing reuse during an async read.
-    if (request.kind === "close") session.descriptors.delete(request.fd);
+    if (request.kind === "close" || request.kind === "unstage") session.descriptors.delete(request.fd);
     const bytes = "bytes" in request ? request.bytes.slice() : undefined;
+    const operation = request;
     return this.ordered(descriptor.file, async () => {
       const fd = descriptor.fd;
-      if (request.kind === "close") return {result:javaCloseFd(fd)};
+      if (operation.kind === "close" || operation.kind === "unstage") return {result:javaCloseFd(fd)};
       if (session.dead) return {result:-E.BADF};
       let reply: DescriptorReply;
-      switch (request.kind) {
+      switch (operation.kind) {
         case "read": case "pread": {
-          if (!Number.isSafeInteger(request.length) || request.length < 0) return {result:-E.INVAL};
-          const target = new Uint8Array(request.length);
-          const result = request.kind === "read" ? await javaReadFd(fd,target) : await javaPreadFd(fd,target,request.offset);
+          if (!Number.isSafeInteger(operation.length) || operation.length < 0) return {result:-E.INVAL};
+          const target = new Uint8Array(operation.length);
+          const result = operation.kind === "read" ? await javaReadFd(fd,target) : await javaPreadFd(fd,target,operation.offset);
           reply = {result, ...(result >= 0 ? {bytes:target.slice(0,result)} : {})}; break;
         }
         case "write": reply = {result:javaWriteFd(fd,bytes!)}; break;
-        case "pwrite": reply = {result:javaPwriteFd(fd,bytes!,request.offset)}; break;
-        case "seek": reply = {result:javaSeekFd(fd,request.offset,request.whence)}; break;
-        case "truncate": reply = {result:javaTruncateFd(fd,request.length)}; break;
+        case "pwrite": reply = {result:javaPwriteFd(fd,bytes!,operation.offset)}; break;
+        case "seek": reply = {result:javaSeekFd(fd,operation.offset,operation.whence)}; break;
+        case "truncate": reply = {result:javaTruncateFd(fd,operation.length)}; break;
         case "sync": {
           const result = javaSyncFd(fd);
           if (result === 0) await vfs.flush();
           reply = {result}; break;
         }
         case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat} : {result:-E.BADF}; break; }
-        case "dup": reply = {result:this.put(session, request.cloexec ? javaFcntlFd(fd,0x406,0) : javaDupFd(fd))}; break;
-        case "fcntl": reply = {result:request.command >= 1 && request.command <= 4 ? javaFcntlFd(fd,request.command,request.arg) : -E.INVAL}; break;
+        case "dup": reply = {result:this.put(session, operation.cloexec ? javaFcntlFd(fd,0x406,0) : javaDupFd(fd))}; break;
+        case "stage": {
+          const token = this.put(session,javaDupFd(fd));
+          if (token >= 0) session.descriptors.get(token)!.staged = true;
+          reply = {result:token}; break;
+        }
+        case "fcntl": reply = {result:operation.command >= 1 && operation.command <= 4 ? javaFcntlFd(fd,operation.command,operation.arg) : -E.INVAL}; break;
       }
       return session.dead ? {result:-E.BADF} : reply;
     });
@@ -99,6 +115,42 @@ export class FileDescriptors {
     const source = this.sessions.get(from), target = this.sessions.get(to), descriptor = source?.descriptors.get(token);
     if (!source || source.dead || !target || target.dead || !descriptor) return -E.BADF;
     return this.ordered(descriptor.file, () => source.dead || target.dead ? -E.BADF : this.put(target,javaDupFd(descriptor.fd)));
+  }
+
+  /** A serialized transaction can consume only the sender's staged reference. The
+   * driver's bound sender/receiver IDs, rather than wire-supplied PIDs, choose the tables. */
+  async receive(from: number, token: number, to: number): Promise<number> {
+    const source = this.sessions.get(from), target = this.sessions.get(to), descriptor = source?.descriptors.get(token);
+    if (!source || source.dead || !target || target.dead || !descriptor?.staged) return -E.BADF;
+    source.descriptors.delete(token);
+    return this.ordered(descriptor.file, () => {
+      try {
+        if (source.dead || target.dead) return -E.BADF;
+        const received = this.put(target,javaFcntlFd(descriptor.fd,0x406,0));
+        if (received >= 0) target.descriptors.get(received)!.incoming = true;
+        return received;
+      }
+      finally { javaCloseFd(descriptor.fd); }
+    });
+  }
+
+  stageLocal(pid: number, fd: number): number {
+    const session = this.sessions.get(pid);
+    if (!session || session.dead) return -E.BADF;
+    const token = this.put(session,javaDupFd(fd));
+    if (token >= 0) session.descriptors.get(token)!.staged = true;
+    return token;
+  }
+  takeLocal(pid: number, token: number): number {
+    const session = this.sessions.get(pid), descriptor = session?.descriptors.get(token);
+    if (!session || session.dead || !descriptor || descriptor.staged) return -E.BADF;
+    session.descriptors.delete(token);
+    return descriptor.fd;
+  }
+  async discard(pid: number, token: number, staged: boolean): Promise<number> {
+    const session = this.sessions.get(pid);
+    if (!session || !staged && !session.descriptors.get(token)?.incoming) return -E.BADF;
+    return (await this.dispatch(session,{kind:staged ? "unstage" : "close",fd:token})).result;
   }
 
   close(pid: number): void {

@@ -172,7 +172,7 @@ test("Worker activity commands retain local results across reentrant replies and
   const previousPending = {...pendingTransport}, previousAlarms = {...alarmTransport};
   const previous = {...activityTransport}, previousExit = {...exitRecordTransport}, previousSettings = settingsStore(), previousSql = sqliteTransport.call,
     previousWebStorage = webStorageTransport.calls, previousCookies = cookieTransport.calls, previousClip = {...clipboardTransport}, previousPaths = filePathTransport.calls,
-    previousPrepare = vfs.prepare, previousDescriptors = descriptorTransport.calls, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
+    previousPrepare = vfs.prepare, previousDescriptors = {...descriptorTransport}, previousPrefs = preferenceStore, previousBinder = binderTransport.transact, previousForeground = notificationTransport.foreground;
   type Calls = Pick<BrokerCalls,"activityLaunch"|"activityFinish"|"activityPresentation"|"exitRecords">;
   const {port1,port2} = new MessageChannel();
   let entered!:()=>void, release!:()=>void, request = 0, launches = 0, completed = false;
@@ -224,7 +224,7 @@ test("Worker activity commands retain local results across reentrant replies and
     Object.assign(serviceTransport,previousService); providerProcesses.get=previousProvider; broadcastTransport.send=previousBroadcast;
     Object.assign(pendingTransport,previousPending); Object.assign(alarmTransport,previousAlarms);
     useSystemServiceAccess([]); binderTransport.transact=previousBinder; notificationTransport.foreground=previousForeground;
-    filePathTransport.calls = previousPaths; descriptorTransport.calls = previousDescriptors; vfs.prepare = previousPrepare;
+    filePathTransport.calls = previousPaths; for(const key of Object.keys(descriptorTransport))Reflect.deleteProperty(descriptorTransport,key); Object.assign(descriptorTransport,previousDescriptors); vfs.prepare = previousPrepare;
     usePermissionStore(new PermissionStore()); useAccountStore(new AccountStore()); usePreferenceStore(previousPrefs);
   }
 });
