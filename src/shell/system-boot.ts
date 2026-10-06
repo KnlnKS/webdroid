@@ -10,6 +10,9 @@ import { loadAppCode, loadTier, tier } from "../jvm/tier";
 import { startZygote } from "./device";
 import { connectProcess } from "./process-endpoint";
 import { processBroker } from "./processes";
+import { hostWindowManager } from "../android/server/wm";
+import { loadSystemFontMap } from "../android/fonts";
+import { rt } from "../jvm/runtime";
 
 let booted: Promise<void> | undefined;
 /** SystemServer's ActivityThread.systemMain creates the real system Context,
@@ -22,7 +25,9 @@ export function bootSystemOwner(): Promise<void> {
     if (tier === "wasm") await loadTier();
     await Promise.all([loadFramework(), loadPlatformDex()]);
     if (tier === "wasm") await loadAppCode({ launch: [] });
+    hostWindowManager();
     await startZygote();
+    await onMain(() => rt.drive(loadSystemFontMap()));
     await onMain(initDeviceLocales);
     await onMain(applyDeviceConfiguration);
     const broker = processBroker();
