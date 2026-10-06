@@ -27,10 +27,10 @@
 // Tools: watdump prints the code generated for a method; `aot` (bun run aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process
 // loads (aot-build, then aot-startup), and makes that build the one the server offers. `aot-profile --classes`, `bun run aot`, `aot-profile` (in this order, with the server
 // running) regroup the build by what launches of apps use and write its startup list.
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AOT_ROOT } from "./aot-key";
+import { AOT_ROOT, type AotManifest } from "./aot-key";
 import { runUnderNode } from "./undernode";
 
 interface Suite { node: boolean; all: boolean }
@@ -50,19 +50,26 @@ async function exec(name: string, args: string[], env: Env): Promise<number> {
   return Bun.spawnSync(["bun", file, ...args], { stdio: ["inherit", "inherit", "inherit"], env }).exitCode ?? 1;
 }
 
-/** builds the platform assets, records which of their modules a start loads and makes the build the current one */
+/** builds the platform assets, records which of their modules a start loads and makes the build the current one. Without an explicit --deopt the delivery is two builds:
+ *  one without deoptimization guards, which a process without the cold interpreter loads (a third fewer code bytes and no guard checks), and the guarded one for `?cold=1` */
 async function buildAot(args: string[]): Promise<number> {
-  const status = await exec("aot-build", args, process.env);
-  if (status) return status;
-  const at = args.indexOf("--out"), keyed = at < 0, key = keyed ? (JSON.parse(readFileSync(join(AOT_ROOT, "latest.json"), "utf8")) as { key: string }).key : "";
-  const dir = keyed ? join(AOT_ROOT, key) : args[at + 1];
-  if (!existsSync(join(dir, "startup.json"))) {
-    const startup = await exec("aot-startup", [], { ...process.env, WEBDROID_AOT: dir });
-    if (startup) return startup;
+  const at = args.indexOf("--out"), keyed = at < 0, latest = join(AOT_ROOT, "latest.json");
+  const policies = keyed && !args.includes("--deopt") ? ["off", "guarded"] : [undefined];
+  const built: AotManifest[] = [];
+  for (const policy of policies) {
+    const status = await exec("aot-build", policy ? [...args, "--deopt", policy] : args, process.env);
+    if (status) return status;
+    const manifest = keyed ? JSON.parse(readFileSync(latest, "utf8")) as AotManifest : undefined, dir = manifest ? join(AOT_ROOT, manifest.key) : args[at + 1];
+    if (!existsSync(join(dir, "startup.json"))) {
+      const startup = await exec("aot-startup", [], { ...process.env, WEBDROID_AOT: dir });
+      if (startup) return startup;
+    }
+    if (manifest) built.push(manifest);
   }
   if (keyed) {
-    copyFileSync(join(AOT_ROOT, "latest.json"), join(AOT_ROOT, "current.json"));
-    for (const old of readdirSync(AOT_ROOT).filter((f) => f !== key && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
+    const [main, cold] = built, keep = new Set(built.map((b) => b.key));
+    writeFileSync(join(AOT_ROOT, "current.json"), JSON.stringify({ ...main, ...(cold && { cold: cold.key }) } satisfies AotManifest));
+    for (const old of readdirSync(AOT_ROOT).filter((f) => !keep.has(f) && !f.endsWith(".json"))) rmSync(join(AOT_ROOT, old), { recursive: true, force: true });
   }
   return 0;
 }
