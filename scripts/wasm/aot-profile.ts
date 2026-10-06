@@ -89,27 +89,33 @@ if (classes) {
 async function exportBundles(page: import("playwright").Page): Promise<void> {
   const dir = join(AOT_ROOT, key);
   const listing = await page.evaluate(async (name) => {
-    const root = await navigator.storage.getDirectory(), store = await root.getDirectoryHandle(name);
-    const meta = JSON.parse(await (await (await store.getFileHandle("meta.json")).getFile()).text()) as { entries: Record<string, { files: Record<string, number> }> };
+    let text: string;
+    try {
+      const root = await navigator.storage.getDirectory(), store = await root.getDirectoryHandle(name);
+      text = await (await (await store.getFileHandle("meta.json")).getFile()).text();
+    } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return {}; throw error; }
+    const meta = JSON.parse(text) as { entries: Record<string, { files: Record<string, number> }> };
     return Object.fromEntries(Object.entries(meta.entries).map(([k, e]) => [k, Object.keys(e.files)]));
   }, COMPILED_CODE_DIR);
+  if (!Object.keys(listing).length) console.log("no app build was kept");
   for (const [entry, names] of Object.entries(listing)) {
-    const app = await page.evaluate(async ([store, entry]) => {
-      const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
-      return JSON.parse(await (await (await dir.getFileHandle("index.json")).getFile()).text());
-    }, [COMPILED_CODE_DIR, entry]) as AppIndex;
+    // the realms of a tab share the store's meta.json without a lock: an entry another realm evicted meanwhile is skipped
+    const files = await page.evaluate(async ([store, entry, names]) => {
+      try {
+        const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
+        return await Promise.all(names.map(async (name) => {
+          const bytes = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
+          let text = "";
+          for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          return btoa(text);
+        }));
+      } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error; }
+    }, [COMPILED_CODE_DIR, entry, names] as const);
+    if (!files) { console.log(`app build ${entry}: evicted while listed, skipped`); continue; }
+    const app = JSON.parse(Buffer.from(files[names.indexOf("index.json")], "base64").toString()) as AppIndex;
     if ((app.deopt ?? 0) !== policy) throw new Error(`app build ${entry}: activation policy differs from platform`);
     for (const old of readdirSync(dir).filter((f) => f.startsWith(`app.${entry}.`))) rmSync(join(dir, old));
-    for (const name of names) {
-      const base64 = await page.evaluate(async ([store, entry, name]) => {
-        const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
-        const bytes = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
-        let text = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        return btoa(text);
-      }, [COMPILED_CODE_DIR, entry, name]);
-      writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(base64, "base64"));
-    }
+    names.forEach((name, i) => writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(files[i], "base64")));
     writeFileSync(join(dir, `app.${entry}.json`), JSON.stringify(names));
     console.log(`app build ${entry}: ${names.length} files`);
   }
