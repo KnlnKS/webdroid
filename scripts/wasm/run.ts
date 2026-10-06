@@ -21,7 +21,7 @@
 //   conform      the scripts/conform suites on the Wasm tier against their baselines, the JS tier beside it: conform <suite|quick> [class]; conform-quick (a few classes of each kind) is in `all`
 //   fwtest       the framework delegates of scripts/fwtest.ts over a World (not part of `all`)
 //   desccheck    the registered descriptors against the baseline, and every intrinsic's key against the platform's methods
-//   g1           the jbench workloads timed in node and headless Chrome (not part of `all`)
+//   g1           the jbench workloads timed in node and headless Chrome (not part of `all`); g1startup writes the startup list of a build made with the G1 dex as its app
 //   boot-probe   a headless Chrome page under ?tier=wasm starts a process on the platform build: modules loaded and missed, synchronous requests (none allowed), compile time
 //                (not part of `all`; needs a build from `bun run aot`)
 // Tools: watdump prints the code generated for a method; `aot` (bun run aot) builds the platform assets under vendor/wasm-aot/<key> and the module list a start of the process
@@ -38,7 +38,7 @@ const SUITES: Record<string, Suite> = {
   cold: { node: true, all: true }, "cold-osr": { node: true, all: false }, "cold-init": { node: true, all: false }, "cold-binder": { node: true, all: false }, "cold-turns": { node: true, all: false }, "cold-vsync": { node: true, all: false }, "cold-slow": { node: true, all: false },
   diff: { node: true, all: true }, libdiff: { node: true, all: true }, classdiff: { node: true, all: true }, customdiff: { node: true, all: true },
   linkdiff: { node: true, all: true }, loaders: { node: true, all: true }, entry: { node: true, all: true }, entrytier: { node: true, all: false }, hostclass: { node: true, all: true }, lazytest: { node: false, all: true }, fuzz: { node: true, all: true }, jbench: { node: true, all: true },
-  threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, watdump: { node: false, all: false },
+  threads: { node: true, all: true }, nested: { node: true, all: true }, conform: { node: false, all: false }, "conform-quick": { node: false, all: true }, fwtest: { node: true, all: false }, desccheck: { node: true, all: true }, sweep: { node: false, all: true }, aottest: { node: true, all: true }, persist: { node: true, all: true }, g1: { node: false, all: false }, g1startup: { node: true, all: false }, watdump: { node: false, all: false },
   "aot-build": { node: true, all: false }, "aot-startup": { node: true, all: false }, "aot-profile": { node: false, all: false }, aot: { node: false, all: false }, "boot-probe": { node: false, all: false },
 };
 const FUZZ_SEEDS = [1, 2, 3, 4, 5, 6];
