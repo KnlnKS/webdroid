@@ -85,9 +85,9 @@ async function chromeRun() {
 // ---- measure
 const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
-interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; boot?: Stats; stats?: Stats }
+interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; boot?: Stats; firstStats?: Stats; stats?: Stats }
 type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
-const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, boot: r.boot as Stats, stats: r.stats as Stats });
+const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, boot: r.boot as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
 const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
@@ -133,14 +133,14 @@ for (const engine of engines) {
   if (process.argv.includes("--phases")) {
     // what the engine and our compiler spent from World creation to the end of the first call, split at the end of process setup (medians over runs, ms)
     const keys = ["prepare", "flow", "infer", "facts", "emit", "encode"], total = (xs: number[]) => med(xs);
-    console.log("\nphases (ms): boot = process setup before the call, call = the first call;  compile = our compiler (prepare flow infer facts emit encode), module/inst = V8, class = class modules (build, link)");
-    console.log("workload".padEnd(11), "part".padEnd(5), "methods".padStart(7), "units".padStart(6), "classes".padStart(7), "compile".padStart(8), ...keys.map((k) => k.padStart(7)), "module".padStart(7), "inst".padStart(6), "classB".padStart(7), "classMs".padStart(8), "KB".padStart(6), "aotD".padStart(5), "aotC".padStart(5), "dead".padStart(5), "aotMs".padStart(6), "read".padStart(5), "aotKB".padStart(6));
-    for (const [w, e] of got) for (const part of ["boot", "call"] as const) {
-      const v = (f: (s: Stats) => number) => total(e.wasm.map((x) => { const end = x.stats!, b = x.boot!; return part === "boot" ? f(b) : f(end) - f(b); }));
+    console.log("\nphases (ms): boot = process setup before the call, first = the first call, rest = the calls after it;  compile = our compiler (prepare flow infer facts emit encode), module/inst = V8, class = class modules (build, link)");
+    console.log("workload".padEnd(11), "part".padEnd(5), "methods".padStart(7), "units".padStart(6), "classes".padStart(7), "compile".padStart(8), ...keys.map((k) => k.padStart(7)), "module".padStart(7), "inst".padStart(6), "classB".padStart(7), "classMs".padStart(8), "KB".padStart(6), "aotD".padStart(5), "aotC".padStart(5), "dead".padStart(5), "miss".padStart(5), "aotMs".padStart(6), "read".padStart(5), "aotKB".padStart(6), "upg".padStart(4));
+    for (const [w, e] of got) for (const part of ["boot", "first", "rest"] as const) {
+      const v = (f: (s: Stats) => number) => total(e.wasm.map((x) => { const end = x.stats!, b = x.boot!, first = x.firstStats ?? end; return part === "boot" ? f(b) : part === "first" ? f(first) - f(b) : f(end) - f(first); }));
       if (!e.wasm.length || !e.wasm[0].stats) continue;
       console.log(w.padEnd(11), part.padEnd(5), String(v((s) => s.methods)).padStart(7), String(v((s) => s.units)).padStart(6), String(v((s) => s.classes)).padStart(7), v((s) => s.compileMs).toFixed(0).padStart(8),
         ...keys.map((k) => v((s) => s.phase[k]).toFixed(0).padStart(7)), v((s) => s.moduleMs).toFixed(0).padStart(7), v((s) => s.instantiateMs).toFixed(0).padStart(6), v((s) => s.phase.classBuild).toFixed(0).padStart(7), v((s) => s.classMs).toFixed(0).padStart(8), (v((s) => s.bytes) / 1024).toFixed(0).padStart(6),
-        String(v((s) => s.aot.d)).padStart(5), String(v((s) => s.aot.c)).padStart(5), String(v((s) => s.aot.dead)).padStart(5), v((s) => s.aot.ms).toFixed(0).padStart(6), v((s) => s.aot.readMs).toFixed(0).padStart(5), (v((s) => s.aot.bytes) / 1024).toFixed(0).padStart(6));
+        String(v((s) => s.aot.d)).padStart(5), String(v((s) => s.aot.c)).padStart(5), String(v((s) => s.aot.dead)).padStart(5), String(v((s) => s.aot.missed)).padStart(5), v((s) => s.aot.ms).toFixed(0).padStart(6), v((s) => s.aot.readMs).toFixed(0).padStart(5), (v((s) => s.aot.bytes) / 1024).toFixed(0).padStart(6), String(v((s) => s.upgrades)).padStart(4));
     }
   }
   for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over ${r.steady.length} matching ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);

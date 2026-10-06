@@ -176,6 +176,23 @@ export class DexFile {
     return s;
   }
 
+  /** the index of string `s`, or -1. string_ids sort by UTF-16 code units, which is how JS compares strings (ART's verifier rejects any other order). */
+  findString(s: string): number {
+    let lo = 0, hi = this.stringCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1, t = this.string(mid);
+      if (t === s) return mid;
+      if (t < s) lo = mid + 1; else hi = mid;
+    }
+    return -1;
+  }
+  /** the method_ids whose name is string `nameIdx` */
+  methodsNamed(nameIdx: number): number[] {
+    const out: number[] = [], v = this.view, at = this.methodIdsOff + 4;
+    for (let i = 0, n = this.methodCount; i < n; i++) if (v.getUint32(at + i * 8, true) === nameIdx) out.push(i);
+    return out;
+  }
+
   private typeResolver?: (descriptor: string) => string;
   /** How the defining loader resolves references. Its library graph may arrive after metadata was inspected; raw DEX descriptors never change. */
   get resolveType(): ((descriptor: string) => string) | undefined { return this.typeResolver; }
@@ -298,6 +315,37 @@ export class DexFile {
     const r = new Reader(this.bytes, classDataOff);
     r.uleb(); r.uleb();
     return r.uleb() + r.uleb();
+  }
+
+  /** how class_def `i` declares method_id `methodIdx` (its position among the direct then virtual methods), if it does */
+  declaredAt(i: number, methodIdx: number): EncodedMethod & { index: number } | undefined {
+    const classDataOff = this.view.getUint32(this.classDefsOff + i * 32 + 24, true);
+    if (!classDataOff) return undefined;
+    const r = new Reader(this.bytes, classDataOff);
+    const nf = r.uleb() + r.uleb(), nd = r.uleb(), nv = r.uleb();
+    for (let j = 0; j < nf; j++) { r.uleb(); r.uleb(); }
+    let index = 0;
+    for (const n of [nd, nv]) for (let j = 0, idx = 0; j < n; j++, index++) {
+      idx += r.uleb();
+      const flags = r.uleb(), codeOff = r.uleb();
+      if (idx === methodIdx) return { methodIdx, flags, codeOff, index };
+    }
+    return undefined;
+  }
+  /** the method_id of class `typeIdx` named `name` with descriptor `desc`, or -1. method_ids sort by class, then name, then proto */
+  findMethod(typeIdx: number, name: string, desc: string): number {
+    const n = this.findString(name);
+    if (n < 0) return -1;
+    const v = this.view, at = (i: number) => this.methodIdsOff + i * 8;
+    let lo = 0, hi = this.methodCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1, c = v.getUint16(at(mid), true), s = v.getUint32(at(mid) + 4, true);
+      if (c < typeIdx || c === typeIdx && s < n) lo = mid + 1; else hi = mid;
+    }
+    for (let i = lo; i < this.methodCount && v.getUint16(at(i), true) === typeIdx && v.getUint32(at(i) + 4, true) === n; i++) {
+      if (this.protoDesc(v.getUint16(at(i) + 2, true)) === desc) return i;
+    }
+    return -1;
   }
 
   classDef(i: number): ClassDef {

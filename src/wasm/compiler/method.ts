@@ -12,11 +12,14 @@ import { emitPolymorphic } from "./poly";
 import { emitCustom } from "./custom";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
-import { MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
+import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
 import { NO_THROW } from "./opinfo";
+import { FUEL } from "../link/sched";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
+/** iterations of an outlined loop per call of its function; its dispatcher charges them to the activation's fuel */
+const CHUNK = 1024;
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
 /** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
@@ -60,8 +63,15 @@ export class MC {
   shadowKeys = new Set<string>();
   shadows = new Map<string, number>();
   private root!: Code;
-  private reentryRegions = new Set<number>();
-  private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number };
+  /** the dispatch cycles (strong components of the regions): each runs in one chunk with a dispatch of its own */
+  private cycleOf = new Map<number, number[]>();
+  /** Loops and dispatch cycles run in functions of their own, re-entered every chunk of iterations, so a long activation reaches the engine's optimized code (G4).
+   *  The second tier runs code that has already been hot: its loops stay in the method, unless the first tier saw one run 64 chunks in one entry (World.longLoops). */
+  private outlining: boolean;
+  private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] };
+  private cycleChunks = new Map<number[], NonNullable<MC["chunk"]>>();
+  /** the state field in which the dispatchers count the iterations the activation's chunks ran, toward its fuel (the chunks themselves only count to CHUNK) */
+  private chunkFuel = -1;
   private chunks: NonNullable<MC["chunk"]>[] = [];
   private resultLocal = -1;
   private controlLocal = -1;
@@ -84,6 +94,7 @@ export class MC {
       this.deopt = { ...cx.deopt, sig: cx.mb.addFuncType([T.externref], m.ret === "V" ? [] : [cx.vtOf(kindOf(m.ret))]) };
     }
     this.tries = this.item.tries.length > 0;
+    this.outlining = cx.counting || !!resume || cx.w.longLoops.has(mid(m));
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
@@ -221,8 +232,8 @@ export class MC {
     }
     if (this.tries) { this.pcLocal = c.newLocal(T.i32); this.excLocal = c.newLocal(T.anyref); }
     this.tmpL = c.newLocal(T.anyref);
-    this.findCyclicRegions();
-    const hasLoops = this.reentryRegions.size > 0 || flow.regions.some((r) => r.scopes.some((s) => s.loop));
+    if (this.outlining) this.findCyclicRegions();
+    const hasLoops = this.outlining && (this.cycleOf.size > 0 || flow.regions.some((r) => r.scopes.some((s) => s.loop)));
     if (hasLoops) {
       c.nullableLocals = true;
       this.controlLocal = c.newLocal(T.i32);
@@ -316,10 +327,18 @@ export class MC {
       const name = `${owner}#loop${ch.label.slice(1)}`;
       ch.f = this.cx.mb.reserveFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), name);
       this.cx.outlines.push({ name, f: ch.f, code: ch.code, m: this.m });
-      const d = new Code(1), count = d.newLocal(T.i32), status = d.newLocal(T.i32);
+      const d = new Code(1), count = d.newLocal(T.i32), status = d.newLocal(T.i32), fuel = d.newLocal(T.i32);
       d.loop().lget(0).i32(0).structSet(this.stateType, ch.count);
-      d.lget(0).call(ch.f).ltee(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
-      d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end().i32(1).ret();
+      d.lget(0).call(ch.f).lset(status);
+      // the activation's fuel: the iterations of every chunk it ran
+      d.lget(0).structGet(this.stateType, this.chunkFuel).lget(0).structGet(this.stateType, ch.count).raw(OP.i32_add).ltee(fuel).i32(FUEL).raw(OP.i32_ge_u).if_();
+      this.cx.callRt(d, "yieldFuel"); d.i32(0).lset(fuel).end();
+      d.lget(0).lget(fuel).structSet(this.stateType, this.chunkFuel);
+      d.lget(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
+      d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end();
+      const slot = this.cx.counting ? this.cx.w.slotOf(this.m) : COUNT_SLOTS;
+      if (slot < COUNT_SLOTS) d.i32(slot).call(this.cx.imp.long);
+      d.i32(1).ret();
       ch.dispatch = this.cx.mb.addFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), d.finish(), "$dispatch:" + name);
     }
     for (const at of this.weights) this.code.patch(at, own);
@@ -413,20 +432,35 @@ export class MC {
     if (label[0] === "L") {
       if (this.chunk?.label === label) {
         const ch = this.chunk, c = this.code;
-        c.lget(ch.count).i32(1024).raw(OP.i32_eq).if_(); this.push("if");
+        c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); this.push("if");
         this.chunkReturn(1); this.pop(); c.end();
         c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
       }
       if (this.cx.counting && !this.chunk) this.cx.emitCount(this.code, this.m);
-      if (this.waiting.has(+label.slice(1))) this.fuel();
+      if (this.waiting.has(+label.slice(1)) && this.chunk?.label !== label) this.fuel();
     }
   }
   endBlk() { this.pop(); this.code.end(); }
 
   emitRegion(k: number) {
-    const r = this.flow.regions[k];
-    if (this.reentryRegions.has(k)) this.outline(r, { open: 0, close: r.order.length, label: "$region" + k, loop: true }, r.scopes);
-    else this.emitSpan(r, 0, r.order.length, r.scopes);
+    const r = this.flow.regions[k], cycle = this.cycleOf.get(k);
+    if (!cycle || this.chunk?.cycle === cycle) { this.emitSpan(r, 0, r.order.length, r.scopes); return; }
+    let ch = this.cycleChunks.get(cycle);
+    if (!ch) this.cycleChunks.set(cycle, ch = this.chunkBody("$cycle" + cycle[0], () => this.emitCycle(cycle), cycle));
+    this.code.i32(k).lset(this.regionLocal);
+    this.chunkCall(ch);
+  }
+  /** the regions of a dispatch cycle in its chunk: a jump between them dispatches here, each dispatch counting toward the chunk */
+  private emitCycle(cycle: number[]): void {
+    const c = this.code, ch = this.chunk!;
+    this.push("$cycleDisp"); c.loop();
+    c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); this.push("if"); this.chunkReturn(1); this.pop(); c.end();
+    c.lget(ch.count).i32(1).raw(OP.i32_add).lset(ch.count);
+    for (let i = cycle.length - 1; i >= 0; i--) { this.push("$C" + i); c.block(); }
+    const at = new Map(cycle.map((k, i) => [k, i]));
+    c.lget(this.regionLocal).brTable(Array.from({ length: this.flow.regions.length }, (_, k) => at.get(k) ?? 0), 0);
+    for (let i = 0; i < cycle.length; i++) { this.pop(); c.end(); this.emitRegion(cycle[i]); c.unreachable(); }
+    this.pop(); c.end().unreachable();
   }
   private findCyclicRegions(): void {
     const { regions, blockAt } = this.flow, n = regions.length;
@@ -455,7 +489,7 @@ export class MC {
         }
       }
     }
-    // Strong components identify dispatch cycles without outlining acyclic handler paths.
+    // Strong components identify dispatch cycles without outlining acyclic handler paths; each cycle re-enters its chunk.
     const seen = new Set<number>(), order: number[] = [];
     for (let start = 0; start < n; start++) {
       if (seen.has(start)) continue;
@@ -477,9 +511,8 @@ export class MC {
         for (const to of reverse[v]) if (!seen.has(to)) { seen.add(to); stack.push(to); }
       }
       if (component.length > 1) {
-        const members = new Set(component);
-        // Every cycle crosses a non-forward edge; its target must re-enter a function.
-        for (const v of component) for (const to of edges[v]) if (to <= v && members.has(to)) this.reentryRegions.add(to);
+        component.sort((a, b) => a - b);
+        for (const v of component) this.cycleOf.set(v, component);
       }
     }
   }
@@ -490,14 +523,14 @@ export class MC {
       let outlined = false;
       for (; next < scopes.length && scopes[next].open === p; next++) {
         const s = scopes[next];
-        if (s.loop) {
+        if (s.loop && this.outlining) {
           let last = next + 1;
           while (last < scopes.length && scopes[last].open < s.close) last++;
           this.outline(r, s, scopes.slice(next + 1, last));
           next = last; p = s.close; outlined = true;
           break;
         }
-        open.push(s); this.blk(s.label, false);
+        open.push(s); this.blk(s.label, s.loop);
       }
       if (outlined) continue;
       if (p < end) this.emitBlock(r.order[p]);
@@ -508,21 +541,28 @@ export class MC {
     this.code.i32(status).br(this.depth("$chunkReturn"));
   }
   private outline(r: Flow["regions"][number], scope: Flow["regions"][number]["scopes"][number], scopes: Flow["regions"][number]["scopes"]) {
+    this.chunkCall(this.chunkBody(scope.label, () => {
+      this.blk(scope.label, true);
+      this.emitSpan(r, scope.open, scope.close, scopes);
+      this.endBlk(); this.chunkReturn(0);
+    }));
+  }
+  /** a function of its own for what `emit` emits, which returns a status (chunkCall) and takes and leaves the method's locals in the state struct */
+  private chunkBody(label: string, emit: () => void, cycle?: number[]): NonNullable<MC["chunk"]> {
     const parent = this.code, nest = this.nest, outer = this.chunk;
     const body = new Code(this.root.nparams); body.localTypes = this.root.localTypes; body.nullableLocals = true; body.nonNullLocals = this.root.nonNullLocals; body.compactLocals = true;
     body.defer((c) => {
       c.raw(0x20, 0).lset(this.stateLocal);
       this.loadState(c, ch.locals);
     });
-    const ch = { code: body, label: scope.label, count: parent.newLocal(T.i32), entry: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1 };
+    if (this.chunkFuel < 0) this.chunkFuel = this.root.newLocal(T.i32);
+    const ch = { code: body, label, count: parent.newLocal(T.i32), entry: parent.newLocal(T.i32), exits: [] as { pc: number; block: number; final: boolean }[], locals: [] as number[], f: -1, dispatch: -1, cycle };
     parent.locals.add(ch.entry);
     this.chunks.push(ch); this.code = body; this.nest = []; this.chunk = ch;
     this.push("$chunkReturn"); body.block(T.i32);
     this.push("$chunkCaught"); body.block(T.anyref);
     this.push("$chunkTry"); body.tryTable(null, [[0, this.cx.tag, 0]]);
-    this.blk(scope.label, true);
-    this.emitSpan(r, scope.open, scope.close, scopes);
-    this.endBlk(); this.chunkReturn(0);
+    emit();
     this.pop(); body.end().unreachable();
     this.pop(); body.end().lset(this.excLocal); this.chunkReturn(3);
     this.pop(); body.end();
@@ -530,7 +570,11 @@ export class MC {
     body.defer((c) => { this.saveState(c, ch.locals); c.ret(); });
     for (const l of body.locals) parent.locals.add(l);
     this.code = parent; this.nest = nest; this.chunk = outer;
-    const c = parent;
+    return ch;
+  }
+  /** calls the chunk until it is done, then goes where it says: the method returns or throws, or control continues at one of its exits (status 0 falls through) */
+  private chunkCall(ch: NonNullable<MC["chunk"]>): void {
+    const c = this.code;
     this.push("$chunkCall"); c.loop();
     c.i32(0).lset(ch.count);
     c.defer((c) => {
@@ -666,6 +710,7 @@ export class MC {
     const flow = this.flow, c = this.code, v = flow.blockAt[targetPc];
     const go = flow.go(this.block, v, final);
     const label = go === Go.Continue ? "L" + targetPc : go === Go.Break ? "B" + targetPc : "$disp";
+    if (go === Go.Dispatch && this.chunk?.cycle?.includes(this.regionOfPc.get(targetPc)!)) { c.i32(this.regionOfPc.get(targetPc)!).lset(this.regionLocal).br(this.depth("$cycleDisp")); return; }
     if (this.chunk && go !== Go.Next && !this.nest.includes(label)) {
       let i = this.chunk.exits.findIndex((e) => e.pc === targetPc && e.block === this.block && e.final === final);
       if (i < 0) { i = this.chunk.exits.length; this.chunk.exits.push({ pc: targetPc, block: this.block, final }); }

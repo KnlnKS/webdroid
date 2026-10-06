@@ -50,7 +50,7 @@ for (const hot of [false, true]) {
   if (hot) {
     check("active before loading", call(), 1);
     const slot = w.slotOf(w.prog.resolve("Lz", "active", "()I")!), initial = w.table.get(slot);
-    for (let i = 0; i < 20000 && w.table.get(slot) === initial; i++) call();
+    for (let i = 0; i < 1e6 && w.table.get(slot) === initial; i++) call();
     check("active frame's method was promoted", w.table.get(slot) !== initial, true);
     loading = true;
   }
