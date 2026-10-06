@@ -8,6 +8,22 @@ public class C {
   static class K implements Cloneable { int a = 3; long b = 4; Object c; K dup() throws CloneNotSupportedException { return (K) super.clone(); } }
   static abstract class Abs { }
 
+  static class Values extends ClassValue<Object> {
+    int computed;
+    protected Object computeValue(Class<?> type) { computed++; return new Object(); }
+  }
+  public static int classValues(int n) {
+    Values a=new Values(), b=new Values(); Object first=a.get(A.class);
+    int r=a.get(A.class)==first && a.computed==1 ? 1 : 0;
+    r+=a.get(B.class)!=first && a.computed==2 ? 2 : 0;
+    r+=b.get(A.class)!=first && b.computed==1 ? 4 : 0;
+    a.remove(A.class); Object second=a.get(A.class);
+    r+=second!=first && a.get(A.class)==second && a.computed==3 ? 8 : 0;
+    Object prim=a.get(int.class), array=a.get(int[].class);
+    r+=prim!=array && a.get(int.class)==prim && a.get(int[].class)==array && a.computed==5 ? 16 : 0;
+    return r;
+  }
+
   public static int classIdent(int n) {
     Object a = new A(), b = new B();
     int r = (a.getClass() == A.class ? 1 : 0) + (b.getClass() == B.class ? 2 : 0) + (a.getClass() != b.getClass() ? 4 : 0);

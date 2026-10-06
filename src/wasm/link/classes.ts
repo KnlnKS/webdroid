@@ -300,6 +300,17 @@ export function emitString(cx: Compiler, c: Code, len: () => void, char: (j: num
   classMethod(cx, c, "java/lang/String", "intern", "()Ljava/lang/String;");
 }
 
+// ART allocates ClassExt lazily in the Class object's extData field, without
+// invoking its private constructor. Allocation and publication cannot suspend
+// in this process realm, so competing strands observe the same extension.
+def("java/lang/Class.ensureExtDataPresent()Ldalvik/system/ClassExt;", (cx, c) => {
+  const cs = cx.structFor(CLASS), ext = c.newLocal(cx.vtOf("L"));
+  c.lget(0).refCast(cs).structGet(cs, field(cx, "extData", "Ldalvik/system/ClassExt;")).ltee(ext).refIsNull().if_();
+  cx.emitNew(c, "dalvik/system/ClassExt"); c.lset(ext);
+  c.lget(0).refCast(cs).lget(ext).structSet(cs, field(cx, "extData", "Ldalvik/system/ClassExt;"));
+  c.end().lget(ext);
+});
+
 def("java/lang/Object.getClass()Ljava/lang/Class;", (cx, c) => { c.lget(0); vtId(cx, c); cx.callRt(c, "classOf"); });
 
 def("java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;Z)Z", (cx, c) => { cx.info(c, Info.HasClinit, () => { c.lget(0); idOfClass(cx, c); }, () => c.lget(1)); });
