@@ -1,5 +1,5 @@
 // invoke-polymorphic on VarHandle access modes (AtomicInteger, AtomicReference, ForkJoinPool, ConcurrentLinkedQueue, ...).
-// Exact accessor types use guarded storage operations; conversions and views use the canonical Java bridge.
+// Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
 import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
 import { ACC, kindOf, type Kind } from "./program";
@@ -60,13 +60,21 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
 function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
   const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => dex.type(t)), ret = dex.type(proto.ret);
   const nv = varHandleValues(mode)!, coords = params.slice(0, params.length - nv), values = params.slice(params.length - nv), op = opOf(mode);
-  const variable = nv ? values[0] : ret;
-  if (variable === "V" || values.some(t => t !== variable) || ret !== (op === "set" ? "V" : op === "cas" ? "Z" : variable)) return false;
+  const variable = nv ? values[nv - 1] : ret;
+  const nullValues = values.map((t, i) => t === variable ? -1 : i).filter(i => i >= 0);
+  if (variable === "V" || nullValues.some(i => family(values[i]) !== "L" || family(variable) !== "L")
+    || ret !== (op === "set" ? "V" : op === "cas" ? "Z" : variable)) return false;
+  // App sites resolve the whole prototype before compilation; boot sites have no symbolic resolver.
+  if (cx.prog.loaderOf(mc.m.cls) === cx.prog.boot && nullValues.some(i => {
+    const component = values[i].replace(/^\[+/, "");
+    return component[0] === "L" && !cx.prog.lookup(cx.prog.boot, descToName(component));
+  })) return false;
   const storage = coords.length === 0 ? "java/lang/invoke/StaticFieldVarHandle"
     : coords.length === 1 && coords[0][0] === "L" ? FVH
     : coords.length === 2 && coords[0][0] === "[" && coords[1] === "I" && coords[0].slice(1) === variable ? "java/lang/invoke/ArrayElementVarHandle" : undefined;
   if (coords.length === 1 && cx.structFor(descToName(coords[0])) === cx.tStr) return false;
   if (!storage || (family(variable) === "F" || family(variable) === "D") && op.startsWith("getAndBitwise")) return false;
+  const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
   const handle = c.newLocal(T.anyref), match = c.newLocal(T.i32), vt = cx.structFor(VH), clsDesc = "Ljava/lang/Class;";
   mc.nonNull(ins.regs[0]); c.lset(handle);
   c.lget(handle).refTest(cx.structFor(storage));
@@ -76,6 +84,8 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
     c.call(cx.helper("acmp")).raw(OP.i32_and);
   };
   sameClass("varType", variable); sameClass("coordinateType0", coords[0]); sameClass("coordinateType1", coords[1]);
+  // Unequal reference descriptors can share storage only when the converted argument is actually null.
+  for (const i of nullValues) { mc.get("L", regs[coords.length + i]); c.refIsNull().raw(OP.i32_and); }
   c.ltee(match).if_();
   const accessMode = `${VH}$AccessMode`;
   const owner = cx.prog.lookup(cx.prog.boot, accessMode);
@@ -92,8 +102,8 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
   cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${accessMode};)Z`)!);
   c.lset(match).end();
   c.lget(match).if_();
-  const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
-  const result = emitVarHandleAccess(cx, c, mode, params, ret, () => c.lget(handle), (kind, i) => mc.get(kind, regs[i]));
+  const storageParams = coords.concat(values.map(() => variable));
+  const result = emitVarHandleAccess(cx, c, mode, storageParams, ret, () => c.lget(handle), (kind, i) => mc.get(kind, regs[i]));
   if (result) mc.finishResult(ins, result);
   c.else_(); emitHandleCall(mc, ins, false, mode); c.end();
   return true;
