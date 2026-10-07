@@ -137,7 +137,10 @@ export class Cha {
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT) && (!filter || p.isSubclass(n, filter))) {
         const target = p.dispatchFor(n, m.name, m.desc);
         if (target && failed(target)) return "conflict";
-        if (target === m) reachesAny = true;
+        if (target === m) {
+          if (p.get(m.cls)?.isInterface === false) return true;
+          reachesAny = true;
+        }
       }
       // a class that implements the method itself decides it for every subclass: none of them runs m
       const own = c && !c.isInterface ? declaredMethod(c, key) : undefined;
