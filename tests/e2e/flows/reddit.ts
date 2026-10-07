@@ -23,8 +23,7 @@ export const reddit: Flow = {
     // the paused welcome screen, so the sheet is awaited and dismissed before any tap
     { id: "launch", label: "Launch — welcome behind the One Tap sheet", action: { type: "launch" }, wait: wait.live(25000), fastWait: wait.state({ kind: "text", text: "Get Started" }, 0, 18_000),
       fastEvidence: { kind: "visual", maxContentDiffPct: 4 } },
-    { id: "dismiss-one-tap", label: "Back dismisses the One Tap sheet — welcome screen", action: { type: "back" },
-      fastAction: { type: "back", whileText: ONE_TAP, appearMs: 15_000 }, wait: wait.live(5000),
+    { id: "dismiss-one-tap", label: "Back dismisses the One Tap sheet — welcome screen", action: { type: "back", whileText: ONE_TAP, appearMs: 15_000 }, wait: wait.live(5000),
       fastWait: wait.state({ kind: "all", conditions: [{ kind: "text", text: "Get Started" }, { kind: "text-absent", text: ONE_TAP }] }, 0, 4_000) },
     { id: "get-started", label: "Get Started — sign-up sheet", action: tap(540, 1837), wait: wait.live(4000), fastWait: wait.state({ kind: "text", text: "Continue with phone number" }, 0, 6_000) },
     // the sheet slides out bottom row first, and still takes taps until its top row is gone
