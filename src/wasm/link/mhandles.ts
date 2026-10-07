@@ -15,7 +15,7 @@ import type { World } from "./world";
 import type { MC } from "../compiler/method";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import { canAccess, constClass, typeName } from "./classes";
-import { failed, resolveFieldRef, resolveInvoke, typeFailure } from "../compiler/linkage";
+import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "../compiler/linkage";
 import { emitSave, type Strand } from "./sched";
 import type { DexFile } from "../../jvm/dex";
 import { emitVarHandleAccess } from "../compiler/poly";
@@ -88,6 +88,38 @@ export function emitTypeValue(cx: Compiler, c: Code, dex: DexFile, index: number
 export function emitHandleConstant(mc: MC, index: number): void {
   if (emitHandleValue(mc.cx, mc.code, mc.m, index)) mc.set("L");
 }
+type HandleMember = { field: FieldInfo } | { method: MethodInfo; cls: string; invoke: string };
+type HandleFailure = LinkFailure | { errorClass: string; message: string };
+
+/** Shared by executed resolution and emission so member failures precede signature loading. */
+export function resolveHandleMember(w: World, referrer: MethodInfo, index: number): HandleMember | HandleFailure {
+  const prog = w.prog, dex = referrer.dex, h = dex.methodHandle(index);
+  const access = (owner: string, flags: number, member: string): HandleFailure | undefined =>
+    canAccess(referrer.cls, prog.require(owner), flags, w) ? undefined : { errorClass: "java/lang/IllegalAccessError", message: `${javaName(referrer.cls)} cannot access ${javaName(owner)}.${member}` };
+  if (h.type <= 3) {
+    const r = resolveFieldRef(prog, dex, h.idx, h.type <= 1, referrer.cls);
+    if (failed(r)) return r;
+    const f = r.f, denied = access(f.owner, f.flags, f.name);
+    if (denied) return denied;
+    if ((h.type === 0 || h.type === 2) && f.flags & ACC.FINAL) return { errorClass: "java/lang/IllegalAccessError", message: `Cannot write final field ${javaName(f.owner)}.${f.name}` };
+    return { field: f };
+  }
+  const mr = dex.method(h.idx), cls = descToName(dex.type(mr.cls)), desc = dex.methodDesc(h.idx);
+  let invoke = h.type === 4 ? "invoke-static" : h.type === 8 ? "invoke-interface" : h.type === 6 ? "invoke-direct" : "invoke-virtual";
+  if (h.type === 7) {
+    const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);
+    if (failed(target)) return target;
+    invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
+  }
+  const m = resolveInvoke(prog, invoke, cls, mr.name, desc, referrer.cls);
+  if (failed(m)) return m;
+  if (h.type === 6 && (m.cls !== cls || !m.isCtor)) return { thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` };
+  const denied = access(m.cls, m.flags, m.name);
+  if (denied) return denied;
+  if (m.name === "<clinit>") return { errorClass: "java/lang/ClassFormatError", message: "Method handles can't target class initializer method" };
+  return { method: m, cls, invoke };
+}
+
 export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, index: number): boolean {
   const dex = referrer.dex, prog = cx.prog, h = dex.methodHandle(index), K = handleKinds(prog);
   const error = (cls: string, message: string) => {
@@ -95,36 +127,17 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
     cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, message);
     cx.callMethod(c, prog.resolve(cls, "<init>", "(Ljava/lang/String;)V")!); c.lget(local).throw_(cx.tag);
   };
-  const access = (owner: string, flags: number, member: string): boolean => {
-    const allowed = canAccess(referrer.cls, prog.require(owner), flags, cx.w);
-    if (!allowed) error("java/lang/IllegalAccessError", `${javaName(referrer.cls)} cannot access ${javaName(owner)}.${member}`);
-    return allowed;
-  };
+  const member = resolveHandleMember(cx.w, referrer, index);
+  if ("thrower" in member) { cx.linkError(c, member); return false; }
+  if ("errorClass" in member) { error(member.errorClass, member.message); return false; }
   let kind: number, art: bigint, ret: string, params: string[];
-  if (h.type <= 3) {
-    const stat = h.type <= 1, put = h.type === 0 || h.type === 2, r = resolveFieldRef(prog, dex, h.idx, stat, referrer.cls);
-    if (failed(r)) { cx.linkError(c, r); return false; }
-    const f = r.f;
-    if (!access(f.owner, f.flags, f.name)) return false;
-    if (put && f.flags & ACC.FINAL) { error("java/lang/IllegalAccessError", `Cannot write final field ${javaName(f.owner)}.${f.name}`); return false; }
+  if ("field" in member) {
+    const stat = h.type <= 1, put = h.type === 0 || h.type === 2, f = member.field;
     kind = stat ? put ? K.SPUT : K.SGET : put ? K.IPUT : K.IGET;
     art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
     ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
   } else {
-    const mr = dex.method(h.idx), cls = descToName(dex.type(mr.cls)), desc = dex.methodDesc(h.idx);
-    let invoke = h.type === 4 ? "invoke-static" : h.type === 8 ? "invoke-interface" : h.type === 6 ? "invoke-direct" : "invoke-virtual";
-    if (h.type === 7) {
-      const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);
-      if (failed(target)) { cx.linkError(c, target); return false; }
-      invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
-    }
-    const m = resolveInvoke(prog, invoke, cls, mr.name, desc, referrer.cls);
-    if (failed(m)) { cx.linkError(c, m); return false; }
-    if (h.type === 6 && (m.cls !== cls || !m.isCtor)) {
-      cx.linkError(c, { thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` }); return false;
-    }
-    if (!access(m.cls, m.flags, m.name)) return false;
-    if (m.name === "<clinit>") { error("java/lang/ClassFormatError", "Method handles can't target class initializer method"); return false; }
+    const { method: m, cls, invoke } = member, desc = dex.methodDesc(h.idx);
     const sig = parseMethodDesc(desc);
     if (h.type === 6) {
       if (!emitType(cx, c, sig.ret, sig.params, false)) return false;

@@ -13,7 +13,7 @@ export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): bo
   const n = ins.name, dex = m.dex;
   if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;
   if (/^invoke-direct/.test(n) && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;") return false;
-  return /^(const-method-type|const-class|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super))/.test(n);
+  return /^(const-class|const-method-|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super|polymorphic))/.test(n);
 }
 
 export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
@@ -25,7 +25,7 @@ export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Ty
     const k = typing.kind[web];
     inputs.push({ reg, web, kind: k === R ? "L" : k === J || k === D ? "J" : "I" });
   }
-  const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(dex.method(ins.b).proto).ret)
+  const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(n.startsWith("invoke-polymorphic") ? ins.c : dex.method(ins.b).proto).ret)
     : /^(iget|sget)/.test(n) ? dex.rawType(dex.field(n.startsWith("iget") ? ins.c : ins.b).type)
     : /^(iput|sput)/.test(n) ? "V" : n === "instance-of" ? "I" : "L";
   return { inputs, output: output === "V" ? "V" : kindOf(output), producer: /^invoke-|^filled-new-array/.test(n) };
@@ -37,6 +37,7 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   const operands = siteOperands(mc.m, ins, mc.typing), name = `${mc.m.cls}:${mc.m.index}:${ins.pc}`;
   const entry = cx.symbolicImports.get(name);
   if (!entry) return false;
+  if (ins.name.startsWith("invoke-polymorphic") && mc.dex.rawType(mc.dex.method(ins.b).cls) === "Ljava/lang/invoke/MethodHandle;") { mc.nonNull(ins.regs[0]); mc.code.drop(); }
   for (const input of operands.inputs) mc.get(input.kind, input.reg);
   mc.code.gget(entry.slot).callIndirect(cx.sig(operands.inputs.map(input => input.kind), operands.output), cx.symbolicTable!);
   if (operands.producer) mc.finishResult(ins, operands.output);

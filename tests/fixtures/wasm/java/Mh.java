@@ -7,6 +7,7 @@ public class Mh {
   final int readOnly = 23;
   static int initializations;
   static class Dormant { static int f = ++initializations; }
+  static class Signature {}
   public Mh() {}
   public Mh(int value) { f = value; }
   static int add(int a, int b) { return a + b; }
@@ -115,11 +116,25 @@ public class Mh {
   public static int tConstStatic(int a) throws Throwable { return (int) Mc.hStatic().invokeExact(a, 4); }
   public static int tConstLoaderType(int a) {
     MethodType type = Mc.loaderType(), virtual = Mc.hVirtual().type();
-    return (type.returnType() == Mh.class ? 1 : 0) | (type.parameterType(0) == Mh.class ? 2 : 0) | (virtual.parameterType(0) == Mh.class ? 4 : 0);
+    return (type.returnType() == Signature.class ? 1 : 0) | (type.parameterType(0) == Signature.class ? 2 : 0) | (virtual.parameterType(0) == Mh.class ? 4 : 0);
   }
   static int loaderMismatch(MethodHandle handle) throws Throwable {
     try { int value = (int) handle.invokeExact(new Mh(), 1); return 0; }
     catch (WrongMethodTypeException expected) { return 1; }
+  }
+  static ClassLoader signatureLoader(String path) throws Exception {
+    return (ClassLoader) SignatureLoader.class
+      .getConstructor(String.class, ClassLoader.class).newInstance(path, Mh.class.getClassLoader());
+  }
+  static void allowSignature(ClassLoader loader) throws Exception { loader.getClass().getField("deny").setBoolean(loader, false); }
+  public static class SignatureLoader extends dalvik.system.DexClassLoader {
+    public boolean deny = true;
+    public SignatureLoader(String path, ClassLoader parent) { super(path, null, null, parent); }
+    public Class<?> loadClass(String name) throws ClassNotFoundException {
+      if (name.equals("Mh$Signature") && deny) throw new ClassNotFoundException("signature denied");
+      if (name.equals("Mt") || name.equals("Mh$Signature")) return findClass(name);
+      return super.loadClass(name);
+    }
   }
   public static int tConstVirtual(int a) throws Throwable { return (int) Mc.hVirtual().invokeExact((Mh) new Mc(), a); }
   public static int tConstInterface(int a) throws Throwable { return ((String) Mc.hInterface().invoke((Ig) new Pq(a, "name"))).length(); }

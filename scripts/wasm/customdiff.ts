@@ -1,10 +1,10 @@
 // invoke-custom and MethodHandle call sites: records (ObjectMethods.bootstrap) compiled by javac 17+ and kept as invoke-custom by d8 --no-desugaring, and
 // MethodHandle.invoke/invokeExact over each kind of direct handle, run as Wasm, on the production JS tier and on the JDK; the results must match. Needs javac (17+), d8 and java. Run: bun run wasm customdiff
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { jsTier, natives, processState } from "./oracle";
+import { jsTier, natives, processState, processStateAsync } from "./oracle";
 import { loadDexes, program, world } from "./lib";
 import { ACC, Program } from "../../src/wasm/compiler/program";
 import { compare, genCases } from "./cases";
@@ -17,6 +17,11 @@ import { hostBytes, hostAddress, mapExternal, unmapExternal } from "../../src/jv
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { UInfo } from "../../src/wasm/link/unsafe";
 import { decodeInstructions } from "../../src/jvm/prepared";
+import { BytesFile } from "../../src/shell/lazyfile";
+import { vfs } from "../../src/shell/vfs";
+import { definingLoader } from "../../src/wasm/link/loaders";
+import { idOfClass } from "../../src/wasm/link/classes";
+import { androidPlatform } from "../android-sdk";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {
@@ -86,8 +91,24 @@ function handClasses(): Record<string, Uint8Array> {
     constant("type", p.methodType("([Ljava/lang/String;JD)Ljava/lang/Object;"), "MethodType");
     constant("dormantType", p.methodType("()LMh$Dormant;"), "MethodType");
     constant("missingType", p.methodType("()LAbsent;"), "MethodType");
-    constant("loaderType", p.methodType("(LMh;)LMh;"), "MethodType");
+    constant("loaderType", p.methodType("(LMh$Signature;)LMh$Signature;"), "MethodType");
     build("Mc", 0x21, "Mh", [], p, [], methods, []);
+  }
+  {
+    const p = new Pool();
+    const constant = (name: string, index: number, type: string) => method(p, 9, name, `()Ljava/lang/invoke/${type};`, [0x13, ...u2(index), 0xb0]);
+    const signature = "(LMh$Signature;)LMh$Signature;", handle = p.methodHandle(6, p.member(10, "Mt", "identity", signature));
+    const bsm = p.methodHandle(6, p.member(10, "Bootstrap", "signature", "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/CallSite;"));
+    const args = [p.cls("Mh$Signature"), p.methodType(signature), handle];
+    const body = [...u2(1), ...u2(bsm), ...u2(args.length), ...args.flatMap(u2)];
+    build("Mt", 0x21, "java/lang/Object", [], p, [], [
+      constant("type", p.methodType(signature), "MethodType"),
+      constant("handle", handle, "MethodHandle"),
+      method(p, 9, "identity", "(LMh$Signature;)LMh$Signature;", [0x2a, 0xb0], 1),
+      method(p, 9, "poly", "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;", [0x2a, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LMh$Signature;)LMh$Signature;")), 0xb0], 1),
+      method(p, 9, "nullPoly", "()I", [0x01, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LAbsent;)LAbsent;")), 0x57, 0x03, 0xac], 0),
+      method(p, 9, "custom", "()Ljava/lang/Object;", [0x01, 0xba, ...u2(p.invokeDynamic(0, "signature", signature)), 0, 0, 0xb0], 0)
+    ], [[...u2(p.utf8("BootstrapMethods")), ...u4(body.length), ...body]]);
   }
   {
     const p = new Pool(), methods: number[][] = [], bootstraps: number[][] = [];
@@ -119,10 +140,12 @@ function handClasses(): Record<string, Uint8Array> {
 const out = mkdtempSync(join(tmpdir(), "j2w-cu-"));
 const sh = shellIn(out);
 for (const [n, bytes] of Object.entries(handClasses())) writeFileSync(join(out, n + ".class"), bytes);
-sh(["javac", "--release", "17", "-cp", out, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java"), join(JAVA, "Bootstrap.java")]);
-sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["javac", "--release", "17", "-cp", `${out}:${androidPlatform(35)}/android.jar`, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java"), join(JAVA, "Bootstrap.java")]);
+sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Mt|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 await jsTier(loadDexes(dex));
+if (process.argv.includes("--signature-loader")) { await checkDeferredSignatures(); process.exit(0); }
+
 let forceAdmission = false, admissionTurns = 0;
 const loop = { ...defaultLoop, due: () => (forceAdmission && admissionTurns < 32) || defaultLoop.due(), yield: (soon: boolean) => {
   if (forceAdmission && admissionTurns < 32) admissionTurns++;
@@ -139,7 +162,7 @@ const constantSite = (name: string) => {
 const virtualSite = constantSite("hVirtual"), typeSite = constantSite("loaderType");
 if (handleMemberOwner(virtualSite.method, virtualSite.index) !== "Mh"
   || JSON.stringify(handleSignatureTypes(virtualSite.method, virtualSite.index)) !== JSON.stringify([{ owner: "Mc", descriptor: "I" }, { owner: "Mc", descriptor: "I" }])
-  || methodTypeSignatureTypes(typeSite.method, typeSite.index).some(t => t.owner !== "Mc" || t.descriptor !== "LMh;")) throw new Error("executed signature metadata contract changed");
+  || methodTypeSignatureTypes(typeSite.method, typeSite.index).some(t => t.owner !== "Mc" || t.descriptor !== "LMh$Signature;")) throw new Error("executed signature metadata contract changed");
 const dyn = w.prog.require("Dyn").methods.find(m => m.name === "constants")!;
 const customIndex = decodeInstructions(dyn.dex.code(dyn.codeOff).insns).find(i => i.name.startsWith("invoke-custom"))!.b;
 if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,methodType,class,methodType,handle") throw new Error("bootstrap reference ordering changed");
@@ -215,6 +238,7 @@ for (const isCold of [false, true]) {
   if (await tier.entryAsync(names[0], "loaderMismatch", "(Ljava/lang/invoke/MethodHandle;)I")(other) !== 1) throw new Error("invokeExact accepted a sibling loader signature");
 }
 console.log("14 executed cross-loader constant/polymorphic/bootstrap checks preserve sibling DEX identities");
+await checkDeferredSignatures();
 let suspendedCases = 0;
 for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
   forceAdmission = name === "tInvokerConcurrent";
@@ -279,3 +303,52 @@ const concat = outcome("concat"), lambda = outcome("lambda");
 if (concat !== "java/lang/NoClassDefFoundError: Failed resolution of: Ljava/lang/invoke/StringConcatFactory;") { console.log(`FAIL concat: ${concat}`); process.exit(1); }
 if (!lambda.startsWith("java/lang/BootstrapMethodError")) { console.log(`FAIL lambda: ${lambda}`); process.exit(1); }
 process.exit(bad || blocked ? 1 : 0);
+
+async function checkDeferredSignatures(): Promise<void> {
+  const signaturePath = "/data/local/tmp/mh-signatures.dex";
+  vfs.mount(signaturePath, new BytesFile(new Uint8Array(readFileSync(dex))));
+  for (const isCold of [false, true]) {
+    let loads = 0;
+    const tier = world(new Program(loadDexes(dex), program(jars)), { cold: isCold, natives, dexes: async path => {
+      if (path !== signaturePath) return undefined;
+      loads++; await new Promise<void>(resolve => queueMicrotask(resolve)); return loadDexes(dex);
+    } });
+    try { await processStateAsync(tier); }
+    catch (e) { const t = tier.throwable(e); throw new Error(`signature bootstrap: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    let object: object;
+    try { object = await tier.entryAsync("Mh", "signatureLoader", "(Ljava/lang/String;)Ljava/lang/ClassLoader;")(signaturePath) as object; }
+    catch (e) { const throwable = tier.throwable(e); throw new Error(`signature loader creation: ${throwable ? tier.classNameOf(throwable) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    const strand = tier.sched.strand();
+    let name: string;
+    try { name = await tier.resolveClass(definingLoader(tier, object), "Mt", strand); }
+    catch (e) { const t = tier.throwable(e); throw new Error(`signature child resolution: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    finally { strand.end(); }
+    if (name === "Mt" || loads !== 1) throw new Error("signature fixture did not load deferred child DEX");
+    for (const [method, desc] of [["type", "()Ljava/lang/invoke/MethodType;"], ["handle", "()Ljava/lang/invoke/MethodHandle;"], ["custom", "()Ljava/lang/Object;"]]) {
+      try { await tier.entryAsync(name, method, desc)(); throw new Error(`${method} bypassed Java loader signature denial`); }
+      catch (e) { const t = tier.throwable(e); if (!t || tier.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }
+    }
+    await tier.entryAsync("Mh", "allowSignature", "(Ljava/lang/ClassLoader;)V")(object);
+    let result: unknown;
+    try { result = await tier.entryAsync(name, "type", "()Ljava/lang/invoke/MethodType;")(); }
+    catch (e) { const t = tier.throwable(e); throw new Error(`signature constant execution: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    const returnType = await handleThunk(tier, "fixture:signatureReturn", ["L"], "L", (cx, c, arg) => {
+      arg(0); cx.callMethod(c, cx.prog.resolve("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;")!);
+    }, tier.sched.current())(result as object);
+    const owner = tier.sched.strand();
+    let key: string;
+    try { key = await tier.resolveClass(definingLoader(tier, object), "Mh$Signature", owner); } finally { owner.end(); }
+    const id = tier.hostFn("fixture:signatureId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(returnType as object);
+    if (id !== tier.idOf(key)) throw new Error(`deferred constant signature identity: cold=${isCold}, got=${id}, expected=${tier.idOf(key)}`);
+    const handle = await tier.entryAsync(name, "handle", "()Ljava/lang/invoke/MethodHandle;")();
+    if (await tier.entryAsync(name, "poly", tier.prog.viewOf(name, "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;"))(handle) !== null) throw new Error("deferred polymorphic prototype must match its handle");
+    if (await tier.entryAsync(name, "custom", "()Ljava/lang/Object;")() !== null) throw new Error("deferred bootstrap must retry against canonical signature identities");
+    try { await tier.entryAsync(name, "nullPoly", "()I")(); throw new Error("null polymorphic receiver returned"); }
+    catch (e) { const t = tier.throwable(e); if (!t || tier.classNameOf(t) !== "java/lang/NullPointerException") throw e; }
+    const bootstrapOwner = tier.sched.strand();
+    let bootstrap: string;
+    try { bootstrap = await tier.resolveClass(definingLoader(tier, object), "Bootstrap", bootstrapOwner); } finally { bootstrapOwner.end(); }
+    if (await tier.entryAsync(bootstrap, "tCustomConstants", "(I)I")(3) !== 8) throw new Error("deferred bootstrap encoded constants lost defining identities");
+  }
+  console.log("14 deferred Java-loader constant/polymorphic/bootstrap checks preserve defining identities, denial/retry and null precedence");
+}

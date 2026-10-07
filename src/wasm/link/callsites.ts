@@ -4,24 +4,25 @@ import { BOX } from "./reflect";
 import type { Program } from "../compiler/program";
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
-import { descToName } from "../../jvm/abi";
 import { methodOf } from "../compiler/ids";
-import { failed, resolveInvoke, typeFailure } from "../compiler/linkage";
+import { typeFailure } from "../compiler/linkage";
 import { constClass, typeName } from "./classes";
-import { box, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, mhInvoke } from "./mhandles";
+import { box, emitHandleValue, emitTypeValue, emitInvokeImport, handleThunk, mhInvoke, resolveHandleMember } from "./mhandles";
 import type { DexFile, EncVal } from "../../jvm/dex";
 import type { Compiler } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
 import type { MethodInfo } from "../compiler/program";
 import type { World } from "./world";
 import type { Strand } from "./sched";
+import { resolveHandleReference, resolveSignatureTypes } from "./resolution";
+import { methodTypeSignatureTypes } from "./mhandles";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CS = "java/lang/invoke/CallSite", LOOKUP = "java/lang/invoke/MethodHandles$Lookup";
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
 const chain = <A, B>(v: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => v instanceof Promise ? v.then(f) : f(v);
 const scalarType: Record<number, string> = { 0: "I", 2: "I", 3: "I", 4: "I", 6: "J", 0x10: "F", 0x11: "D", 0x15: `L${MT};`, 0x16: `L${MH};`, 0x17: "Ljava/lang/String;", 0x18: "Ljava/lang/Class;", 0x1f: "I" };
 export type BootstrapReference = { argument: number } & (
-  { kind: "handle" | "methodType"; index: number } | { kind: "class"; owner: string; descriptor: string }
+  { kind: "handle"; index: number } | { kind: "methodType"; index: number } | { kind: "class"; owner: string; descriptor: string }
 );
 
 /** Ordered metadata, consumed inside bootstrap validation's error boundary, never while compiling unused sites. */
@@ -69,47 +70,63 @@ function argument(cx: Compiler, c: Code, referrer: MethodInfo, type: number, val
     default: error(cx, c, "java/lang/ClassCastException", "Unsupported bootstrap argument type"); return false;
   }
 }
+function bootstrapFailure(prog: Program, target: MethodInfo, values: ReturnType<DexFile["callSiteValues"]>): { cls: string; message: string } | undefined {
+  const fail = (cls: string, message: string) => ({ cls, message });
+  if (target.flags & 0x80) {
+    const last = target.params.at(-1), start = target.params.length - 1;
+    if (!last || last[0] !== "[") return fail("java/lang/BootstrapMethodError", "Variable arity BSM does not have array as final argument");
+    if (values.length < start) return fail("java/lang/invoke/WrongMethodTypeException", "Insufficient bootstrap arguments");
+    for (let i = start; i < values.length; i++) if (scalarType[values[i].type] !== last.slice(1)) return fail("java/lang/ClassCastException", "Bootstrap collector argument type does not match component type");
+  }
+  const supplied = [`L${LOOKUP};`, ...values.slice(1).map(v => scalarType[v.type])];
+  if (target.flags & 0x80) supplied.splice(target.params.length - 1, Infinity, target.params.at(-1)!);
+  if (supplied.length !== target.params.length) return fail("java/lang/invoke/WrongMethodTypeException", "Bootstrap argument count does not match method type");
+  if (supplied.some((from, i) => from && !convertible(prog, from, target.params[i])) || target.ret !== "V" && !convertible(prog, `L${CS};`, target.ret)) return fail("java/lang/ClassCastException", "Bootstrap argument or return type is not convertible");
+}
+function resolveBootstrapArguments(w: World, referrer: MethodInfo, index: number, parent: Strand): void | Promise<void> {
+  const invalid = referrer.dex.callSiteValues(index).findIndex(v => !scalarType[v.type]);
+  const references = bootstrapReferences(referrer, index).filter(r => r.argument !== 0 && (invalid < 0 || r.argument < invalid));
+  const next = (at: number): void | Promise<void> => {
+    for (; at < references.length; at++) {
+      const ref = references[at];
+      const ready = ref.kind === "handle" ? resolveHandleReference(w, referrer, ref.index, parent)
+        : resolveSignatureTypes(w, ref.kind === "methodType" ? methodTypeSignatureTypes(referrer, ref.index) : [ref], parent);
+      if (ready instanceof Promise) return ready.then(() => next(at + 1));
+    }
+  };
+  return next(0);
+}
 function bootstrap(w: World, referrer: MethodInfo, index: number, parent: Strand): object | Promise<object> {
   const values = referrer.dex.callSiteValues(index), first = values[0]?.value as { kind?: string; idx: number };
   const fail = (message: string): never => { throw w.exception(w.makeThrowable("java/lang/BootstrapMethodError", message)); };
   if (values.length < 3) fail(`Truncated bootstrap arguments (${values.length} < 3)`);
   if (values[0].type !== 0x16 || first.kind !== "mhandle") fail("First bootstrap argument is not a method handle");
-  const dex = referrer.dex, h = dex.methodHandle(first.idx), mr = h.type === 4 ? dex.method(h.idx) : undefined;
-  const target = mr ? resolveInvoke(w.prog, "invoke-static", descToName(dex.type(mr.cls)), mr.name, dex.methodDesc(h.idx), referrer.cls) : undefined;
-  return handleThunk(w, `custom:bootstrap:${referrer.cls}:${dex.id}:${index}:${w.epoch}`, [], "L", (cx, c) => {
-    const handle = c.newLocal(T.anyref), args = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref);
-    if (!emitHandleValue(cx, c, referrer, first.idx)) return; c.lset(handle);
-    if (h.type !== 4) { error(cx, c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
-    if (target && !failed(target) && target.flags & 0x80) {
-      const last = target.params.at(-1);
-      if (!last || last[0] !== "[") { error(cx, c, "java/lang/BootstrapMethodError", "Variable arity BSM does not have array as final argument"); return; }
-      const start = target.params.length - 1;
-      if (values.length < start) { error(cx, c, "java/lang/invoke/WrongMethodTypeException", "Insufficient bootstrap arguments"); return; }
-      for (let i = start; i < values.length; i++) {
-        if (scalarType[values[i].type] !== last.slice(1)) { error(cx, c, "java/lang/ClassCastException", "Bootstrap collector argument type does not match component type"); return; }
+  return chain(resolveHandleReference(w, referrer, first.idx, parent), () => {
+    const dex = referrer.dex, h = dex.methodHandle(first.idx), member = resolveHandleMember(w, referrer, first.idx);
+    const target = "method" in member && h.type === 4 ? member.method : undefined;
+    const invalid = target ? bootstrapFailure(w.prog, target, values) : undefined;
+    const emit = () => handleThunk(w, `custom:bootstrap:${referrer.cls}:${dex.id}:${index}:${w.epoch}`, [], "L", (cx, c) => {
+      const handle = c.newLocal(T.anyref), args = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref);
+      if (!emitHandleValue(cx, c, referrer, first.idx)) return; c.lset(handle);
+      if (h.type !== 4) { error(cx, c, "java/lang/BootstrapMethodError", "Unsupported bootstrap method invocation kind"); return; }
+      if (invalid) { error(cx, c, invalid.cls, invalid.message); return; }
+      if (target && target.flags & 0x80) {
+        c.lget(handle); constClass(cx, c, target.params.at(-1)!); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
       }
-      c.lget(handle); constClass(cx, c, last); cx.callMethod(c, cx.prog.resolve(MH, "asVarargsCollector", `(Ljava/lang/Class;)L${MH};`)!); c.lset(handle);
-    }
-    if (target && !failed(target)) {
-      const supplied = [`L${LOOKUP};`, ...values.slice(1).map(v => scalarType[v.type])];
-      if (target.flags & 0x80) supplied.splice(target.params.length - 1, Infinity, target.params.at(-1)!);
-      if (supplied.length !== target.params.length) { error(cx, c, "java/lang/invoke/WrongMethodTypeException", "Bootstrap argument count does not match method type"); return; }
-      if (supplied.some((from, i) => from && !convertible(cx.prog, from, target.params[i])) || target.ret !== "V" && !convertible(cx.prog, `L${CS};`, target.ret)) {
-        error(cx, c, "java/lang/ClassCastException", "Bootstrap argument or return type is not convertible"); return;
+      cx.emitNewArray(c, "[Ljava/lang/Object;", () => c.i32(values.length)); c.lset(args);
+      cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); constClass(cx, c, referrer.cls); c.i32(15);
+      cx.callMethod(c, cx.prog.resolve(LOOKUP, "<init>", "(Ljava/lang/Class;I)V")!);
+      c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(0).lget(lookup).arraySet(cx.tData.ref);
+      const params = [`L${LOOKUP};`];
+      for (let i = 1; i < values.length; i++) {
+        const { type, value } = values[i];
+        c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i);
+        if (!argument(cx, c, referrer, type, value)) return; c.arraySet(cx.tData.ref); params.push(scalarType[type]);
       }
-    }
-    cx.emitNewArray(c, "[Ljava/lang/Object;", () => c.i32(values.length)); c.lset(args);
-    cx.emitEnsure(c, LOOKUP); cx.emitNew(c, LOOKUP); c.ltee(lookup); constClass(cx, c, referrer.cls); c.i32(15);
-    cx.callMethod(c, cx.prog.resolve(LOOKUP, "<init>", "(Ljava/lang/Class;I)V")!);
-    c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(0).lget(lookup).arraySet(cx.tData.ref);
-    const params = [`L${LOOKUP};`];
-    for (let i = 1; i < values.length; i++) {
-      const { type, value } = values[i];
-      c.lget(args).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i);
-      if (!argument(cx, c, referrer, type, value)) return; c.arraySet(cx.tData.ref); params.push(scalarType[type]);
-    }
-    emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, 0);
-  }, parent)() as object | Promise<object>;
+      emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(args), `(${params.join("")})L${CS};`, 0);
+    }, parent)() as object | Promise<object>;
+    return !target || invalid ? emit() : chain(resolveBootstrapArguments(w, referrer, index, parent), emit);
+  });
 }
 function wrap(w: World, e: unknown, index: number, parent: Strand): never | Promise<never> {
   const throwable = w.throwable(w.boundary(e));
@@ -124,11 +141,15 @@ export function invokeCustom(w: World, site: string, args: object, parent: Stran
   const split = site.lastIndexOf("#"), index = Number(site.slice(split + 1)), referrer = methodOf(w.prog, site.slice(0, split))!;
   let dexes = linked.get(w); if (!dexes) linked.set(w, dexes = new WeakMap());
   let sites = dexes.get(referrer.dex); if (!sites) dexes.set(referrer.dex, sites = new Map());
-  const proto = referrer.dex.proto((referrer.dex.callSite(index)[2] as { idx: number }).idx), params = proto.params.map(t => referrer.dex.type(t)), ret = referrer.dex.type(proto.ret), sig = `(${params.join("")})${ret}`;
+  const signature = () => {
+    const proto = referrer.dex.proto((referrer.dex.callSite(index)[2] as { idx: number }).idx);
+    return `(${proto.params.map(t => referrer.dex.type(t)).join("")})${referrer.dex.type(proto.ret)}`;
+  };
   const targetOf = w.fieldReader<object | null>(CS, "target", `L${MH};`);
-  const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, sig, 1, parent);
+  const invoke = (callSite: object) => mhInvoke(w, targetOf(callSite), args, signature(), 1, parent);
   const cached = sites.get(index); if (cached) return invoke(cached);
   const validate = (candidate: object | null): object | Promise<object> => {
+    const sig = signature();
     return handleThunk(w, `custom:validate:${sig}:${w.epoch}`, ["L"], "L", (cx, c, arg) => {
       arg(0); c.refIsNull().if_(); error(cx, c, "java/lang/ClassCastException", "Bootstrap method returned null"); c.end();
       arg(0); c.call(cx.castFn(CS)); const local = c.newLocal(T.anyref); c.lset(local);

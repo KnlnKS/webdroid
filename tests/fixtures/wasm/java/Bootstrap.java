@@ -23,6 +23,10 @@ public class Bootstrap {
     if (!s.equals("payload") || c != Bootstrap.class || !mt.equals(INT) || h.type().parameterCount() != 2) throw new AssertionError();
     return new ConstantCallSite(target((int) h.invokeExact(2, 3)));
   }
+  public static CallSite signature(MethodHandles.Lookup l, String n, MethodType t, Class<?> c, MethodType mt, MethodHandle h) {
+    if (c.getClassLoader() != l.lookupClass().getClassLoader() || mt.returnType() != c || mt.parameterType(0) != c || !h.type().equals(t)) throw new AssertionError();
+    return new ConstantCallSite(h);
+  }
   public static CallSite scalars(MethodHandles.Lookup l, String n, MethodType t, long j, float f, double d) throws Exception {
     if (j != 4294967303L || Float.floatToRawIntBits(f) != 0x80000000 || d != 2.5) throw new AssertionError();
     return new ConstantCallSite(target((int) j + (int) d));

@@ -394,7 +394,13 @@ export class ColdSlowOps {
     // Capture it before yielding; callFn enters a fresh engine stack using the bound peer.
     const peer = this.w.rtImports().thr.value;
     const call = () => {
-      const resolve = () => resolveInstruction(this.w, m, ins, strand);
+      const resolve = () => {
+        if (ins.name.startsWith("invoke-polymorphic") && m.dex.rawType(m.dex.method(ins.b).cls) === "Ljava/lang/invoke/MethodHandle;") {
+          const receiver = this.read(state, ins.regs[0], "L");
+          if (receiver == null || receiver === 0) return; // The adapter must raise NPE before signature resolution.
+        }
+        return resolveInstruction(this.w, m, ins, strand);
+      };
       const found = state.sync ? this.w.synchronous(resolve) : resolve();
       const execute = () => {
         adapter = this.adapter(m, ins);
