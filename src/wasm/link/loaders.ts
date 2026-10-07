@@ -9,7 +9,7 @@ import type { Loader } from "../compiler/program";
 import { dexesIn, type DexFile } from "../../jvm/dex";
 import type { World } from "./world";
 import { prepareDefinition, resolvedMirror } from "./resolution";
-import { emitSave } from "./sched";
+import { emitRestored } from "./sched";
 
 /** how host.classByName reads its scope: the loader whose view of the names is asked for, the loader whose own classes are asked for, or the dex files of a cookie */
 export const enum Lookup { Visible, Defined, Cookie, ForName }
@@ -161,22 +161,24 @@ const def = (key: string, f: (cx: Compiler, c: Code) => void) => loaderIntrinsic
 
 def("dalvik/system/DexFile.openDexFileNative(Ljava/lang/String;Ljava/lang/String;ILjava/lang/ClassLoader;[Ldalvik/system/DexPathList$Element;)Ljava/lang/Object;", (cx, c) => {
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  const restore = emitSave(cx, c);
   const wait = cx.global("rt", "wait", T.i32, true);
-  c.lget(0); cx.str.toHost(c); c.lget(3).externConvertAny(); c.call(cx.imp.dexOpen);
-  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
-  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
-  c.end().anyConvertExtern(); restore();
+  emitRestored(cx, c, [], [T.anyref], () => {
+    c.lget(0); cx.str.toHost(c); c.lget(3).externConvertAny(); c.call(cx.imp.dexOpen);
+    c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+    c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
+    c.end().anyConvertExtern();
+  });
 });
 // the classes of an opened dex are in the Program already: defining one is finding it among the cookie's
 def("dalvik/system/DexFile.defineClassNative(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Object;Ldalvik/system/DexFile;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
-  c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.Cookie); c.call(cx.imp.classByName).lset(id);
-  c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
-  c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end();
-  restore();
+  const wait = cx.global("rt", "wait", T.i32, true);
+  emitRestored(cx, c, [], [T.anyref], () => {
+    c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.Cookie); c.call(cx.imp.classByName).lset(id);
+    c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
+    c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end();
+  });
 });
 // classes are never unloaded, so a closed dex is still in use
 def("dalvik/system/DexFile.closeDexFile(Ljava/lang/Object;)Z", (cx, c) => { c.i32(0); });

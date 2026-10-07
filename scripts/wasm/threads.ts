@@ -23,6 +23,7 @@ import { resumeAs } from "../../src/jvm/natives/jentry";
 import { hasJspi } from "../../src/wasm/link/module";
 import { javaFrames } from "../../src/wasm/link/exc";
 import { T } from "../../src/wasm/compiler/wasmbin";
+import { classIntrinsics } from "../../src/wasm/link/classes";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 
@@ -183,6 +184,51 @@ if (substrate) {
   } finally {
     importStrand.end();
     delete w.host.importThrowPrepare; delete w.host.importThrow; delete w.host.importThrowCaught;
+  }
+  const lookupStrand = w.sched.strand(w.sched.hostThread()), lookupGlobals = w.rtImports();
+  const oldLookup = w.host.classByName, oldWait = w.host.annotationWait, oldSuspending = w.sched.suspending;
+  const lookupError = new Error("class lookup rejected");
+  try {
+    await lookupStrand.call(w.hostFn("substrate:lookup-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
+    // Interpose another completion after settle's rejection handler, before the engine's catch.
+    const suspending = oldSuspending.bind(w.sched);
+    w.sched.suspending = fn => suspending((...args) => {
+      const p = fn(...args);
+      if (p instanceof Promise) {
+        const then = p.then.bind(p);
+        p.then = ((ok, failed) => then(ok, e => {
+          try { return failed!(e); }
+          finally { queueMicrotask(() => w.sched.idle()); }
+        })) as typeof p.then;
+      }
+      return p;
+    });
+    w.host.annotationWait = w.sched.settle();
+    w.sched.suspending = oldSuspending;
+    w.host.classByName = () => { w.sched.parkNative(Promise.reject(lookupError)); return 0; };
+    w.host.lookupPrepare = () => { lookupGlobals.depth.value = 23; };
+    w.host.lookupCaught = () => {
+      expect("classForName rejected wait retains strand", w.sched.current().id, lookupStrand.id);
+      expect("classForName rejected wait retains Thread", lookupGlobals.thr.value === lookupStrand.thread.obj, true);
+      expect("classForName rejected wait retains depth", lookupGlobals.depth.value, 23);
+    };
+    let prepare = 0, caught = 0;
+    const key = "java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;";
+    const m = w.prog.resolve("java/lang/Class", "classForName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")!;
+    const lookup = w.hostFn("substrate:lookup-reject", ["L", "I", "L"], "V", (cx, c) => {
+      c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]);
+      classIntrinsics.get(key)!(cx, m, c); c.drop();
+      c.end().br(1).end().call(caught).throwRef().end();
+    }, cx => {
+      prepare = cx.mb.importFunc("host", "lookupPrepare", cx.sig([], "V"));
+      caught = cx.mb.importFunc("host", "lookupCaught", cx.sig([], "V"));
+    });
+    const got = await lookupStrand.call(lookup, w.javaString("missing.Type"), 0, null).then(() => null, e => e);
+    expect("classForName rejected wait rethrows the same exception", got === lookupError, true);
+  } finally {
+    lookupStrand.end();
+    w.host.classByName = oldLookup; w.host.annotationWait = oldWait; w.sched.suspending = oldSuspending;
+    delete w.host.lookupPrepare; delete w.host.lookupCaught;
   }
   admissionProbe = true;
   try {

@@ -19,7 +19,7 @@ import { hostUnsafe, UInfo, fieldCookie } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";
 import { Lookup, LOADER_OF_CLASS } from "./loaders";
-import { emitSave } from "./sched";
+import { emitRestored } from "./sched";
 
 const CLASS = "java/lang/Class", OBJ_ARRAY = "[Ljava/lang/Object;", FIELD = "java/lang/reflect/Field", FIELD_ARRAY = "[Ljava/lang/reflect/Field;";
 const CLONEABLE = ["java/lang/Cloneable", "java/io/Serializable"];
@@ -324,11 +324,13 @@ def("java/lang/Class.getNameNative()Ljava/lang/String;", (cx, c) => {
 def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
-  c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.ForName); c.call(cx.imp.classByName).lset(id);
-  c.gget(wait).if_();
-  c.i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern(); idOfClass(cx, c); c.lset(id);
-  c.end(); restore();
+  const wait = cx.global("rt", "wait", T.i32, true);
+  emitRestored(cx, c, [], [], () => {
+    c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.ForName); c.call(cx.imp.classByName).lset(id);
+    c.gget(wait).if_();
+    c.i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern(); idOfClass(cx, c); c.lset(id);
+    c.end();
+  });
   c.lget(id).raw(OP.i32_eqz).if_().lget(0); cx.callRt(c, "cnfe"); c.end();
   const init = c.newLocal(T.i32);
   c.lget(1).if_(); cx.info(c, Info.EnsureSlot, () => c.lget(id)); c.ltee(init).if_().lget(init).callIndirect(cx.sig([], "V")).end().end();
@@ -339,10 +341,12 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
-  c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).lset(id);
-  c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
-  c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end(); restore();
+  const wait = cx.global("rt", "wait", T.i32, true);
+  emitRestored(cx, c, [], [T.anyref], () => {
+    c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).lset(id);
+    c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
+    c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end();
+  });
 });
 
 // Class.getInnerClassFlags(default): the InnerClass annotation's flags, else `default`
