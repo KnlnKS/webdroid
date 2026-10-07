@@ -1,18 +1,11 @@
 // invoke-polymorphic on VarHandle access modes (AtomicInteger, AtomicReference, ForkJoinPool, ConcurrentLinkedQueue, ...).
-//
-// The call site's proto fixes the coordinate and value types; the VarHandle object decides which field they reach. A field
-// handle carries its field id (class id << 12 | index among the class's declared fields) in FieldVarHandle.artField, so a
-// site is compiled to a test of that id against the fields it can reach (declared fields of classes that relate to the
-// receiver type, i.e. its class and superclasses, and have the value type's family) and, per field, the access mode as plain struct operations. An array
-// handle's coordinates are the array and the index, so it needs no dispatch. Java threads yield only at suspension points, so
-// read-modify-write modes need no atomics. A receiver of a class with no field of the value type to try, or any static field, is reached
-// through the accessor slot the host hands out for the handle's field id (hostUnsafe). A value type that would need boxing is a gap.
+// Exact accessor types use guarded storage operations; conversions and views use the canonical Java bridge.
 import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind } from "./program";
 import { elemKindOf } from "./consts";
-import { descToName, varHandleValues } from "../../jvm/abi";
-import { emitStoreCheck, classMethod, Info } from "../link/classes";
+import { descToName, isWide, varHandleValues } from "../../jvm/abi";
+import { emitStoreCheck, classMethod, constClass, typeName, Info } from "../link/classes";
 import { UInfo } from "../link/unsafe";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import type { Compiler } from "./j2w";
@@ -60,7 +53,41 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
   const mr = dex.method(ins.b), cls = descToName(dex.type(mr.cls)), mode = mr.name;
   if (cls === "java/lang/invoke/MethodHandle" && (mode === "invoke" || mode === "invokeExact")) return emitHandleCall(mc, ins, mode === "invokeExact");
   if (cls !== VH || varHandleValues(mode) === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
-  return emitHandleCall(mc, ins, false, mode);
+  if (!emitExactAccess(mc, ins, mode)) return emitHandleCall(mc, ins, false, mode);
+}
+
+/** Compare the live libcore accessor classes, including defining loader identity, before using unboxed storage. */
+function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
+  const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => dex.type(t)), ret = dex.type(proto.ret);
+  const nv = varHandleValues(mode)!, coords = params.slice(0, params.length - nv), values = params.slice(params.length - nv), op = opOf(mode);
+  const variable = nv ? values[0] : ret;
+  if (variable === "V" || values.some(t => t !== variable) || ret !== (op === "set" ? "V" : op === "cas" ? "Z" : variable)) return false;
+  const storage = coords.length === 0 ? "java/lang/invoke/StaticFieldVarHandle"
+    : coords.length === 1 && coords[0][0] === "L" ? FVH
+    : coords.length === 2 && coords[0][0] === "[" && coords[1] === "I" && coords[0].slice(1) === variable ? "java/lang/invoke/ArrayElementVarHandle" : undefined;
+  if (coords.length === 1 && cx.structFor(descToName(coords[0])) === cx.tStr) return false;
+  if (!storage || (family(variable) === "F" || family(variable) === "D") && op.startsWith("getAndBitwise")) return false;
+  const handle = c.newLocal(T.anyref), match = c.newLocal(T.i32), vt = cx.structFor(VH), clsDesc = "Ljava/lang/Class;";
+  mc.nonNull(ins.regs[0]); c.lset(handle);
+  c.lget(handle).refTest(cx.structFor(storage));
+  const sameClass = (field: string, desc?: string) => {
+    c.lget(handle).refCast(vt).structGet(vt, cx.fieldIndex(VH, { owner: VH, name: field, desc: clsDesc }));
+    if (desc) constClass(cx, c, typeName(desc)); else c.anyNull();
+    c.call(cx.helper("acmp")).raw(OP.i32_and);
+  };
+  sameClass("varType", variable); sameClass("coordinateType0", coords[0]); sameClass("coordinateType1", coords[1]);
+  c.ltee(match).if_();
+  const accessMode = `${VH}$AccessMode`;
+  c.lget(handle); cx.emitEnsure(c, accessMode); cx.str.literal(c, mode);
+  cx.callMethod(c, cx.prog.resolve(accessMode, "valueFromMethodName", `(Ljava/lang/String;)L${accessMode};`)!);
+  cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${accessMode};)Z`)!);
+  c.lset(match).end();
+  c.lget(match).if_();
+  const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
+  const result = emitVarHandleAccess(cx, c, mode, params, ret, () => c.lget(handle), (kind, i) => mc.get(kind, regs[i]));
+  if (result) mc.finishResult(ins, result);
+  c.else_(); emitHandleCall(mc, ins, false, mode); c.end();
+  return true;
 }
 
 /** Canonical storage operations shared by DEX polymorphic sites and MethodHandle VarHandle invokers. */
@@ -109,7 +136,7 @@ export function emitVarHandleAccess(cx: Compiler, c: Code, mode: string, params:
       if (!jc?.def || jc.isInterface) continue;
       jc.fields.forEach((f, i) => { if (!f.isStatic && family(f.desc) === vf && i < 1 << 12) cands.push({ cn, fid: cx.idOf(cn) << 12 | i, fi: cx.fieldIndex(cn, f), letter: f.desc[0] }); });
     }
-    if (R === "java/lang/Void") cx.callThrower(c, "npe");        // the receiver is the literal null
+    if (R === "java/lang/Void") { cx.callThrower(c, "npe"); c.unreachable(); }        // the receiver is the literal null
     else if (cands.length && cands.length <= MAX_CANDIDATES) {
       const vh = c.newLocal(cx.vtOf("L")), recv = c.newLocal(cx.vtOf("L")), fid = c.newLocal(T.i32);
       nonNull(handle); c.lset(vh); nonNull(() => read("L", 0)); c.lset(recv);

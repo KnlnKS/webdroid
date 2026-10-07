@@ -142,6 +142,9 @@ const assertEagerFieldAccessors = (tier: typeof w) => {
     return slot;
   };
 };
+let bridgeCalls = 0;
+const invokeBridge = w.host.mhInvoke;
+w.host.mhInvoke = (...args: unknown[]) => { bridgeCalls++; return invokeBridge(...args); };
 assertEagerFieldAccessors(w);
 processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
@@ -162,6 +165,13 @@ const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
 };
 const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || cls === "Px" || cls === "Pt" || cls === "Bootstrap" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (JS/JDK or documented ART differences); ${threw} threw`);
+const bridgeCounts: Record<string, number> = {};
+for (const name of ["inst", "tDirectAdapt", "tDirectViews"]) {
+  const before = bridgeCalls, method = methods.find(m => m.cls === "Vh" && m.name === name)!;
+  entries.get(method)!(7); bridgeCounts[name] = bridgeCalls - before;
+}
+if (bridgeCounts.inst !== 0 || !bridgeCounts.tDirectAdapt || !bridgeCounts.tDirectViews) throw new Error(`exact storage/fallback bridge counts: ${JSON.stringify(bridgeCounts)}`);
+console.log(`direct bridge calls: ${JSON.stringify(bridgeCounts)} (work counts, no timing claim)`);
 const cold = world([dex, ...jars], { cold: true, natives, loop });
 assertEagerFieldAccessors(cold);
 processState(cold);
