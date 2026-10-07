@@ -304,9 +304,16 @@ export function jniInit(): void {
   });
   def(6, "FindClass", (cpu, a) => {
     a.p(); const n = a.str().replace(/\./g, "/");
-    const owner = cpu.nativeRuntime ?? rt, c = vm.find(n, owner, cpu.nativeClass);
-    if (!c) { pend(cpu, vm.noClass(n)); return 0; }
-    return toRef(vm.mirror(c, owner), cpu);
+    const owner = cpu.nativeRuntime ?? rt;
+    const found = (c: JniClass | null): number => {
+      if (!c) { pend(cpu, vm.noClass(n)); return 0; }
+      return toRef(vm.mirror(c, owner), cpu);
+    };
+    const rejected = (e: unknown): number => { failed(cpu, e); return 0; };
+    try {
+      const result = vm.resolve ? vm.resolve(n, owner, cpu.nativeClass) : vm.find(n, owner, cpu.nativeClass);
+      return result instanceof Promise ? result.then(found).catch(rejected) : found(result);
+    } catch (e) { return rejected(e); }
   });
   def(10, "GetSuperclass", (_c, a) => { a.p(); const c = classOf(a.p()); return c ? toRef(vm.superClass(c)) : 0; });
   def(11, "IsAssignableFrom", (_c, a) => { a.p(); const s = classOf(a.p()), t = classOf(a.p()); return s && t && vm.assignable(s, t) ? 1 : 0; });

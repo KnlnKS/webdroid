@@ -16,6 +16,8 @@ export interface JniVm {
   // ---------- classes
   /** FindClass: the class `name` of the library's loader (`owner`), or of the loader of `from`, the class of the native method that asks, linked but not initialized; null when there is none */
   find(name: string, owner: Runtime | null, from?: JniClass | null): JniClass | null;
+  /** Executed FindClass may enter a Java loader and suspend; export binding uses the known-class lookup above. */
+  resolve?(name: string, owner: Runtime | null, from?: JniClass | null): JniClass | null | Promise<JniClass | null>;
   /** the runtime a class was loaded by, when it is not the default one */
   owner(c: JniClass): Runtime | null;
   /** a class name or descriptor in the binary names JNI's short names spell */

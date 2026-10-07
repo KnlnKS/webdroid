@@ -73,6 +73,12 @@ export function wasmJni(w: World): JniVm {
       const key = prog.lookup(prog.loaderOf(from.name), name);
       return key === undefined ? null : cls(key);
     },
+    resolve(name, _owner, from) {
+      return nest(s => {
+        const result = w.resolveClass(from ? prog.loaderOf(from.name) : prog.root, name, s);
+        return result instanceof Promise ? result.then(cls) : cls(result);
+      });
+    },
     owner: () => null,
     // a class key carries the namespace of its loader (program.ts), which is no part of its name
     binaryName: javaName,

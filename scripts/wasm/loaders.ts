@@ -13,6 +13,12 @@ import { Program, ACC, type JClass } from "../../src/wasm/compiler/program";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
+import { jniInit, deref, javaVM } from "../../src/native/jni";
+import { useJniVm, vm as priorJniVm } from "../../src/native/jnivm";
+import { Cpu, setA64 } from "../../src/native/cpu";
+import { mem } from "../../src/native/mem";
+import { ldp, PTR } from "../../src/native/host";
+import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { St } from "../../src/wasm/link/monitor";
 import { HOSTED } from "../../src/wasm/link/hostapi";
@@ -215,6 +221,27 @@ for (const asynchronous of [false, true]) {
       }
     } finally { first.end(); second.end(); }
   }
+  const jni = wasmJni(resolver), previous = priorJniVm;
+  setA64(false); jniInit(); useJniVm(jni);
+  const name = mem.malloc(16), environment = mem.malloc(PTR);
+  mem.putCstr(name, "Shared");
+  try {
+    for (const mode of [0, 1]) {
+      const object = await resolver.entryAsync("Ldr", "resolverLoader", "(Ljava/lang/String;I)Ljava/lang/ClassLoader;")(paths[0], mode) as object;
+      const loader = definingLoader(resolver, object), owner = `fixture/NativeOwner@${loader.id}`;
+      resolver.prog.addClass({ name: owner, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, loader);
+      const cpu = new Cpu(mainThread, "loader-jni"); cpu.nativeClass = { name: owner };
+      const getEnv = ldp(ldp(javaVM.addr) + 6 * PTR);
+      if (await cpu.call(getEnv, [javaVM.addr, environment, 0x10006])) throw new Error("JNI fixture GetEnv failed");
+      const env = ldp(environment), find = ldp(ldp(env) + 6 * PTR);
+      const before = await calls() as number, handle = await cpu.call(find, [env, name]) as number;
+      if (await calls() !== before + 1) throw new Error("JNI FindClass bypassed its Java loader");
+      if (mode === 0) {
+        const key = resolver.prog.initiatedBy(loader, "Shared");
+        if (!handle || cpu.exc || jni.classOf(deref(handle, cpu))?.name !== key) throw new Error("suspended JNI FindClass lost its class or reference owner");
+      } else if (handle || !cpu.exc || resolver.classNameOf(cpu.exc as object) !== "java/lang/ClassNotFoundException") throw new Error("JNI loader failure did not remain pending");
+    }
+  } finally { mem.free(name); mem.free(environment); useJniVm(previous); }
 }
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);
