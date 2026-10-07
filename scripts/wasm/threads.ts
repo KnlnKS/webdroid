@@ -22,6 +22,7 @@ import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
 import { resumeAs } from "../../src/jvm/natives/jentry";
 import { hasJspi } from "../../src/wasm/link/module";
 import { javaFrames } from "../../src/wasm/link/exc";
+import { T } from "../../src/wasm/compiler/wasmbin";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 
@@ -139,6 +140,35 @@ if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffe
 
 // ---------- the substrate, directly
 if (substrate) {
+  const importStrand = w.sched.strand(w.sched.hostThread()), globals = w.rtImports();
+  try {
+    await importStrand.call(w.hostFn("substrate:import-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
+    for (const deferred of [false, true]) {
+      const error = new Error("suspending import failure"), mode = deferred ? "rejected" : "immediate";
+      let fail = 0, prepare = 0, caught = 0;
+      w.host.importThrowPrepare = () => { globals.depth.value = 23; };
+      w.host.importThrow = w.sched.suspending(() => { if (deferred) return Promise.reject(error); throw error; });
+      w.host.importThrowCaught = () => {
+        expect(`${mode} import catch retains strand`, w.sched.current().id, importStrand.id);
+        expect(`${mode} import catch retains Thread`, globals.thr.value === importStrand.thread.obj, true);
+        expect(`${mode} import catch retains depth`, globals.depth.value, 23);
+        if (!deferred) expect("immediate import catch retains native owner", w.sched.running === importStrand, true);
+      };
+      const f = w.hostFn("substrate:import-throw:" + mode, [], "V", (_cx, c) => {
+        c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]).call(fail).end().br(1).end();
+        c.call(caught).throwRef().end();
+      }, cx => {
+        prepare = cx.mb.importFunc("host", "importThrowPrepare", cx.sig([], "V"));
+        fail = cx.mb.importFunc("host", "importThrow", cx.sig([], "V"));
+        caught = cx.mb.importFunc("host", "importThrowCaught", cx.sig([], "V"));
+      });
+      const got = await importStrand.call(f).then(() => null, e => e);
+      expect(`${mode} Wasm rethrow retains the host exception`, got === error, true);
+    }
+  } finally {
+    importStrand.end();
+    delete w.host.importThrowPrepare; delete w.host.importThrow; delete w.host.importThrowCaught;
+  }
   admissionProbe = true;
   try {
     idleBeforeResume = true;

@@ -312,7 +312,13 @@ export class Sched {
       this.suspensions++;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
-      try { r = fn(...a); } finally { this.idle(); }
+      try { r = fn(...a); }
+      catch (e) {
+        // No stack switch occurred: Wasm may catch the import's throw on this strand.
+        this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth;
+        this.running = s; this.onThread?.(s.thread, false); throw e;
+      }
+      this.idle();
       // Immediate imports retain their engine stacks. Clear the quota only
       // when the import actually suspends, including a forced cold-loop yield.
       if (r instanceof Promise) s.nested = 0;
