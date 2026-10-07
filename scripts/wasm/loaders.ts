@@ -57,6 +57,7 @@ const build = (dir: string, sources: string[], classpath?: string) => {
   sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath?.split(":").flatMap(path => ["--classpath", path]) ?? []), ...readdirSync(join(out, dir), { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path)).map(path => join(out, dir, path)).filter(path => !/\/(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path))]);
   return join(out, dir, "classes.dex");
 };
+if (process.argv.includes("--super")) { await interfaceSuperControl(); process.exit(0); }
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
 const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
@@ -561,5 +562,37 @@ for (const asynchronous of [false, true]) {
     }
   } finally { mem.free(name); mem.free(environment); useJniVm(previous); }
 }
+await interfaceSuperControl();
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);
+
+async function interfaceSuperControl(): Promise<void> {
+  const dex = build("interfaceSuper", ["InterfaceSuper.java"]);
+  const names = ["selected", "reversed", "declared", "inherited", "classSuper"];
+  const jdk = sh(["java", "-cp", join(out, "interfaceSuper"), "InterfaceSuper"]).trim().split("\n").map(Number);
+  if (jdk.join(",") !== "22,22,33,11,44") throw new Error("interface-super JDK control changed");
+  const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
+  let checks = 0;
+  for (const cold of [false, true]) {
+    const p = new Program(loadDexes(dex), base), target = p.get("InterfaceSuper$Select")!.byKey.get("f()I")!;
+    const code = target.dex.code(target.codeOff).insns, ref = target.dex.method(code[1]);
+    if ((code[0] & 0xff) !== 0x6f || target.dex.rawType(ref.cls) !== "LInterfaceSuper$C;") throw new Error("D8 did not preserve invoke-super C.f");
+    const current = world(p, { cold }), mirrors = new Set<object>();
+    for (const namespace of ["root", "first", "second"]) {
+      let cls = "InterfaceSuper";
+      if (namespace !== "root") {
+        const loader = p.newLoader(p.boot, null);
+        current.addDexes(loadDexes(dex), loader); cls += "@" + loader.id;
+      }
+      for (let i = 0; i < names.length; i++) {
+        const got = await current.entryAsync(cls, names[i], "()I")();
+        if (got !== jdk[i]) throw new Error(`interface-super ${cold ? "cold" : "compiled"}/${namespace}/${names[i]}: ${got}, expected ${jdk[i]}`);
+        checks++;
+      }
+      mirrors.add(await current.entryAsync(cls, "self", "()Ljava/lang/Class;")() as object);
+    }
+    if (mirrors.size !== 3) throw new Error("interface-super loaders aliased Class identities");
+    if (cold && !current.stats.coldCalls) throw new Error("interface-super cold control did not execute the interpreter");
+  }
+  console.log(`interface-super: ${checks} compiled/cold root/two-loader cases match JDK; DEX retains invoke-super C.f; Class identities stay distinct`);
+}

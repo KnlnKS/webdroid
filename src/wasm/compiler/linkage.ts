@@ -124,6 +124,27 @@ function resolveSymbolicField(prog: Program, cls: string, name: string, desc: st
   return visit(cls);
 }
 
+/** ART Class::FindVirtualMethodForInterfaceSuper visits subinterfaces before their ancestors. */
+function interfaceSuper(prog: Program, cls: string, name: string, desc: string): MethodInfo | LinkFailure | undefined {
+  const own = symbolicMethod(prog.require(cls), name, desc);
+  if (own) return own;
+  const seen = new Set<string>(), candidates: MethodInfo[] = [];
+  const visit = (key: string) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    const c = prog.get(key);
+    if (!c) return;
+    const m = symbolicMethod(c, name, desc);
+    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) candidates.push(m);
+    c.ifaces.forEach(visit);
+  };
+  prog.require(cls).ifaces.forEach(visit);
+  const maximal = candidates.filter(m => !candidates.some(other => other !== m && prog.isSubclass(other.cls, m.cls)));
+  const defaults = maximal.filter(m => !(m.flags & ACC.ABSTRACT));
+  if (defaults.length > 1) return fail("icce", `Conflicting default methods for ${dotted(cls)}.${name}${javaName(desc)}`);
+  return defaults[0] ?? maximal[0];
+}
+
 /** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method, `kind` the opcode without /range. */
 export function resolveInvoke(prog: Program, kind: string, declaredCls: string, name: string, desc: string, referrer: string): MethodInfo | LinkFailure {
   const cls = declaredCls[0] === "[" ? "java/lang/Object" : declaredCls, c = prog.get(cls), at = declared(prog, referrer);
@@ -132,8 +153,9 @@ export function resolveInvoke(prog: Program, kind: string, declaredCls: string, 
   if (kind === "invoke-virtual" && c.isInterface) return fail("icce", `Found interface ${dotted(cls)}, but class was expected${at}`);
   const expected = kind.slice(7);
   const owner = kind === "invoke-super" && !c.isInterface ? prog.get(referrer)?.sup ?? cls : cls;
-  const m = resolveSymbolicMethod(prog, owner, name, desc);
+  const m = kind === "invoke-super" && c.isInterface ? interfaceSuper(prog, cls, name, desc) : resolveSymbolicMethod(prog, owner, name, desc);
   if (!m) return fail("nsme", `No ${expected} method ${name}${desc} in class ${descriptor(cls)} or its super classes${declared(prog, cls)}`);
+  if (failed(m)) return m;
   if (m.isStatic !== (kind === "invoke-static")) {
     const found = invokeType(m, prog);
     return fail("icce", `The method '${prettyMethod(m)}' was expected to be of type ${expected} but instead was found to be of type ${found}${at}`);
