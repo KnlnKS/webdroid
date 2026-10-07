@@ -10,6 +10,7 @@ import type { TierBackend } from "../../jvm/tier";
 import { dexesIn, dexEntryNames, type DexFile } from "../../jvm/dex";
 import { centralDir, entryBytes } from "../../jvm/natives/jzip";
 import { vfs } from "../../shell/vfs";
+import { packedArchives } from "../../shell/packedarchive";
 import { Program } from "../compiler/program";
 import { fetchPlatformJars, jarDexes } from "../../android/framework";
 import { PLATFORM_JARS, hostWhole } from "../../jvm/provenance";
@@ -157,9 +158,12 @@ export function openDexes(path: string, app: DexFile[], opened: Map<string, DexF
   path = vfs.norm(path);
   if (!opened.has(path)) {
     const own = appArchives.has(path) && app.length > 0;
-    const bytes = own ? null : vfs.readFile(path);
+    const packed = own ? undefined : packedArchives.get(path);
+    const bytes = own || packed ? null : vfs.readFile(path);
     const decode = (bytes: Uint8Array | null) => bytes === null ? own ? app : undefined : bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b ? dexesOf(bytes, path) : dexesIn(bytes, path);
-    opened.set(path, bytes instanceof Promise ? bytes.then(decode).catch(error => { opened.delete(path); throw error; }) : decode(bytes));
+    const dexes = packed ? packed.prepare(true).then(() => dexEntryNames(Object.keys(packed.zip)).flatMap(name => dexesIn(packed.zip[name], `${path}:${name}`)))
+      : bytes instanceof Promise ? bytes.then(decode) : decode(bytes);
+    opened.set(path, dexes instanceof Promise ? dexes.catch(error => { opened.delete(path); throw error; }) : dexes);
   }
   return opened.get(path);
 }

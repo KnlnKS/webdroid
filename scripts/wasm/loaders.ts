@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
+import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive";
 import { loadDexes, program, world } from "./lib";
 import { Program, ACC, type JClass } from "../../src/wasm/compiler/program";
 import { appArchives } from "../../src/jvm/natives/jdex";
@@ -73,6 +74,29 @@ try {
   const other = await openDexes(otherPath, ownDexes, opened);
   if (!other || other === ownDexes || other[0].id === ownDexes[0].id || await openDexes(otherPath, ownDexes, opened) !== other) throw new Error("another APK aliased the app's DEX or lost its cached identity");
 } finally { appArchives.delete(ownPath); }
+
+{
+  const path = "/data/app/loader-packed/base.apk", first = new Uint8Array(readFileSync(a)), second = new Uint8Array(readFileSync(b));
+  const zip = zipSync({ "classes2.dex": second, "classes.dex": first, "assets/unused": new Uint8Array([1, 2, 3]) });
+  const files = new Map<string, Uint8Array>(), requests: string[] = [], fetchBefore = globalThis.fetch;
+  const file = async (bytes: Uint8Array) => { const hash = await sha256(bytes), name = `${hash}.bin`; files.set(`/packed-loader/${name}`, bytes); return { file: name, size: bytes.length, sha256: hash }; };
+  const bootstrap = await file(zipSync({ "AndroidManifest.xml": new Uint8Array([0]) })), one = await file(first), two = await file(second), raw = await file(zip);
+  const packed = new PackedArchive({ version: 1, pkg: "loader-packed", sha256: raw.sha256, size: zip.length, certificates: [], bootstrap,
+    entries: { "classes2.dex": two, "classes.dex": one }, spans: [[0, zip.length, raw.file, 0]] }, "/packed-loader/");
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input), bytes = files.get(url.split("?")[0]); requests.push(url);
+    if (!bytes) throw new Error(`unexpected packed fixture request: ${url}`);
+    return new Response(new Uint8Array(bytes).buffer);
+  }) as typeof fetch;
+  packedArchives.set(path, packed); vfs.mount(path, packed);
+  try {
+    const result = await openDexes(path, ownDexes, opened);
+    if (result?.map(d => d.id).join() !== [...loadDexes(a), ...loadDexes(b)].map(d => d.id).join()) throw new Error("packed DEX precedence changed");
+    if (requests.some(url => url.includes("?raw=")) || requests.length !== 3) throw new Error("packed loader read the whole archive instead of its DEX entries");
+    if (await openDexes(path, ownDexes, opened) !== result || requests.length !== 3) throw new Error("packed DEX cache lost identity");
+    console.log("packed loader: ordered DEX entries and bootstrap only; cached identity preserved");
+  } finally { globalThis.fetch = fetchBefore; packedArchives.delete(path); vfs.delete(path, false); }
+}
 
 // the files the loaders open: libcore finds them through the file system, the World reads their dex
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
