@@ -12,6 +12,8 @@ import { Pool, u2, u4 } from "./classfile";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 import { handleThunk } from "../../src/wasm/link/mhandles";
+import { defaultLoop } from "../../src/wasm/link/sched";
+import { UInfo } from "../../src/wasm/link/unsafe";
 import { decodeInstructions } from "../../src/jvm/prepared";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
@@ -118,10 +120,28 @@ sh(["javac", "--release", "17", "-cp", out, "-d", out, join(JAVA, "Rec.java"), j
 sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 await jsTier(loadDexes(dex));
-const w = world([dex, ...jars], { natives }), hit: string[] = [];
+let forceAdmission = false, admissionTurns = 0;
+const loop = { ...defaultLoop, due: () => forceAdmission || defaultLoop.due(), yield: (soon: boolean) => {
+  if (forceAdmission) admissionTurns++;
+  return defaultLoop.yield(soon);
+} };
+const w = world([dex, ...jars], { natives, loop }), hit: string[] = [];
 const constants = w.prog.require("Mc").methods.filter(m => m.codeOff).flatMap(m => decodeInstructions(m.dex.code(m.codeOff).insns));
 const kinds = new Set(constants.filter(i => i.name === "const-method-handle").map(i => w.prog.require("Mc").dex!.methodHandle(i.b).type));
 if (kinds.size !== 9 || !constants.some(i => i.name === "const-method-type")) throw new Error("constant fixture must retain both DEX opcodes and all nine handle kinds");
+// Pure accessors must already be installed when their host lookup returns, even when lazy admission is due.
+const rejectFieldAdmission = (tier: typeof w) => {
+  const info = tier.host.info;
+  tier.host.info = (kind: number, a: number, b: number) => {
+    const slot = info(kind, a, b);
+    if ([UInfo.FieldGet, UInfo.FieldPut, UInfo.StaticGet, UInfo.StaticPut].includes(kind) && slot) {
+      const state = tier.slotAt(slot);
+      if (state?.k !== "synth" || !state.done) throw new Error("field accessor still needs lazy admission");
+    }
+    return slot;
+  };
+};
+rejectFieldAdmission(w);
 processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry" && m.name !== "tInvokerConcurrent"));
@@ -141,7 +161,8 @@ const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
 };
 const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || cls === "Px" || cls === "Pt" || cls === "Bootstrap" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (JS/JDK or documented ART differences); ${threw} threw`);
-const cold = world([dex, ...jars], { cold: true, natives });
+const cold = world([dex, ...jars], { cold: true, natives, loop });
+rejectFieldAdmission(cold);
 processState(cold);
 const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom") || c.m.name.startsWith("tInvoker"));
 for (const { m, args, i } of constantCases) {
@@ -155,6 +176,7 @@ for (const { m, args, i } of constantCases) {
 console.log(`${constantCases.length} constant/transformer/bootstrap cases match on the cold tier`);
 let suspendedCases = 0;
 for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
+  forceAdmission = name === "tInvokerConcurrent";
   const waiting = [-1, 7], reference = sh(["java", "-cp", out, "Ref"], waiting.map(a => `${cls}.${name} ${a}`).join("\n") + "\n").trim().split("\n");
   for (const tier of [w, cold]) for (const [i, a] of waiting.entries()) {
     const value = await tier.entryAsync(cls, name, "(I)I")(a);
@@ -162,7 +184,15 @@ for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcur
     suspendedCases++;
   }
 }
+forceAdmission = false;
+if (!admissionTurns) throw new Error("VarHandle concurrency fixture must force lazy-link turns");
+console.log(`${admissionTurns} forced admission turns retain eager field accessors`);
 console.log(`${suspendedCases} suspended handle cases preserve thread, monitor ownership and exceptions`);
+for (const tier of [w, cold]) {
+  if (await tier.entryAsync("Vh", "artExternalView", "(I)I")(7) !== 2) throw new Error("external view must reject before accessing its bytes");
+}
+console.log("4 external view operations reject ranges lacking a synchronous atomic primitive");
+
 // ART retries failed linkage (the JDK caches failures), and requires exact collector component types (the JDK adapts them).
 for (const tier of [w, cold]) {
   if (await tier.entryAsync("Bootstrap", "artCollectorMismatch", "(I)I")(0) !== 31) throw new Error("ART bootstrap collectors require exact component types");

@@ -188,18 +188,33 @@ public class Vh {
     return r;
   }
 
+  static int artExternalView(int a) throws Throwable {
+    VarHandle vh = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(8);
+    java.lang.reflect.Field address = java.nio.Buffer.class.getDeclaredField("address");
+    address.setAccessible(true); address.setLong(buffer, 0x10_0000_0000L);
+    int rejected = 0;
+    try { vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(buffer, 0, a); }
+    catch (UnsatisfiedLinkError e) { rejected++; }
+    try { int unused = (int) vh.toMethodHandle(VarHandle.AccessMode.GET_AND_ADD).invokeExact(buffer, 0, a); }
+    catch (UnsatisfiedLinkError e) { rejected++; }
+    return rejected;
+  }
+
   public static int tInvokerConcurrent(int a) throws Throwable {
     VarHandle vh = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
     java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(8);
     vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(buffer, 0, a);
     MethodHandle add = vh.toMethodHandle(VarHandle.AccessMode.GET_AND_ADD).bindTo(buffer);
+    SL.set((long) a);
+    MethodHandle staticAdd = SL.toMethodHandle(VarHandle.AccessMode.GET_AND_ADD);
     class Worker extends Thread {
       public void run() {
-        try { for (int i = 0; i < 100; i++) { int unused = (int) add.invokeExact(0, 1); Thread.yield(); } }
+        try { for (int i = 0; i < 100; i++) { int unused = (int) add.invokeExact(0, 1); long old = (long) staticAdd.invokeExact(1L); Thread.yield(); } }
         catch (Throwable e) { throw new AssertionError(e); }
       }
     }
     Thread first = new Worker(), second = new Worker(); first.start(); second.start(); first.join(); second.join();
-    return (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(buffer, 0);
+    return (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(buffer, 0) + (int) (long) SL.get();
   }
 }

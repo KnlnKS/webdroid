@@ -39,6 +39,11 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
     if (mode !== "get" && mode !== "set") {
       c.lget(address).lget(index).raw(OP.i64_extend_i32_u, OP.i64_add).i64(BigInt(width - 1)).raw(OP.i64_and, OP.i64_eqz, OP.i32_eqz).if_(); failure("java/lang/IllegalStateException"); c.end();
     }
+    // External regions may page in asynchronously. Reject the entire range before touching memory.
+    c.lget(address).raw(OP.i64_eqz, OP.i32_eqz).if_();
+    c.lget(address).lget(index).raw(OP.i64_extend_i32_u, OP.i64_add).i64(0x10000n).raw(OP.i64_sub)
+      .i64(0x1_0000_0000n - 0x10000n - BigInt(width)).raw(OP.i64_gt_u).if_();
+    cx.gap(c, "VarHandle view: external memory range has no synchronous atomic primitive"); c.end().end();
     const byteIndex = (i: number) => c.lget(index).i32(i).raw(OP.i32_add);
     const memoryAddress = (i: number) => { c.lget(address); byteIndex(i); c.raw(OP.i64_extend_i32_u, OP.i64_add); };
     const data = () => c.lget(bytes).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2);
