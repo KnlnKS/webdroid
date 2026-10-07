@@ -124,7 +124,7 @@ const kinds = new Set(constants.filter(i => i.name === "const-method-handle").ma
 if (kinds.size !== 9 || !constants.some(i => i.name === "const-method-type")) throw new Error("constant fixture must retain both DEX opcodes and all nine handle kinds");
 processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
-const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry"));
+const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry" && m.name !== "tInvokerConcurrent"));
 const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
   ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
@@ -143,7 +143,7 @@ const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cl
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (JS/JDK or documented ART differences); ${threw} threw`);
 const cold = world([dex, ...jars], { cold: true, natives });
 processState(cold);
-const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom"));
+const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom") || c.m.name.startsWith("tInvoker"));
 for (const { m, args, i } of constantCases) {
   let value: unknown;
   try { value = await cold.entryAsync(m.cls, m.name, m.desc)(...args.map(Number)); } catch (e) {
@@ -154,10 +154,10 @@ for (const { m, args, i } of constantCases) {
 }
 console.log(`${constantCases.length} constant/transformer/bootstrap cases match on the cold tier`);
 let suspendedCases = 0;
-for (const name of ["tConstWait", "tTransformWait", "tTransformConcurrent"]) {
-  const waiting = [-1, 7], reference = sh(["java", "-cp", out, "Ref"], waiting.map(a => `Mh.${name} ${a}`).join("\n") + "\n").trim().split("\n");
+for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
+  const waiting = [-1, 7], reference = sh(["java", "-cp", out, "Ref"], waiting.map(a => `${cls}.${name} ${a}`).join("\n") + "\n").trim().split("\n");
   for (const tier of [w, cold]) for (const [i, a] of waiting.entries()) {
-    const value = await tier.entryAsync("Mh", name, "(I)I")(a);
+    const value = await tier.entryAsync(cls, name, "(I)I")(a);
     if (String(value) !== reference[i]) throw new Error(`suspended ${name}(${a}): ${value} != ${reference[i]}`);
     suspendedCases++;
   }

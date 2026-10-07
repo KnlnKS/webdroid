@@ -5,7 +5,8 @@
 // an external mapping or a higher plane, which the production natives answer.
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
-import type { Code } from "../compiler/code";
+import { Code } from "../compiler/code";
+import { rtfns } from "../compiler/rtfns";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
 import "./guest";
@@ -22,15 +23,24 @@ const guest = (c: Code, a: number) => c.lget(a).i64(LOW).raw(OP.i64_sub).i64(0x1
 
 const SCALARS: [peek: string, poke: string, bits: 8 | 16 | 32 | 64][] = [["peekByte(J)B", "pokeByte(JB)V", 8], ["peekShortNative(J)S", "pokeShortNative(JS)V", 16],
   ["peekIntNative(J)I", "pokeIntNative(JI)V", 32], ["peekLongNative(J)J", "pokeLongNative(JJ)V", 64]];
+/** The view bridge inlines pure guest operations so cooperative lazy links cannot split an atomic access. */
+export function emitMemoryScalar(cx: Compiler, c: Code, m: MethodInfo, peek: boolean, bits: 8 | 16 | 32 | 64, inlineRuntime = false): void {
+  const call = (name: string) => {
+    if (!inlineRuntime) { cx.callRt(c, name); return; }
+    const fn = cx.memo(`memory:inline:${name}`, () => {
+      const d = rtfns.get(name)!, fn = cx.mb.reserveFunc(cx.sig(d.params, d.ret), "$" + name), body = new Code(d.params.length);
+      d.body(cx, body); cx.mb.setBody(fn, body.finish()); return fn;
+    });
+    c.call(fn);
+  };
+  guest(c, 0).if_(peek ? bits === 64 ? T.i64 : T.i32 : undefined).lget(0).raw(OP.i32_wrap_i64);
+  if (!peek) c.lget(1);
+  call(`${peek ? "gld" : "gst"}${bits}`);
+  c.else_(); leaf(cx, c, m); c.end();
+}
 for (const [peek, poke, bits] of SCALARS) {
-  memoryIntrinsics.set(MEMORY + peek, (cx, m, c) => {
-    guest(c, 0).if_(bits === 64 ? T.i64 : T.i32).lget(0).raw(OP.i32_wrap_i64); cx.callRt(c, `gld${bits}`);
-    c.else_(); leaf(cx, c, m); c.end();
-  });
-  memoryIntrinsics.set(MEMORY + poke, (cx, m, c) => {
-    guest(c, 0).if_().lget(0).raw(OP.i32_wrap_i64).lget(1); cx.callRt(c, `gst${bits}`);
-    c.else_(); leaf(cx, c, m); c.end();
-  });
+  memoryIntrinsics.set(MEMORY + peek, (cx, m, c) => emitMemoryScalar(cx, c, m, true, bits));
+  memoryIntrinsics.set(MEMORY + poke, (cx, m, c) => emitMemoryScalar(cx, c, m, false, bits));
 }
 
 // peek/poke<Kind>Array(address, array, index, count[, swap]): count elements between native memory and the array's elements from index

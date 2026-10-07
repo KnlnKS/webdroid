@@ -75,4 +75,131 @@ public class Vh {
     return r + a;
   }
   public static int fieldAfterInit(int a) { Vh v = new Vh(); VI.set(v, a); return (int) VI.getAndAdd(v, 1) + v.vi; }
+
+  static MethodHandle inv(VarHandle.AccessMode mode, MethodType type, boolean exact) {
+    return exact ? MethodHandles.varHandleExactInvoker(mode, type) : MethodHandles.varHandleInvoker(mode, type);
+  }
+  public static int tInvokerField(int a) throws Throwable {
+    Vh v = new Vh(); v.i = a;
+    MethodHandle h = inv(VarHandle.AccessMode.GET_AND_ADD, MethodType.methodType(int.class, Vh.class, int.class), true);
+    int before = (int) h.invokeExact(I, v, 3);
+    return before + v.i;
+  }
+  public static int tInvokerBound(int a) throws Throwable {
+    Vh v = new Vh(); v.i = a;
+    MethodHandle h = I.toMethodHandle(VarHandle.AccessMode.GET).bindTo(v);
+    return (int) h.invokeExact() + (int) MethodHandles.filterReturnValue(h, MethodHandles.identity(int.class)).invokeExact();
+  }
+  public static long tInvokerStatic(int a) throws Throwable {
+    sl = a;
+    MethodHandle h = inv(VarHandle.AccessMode.GET_AND_SET, MethodType.methodType(long.class, long.class), true);
+    long before = (long) h.invokeExact(SL, 1L << 40);
+    return before + sl;
+  }
+  public static int tInvokerArray(int a) throws Throwable {
+    int[] array = new int[3]; array[1] = a;
+    MethodHandle h = inv(VarHandle.AccessMode.COMPARE_AND_EXCHANGE, MethodType.methodType(int.class, int[].class, int.class, int.class, int.class), true);
+    int before = (int) h.invokeExact(AI, array, 1, a, a + 4);
+    return before + array[1];
+  }
+  public static int tInvokerAdapt(int a) throws Throwable {
+    Vh v = new Vh(); v.i = a;
+    MethodHandle get = inv(VarHandle.AccessMode.GET, MethodType.methodType(Object.class, Object.class), false);
+    MethodHandle set = inv(VarHandle.AccessMode.SET, MethodType.methodType(void.class, Object.class, Object.class), false);
+    set.invokeExact(I, (Object) v, (Object) Integer.valueOf(a + 2));
+    return (Integer) (Object) get.invokeExact(I, (Object) v);
+  }
+  public static long tInvokerWiden(int a) throws Throwable {
+    Vh v = new Vh(); v.i = a;
+    return (long) inv(VarHandle.AccessMode.GET, MethodType.methodType(long.class, Vh.class), false).invokeExact(I, v);
+  }
+  public static int tInvokerFloating(int a) throws Throwable {
+    Vh v = new Vh(); v.f = a; v.d = a;
+    float f = (float) inv(VarHandle.AccessMode.GET_AND_ADD, MethodType.methodType(float.class, Vh.class, float.class), true).invokeExact(F, v, 0.5f);
+    double d = (double) inv(VarHandle.AccessMode.GET_AND_ADD, MethodType.methodType(double.class, Vh.class, double.class), true).invokeExact(D, v, 0.25);
+    return (int) ((f + d + v.f + v.d) * 4);
+  }
+  public static int tInvokerErrors(int a) throws Throwable {
+    int r = 0;
+    MethodHandle get = inv(VarHandle.AccessMode.GET, MethodType.methodType(int.class, Vh.class), true);
+    try { int unused = (int) get.invokeExact((VarHandle) null, new Vh()); } catch (NullPointerException e) { r += 1; }
+    try { long unused = (long) inv(VarHandle.AccessMode.GET, MethodType.methodType(long.class, Vh.class), true).invokeExact(I, new Vh()); } catch (WrongMethodTypeException e) { r += 2; }
+    try { Object unused = (Object) inv(VarHandle.AccessMode.GET, MethodType.methodType(Object.class, Object.class), false).invokeExact(I, (Object) "wrong"); } catch (ClassCastException e) { r += 4; }
+    try { int unused = (int) AI.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(new int[2], -1); } catch (ArrayIndexOutOfBoundsException e) { r += 8; }
+    try { int unused = (int) inv(VarHandle.AccessMode.GET_AND_ADD, MethodType.methodType(int.class, Vh.class, int.class), false).invokeExact(S, new Vh(), 1); } catch (UnsupportedOperationException e) { r += 16; }
+    return r + a;
+  }
+
+  public static int tInvokerViewArray(int a) throws Throwable {
+    VarHandle vh = MethodHandles.byteArrayViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    byte[] data = new byte[12];
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(data, 1, a);
+    int r = (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(data, 1);
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(data, 4, a + 2);
+    r += (int) vh.toMethodHandle(VarHandle.AccessMode.GET_AND_ADD).invokeExact(data, 4, 3);
+    r += (int) vh.toMethodHandle(VarHandle.AccessMode.GET_VOLATILE).invokeExact(data, 4);
+    try { int unused = (int) vh.toMethodHandle(VarHandle.AccessMode.GET_OPAQUE).invokeExact(data, 1); } catch (IllegalStateException e) { r += 100; }
+    try { int unused = (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(data, 10); } catch (IndexOutOfBoundsException e) { r += 1000; }
+    return r;
+  }
+  public static int tInvokerViewBuffer(int a) throws Throwable {
+    VarHandle vh = MethodHandles.byteBufferViewVarHandle(long[].class, java.nio.ByteOrder.LITTLE_ENDIAN);
+    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.BIG_ENDIAN);
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(buffer, 8, (long) a);
+    long before = (long) vh.toMethodHandle(VarHandle.AccessMode.GET_AND_SET).invokeExact(buffer, 8, 1L << 40);
+    long after = (long) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(buffer, 8);
+    int r = (int) before + (int) (after >> 40);
+    if (buffer.order() == java.nio.ByteOrder.BIG_ENDIAN && buffer.position() == 0) r += 10;
+    java.nio.ByteBuffer readOnly = buffer.asReadOnlyBuffer();
+    try { boolean unused = (boolean) vh.toMethodHandle(VarHandle.AccessMode.COMPARE_AND_SET).invokeExact(readOnly, 8, 99L, 0L); } catch (java.nio.ReadOnlyBufferException e) { r += 100; }
+    try { long unused = (long) vh.toMethodHandle(VarHandle.AccessMode.GET_VOLATILE).invokeExact(buffer, 1); } catch (IllegalStateException e) { r += 1000; }
+    return r;
+  }
+
+  public static int tInvokerViewKinds(int a) throws Throwable {
+    byte[] bytes = new byte[32];
+    VarHandle c = MethodHandles.byteArrayViewVarHandle(char[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    c.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(bytes, 1, (char) (a + 65530));
+    int r = (char) c.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(bytes, 1);
+    VarHandle s = MethodHandles.byteArrayViewVarHandle(short[].class, java.nio.ByteOrder.LITTLE_ENDIAN);
+    s.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(bytes, 4, (short) -a);
+    r += (short) s.toMethodHandle(VarHandle.AccessMode.GET_VOLATILE).invokeExact(bytes, 4);
+    VarHandle d = MethodHandles.byteArrayViewVarHandle(double[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    d.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(bytes, 8, -0.0);
+    r += (boolean) d.toMethodHandle(VarHandle.AccessMode.COMPARE_AND_SET).invokeExact(bytes, 8, 0.0, 2.0) ? -100 : 100;
+    r += (boolean) d.toMethodHandle(VarHandle.AccessMode.COMPARE_AND_SET).invokeExact(bytes, 8, -0.0, 3.0) ? 1000 : -1000;
+    r += (int) (double) d.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(bytes, 8);
+    return r;
+  }
+  public static int tInvokerViewDirect(int a) throws Throwable {
+    VarHandle vh = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    java.nio.ByteBuffer direct = java.nio.ByteBuffer.allocateDirect(24);
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(direct, 4, a);
+    int r = (int) vh.toMethodHandle(VarHandle.AccessMode.GET_AND_BITWISE_XOR).invokeExact(direct, 4, 3);
+    r += (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(direct, 4);
+    direct.position(1); java.nio.ByteBuffer slice = direct.slice();
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(slice, 0, a + 1);
+    r += (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(slice, 0);
+    try { int unused = (int) vh.toMethodHandle(VarHandle.AccessMode.GET_ACQUIRE).invokeExact(slice, 0); } catch (IllegalStateException e) { r += 100; }
+    java.nio.ByteBuffer heap = java.nio.ByteBuffer.allocate(16); heap.position(3); heap = heap.slice();
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(heap, 0, a + 2);
+    r += (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(heap, 0);
+    try { vh.toMethodHandle(VarHandle.AccessMode.SET_RELEASE).invokeExact(heap, 0, 1); } catch (IllegalStateException e) { r += 1000; }
+    return r;
+  }
+
+  public static int tInvokerConcurrent(int a) throws Throwable {
+    VarHandle vh = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(8);
+    vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(buffer, 0, a);
+    MethodHandle add = vh.toMethodHandle(VarHandle.AccessMode.GET_AND_ADD).bindTo(buffer);
+    class Worker extends Thread {
+      public void run() {
+        try { for (int i = 0; i < 100; i++) { int unused = (int) add.invokeExact(0, 1); Thread.yield(); } }
+        catch (Throwable e) { throw new AssertionError(e); }
+      }
+    }
+    Thread first = new Worker(), second = new Worker(); first.start(); second.start(); first.join(); second.join();
+    return (int) vh.toMethodHandle(VarHandle.AccessMode.GET).invokeExact(buffer, 0);
+  }
 }

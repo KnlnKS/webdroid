@@ -18,6 +18,8 @@ import { canAccess, constClass, typeName } from "./classes";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure } from "../compiler/linkage";
 import { emitSave, type Strand } from "./sched";
 import type { DexFile } from "../../jvm/dex";
+import { emitVarHandleAccess } from "../compiler/poly";
+import { invokeVarHandleView } from "./vhandleviews";
 import { invokeCustom } from "./callsites";
 import type { MethodInfo } from "../compiler/program";
 import type { Kind } from "../compiler/program";
@@ -223,6 +225,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     return chain(adapted, adapted => mhInvoke(w, adapted, args, siteId, 1, parent));
   }
   const kind = s.handleKind(mh!), K = s.kinds, art = s.art(mh!);
+  if (kind === K.INVOKE_VAR_HANDLE || kind === K.INVOKE_VAR_HANDLE_EXACT) return invokeVarHandle(w, args, art, kind === K.INVOKE_VAR_HANDLE_EXACT, np, nr, parent);
   if (kind === K.INVOKE_TRANSFORM) return transform(w, mh!, args, sp, sr, parent);
   const given = Array.from({ length: sp.length }, (_, i) => s.aget(args, i));
   const out = (v: unknown) => v as object | null | Promise<object | null>;
@@ -271,6 +274,56 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   }
   w.onGap(w.gapId(`MethodHandle invocation kind ${kind}`));
   return fail("java/lang/UnsatisfiedLinkError", `MethodHandle invocation kind ${kind}`);
+}
+
+/** ART DoVarHandleInvokeTranslation obtains the access-mode type, checks exact invokers, then dispatches the accessor. */
+function invokeVarHandle(w: World, args: object, art: bigint, exact: boolean, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
+  const s = state(w), VH = "java/lang/invoke/VarHandle", AM = `${VH}$AccessMode`;
+  const fail = (cls: string, message: string | null): never => { throw w.exception(w.makeThrowable(cls, message)); };
+  if (params[0] !== `L${VH};`) fail("java/lang/invoke/WrongMethodTypeException", "Expected leading VarHandle parameter");
+  const handle = s.aget(args, 0);
+  if (!handle) fail("java/lang/NullPointerException", "Expected argument 1 to be a non-null VarHandle");
+  const method = w.prog.require(w.nameOf(Number(art >> 16n))).methods[Number(art & 0xffffn)], mode = method.name;
+  const accessMode = (cx: Compiler, c: Code) => {
+    cx.emitEnsure(c, AM); cx.str.literal(c, mode);
+    cx.callMethod(c, cx.prog.resolve(AM, "valueFromMethodName", `(Ljava/lang/String;)L${AM};`)!);
+  };
+  const type = handleThunk(w, `mh:varHandleType:${mode}`, ["L"], "L", (cx, c, arg) => {
+    arg(0); accessMode(cx, c); cx.callMethod(c, cx.prog.resolve(VH, "accessModeType", `(L${AM};)L${MT};`)!);
+  }, parent)(handle) as object | Promise<object>;
+  return chain(type, type => {
+    const actual = signatureOf(w, type), match = ret === actual.ret && params.length === actual.params.length + 1 && actual.params.every((p, i) => p === params[i + 1]);
+    if (exact && !match) fail("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(actual.params, actual.ret)} but was ${prettySig(params.slice(1), ret)}`);
+    const supported = handleThunk(w, `mh:varHandleSupported:${mode}`, ["L"], "I", (cx, c, arg) => {
+      arg(0); accessMode(cx, c); cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${AM};)Z`)!);
+    }, parent)(handle) as number | Promise<number>;
+    return chain(supported, supported => {
+      if (!supported) fail("java/lang/UnsupportedOperationException", null);
+      if (!match) {
+        const normalized = handleThunk(w, `mh:varHandleInvoker:${art}:${actual.params.join("")}:${actual.ret}`, [], "L", (cx, c) => {
+          const impl = "java/lang/invoke/MethodHandleImpl", local = c.newLocal(T.anyref);
+          cx.emitEnsure(c, impl); cx.emitNew(c, impl); c.ltee(local).i64(art).i32(s.kinds.INVOKE_VAR_HANDLE_EXACT);
+          emitMethodType(cx, c, actual.ret, [`L${VH};`, ...actual.params]);
+          cx.callMethod(c, cx.prog.resolve(impl, "<init>", `(JIL${MT};)V`)!); c.lget(local);
+        }, parent)() as object | Promise<object>;
+        return chain(normalized, normalized => mhInvoke(w, normalized, args, `(${params.join("")})${ret}`, 0, parent));
+      }
+      // View handles need byte addressing and alignment, not the element-array lowering.
+      const storage = w.classNameOf(handle);
+      if (storage === "java/lang/invoke/ByteArrayViewVarHandle" || storage === "java/lang/invoke/ByteBufferViewVarHandle") return invokeVarHandleView(w, handle, args, storage, mode, actual.params, actual.ret, parent);
+      if (storage !== "java/lang/invoke/FieldVarHandle" && storage !== "java/lang/invoke/StaticFieldVarHandle" && storage !== "java/lang/invoke/ArrayElementVarHandle") {
+        w.onGap(w.gapId(`VarHandle storage ${storage}`));
+        fail("java/lang/UnsatisfiedLinkError", `VarHandle storage ${storage}`);
+      }
+      return handleThunk(w, `mh:varHandleAccess:${mode}:(${actual.params.join("")})${actual.ret}`, ["L"], "L", (cx, c, arg) => {
+        const value = (index: number) => { arg(0); c.refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(index).arrayGet(cx.tData.ref); };
+        const result = emitVarHandleAccess(cx, c, mode, actual.params, actual.ret, () => value(0), (_kind, i) => {
+          value(i + 1); if (BOX[actual.params[i]]) unbox(cx, c, actual.params[i]);
+        });
+        if (!result) c.anyNull(); else if (BOX[actual.ret]) box(cx, c, actual.ret);
+      }, parent)(args) as object | null | Promise<object | null>;
+    });
+  });
 }
 
 /** the generated accessor of field `id` (class id << 12 | index) on boxed values: get(obj?) answers the boxed value, put(obj?, value) stores it */
