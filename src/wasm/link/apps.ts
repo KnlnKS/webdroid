@@ -100,9 +100,11 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
   flush();
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
   w.replay(demand.infos);
-  const synths: AppIndex["synths"] = [], all = w.synths();
-  for (let at = 0; at < all.length; at += SYNTH_GROUP) {
-    let group = all.slice(at, at + SYNTH_GROUP);
+  // building a group can name more synthetic functions (one that calls another): the list is read again for the next group
+  const synths: AppIndex["synths"] = [];
+  for (let at = 0, all = w.synths(); at < all.length; all = w.synths()) {
+    const end = Math.min(at + SYNTH_GROUP, all.length);
+    let group = all.slice(at, end);
     for (;;) {
       const cx = new Compiler(w, w.aot ? w.aot.deopt === DEOPT_ABI : !!w.opts.cold || !!w.opts.deopt);
       w.beginTouch();
@@ -120,6 +122,7 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
       if (!name || !group.some((g) => g.name === name)) break;
       group = group.filter((g) => g.name !== name);
     }
+    at = end;
   }
   return { index: { version: APP_VERSION, deopt: aot.deopt, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand }, files };
 }
