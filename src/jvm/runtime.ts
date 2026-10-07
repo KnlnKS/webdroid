@@ -458,7 +458,7 @@ export class Runtime {
   /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary
    *  consults it before giving up). `thread` is the Java thread that asked: its Cpu runs the
    *  initialisers, whichever thread is current by then. */
-  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime) => Promise<void>) | null = null;
+  loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime, caller?: unknown) => Promise<void>) | null = null;
   /** the ABIs the native tier can actually execute, most-preferred first. Empty until
    *  src/native/loader.ts is imported, which is the only thing that can answer it. */
   nativeAbis: readonly string[] = [];
@@ -496,7 +496,7 @@ export class Runtime {
   placeholderAt = new Map<string, string[]>();
   /** `fn` itself, or for a placeholder a wrapper that records its first hit and then asks
    *  `uninstall` to put `fn` back, so later calls cost what they did before */
-  private trackPlaceholder<F extends Function>(what: string, fn: F, uninstall: (wrapper: F) => void): F {
+  trackPlaceholder<F extends Function>(what: string, fn: F, uninstall: (wrapper: F) => void = () => {}): F {
     if (!placeholderMethods.has(fn)) return fn;
     const R = this;
     const wrapper = function (this: unknown, ...args: unknown[]) {

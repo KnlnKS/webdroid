@@ -39,6 +39,16 @@ function loaderFor(w: World, obj: object | null): Loader {
   return w.prog.boot;
 }
 
+/** Parent-first resolution uses the nearest defining ancestor. Custom loadClass overrides need dynamic resolution; their class kind does not specify delegation order. */
+function newLoader(w: World, parent: object | null, loader: object): Loader {
+  const s = stateOf(w);
+  for (let o = parent; o; o = s.parentOf(o)) {
+    const ancestor = s.byObject.get(o);
+    if (ancestor) return w.prog.newLoader(ancestor, loader);
+  }
+  return w.prog.newLoader(w.prog.boot, loader);
+}
+
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const s = stateOf(w), prior = s.libraries.get(object);
   if (prior) return prior;
@@ -92,7 +102,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
     let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
     if (!loader) {
       const ownApp = !s.appLoader && dexes.some(d => w.prog.loaderOfDex(d) === w.prog.root);
-      loader = ownApp ? w.prog.root : w.prog.newLoader(loaderFor(w, s.parentOf(loaderObject!)), loaderObject);
+      loader = ownApp ? w.prog.root : newLoader(w, s.parentOf(loaderObject!), loaderObject!);
       s.byObject.set(loaderObject!, loader);
     }
     if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;

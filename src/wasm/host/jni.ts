@@ -1,7 +1,7 @@
 // JNI over the Wasm tier (native/jnivm.ts): a Java object in a JNI table is the Wasm reference itself, a class is its key in the Program, and fields, methods
 // and arrays are reached through generated Wasm functions (Bridge.call, read, write, and the runtime functions of link/guest.ts), never through a facade.
 import { rt } from "../../jvm/runtime";
-import type { Bridge } from "./bridge";
+import { refOf, type Bridge } from "./bridge";
 import { constClass, idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
 import type { World } from "../link/world";
@@ -23,6 +23,8 @@ export function wasmJni(w: World): JniVm {
   /** a Java exception raised from the host's side of a call */
   const fail = (name: string, msg: string): never => { throw w.exception(w.makeThrowable(name, msg)); };
   const noSuchMethod = (name: string, sig: string) => fail("java/lang/NoSuchMethodError", name + sig);
+  /** JNI names classes by binary name; a class of a loader's own namespace names them as that loader sees them */
+  const view = (c: JniClass, sig: string): string => prog.viewOf(c.name, sig);
 
   /** whether the class named `name`, a class or an array class, exists */
   const exists = (name: string): boolean => {
@@ -39,7 +41,11 @@ export function wasmJni(w: World): JniVm {
   };
   const mirror = (c: JniClass): unknown => w.hostFn("j:class:" + c.name, [], "L", (cx, code) => { constClass(cx, code, c.name); })();
   const classId = w.hostFn("j:cid", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); });
-  const classOf = (m: unknown): JniClass | null => (m === null || m === undefined || w.classNameOf(m as object) !== CLASS ? null : cls(w.nameOf(classId(m))));
+  /** a Class as JNI holds it, or as a native's argument holds it (the host form of the object) */
+  const classOf = (mirror: unknown): JniClass | null => {
+    const m = refOf(mirror) ?? mirror;
+    return m === null || m === undefined || w.classNameOf(m as object) !== CLASS ? null : cls(w.nameOf(classId(m)));
+  };
   /** the descriptor of the type a Class stands for */
   const descriptor = (m: unknown): string => {
     const name = javaName(classOf(m)!.name);
@@ -62,11 +68,14 @@ export function wasmJni(w: World): JniVm {
   const vm: JniVm = {
     find(name, _owner, from) {
       // the loader of the class whose native method asks, as ART's FindClass has it; a thread that attached by itself asks the default namespace
-      if (name[0] === "[" || !from) return exists(name) ? cls(name) : null;
+      if (!from) return exists(name) ? cls(name) : null;
+      if (name[0] === "[") { const key = view(from, name); return exists(key) ? cls(key) : null; }
       const key = prog.lookup(prog.loaderOf(from.name), name);
       return key === undefined ? null : cls(key);
     },
     owner: () => null,
+    // a class key carries the namespace of its loader (program.ts), which is no part of its name
+    binaryName: javaName,
     mirror: (c) => mirror(c),
     classOf,
     objectClass: (o) => mirror(cls(w.classNameOf(o as object))),
@@ -83,18 +92,18 @@ export function wasmJni(w: World): JniVm {
     },
 
     hasMethod(c, name, sig, isStatic) {
-      const m = prog.resolve(c.name, name, sig);
+      const m = prog.resolve(c.name, name, view(c, sig));
       return !!m && m.isStatic === isStatic;
     },
     field(c, name, sig, isStatic): WasmField | null {
-      const info = prog.resolveField(c.name, name, sig);
+      const info = prog.resolveField(c.name, name, view(c, sig));
       return info && info.isStatic === isStatic ? { cls: cls(info.owner), key: (isStatic ? "static " : "") + name + ":" + sig, type: sig, isStatic, info } : null;
     },
     get(f, o) { const info = (f as WasmField).info; return bridge.read(info, info.isStatic ? null : o as object); },
     set(f, o, v) { const info = (f as WasmField).info; bridge.write(info, info.isStatic ? null : o as object, v); },
     invoke(c, name, sig, isStatic, self, args, nonvirtual) {
       if (!isStatic && (self === null || self === undefined)) return fail("java/lang/NullPointerException", "JNI call on null " + name);
-      const m = isStatic || nonvirtual ? prog.resolve(c.name, name, sig) : prog.implFor(w.classNameOf(self as object), name, sig);
+      const desc = view(c, sig), m = isStatic || nonvirtual ? prog.resolve(c.name, name, desc) : prog.implFor(w.classNameOf(self as object), name, desc);
       if (!m || m.isStatic !== isStatic) return noSuchMethod(name, sig);
       return nest((s) => bridge.callOn(s, m, isStatic ? null : self as object, args));
     },
@@ -106,14 +115,14 @@ export function wasmJni(w: World): JniVm {
         const mark = bridge.begin();
         try { return w.javaString(make(...args.map((a) => bridge.toHost(a)))); } finally { bridge.end(mark); }
       }
-      const ctor = prog.get(c.name)?.byKey.get("<init>" + sig);
+      const ctor = prog.get(c.name)?.byKey.get("<init>" + view(c, sig));
       if (!ctor) return noSuchMethod("<init>", sig);
       const o = alloc(c.name), done = nest((s) => bridge.callOn(s, ctor, o, args));
       return done instanceof Promise ? done.then(() => o) : o;
     },
     allocate: (c) => alloc(c.name),
     reflect(c, name, desc) {
-      const params = desc.slice(1, desc.indexOf(")")).match(/\[*(?:L[^;]+;|.)/g) ?? [], types = bridge.newArray("[Ljava/lang/Class;", params.length);
+      const own = view(c, desc), params = own.slice(1, own.indexOf(")")).match(/\[*(?:L[^;]+;|.)/g) ?? [], types = bridge.newArray("[Ljava/lang/Class;", params.length);
       params.forEach((p, i) => bridge.setElement(types, i, mirror(cls(typeName(p)))));
       const owner = mirror(c) as object;
       return name === "<init>" ? call(owner, "getDeclaredConstructorInternal", "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;", types)
@@ -134,12 +143,12 @@ export function wasmJni(w: World): JniVm {
       return vm.field(owner, name, descriptor(call(object, "getType", "()Ljava/lang/Class;")), ((call(object, "getModifiers", "()I") as number) & ACC.STATIC) !== 0) as WasmField | null;
     },
     nativeKind(c, name, sig) {
-      const jc = prog.get(c.name), m = jc?.byKey.get(name + sig);
+      const jc = prog.get(c.name), m = jc?.byKey.get(name + view(c, sig));
       if (!jc || !m) return { isStatic: false, critical: false };
       const critical = m.isStatic && !!jc.dex?.classAnnotations(jc.def!).methods.get(m.methodIdx)?.some((a) => a.type === "dalvik/annotation/optimization/CriticalNative");
       return { isStatic: m.isStatic, critical };
     },
-    bind(c, name, sig, _isStatic, entry) { rt.registerJni(c.name, name + sig, entry); },
+    bind(c, name, sig, _isStatic, entry) { rt.registerJni(c.name, name + view(c, sig), entry); },
 
     string: (js) => w.javaString(js),
     chars: (s) => bridge.toHost(s) as string,
@@ -157,7 +166,7 @@ export function wasmJni(w: World): JniVm {
     fromGuest: (array, type, start, n, p) => copy(false, type)(array, start, n, p, 0),
 
     throwable: (name, msg) => w.makeThrowable(name, msg),
-    noClass: (name) => w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`),
+    noClass: (name) => { rt.noteMissing("class " + name); return w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: L${name};`); },
     caught: (e) => w.throwable(w.boundary(e)) ?? w.makeThrowable("java/lang/InternalError", e instanceof Error ? e.message : String(e)),
     raise: (t) => bridge.toHost(t),
     describe: (t) => bridge.toHost(call(t as object, "toString", "()Ljava/lang/String;")) as string,

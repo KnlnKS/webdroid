@@ -12,9 +12,10 @@ import { mayWait } from "./suspend";
 /** the String methods production overrides, as installed before linking compiles String's remaining bytecode onto the same prototype */
 const stringOverrides = new Map(Object.getOwnPropertyNames(String.prototype).filter((k) => k.startsWith("m$")).map((k) => [k, (String.prototype as never)[k] as HostFn]));
 export const lookup = (cls: string, key: string, isStatic: boolean) => {
-  const owner = rt.natives.get(cls), spec = owner?.methods?.[(isStatic ? "static " : "") + key];
-  const production = (typeof spec === "function" ? spec : typeof spec === "string" ? owner!.ctor.prototype[spec] : rt.jniFn(cls, key)) as HostFn | undefined ?? undefined, id = cls + "." + key;
-  return hostNatives.get(id) ?? production;
+  const owner = rt.natives.get(cls), spec = owner?.methods?.[(isStatic ? "static " : "") + key], id = cls + "." + key;
+  const own = (typeof spec === "function" ? spec : typeof spec === "string" ? owner!.ctor.prototype[spec] : undefined) as HostFn | undefined;
+  // a registered JNI function is tracked already; a spec's placeholder is recorded here, where the JS tier records it as it installs the spec
+  return hostNatives.get(id) ?? (own ? rt.trackPlaceholder(id, own) : rt.jniFn(cls, key) as HostFn | null ?? undefined);
 };
 /** the values of natives that read the ICU data asynchronously, resolved once before they run (a native cannot suspend yet) */
 export const settled = new Map<string, unknown>();

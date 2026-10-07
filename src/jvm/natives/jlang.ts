@@ -7,7 +7,7 @@ import { mangleMethod, mangleField, mangleStaticField, descToName, jarray, PRIM_
 import { uptimeMillis, wallMillis } from "../../guest-clock";
 import { vfs, apkPath } from "../../shell/vfs";
 import { processEnv } from "../../shell/environment";
-import { after, curThread, newObj, scall, vcall, type JThread } from "./jentry";
+import { after, curThread, iof, newObj, scall, vcall, type JThread } from "./jentry";
 import { definePublic, shareable } from "../suspend";
 import { JThrowable } from "./jthrowable";
 import { park } from "./jthread";
@@ -391,9 +391,25 @@ export function libraryAbi(names: Iterable<string>): string | null {
   return dirs.size ? pickAbi((a) => dirs.has(a)) : null;
 }
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi-v7a", 0x3e: "x86_64", 0x03: "x86" };
+/** a library in the native library path of a dex class loader (BaseDexClassLoader.getLdLibraryPath), which the linker namespace ART makes for the
+ *  loader searches: directories, and archive directories ("base.apk!/lib/arm64-v8a") whose entries it maps from the archive */
+function* fromLibraryPath(loader: JClassLoader, lib: string): Gen<Uint8Array | null> {
+  let path: string | null;
+  try { path = yield vcall(loader, "getLdLibraryPath", "()Ljava/lang/String;"); } catch { return null; }
+  for (const dir of path?.split(":") ?? []) {
+    const bang = dir.indexOf("!/");
+    if (bang < 0) { if (vfs.exists(`${dir}/${lib}`)) return yield vfs.readFile(`${dir}/${lib}`); continue; }
+    const archive = dir.slice(0, bang), entry = `${dir.slice(bang + 2)}/${lib}`;
+    const [{ packedArchives }, { zipTree }] = yield* awaited(Promise.all([import("../../shell/packedarchive"), import("./jzip")]));
+    const packed = packedArchives.get(archive);
+    const bytes: Uint8Array | null = packed ? yield packed.entry(entry) : vfs.exists(archive) ? zipTree(yield vfs.readFile(archive))[entry] ?? null : null;
+    if (bytes) return bytes;
+  }
+  return null;
+}
 /** Runtime.nativeLoad: `file` is a path (ClassLoader.findLibrary's, System.load's) or a bare name
- *  from the loader's class path; null once the library is loaded, else the linker's error */
-function nativeLoad(file: string, loader: JClassLoader | null): string | null | Promise<string | null> {
+ *  from the loader's class path or native library path; null once the library is loaded, else the linker's error. `caller` is the class loading it. */
+function nativeLoad(file: string, loader: JClassLoader | null, caller: unknown = null): string | null | Promise<string | null> {
   const owner = loader && "runtime" in loader ? loader.runtime : rt, lib = file.slice(file.lastIndexOf("/") + 1);
   if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return null;
   const have = loadedLibs.get(lib);
@@ -408,12 +424,16 @@ function nativeLoad(file: string, loader: JClassLoader | null): string | null | 
     } else {
       abi = pickAbi((a) => owner.hasClasspath(`lib/${a}/${lib}`));
       bytes = abi ? yield owner.readClasspath(`lib/${abi}/${lib}`) : null;
+      if (!bytes && loader) {
+        bytes = yield* fromLibraryPath(loader, lib);
+        abi = bytes && (E_MACHINE[bytes[18] | (bytes[19] << 8)] ?? "unknown");
+      }
     }
     if (abi && bytes && owner.loadNativeLib) {
-      try { yield owner.loadNativeLib(lib, bytes, abi, owner); return null; }
+      try { yield owner.loadNativeLib(lib, bytes, abi, owner, caller); return null; }
       catch (e) {
         rt.noteNativeRequired(lib, abi);
-        if (e instanceof rt.link("java/lang/UnsatisfiedLinkError").ctor) return (e as JThrowable).msg;
+        if (iof(e, "java/lang/UnsatisfiedLinkError")) return (e as JThrowable).msg;
         throw e;
       }
     }

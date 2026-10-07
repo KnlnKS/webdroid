@@ -18,6 +18,8 @@ export interface JniVm {
   find(name: string, owner: Runtime | null, from?: JniClass | null): JniClass | null;
   /** the runtime a class was loaded by, when it is not the default one */
   owner(c: JniClass): Runtime | null;
+  /** a class name or descriptor in the binary names JNI's short names spell */
+  binaryName(name: string): string;
   /** the java.lang.Class of a class */
   mirror(c: JniClass, owner?: Runtime | null): unknown;
   /** the class a java.lang.Class stands for */

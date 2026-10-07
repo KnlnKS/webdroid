@@ -524,8 +524,8 @@ export function resolveByExport(lookup: (sym: string) => number | undefined): vo
   rt.jniResolver = function (this: Runtime, cls: string, sig: string) {
     const [name, desc] = splitSig(sig);
     const mangle = (s: string) => s.replace(/_/g, "_1").replace(/;/g, "_2").replace(/\[/g, "_3").replace(/\//g, "_").replace(/[^A-Za-z0-9_]/g, (c) => "_0" + c.charCodeAt(0).toString(16).padStart(4, "0"));
-    const short = "Java_" + mangle(cls) + "_" + mangle(name);
-    const fn = lookup(short) ?? lookup(short + "__" + mangle(desc.slice(1, desc.indexOf(")"))));
+    const short = "Java_" + mangle(vm.binaryName(cls)) + "_" + mangle(name);
+    const fn = lookup(short) ?? lookup(short + "__" + mangle(vm.binaryName(desc.slice(1, desc.indexOf(")")))));
     if (fn === undefined) return null;
     const c = vm.find(cls, this);
     if (!c) return null;

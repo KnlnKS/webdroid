@@ -3,7 +3,7 @@
 // class are named as reflect.ts names them: Executable.artMethod = class id << 16 | index in the class's methods, Field.artFieldIndex = class id << 12 | index in its fields.
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
-import { ACC, type JClass } from "../compiler/program";
+import { ACC, javaName, type JClass } from "../compiler/program";
 import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName, PRIM } from "./classes";
 import { rt } from "../compiler/rtfns";
@@ -93,7 +93,7 @@ export function hostText(w: World, kind: TextKind, a: number): string {
   if (name in PRIM) return PRIM[name][2];
   const jc = w.prog.get(name), inner = annotationsOf(jc)?.cls.find((x) => x.type === INNER);
   // a member class has its name in InnerClass; a local or anonymous class has none ("" for an anonymous one); a top-level class is named after its package
-  return inner ? (inner.elements.name as string | null) ?? "" : name.slice(name.lastIndexOf("/") + 1);
+  return inner ? (inner.elements.name as string | null) ?? "" : javaName(name.slice(name.lastIndexOf("/") + 1));
 }
 
 // execArray(cid, ctor?, publicOnly?): the Method[] or Constructor[] of the declared methods or constructors of class cid

@@ -6,6 +6,10 @@ import java.util.concurrent.locks.*;
 /** Threads, monitors, parking and class initialization: static int(int) cases whose answers do not depend on timing (the harness compares the JDK,
  *  the JS tier and the Wasm tier); the natives are bound by scripts/wasm/threads.ts. */
 public class Th {
+  static native int delayedCallback(int x);
+  static native int orderedWait(int x);
+  static synchronized int callbackLock(int x) { return x + 1; }
+  static synchronized int callbackOwner(int x) { return delayedCallback(x); }
   static native int await(int x);       // an async native
   static native int driven(int x);      // a generator native
   static native int nested(int x);      // an async native that enters Java again, which waits again

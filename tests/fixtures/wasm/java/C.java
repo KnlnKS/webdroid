@@ -1,5 +1,11 @@
 /** Class model tests: every method is a static int(int) that exercises one feature once. Run by classdiff.ts. */
 public class C {
+  public static int jsWrong_definitionlessAnnotations(int n) {
+    for (Class<?> type : new Class<?>[] {int.class, void.class, int[].class, Object[][].class}) {
+      if (type.getDeclaredAnnotation(Deprecated.class) != null || type.getDeclaredAnnotations().length != 0 || type.getAnnotations().length != 0 || type.getTypeParameters().length != 0) return 1;
+    }
+    return 0;
+  }
   interface I { default int f() { return 1; } int g(); }
   interface J extends I { default int f() { return 2 + I.super.f(); } }
   static class A implements I { public int g() { return 5; } }

@@ -209,7 +209,7 @@ export class Program {
       if (view === loader) return true;
       if (view === this.boot || seen.has(view)) return false;
       seen.add(view);
-      return !!view.parent && depends(view.parent, seen) || [...view.before ?? [], ...view.after ?? []].some(l => depends(l, seen));
+      return [view.parent, ...view.before ?? [], ...view.after ?? []].some(l => !!l && depends(l, seen));
     };
     const affected = new Set(this.loaders.filter(l => depends(l))), names: string[] = [];
     for (const [dex, owner] of this.dexLoader) if (affected.has(owner)) dex.resolveType = d => this.rewrite(owner, d);
@@ -219,6 +219,11 @@ export class Program {
     }
     this.ancestorMemo.clear(); this.implMemo.clear();
     return names;
+  }
+  /** a type or method descriptor in binary names (JNI's) as the loader of class `cls` sees it: each class it names by the key that loader sees under that name */
+  viewOf(cls: string, desc: string): string {
+    const loader = this.loaderOf(cls);
+    return desc.replace(/L([^;]+);/g, (whole, name: string) => { const key = this.lookup(loader, name); return key === undefined ? whole : `L${key};`; });
   }
   /** a descriptor of a dex file of `loader`, with the class names it names replaced by the keys of the classes the loader sees under them */
   private rewrite(loader: Loader, desc: string): string {

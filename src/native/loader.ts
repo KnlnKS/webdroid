@@ -5,6 +5,7 @@ import { kernelInit } from "./syscall";
 import { dlInit, loadModule, modulePath, modules, resolveGlobalOrNull } from "./dl";
 import type { Module } from "./elf";
 import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
+import { vm } from "./jnivm";
 import { gles1Init } from "./gles1";
 import { gles3Init } from "./gles3";
 import { eglInit } from "./egl";
@@ -67,7 +68,8 @@ export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): 
   return loadModule(name, bytes, true);
 }
 
-export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt): Promise<void> {
+/** `caller` is the java.lang.Class whose code loads the library: JNI_OnLoad finds classes through its loader, as ART's loader override has it */
+export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string, owner: Runtime = rt, caller: unknown = null): Promise<void> {
   if (!NATIVE_ABIS.includes(abi)) {
     throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `dlopen failed: library "${name}" is ${abi} machine code`);
   }
@@ -84,11 +86,12 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
     const mod: Module = yield loadModule(name, bytes, false, owner, cpu);
     const onload = mod.exports.get("JNI_OnLoad");
     if (!onload) return;
-    const previous = cpu.nativeRuntime;
+    const previous = cpu.nativeRuntime, previousClass = cpu.nativeClass;
     cpu.nativeRuntime = owner;
+    cpu.nativeClass = caller === null ? null : vm.classOf(caller);
     pushFrame(cpu);
     try { yield cpu.call(onload, [javaVM.addr, 0]); }
-    finally { popFrame(cpu); cpu.nativeRuntime = previous; }
+    finally { popFrame(cpu); cpu.nativeRuntime = previous; cpu.nativeClass = previousClass; }
   }());
 }
 

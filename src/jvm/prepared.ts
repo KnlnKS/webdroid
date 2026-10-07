@@ -466,7 +466,11 @@ export function prepareMethod(
   started = observe ? performance.now() : 0;
   const leaders = new Uint8Array(code.insns.length + 1);
   leaders[0] = 1;
+  let end = 0;
   for (const instruction of instructions) {
+    // nothing falls into code after payload data (the alignment nop before a payload follows a goto or throw)
+    if (instruction.pc !== end) leaders[instruction.pc] = 1;
+    end = instruction.pc + instruction.len;
     const targets = branchTargets(code, instruction);
     for (const target of targets) leaders[target] = 1;
     if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;

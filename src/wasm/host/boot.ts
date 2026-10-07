@@ -67,6 +67,10 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
   bindWorld(w);
   if (typeof window !== "undefined") window.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
+  // the JS tier notes the class a site cannot link as it links it
+  w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
+  // the frames of Java code, as the JS tier names them: a method the host implements is not one
+  rt.javaFrames = () => w.callerFrames(16).filter((f) => w.prog.get(f.cls.replace(/\./g, "/"))?.dex !== null).map((f) => f.cls + "." + f.method);
   for (const spec of nativeSource.hostSpecs!()) w.addHostClass(spec);
   return w;
 }

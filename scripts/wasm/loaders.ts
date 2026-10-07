@@ -12,6 +12,8 @@ import { loadDexes, program, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
+import { wasmJni } from "../../src/wasm/host/jni";
+import { wasmEntry } from "../../src/wasm/host/entry";
 import { jsTier, natives } from "./oracle";
 import { AOSP, JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
@@ -74,8 +76,10 @@ w.opts.dexes = async (path) => {
 const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
 if (deferred) { failed++; console.log(`FAIL deferred archive checks: ${deferred}`); }
 const desc = "(Ljava/lang/String;Ljava/lang/String;)I", paths = ["/data/local/tmp/a.dex", "/data/local/tmp/b.dex"];
-const jsLibraries = await js("Ldr", "libraries", desc, paths);
-if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibraries}`);
+const jsCustom = await js("Ldr", "customParent", desc, paths);
+const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
+if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: js=${jsCustom}, wasm=${wasmCustom}, expected=121`); }
+if (jsCustom !== 121) console.log(`JS loader superclass differs from parent-first resolution: ${jsCustom} (expected 121)`);
 for (const asynchronous of [false, true]) {
   const appDexes = loadDexes(a), base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]);
   const p = new Program(appDexes, base), layered = world(p, { natives, dexes: path => {
@@ -90,6 +94,26 @@ for (const asynchronous of [false, true]) {
   const retIndex = appDexes[0].proto(appDexes[0].method(self.methodIdx).proto).ret;
   const result = await layered.entryAsync("Ldr", "libraries", desc)(...paths);
   const visible = p.lookup(p.root, "Shared");
+  wasmEntry(layered);
+  const jni = wasmJni(layered);
+  for (const name of ["Ldr", childClass.name, visible!]) {
+    const owner = jni.find(name, null)!;
+    const expected = p.lookup(p.loaderOf(name), "Shared")!;
+    if (p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;") !== `([L${expected};Ljava/lang/String;)L${expected};` || jni.find("[LShared;", null, owner)?.name !== `[L${expected};`) {
+      failed++; console.log(`FAIL JNI descriptor/array namespace of ${name}`);
+    }
+  }
+  const shared = jni.find(visible!, null)!;
+  const object = await jni.construct(shared, "()V", []);
+  const field = jni.field(shared, "peer", "LShared;", false);
+  if (!field || !jni.hasMethod(shared, "self", "()LShared;", false) || !jni.hasMethod(shared, "same", "(LShared;LShared;)Z", true)) {
+    failed++; console.log("FAIL JNI member descriptors");
+  } else {
+    jni.set(field, object, object);
+    if (jni.get(field, object) !== object || await jni.invoke(shared, "self", "()LShared;", false, object, [], false) !== object || !await jni.invoke(shared, "same", "(LShared;LShared;)Z", true, null, [object, object], false)) {
+      failed++; console.log("FAIL JNI member invocation/field identity");
+    }
+  }
   if (childSelf.ret !== `L${visible};` || childPeer.desc !== childSelf.ret || childClass.byKey.get(childSelf.key) !== childSelf) {
     failed++; console.log(`FAIL dependent loader caches: self=${childSelf.ret}, peer=${childPeer.desc}, visible=${visible}`);
   }
