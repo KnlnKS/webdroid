@@ -451,10 +451,11 @@ export class AotRuntime {
     // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
     // a store that lacks a D module) its methods are compiled on demand
     if (!head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    if (!head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) {
-      if (head.mods.some(m => this.fallbackD.has(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; }
-      return false;
-    }
+    if (head.mods.some(m => this.fallbackD.has(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    // Request the whole dependency set now: stopping at the first miss delays delivery of the remaining original globals.
+    let dataReady = true;
+    for (const m of head.mods) if (!this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
+    if (!dataReady) return false;
     if (retry && !head.mods.every(m => !!this.loadD(+m.slice(1)))) return false;
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) this.touch(id);
