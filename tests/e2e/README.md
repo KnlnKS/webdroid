@@ -69,6 +69,9 @@ bun run e2e --full --shots            # also save every distinct frame per step
 rescores an existing full capture without launching a browser. `--test` selects a flow in
 each mode.
 
+The verification matrix excludes Genshin Impact, Clash of Clans and Clash Royale. The default
+APK corpus uses the same exclusions; retained historical captures are not current targets.
+
 `WEBDROID_CPU_THROTTLE=2` slows the page's CPU by that factor (CDP), to reproduce races that host
 load exposes. `WEBDROID_SITE_ISOLATION=0` drops `--site-per-process`, so a WebView page shares the
 app's renderer thread, as in Safari and Chrome on Android.

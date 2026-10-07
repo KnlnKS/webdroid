@@ -10,6 +10,9 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-07)
 
+The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
+E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
+
 ### Current recovery checkpoint (2026-10-07, `84a4b2b3`)
 
 Format 9 repairs flat/shared executor dispatch layout; all 54,871 enumerated platform layouts agree without duplicate keys. Fresh dual-policy eight-jar assets on `148c7c34` compile 290,828 methods per policy. Actual Wasm Resy reaches onboarding but its close action still times out; the official quick gate is interrupted during Komikku startup with zero checkpoints. A bounded Komikku trace observes a coroutine worker parking with synchronous root strand 1. The integrated scheduler repair restores ownership after immediate import throws and inside exceptional Wasm continuations. A forced race through the real Class.forName intrinsic fails three ownership assertions before repair and passes all 75 substrate assertions afterward. Application causality remains unproved; current-source assets and browser repeats are required.

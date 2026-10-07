@@ -15,6 +15,7 @@ import { PLATFORM_JARS } from "../src/jvm/provenance";
 import "../src/natives";
 import { jarDexes } from "../src/android/framework";
 import { openDexes } from "./lib";
+import { corpusApks } from "./apk-corpus";
 
 const NO_INDEX = 0xffffffff, FINAL = 0x10, PRIVATE = 0x2;
 const root = resolve(import.meta.dir, "..");
@@ -130,8 +131,7 @@ export function selfCallsSkipped(defs = platformDefs()): Map<string, string[]> {
 /** platform class → signature → how many corpus apps override it there or in a subclass */
 async function corpusOverrides(defs: Map<string, ClassDef>, wanted: Map<string, Set<string>>): Promise<Record<string, Record<string, number>>> {
   const counts = new Map<string, Map<string, Set<string>>>();
-  // the corpus apps work runs against (docs/bytecode-first-plan.md §9: never Genshin or the Clash games)
-  for (const apk of readdirSync(resolve(root, "apks")).filter((f) => /\.x?apk$/.test(f) && !/Genshin|Clash/.test(f))) {
+  for (const apk of corpusApks(resolve(root, "apks"))) {
     let dexes;
     try { dexes = await openDexes(resolve(root, "apks", apk)); } catch { continue; }
     const app = new Map<string, ClassDef>();
