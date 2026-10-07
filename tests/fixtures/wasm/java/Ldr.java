@@ -9,6 +9,13 @@ interface Tag { int tag(); }
 
 /** Two DexClassLoaders over dex files that define the class Shared (ldr1, ldr2): each sees its own class, with its own statics, and both see the app's Tag. */
 public class Ldr {
+  public static int customParent(String pathA, String pathB) throws Exception {
+    ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    ClassLoader parent = new ClassLoader(a) {};
+    ClassLoader b = new DexClassLoader(pathB, null, null, parent);
+    Class<?> sub = b.loadClass("Sub"), shared = b.loadClass("Shared");
+    return (sub.getSuperclass() == shared ? 100 : 0) + ((Tag) sub.newInstance()).tag();
+  }
   static int failed;
   static void expect(int bit, boolean ok) { if (!ok) failed |= 1 << bit; }
 

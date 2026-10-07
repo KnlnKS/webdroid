@@ -68,7 +68,8 @@ export function wasmJni(w: World): JniVm {
   const vm: JniVm = {
     find(name, _owner, from) {
       // the loader of the class whose native method asks, as ART's FindClass has it; a thread that attached by itself asks the default namespace
-      if (name[0] === "[" || !from) return exists(name) ? cls(name) : null;
+      if (!from) return exists(name) ? cls(name) : null;
+      if (name[0] === "[") { const key = view(from, name); return exists(key) ? cls(key) : null; }
       const key = prog.lookup(prog.loaderOf(from.name), name);
       return key === undefined ? null : cls(key);
     },

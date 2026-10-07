@@ -18,12 +18,10 @@ export interface JClass {
 }
 export const mkey = (name: string, desc: string) => name + desc;
 
-/** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, after libraries, then the fallback. */
+/** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
 export interface Loader {
   readonly id: number;
   readonly parent: Loader | null;
-  /** the ancestor namespace behind a ClassLoader of another kind (loaders.ts), consulted only for names nothing before it defines */
-  readonly fallback?: Loader;
   /** the java.lang.ClassLoader this namespace belongs to, once the host has one */
   object: object | null;
   /** class name -> key of the classes this loader defines */
@@ -175,8 +173,8 @@ export class Program {
   /** the loader whose namespace holds `dex`'s classes */
   loaderOfDex(dex: DexFile): Loader | undefined { return this.dexLoader.get(dex) ?? this.base?.loaderOfDex(dex); }
   /** a namespace of its own under `parent`, which it consults first */
-  newLoader(parent: Loader, object: object | null, fallback?: Loader): Loader {
-    const loader: Loader = { id: this.loaders.length, parent, fallback, object, defined: new Map() };
+  newLoader(parent: Loader, object: object | null): Loader {
+    const loader: Loader = { id: this.loaders.length, parent, object, defined: new Map() };
     this.loaders.push(loader);
     return loader;
   }
@@ -193,7 +191,7 @@ export class Program {
     const own = loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
     if (own) return own;
     for (const library of loader.after ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
-    return loader.fallback ? this.lookup(loader.fallback, name, seen) : undefined;
+    return undefined;
   }
   libraries(loader: Loader, before: Loader[], after: Loader[]): string[] {
     const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
@@ -203,7 +201,7 @@ export class Program {
       if (view === loader) return true;
       if (view === this.boot || seen.has(view)) return false;
       seen.add(view);
-      return [view.parent, view.fallback, ...view.before ?? [], ...view.after ?? []].some(l => !!l && depends(l, seen));
+      return [view.parent, ...view.before ?? [], ...view.after ?? []].some(l => !!l && depends(l, seen));
     };
     const affected = new Set(this.loaders.filter(l => depends(l))), names: string[] = [];
     for (const [dex, owner] of this.dexLoader) if (affected.has(owner)) dex.resolveType = d => this.rewrite(owner, d);
@@ -217,7 +215,7 @@ export class Program {
   /** a type or method descriptor in binary names (JNI's) as the loader of class `cls` sees it: each class it names by the key that loader sees under that name */
   viewOf(cls: string, desc: string): string {
     const loader = this.loaderOf(cls);
-    return loader.id ? desc.replace(/L([^;]+);/g, (whole, name: string) => { const key = this.lookup(loader, name); return key === undefined ? whole : `L${key};`; }) : desc;
+    return desc.replace(/L([^;]+);/g, (whole, name: string) => { const key = this.lookup(loader, name); return key === undefined ? whole : `L${key};`; });
   }
   /** a descriptor of a dex file of `loader`, with the class names it names replaced by the keys of the classes the loader sees under them */
   private rewrite(loader: Loader, desc: string): string {

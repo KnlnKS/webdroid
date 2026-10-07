@@ -39,17 +39,12 @@ function loaderFor(w: World, obj: object | null): Loader {
   return w.prog.boot;
 }
 
-/** a namespace for the ClassLoader object `loader` under its Java parent: the nearest ancestor that opened dex files (or the boot loader). A ClassLoader of
- *  another kind on the way answers by its own loadClass, which ART calls and a static view cannot (microG's dynamite modules keep the app's classes out
- *  that way): the namespace then sees the boot classes and its own first, and the ancestor's only for names neither defines */
+/** Parent-first resolution uses the nearest defining ancestor. Custom loadClass overrides need dynamic resolution; their class kind does not specify delegation order. */
 function newLoader(w: World, parent: object | null, loader: object): Loader {
   const s = stateOf(w);
-  let custom = false;
   for (let o = parent; o; o = s.parentOf(o)) {
     const ancestor = s.byObject.get(o);
-    if (ancestor) return custom ? w.prog.newLoader(w.prog.boot, loader, ancestor) : w.prog.newLoader(ancestor, loader);
-    const cls = w.classNameOf(o);
-    custom ||= cls !== "java/lang/BootClassLoader" && !w.prog.isSubclass(cls, "dalvik/system/BaseDexClassLoader");
+    if (ancestor) return w.prog.newLoader(ancestor, loader);
   }
   return w.prog.newLoader(w.prog.boot, loader);
 }
