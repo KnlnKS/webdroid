@@ -232,7 +232,10 @@ function findField(refc: JClass, name: string, type: JClass, isStatic: boolean) 
 function findMethod(refc: JClass, name: string, type: JMethodType, isStatic: boolean): JMethod {
   if (!refc || !name || !type) rt.npe();
   const desc = type.desc, ci = refc.ci;
-  const m = ci && classMethods(ci, false).find((m) => m.name === name && m.desc === desc && m.isStatic === isStatic);
+  const matches = (m: JMethod) => m.name === name && m.desc === desc && m.isStatic === isStatic;
+  let m: JMethod | undefined;
+  for (let owner = ci; owner && !m; owner = owner.superInfo) m = classMethods(owner, true).find(matches);
+  if (!m && ci) m = classMethods(ci, false).find(matches);
   if (!m) throw rt.mkThrowable("java/lang/NoSuchMethodException", `no such method: ${ci?.name}.${name}${desc}`);
   return m;
 }
