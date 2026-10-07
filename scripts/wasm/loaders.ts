@@ -9,10 +9,11 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
 import { loadDexes, program, world } from "./lib";
-import { Program } from "../../src/wasm/compiler/program";
+import { Program, ACC, type JClass } from "../../src/wasm/compiler/program";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
+import { HOSTED } from "../../src/wasm/link/hostapi";
 import { wasmEntry } from "../../src/wasm/host/entry";
 import { jsTier, natives } from "./oracle";
 import { AOSP, JAVA } from "./paths";
@@ -80,6 +81,10 @@ const jsCustom = await js("Ldr", "customParent", desc, paths);
 const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
 if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: js=${jsCustom}, wasm=${wasmCustom}, expected=121`); }
 if (jsCustom !== 121) console.log(`JS loader superclass differs from parent-first resolution: ${jsCustom} (expected 121)`);
+{
+  const proxies = await w.entryAsync("Ldr", "proxyLoaders", desc)(...paths);
+  if (proxies !== 8191) { failed++; console.log(`FAIL proxy defining loaders, duplicate binary names, bootstrap isolation, public cache, arrays and defensive duplicate rejection: ${proxies} (expected 8191)`); }
+}
 const jsLibraries = await js("Ldr", "libraries", desc, paths);
 if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibraries}`);
 for (const asynchronous of [false, true]) {
@@ -122,6 +127,23 @@ for (const asynchronous of [false, true]) {
   if (result !== jsLibraries || visible === "Shared" || !visible || self.ret !== `L${visible};` || peer.desc !== self.ret || cls.fields.find(f => f.name === "peer") !== peer || cls.byKey.get(self.key) !== self || cls.byKey.get(`alias()L${visible};`) !== self || cls.byKey.has("self()LShared;") || cls.byKey.has("alias()LShared;") || appDexes[0].rawType(retIndex) !== "LShared;" || appDexes[0].type(retIndex) !== self.ret) {
     failed++; console.log(`FAIL ${asynchronous ? "deferred" : "synchronous"} library graph: result=${result}, visible=${visible}, self=${self.ret}, peer=${peer.desc}`);
   }
+  const hostedSpec = { name: childClass.name, sup: childClass.sup, ifaces: [], methods: ["toString()Ljava/lang/String;"], fields: [], ctor: class {} };
+  layered.addHostClass(hostedSpec);
+  if (p.loaderOf(childClass.name + HOSTED) !== child || p.lookup(p.boot, childClass.name + HOSTED)) throw new Error("hosted custom class lost its defining loader");
+  const iface: JClass = { name: `fixture/HostedInterface@${child.id}`, dex: null, def: null, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC | ACC.INTERFACE | ACC.ABSTRACT, isInterface: true, fields: [], methods: [], byKey: new Map() };
+  layered.addClass(iface, new Map(), child);
+  const shell = layered.hosts.javaClass({ ...hostedSpec, name: iface.name, methods: [] });
+  if (p.loaderOf(shell) !== child || p.lookup(p.boot, shell)) throw new Error("hosted interface shell lost its defining loader");
+
+}
+{
+  const base = new Program([]), custom = base.newLoader(base.boot, null);
+  const synthetic = (name: string): JClass => ({ name, dex: null, def: null, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() });
+  base.addClass(synthetic("fixture/BaseApp"), base.root);
+  base.addClass(synthetic("fixture/BaseBoot@0"), base.boot);
+  base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
+  const derived = new Program([], base);
+  if (derived.lookup(derived.boot, "fixture/BaseApp") || derived.lookup(derived.boot, "fixture/BaseCustom") || derived.lookup(derived.boot, "fixture/BaseBoot") !== "fixture/BaseBoot@0" || derived.loaderOf("fixture/BaseApp") !== base.root || derived.loaderOf(`[Lfixture/BaseCustom@${custom.id};`) !== custom || derived.loaderOf("[Lfixture/BaseBoot@0;") !== base.boot) throw new Error("inherited synthetic defining loader or bootstrap visibility changed");
 }
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);

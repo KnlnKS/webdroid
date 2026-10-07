@@ -8,7 +8,7 @@
 //    inherits from a superclass in a class of their own that the class resolves them in. The class keeps its members, so ids and slots stay put.
 //  - The host object is made when a native first needs it (host/bridge.ts): a Java object that Java code allocated, as a bytecode subclass does,
 //    gets its host object at its first host call, which is its constructor.
-import { ACC, type JClass, type MethodInfo } from "../compiler/program";
+import { ACC, type JClass, type Loader, type MethodInfo } from "../compiler/program";
 import type { Intrinsic } from "../compiler/j2w";
 import { parseMethodDesc } from "../../jvm/abi";
 import { HOSTED, type HostSpec } from "./hostapi";
@@ -79,7 +79,7 @@ export class HostClasses {
     if (!this.w.prog.get(name)) {
       const methods = new Set<string>();
       if (iface) for (let s: HostSpec | undefined = spec; s; s = s.sup ? this.specs.get(s.sup) : undefined) for (const key of s.methods) if (!key.startsWith(STATIC)) methods.add(key);
-      this.synthesize({ ...spec, name, sup: iface ? null : spec.name, ifaces: iface ? [spec.name] : [], methods: [...methods] });
+      this.synthesize({ ...spec, name, sup: iface ? null : spec.name, ifaces: iface ? [spec.name] : [], methods: [...methods] }, this.w.prog.base?.get(spec.name)?.dex ? this.w.prog.boot : this.w.prog.loaderOf(spec.name));
       if (iface) this.defined.set(name, spec);
     }
     return name;
@@ -98,7 +98,7 @@ export class HostClasses {
     return out;
   }
   /** a class of natives */
-  private synthesize(spec: HostSpec): void {
+  private synthesize(spec: HostSpec, loader?: Loader): void {
     const sup = spec.sup ?? OBJECT, jc = classOf(spec.name, sup, spec.ifaces, ACC.PUBLIC), bodies = new Map<MethodInfo, Intrinsic>();
     for (const key of spec.methods) { const m = native(spec.name, key, jc.methods.length); jc.methods.push(m); jc.byKey.set(m.key, m); }
     // the constructor Java finds when the spec declares none is the superclass's, as it is for the object the JS tier makes
@@ -108,7 +108,8 @@ export class HostClasses {
       jc.methods.push(m); jc.byKey.set(m.key, m);
       bodies.set(m, (cx, _m, c) => { const init = cx.prog.resolve(sup, "<init>", "()V"); if (init) { c.lget(0); cx.callMethod(c, init); } });
     }
-    this.w.addClass(jc, bodies);
+    const owner = loader ?? (this.w.prog.loaderOf(spec.name).id ? this.w.prog.loaderOf(spec.name) : this.w.prog.boot);
+    this.w.addClass(jc, bodies, owner);
   }
 
   /** the natives of `spec` take the place of the methods of the dex class `jc` they name, in a class of this World's Program that stands for it: the platform's own classes, which
@@ -142,7 +143,7 @@ export class HostClasses {
     this.w.addClass(over, bodies);
     if (virtual.length) { this.changed.push({ cls: jc.name, keys: virtual }); this.w.repairLinked(); }
     for (const m of taken) this.w.aot?.override(m);
-    if (hosted.methods.length) this.w.addClass(hosted, new Map());
+    if (hosted.methods.length) this.w.addClass(hosted, new Map(), prog.base?.get(jc.name)?.dex ? prog.boot : prog.loaderOf(jc.name));
   }
 
   /** the spec that implements class `cls` or its nearest superclass */

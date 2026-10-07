@@ -49,6 +49,22 @@ function newLoader(w: World, parent: object | null, loader: object): Loader {
   return w.prog.newLoader(w.prog.boot, loader);
 }
 
+/** Native class generation defines in the supplied loader even when it has never opened dex files. */
+export function definingLoader(w: World, object: object | null): Loader {
+  if (!object) return w.prog.boot;
+  const s = stateOf(w);
+  let loader = s.byObject.get(object);
+  if (!loader) { loader = newLoader(w, s.parentOf(object), object); s.byObject.set(object, loader); }
+  return loader;
+}
+
+export function recordDefinedClass(w: World, loader: Loader, name: string, key: string): void {
+  const s = stateOf(w);
+  let initiated = s.initiated.get(loader);
+  if (!initiated) s.initiated.set(loader, initiated = new Map());
+  initiated.set(name, key);
+}
+
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const s = stateOf(w), prior = s.libraries.get(object);
   if (prior) return prior;
@@ -74,7 +90,7 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
   if (!loader) return 0;
   const find = (cls: string): string | undefined => {
     if (mode === Lookup.Defined) return s.initiated.get(loader)?.get(cls);
-    const key = mode === Lookup.Visible ? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
+    const key = mode === Lookup.Visible ? s.initiated.get(loader)?.get(cls) ?? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
     if (key === undefined || cookie && !cookie.dexes.includes(prog.get(key)!.dex!)) return undefined;
     let loaded = s.initiated.get(loader);
     if (!loaded) s.initiated.set(loader, loaded = new Map());

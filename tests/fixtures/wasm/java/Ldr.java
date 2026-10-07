@@ -9,6 +9,40 @@ interface Tag { int tag(); }
 
 /** Two DexClassLoaders over dex files that define the class Shared (ldr1, ldr2): each sees its own class, with its own statics, and both see the app's Tag. */
 public class Ldr {
+  public static int proxyLoaders(String pathA, String pathB) throws Exception {
+    ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    ClassLoader b = new DexClassLoader(pathB, null, null, Ldr.class.getClassLoader());
+    Method generate = java.lang.reflect.Proxy.class.getDeclaredMethod("generateProxy", String.class, Class[].class, ClassLoader.class, Method[].class, Class[][].class);
+    generate.setAccessible(true);
+    Class<?>[] interfaces = {Runnable.class};
+    Method[] methods = {Runnable.class.getMethod("run")};
+    Class<?>[][] exceptions = {new Class<?>[0]};
+    Class<?> ca = (Class<?>) generate.invoke(null, "fixture.SameProxy", interfaces, a, methods, exceptions);
+    Class<?> cb = (Class<?>) generate.invoke(null, "fixture.SameProxy", interfaces, b, methods, exceptions);
+    int result = ca != cb && ca.getName().equals(cb.getName()) ? 1 : 0;
+    if (ca.getClassLoader() == a && cb.getClassLoader() == b) result |= 2;
+    try { Class.forName("fixture.SameProxy", false, null); } catch (ClassNotFoundException expected) { result |= 4; }
+    ClassLoader plain = new ClassLoader(Ldr.class.getClassLoader()) {};
+    Class<?> cp = (Class<?>) generate.invoke(null, "fixture.SameProxy", interfaces, plain, methods, exceptions);
+    if (cp != ca && cp != cb && cp.getClassLoader() == plain && plain.loadClass("fixture.SameProxy") == cp) result |= 8;
+    Class<?> app = (Class<?>) generate.invoke(null, "fixture.RootProxy", interfaces, a, methods, exceptions);
+    Class<?> boot = (Class<?>) generate.invoke(null, "fixture.RootProxy", interfaces, null, methods, exceptions);
+    if (app != boot) result |= 16;
+    if (app.getClassLoader() == a) result |= 32;
+    if (boot.getClassLoader() == Runnable.class.getClassLoader()) result |= 64;
+    if (Class.forName("fixture.RootProxy", false, null) == boot) result |= 128;
+    if (Class.forName("fixture.RootProxy", false, a) == app) result |= 256;
+    Class<?> publicProxy = java.lang.reflect.Proxy.getProxyClass(plain, Runnable.class);
+    if (publicProxy.getClassLoader() == plain && java.lang.reflect.Proxy.getProxyClass(plain, Runnable.class) == publicProxy) result |= 512;
+    if (Array.newInstance(cp, 0).getClass().getClassLoader() == plain && Array.newInstance(boot, 0).getClass().getClassLoader() == Runnable.class.getClassLoader()) result |= 1024;
+    try {
+      generate.invoke(null, "fixture.SameProxy", interfaces, a, methods, exceptions);
+    } catch (java.lang.reflect.InvocationTargetException expected) {
+      if (expected.getCause() instanceof LinkageError && a.loadClass("fixture.SameProxy") == ca) result |= 2048;
+    }
+    if (java.lang.reflect.Modifier.isPublic(ca.getModifiers()) && java.lang.reflect.Modifier.isFinal(ca.getModifiers())) result |= 4096;
+    return result;
+  }
   public static int customParent(String pathA, String pathB) throws Exception {
     ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
     ClassLoader parent = new ClassLoader(a) {};

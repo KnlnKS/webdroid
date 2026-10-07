@@ -143,6 +143,7 @@ export const declaredMethods = (c: JClass): [string, number][] => (c instanceof 
 export class Program {
   /** the classes this Program adds to its base's, by key */
   private classes = new Map<string, JClass>();
+  private syntheticLoaders = new Map<string, Loader>();
   readonly root: Loader = { id: 0, parent: null, object: null, defined: new Map() };
   readonly boot: Loader = { id: 0, parent: null, object: null, defined: new Map() };
   private loaders: Loader[] = [this.root];
@@ -187,13 +188,21 @@ export class Program {
     return loader;
   }
   /** the loader that defines the class with this key */
-  loaderOf(key: string): Loader { return this.loaders[loaderIdOf(key)]; }
+  loaderOf(key: string): Loader {
+    const component = key.replace(/^\[+L(.*);$/, "$1");
+    for (let p: Program | undefined = this; p; p = p.base) {
+      const loader = p.syntheticLoaders.get(component);
+      if (loader) return loader;
+      if (p.classes.has(component)) break;
+    }
+    return this.loaders[loaderIdOf(key)];
+  }
   /** the key of the class `name` as `loader` sees it: the first of its ancestors (parent first) and itself that defines it */
   lookup(loader: Loader, name: string, seen = new Set<Loader>()): string | undefined {
     if (seen.has(loader)) return undefined;
     seen.add(loader);
-    if (loader === this.boot) return this.inBoot(name) ? name : undefined;
-    const parent = loader.parent ? this.lookup(loader.parent, name, seen) : this.base?.has(name) ? name : undefined;
+    if (loader === this.boot) return this.boot.defined.get(name) ?? (this.base ? this.base.lookup(this.base.boot, name) : this.inBoot(name) ? name : undefined);
+    const parent = loader.parent ? this.lookup(loader.parent, name, seen) : this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name);
     if (parent) return parent;
     for (const library of loader.before ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
     const own = loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
@@ -234,11 +243,14 @@ export class Program {
   }
   /** the key of the class `name` that `loader` itself defines (not its ancestors) */
   definedBy(loader: Loader, name: string): string | undefined {
-    if (loader === this.boot) return this.inBoot(name) ? name : undefined;
+    if (loader === this.boot) return this.boot.defined.get(name) ?? (this.base ? this.base.lookup(this.base.boot, name) : this.inBoot(name) ? name : undefined);
     return loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
   }
-  /** the boot namespace: the platform base and the classes the host makes without a dex */
-  private inBoot(name: string): boolean { return this.base ? this.base.has(name) || this.classes.get(name)?.dex === null : this.has(name); }
+  /** Synthetic classes have an explicit defining loader; lacking a dex does not imply bootstrap ownership. */
+  private inBoot(name: string): boolean {
+    const loader = this.syntheticLoaders.get(name);
+    return loader ? loader === this.boot : this.base ? this.base.inBoot(name) : this.has(name);
+  }
   has(name: string): boolean { return this.classes.has(name) || !!this.base?.has(name); }
   /** every class, the base's first */
   *all(): Generator<JClass> {
@@ -249,7 +261,7 @@ export class Program {
   own(): IterableIterator<JClass> { return this.classes.values(); }
   private stub(name: string, sup: string | null): JClass {
     const c: JClass = { name, dex: null, def: null, sup, ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map() };
-    this.classes.set(name, c); return c;
+    this.classes.set(name, c); this.syntheticLoaders.set(name, this.boot); return c;
   }
   /** Classes the compiler's own helpers instantiate; stubbed when the loaded dexes (no framework) lack them. */
   private addRuntimeClasses() {
@@ -275,10 +287,11 @@ export class Program {
     this.ancestorMemo.clear(); this.implMemo.clear();
   }
   /** a class made at run time (a proxy class): the open-world counterpart of `add` for a class no dex defines */
-  addClass(jc: JClass): void {
+  addClass(jc: JClass, loader: Loader = this.root): void {
     if (this.base?.has(jc.name)) this.shadowing = true;
     jc.methods.forEach((m, i) => { m.index = i; jc.byKey.set(m.key, m); });
     this.classes.set(jc.name, jc);
+    if (!jc.dex) { this.syntheticLoaders.set(jc.name, loader); loader.defined.set(javaName(jc.name), jc.name); }
     this.ancestorMemo.clear(); this.implMemo.clear();
   }
   get(name: string): JClass | undefined { return this.classes.get(name) ?? this.base?.get(name); }

@@ -12,6 +12,7 @@ import { descToName } from "../../jvm/abi";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
+import { definingLoader, recordDefinedClass } from "./loaders";
 
 const PROXY = "java/lang/reflect/Proxy", HANDLER = "java/lang/reflect/InvocationHandler", EXEC = "java/lang/reflect/Executable", CLASS = "java/lang/Class";
 const NM_TABLE = 1, PROXY_FLAG = 0x40000;
@@ -19,7 +20,7 @@ const OBJECT_ARRAY = "[Ljava/lang/Object;";
 
 export const proxyIntrinsics = new Map<string, Intrinsic>();
 proxyIntrinsics.set("java/lang/reflect/Proxy.generateProxy(Ljava/lang/String;[Ljava/lang/Class;Ljava/lang/ClassLoader;[Ljava/lang/reflect/Method;[[Ljava/lang/Class;)Ljava/lang/Class;", (cx, m, c) => {
-  c.lget(0).externConvertAny().lget(1).externConvertAny().lget(3).externConvertAny().lget(4).externConvertAny().call(cx.imp.proxy).anyConvertExtern();
+  c.lget(0).externConvertAny().lget(1).externConvertAny().lget(2).externConvertAny().lget(3).externConvertAny().lget(4).externConvertAny().call(cx.imp.proxy).anyConvertExtern();
 });
 
 interface Readers { art(method: object): bigint; classId(cls: object): number; alen(a: object): number; aget(a: object, i: number): object; classOf(id: number): object }
@@ -35,9 +36,11 @@ function readersOf(w: World): Readers {
   return r;
 }
 
-/** host.proxy(name, interfaces, methods, exceptions): the Class of the proxy class `name`, made now */
-export function generateProxy(w: World, name: string, interfaces: object, methods: object, exceptions: object): object {
-  const r = readersOf(w), internal = name.replace(/\./g, "/");
+/** host.proxy(name, interfaces, loader, methods, exceptions): the Class of the proxy class `name`, made now */
+export function generateProxy(w: World, name: string, interfaces: object, object: object | null, methods: object, exceptions: object): object {
+  const r = readersOf(w), binary = name.replace(/\./g, "/"), loader = definingLoader(w, object), internal = loader === w.prog.boot || loader.id ? `${binary}@${loader.id}` : binary;
+  // ART's CreateProxyClass requires InsertClass to find no existing definition; public Proxy caching happens in Java.
+  if (w.prog.definedBy(loader, binary)) throw w.exception(w.makeThrowable("java/lang/LinkageError", `duplicate proxy definition: ${binary}`));
   const jc: JClass = {
     name: internal, dex: null, def: null, sup: PROXY, flags: ACC.PUBLIC | ACC.FINAL | PROXY_FLAG, isInterface: false, fields: [], methods: [], byKey: new Map(),
     ifaces: Array.from({ length: r.alen(interfaces) }, (_, i) => w.nameOf(r.classId(r.aget(interfaces, i)))),
@@ -55,7 +58,8 @@ export function generateProxy(w: World, name: string, interfaces: object, method
     const handle = w.pin(method), declared = w.pin(r.aget(exceptions, i));
     add(made(src, ACC.PUBLIC | ACC.FINAL), (cx, m, c) => proxyBody(cx, c, m, handle, declared));
   }
-  w.addClass(jc, bodies);
+  w.addClass(jc, bodies, loader);
+  recordDefinedClass(w, loader, binary, internal);
   return r.classOf(w.idOf(internal));
 }
 

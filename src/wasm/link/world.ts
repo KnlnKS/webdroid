@@ -211,7 +211,7 @@ export class World {
         this.sched.parkNative(value); return null;
       },
       annotationWait: suspending(() => null),
-      proxy: (name: unknown, interfaces: object, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, methods, exceptions)),
+      proxy: (name: unknown, interfaces: object, loader: object | null, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, loader, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
       mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
@@ -1288,9 +1288,9 @@ export class World {
   hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
   private settlingHosts = false;
   /** adds a class that no dex defines, with the body of each of its methods */
-  addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>): void {
+  addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root): void {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
-    this.prog.addClass(jc);
+    this.prog.addClass(jc, loader);
     this.epoch++;
     // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
     if (!this.settlingHosts) this.opts.compiler?.added(null);
