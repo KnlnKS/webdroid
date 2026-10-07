@@ -1,4 +1,4 @@
-import { symbolicOverride } from "./linkage";
+import { failed, symbolicOverride } from "./linkage";
 import type { DexFile } from "../../jvm/dex";
 import { ACC, classDefIdx, declaredMethod, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
 
@@ -101,39 +101,50 @@ export class Cha {
       if (seen.has(n)) continue;
       seen.add(n); budget--;
       const c = this.prog.get(n);
-      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) { const m = packageMethod ? symbolicOverride(this.prog, n, declared!) : this.prog.implFor(n, name, desc); if (m) found.add(m); }
+      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) {
+        const m = packageMethod ? symbolicOverride(this.prog, n, declared!) : this.prog.dispatchFor(n, name, desc);
+        if (m && failed(m)) { this.memo.set(key, out = []); return out; }
+        if (m) found.add(m);
+      }
       for (const sub of this.subsOf(n)) stack.push(sub);
     }
     if (budget <= 0 && stack.length && found.size < 2) {
       found.clear();
       if (packageMethod) return [];
-      const key = mkey(name, desc);
-      for (const cls of this.declaring(key)) {
-        const m = declaredMethod(this.prog.get(cls), key)!;
-        if (this.reaches(decl, m) && found.add(m).size >= 2) break;
+      const methodKey = mkey(name, desc);
+      for (const cls of this.declaring(methodKey)) {
+        const m = declaredMethod(this.prog.get(cls), methodKey)!;
+        const reaches = this.reaches(decl, m);
+        if (reaches === "conflict") { this.memo.set(key, out = []); return out; }
+        if (reaches && found.add(m).size >= 2) break;
       }
     }
     this.memo.set(key, out = [...found]);
     return out;
   }
   /** whether some concrete subtype of decl (decl included) runs `m` for its method of that name and descriptor */
-  private reaches(decl: string, m: MethodInfo): boolean {
+  private reaches(decl: string, m: MethodInfo): boolean | "conflict" {
     const p = this.prog, key = m.key;
     // the subtypes that can run m are subtypes of its class; those of decl are the ones that count
     const [top, filter] = p.isSubclass(m.cls, decl) ? [m.cls, null] : p.isSubclass(decl, m.cls) ? [decl, null] : [m.cls, decl];
     const seen = new Set<string>(), stack = [top];
+    let reachesAny = false;
     while (stack.length) {
       const n = stack.pop()!;
       if (seen.has(n)) continue;
       seen.add(n);
       const c = p.get(n);
-      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT) && (!filter || p.isSubclass(n, filter)) && p.implFor(n, key.slice(0, key.indexOf("(")), key.slice(key.indexOf("("))) === m) return true;
+      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT) && (!filter || p.isSubclass(n, filter))) {
+        const target = p.dispatchFor(n, m.name, m.desc);
+        if (target && failed(target)) return "conflict";
+        if (target === m) reachesAny = true;
+      }
       // a class that implements the method itself decides it for every subclass: none of them runs m
       const own = c && !c.isInterface ? declaredMethod(c, key) : undefined;
       if (own && own !== m && !(own.flags & (ACC.STATIC | ACC.ABSTRACT))) continue;
       for (const sub of this.subsOf(n)) stack.push(sub);
     }
-    return false;
+    return reachesAny;
   }
 }
 const WALK = 64, MAX_SCANS = 128;

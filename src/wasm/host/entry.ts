@@ -18,6 +18,7 @@ import type { Compiler } from "../compiler/j2w";
 import { OP, type Code } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import { fromBits, refOf, toBits } from "./bridge";
+import { failed } from "../compiler/linkage";
 import { count } from "./stats";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
@@ -187,7 +188,8 @@ export function wasmEntry(w: World): Entry {
 
   return {
     vcall(obj, name, desc, ...args) {
-      const recv = receiver(obj, name), cls = w.classNameOf(recv), m = prog.implFor(cls, name, desc);
+      const recv = receiver(obj, name), cls = w.classNameOf(recv), m = prog.dispatchFor(cls, name, desc);
+      if (m && failed(m)) return enter(() => call("e:conflict:" + cls + "." + name + desc, [], "V", (cx, c) => cx.linkError(c, m)));
       if (!m) throw missing(`vcall ${cls}.${name}${desc}`);
       return enter(() => invoke(m, recv, args));
     },

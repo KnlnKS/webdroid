@@ -4,6 +4,7 @@
 // reached through Object, a JS array for an object array, a field-reading Proxy for any other object) and what the native wrote is
 // stored back when the call ends. A result the native returns is turned into a Java value: strings and references it was given pass
 // through, host arrays are allocated in the Wasm heap, and an object the production runtime made (a Struct*) is copied field by field.
+import { failed } from "../compiler/linkage";
 import { demangle, mangleField } from "../../jvm/abi";
 import { rt, JObj } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
@@ -243,7 +244,8 @@ export class Bridge implements HostBridge {
 
   /** the method a native calls on the object by its mangled name (vcall), run as the Java method the object's class resolves it to */
   private method(o: object, cls: string, mangled: string): Fn | undefined {
-    const nd = demangle(mangled), impl = nd && this.w.prog.implFor(cls, nd[0], nd[1]);
+    const nd = demangle(mangled), impl = nd && this.w.prog.dispatchFor(cls, nd[0], nd[1]);
+    if (impl && failed(impl)) return () => this.w.hostFn("b:conflict:" + cls + "." + mangled, [], "V", (cx, c) => cx.linkError(c, impl))();
     return impl ? (...args: unknown[]) => this.invoke(impl, o, args) : undefined;
   }
   /** the generated function that calls `m`, over Java values */

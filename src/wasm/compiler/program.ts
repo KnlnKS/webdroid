@@ -1,3 +1,4 @@
+import type { LinkFailure } from "./linkage";
 import type { DexFile, ClassDef } from "../../jvm/dex";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 
@@ -12,6 +13,19 @@ export interface MethodInfo {
   /** position in its class's `methods`, which is also the offset of its table slot from the class's block */
   index: number;
 }
+export interface DefaultConflict extends LinkFailure {
+  thrower: "icce";
+  candidates: readonly MethodInfo[];
+}
+export type DispatchTarget = MethodInfo | DefaultConflict | undefined;
+
+/** Conflict is an invocation error, not an abstract or missing declaration. */
+export function selectDefault(maximal: readonly MethodInfo[], includeAbstract = false): DispatchTarget {
+  const defaults = maximal.filter(m => !(m.flags & ACC.ABSTRACT));
+  if (defaults.length > 1) return { thrower: "icce", message: "Conflicting default methods: " + defaults.map(m => javaName(m.cls) + "." + javaName(m.key)).join(", "), candidates: defaults };
+  return defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
+}
+
 export interface JClass {
   name: string; dex: DexFile | null; def: ClassDef | null; sup: string | null; ifaces: string[]; flags: number;
   isInterface: boolean; fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo>;
@@ -330,7 +344,7 @@ export class Program {
   /** a class of this Program stands in for one of the base's (a host class over a platform class): the base's answers about implementations are no longer this Program's */
   private shadowing = false;
   private ancestorMemo = new Map<string, Set<string>>();
-  private implMemo = new Map<string, Map<string, MethodInfo | undefined>>();
+  private implMemo = new Map<string, Map<string, DispatchTarget>>();
   /** the supertypes of `a` (superclasses and interfaces, itself included), made once per class: a class-hierarchy query asks this of the same classes again and again */
   private ancestors(a: string): Set<string> {
     let s = this.ancestorMemo.get(a);
@@ -368,7 +382,12 @@ export class Program {
   }
   /** a concrete (non-abstract) implementation of name+desc for runtime class `cls` */
   implFor(cls: string, name: string, desc: string): MethodInfo | undefined {
-    if (!this.shadowing && this.base?.has(cls)) return this.base.implFor(cls, name, desc);
+    const target = this.dispatchFor(cls, name, desc);
+    return target && !("thrower" in target) ? target : undefined;
+  }
+  /** The receiver's executable target, retaining invocation-time default conflicts. */
+  dispatchFor(cls: string, name: string, desc: string): DispatchTarget {
+    if (!this.shadowing && this.base?.has(cls)) return this.base.dispatchFor(cls, name, desc);
     const key = mkey(name, desc);
     let memo = this.implMemo.get(cls);
     if (!memo) this.implMemo.set(cls, memo = new Map());
@@ -377,12 +396,11 @@ export class Program {
     memo.set(key, found);
     return found;
   }
-  private findImpl(cls: string, key: string): MethodInfo | undefined {
+  private findImpl(cls: string, key: string): DispatchTarget {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
       const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) return m.flags & ACC.ABSTRACT ? undefined : m;
     }
-    const defaults = this.maximalInterfaceMethods(this.chain(cls).flatMap(n => this.require(n).ifaces), c => declaredMethod(c, key)).filter(m => !(m.flags & ACC.ABSTRACT));
-    return defaults[0];
+    return selectDefault(this.maximalInterfaceMethods(this.chain(cls).flatMap(n => this.require(n).ifaces), c => declaredMethod(c, key)));
   }
   /** Abstract declarations participate in dominance even when only a concrete body is requested. */
   maximalInterfaceMethods(roots: readonly string[], lookup: (c: JClass) => MethodInfo | undefined): MethodInfo[] {

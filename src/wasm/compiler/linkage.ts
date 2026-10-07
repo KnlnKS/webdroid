@@ -3,7 +3,7 @@
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex";
 import { descToName } from "../../jvm/abi";
-import { ACC, declaredMethod, declaredMethods, javaName, sameRuntimePackage, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
+import { ACC, declaredMethod, declaredMethods, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
 import type { Thrower } from "../link/exc";
 
 export interface LinkFailure {
@@ -85,19 +85,24 @@ export function symbolicOverride(prog: Program, cls: string, declared: MethodInf
 
 /** DEX name/prototype equality selects true overrides; initialization checks their Class identities. */
 export function symbolicImplFor(prog: Program, cls: string, slot: string, includeAbstract = false): MethodInfo | undefined {
+  const target = symbolicDispatchFor(prog, cls, slot, includeAbstract);
+  return target && failed(target) ? includeAbstract ? target.candidates[0] : undefined : target;
+}
+
+/** Executable selection differs from declaration metadata when defaults conflict. */
+export function symbolicDispatchFor(prog: Program, cls: string, slot: string, includeAbstract = false): DispatchTarget {
   const key = dispatchMethodKey(slot), at = key.indexOf("("), name = key.slice(0, at), desc = key.slice(at), split = slot.indexOf("\0");
   if (split >= 0) {
     const declared = symbolicMethod(prog.require(slot.slice(0, split)), name, desc);
     return declared ? symbolicOverride(prog, cls, declared, includeAbstract) : undefined;
   }
-  if (prog.loaderOf(cls) === prog.boot && !includeAbstract) return prog.implFor(cls, name, desc);
+  if (prog.loaderOf(cls) === prog.boot && !includeAbstract) return prog.dispatchFor(cls, name, desc);
   for (const owner of prog.chain(cls).reverse()) {
     const m = symbolicMethod(prog.require(owner), name, desc);
     if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.flags & (ACC.PUBLIC | ACC.PROTECTED)) return symbolicOverride(prog, cls, m, includeAbstract);
   }
   const maximal = prog.maximalInterfaceMethods(prog.chain(cls).flatMap(owner => prog.require(owner).ifaces), c => symbolicMethod(c, name, desc));
-  const defaults = maximal.filter(m => !(m.flags & ACC.ABSTRACT));
-  return defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
+  return selectDefault(maximal, includeAbstract);
 }
 
 function resolveSymbolicField(prog: Program, cls: string, name: string, desc: string): FieldInfo | undefined {
@@ -120,9 +125,8 @@ function interfaceSuper(prog: Program, cls: string, name: string, desc: string):
   const own = symbolicMethod(prog.require(cls), name, desc);
   if (own) return own;
   const maximal = prog.maximalInterfaceMethods(prog.require(cls).ifaces, c => symbolicMethod(c, name, desc));
-  const defaults = maximal.filter(m => !(m.flags & ACC.ABSTRACT));
-  if (defaults.length > 1) return fail("icce", `Conflicting default methods for ${dotted(cls)}.${name}${javaName(desc)}`);
-  return defaults[0] ?? maximal[0];
+  const target = selectDefault(maximal, true);
+  return target && failed(target) ? { ...target, message: `Conflicting default methods for ${dotted(cls)}.${name}${javaName(desc)}` } : target;
 }
 
 /** the method an invoke names, or why it does not resolve. `referrer` is the class of the calling method, `kind` the opcode without /range. */

@@ -4,7 +4,7 @@ import { rt } from "../../jvm/runtime";
 import { refOf, type Bridge } from "./bridge";
 import { constClass, idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
-import { symbolicImplFor } from "../compiler/linkage";
+import { failed, symbolicImplFor } from "../compiler/linkage";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
 import { onNestedStrand, runningThread } from "./entry";
@@ -53,7 +53,8 @@ export function wasmJni(w: World): JniVm {
     return name.length === 1 || name[0] === "#" ? name.slice(-1) : name[0] === "[" ? name : `L${name};`;
   };
   const virtual = (o: object, name: string, desc: string): MethodInfo => {
-    const m = prog.implFor(w.classNameOf(o), name, desc);
+    const m = prog.dispatchFor(w.classNameOf(o), name, desc);
+    if (m && failed(m)) return fail("java/lang/IncompatibleClassChangeError", m.message);
     return m ?? noSuchMethod(name, desc);
   };
   const call = (o: object, name: string, desc: string, ...args: unknown[]): unknown => bridge.call(virtual(o, name, desc), o, args);
@@ -110,7 +111,12 @@ export function wasmJni(w: World): JniVm {
     set(f, o, v) { const info = (f as WasmField).info; bridge.write(info, info.isStatic ? null : o as object, v); },
     invoke(c, name, sig, isStatic, self, args, nonvirtual) {
       if (!isStatic && (self === null || self === undefined)) return fail("java/lang/NullPointerException", "JNI call on null " + name);
-      const desc = view(c, sig), m = isStatic || nonvirtual ? prog.resolve(c.name, name, desc) : prog.implFor(w.classNameOf(self as object), name, desc);
+      const desc = view(c, sig), m = isStatic || nonvirtual ? prog.resolve(c.name, name, desc) : prog.dispatchFor(w.classNameOf(self as object), name, desc);
+      if (m && failed(m)) return fail("java/lang/IncompatibleClassChangeError", m.message);
+      if (nonvirtual && !isStatic && m && !m.isStatic && !prog.get(c.name)?.isInterface) {
+        const selected = prog.dispatchFor(c.name, name, desc);
+        if (selected && failed(selected)) return fail("java/lang/IncompatibleClassChangeError", selected.message);
+      }
       if (!m && !isStatic && !nonvirtual) {
         const declared = prog.resolve(c.name, name, desc), target = symbolicImplFor(prog, w.classNameOf(self as object), name + javaName(desc), true);
         if (declared && !declared.isStatic && target && target.flags & ACC.ABSTRACT) return fail("java/lang/AbstractMethodError", target.cls + "." + target.key);

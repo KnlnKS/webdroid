@@ -37,7 +37,7 @@ import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, 
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
-import { dispatchMethodKey, dispatchSlotKey, overridesMethod, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
+import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
@@ -460,7 +460,7 @@ export class World {
     const prog = this.prog, arr = name[0] === "[", c = prog.get(name);
     const chain = arr ? ["java/lang/Object", name] : prog.chain(name).reverse();   // Object first
     const depth = chain.length - 1;
-    const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => symbolicImplFor(prog, arr ? "java/lang/Object" : name, key);
+    const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => symbolicDispatchFor(prog, arr ? "java/lang/Object" : name, key);
     const body: number[] = new Array(H.VTAB + keys.length).fill(0);
     body[H.ID] = id; body[H.DEPTH] = depth;
     // ancestors beyond the fixed display are tested like interfaces, from the id list at the end
@@ -471,13 +471,13 @@ export class World {
       body[ELEM] = this.idOf(comp);
       body[ELEM_KIND] = !cc ? ELEM_OTHER : cc.isInterface || d >= H.MAXD ? ELEM_IFACE : d + 1;
     }
-    keys.forEach((key, i) => { const m = impl(key); body[H.VTAB + i] = m ? this.slotOf(m) : this.abstractSlot(key); });
+    keys.forEach((key, i) => { body[H.VTAB + i] = this.dispatchSlot(key, impl(key)); });
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];
     if (!arr) for (const key of keys) {
-      const sel = this.selectors.get(dispatchMethodKey(key)), target = sel ? impl(key) : undefined, m = (target?.flags ?? 0) & ACC.PUBLIC ? target : undefined;
-      if (!sel || !m) continue;
-      const s = sel % H.IMT_N, f = this.slotOf(m);
+      const sel = this.selectors.get(dispatchMethodKey(key)), target = sel ? impl(key) : undefined;
+      if (!sel || !target || !failed(target) && !(target.flags & ACC.PUBLIC)) continue;
+      const s = sel % H.IMT_N, f = this.dispatchSlot(key, target);
       if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
     }
     const addI = (i: string) => { const ic = prog.get(i); if (ic) { ifs.add(this.idOf(i)); ic.ifaces.forEach(addI); } };
@@ -501,8 +501,8 @@ export class World {
         const candidate = symbolicMethod(this.prog.require(owner), key.slice(0, at), key.slice(at));
         if (candidate && !candidate.isStatic) { m = candidate; break; }
       }
-      m ??= symbolicImplFor(this.prog, receiver, key);
-      cache.set(sel, slot = m ? m.flags & ACC.PUBLIC ? this.slotOf(m) : this.interfaceAccessSlot(key) : this.abstractSlot(key));
+      const target = m ?? symbolicDispatchFor(this.prog, receiver, key);
+      cache.set(sel, slot = target && !failed(target) && !(target.flags & ACC.PUBLIC) ? this.interfaceAccessSlot(key) : this.dispatchSlot(key, target));
     }
     return slot;
   }
@@ -552,6 +552,10 @@ export class World {
   replay(infos: InfoRecord[]): void { for (const r of infos) { try { replayInfo(this, r); } catch { /* a question the Program no longer answers */ } } }
   /** the synthetic function `name` a precompiled module calls, which its numbering has reserved but whose stub may not exist yet */
   ensureSynth(name: string): void {
+    if (name.startsWith("conflict:")) {
+      const [key, message] = JSON.parse(name.slice("conflict:".length)) as [string, string];
+      this.conflictSlot(key, message); return;
+    }
     const access = /^interfaceAccess:([ILJ]*)>([ILJV])$/.exec(name);
     if (access) { this.interfaceAccessSlot("method(" + [...access[1]].slice(1).map(k => k === "L" ? "Ljava/lang/Object;" : k).join("") + ")" + (access[2] === "L" ? "Ljava/lang/Object;" : access[2])); return; }
     const m = /^abstract:([ILJ]*)>([ILJV])$/.exec(name);
@@ -562,6 +566,18 @@ export class World {
     const p = parseMethodDesc(key.slice(key.indexOf("(")));
     const params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); } });
+  }
+
+  private dispatchSlot(key: string, target: ReturnType<typeof symbolicDispatchFor>): number {
+    return target ? failed(target) ? this.conflictSlot(key, target.message) : this.slotOf(target) : this.abstractSlot(key);
+  }
+
+  /** A default conflict keeps the physical dispatch signature and throws only when invoked. */
+  private conflictSlot(key: string, message: string): number {
+    const p = parseMethodDesc(key.slice(key.indexOf("("))), params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+    return this.synthSlot("conflict:" + JSON.stringify([key, message]), { params, ret, body: (cx, c) => {
+      cx.linkError(c, { thrower: "icce", message });
+    } });
   }
 
   private interfaceAccessSlot(key: string): number {
@@ -1416,7 +1432,7 @@ export class World {
       if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
     }
     const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {
-      return symbolicImplFor(this.prog, name, key);
+      return symbolicDispatchFor(this.prog, name, key);
     }) }));
     const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
     const existing = [...this.classes].filter(([name]) => own.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
@@ -1424,8 +1440,11 @@ export class World {
     if (!names.length) return;
     this.vslotCache.clear();
     for (const old of dispatch) {
-      const methods = this.vslots(old.name).map(key => symbolicImplFor(this.prog, old.name, key));
-      if (methods.length !== old.methods.length || methods.some((m, i) => m !== old.methods[i])) {
+      const methods = this.vslots(old.name).map(key => symbolicDispatchFor(this.prog, old.name, key));
+      if (methods.length !== old.methods.length || methods.some((m, i) => {
+        const prior = old.methods[i];
+        return m !== prior && !(m && prior && failed(m) && failed(prior) && m.candidates.length === prior.candidates.length && m.candidates.every((candidate, index) => candidate === prior.candidates[index]));
+      })) {
         undo(); this.vslotCache.clear();
         throw this.exception(this.makeThrowable("java/lang/LinkageError", `${reason} changed linked dispatch of ${old.name}`));
       }
@@ -1593,7 +1612,7 @@ export class World {
   /** whether the implementation code relied on for decl.name+desc (`tc`'s method `tk`, none if empty) stands once the concrete classes `by`, all subtypes of decl, exist */
   holds(a: { name: string; desc: string; tc: string; tk: string }, by: string[]): boolean {
     const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
-    for (const n of by) { const m = this.prog.implFor(n, a.name, a.desc); if (m && m !== target) return false; }
+    for (const n of by) { const m = this.prog.dispatchFor(n, a.name, a.desc); if (m && (failed(m) || m !== target)) return false; }
     return true;
   }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
