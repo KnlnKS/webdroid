@@ -92,6 +92,8 @@ export function without(methods: NativeSpec["methods"], ...keys: string[][]): No
 /** an object V8 stores properties into as a hash table: adding one is then no map transition */
 function dictionaryMode(o: object): void { (o as { $d?: number }).$d = 0; delete (o as { $d?: number }).$d; }
 
+const copiedDefaults = new WeakMap<object, Map<string, JvmFunction>>();
+
 export class ClassInfo {
   staticFieldTable = new Map<string, string>();
   ctor: any;
@@ -820,7 +822,9 @@ export class Runtime {
     perf.compileMs += performance.now() - t0;
     perf.classesCompiled++;
     for (const m of info.def.virtualMethods) {
-      if (m.codeOff) info.ownMethods.push(methodKey(dex, m.methodIdx).mangled);
+      const mangled = methodKey(dex, m.methodIdx).mangled;
+      if (!info.isInterface && m.flags & ACC.ABSTRACT) setJava(info.ctor.prototype, mangled, this.abstractBody(info, mangled), parseMethodDesc(demangle(mangled)![1]).params.length);
+      if (m.codeOff) info.ownMethods.push(mangled);
     }
     this.copyDefaults(info);
   }
@@ -830,7 +834,13 @@ export class Runtime {
       const dex = info.dex;
       return info.def.virtualMethods.find(m => methodKey(dex, m.methodIdx).mangled === mangled)?.flags;
     }
-    return info.ownMethods.includes(mangled) ? 0 : undefined;
+    if (info.ownMethods.includes(mangled)) return 0;
+    const proto = info.ctor?.prototype, java = xname(mangled);
+    if (info.native && proto && (Object.hasOwn(proto, java) || Object.hasOwn(proto, mangled))) {
+      const entry = proto[java] ?? proto[mangled];
+      if (typeof entry === "function" && copiedDefaults.get(proto)?.get(mangled) !== entry) return 0;
+    }
+    return undefined;
   }
 
   /** Select declarations rather than defaults previously copied onto a prototype. */
@@ -849,13 +859,17 @@ export class Runtime {
     return candidates.filter(([c]) => !candidates.some(([other]) => other !== c && other.assignableTo(c)));
   }
 
+  private abstractBody(info: ClassInfo, mangled: string): JvmFunction {
+    return () => { throw this.mkThrowable("java/lang/AbstractMethodError", `${info.name}.${mangled}`); };
+  }
+
   private interfaceBody(info: ClassInfo, mangled: string, includeAbstract: boolean): JvmFunction | undefined {
     const maximal = this.interfaceDeclarations(info, mangled), defaults = maximal.filter(([, flags]) => !(flags & ACC.ABSTRACT));
     if (defaults.length > 1) return () => { throw this.mkThrowable("java/lang/IncompatibleClassChangeError", `Conflicting default methods for ${info.name}.${mangled}`); };
     const target = defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
     if (!target) return undefined;
     const [c, flags] = target;
-    if (flags & ACC.ABSTRACT) return () => { throw this.mkThrowable("java/lang/AbstractMethodError", `${c.name}.${mangled}`); };
+    if (flags & ACC.ABSTRACT) return this.abstractBody(c, mangled);
     this.ensureCompiled(c);
     return c.ctor.prototype[xname(mangled)] ?? this.nsm(`${c.name}.${mangled} (super)`);
   }
@@ -886,8 +900,14 @@ export class Runtime {
       let declared = false;
       for (let c: ClassInfo | null = info; c; c = c.superInfo) if (this.declaredMethodFlags(c, mangled) !== undefined) { declared = true; break; }
       if (declared) continue;
-      const fn = this.interfaceDefault(info, mangled);
-      if (fn) setJava(info.ctor.prototype, mangled, fn, parseMethodDesc(demangle(mangled)![1]).params.length);
+      const fn = this.interfaceBody(info, mangled, true);
+      if (fn) {
+        const proto = info.ctor.prototype;
+        setJava(proto, mangled, fn, parseMethodDesc(demangle(mangled)![1]).params.length);
+        let copied = copiedDefaults.get(proto);
+        if (!copied) copiedDefaults.set(proto, copied = new Map());
+        copied.set(mangled, fn);
+      }
     }
   }
 

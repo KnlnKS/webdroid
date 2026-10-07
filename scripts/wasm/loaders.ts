@@ -63,7 +63,8 @@ const build = (dir: string, sources: string[], classpath?: string) => {
   sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath?.split(":").flatMap(path => ["--classpath", path]) ?? []), ...readdirSync(join(out, dir), { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path)).map(path => join(out, dir, path)).filter(path => !/\/(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path))]);
   return join(out, dir, "classes.dex");
 };
-if (process.argv.includes("--super")) { await interfaceSuperControl(); process.exit(0); }
+if (process.argv.includes("--abstract-default")) { await abstractDefaultControl(); process.exit(0); }
+if (process.argv.includes("--super")) { await interfaceSuperControl(); await abstractDefaultControl(); process.exit(0); }
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
 const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
@@ -663,4 +664,58 @@ async function interfaceSuperControl(): Promise<void> {
   } finally { jvmProfiler.tier = previous; }
   console.log(`JS interface-super/default: ${jsChecks} root/two-fork compiled and two-fork cold cases match JDK; Class identities stay distinct`);
 
+}
+
+async function abstractDefaultControl(): Promise<void> {
+  const dex = build("abstractDefault", ["InterfaceSuper.java", "ClassReabstract.java"]);
+  const old = join(out, "oldInterfaceSuper");
+  sh(["mkdir", "-p", old]);
+  writeFileSync(join(old, "InterfaceSuper.java"), readFileSync(join(JAVA, "InterfaceSuper.java"), "utf8").replace("interface Reabstracted extends C { int f(); }", "interface Reabstracted extends C {}").replace("interface OtherReabstracted extends C { int f(); }", "interface OtherReabstracted extends C {}"));
+  writeFileSync(join(old, "ClassReabstract.java"), readFileSync(join(JAVA, "ClassReabstract.java"), "utf8").replace("  public abstract int f();", ""));
+  sh(["javac", "--release", "11", "-d", old, join(old, "InterfaceSuper.java"), join(old, "ClassReabstract.java"), join(JAVA, "AbstractDefaultUse.java")]);
+  for (const file of readdirSync(old).filter(p => /^AbstractDefaultUse.*\.class$/.test(p))) sh(["cp", join(old, file), join(out, "abstractDefault")]);
+  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, "abstractDefault"), "--lib", androidJar, ...readdirSync(join(out, "abstractDefault")).filter(p => p.endsWith(".class")).map(p => join(out, "abstractDefault", p))]);
+  const expected = sh(["java", "-cp", join(out, "abstractDefault"), "AbstractDefaultUse"]).trim();
+  if (expected !== "42\n1\n42\n1") throw new Error("binary-evolution JDK control changed: " + expected);
+  const failures: string[] = [], base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
+  for (const cold of [false, true]) {
+    const p = new Program(loadDexes(dex), base), w = world(p, { cold });
+    for (let index = 0; index < 3; index++) {
+      let cls = "AbstractDefaultUse";
+      if (index) { const loader = p.newLoader(p.boot, null); w.addDexes(loadDexes(dex), loader); cls += "@" + loader.id; }
+      const mode = `Wasm ${cold ? "cold" : "compiled"}/${index}`;
+      const abstract = symbolicImplFor(p, cls, "f()I", true);
+      if (p.implFor(cls, "f", "()I") || symbolicImplFor(p, cls, "f()I") || !abstract || !(abstract.flags & ACC.ABSTRACT) || !(abstract.flags & ACC.PUBLIC)) throw new Error("compatible maximal abstracts lost metadata or retained concrete default");
+      try {
+        for (const suffix of ["", "Class"]) {
+          const prepared = await w.entryAsync(cls, "prepare" + suffix, "()I")();
+          const checked = await w.entryAsync(cls, "check" + suffix, "()I")();
+          console.log(`${mode}/${suffix || "interface"}: preparation=${prepared}, AME=${checked}`);
+          if (prepared !== 42 || checked !== 1) failures.push(mode + "/" + suffix);
+        }
+      } catch (error) { console.log(mode, error); failures.push(mode + " threw before expected catch"); }
+    }
+    if (cold && !w.stats.coldCalls) throw new Error("abstract-default Wasm cold path inactive");
+  }
+  await jsTier(loadDexes(dex));
+  const previous = jvmProfiler.tier;
+  try {
+    for (const mode of ["js", "cold"] as const) {
+      jvmProfiler.tier = mode;
+      const owners = mode === "js" ? [rt, rt.fork(), rt.fork()] : [rt.fork(), rt.fork()], before = perf.coldCalls;
+      for (const [index, owner] of owners.entries()) {
+        if (owner !== rt) loadDexes(dex).forEach(d => owner.loadDex(d));
+        const info = owner.link("AbstractDefaultUse");
+        await owner.initClass(info);
+        for (const suffix of ["", "Class"]) {
+          const prepared = await callOn(mainThread, () => info.ctor[mangleMethod("prepare" + suffix, "()I")]());
+          const checked = await callOn(mainThread, () => info.ctor[mangleMethod("check" + suffix, "()I")]());
+          console.log(`JS ${mode}/${index}/${suffix || "interface"}: preparation=${prepared}, AME=${checked}`);
+          if (prepared !== 42 || checked !== 1) failures.push(`JS ${mode}/${index}/${suffix}`);
+        }
+      }
+      if (mode === "cold" && perf.coldCalls === before) throw new Error("abstract-default JS cold path inactive");
+    }
+  } finally { jvmProfiler.tier = previous; }
+  if (failures.length) throw new Error("abstract-dominance mismatch: " + failures.join(", "));
 }

@@ -13,6 +13,7 @@ public class InterfaceSuper {
   static class Inherited implements Basic { public int f() { return Basic.super.f(); } }
   static class Default implements C {}
   interface Reabstracted extends C { int f(); }
+  interface OtherReabstracted extends C { int f(); }
   static abstract class AbstractDefault implements Reabstracted {}
   static class ConcreteDefault extends AbstractDefault { public int f() { return 55 + offset; } }
   static class Parent { public int f() { return 44 + offset; } }

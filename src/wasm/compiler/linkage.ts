@@ -90,23 +90,14 @@ export function symbolicImplFor(prog: Program, cls: string, slot: string, includ
     const declared = symbolicMethod(prog.require(slot.slice(0, split)), name, desc);
     return declared ? symbolicOverride(prog, cls, declared, includeAbstract) : undefined;
   }
-  if (prog.loaderOf(cls) === prog.boot) return includeAbstract ? prog.resolve(cls, name, desc) : prog.implFor(cls, name, desc);
+  if (prog.loaderOf(cls) === prog.boot && !includeAbstract) return prog.implFor(cls, name, desc);
   for (const owner of prog.chain(cls).reverse()) {
     const m = symbolicMethod(prog.require(owner), name, desc);
     if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.flags & (ACC.PUBLIC | ACC.PROTECTED)) return symbolicOverride(prog, cls, m, includeAbstract);
   }
-  const seen = new Set<string>(), found: MethodInfo[] = [];
-  const visit = (owner: string) => {
-    if (seen.has(owner)) return;
-    seen.add(owner);
-    const c = prog.get(owner);
-    if (!c) return;
-    const m = symbolicMethod(c, name, desc);
-    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) { if (includeAbstract || !(m.flags & ACC.ABSTRACT)) found.push(m); return; }
-    c.ifaces.forEach(visit);
-  };
-  for (const owner of prog.chain(cls)) prog.require(owner).ifaces.forEach(visit);
-  return found.find(m => found.every(other => other === m || !prog.isSubclass(other.cls, m.cls)));
+  const maximal = prog.maximalInterfaceMethods(prog.chain(cls).flatMap(owner => prog.require(owner).ifaces), c => symbolicMethod(c, name, desc));
+  const defaults = maximal.filter(m => !(m.flags & ACC.ABSTRACT));
+  return defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
 }
 
 function resolveSymbolicField(prog: Program, cls: string, name: string, desc: string): FieldInfo | undefined {
@@ -128,18 +119,7 @@ function resolveSymbolicField(prog: Program, cls: string, name: string, desc: st
 function interfaceSuper(prog: Program, cls: string, name: string, desc: string): MethodInfo | LinkFailure | undefined {
   const own = symbolicMethod(prog.require(cls), name, desc);
   if (own) return own;
-  const seen = new Set<string>(), candidates: MethodInfo[] = [];
-  const visit = (key: string) => {
-    if (seen.has(key)) return;
-    seen.add(key);
-    const c = prog.get(key);
-    if (!c) return;
-    const m = symbolicMethod(c, name, desc);
-    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) candidates.push(m);
-    c.ifaces.forEach(visit);
-  };
-  prog.require(cls).ifaces.forEach(visit);
-  const maximal = candidates.filter(m => !candidates.some(other => other !== m && prog.isSubclass(other.cls, m.cls)));
+  const maximal = prog.maximalInterfaceMethods(prog.require(cls).ifaces, c => symbolicMethod(c, name, desc));
   const defaults = maximal.filter(m => !(m.flags & ACC.ABSTRACT));
   if (defaults.length > 1) return fail("icce", `Conflicting default methods for ${dotted(cls)}.${name}${javaName(desc)}`);
   return defaults[0] ?? maximal[0];

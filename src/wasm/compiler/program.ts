@@ -379,18 +379,24 @@ export class Program {
   }
   private findImpl(cls: string, key: string): MethodInfo | undefined {
     for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) {
-      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC) && !(m.flags & ACC.ABSTRACT)) return m;
+      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) return m.flags & ACC.ABSTRACT ? undefined : m;
     }
-    // default methods: the most specific one, i.e. none whose interface is a superinterface of another candidate's
+    const defaults = this.maximalInterfaceMethods(this.chain(cls).flatMap(n => this.require(n).ifaces), c => declaredMethod(c, key)).filter(m => !(m.flags & ACC.ABSTRACT));
+    return defaults[0];
+  }
+  /** Abstract declarations participate in dominance even when only a concrete body is requested. */
+  maximalInterfaceMethods(roots: readonly string[], lookup: (c: JClass) => MethodInfo | undefined): MethodInfo[] {
     const seen = new Set<string>(), found: MethodInfo[] = [];
-    const visit = (n: string) => {
-      if (seen.has(n)) return; seen.add(n);
-      const c = this.get(n); if (!c) return;
-      const m = declaredMethod(c, key); if (m && !(m.flags & ACC.STATIC)) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
-      for (const i of c.ifaces) visit(i);
+    const visit = (name: string) => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const c = this.get(name); if (!c) return;
+      const m = lookup(c);
+      if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) found.push(m);
+      c.ifaces.forEach(visit);
     };
-    for (let c: JClass | undefined = this.get(cls); c; c = c.sup ? this.get(c.sup) : undefined) for (const i of c.ifaces) visit(i);
-    return found.find((m) => found.every((o) => o === m || !this.isSubclass(o.cls, m.cls)));
+    roots.forEach(visit);
+    return found.filter(m => !found.some(other => other !== m && this.isSubclass(other.cls, m.cls)));
   }
   /** the method an invoke-super in class `cur` of a reference to `decl.name+desc` runs: found from the interface when `decl` is one, else from the superclass */
   superTarget(cur: string, decl: string, name: string, desc: string): MethodInfo | undefined {
