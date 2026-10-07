@@ -1662,8 +1662,8 @@ export class World {
       c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
     }, ret);
     this.stats.units++;
-    const { get } = this.helperUnit(cx, { ...this.unitImports(cx), call: { d, v, x: thr } }, built, clock, this.callRebuilder(name, params, ret, body, prepare, { d, v, thr }), slot);
-    return { get, d, v, thr };
+    const { get, raw } = this.helperUnit(cx, { ...this.unitImports(cx), call: { d, v, x: thr } }, built, clock, this.callRebuilder(name, params, ret, body, prepare, { d, v, thr }), slot);
+    return { get, raw, d, v, thr };
   }
   /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
    *  call did not wait (a Java exception is thrown as a WebAssembly.Exception), else a Promise of it. The module records how the call ended in globals of its own, which the
@@ -1671,8 +1671,9 @@ export class World {
   callFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void): (s: Strand, ...a: any[]) => unknown {
     let f = this.callFns.get(name);
     if (f) return f;
-    const { get, d, v, thr } = this.buildCallFn(name, params, ret, body, prepare);
-    const enter = (s: Strand, ...args: unknown[]) => s.call(get(), ...args);
+    const { get, raw, d, v, thr } = this.buildCallFn(name, params, ret, body, prepare);
+    const enter = raw ? (s: Strand, ...args: unknown[]) => s.call(raw, ...args)
+      : (s: Strand, ...args: unknown[]) => s.call(get(), ...args);
     Object.defineProperty(enter, "name", { value: "webdroid:callFn" });
     let token = 0;
     this.callFns.set(name, f = (s, ...args) => {
