@@ -16,13 +16,24 @@ import { AOSP, G1_DIR, JAVA, ROOT } from "./paths";
 import { cutWorkloads, dexAndroid, shellIn } from "./tools";
 import { sourceKey } from "./aot-key";
 import { createHash } from "node:crypto";
+import { sampleError } from "./g1report";
 
 const here = import.meta.dir;
 const flag = (k: string, d: string) => { const i = process.argv.indexOf(k); return i < 0 ? d : process.argv[i + 1]; };
 const reps = +flag("--reps", "100"), runs = +flag("--runs", "5"), engines = flag("--engines", "node,chrome").split(","), jsonOut = flag("--json", ""), refPath = flag("--ref", ""), v8Flags = flag("--v8-flags", "");
 /** the workloads as an installed app: the saved build g1app.ts made in this directory (with WEBDROID_AOT its platform build) */
 const installedDir = flag("--installed", ""), inlineTier = process.argv.includes("--inline");
-const only = process.argv.slice(2).filter((a, i, v) => !a.startsWith("--") && !v[i - 1]?.startsWith("--"));
+if (process.env.G1_APP && process.env.G1_APP !== installedDir) throw new Error("G1_APP requires the same explicit --installed directory");
+if (inlineTier && !installedDir) throw new Error("--inline requires --installed");
+const valueFlags = new Set(["--reps", "--runs", "--engines", "--json", "--ref", "--v8-flags", "--installed"]);
+const switchFlags = new Set(["--inline", "--cold", "--phases"]), only: string[] = [];
+for (let i = 2; i < process.argv.length; i++) {
+  const arg = process.argv[i];
+  if (valueFlags.has(arg)) { if (!process.argv[i + 1] || arg !== "--v8-flags" && process.argv[i + 1].startsWith("--")) throw new Error(`${arg} needs a value`); i++; }
+  else if (arg.startsWith("--")) { if (!switchFlags.has(arg)) throw new Error(`unknown option: ${arg}`); }
+  else only.push(arg);
+}
+if (![reps, runs].every(n => Number.isInteger(n) && n > 0) || engines.some(e => !["node", "chrome"].includes(e)) || new Set(engines).size !== engines.length) throw new Error("positive integer reps/runs and distinct node/chrome engines required");
 
 // ---- Bench.java and G1.java with each workload cut into its own static method (as jbench.ts does)
 const out = G1_DIR, sources = [["Bench", join(ROOT, "scripts/jbench/Bench.java")], ["G1", join(JAVA, "G1.java")]];
@@ -34,6 +45,7 @@ const names: string[] = [], classOf = new Map<string, string>(), cut = sources.m
   return { cls, file, text: source };
 });
 const dex = join(out, "classes.dex");
+if (only.some(name => !names.includes(name))) throw new Error(`unknown workload: ${only.filter(name => !names.includes(name)).join(", ")}`);
 if (!existsSync(dex) || cut.some((c) => statSync(dex).mtimeMs < statSync(c.file).mtimeMs)) {
   for (const c of cut) writeFileSync(join(out, `${c.cls}.java`), c.text);
   dexAndroid(sh, out, cut.map((c) => `${c.cls}.java`));
@@ -55,7 +67,9 @@ const nodeRun = (b: string) => (cfg: G1Config): G1Result => {
   const r = Bun.spawnSync(["node", "--expose-gc", "--experimental-wasm-jspi", ...base64, ...v8Flags.split(" ").filter(Boolean), b, JSON.stringify(cfg)], { env: { ...process.env, G1_ROOT: ROOT, ...(installedDir && { G1_APP: installedDir }) } });
   const line = r.stdout.toString().split("\n").find((l) => l.startsWith("G1"));
   if (!line) throw new Error(`${cfg.workload}/${cfg.mode}: ${r.stderr.toString().slice(0, 400)}`);
-  return JSON.parse(line.slice(2));
+  const result = JSON.parse(line.slice(2)) as G1Result;
+  if (r.exitCode) result.error ??= `node exited ${r.exitCode}: ${r.stderr.toString().slice(0, 400)}`;
+  return result;
 };
 async function chromeRun() {
   const { chromium } = await import("playwright");
@@ -84,21 +98,24 @@ async function chromeRun() {
   const version = browser.version();
   return { version, run: async (cfg: G1Config): Promise<G1Result> => {
     const page = await (await browser.newContext()).newPage();
-    page.on("pageerror", (e) => console.log("PAGEERR", String(e).slice(0, 500)));
-    await page.goto(`http://localhost:${server.port}/`);
-    await page.waitForFunction("window.ready === true", null, { timeout: 120000 });
-    const r = await page.evaluate((c) => (globalThis as unknown as { g1run: (c: unknown) => Promise<unknown> }).g1run(c), cfg) as G1Result;
-    await page.context().close();
-    return r;
+    const errors: string[] = [];
+    page.on("pageerror", e => errors.push(String(e).slice(0, 500)));
+    try {
+      await page.goto(`http://localhost:${server.port}/`);
+      await page.waitForFunction("window.ready === true", null, { timeout: 120000 });
+      const r = await page.evaluate((c) => (globalThis as unknown as { g1run: (c: unknown) => Promise<unknown> }).g1run(c), cfg) as G1Result;
+      if (errors.length) r.error ??= `page error: ${errors.join("; ")}`;
+      return r;
+    } finally { await page.context().close(); }
   }, close: async () => { await browser.close(); server.stop(); } };
 }
 
 // ---- measure
 const med = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 const geo = (a: number[]) => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
-interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; boot?: Stats; setup?: Stats; firstStats?: Stats; stats?: Stats }
+interface Sample { first: number; warm: number; steady: number; completedCalls:number; result: string; error?: string; compileMs?: number; oracleBootMs?: number; bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; boot?: Stats; setup?: Stats; firstStats?: Stats; stats?: Stats }
 type Stats = Record<string, number> & { phase: Record<string, number>; aot: Record<string, number> }
-const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, bootMs: r.bootMs, ahead: r.ahead, appReadMs: r.appReadMs, worldSetupMs: r.worldSetupMs, workerStartMs: r.workerStartMs, prestartedWorker: r.prestartedWorker, boot: r.boot as Stats, setup: r.setup as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
+const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.slice(1, 11)), steady: med(r.times.slice(Math.max(1, r.times.length >> 1))), completedCalls:r.times.length, result: r.result, error: r.error, compileMs: r.compileMs, oracleBootMs: r.oracleBootMs, bootMs: r.bootMs, ahead: r.ahead, appReadMs: r.appReadMs, worldSetupMs: r.worldSetupMs, workerStartMs: r.workerStartMs, prestartedWorker: r.prestartedWorker, boot: r.boot as Stats, setup: r.setup as Stats, firstStats: r.first as Stats, stats: r.stats as Stats });
 const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
@@ -108,9 +125,10 @@ report.scenario = installedDir ? "installed-measured-demand-preload" : "ordinary
 report.startup = installedDir ? artifact(installedDir, "startup.json") : process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "startup.json") : null;
 report.appIndex = installedDir ? artifact(installedDir, "index.json") : null;
 report.platformIndex = process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "index.json") : null;
-report.harnessSha256 = createHash("sha256").update(readFileSync(import.meta.path)).update(readFileSync(join(here, "g1run.ts"))).digest("hex");
+report.harnessSha256 = createHash("sha256").update(readFileSync(import.meta.path)).update(readFileSync(join(here, "g1run.ts"))).update(readFileSync(join(here, "g1report.ts"))).digest("hex");
 report.v8Flags = v8Flags;
 report.startupOverride = process.env.G1_STARTUP ?? null;
+report.primaryProtocol = !installedDir && !refPath && !v8Flags && !process.env.G1_STARTUP && !process.argv.includes("--cold");
 
 for (const engine of engines) {
   let run: (c: G1Config) => G1Result | Promise<G1Result>, label = "node " + Bun.spawnSync(["node", "-p", "process.version + ' (V8 ' + process.versions.v8 + ')'"]).stdout.toString().trim(), close = async () => {};
@@ -126,19 +144,28 @@ for (const engine of engines) {
     for (const w of got.keys()) for (const mode of (i%2?["wasm","js"]:["js","wasm"]) as ("js"|"wasm")[]) {
       const entry = got.get(w)!;
       if (ref && mode === "js") continue;
-      if (entry.blocked && (mode === "wasm" || i > 0)) continue;
-      const r = sample(await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }));
+      let result: G1Result;
+      try { result = await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }); }
+      catch (error) { result = { mode, workload: w, result: "", times: [], error: String(error).slice(0, 900) }; }
+      const r = sample(result);
       entry[mode].push(r);
-      if (mode === "wasm" && i === 0 && ((r.error && !r.result) || r.result !== entry.js[0].result)) entry.blocked = true;
+      if (mode === "wasm" && (r.error || r.result !== entry.js[0]?.result)) entry.blocked = true;
     }
     loads.push(loadavg()[0]);
   }
+  const failures = [...got].flatMap(([workload, e]) => (["js", "wasm"] as const).flatMap(mode => {
+    const samples = e[mode], expected = e.js[0]?.result ?? "";
+    return samples.flatMap((s, run) => { const error = sampleError(s, expected, ref && mode === "js" ? undefined : reps + 1); return error ? [{ workload, mode, run, error, completedCalls: s.completedCalls }] : []; })
+      .concat(samples.length === (ref && mode === "js" ? refRows.get(workload)!.jsFirst.length : runs) ? [] : [{ workload, mode, run: -1, error: "incomplete run count", completedCalls: 0 }]);
+  }));
+  const omittedWorkloads = todo.filter(w => !got.has(w));
   const rows = [], ratios = { first: [] as number[], steady: [] as number[] }, byClass = new Map<string, { first: number[]; steady: number[] }>();
   console.log(`\n${label}: ${runs} runs x ${reps} reps; medians, [min-max] over runs; ms`);
   console.log(`scenario: ${report.scenario}; worker: ${installedDir && engine !== "node" && !inlineTier ? "prestarted before first call" : "inline"}; startup: ${JSON.stringify(report.startup)}`);
   console.log("workload".padEnd(11), "js first".padStart(9), "wasm first".padStart(11), "x".padStart(6), "js steady".padStart(11), "wasm steady".padStart(12), "x".padStart(6), " wasm warm(2-11)  compile");
   for (const [w, e] of got) {
-    if (e.blocked) { console.log(w.padEnd(11), `blocked (${e.wasm[0]?.error ?? "result differs"})`); continue; }
+    const invalid = failures.filter(f => f.workload === w);
+    if (invalid.length) { console.log(w.padEnd(11), `FAILED (${invalid.map(f => `${f.mode}/${f.run}: ${f.error}`).join("; ")})`); continue; }
     const f = (xs: Sample[], k: "first" | "steady" | "warm") => xs.map((x) => x[k]);
     const rng = (a: number[]) => `${med(a).toFixed(a[0] < 1 ? 3 : 1)} [${Math.min(...a).toFixed(a[0] < 1 ? 3 : 1)}-${Math.max(...a).toFixed(a[0] < 1 ? 3 : 1)}]`;
     const xf = med(f(e.js, "first")) / med(f(e.wasm, "first")), xs = med(f(e.js, "steady")) / med(f(e.wasm, "steady"));
@@ -146,8 +173,6 @@ for (const engine of engines) {
     const bc = byClass.get(classOf.get(w)!) ?? (byClass.set(classOf.get(w)!, { first: [], steady: [] }), byClass.get(classOf.get(w)!)!);
     bc.first.push(xf); bc.steady.push(xs);
     rows.push({ w, result: e.js[0].result, firstRatio: xf, steadyRatio: xs, jsFirst: f(e.js, "first"), wasmFirst: f(e.wasm, "first"), jsCompletedCalls: e.js.map((x) => x.completedCalls), wasmCompletedCalls: e.wasm.map((x) => x.completedCalls), wasmBoot: e.wasm.map((x) => x.bootMs ?? 0), wasmAhead: e.wasm.map((x) => x.ahead ?? 0), wasmAppRead: e.wasm.map((x) => x.appReadMs ?? 0), wasmWorldSetup: e.wasm.map((x) => x.worldSetupMs ?? 0), wasmWorkerStart: e.wasm.map((x) => x.workerStartMs ?? 0), prestartedWorker: e.wasm.map((x) => !!x.prestartedWorker), wasmCalls: e.wasm.map((x) => (x.stats?.methods ?? 0) - (x.setup?.methods ?? x.boot?.methods ?? 0)), jsSteady: f(e.js, "steady"), wasmSteady: f(e.wasm, "steady"), wasmWarm: f(e.wasm, "warm") });
-    const cut = e.wasm.find((x) => x.error);
-    if (cut) console.log(`  note: ${w} stopped early (${cut.error}); its steady state is over the calls that completed`);
     console.log(w.padEnd(11), rng(f(e.js, "first")).padStart(9), rng(f(e.wasm, "first")).padStart(11), xf.toFixed(2).padStart(6), rng(f(e.js, "steady")).padStart(11), rng(f(e.wasm, "steady")).padStart(12), xs.toFixed(2).padStart(6), "  ", med(f(e.wasm, "warm")).toFixed(3), " ", med(e.wasm.map((x) => x.compileMs ?? 0)).toFixed(0));
   }
   if (process.argv.includes("--phases")) {
@@ -157,15 +182,16 @@ for (const engine of engines) {
     console.log("workload".padEnd(11), "part".padEnd(5), "methods".padStart(7), "units".padStart(6), "classes".padStart(7), "compile".padStart(8), ...keys.map((k) => k.padStart(7)), "module".padStart(7), "inst".padStart(6), "classB".padStart(7), "classMs".padStart(8), "KB".padStart(6), "aotD".padStart(5), "aotC".padStart(5), "dead".padStart(5), "miss".padStart(5), "aotMs".padStart(6), "read".padStart(5), "aotKB".padStart(6), "upg".padStart(4));
     for (const [w, e] of got) for (const part of ["boot", "setup", "first", "rest"] as const) {
       const v = (f: (s: Stats) => number) => total(e.wasm.map((x) => { const end = x.stats!, b = x.boot!, setup = x.setup ?? b, first = x.firstStats ?? end; return part === "boot" ? f(b) : part === "setup" ? f(setup) - f(b) : part === "first" ? f(first) - f(setup) : f(end) - f(first); }));
-      if (!e.wasm.length || !e.wasm[0].stats) continue;
+      if (!e.wasm.length || e.wasm.some(x => !x.stats || !x.boot)) continue;
       console.log(w.padEnd(11), part.padEnd(5), String(v((s) => s.methods)).padStart(7), String(v((s) => s.units)).padStart(6), String(v((s) => s.classes)).padStart(7), v((s) => s.compileMs).toFixed(0).padStart(8),
         ...keys.map((k) => v((s) => s.phase[k]).toFixed(0).padStart(7)), v((s) => s.moduleMs).toFixed(0).padStart(7), v((s) => s.instantiateMs).toFixed(0).padStart(6), v((s) => s.phase.classBuild).toFixed(0).padStart(7), v((s) => s.classMs).toFixed(0).padStart(8), (v((s) => s.bytes) / 1024).toFixed(0).padStart(6),
         String(v((s) => s.aot.d)).padStart(5), String(v((s) => s.aot.c)).padStart(5), String(v((s) => s.aot.dead)).padStart(5), String(v((s) => s.aot.missed)).padStart(5), v((s) => s.aot.ms).toFixed(0).padStart(6), v((s) => s.aot.readMs).toFixed(0).padStart(5), (v((s) => s.aot.bytes) / 1024).toFixed(0).padStart(6), String(v((s) => s.upgrades)).padStart(4));
     }
   }
-  for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over ${r.steady.length} matching ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
-  const failures=[...got].flatMap(([workload,e])=>["js","wasm"].flatMap(mode=>e[mode as "js"|"wasm"].flatMap((s,run)=>s.error||s.result!==e.js[0]?.result||((!ref||mode==="wasm")&&s.completedCalls!==reps+1)?[{workload,mode,run,error:s.error??(s.result!==e.js[0]?.result?"result differs":"incomplete call count"),completedCalls:s.completedCalls}]:[])));
-  (report.engines as Record<string, unknown>)[engine] = { label, workerPolicy: installedDir && engine !== "node" && !inlineTier ? "prestarted-before-first-call" : "inline", selected:got.size, selectedWorkloads:todo, blocked:[...got].filter(([,e])=>e.blocked).map(([w])=>w), failures, reference:refPath||null, rows, samples:Object.fromEntries(got), geoFirst: ratios.first.length ? geo(ratios.first) : null, geoSteady: ratios.steady.length ? geo(ratios.steady) : null };
+  const complete = failures.length === 0 && omittedWorkloads.length === 0 && rows.length === todo.length && rows.length > 0;
+  if (complete) for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over all ${r.steady.length} selected ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
+  else { console.log("No full-selection geometric mean: failed or omitted workloads remain in samples/failures."); process.exitCode = 1; }
+  (report.engines as Record<string, unknown>)[engine] = { label, workerPolicy: installedDir && engine !== "node" && !inlineTier ? "prestarted-before-first-call" : "inline", selected:got.size, selectedWorkloads:todo, omittedWorkloads, complete, blocked:[...got].filter(([,e])=>e.blocked).map(([w])=>w), failures, reference:refPath||null, rows, samples:Object.fromEntries(got), geoFirst: complete ? geo(ratios.first) : null, geoSteady: complete ? geo(ratios.steady) : null };
   await close();
 }
 const peak = Math.max(...loads), noisy = peak > 2;
