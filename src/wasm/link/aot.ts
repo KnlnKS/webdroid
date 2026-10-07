@@ -183,6 +183,7 @@ export class AotRuntime {
   private cOf = new Int32Array(0);
   private dExports: (WebAssembly.Exports | undefined)[] = [];
   private fallbackD = new Set<number>();
+  private rejectedData = new Set<string>();
   private cState: number[] = [];
   private cAbsent: (Set<number> | undefined)[] = [];
   private overridden = new Set<number>();
@@ -364,7 +365,7 @@ export class AotRuntime {
     const w = this.w, mod = this.module(file);
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
-    if (head.version !== VERSION) return undefined;
+    if (head.version !== VERSION) { this.rejectedData.add(file); return undefined; }
     ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
@@ -415,11 +416,9 @@ export class AotRuntime {
   /** Files absent on first use. A preflight data miss can retry until World.link begins publishing fallback globals for its group. */
   missed = new Set<string>();
   private ready(file: string): boolean {
-    const missed = this.missed.has(file);
-    if (missed && !/^c\d+\.wasm$/.test(file)) {
-      const data = /^d(\d+)\.wasm$/.exec(file);
-      if (!data || this.fallbackD.has(+data[1])) return false;
-    }
+    const missed = this.missed.has(file), data = /^d(\d+)\.wasm$/.exec(file);
+    if (this.rejectedData.has(file) || data && this.fallbackD.has(+data[1])) return false;
+    if (missed && !/^c\d+\.wasm$/.test(file) && !data) return false;
     if (this.store!.get(file)) return true;
     if (!missed) { this.missed.add(file); this.w.stats.aot.missed++; }
     return false;
