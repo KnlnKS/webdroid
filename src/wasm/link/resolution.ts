@@ -23,8 +23,7 @@ function resolveType(w: World, loader: Loader, name: string, owner: Strand): str
   catch (error) { return fail(error); }
 }
 
-/** Resolve the class named by this executed instruction, not its unused siblings. */
-export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): void | Promise<void> {
+export function instructionClass(method: MethodInfo, ins: PreparedInstruction): string | undefined {
   const dex = method.dex, n = ins.name;
   const index = /^(const-class|check-cast|new-instance|filled-new-array)/.test(n) ? ins.b
     : n === "instance-of" || n === "new-array" ? ins.c
@@ -34,7 +33,14 @@ export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedIn
   if (index === undefined) return;
   const descriptor = dex.rawType(index);
   if (descriptor[0] !== "L" && descriptor[0] !== "[") return;
-  const key = resolveType(w, w.prog.loaderOf(method.cls), descToName(descriptor), owner);
+  return descToName(descriptor);
+}
+
+/** Resolve the class named by this executed instruction, not its unused siblings. */
+export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): void | Promise<void> {
+  const name = instructionClass(method, ins);
+  if (!name) return;
+  const key = resolveType(w, w.prog.loaderOf(method.cls), name, owner);
   if (key instanceof Promise) return key.then(() => {});
 }
 
@@ -82,6 +88,12 @@ export function resolveForName(w: World, name: string, object: object | null, ow
 
 type Definition = { owner: Strand["thread"]; state: "resolving" | "ready" | "failed"; wait: Promise<string>; error?: unknown };
 const definitions = new WeakMap<World, Map<string, Definition>>();
+
+export function definitionReady(w: World, key: string): boolean {
+  const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
+  return !cls?.dex || !cls.def || loader === w.prog.boot || !objectOfLoader(w, loader)
+    || definitions.get(w)?.get(key)?.state === "ready";
+}
 
 /** Resolve only declaration hierarchy before a definition publishes layout or its mirror. */
 export function prepareDefinition(w: World, key: string, owner: Strand): string | Promise<string> {

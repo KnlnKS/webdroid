@@ -13,14 +13,14 @@ import { T } from "../compiler/wasmbin";
 import { validateColdSnapshot, type ColdSnapshot } from "./state";
 import type { Strand } from "../link/sched";
 import type { World } from "../link/world";
-import { resolveInstruction } from "../link/resolution";
+import { definitionReady, instructionClass, resolveInstruction } from "../link/resolution";
 
 
 export class UnsupportedSlowOperation extends Error {}
 type Analysis = { prepared: ReturnType<typeof prepareMethod>; typing: Typing; instructions: Map<number, PreparedInstruction> };
 type Adapter = { call: (strand: Strand, sync: boolean, depth: number, peer: unknown, ...args: unknown[]) => unknown; inputs: { reg: number; kind: Kind }[]; output: Kind | "V"; successor: number; producer: boolean };
 type SlowBody = (cx: Compiler, c: Code, arg: (i: number) => void) => number[];
-type Batch = { entries: { body: SlowBody; ctor?: MethodInfo }[]; call: (strand: Strand, sync: boolean, selector: number, depth: number, peer: unknown, ...args: unknown[]) => unknown };
+type Batch = { readonly sealed: boolean; entries: { body: SlowBody; ctor?: MethodInfo }[]; call: (strand: Strand, sync: boolean, selector: number, depth: number, peer: unknown, ...args: unknown[]) => unknown };
 const BATCH_SIZE = 16;
 const abi = (kind: number): Kind => kind === R ? "L" : kind === J || kind === D ? "J" : "I";
 
@@ -108,18 +108,31 @@ export class ColdSlowOps {
     throw new UnsupportedSlowOperation(`${mid(m)} at ${ins.pc}: ${n}`);
   }
 
-  private adapter(m: MethodInfo, ins: PreparedInstruction): Adapter {
+  private batchReady(m: MethodInfo, ins: PreparedInstruction): boolean {
+    const loader = this.w.prog.loaderOf(m.cls);
+    if (loader === this.w.prog.boot) return true;
+    if (/^invoke-(custom|polymorphic)|^const-method-/.test(ins.name)) return false;
+    const name = instructionClass(m, ins);
+    if (!name) return true;
+    const component = name.replace(/^\[+/, ""), type = name[0] === "[" && component[0] === "L" ? component.slice(1, -1) : name;
+    if (name[0] === "[" && /^[ZBCSIJFD]$/.test(component)) return true;
+    const key = this.w.prog.initiatedBy(loader, type);
+    return !!key && definitionReady(this.w, key);
+  }
+
+  private adapter(m: MethodInfo, ins: PreparedInstruction, seal = true): Adapter {
     const analysis = this.analysis(m);
     if (!analysis.typing.reached(ins.pc)) throw new UnsupportedSlowOperation(`unreachable cold opcode at ${ins.pc}`);
     let cache = this.adapters.get(m);
     if (!cache) {
       this.adapters.set(m, cache = new Map());
-      // Seal deterministic, bounded ABI batches before any helper is emitted.
-      // Snapshot-only operations and String allocation do not need an adapter.
-      for (const op of this.w.prog.loaderOf(m.cls) === this.w.prog.boot ? analysis.prepared.instructions : []) {
+    }
+    if (seal && !cache.has(ins.pc)) {
+      // Preseal only already-resolved owners; inactive symbolic names stay lazy.
+      for (const op of analysis.prepared.instructions) {
         if (!analysis.typing.reached(op.pc) || !ColdSlowOps.supports(op) || /^(move-result|move-exception)/.test(op.name)
-          || op.name === "new-instance" && descToName(m.dex.type(op.b)) === "java/lang/String") continue;
-        this.adapter(m, op);
+          || op.name === "new-instance" && descToName(m.dex.type(op.b)) === "java/lang/String" || !this.batchReady(m, op)) continue;
+        this.adapter(m, op, false);
       }
     }
     let found = cache.get(ins.pc);
@@ -164,7 +177,7 @@ export class ColdSlowOps {
     let list = groups.get(signature);
     if (!list) groups.set(signature, list = []);
     let batch = list.at(-1);
-    if (!batch || batch.entries.length === (this.w.prog.loaderOf(m.cls) === this.w.prog.boot ? BATCH_SIZE : 1)) {
+    if (!batch || batch.sealed || batch.entries.length === (this.batchReady(m, ins) ? BATCH_SIZE : 1)) {
       batch = this.batch(`cold:slow:${mid(m)}:${ins.pc}`, ["I", "L", "I", ...inputs.map(i => i.kind)], output);
       list.push(batch);
     }
@@ -237,7 +250,7 @@ export class ColdSlowOps {
     const call: Batch["call"] = (strand, sync, selector, depth, peer, ...args) => strand.root || sync
       ? this.w.synchronous(() => (rootCall ??= this.w.hostFn(name, params, output, (cx, c) => emit(cx, c, i => { c.lget(i); }), prepare))(depth, peer, selector, ...args))
       : (strandCall ??= this.w.callFn(name, params, output, emit, prepare))(strand, depth, peer, selector, ...args);
-    return { entries, call };
+    return { entries, call, get sealed() { return !!rootCall || !!strandCall; } };
   }
 
   private read(state: ColdSnapshot, reg: number, kind: Kind): unknown {
