@@ -300,7 +300,8 @@ export class AotRuntime {
     const w = this.w, sigs = this.appDexes(app.classes);
     if ((app.deopt ?? 0) !== this.deopt || w.opts.cold && app.deopt !== DEOPT_ABI || app.version !== APP_VERSION || this.rest.length < app.classes || !sameMarks(w.numbering(), app.base) || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) || !w.adopt(app.numbering)) return false;
     this.appClasses = new Set(this.rest.slice(0, app.classes));
-    for (const [key, tc, tk, stands] of app.demand.verdicts ?? []) this.verdicts.set(key, [tc, tk, stands]);
+    // Verdicts cover the build's whole app, not an arbitrary prefix of this World's app.
+    if (app.classes === this.rest.length) for (const [key, tc, tk, stands] of app.demand.verdicts ?? []) this.verdicts.set(key, [tc, tk, stands]);
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
     cOf.set(this.cOf);
     this.appFrom = this.cState.length;
@@ -509,6 +510,7 @@ export class AotRuntime {
   /** App units were compiled before the runtime loader's library graph was known. Keep platform modules and stable numbering, but discard the app's old resolution. */
   unbindApp(): void {
     this.verdictsHold = false;
+    this.verdicts.clear(); this.parts.clear(); this.restSet = undefined;
     for (let c = this.appFrom; c < this.cState.length; c++) this.cState[c] = DEAD;
     this.appDOf.clear();
     this.patchesOver.clear();
