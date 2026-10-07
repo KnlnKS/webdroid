@@ -418,13 +418,13 @@ export function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] 
   return (c[declaredOnly ? 1 : 0] ??= collectMethods(info, declaredOnly)).slice();
 }
 /** a platform body a native class could not run is not a method it has */
-const runnable = (ci: ClassInfo, fn: unknown, java: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !unsafeFallthrough(rt, ci, java);
+const runnable = (ci: ClassInfo, fn: unknown, java: unknown): fn is (...a: unknown[]) => unknown => typeof fn === "function" && !unsafeFallthrough(ci.owner ?? rt, ci, java);
 function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
-  rt.ensureCompiled(info);
+  (info.owner ?? rt).ensureCompiled(info);
   const out: JMethod[] = [];
   const seen = new Set<string>();
   const collectNative = (ci: ClassInfo) => {
-    const spec = rt.natives.get(ci.name);
+    const owner = ci.owner ?? rt, spec = owner.natives.get(ci.name);
     for (const key of Object.keys(spec?.methods ?? {})) {
       let k = key, isStatic = false;
       if (k.startsWith("static ")) { isStatic = true; k = k.slice(7); }
@@ -437,7 +437,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
     }
     // methods installed outside the spec (Class's own reflection natives, generated members) are
     // known by the descriptors bytecode references them with
-    for (const [k, desc] of rt.methodRefs(ci.name)) {
+    for (const [k, desc] of owner.methodRefs(ci.name)) {
       const name = k.slice(0, k.length - desc.length);
       if (name === "<init>" || name === "<clinit>" || seen.has(k)) continue;
       const mangled = mangleMethod(name, desc);
@@ -450,7 +450,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
     if (!ci.def || !ci.dex) { if (ci.native) collectNative(ci); return; }
     for (const m of [...ci.def.directMethods, ...ci.def.virtualMethods]) {
       const mr = ci.dex.method(m.methodIdx);
-      if (mr.name === "<init>" || mr.name === "<clinit>") continue;
+      if (mr.name === "<init>" || mr.name === "<clinit>" || !declaredOnly && !(m.flags & 1)) continue;
       const desc = ci.dex.methodDesc(m.methodIdx);
       const isStatic = (m.flags & 0x8) !== 0;
       const key = mr.name + desc;
@@ -463,8 +463,22 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   };
   collect(info);
   if (!declaredOnly) {
-    let sup = info.superInfo;
-    while (sup) { rt.ensureCompiled(sup); collect(sup); sup = sup.superInfo; }
+    if (!info.isInterface) {
+      for (let sup = info.superInfo; sup; sup = sup.superInfo) { (sup.owner ?? rt).ensureCompiled(sup); collect(sup); }
+    }
+    const visited = new Set<ClassInfo>(), inherited = new Map<string, JMethod>();
+    const visit = (ci: ClassInfo) => {
+      if (visited.has(ci)) return;
+      visited.add(ci);
+      for (const method of classMethods(ci, true)) {
+        if (method.isStatic || method.mods && !(method.mods & 1)) continue;
+        const key = method.name + method.desc, prior = inherited.get(key);
+        if (!seen.has(key) && (!prior || ci.assignableTo(prior.owner))) inherited.set(key, method);
+      }
+      ci.interfaces.forEach(visit);
+    };
+    for (let ci: ClassInfo | null = info; ci; ci = info.isInterface ? null : ci.superInfo) ci.interfaces.forEach(visit);
+    out.push(...inherited.values());
   }
   return out;
 }
