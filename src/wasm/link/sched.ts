@@ -255,11 +255,11 @@ export class Sched {
     const pending = this.loop.yield(s.thread === this.main);
     this.suspensions++; s.nested = 0;
     this.idle();
-    return pending.then(() => {
+    const restore = () => {
       sid.value = saved[0]; thr.value = saved[1]; depth.value = saved[2];
       this.running = s; this.onThread?.(s.thread, false);
-      run();
-    });
+    };
+    return pending.then(() => { restore(); run(); }, error => { restore(); throw error; });
   }
   /** the Promise a native answered where it could not wait, which the call site settles next (natives.ts park) */
   pending: Promise<unknown> | null = null;

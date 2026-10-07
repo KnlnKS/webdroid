@@ -32,11 +32,11 @@ sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).f
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0;
+let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0, rejectAdmission = false;
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (admissionProbe) admissionTurns++; if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
+} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (rejectAdmission) return Promise.reject(new Error("admission timer rejected")); if (admissionProbe) admissionTurns++; if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
 const ordered: (() => void)[] = [];
@@ -139,6 +139,20 @@ if (substrate) {
     expect("fresh plain helper links synchronously with an exhausted budget", helper(0), 11);
     expect("plain host entry remains synchronous with an exhausted budget", w.entry("Th", "linkAdmissionPlain", "(I)I")(0), 11);
     expect("plain host entry does not admit a turn", admissionTurns, before);
+    const rejected = w.sched.strand(), globals = w.rtImports();
+    globals.sid.value = rejected.id; globals.thr.value = rejected.thread.obj; globals.depth.value = 17;
+    try {
+      rejectAdmission = true;
+      try { await w.sched.admitLink(() => { throw new Error("rejected admission ran link"); }); }
+      catch (error) { expect("admission timer failure is retained", (error as Error).message, "admission timer rejected"); }
+      expect("timer rejection restores its strand", w.sched.current(), rejected);
+      expect("timer rejection restores frame depth", globals.depth.value, 17);
+      rejectAdmission = false;
+      try { await w.sched.admitLink(() => { throw new Error("link failed"); }); }
+      catch (error) { expect("admitted link failure is retained", (error as Error).message, "link failed"); }
+      expect("throwing link retains its strand", w.sched.current(), rejected);
+      expect("throwing link retains frame depth", globals.depth.value, 17);
+    } finally { rejectAdmission = false; rejected.end(); w.sched.idle(); }
     expect("admission releases its strands", w.sched.strands.filter(Boolean).length, 1);
   } finally { admissionProbe = false; }
   const cold = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives(nativeSource) });
