@@ -87,6 +87,40 @@ export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedIn
   if (key instanceof Promise) return key.then(() => {});
 }
 
+/** ART FindCatchBlock preserves the original exception and skips unresolved catch types. */
+export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable: object, owner: Strand): number | Promise<number> {
+  const range = method.dex.code(method.codeOff).tries.find(t => pc >= t.start && pc < t.end);
+  if (!range) return -1;
+  const loader = w.prog.loaderOf(method.cls), thrown = w.classNameOf(throwable);
+  const next = (at: number): number | Promise<number> => {
+    if (at === range.handlers.length) return range.catchAllAddr;
+    const [type, target] = range.handlers[at];
+    const matched = (key: string) => w.prog.isSubclass(thrown, key) ? target : next(at + 1);
+    const failed = (error: unknown): number | Promise<number> => {
+      if (!w.throwable(error)) throw error;
+      return next(at + 1);
+    };
+    try {
+      const key = resolveType(w, loader, descToName(method.dex.rawType(type)), owner);
+      return key instanceof Promise ? key.then(matched, failed) : matched(key);
+    } catch (error) { return failed(error); }
+  };
+  return next(0);
+}
+
+/** Snapshot validation must not replay Java loader callbacks. */
+export function knownCatch(w: World, method: MethodInfo, pc: number, throwable: object): number {
+  const range = method.dex.code(method.codeOff).tries.find(t => pc >= t.start && pc < t.end);
+  if (!range) return -1;
+  const loader = w.prog.loaderOf(method.cls), thrown = w.classNameOf(throwable);
+  for (const [type, target] of range.handlers) {
+    const name = descToName(method.dex.rawType(type));
+    const key = w.prog.initiatedBy(loader, name) ?? (loader === w.prog.boot ? w.prog.lookup(loader, name) : undefined);
+    if (key && definitionReady(w, key) && w.prog.isSubclass(thrown, key)) return target;
+  }
+  return range.catchAllAddr;
+}
+
 function callJava(w: World, owner: Strand, name: string, params: Kind[], ret: Kind | "V", body: Parameters<World["callFn"]>[3], ...args: unknown[]): unknown {
   if (w.inSynchronousJava() || owner.root) {
     const call = w.hostFn(name + ":sync", params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }));

@@ -45,7 +45,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; dexOpen: number; galloc: number; hot: number; long: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; annotation: number; annotationWait: number; watch: number; intern: number; claim: number; sync: number; block: number };
+  imp: { fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; catchBlock: number; catchBlockWait: number; catchSync: number; dexOpen: number; galloc: number; hot: number; long: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; annotation: number; annotationWait: number; watch: number; intern: number; claim: number; sync: number; block: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
@@ -95,7 +95,7 @@ export class Compiler implements Base {
     this.classStruct.set("java/lang/String", this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
     const f = (name: string, p: VT[], r: VT[]) => mb.importFunc("host", name, mb.addFuncType(p, r));
-    this.imp = { fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
+    this.imp = { catchBlock: f("catchBlock", [T.i32, T.i32, T.i32, T.externref], [T.i32]), catchBlockWait: f("catchBlockWait", [T.i32, T.i32, T.i32, T.externref], [T.i32]), catchSync: f("catchSync", [], [T.i32]), fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
       info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), galloc: f("galloc", [T.externref, T.i32], [T.i64]), hot: f("hot", [T.i32], []), long: f("long", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
@@ -107,7 +107,7 @@ export class Compiler implements Base {
     }
     this.str.importBuiltins();
     // the imports that cannot run Java code
-    const { mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block } = this.imp, runsJava = new Set([mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block]);
+    const { mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block, catchBlock, catchBlockWait } = this.imp, runsJava = new Set([mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block, catchBlock, catchBlockWait]);
     this.hostSafe = new Set(Array.from({ length: mb.nImportedFuncs }, (_, i) => i).filter((i) => !runsJava.has(i)));
   }
   private hostSafe: Set<number>;

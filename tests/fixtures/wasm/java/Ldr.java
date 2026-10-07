@@ -145,6 +145,29 @@ public class Ldr {
   public static int symbolicDelegateLast(String pathA, String pathB) throws Exception {
     return (Integer) symbolicLoader(pathA, pathB).loadClass("Shared").getMethod("symbolic").invoke(null);
   }
+  public static class CatchLoader extends DexClassLoader {
+    public int missing, present;
+    public boolean denyPresent = true;
+    CatchLoader(String path) { super(path, null, null, Ldr.class.getClassLoader()); }
+    @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
+      if (name.equals("MissingCatch") || name.equals("CatchOnly")) {
+        if (name.equals("MissingCatch")) missing++; else present++;
+        try { Thread.sleep(1); } catch (InterruptedException e) { throw new ClassNotFoundException(name, e); }
+        if (name.equals("CatchOnly") && denyPresent) { denyPresent = false; throw new ClassNotFoundException(name); }
+      }
+      return super.loadClass(name);
+    }
+  }
+  public static int catchResolution(String path) throws Exception {
+    CatchLoader loader = new CatchLoader(path);
+    java.lang.reflect.Method method = loader.loadClass("Shared").getMethod("catchOnly", boolean.class);
+    int result = (Integer) method.invoke(null, false) == 7 && loader.missing == 0 && loader.present == 0 ? 1 : 0;
+    if ((Integer) method.invoke(null, true) == 42) result |= 2;
+    if (loader.missing == 1 && loader.present == 1) result |= 4;
+    if ((Integer) method.invoke(null, true) == 42 && loader.missing == 2 && loader.present == 2) result |= 8;
+    if ((Integer) method.invoke(null, true) == 42 && loader.missing == 3 && loader.present == 2) result |= 16;
+    return result;
+  }
   public static int customParent(String pathA, String pathB) throws Exception {
     ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
     ClassLoader parent = new ClassLoader(a) {};

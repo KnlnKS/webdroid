@@ -13,7 +13,7 @@ import { T } from "../compiler/wasmbin";
 import { validateColdSnapshot, type ColdSnapshot } from "./state";
 import type { Strand } from "../link/sched";
 import type { World } from "../link/world";
-import { definitionReady, instructionClass, resolveInstruction } from "../link/resolution";
+import { definitionReady, instructionClass, resolveInstruction, resolveCatch, knownCatch } from "../link/resolution";
 
 
 export class UnsupportedSlowOperation extends Error {}
@@ -318,17 +318,6 @@ export class ColdSlowOps {
     else { state.bits[reg] = BigInt(value as number | bigint); state.references[reg] = null; state.kinds[reg] = 0; }
   }
 
-  private handler(m: MethodInfo, pc: number, throwable: object): number | undefined {
-    for (const range of m.dex.code(m.codeOff).tries) if (pc >= range.start && pc < range.end) {
-      for (const [type, target] of range.handlers) {
-        const name = descToName(m.dex.type(type));
-        const matches = this.w.hostFn(`cold:catch:${name}`, ["L"], "I", (cx, c) => c.lget(0).call(cx.instanceOfFn(name)));
-        if (matches(throwable)) return target;
-      }
-      if (range.catchAllAddr >= 0) return range.catchAllAddr;
-    }
-  }
-
   private stringConstructor(m: MethodInfo, ins: PreparedInstruction): boolean {
     return /^invoke-direct/.test(ins.name) && m.dex.method(ins.b).name === "<init>" && descToName(m.dex.type(m.dex.method(ins.b).cls)) === "java/lang/String";
   }
@@ -340,7 +329,7 @@ export class ColdSlowOps {
       throw new Error("foreign cold method/strand ownership");
     for (const monitor of state.monitors) if (this.w.sched.monitors.depth(monitor.object, strand) < monitor.count)
       throw new Error("foreign cold monitor ownership");
-    if (state.exception && this.handler(m, state.exception.pc, state.exception.value) !== state.pc)
+    if (state.exception && knownCatch(this.w, m, state.exception.pc, state.exception.value) !== state.pc)
       throw new Error("incompatible pending cold exception handler");
   }
 
@@ -396,14 +385,18 @@ export class ColdSlowOps {
       state.executedPc = ins.pc; state.pc = adapter.successor;
       return "next";
     };
-    const failure = (error: unknown): "handler" => {
+    const failure = (error: unknown): "handler" | Promise<"handler"> => {
       error = this.w.boundary(error);
       const throwable = this.w.throwable(error);
       if (!throwable) throw error;
-      const target = this.handler(m, ins.pc, throwable);
-      if (target === undefined) throw error;
-      state.exception = this.analysis(m).instructions.get(target)?.name === "move-exception" ? { pc: ins.pc, value: throwable } : undefined; state.executedPc = ins.pc; state.pc = target;
-      return "handler";
+      const selected = (target: number): "handler" => {
+        if (target < 0) throw error;
+        state.exception = this.analysis(m).instructions.get(target)?.name === "move-exception" ? { pc: ins.pc, value: throwable } : undefined;
+        state.executedPc = ins.pc; state.pc = target;
+        return "handler";
+      };
+      const target = state.sync ? this.w.synchronous(() => resolveCatch(this.w, m, ins.pc, throwable, strand)) : resolveCatch(this.w, m, ins.pc, throwable, strand);
+      return target instanceof Promise ? target.then(selected) : selected(target);
     };
     this.w.stats.coldSlowCalls++;
     // A peer can be allocated but not yet bound during Thread construction.
@@ -436,7 +429,11 @@ export class ColdSlowOps {
       if (pending instanceof Promise) { this.w.stats.coldSlowWaits++; return pending.then(success, failure).finally(() => this.busy.delete(state)); }
       const answer = success(pending); this.busy.delete(state); return answer;
     } catch (error) {
-      try { return failure(error); } finally { this.busy.delete(state); }
+      try {
+        const handled = failure(error);
+        if (handled instanceof Promise) return handled.finally(() => this.busy.delete(state));
+        this.busy.delete(state); return handled;
+      } catch (failure) { this.busy.delete(state); throw failure; }
     }
   }
 }

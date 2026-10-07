@@ -31,7 +31,7 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { initiatedInstruction, resolveInstruction, resolveClass, resolveForName } from "./resolution";
+import { initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -264,6 +264,14 @@ export class World {
     this.startRuntime();
     this.sched = new Sched(this, this.rt, opts.loop ?? defaultLoop);
     this.host.annotationWait = this.sched.settle();
+    const catchBlock = (cls: number, index: number, pc: number, throwable: object) => {
+      const method = methodAt(this.prog.require(this.nameOf(cls)), index);
+      if (!method) throw new Error("Missing catch dispatcher method");
+      return resolveCatch(this, method, pc, throwable, this.sched.current());
+    };
+    this.host.catchSync = this.symbolicSync.bind(this);
+    this.host.catchBlock = (...args: Parameters<typeof catchBlock>) => this.synchronous(() => catchBlock(...args));
+    this.host.catchBlockWait = this.sched.suspending(catchBlock);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
     this.appAttached = !!opts.app && !!this.aot?.extend(opts.app.index, opts.app.store);
     this.base = this.numbering();

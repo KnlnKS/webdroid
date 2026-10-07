@@ -54,7 +54,7 @@ const build = (dir: string, sources: string[], classpath?: string) => {
     const methods = [method("value", "(LShared;)LShared;"), method("missing", "()LAbsentOptional;")];
     writeFileSync(join(out, dir, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
   }
-  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !path.endsWith("/AbsentOptional.class"))]);
+  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !/\/(AbsentOptional|MissingCatch)\.class$/.test(path))]);
   return join(out, dir, "classes.dex");
 };
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
@@ -128,7 +128,7 @@ w.opts.dexes = async (path) => {
 const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
 if (deferred) { failed++; console.log(`FAIL deferred archive checks: ${deferred}`); }
 const desc = "(Ljava/lang/String;Ljava/lang/String;)I", paths = ["/data/local/tmp/a.dex", "/data/local/tmp/b.dex"];
-if (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy")) {
+if (!process.argv.includes("--catch-only") && (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy"))) {
   const expected = await js("Ldr", "hierarchyDelegateLast", desc, paths);
   const result = await w.entryAsync("Ldr", "hierarchyDelegateLast", desc)(...paths);
   if (expected !== 7 || result !== expected) throw new Error(`defining hierarchy mirrors: js=${expected}, wasm=${result}, expected=7`);
@@ -136,6 +136,10 @@ if (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy")
   if (process.argv.includes("--hierarchy")) process.exit(0);
 }
 if (!process.argv.includes("--hierarchy")) {
+  const caught = await w.entryAsync("Ldr", "catchResolution", "(Ljava/lang/String;)I")(paths[1]);
+  if (caught !== 31) throw new Error(`executed catch loader: wasm=${caught}, expected=31`);
+  console.log("executed catch loader: wasm=31; untaken handler types stay lazy, suspended denial retries, successful identity stays cached, missing types preserve the original exception");
+  if (process.argv.includes("--catch-only")) process.exit(0);
   const actualType = await w.entryAsync("Ldr", "typeDelegateLast", desc)(...paths);
   if (actualType !== 7) throw new Error(`executed method-type loader: wasm=${actualType}, expected=7`);
   console.log("executed method-type loader: wasm=7; unused optional signature stays lazy (JS const-method-type unsupported)");
