@@ -255,11 +255,11 @@ function setWorkSource(uid: number, propagate: boolean): bigint {
 }
 const transactionCaller = (): Caller | undefined => ipc().caller;
 export const parcelScope = (): FdScope | undefined => ipc().parcelScope;
-export async function withParcelScope<T>(work: () => T | Promise<T>, transfer = false): Promise<T> {
+export async function withParcelScope<T>(work: () => T | Promise<T>): Promise<T> {
   const state = ipc();
   if (state.parcelScope) return work();
   const scope = new FdScope(); state.parcelScope = scope;
-  try { const value = await work(); if (transfer) scope.transfer(); return value; }
+  try { return await work(); }
   finally { state.parcelScope = undefined; scope.close(); }
 }
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
