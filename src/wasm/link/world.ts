@@ -32,6 +32,7 @@ import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
 import { definitionReady, initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
+import { hasSignatureConstraints, validateSignatures } from "./signatures";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -272,6 +273,9 @@ export class World {
     this.host.catchSync = this.symbolicSync.bind(this);
     this.host.catchBlock = (...args: Parameters<typeof catchBlock>) => this.synchronous(() => catchBlock(...args));
     this.host.catchBlockWait = this.sched.suspending(catchBlock);
+    const signatures = (id: number) => validateSignatures(this, this.nameOf(id), this.sched.current());
+    this.host.initSignatures = (id: number) => this.synchronous(() => signatures(id));
+    this.host.initSignaturesWait = this.sched.suspending(signatures);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
     this.appAttached = !!opts.app && !!this.aot?.extend(opts.app.index, opts.app.store);
     this.base = this.numbering();
@@ -406,7 +410,7 @@ export class World {
   private madeUp = new Map<string, Intrinsic>();
   needsInit(n: string): boolean {
     const c = this.prog.get(n); if (!c) return false;
-    if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff) return true;
+    if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff || hasSignatureConstraints(this, n)) return true;
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
   /** the init word of the class with id `id` (0 before its module is built) */
@@ -694,6 +698,13 @@ export class World {
     const c = new Code(0), voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
     const call = (slot: number, sig = voidSig) => c.i32(slot).callIndirect(sig);
     const rtfn = (name: string) => this.synthSlot(name, rtfns.get(name)!);
+    if (hasSignatureConstraints(this, jc.name)) {
+      c.gget(initG).raw(OP.i32_eqz).if_();
+      c.block().block(T.anyref).tryTable(null, [[0, tag, 0]]);
+      c.i32(rt.id); call(rtfn("validateSignatures"), mb.addFuncType([T.i32], [])); c.br(2);
+      c.end().unreachable().end().lset(e).i32(INIT_FAILED).gset(initG);
+      c.lget(e); call(rtfn("initFail"), b.tTagFn); c.end().end();
+    }
     c.block().block().loop();                                   // exit, claim, retry
     c.gget(initG).i32(INIT_DONE).raw(OP.i32_eq).brIf(2);
     c.gget(initG).i32(INIT_FAILED).raw(OP.i32_eq).if_(); c.i32(rt.id); call(rtfn("initErroneous"), mb.addFuncType([T.i32], [])); c.end();

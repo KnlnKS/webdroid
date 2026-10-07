@@ -34,7 +34,7 @@ export function resolveHandleReference(w: World, method: MethodInfo, index: numb
   return ready instanceof Promise ? ready.then(signature) : signature();
 }
 
-function resolveType(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
+export function resolveType(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
   const component = name[0] === "[" ? name.replace(/^\[+/, "") : `L${name};`;
   if (!objectOfLoader(w, loader) && component[0] === "L" && !w.prog.lookup(loader, descToName(component))) {
     throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: ${name[0] === "[" ? name : `L${name};`}`));

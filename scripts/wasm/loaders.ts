@@ -59,7 +59,7 @@ const build = (dir: string, sources: string[], classpath?: string) => {
 };
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/MemberBase.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/MemberUse.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
 const ordered = world([apk, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives });
@@ -132,6 +132,14 @@ const memberExpected = await js("Ldr", "memberResolution", desc, paths);
 const memberResult = await w.entryAsync("Ldr", "memberResolution", desc)(...paths);
 if (memberExpected !== 31 || memberResult !== memberExpected) throw new Error(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}, expected=31`);
 console.log(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}; denied type retries, unused prototype stays lazy, declaring reflection identity preserved`);
+if (!process.argv.includes("--member-only") || process.argv.includes("--constraints")) {
+  for (const method of ["memberConstraints", "memberInterfaceConstraints"]) {
+    const baseline = await js("Ldr", method, desc, paths);
+    const result = await w.entryAsync("Ldr", method, desc)(...paths);
+    console.log(`${method}: js=${baseline}, wasm=${result}, ART expected=255`);
+    if (result !== 255) throw new Error(`${method}: ${result}`);
+  }
+}
 if (process.argv.includes("--member-only")) process.exit(0);
 if (!process.argv.includes("--catch-only") && (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy"))) {
   const expected = await js("Ldr", "hierarchyDelegateLast", desc, paths);

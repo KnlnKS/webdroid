@@ -145,16 +145,18 @@ public class Ldr {
   public static int symbolicDelegateLast(String pathA, String pathB) throws Exception {
     return (Integer) symbolicLoader(pathA, pathB).loadClass("Shared").getMethod("symbolic").invoke(null);
   }
+  public static int memberInitEffects, memberDispatchEffects;
   public static class MemberLoader extends DexClassLoader {
     public int typeCalls;
-    public boolean deny = true;
+    public boolean deny = true, ownType = true;
     MemberLoader(String path, ClassLoader parent) { super(path, null, null, parent); }
     @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
-      if (name.equals("MemberUse") || name.equals("MemberType")) {
+      if (name.equals("MemberUse") || name.equals("MemberOverride") || name.equals("MemberImplementation") || name.equals("MemberType")) {
         if (name.equals("MemberType")) {
           typeCalls++;
           if (deny) { deny = false; throw new ClassNotFoundException(name); }
           try { Thread.sleep(1); } catch (InterruptedException e) { throw new ClassNotFoundException(name, e); }
+          if (!ownType) return super.loadClass(name);
         }
         Class<?> loaded = findLoadedClass(name);
         return loaded == null ? findClass(name) : loaded;
@@ -175,6 +177,69 @@ public class Ldr {
     if (value.tag() == 42 && loader.typeCalls == 2) result |= 8;
     java.lang.reflect.Field field = base.getField("peer");
     if (field.getType() == parentType && field.getDeclaringClass() == base) result |= 16;
+    return result;
+  }
+  public static int memberConstraints(String pathA, String pathB) throws Exception {
+    return memberConstraints(pathA, pathB, "MemberOverride", 1);
+  }
+  public static int memberInterfaceConstraints(String pathA, String pathB) throws Exception {
+    return memberConstraints(pathA, pathB, "MemberImplementation", 0);
+  }
+  private static int memberConstraints(String pathA, String pathB, String name, int effects) throws Exception {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    parent.loadClass("MemberBase"); parent.loadClass("MemberContract"); parent.loadClass("MemberType");
+    memberInitEffects = 0; memberDispatchEffects = 0;
+    MemberLoader valid = new MemberLoader(pathB, parent);
+    valid.deny = false; valid.ownType = false;
+    Class.forName(name, false, valid);
+    int result = valid.typeCalls == 0 && memberInitEffects == 0 ? 1 : 0;
+    Class<?> value = Class.forName(name, true, valid);
+    if (valid.typeCalls == 1 && memberInitEffects == effects && (Integer) value.getMethod("dispatch").invoke(value.newInstance()) == 1) result |= 2;
+    Class.forName(name, true, valid);
+    if (valid.typeCalls == 1 && memberInitEffects == effects) result |= 4;
+    MemberLoader invalid = new MemberLoader(pathB, parent);
+    invalid.deny = false;
+    Class.forName(name, false, invalid);
+    try { Class.forName(name, true, invalid); }
+    catch (LinkageError expected) { if (invalid.typeCalls == 1 && memberInitEffects == effects) result |= 8; }
+    try { Class.forName(name, true, invalid); }
+    catch (NoClassDefFoundError expected) { if (invalid.typeCalls == 1 && memberInitEffects == effects) result |= 16; }
+    memberInitEffects = 0;
+    MemberLoader denied = new MemberLoader(pathB, parent);
+    Class.forName(name, false, denied);
+    boolean wrapped = false;
+    try { Class.forName(name, true, denied); }
+    catch (LinkageError expected) {
+      wrapped = expected.getCause() instanceof NoClassDefFoundError && denied.typeCalls == 1 && memberInitEffects == 0;
+    }
+    try { Class.forName(name, true, denied); }
+    catch (NoClassDefFoundError expected) { if (wrapped && denied.typeCalls == 1) result |= 32; }
+    MemberLoader concurrent = new MemberLoader(pathB, parent);
+    concurrent.deny = false; concurrent.ownType = false;
+    final int[] completed = {0};
+    Runnable initialize = () -> {
+      try {
+        Class.forName(name, true, concurrent);
+        synchronized (completed) { completed[0]++; }
+      } catch (Throwable failure) { }
+    };
+    Thread first = new Thread(initialize), second = new Thread(initialize);
+    first.start(); second.start(); first.join(); second.join();
+    if (completed[0] == 2 && concurrent.typeCalls == 1 && memberInitEffects == effects) result |= 64;
+    memberInitEffects = 0;
+    MemberLoader failing = new MemberLoader(pathB, parent);
+    failing.deny = false;
+    Class.forName(name, false, failing);
+    final int[] errors = {0, 0};
+    Runnable fail = () -> {
+      try { Class.forName(name, true, failing); }
+      catch (NoClassDefFoundError expected) { synchronized (errors) { errors[1]++; } }
+      catch (LinkageError expected) { synchronized (errors) { errors[0]++; } }
+      catch (Throwable other) { }
+    };
+    first = new Thread(fail); second = new Thread(fail);
+    first.start(); second.start(); first.join(); second.join();
+    if (errors[0] == 1 && errors[1] == 1 && failing.typeCalls == 1 && memberInitEffects == 0) result |= 128;
     return result;
   }
   public static class CatchLoader extends DexClassLoader {
