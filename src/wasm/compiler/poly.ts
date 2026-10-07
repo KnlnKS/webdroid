@@ -11,7 +11,7 @@ import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind } from "./program";
 import { elemKindOf } from "./consts";
-import { descToName, isWide, varHandleValues } from "../../jvm/abi";
+import { descToName, varHandleValues } from "../../jvm/abi";
 import { emitStoreCheck, classMethod, Info } from "../link/classes";
 import { UInfo } from "../link/unsafe";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
@@ -56,15 +56,11 @@ export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type
 }
 
 export function emitPolymorphic(mc: MC, ins: Ins): void {
-  const { cx, code: c, dex } = mc;
-  const mr = dex.method(ins.b), cls = descToName(dex.type(mr.cls)), mode = mr.name, proto = dex.proto(ins.c);
+  const { dex } = mc;
+  const mr = dex.method(ins.b), cls = descToName(dex.type(mr.cls)), mode = mr.name;
   if (cls === "java/lang/invoke/MethodHandle" && (mode === "invoke" || mode === "invokeExact")) return emitHandleCall(mc, ins, mode === "invokeExact");
-  const params = proto.params.map((t) => dex.type(t)), ret = dex.type(proto.ret), nv = cls === VH ? varHandleValues(mode) : undefined;
-  if (nv === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
-  const regs: number[] = [];
-  for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
-  const result = emitVarHandleAccess(cx, c, mode, params, ret, () => mc.get("L", ins.regs[0]), (kind, i) => mc.get(kind, regs[i]), why => mc.invokeGap(ins, `${cls}.${mode}: ${why}`));
-  if (result) mc.finishResult(ins, result);
+  if (cls !== VH || varHandleValues(mode) === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
+  return emitHandleCall(mc, ins, false, mode);
 }
 
 /** Canonical storage operations shared by DEX polymorphic sites and MethodHandle VarHandle invokers. */

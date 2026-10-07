@@ -1,6 +1,6 @@
 // ART mirror/var_handle.cc: view accesses use backing bytes, native byte order and alignment; ByteBuffer checks read-only before bounds.
 import { Code, OP } from "../compiler/code";
-import { emitMemoryScalar } from "./memory";
+import { emitMemoryScalar, memoryScalarMethod, guestRange } from "./memory";
 import { T } from "../compiler/wasmbin";
 import { kindOf } from "../compiler/program";
 import { emitVarHandleOperation } from "../compiler/poly";
@@ -39,21 +39,17 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
     if (mode !== "get" && mode !== "set") {
       c.lget(address).lget(index).raw(OP.i64_extend_i32_u, OP.i64_add).i64(BigInt(width - 1)).raw(OP.i64_and, OP.i64_eqz, OP.i32_eqz).if_(); failure("java/lang/IllegalStateException"); c.end();
     }
-    // External regions may page in asynchronously. Reject the entire range before touching memory.
-    c.lget(address).raw(OP.i64_eqz, OP.i32_eqz).if_();
-    c.lget(address).lget(index).raw(OP.i64_extend_i32_u, OP.i64_add).i64(0x10000n).raw(OP.i64_sub)
-      .i64(0x1_0000_0000n - 0x10000n - BigInt(width)).raw(OP.i64_gt_u).if_();
-    cx.gap(c, "VarHandle view: external memory range has no synchronous atomic primitive"); c.end().end();
     const byteIndex = (i: number) => c.lget(index).i32(i).raw(OP.i32_add);
     const memoryAddress = (i: number) => { c.lget(address); byteIndex(i); c.raw(OP.i64_extend_i32_u, OP.i64_add); };
     const data = () => c.lget(bytes).refCast(cx.tArr.i8).structGet(cx.tArr.i8, 2);
-    // Inline the owning memory intrinsics so a lazy-link wait cannot split a read-modify-write operation.
-    const memoryCall = (put: boolean) => {
-      const name = put ? "pokeByte" : "peekByte", desc = put ? "(JB)V" : "(J)B";
+    // Mutable external HostBytes reads/writes are synchronous; immutable Region reads may fault before returning a whole-width value.
+    // Inline native bindings and guest operations so no lazy link can split a read-modify-write operation.
+    const memoryCall = (put: boolean, size = 1) => {
+      const bits = size * 8 as 8 | 16 | 32 | 64, m = memoryScalarMethod(cx, !put, bits), name = m.name;
       const fn = cx.memo(`vh:view:${name}`, () => {
-        const m = cx.prog.resolve("libcore/io/Memory", name, desc)!, body = new Code(m.params.length);
+        const body = new Code(m.params.length);
         const fn = cx.mb.reserveFunc(cx.methodSig(m), "$vh_" + name);
-        emitMemoryScalar(cx, body, m, !put, 8, true);
+        emitMemoryScalar(cx, body, m, !put, bits, true);
         cx.mb.setBody(fn, body.finish()); return fn;
       });
       c.call(fn);
@@ -62,25 +58,48 @@ export function invokeVarHandleView(w: World, handle: object, args: object, stor
       c.lget(address).raw(OP.i64_eqz).if_(T.i32); data(); byteIndex(i); c.arrayGetU(cx.tData.i8);
       c.else_(); memoryAddress(i); memoryCall(false); c.i32(255).raw(OP.i32_and); c.end();
     };
+    const inline = () => {
+      c.lget(address).raw(OP.i64_eqz);
+      guestRange(c, () => memoryAddress(0), width); c.raw(OP.i32_or);
+    };
+    const reverse = () => {
+      const value = c.newLocal(cx.vtOf(K)), result = c.newLocal(cx.vtOf(K)); c.lset(value);
+      for (let i = 0; i < width; i++) {
+        c.lget(value);
+        if (K === "J") c.i64(BigInt(i * 8)).raw(OP.i64_shr_u).i64(255n).raw(OP.i64_and).i64(BigInt((width - 1 - i) * 8)).raw(OP.i64_shl).lget(result).raw(OP.i64_or);
+        else c.i32(i * 8).raw(OP.i32_shr_u).i32(255).raw(OP.i32_and).i32((width - 1 - i) * 8).raw(OP.i32_shl).lget(result).raw(OP.i32_or);
+        c.lset(result);
+      }
+      c.lget(result);
+    };
     const values = params.slice(2).map((p, i) => { const local = c.newLocal(cx.vtOf(kindOf(p))); value(i + 3); unbox(cx, c, p); c.lset(local); return local; });
     emitVarHandleOperation(cx, c, mode, element, {
       load: () => {
+        inline(); c.if_(cx.vtOf(K));
         for (let i = 0; i < width; i++) {
           readByte(i); if (K === "J") c.raw(OP.i64_extend_i32_u);
           const shift = 8 * (nativeOrder ? i : width - 1 - i);
           if (shift) { if (K === "J") c.i64(BigInt(shift)).raw(OP.i64_shl); else c.i32(shift).raw(OP.i32_shl); }
           if (i) c.raw(K === "J" ? OP.i64_or : OP.i32_or);
         }
-        if (element === "S") c.raw(OP.i32_extend16_s);
+        c.else_(); memoryAddress(0); memoryCall(false, width);
+        if (!nativeOrder) reverse(); c.end();
+        if (element === "S") c.raw(OP.i32_extend16_s); else if (element === "C") c.i32(0xffff).raw(OP.i32_and);
       },
       store: v => {
+        inline(); c.if_();
         for (let i = 0; i < width; i++) {
           const byte = () => { const shift = 8 * (nativeOrder ? i : width - 1 - i); c.lget(v); if (K === "J") c.i64(BigInt(shift)).raw(OP.i64_shr_u, OP.i32_wrap_i64); else c.i32(shift).raw(OP.i32_shr_u); };
           c.lget(address).raw(OP.i64_eqz).if_(); data(); byteIndex(i); byte(); c.arraySet(cx.tData.i8);
           c.else_(); memoryAddress(i); byte(); memoryCall(true); c.end();
         }
+        c.else_(); memoryAddress(0); c.lget(v); if (!nativeOrder) reverse(); memoryCall(true, width); c.end();
       },
     }, values);
     if (ret === "V") c.anyNull(); else box(cx, c, ret);
-  }, parent)(args) as object | null | Promise<object | null>;
+  }, parent, cx => {
+    for (const size of [1, width]) for (const put of [false, true]) {
+      cx.natives.declare(cx, [memoryScalarMethod(cx, !put, size * 8 as 8 | 16 | 32 | 64)]);
+    }
+  })(args) as object | null | Promise<object | null>;
 }

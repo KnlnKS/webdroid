@@ -12,6 +12,7 @@ import { Pool, u2, u4 } from "./classfile";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 import { handleThunk } from "../../src/wasm/link/mhandles";
+import { hostBytes, hostAddress, mapExternal, unmapExternal } from "../../src/jvm/natives/jmemory";
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { UInfo } from "../../src/wasm/link/unsafe";
 import { decodeInstructions } from "../../src/jvm/prepared";
@@ -121,8 +122,8 @@ sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ..
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 await jsTier(loadDexes(dex));
 let forceAdmission = false, admissionTurns = 0;
-const loop = { ...defaultLoop, due: () => forceAdmission || defaultLoop.due(), yield: (soon: boolean) => {
-  if (forceAdmission) admissionTurns++;
+const loop = { ...defaultLoop, due: () => (forceAdmission && admissionTurns < 32) || defaultLoop.due(), yield: (soon: boolean) => {
+  if (forceAdmission && admissionTurns < 32) admissionTurns++;
   return defaultLoop.yield(soon);
 } };
 const w = world([dex, ...jars], { natives, loop }), hit: string[] = [];
@@ -130,7 +131,7 @@ const constants = w.prog.require("Mc").methods.filter(m => m.codeOff).flatMap(m 
 const kinds = new Set(constants.filter(i => i.name === "const-method-handle").map(i => w.prog.require("Mc").dex!.methodHandle(i.b).type));
 if (kinds.size !== 9 || !constants.some(i => i.name === "const-method-type")) throw new Error("constant fixture must retain both DEX opcodes and all nine handle kinds");
 // Pure accessors must already be installed when their host lookup returns, even when lazy admission is due.
-const rejectFieldAdmission = (tier: typeof w) => {
+const assertEagerFieldAccessors = (tier: typeof w) => {
   const info = tier.host.info;
   tier.host.info = (kind: number, a: number, b: number) => {
     const slot = info(kind, a, b);
@@ -141,7 +142,7 @@ const rejectFieldAdmission = (tier: typeof w) => {
     return slot;
   };
 };
-rejectFieldAdmission(w);
+assertEagerFieldAccessors(w);
 processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry" && m.name !== "tInvokerConcurrent"));
@@ -162,9 +163,9 @@ const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
 const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || cls === "Px" || cls === "Pt" || cls === "Bootstrap" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (JS/JDK or documented ART differences); ${threw} threw`);
 const cold = world([dex, ...jars], { cold: true, natives, loop });
-rejectFieldAdmission(cold);
+assertEagerFieldAccessors(cold);
 processState(cold);
-const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom") || c.m.name.startsWith("tInvoker"));
+const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom") || c.m.name.startsWith("tInvoker") || c.m.name.startsWith("tDirect"));
 for (const { m, args, i } of constantCases) {
   let value: unknown;
   try { value = await cold.entryAsync(m.cls, m.name, m.desc)(...args.map(Number)); } catch (e) {
@@ -189,10 +190,24 @@ if (!admissionTurns) throw new Error("VarHandle concurrency fixture must force l
 console.log(`${admissionTurns} forced admission turns retain eager field accessors`);
 console.log(`${suspendedCases} suspended handle cases preserve thread, monitor ownership and exceptions`);
 for (const tier of [w, cold]) {
-  if (await tier.entryAsync("Vh", "artExternalView", "(I)I")(7) !== 2) throw new Error("external view must reject before accessing its bytes");
+  try {
+    const buffer = await tier.entryAsync("Vh", "artViewAllocate", "()Ljava/nio/ByteBuffer;")();
+    const setAddress = tier.hostFn("fixture:viewAddress", ["L", "J"], "V", (cx, c) => {
+      const owner = "java/nio/Buffer", f = cx.prog.resolveField(owner, "address", "J")!;
+      c.lget(0).refCast(cx.structFor(owner)).lget(1).structSet(cx.structFor(owner), cx.fieldIndex(owner, f));
+    });
+    const bytes = hostBytes(8), view = new DataView(bytes.buffer); view.setInt32(0, 41);
+    setAddress(buffer, hostAddress(bytes)!);
+    if (await tier.entryAsync("Vh", "artViewUpdate", "(Ljava/nio/ByteBuffer;I)I")(buffer, 7) !== 41 || view.getInt32(0) !== 48) throw new Error("mutable external view update must stay atomic");
+    let faults = 0;
+    const mapped = mapExternal({ size: 8, read: async (at, n) => { faults++; return new Uint8Array(bytes.buffer).slice(at, at + n); } }, 0, 8);
+    try {
+      setAddress(buffer, mapped);
+      if (await tier.entryAsync("Vh", "artViewRead", "(Ljava/nio/ByteBuffer;)I")(buffer) !== 48 || faults !== 1) throw new Error("immutable mapped view must retain paged whole-width reads");
+    } finally { unmapExternal(mapped); }
+  } catch (e) { const throwable = tier.throwable(e); throw new Error(`external view: ${throwable ? tier.classNameOf(throwable) : String(e)} (${tier.lastMessage})`, { cause: e }); }
 }
-console.log("4 external view operations reject ranges lacking a synchronous atomic primitive");
-
+console.log("4 external view cases preserve synchronous mutable updates and asynchronous immutable reads");
 // ART retries failed linkage (the JDK caches failures), and requires exact collector component types (the JDK adapts them).
 for (const tier of [w, cold]) {
   if (await tier.entryAsync("Bootstrap", "artCollectorMismatch", "(I)I")(0) !== 31) throw new Error("ART bootstrap collectors require exact component types");

@@ -14,15 +14,24 @@ import "./guest";
 /** the guest's first mapped address (src/native/abi.ts LOW) */
 const LOW = 0x1_0000n;
 const MEMORY = "libcore/io/Memory.", MEMORY_REF = "java/nio/DirectByteBuffer$MemoryRef";
-/** the production native for an address the runtime functions do not reach: it only reads or writes memory, so it runs no Java code */
+/** External reads can page in; retain the native suspension epilogue, with no Java call target. */
 const leaf = (cx: Compiler, c: Code, m: MethodInfo) => { const n = c.targets.length; cx.natives.call(cx, c, m); c.targets.length = n; };
 export const memoryIntrinsics = new Map<string, Intrinsic>();
 
 /** leaves 1 when the address in local `a` (a long) is one the runtime functions reach */
 const guest = (c: Code, a: number) => c.lget(a).i64(LOW).raw(OP.i64_sub).i64(0x1_0000_0000n - LOW).raw(OP.i64_lt_u);
+/** The entire range is reachable by pure guest loads/stores. */
+export const guestRange = (c: Code, address: () => void, width: number): void => {
+  address(); c.i64(LOW).raw(OP.i64_sub).i64(0x1_0000_0000n - LOW - BigInt(width) + 1n).raw(OP.i64_lt_u);
+};
+
 
 const SCALARS: [peek: string, poke: string, bits: 8 | 16 | 32 | 64][] = [["peekByte(J)B", "pokeByte(JB)V", 8], ["peekShortNative(J)S", "pokeShortNative(JS)V", 16],
   ["peekIntNative(J)I", "pokeIntNative(JI)V", 32], ["peekLongNative(J)J", "pokeLongNative(JJ)V", 64]];
+export function memoryScalarMethod(cx: Compiler, peek: boolean, bits: 8 | 16 | 32 | 64): MethodInfo {
+  const scalar = SCALARS.find(s => s[2] === bits)!, key = scalar[peek ? 0 : 1], at = key.indexOf("(");
+  return cx.prog.resolve("libcore/io/Memory", key.slice(0, at), key.slice(at))!;
+}
 /** The view bridge inlines pure guest operations so cooperative lazy links cannot split an atomic access. */
 export function emitMemoryScalar(cx: Compiler, c: Code, m: MethodInfo, peek: boolean, bits: 8 | 16 | 32 | 64, inlineRuntime = false): void {
   const call = (name: string) => {

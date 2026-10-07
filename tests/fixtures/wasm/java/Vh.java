@@ -188,17 +188,42 @@ public class Vh {
     return r;
   }
 
-  static int artExternalView(int a) throws Throwable {
-    VarHandle vh = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
-    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(8);
-    java.lang.reflect.Field address = java.nio.Buffer.class.getDeclaredField("address");
-    address.setAccessible(true); address.setLong(buffer, 0x10_0000_0000L);
-    int rejected = 0;
-    try { vh.toMethodHandle(VarHandle.AccessMode.SET).invokeExact(buffer, 0, a); }
-    catch (UnsatisfiedLinkError e) { rejected++; }
-    try { int unused = (int) vh.toMethodHandle(VarHandle.AccessMode.GET_AND_ADD).invokeExact(buffer, 0, a); }
-    catch (UnsatisfiedLinkError e) { rejected++; }
-    return rejected;
+  public static int tDirectAdapt(int a) {
+    Object v = new Vh();
+    I.set(v, Integer.valueOf(a));
+    Object boxed = I.get(v);
+    long widened = (long) I.get(v);
+    I.getAndAdd(v, Integer.valueOf(3));
+    return (Integer) boxed + (int) widened + (int) I.get(v);
+  }
+  public static int tDirectViews(int a) {
+    VarHandle array = MethodHandles.byteArrayViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    Object bytes = new byte[12]; array.set(bytes, Integer.valueOf(4), Integer.valueOf(a));
+    int before = (int) array.getAndAdd(bytes, 4, 5);
+    VarHandle buffer = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.LITTLE_ENDIAN);
+    Object direct = java.nio.ByteBuffer.allocateDirect(12).position(4).slice();
+    buffer.set(direct, 0, before); int exchanged = (int) buffer.compareAndExchange(direct, 0, before, a + 9);
+    return before + exchanged + (int) array.get(bytes, 4) + (int) buffer.get(direct, 0);
+  }
+  public static int tDirectErrors(int a) {
+    int r = 0;
+    try { I.set(new Vh(), (Object) "bad"); } catch (ClassCastException e) { r |= 1; }
+    try { int unused = (int) I.get("bad"); } catch (ClassCastException e) { r |= 2; }
+    try { I.set(new Vh(), (Object) null); } catch (NullPointerException e) { r |= 4; }
+    try { I.set(new Vh(), 1L); } catch (WrongMethodTypeException e) { r |= 8; }
+    VarHandle view = MethodHandles.byteArrayViewVarHandle(float[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    try { float unused = (float) view.getAndAdd(new byte[8], 0, 1f); } catch (UnsupportedOperationException e) { r |= 16; }
+    return r;
+  }
+
+  static java.nio.ByteBuffer artViewAllocate() { return java.nio.ByteBuffer.allocateDirect(8); }
+  static int artViewRead(java.nio.ByteBuffer buffer) {
+    VarHandle view = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    return (int) view.getVolatile(buffer, 0);
+  }
+  static int artViewUpdate(java.nio.ByteBuffer buffer, int a) {
+    VarHandle view = MethodHandles.byteBufferViewVarHandle(int[].class, java.nio.ByteOrder.BIG_ENDIAN);
+    return (int) view.getAndAdd(buffer, 0, a);
   }
 
   public static int tInvokerConcurrent(int a) throws Throwable {

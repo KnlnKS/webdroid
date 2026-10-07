@@ -132,8 +132,8 @@ export function unbox(cx: Compiler, c: Code, desc: string): void {
   cx.callMethod(c, cx.prog.resolve(cls, name, d)!);
 }
 
-/** the call site `ins`: invoke-polymorphic on MethodHandle.invoke or invokeExact */
-export function emitHandleCall(mc: MC, ins: Ins, exact: boolean): void {
+/** Box a DEX polymorphic site for the canonical MethodHandle or VarHandle dispatcher. */
+export function emitHandleCall(mc: MC, ins: Ins, exact: boolean, accessMode?: string): void {
   const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map((t) => dex.type(t)), ret = dex.type(proto.ret);
   const handle = c.newLocal(T.anyref), arr = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);
@@ -146,7 +146,7 @@ export function emitHandleCall(mc: MC, ins: Ins, exact: boolean): void {
     if (BOX[p]) box(cx, c, p);
     c.arraySet(data);
   });
-  emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(arr), `(${params.join("")})${ret}`, exact ? 1 : 0);
+  emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(arr), `${accessMode ? accessMode + "@" : ""}(${params.join("")})${ret}`, accessMode ? VAR_HANDLE_INVOKE : exact ? 1 : 0);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
@@ -159,7 +159,7 @@ export function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args
   c.drop().i32(0).gset(wait).call(cx.imp.annotationWait); c.end().anyConvertExtern(); restore();
 }
 
-const FRAME = "dalvik/system/EmulatedStackFrame", FRAME_INVOKE = 2;
+const FRAME = "dalvik/system/EmulatedStackFrame", FRAME_INVOKE = 2, VAR_HANDLE_INVOKE = 4;
 export const handleIntrinsics = new Map<string, Intrinsic>([
   [`${MH}.invokeExactWithFrame(L${FRAME};)V`, (cx, _m, c) => {
     c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
@@ -196,12 +196,12 @@ const descOfName = (n: string) => n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
 /** Capture the parent before a wait: a Promise continuation may run while the scheduler is idle. Child strands share its thread and monitor ancestry. */
-export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current()): (...args: (object | null)[]) => unknown {
+export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current(), prepare?: (cx: Compiler) => void): (...args: (object | null)[]) => unknown {
   return (...args) => {
-    if (parent.root || w.inSynchronousJava()) return w.unwound(() => w.synchronous(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }))(...args)));
+    if (parent.root || w.inSynchronousJava()) return w.unwound(() => w.synchronous(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }), prepare)(...args)));
     const s = w.sched.strand(parent.thread, parent);
     let result: unknown;
-    try { result = w.callFn(name, params, ret, body)(s, ...args); } catch (e) { s.end(); throw e; }
+    try { result = w.callFn(name, params, ret, body, prepare)(s, ...args); } catch (e) { s.end(); throw e; }
     if (result instanceof Promise) return result.finally(() => s.end());
     s.end(); return result;
   };
@@ -209,6 +209,15 @@ export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | 
 
 export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number, parent = w.sched.current()): object | null | Promise<object | null> {
   if (exact === 3) return invokeCustom(w, siteId, args, parent);
+  if (exact === VAR_HANDLE_INVOKE) {
+    const separator = siteId.indexOf("@"), mode = siteId.slice(0, separator), site = parseMethodDesc(siteId.slice(separator + 1));
+    const s = state(w), list = s.newArray(site.params.length + 1), owner = "java/lang/invoke/VarHandle";
+    s.aset(list, 0, mh);
+    site.params.forEach((_, i) => s.aset(list, i + 1, s.aget(args, i)));
+    const method = w.prog.require(owner).methods.find(m => m.name === mode)!;
+    const art = BigInt(w.idOf(owner)) << 16n | BigInt(w.prog.require(owner).methods.indexOf(method));
+    return invokeVarHandle(w, list, art, false, [`L${owner};`, ...site.params], site.ret, parent);
+  }
   if (exact === FRAME_INVOKE) return invokeFrame(w, mh!, args, parent);
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw w.exception(w.makeThrowable(cls, msg)); };
