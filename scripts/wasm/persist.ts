@@ -141,7 +141,14 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   check("worker carries prepared hierarchy certificates", !!job.prepared?.length, true);
   if (job.prepared?.length) {
     const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
-    check("worker rejects a mismatched prepared hierarchy", typeof uc.upgrade(bad), "string");
+    const rejected = world(app, { compileOnly: true }), rejecting = new UnitCompiler(rejected);
+    bad.resolved = [...job.resolved ?? [], ["Pst", "fixture/RejectedIdentity", "Pst"]];
+    if (!bad.prepared.some(([key]) => key === "Pst")) {
+      const cls = rejected.prog.get("Pst")!;
+      bad.prepared.push(["Pst", cls.sup, [...cls.ifaces]]);
+    }
+    check("worker rejects a mismatched prepared hierarchy", typeof rejecting.upgrade(bad), "string");
+    check("rejected hierarchy leaves initiating identity untouched", rejected.prog.initiatedBy(rejected.prog.root, "fixture/RejectedIdentity"), undefined);
     check("worker rejects missing hierarchy certificates", typeof uc.upgrade({ ...job, prepared: undefined }), "string");
   }
   worker.selectorId("pst.extra()V");      // what a unit that needs a selector the page lacks would number

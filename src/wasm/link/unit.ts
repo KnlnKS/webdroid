@@ -58,11 +58,11 @@ export class UnitCompiler {
     if (job.resolved?.length && !job.prepared?.length) return "missing prepared worker hierarchies";
     const prepared = new Set((job.prepared ?? []).map(([key]) => key));
     for (const [, , key] of job.resolved ?? []) if (!prepared.has(key)) return `missing prepared worker hierarchy ${key}`;
-    for (const [referrer, name, key] of job.resolved ?? []) w.initiateClass(w.prog.loaderOf(referrer), name, key);
     for (const [key, sup, ifaces] of job.prepared ?? []) {
       const cls = w.prog.get(key);
       if (!cls || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return `mismatched prepared worker hierarchy ${key}`;
     }
+    for (const [referrer, name, key] of job.resolved ?? []) w.initiateClass(w.prog.loaderOf(referrer), name, key);
     job.initialized.forEach((c) => w.preInitialized.add(c));
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.longLoops = new Set(job.long);
