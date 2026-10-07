@@ -21,6 +21,8 @@ export interface UpgradeJob {
   initialized: string[];
   /** Successful, prepared initiating identities needed by these methods. */
   resolved?: [referrer: string, name: string, key: string][];
+  /** Declaration hierarchies prepared by Java loading in the source World. */
+  prepared?: [key: string, sup: string | null, ifaces: string[]][];
   /** the methods of the unit that ran a long loop (World.longLoops) */
   long: string[];
 }
@@ -50,7 +52,16 @@ export class UnitCompiler {
     const w = this.w, method = (id: string) => methodOf(w.prog, id)!;
     for (const [referrer, name, key] of job.resolved ?? []) {
       if (!w.prog.has(referrer) || !w.prog.has(key)) return `missing resolved worker identity ${referrer}: ${name} -> ${key}`;
-      w.initiateClass(w.prog.loaderOf(referrer), name, key);
+      const prior = w.prog.initiatedBy(w.prog.loaderOf(referrer), name);
+      if (prior && prior !== key) return `conflicting resolved worker identity ${referrer}: ${name} -> ${key}, already ${prior}`;
+    }
+    if (job.resolved?.length && !job.prepared?.length) return "missing prepared worker hierarchies";
+    const prepared = new Set((job.prepared ?? []).map(([key]) => key));
+    for (const [, , key] of job.resolved ?? []) if (!prepared.has(key)) return `missing prepared worker hierarchy ${key}`;
+    for (const [referrer, name, key] of job.resolved ?? []) w.initiateClass(w.prog.loaderOf(referrer), name, key);
+    for (const [key, sup, ifaces] of job.prepared ?? []) {
+      const cls = w.prog.get(key);
+      if (!cls || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return `mismatched prepared worker hierarchy ${key}`;
     }
     job.initialized.forEach((c) => w.preInitialized.add(c));
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));

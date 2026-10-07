@@ -138,6 +138,12 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   check("and then numbers the same", sameMarks(worker.numbering(), page.numbering()), true);
   const slot = page.slotOf(page.prog.resolve("Pst", "hot", "(I)I")!);
   const job = page.upgradeJob(slot)!, from = page.numbering();
+  check("worker carries prepared hierarchy certificates", !!job.prepared?.length, true);
+  if (job.prepared?.length) {
+    const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
+    check("worker rejects a mismatched prepared hierarchy", typeof uc.upgrade(bad), "string");
+    check("worker rejects missing hierarchy certificates", typeof uc.upgrade({ ...job, prepared: undefined }), "string");
+  }
   worker.selectorId("pst.extra()V");      // what a unit that needs a selector the page lacks would number
   const unit = uc.upgrade(job);
   if (typeof unit === "string") { failed++; console.log("FAIL upgrade:", unit); } else {

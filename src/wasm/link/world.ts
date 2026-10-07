@@ -31,7 +31,7 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
+import { definitionReady, initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -980,17 +980,37 @@ export class World {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return undefined;
     const clock = this.unitClock(), { installed, copies } = this.group(s.m);
-    const resolved: [string, string, string][] = [];
+    const resolved: [string, string, string][] = [], prepared: [string, string | null, string[]][] = [];
+    const seen = new Map<string, Set<string>>(), hierarchies = new Set<string>();
+    let ready = true;
+    const addResolved = (referrer: string, name: string, key: string) => {
+      const names = seen.get(referrer) ?? seen.set(referrer, new Set()).get(referrer)!;
+      if (names.has(name)) return;
+      names.add(name); resolved.push([referrer, name, key]);
+      addHierarchy(key);
+    };
+    const addHierarchy = (key: string) => {
+      if (hierarchies.has(key)) return;
+      hierarchies.add(key);
+      const cls = this.prog.get(key);
+      if (!cls || !definitionReady(this, key)) { ready = false; return; }
+      prepared.push([key, cls.sup, [...cls.ifaces]]);
+      if (!cls.dex || !cls.def || this.prog.loaderOf(key) === this.prog.boot) return;
+      const indices = [...cls.def.superIdx === 0xffffffff ? [] : [cls.def.superIdx], ...cls.def.interfaces];
+      const targets = [...cls.sup ? [cls.sup] : [], ...cls.ifaces];
+      indices.forEach((index, i) => addResolved(key, descToName(cls.dex!.rawType(index)), targets[i]));
+    };
     for (const method of [...installed, ...copies]) if (method.codeOff && !this.intrinsic(method)) {
       const start = performance.now(), prepared = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic);
       this.stats.phase.prepare += performance.now() - start;
       for (const ins of prepared.instructions) {
         const owner = initiatedInstruction(this, method, ins);
-        if (owner && !resolved.some(([referrer, name]) => referrer === method.cls && name === owner.name)) resolved.push([method.cls, owner.name, owner.key]);
+        if (owner) addResolved(method.cls, owner.name, owner.key);
       }
     }
     this.accountCompilation(clock);
-    return { resolved, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+    if (!ready) return undefined;
+    return { resolved, prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
