@@ -13,9 +13,7 @@ import { mid } from "../../src/wasm/compiler/ids";
 import { compileModule } from "../../src/wasm/link/module";
 import { AOSP, ROOT } from "./paths";
 
-/** what is understood and not yet translated: natives with no host implementation, String constructors strings.ts lacks, and an invoke-custom whose bootstrap is
- *  libcore's LambdaMetafactory (a stub that returns null: ART cannot link a lambda, d8 desugars them) */
-const KNOWN = [/^native: /, /^String\.<init>\(/, /^invoke-custom .*LambdaMetafactory/];
+const KNOWN = [/^native: /];
 
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 // Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
