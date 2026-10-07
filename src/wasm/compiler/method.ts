@@ -339,7 +339,7 @@ export class MC {
       d.lget(0).call(ch.f).lset(status);
       // the activation's fuel: the iterations of every chunk it ran
       d.lget(0).structGet(this.stateType, this.chunkFuel).lget(0).structGet(this.stateType, ch.count).raw(OP.i32_add).ltee(fuel).i32(FUEL).raw(OP.i32_ge_u).if_();
-      this.cx.callRt(d, "yieldFuel"); d.i32(0).lset(fuel).end();
+      this.cx.callRt(d, "yieldNow"); d.i32(0).lset(fuel).end();
       d.lget(0).lget(fuel).structSet(this.stateType, this.chunkFuel);
       d.lget(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
       d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end();

@@ -90,7 +90,7 @@ export function coldUnit(w: World, m: MethodInfo, cold: ColdInterpreter, resumin
     c.lget(done).i32(1).raw(OP.i32_eq).brIf(1);
     c.lget(done).i32(2).raw(OP.i32_eq).if_();
     c.lget(savedSid).i32(ROOT).raw(OP.i32_eq).lget(frame).call(synchronous).raw(OP.i32_or).if_().lget(frame).call(slow).else_().lget(frame).call(slowAsync).end();
-    c.else_(); cx.callRt(c, "yieldFuel"); c.end(); restore();
+    c.else_(); cx.callRt(c, "yieldNow"); c.end(); restore();
     const resume = c.newLocal(T.funcref);
     c.lget(frame).lget(prior).call(target).ltee(resume).refIsNull().raw(OP.i32_eqz).if_();
     c.lget(frame).call(snapshot).lget(resume).refAsNonNull().refCast(resumeSig).returnCallRef(resumeSig).end();
