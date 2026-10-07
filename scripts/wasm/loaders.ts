@@ -11,6 +11,8 @@ import { vfs } from "../../src/shell/vfs";
 import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive";
 import { loadDexes, program, world } from "./lib";
 import { Program, ACC, javaName, type JClass } from "../../src/wasm/compiler/program";
+import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/link/exc";
+import { mid } from "../../src/wasm/compiler/ids";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
@@ -241,6 +243,28 @@ if (!process.argv.includes("--hierarchy")) {
   const owner = w.sched.strand();
   let key: string;
   try { key = await w.resolveClass(definingLoader(w, object), "Shared", owner); } finally { owner.end(); }
+  if (process.argv.includes("--promotion-copies")) {
+    const loader = w.prog.loaderOf(key), method = w.prog.require(key).byKey.get("symbolic()I")!;
+    const helperKey = w.prog.lookup(loader, "SymbolicHelper")!, helper = w.prog.require(helperKey).byKey.get("value()I")!;
+    if (w.prog.initiatedBy(loader, "SymbolicHelper")) throw new Error("copy fixture helper already initiated");
+    const slot = w.slotOf(method), helperSlot = w.slotOf(helper);
+    await w.host.link(slot); await w.host.link(helperSlot);
+    new Int32Array(w.mem.buffer, COUNT_BASE + 4 * helperSlot, 1)[0] = HOT_BUDGET;
+    const before = w.upgradeJob(slot);
+    if (!before || [...before.installed, ...before.copies].includes(mid(helper))) throw new Error("symbolic promotion selected an unresolved local copy");
+    if (w.prog.initiatedBy(loader, "SymbolicHelper")) throw new Error("promotion eagerly initiated its helper");
+    const strand = w.sched.strand();
+    let resolved: string;
+    try { resolved = await w.resolveClass(loader, "SymbolicHelper", strand); } finally { strand.end(); }
+    const winner = w.prog.require(resolved).byKey.get("value()I")!, winnerSlot = w.slotOf(winner);
+    await w.host.link(slot); await w.host.link(winnerSlot);
+    new Int32Array(w.mem.buffer, COUNT_BASE + 4 * winnerSlot, 1)[0] = HOT_BUDGET;
+    const after = w.upgradeJob(slot);
+    if (!after?.copies.includes(mid(winner)) || resolved !== helperKey && after.copies.includes(mid(helper))) throw new Error("promotion did not recheck the Java loader's winning helper");
+    if (await w.entryAsync(key, "symbolic", "()I")() !== expected) throw new Error("copy fixture changed Java result");
+    console.log("promotion copies: unresolved helper excluded without loading; initiated helper copied on next selection; js=wasm=42");
+    process.exit(0);
+  }
   const handedData: WeakRef<object>[] = [], handingCompilers: WeakRef<object>[] = [];
   const buildUnit = Compiler.prototype.buildUnit;
   if (process.argv.includes("--memory")) Compiler.prototype.buildUnit = function (...args: Parameters<typeof buildUnit>) {

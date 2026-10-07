@@ -7,9 +7,9 @@
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
-import { prepareMethod } from "../../jvm/prepared";
+import { prepareMethod, type PreparedInstruction } from "../../jvm/prepared";
 import { ColdInterpreter } from "../cold/interpreter";
-import type { SymbolicSite } from "../compiler/sites";
+import { needsSymbolicSite, type SymbolicSite } from "../compiler/sites";
 import { ColdSlowOps } from "../cold/slowops";
 import { resumeUnit, type ResumeState } from "../compiler/resume";
 import type { ColdSnapshot } from "../cold/state";
@@ -1304,25 +1304,33 @@ export class World {
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
   plan = new Map<string, MethodInfo[]>();
   groupOf = new Map<number, number[]>();
-  private callees = new Map<MethodInfo, MethodInfo[]>();
+  private callees = new Map<MethodInfo, PreparedInstruction[]>();
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] : 0; }
   /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
   private smallCallees(m: MethodInfo): MethodInfo[] {
-    let out = this.callees.get(m);
-    if (out) return out;
-    out = [];
+    let sites = this.callees.get(m);
+    if (!sites) {
+      const seen = new Set<string>();
+      sites = decodeInstructions(m.dex.code(m.codeOff).insns).filter(ins => {
+        if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) return false;
+        const key = `${ins.op}:${ins.b}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      });
+      this.callees.set(m, sites);
+    }
+    const out: MethodInfo[] = [];
     const dex = m.dex;
-    for (const ins of decodeInstructions(dex.code(m.codeOff).insns)) {
-      const op = ins.op;
-      if (!(op >= 0x6e && op <= 0x72) && !(op >= 0x74 && op <= 0x78)) continue;
+    // Cache bytecode references, not eligibility or targets: loader initiation can change both.
+    for (const ins of sites) {
+      if (needsSymbolicSite(this, m, ins)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
       if (decl[0] === "[" || kind === "invoke-super") continue;
       const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
         : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
       if (t && t !== m && this.inlinable(t) && !out.includes(t)) out.push(t);
     }
-    this.callees.set(m, out);
     return out;
   }
   /** the classes `m` allocates join the allocated set before its virtual calls are planned: it is about to run */
@@ -1339,6 +1347,7 @@ export class World {
     for (const ins of decodeInstructions(dex.code(m.codeOff).insns)) {
       const op = ins.op;
       if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78) continue;
+      if (needsSymbolicSite(this, m, ins)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), key = `${decl}.${mr.name}${desc}`;
       if (decl[0] === "[") continue;
       let t = this.plan.get(key);

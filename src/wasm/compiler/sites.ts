@@ -5,6 +5,7 @@ import type { Compiler } from "./j2w";
 import { T } from "./wasmbin";
 import type { MC } from "./method";
 import { initiatedInstruction } from "../link/resolution";
+import type { World } from "../link/world";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, params: Kind[], ret: Kind | "V"];
 export interface SiteOperands { inputs: { reg: number; kind: Kind; web: number }[]; output: Kind | "V"; producer: boolean }
@@ -14,6 +15,10 @@ export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): bo
   if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;
   if (/^invoke-direct/.test(n) && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;") return false;
   return /^(const-class|const-method-|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super|polymorphic))/.test(n);
+}
+
+export function needsSymbolicSite(w: World, m: MethodInfo, ins: PreparedInstruction): boolean {
+  return w.prog.loaderOf(m.cls) !== w.prog.boot && symbolicInstruction(m, ins) && !initiatedInstruction(w, m, ins);
 }
 
 export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
@@ -57,7 +62,7 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
     phase.infer += performance.now() - t;
     cx.methodAnalyses.set(m, { prepared, typing });
     for (const ins of prepared.instructions) {
-      if (!typing.reached(ins.pc) || !symbolicInstruction(m, ins) || initiatedInstruction(cx.w, m, ins)) continue;
+      if (!typing.reached(ins.pc) || !needsSymbolicSite(cx.w, m, ins)) continue;
       const name = `${m.cls}:${m.index}:${ins.pc}`;
       if (cx.symbolicImports.has(name)) continue;
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);
