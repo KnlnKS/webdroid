@@ -1394,8 +1394,8 @@ export class World {
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();
     for (const assumption of this.assumptions.values()) for (const slot of assumption.slots) this.invalidate(slot);
-    this.assumptions.clear(); this.late.clear();
-    this.noteLate([...this.prog.own()].map(c => c.name));
+    this.assumptions.clear();
+    this.refreshLate();
     for (const slots of this.absent.values()) for (const slot of slots) this.invalidate(slot);
     this.absent.clear();
   }
@@ -1470,12 +1470,31 @@ export class World {
   }
   /** the concrete classes added since compiled code was made, by each of their supertypes (themselves included) */
   late = new Map<string, string[]>();
+  private lateKnown = new Set<string>();
+  private lateHierarchy = new Map<string, { sup: string | null; ifaces: string[]; flags: number } | undefined>();
+  private rememberLate(name: string): void {
+    if (this.lateHierarchy.has(name)) return;
+    const c = this.prog.get(name);
+    this.lateHierarchy.set(name, c && { sup: c.sup, ifaces: [...c.ifaces], flags: c.flags });
+  }
+  private refreshLate(): void {
+    // Descriptor rebinding can leave every subtype relationship intact. Missing ancestors and changed interfaces still require a rebuild.
+    for (const [name, old] of this.lateHierarchy) {
+      const c = this.prog.get(name);
+      if (!!c !== !!old || c && old && (c.sup !== old.sup || c.flags !== old.flags || c.ifaces.length !== old.ifaces.length || c.ifaces.some((n, i) => n !== old.ifaces[i]))) {
+        this.late.clear(); this.lateKnown.clear(); this.lateHierarchy.clear();
+        break;
+      }
+    }
+    this.noteLate([...this.prog.own()].map(c => c.name).filter(n => !this.lateKnown.has(n)));
+  }
   /** records the concrete classes among `added` and returns them by supertype */
   noteLate(added: string[]): Map<string, string[]> {
     const now = new Map<string, string[]>(), up = new Map<string, string[]>();
     const supers = (n: string): string[] => {
       let s = up.get(n);
       if (!s) {
+        this.rememberLate(n);
         const c = this.prog.get(n), out = new Set([n]);
         if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of supers(p)) out.add(x);
         up.set(n, s = [...out]);
@@ -1483,7 +1502,9 @@ export class World {
       return s;
     };
     for (const n of added) {
+      this.rememberLate(n);
       const c = this.prog.get(n);
+      if (c) this.lateKnown.add(n);
       if (!c || c.isInterface || c.flags & ACC.ABSTRACT) continue;
       for (const s of supers(n)) {
         let a = now.get(s); if (!a) now.set(s, a = []); a.push(n);

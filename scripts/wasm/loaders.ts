@@ -301,9 +301,23 @@ try {
   const self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
   const type = cls.dex!.proto(cls.dex!.method(self.methodIdx).proto).ret;
   if (cls.dex!.type(type) !== "LShared;" || peer.desc !== "LShared;") throw new Error("fixture did not warm the parent resolution");
+  cache.noteLate([...p.own()].map(c => c.name));
+  const note = cache.noteLate.bind(cache);
+  let reindexed = 0;
+  cache.noteLate = names => { reindexed += names.length; return note(names); };
   const epoch = cache.epoch;
   cache.initiateClass(child, "Shared", key);
+  const sub = p.definedBy(child, "Sub")!;
+  if (!reindexed || !cache.late.get(key)?.includes(sub) || cache.late.get("Shared")?.includes(sub)) throw new Error("initiated superclass identity retained stale subtype relationships");
   if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) throw new Error("initiating identity retained stale DEX/member caches");
+  const priorLate = cache.late.get("NamespaceFace");
+  reindexed = 0;
+  cache.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
+  if (reindexed || cache.late.get("NamespaceFace") !== priorLate) throw new Error("descriptor-only initiation rebuilt the subtype index");
+  const face = p.definedBy(child, "NamespaceFace")!;
+  cache.initiateClass(child, "NamespaceFace", face);
+  if (!reindexed || !cache.late.get(face)?.includes(key) || cache.late.get("NamespaceFace")?.includes(key)) throw new Error("initiated interface identity retained stale subtype relationships");
+  console.log(`  subtype index: descriptor-only 0 classes, interface change ${reindexed} classes reindexed`);
   cache.link(key);
   try { cache.initiateClass(child, "Shared", "Shared"); throw new Error("conflicting initiated identity accepted"); }
   catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
