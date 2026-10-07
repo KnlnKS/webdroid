@@ -62,8 +62,8 @@ export async function entryCases(): Promise<string[]> {
   await line("plus", () => vcall(a, "plus", "(I)I", 4));
   await line("set", () => vcall(a, "set", "(I)V", 8));
   await line("describe", () => vcall(a, "describe", `()${STR}`));
-  await line("self is the receiver", () => vcall(a, "self", `()L${E};`).then((s: unknown) => s === a));
-  await line("static make is not the receiver", () => scall(E, "make", `(I)L${E};`, 3).then((s: unknown) => s === a));
+  await line("self is the receiver", async () => (await vcall(a, "self", `()L${E};`)) === a);
+  await line("static make is not the receiver", async () => (await scall(E, "make", `(I)L${E};`, 3)) === a);
   const sub = await vcall(a, "sub", `(I)L${E};`, 6);
   await line("override", () => vcall(sub, "get", "()I"));
   await line("sub", () => sub);
@@ -81,7 +81,7 @@ export async function entryCases(): Promise<string[]> {
   await line("list", () => vcall(list, "add", `(Ljava/lang/Object;)Z`, "x"));
   await line("list size", () => vcall(list, "size", "()I"));
   await line("list string", () => vcall(list, "toString", `()${STR}`));
-  await line("Integer", () => scall("java/lang/Integer", "valueOf", `(I)${INT}`, 5).then((i: unknown) => vcall(i, "intValue", "()I")));
+  await line("Integer", async () => vcall(await scall("java/lang/Integer", "valueOf", `(I)${INT}`, 5), "intValue", "()I"));
   await line("Integer.MAX_VALUE", () => staticField("java/lang/Integer", "MAX_VALUE"));
   await line("parseInt", () => scall("java/lang/Integer", "parseInt", `(${STR})I`, "42"));
   await line("string receiver", () => vcall("abc", "length", "()I"));
