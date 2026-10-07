@@ -15,8 +15,11 @@ import type { World } from "./world";
 import type { MC } from "../compiler/method";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import { canAccess, constClass, typeName } from "./classes";
-import { failed, resolveFieldRef, resolveInvoke } from "../compiler/linkage";
+import { failed, resolveFieldRef, resolveInvoke, typeFailure } from "../compiler/linkage";
 import { emitSave, type Strand } from "./sched";
+import type { DexFile } from "../../jvm/dex";
+import { invokeCustom } from "./callsites";
+import type { MethodInfo } from "../compiler/program";
 import type { Kind } from "../compiler/program";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
@@ -28,10 +31,10 @@ function handleKinds(prog: Program): Record<string, number> {
 }
 
 /** ART resolves the signature without initializing its classes; libcore interns MethodType. */
-function emitType(mc: MC, ret: string, params: string[], returnFirst = true): boolean {
+function emitType(cx: Compiler, c: Code, ret: string, params: string[], returnFirst = true): boolean {
   const resolutionOrder = returnFirst ? [ret, ...params] : [...params, ret];
-  if (resolutionOrder.some(d => mc.unresolved(d))) return false;
-  emitMethodType(mc.cx, mc.code, ret, params);
+  for (const d of resolutionOrder) { const failure = typeFailure(cx.prog, d); if (failure) { cx.linkError(c, failure); return false; } }
+  emitMethodType(cx, c, ret, params);
   return true;
 }
 function emitMethodType(cx: Compiler, c: Code, ret: string, params: string[]): void {
@@ -47,30 +50,36 @@ function emitMethodType(cx: Compiler, c: Code, ret: string, params: string[]): v
 }
 
 export function emitTypeConstant(mc: MC, index: number): void {
-  const p = mc.dex.proto(index);
-  if (emitType(mc, mc.dex.type(p.ret), p.params.map(t => mc.dex.type(t)))) mc.set("L");
+  if (emitTypeValue(mc.cx, mc.code, mc.dex, index)) mc.set("L");
+}
+export function emitTypeValue(cx: Compiler, c: Code, dex: DexFile, index: number): boolean {
+  const p = dex.proto(index);
+  return emitType(cx, c, dex.type(p.ret), p.params.map(t => dex.type(t)));
 }
 
 /** const-method-handle uses the referring loader, member access checks and ART's direct handle kinds. */
 export function emitHandleConstant(mc: MC, index: number): void {
-  const { cx, code: c, dex } = mc, prog = cx.prog, h = dex.methodHandle(index), K = handleKinds(prog);
+  if (emitHandleValue(mc.cx, mc.code, mc.m, index)) mc.set("L");
+}
+export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, index: number): boolean {
+  const dex = referrer.dex, prog = cx.prog, h = dex.methodHandle(index), K = handleKinds(prog);
   const error = (cls: string, message: string) => {
     const local = c.newLocal(T.anyref);
     cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, message);
     cx.callMethod(c, prog.resolve(cls, "<init>", "(Ljava/lang/String;)V")!); c.lget(local).throw_(cx.tag);
   };
   const access = (owner: string, flags: number, member: string): boolean => {
-    const allowed = canAccess(mc.m.cls, prog.require(owner), flags, cx.w);
-    if (!allowed) error("java/lang/IllegalAccessError", `${javaName(mc.m.cls)} cannot access ${javaName(owner)}.${member}`);
+    const allowed = canAccess(referrer.cls, prog.require(owner), flags, cx.w);
+    if (!allowed) error("java/lang/IllegalAccessError", `${javaName(referrer.cls)} cannot access ${javaName(owner)}.${member}`);
     return allowed;
   };
   let kind: number, art: bigint, ret: string, params: string[];
   if (h.type <= 3) {
-    const stat = h.type <= 1, put = h.type === 0 || h.type === 2, r = resolveFieldRef(prog, dex, h.idx, stat, mc.m.cls);
-    if (failed(r)) { mc.linkFail(r); return; }
+    const stat = h.type <= 1, put = h.type === 0 || h.type === 2, r = resolveFieldRef(prog, dex, h.idx, stat, referrer.cls);
+    if (failed(r)) { cx.linkError(c, r); return false; }
     const f = r.f;
-    if (!access(f.owner, f.flags, f.name)) return;
-    if (put && f.flags & ACC.FINAL) { error("java/lang/IllegalAccessError", `Cannot write final field ${javaName(f.owner)}.${f.name}`); return; }
+    if (!access(f.owner, f.flags, f.name)) return false;
+    if (put && f.flags & ACC.FINAL) { error("java/lang/IllegalAccessError", `Cannot write final field ${javaName(f.owner)}.${f.name}`); return false; }
     kind = stat ? put ? K.SPUT : K.SGET : put ? K.IPUT : K.IGET;
     art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
     ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
@@ -78,24 +87,24 @@ export function emitHandleConstant(mc: MC, index: number): void {
     const mr = dex.method(h.idx), cls = descToName(dex.type(mr.cls)), desc = dex.methodDesc(h.idx);
     let invoke = h.type === 4 ? "invoke-static" : h.type === 8 ? "invoke-interface" : h.type === 6 ? "invoke-direct" : "invoke-virtual";
     if (h.type === 7) {
-      const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, mc.m.cls);
-      if (failed(target)) { mc.linkFail(target); return; }
+      const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);
+      if (failed(target)) { cx.linkError(c, target); return false; }
       invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
     }
-    const m = resolveInvoke(prog, invoke, cls, mr.name, desc, mc.m.cls);
-    if (failed(m)) { mc.linkFail(m); return; }
+    const m = resolveInvoke(prog, invoke, cls, mr.name, desc, referrer.cls);
+    if (failed(m)) { cx.linkError(c, m); return false; }
     if (h.type === 6 && (m.cls !== cls || !m.isCtor)) {
-      mc.linkFail({ thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` }); return;
+      cx.linkError(c, { thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` }); return false;
     }
-    if (!access(m.cls, m.flags, m.name)) return;
-    if (m.name === "<clinit>") { error("java/lang/ClassFormatError", "Method handles can't target class initializer method"); return; }
+    if (!access(m.cls, m.flags, m.name)) return false;
+    if (m.name === "<clinit>") { error("java/lang/ClassFormatError", "Method handles can't target class initializer method"); return false; }
     if (h.type === 6) {
-      if (!emitType(mc, m.ret, m.params, false)) return;
+      if (!emitType(cx, c, m.ret, m.params, false)) return false;
       const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
       c.lset(type); cx.emitEnsure(c, "java/lang/invoke/MethodHandles");
       cx.callMethod(c, prog.resolve("java/lang/invoke/MethodHandles", "lookup", `()L${L};`)!); c.lset(lookup);
       c.lget(lookup); constClass(cx, c, cls); c.lget(type);
-      cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); mc.set("L"); return;
+      cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); return true;
     }
     kind = invoke === "invoke-static" ? K.INVOKE_STATIC : invoke === "invoke-interface" ? K.INVOKE_INTERFACE
       : invoke === "invoke-direct" ? K.INVOKE_DIRECT : invoke === "invoke-super" ? K.INVOKE_SUPER : K.INVOKE_VIRTUAL;
@@ -103,20 +112,20 @@ export function emitHandleConstant(mc: MC, index: number): void {
     const sig = parseMethodDesc(desc);
     ret = sig.ret; params = [...m.isStatic ? [] : [descOfName(cls)], ...sig.params];
   }
-  if (!emitType(mc, ret, params, false)) return;
+  if (!emitType(cx, c, ret, params, false)) return false;
   const type = c.newLocal(T.anyref), handle = c.newLocal(T.anyref), impl = MH + "Impl";
   c.lset(type); cx.emitEnsure(c, impl); cx.emitNew(c, impl); c.ltee(handle).i64(art).i32(kind).lget(type);
-  cx.callMethod(c, prog.resolve(impl, "<init>", `(JIL${MT};)V`)!); c.lget(handle); mc.set("L");
+  cx.callMethod(c, prog.resolve(impl, "<init>", `(JIL${MT};)V`)!); c.lget(handle); return true;
 }
 
 /** pushes the wrapper of the primitive `desc` on the stack (valueOf) */
-function box(cx: Compiler, c: Code, desc: string): void {
+export function box(cx: Compiler, c: Code, desc: string): void {
   const [cls] = BOX[desc];
   cx.emitEnsure(c, cls);
   cx.callMethod(c, cx.prog.resolve(cls, "valueOf", `(${desc})L${cls};`)!);
 }
 /** replaces the (non-null) wrapper on the stack by its primitive value */
-function unbox(cx: Compiler, c: Code, desc: string): void {
+export function unbox(cx: Compiler, c: Code, desc: string): void {
   const [cls, name, d] = BOX[desc];
   cx.callMethod(c, cx.prog.resolve(cls, name, d)!);
 }
@@ -141,7 +150,7 @@ export function emitHandleCall(mc: MC, ins: Ins, exact: boolean): void {
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
 }
 
-function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args: () => void, site: string, mode: number): void {
+export function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args: () => void, site: string, mode: number): void {
   const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
   handle(); c.externConvertAny(); args(); c.externConvertAny().gget(cx.stringConst(site)).i32(mode).call(cx.imp.mhInvoke);
   c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
@@ -185,7 +194,7 @@ const descOfName = (n: string) => n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
 /** Capture the parent before a wait: a Promise continuation may run while the scheduler is idle. Child strands share its thread and monitor ancestry. */
-function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current()): (...args: (object | null)[]) => unknown {
+export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current()): (...args: (object | null)[]) => unknown {
   return (...args) => {
     if (parent.root) return w.unwound(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }))(...args));
     const s = w.sched.strand(parent.thread, parent);
@@ -197,6 +206,7 @@ function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", bo
 }
 
 export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number, parent = w.sched.current()): object | null | Promise<object | null> {
+  if (exact === 3) return invokeCustom(w, siteId, args, parent);
   if (exact === FRAME_INVOKE) return invokeFrame(w, mh!, args, parent);
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw w.exception(w.makeThrowable(cls, msg)); };

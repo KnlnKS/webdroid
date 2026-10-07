@@ -456,6 +456,16 @@ export class DexFile {
     return this.encodedArray(this.view.getUint32(sec.off + i * 4, true));
   }
 
+  /** Encoded tags distinguish integer/float/double bootstrap arguments that the value-only API cannot. */
+  callSiteValues(i: number): { type: number; value: EncVal }[] {
+    const sec = this.section(0x0007);
+    if (!sec || i >= sec.size) throw new Error(`call_site ${i} out of range in ${this.name}`);
+    const r = new Reader(this.bytes, this.view.getUint32(sec.off + i * 4, true)), n = r.uleb();
+    const values: { type: number; value: EncVal }[] = [];
+    for (let j = 0; j < n; j++) { const type = r.bytes[r.pos] & 0x1f; values.push({ type, value: this.encodedValue(r) }); }
+    return values;
+  }
+
   /** the source line of the instruction at code unit `pc`, by the code item's debug_info
    *  position table; -1 without one */
   lineAt(codeOff: number, pc: number): number {

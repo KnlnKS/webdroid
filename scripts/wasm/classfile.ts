@@ -7,6 +7,16 @@ export class Pool {
   private add(key: string, ...b: number[]) { let i = this.map.get(key); if (i === undefined) { i = this.count++; this.map.set(key, i); this.bytes.push(...b); } return i; }
   utf8(s: string) { const e = new TextEncoder().encode(s); return this.add("u" + s, 1, ...u2(e.length), ...e); }
   int(v: number) { return this.add("i" + v, 3, ...u4(v)); }
+  numeric(tag: 4 | 5 | 6, value: number | bigint) {
+    const bits = new DataView(new ArrayBuffer(8));
+    if (tag === 4) bits.setFloat32(0, Number(value));
+    else if (tag === 5) bits.setBigInt64(0, BigInt(value));
+    else bits.setFloat64(0, Number(value));
+    const bytes = [...new Uint8Array(bits.buffer)].slice(0, tag === 4 ? 4 : 8), before = this.count;
+    const index = this.add(`v${tag}:${bytes}`, tag, ...bytes);
+    if (tag !== 4 && this.count !== before) this.count++;
+    return index;
+  }
   cls(name: string) { return this.add("c" + name, 7, ...u2(this.utf8(name))); }
   string(s: string) { return this.add("s" + s, 8, ...u2(this.utf8(s))); }
   nameAndType(name: string, desc: string) { return this.add(`n${name}:${desc}`, 12, ...u2(this.utf8(name)), ...u2(this.utf8(desc))); }

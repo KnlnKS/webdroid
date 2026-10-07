@@ -13,7 +13,7 @@ import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 import { decodeInstructions } from "../../src/jvm/prepared";
 
-/** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and an interface getter, the method handle kinds a record never uses */
+/** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
 function handClasses(): Record<string, Uint8Array> {
   const out: Record<string, Uint8Array> = {};
   const build = (name: string, access: number, sup: string, ifaces: string[], pool: Pool, fields: number[][], methods: number[][], attrs: number[][]) => {
@@ -35,7 +35,7 @@ function handClasses(): Record<string, Uint8Array> {
     if (name === "Pq") {
       methods.push(method(p, 1, "x", "()I", [0x2a, 0xb4, ...u2(fx), 0xac]), method(p, 1, "name", "()Ljava/lang/String;", [0x2a, 0xb4, ...u2(fs), 0xb0]));
       const bsm = p.member(10, "java/lang/runtime/ObjectMethods", "bootstrap", "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/TypeDescriptor;Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/invoke/MethodHandle;)Ljava/lang/Object;");
-      const args = [p.cls("Pq"), p.string("x;name"), p.methodHandle(5, p.member(10, "Pq", "x", "()I")), p.methodHandle(9, p.member(11, "Ig", "name", "()Ljava/lang/String;"))];
+      const args = [p.cls("Pq"), p.string("x;name"), p.methodHandle(5, p.member(10, "Pq", "x", "()I")), p.methodHandle(5, p.member(10, "Pq", "name", "()Ljava/lang/String;"))];
       const site = (what: string, desc: string) => p.invokeDynamic(0, what, desc);
       methods.push(method(p, 1, "toString", "()Ljava/lang/String;", [0x2a, 0xba, ...u2(site("toString", `(${self})Ljava/lang/String;`)), 0, 0, 0xb0]));
       methods.push(method(p, 1, "hashCode", "()I", [0x2a, 0xba, ...u2(site("hashCode", `(${self})I`)), 0, 0, 0xac]));
@@ -83,13 +83,38 @@ function handClasses(): Record<string, Uint8Array> {
     constant("missingType", p.methodType("()LAbsent;"), "MethodType");
     build("Mc", 0x21, "Mh", [], p, [], methods, []);
   }
+  {
+    const p = new Pool(), methods: number[][] = [], bootstraps: number[][] = [];
+    const prefix = "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;";
+    const site = (name: string, bsm: string, tail: string, args: number[] = [], ret = "Ljava/lang/invoke/CallSite;") => {
+      const index = bootstraps.length;
+      bootstraps.push([...u2(p.methodHandle(6, p.member(10, "Bootstrap", bsm, prefix + tail + ")" + ret))), ...u2(args.length), ...args.flatMap(u2)]);
+      methods.push(method(p, 9, name, "(I)I", [0x1a, 0xba, ...u2(p.invokeDynamic(index, name, "(I)I")), 0, 0, 0xac], 1));
+    };
+    methods.push(method(p, 10, "secret", "(I)I", [0x1a, 0x10, 19, 0x60, 0xac], 1));
+    site("fixed", "fixed", "I", [p.int(19)]);
+    site("collected", "collected", "[I", [p.int(2), p.int(7), p.int(11)]);
+    site("constants", "constants", "Ljava/lang/String;Ljava/lang/Class;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;", [p.string("payload"), p.cls("Bootstrap"), p.methodType("(I)I"), p.methodHandle(6, p.member(10, "Bootstrap", "add", "(II)I"))]);
+    site("changing", "changing", "");
+    site("scalars", "scalars", "JFD", [p.numeric(5, 4294967303n), p.numeric(4, -0), p.numeric(6, 2.5)]);
+    site("volatileChanging", "volatileChanging", "");
+    site("reentrant", "reentrant", "");
+    site("targetFailure", "targetFailure", "");
+    site("nonCallSite", "nonCallSite", "", [], "Ljava/lang/Object;");
+    site("collectorMismatch", "collectorMismatch", "[Ljava/lang/Object;", [p.string("payload")]);
+    for (const [kind, name] of ["failure", "error", "nullSite", "wrong"].entries()) site(name, "failure", "I", [p.int(kind)]);
+    site("race", "race", "");
+    site("raceFailure", "raceFailure", "");
+    const body = [...u2(bootstraps.length), ...bootstraps.flat()];
+    build("Dyn", 0x21, "java/lang/Object", [], p, [], methods, [[...u2(p.utf8("BootstrapMethods")), ...u4(body.length), ...body]]);
+  }
   return out;
 }
 const out = mkdtempSync(join(tmpdir(), "j2w-cu-"));
 const sh = shellIn(out);
 for (const [n, bytes] of Object.entries(handClasses())) writeFileSync(join(out, n + ".class"), bytes);
-sh(["javac", "--release", "17", "-cp", out, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java")]);
-sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Vh|Px|Pt|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
+sh(["javac", "--release", "17", "-cp", out, "-d", out, join(JAVA, "Rec.java"), join(JAVA, "Mh.java"), join(JAVA, "Vh.java"), join(JAVA, "Px.java"), join(JAVA, "Pt.java"), join(JAVA, "Ind.java"), join(JAVA, "Ref.java"), join(JAVA, "Bootstrap.java")]);
+sh(["d8", "--release", "--no-desugaring", "--min-api", "34", "--output", out, ...readdirSync(out).filter((f) => /^(Rec|Mh|Mc|Vh|Px|Pt|Bootstrap|Dyn|Pq2?|Ig|Ind)(\$.*)?\.class$/.test(f)).map((f) => join(out, f))]);
 const dex = join(out, "classes.dex"), jars = [...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j));
 await jsTier(loadDexes(dex));
 const w = world([dex, ...jars], { natives }), hit: string[] = [];
@@ -98,23 +123,12 @@ const kinds = new Set(constants.filter(i => i.name === "const-method-handle").ma
 if (kinds.size !== 9 || !constants.some(i => i.name === "const-method-type")) throw new Error("constant fixture must retain both DEX opcodes and all nine handle kinds");
 processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
-const methods = ["Rec", "Mh", "Vh", "Px", "Pt"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent"));
+const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry"));
 const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
-  ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt").map((m) => [m.name, mh])), empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
+  ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
-// the JDK rejects Pq (its ObjectMethods wants a record), so the expected values of Pt are computed here from the semantics of ObjectMethods: the getters are virtual (Pq2.x() answers ten
-// times the field), the components combine as 31 * hash + hash, and the name in toString is the record class's, Pq
-const strHash = (t: string | null) => t === null ? 0 : [...t].reduce((h, ch) => (Math.imul(h, 31) + ch.charCodeAt(0)) | 0, 0);
-const pqHash = (x: number, name: string | null) => (Math.imul(x | 0, 31) + strHash(name)) | 0;
-const pqText = (x: number, name: string | null) => `Pq[x=${x}, name=${name}]`;
-const expected: Record<string, (a: number) => number> = {
-  ts: (a) => (Math.imul(strHash(pqText(a, a % 2 === 0 ? null : "n")), 31) + strHash(pqText(a * 10, "m"))) | 0,
-  hc: (a) => (Math.imul(pqHash(a, "n"), 7) + pqHash(a * 10, "m") + pqHash(a, null)) | 0,
-  eq: (a) => 17 + (a === 0 ? 12 : 0),
-};
-cases.forEach((c, i) => { if (c.m.cls === "Pt") jdk[i] = String(expected[c.m.name](Number(c.args[0]))); });
 // ART ClassLinker::ResolveMethodHandleForMethod keeps the named array receiver; the JDK narrows Object.clone's protected receiver to Mc.
 // These six rows therefore use ART's receiver rule and array clone semantics, rather than claiming a JDK match.
 cases.forEach((c, i) => { if (c.m.name === "tConstClone") { if (jdk[i] !== "throw") throw new Error("JDK array clone receiver changed"); jdk[i] = String(Number(c.args[0]) + 1); } });
@@ -124,11 +138,11 @@ const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
   const i = cases.findIndex((c) => c.m.cls === cls && c.m.name === name && c.args.every((a, j) => a === args[j] || Number(a) === Number(args[j])));
   return jdk[i] === "throw" ? Promise.reject(new Error("throw")) : Promise.resolve(entries.get(cases[i].m)!.length === 0 || cases[i].m.ret === "J" ? BigInt(jdk[i]) : Number(jdk[i]));
 };
-const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || cls === "Px" || cls === "Pt" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
+const { bad, blocked, threw } = await compare(cases, (m) => entries.get(m)!, (cls, name, desc, args, inst) => (cls === "Mh" || cls === "Vh" || cls === "Px" || cls === "Pt" || cls === "Bootstrap" || name === "recordInfo" ? asJdk(cls, name, desc, args) : tier(cls, name, desc, args, inst)), jdk, hit);
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match (JS/JDK or documented ART differences); ${threw} threw`);
 const cold = world([dex, ...jars], { cold: true, natives });
 processState(cold);
-const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind");
+const constantCases = cases.map((c, i) => ({ ...c, i })).filter(c => c.m.name.startsWith("tConst") || c.m.name.startsWith("tTransform") || c.m.name === "tBind" || c.m.name.startsWith("tCustom"));
 for (const { m, args, i } of constantCases) {
   let value: unknown;
   try { value = await cold.entryAsync(m.cls, m.name, m.desc)(...args.map(Number)); } catch (e) {
@@ -137,7 +151,7 @@ for (const { m, args, i } of constantCases) {
   }
   if (String(value) !== jdk[i]) throw new Error(`cold ${m.name}: ${value} != ${jdk[i]}`);
 }
-console.log(`${constantCases.length} constant/transformer cases match on the cold tier`);
+console.log(`${constantCases.length} constant/transformer/bootstrap cases match on the cold tier`);
 let suspendedCases = 0;
 for (const name of ["tConstWait", "tTransformWait", "tTransformConcurrent"]) {
   const waiting = [-1, 7], reference = sh(["java", "-cp", out, "Ref"], waiting.map(a => `Mh.${name} ${a}`).join("\n") + "\n").trim().split("\n");
@@ -148,10 +162,18 @@ for (const name of ["tConstWait", "tTransformWait", "tTransformConcurrent"]) {
   }
 }
 console.log(`${suspendedCases} suspended handle cases preserve thread, monitor ownership and exceptions`);
+// ART retries failed linkage (the JDK caches failures), and requires exact collector component types (the JDK adapts them).
+for (const tier of [w, cold]) {
+  if (await tier.entryAsync("Bootstrap", "artCollectorMismatch", "(I)I")(0) !== 31) throw new Error("ART bootstrap collectors require exact component types");
+  if (await tier.entryAsync("Bootstrap", "tCustomRetry", "(I)I")(0) !== 2) throw new Error("ART bootstrap failures must be retried");
+  if (await tier.entryAsync("Bootstrap", "artRaceFailure", "(I)I")(0) !== 1) throw new Error("failed bootstrap contender must preserve its error and leave the successful winner installed");
+  if (await tier.entryAsync("Bootstrap", "tCustomRace", "(I)I")(0) !== 1) throw new Error("racing bootstrap contenders must invoke the installed winner");
+}
+console.log("8 ART collector/retry/racing cases match on both tiers");
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
-// a bootstrap class libcore lacks is ART's NoClassDefFoundError at the site; LambdaMetafactory exists but returns null, which is a gap
-const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.lastMessage}` : String(e); } };
+// Missing bootstrap classes fail resolution; libcore LambdaMetafactory returns null and ART wraps that CCE in BME.
+const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.bridge.toHost(w.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t))}` : String(e); } };
 const concat = outcome("concat"), lambda = outcome("lambda");
 if (concat !== "java/lang/NoClassDefFoundError: Failed resolution of: Ljava/lang/invoke/StringConcatFactory;") { console.log(`FAIL concat: ${concat}`); process.exit(1); }
-if (!lambda.startsWith("java/lang/UnsatisfiedLinkError")) { console.log(`FAIL lambda: ${lambda}`); process.exit(1); }
+if (!lambda.startsWith("java/lang/BootstrapMethodError")) { console.log(`FAIL lambda: ${lambda}`); process.exit(1); }
 process.exit(bad || blocked ? 1 : 0);
