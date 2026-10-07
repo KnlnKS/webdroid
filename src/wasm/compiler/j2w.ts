@@ -313,6 +313,8 @@ export class Compiler implements Base {
   /** the only implementation of decl.name+desc among all loaded classes, or "many": none yet is a dispatch like any other, since a class made later (a proxy
    *  class, a dex) may implement it, even for a frame that is already running */
   devirt(decl: string, name: string, desc: string): MethodInfo | "many" {
+    // Raw host helpers have no Java method owner or guarded activation to deopt.
+    if (!this.assumer) return "many";
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length !== 1) return "many";
     this.assumptions.push([decl, name, desc, t[0], this.assumer]);

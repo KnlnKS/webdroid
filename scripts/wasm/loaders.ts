@@ -22,6 +22,8 @@ import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
 import { Compiler } from "../../src/wasm/compiler/j2w";
+import { typeFailure } from "../../src/wasm/compiler/linkage";
+import type { Code } from "../../src/wasm/compiler/code";
 import { ColdSlowOps, SYMBOLIC_ANALYSIS_METHODS, SYMBOLIC_ANALYSIS_CELLS } from "../../src/wasm/cold/slowops";
 import { St } from "../../src/wasm/link/monitor";
 import { canAccess } from "../../src/wasm/link/classes";
@@ -127,6 +129,29 @@ if (!process.argv.includes("--hierarchy")) {
     const warm = { ...w.stats };
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) throw new Error("warm symbolic operation compiled again");
     console.log("symbolic accounting: stub and operation each recorded one unit, bytes and traces; warm execution unchanged");
+    const later = "fixture/HelperLater", helperBody = (cx: Compiler, c: Code) => {
+      const failure = typeFailure(cx.w.prog, `L${later};`);
+      if (failure) cx.linkError(c, failure); else c.i32(42);
+    };
+    const helper = w.hostFn("helper:late:sync", [], "I", helperBody);
+    const waitingHelper = w.callFn("helper:late:async", [], "I", helperBody);
+    const checkMissing = (error: unknown) => {
+      const value = w.throwable(error);
+      if (!value || w.classNameOf(value) !== "java/lang/NoClassDefFoundError") throw error;
+    };
+    let syncFailed = false, asyncFailed = false;
+    try { w.unwound(() => helper()); } catch (error) { checkMissing(error); syncFailed = true; }
+    const strand = w.sched.strand();
+    try { await waitingHelper(strand); } catch (error) { checkMissing(error); asyncFailed = true; } finally { strand.end(); }
+    if (!syncFailed || !asyncFailed || w.absent.get(later)?.size !== 2) throw new Error("helper dependencies lack invalidation slots");
+    w.addClass({ name: later, sup: "java/lang/Object", ifaces: [], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, new Map());
+    const resumed = w.sched.strand();
+    try {
+      if (helper() !== 42 || await waitingHelper(resumed) !== 42) throw new Error("retained helper did not recover after class arrival");
+      const units = w.stats.units;
+      if (helper() !== 42 || await waitingHelper(resumed) !== 42 || w.stats.units !== units) throw new Error("warm helper recompiled");
+    } finally { resumed.end(); }
+    console.log("helper accounting: two owned absence slots recover cached sync/strand functions after class arrival; warm calls unchanged");
     if (process.argv.includes("--memory")) {
       const analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [], seen = new WeakSet<object>();
       let probeOps: ColdSlowOps | undefined;
