@@ -1,6 +1,6 @@
-// Compile sweep: every method with code in the given jars or APKs (default: the first six boot jars, up to framework.jar, and apks/FitNotes.apk) is compiled alone by the
+// Validation sweep: every method with code in the given jars or APKs (default: the first six boot jars, up to framework.jar, and apks/FitNotes.apk) is compiled alone by the
 // Wasm compiler against the whole boot class path, and each failure is reported by cause: a gap (a construct with no translation, recorded by
-// Compiler.gap), a compiler exception, or a module V8 rejects. The exit status is non-zero when a cause outside KNOWN occurs.
+// Compiler.gap), a compiler exception, or a module the selected engine rejects. The exit status is non-zero when a cause outside KNOWN occurs.
 // Run from the repository root: bun run wasm sweep [path ...] [-v]
 import { join, resolve } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
@@ -10,10 +10,12 @@ import { Program } from "../../src/wasm/compiler/program";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { natives } from "./oracle";
 import { mid } from "../../src/wasm/compiler/ids";
-import { compileModule } from "../../src/wasm/link/module";
+import { compileModule, COMPILE_OPTIONS } from "../../src/wasm/link/module";
 import { AOSP, ROOT } from "./paths";
 
 const KNOWN = [/^native: /];
+// Validate discarded units without allocating executable code; compilation supplies rejection diagnostics.
+const validate = WebAssembly.validate as unknown as (bytes: BufferSource, options: typeof COMPILE_OPTIONS) => boolean;
 
 const verbose = process.argv.includes("-v"), args = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 // Check methods separately as well as in their AOT groups, since grouping changes inlining and imports.
@@ -40,12 +42,18 @@ for (const target of targets) {
       for (const t of new Set(cx.linkErrors)) linked.set(t, (linked.get(t) ?? 0) + 1);
       if (cx.gaps.length) for (const g of new Set(cx.gaps.map((g) => (g.startsWith(id + ": ") ? g.slice(id.length + 2) : g).replace(/\d+/g, "N")))) fail(g);
       else {
-        try { compileModule(bytes); clean++; } catch (e) { fail("invalid module: " + (e as Error).message.replace(/.*?: /, "").replace(/@\+\d+/g, "").replace(/\d+/g, "N")); }
+        try {
+          if (!validate(bytes as BufferSource, COMPILE_OPTIONS)) {
+            compileModule(bytes);
+            throw new Error("validator rejected module accepted by compiler");
+          }
+          clean++;
+        } catch (e) { fail("invalid module: " + (e as Error).message.replace(/.*?: /, "").replace(/@\+\d+/g, "").replace(/\d+/g, "N")); }
       }
     } catch (e) { fail("compiler crash: " + (e as Error).message.replace(/\d+/g, "N")); }
   }
-  console.log(`${target}: ${total} methods with code (${bodyless} without), ${clean} compile clean, ${total - clean} fail in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
-  if (linked.size) console.log(`  ${[...linked.values()].reduce((a, b) => a + b, 0)} methods throw a link error at a site, as ART does (${[...linked].map(([t, n]) => `${t} ${n}`).join(", ")}), counted as compiled`);
+  console.log(`${target}: ${total} methods with code (${bodyless} without), ${clean} validate clean, ${total - clean} fail in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+  if (linked.size) console.log(`  ${[...linked.values()].reduce((a, b) => a + b, 0)} methods throw a link error at a site, as ART does (${[...linked].map(([t, n]) => `${t} ${n}`).join(", ")}), counted as validated`);
   if (verbose) for (const msg of w.linkMessages) console.log("    link error: " + msg);
   for (const [cause, ms] of [...causes].sort((a, b) => b[1].length - a[1].length)) {
     const known = KNOWN.some((k) => k.test(cause));
