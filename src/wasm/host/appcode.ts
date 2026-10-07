@@ -4,7 +4,7 @@
 // launch's second-tier units is made either way; `start` gives it the World. The options go to the World's constructor: the saved build only attaches while the World has
 // numbered nothing since the platform build.
 import type { World, WorldOptions } from "../link/world";
-import type { Demand } from "../link/aot";
+import type { Demand, Verdict } from "../link/aot";
 import { mid } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
 import type { FetchStore } from "../link/aotstore";
@@ -79,6 +79,8 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const initial = saved?.index.demand;
   const merged = { methods: new Set(initial?.methods), classes: new Set(initial?.classes), infos: new Map(initial?.infos.map((r) => [r.join("\0"), r])) };
   const size = () => merged.methods.size + merged.classes.size + merged.infos.size;
+  const verdictMap = (verdicts: Verdict[]) => new Map(verdicts.map(([key, ...answer]) => [key, answer]));
+  let coveredVerdicts = verdictMap(initial?.verdicts ?? []), verdicts: Verdict[] = [], verdictChanges = 0;
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
   const builds: Built[] = [];
   const code: AppCode = { hit: !!saved, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
@@ -99,13 +101,21 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     }
     for (; seen.classes < d.classes.length; seen.classes++) merged.classes.add(d.classes[seen.classes]);
     for (; seen.infos < d.infos.length; seen.infos++) { const r = d.infos[seen.infos]; merged.infos.set(r.join("\0"), r); }
-    return size() - covered;
+    verdicts = world.aot?.verdictList() ?? [];
+    const now = verdictMap(verdicts);
+    verdictChanges = 0;
+    for (const [key, answer] of now) {
+      const prior = coveredVerdicts.get(key);
+      if (!prior || answer.some((v, i) => v !== prior[i])) verdictChanges++;
+    }
+    for (const key of coveredVerdicts.keys()) if (!now.has(key)) verdictChanges++;
+    return size() - covered + verdictChanges;
   }
   async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
-    if (closed || fresh(world) < min) return undefined;
-    const at = size(), built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()], verdicts: world.aot?.verdictList() }, hostClasses);
+    if (closed || fresh(world) < Math.max(1, min)) return undefined;
+    const at = size(), decisions = verdicts, built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()], verdicts: decisions }, hostClasses);
     builds.unshift(built);
-    if (built.kept) covered = at;
+    if (built.kept) { covered = at; coveredVerdicts = verdictMap(decisions); }
     return built;
   }
   async function settle(world: World): Promise<Built | undefined> {
@@ -125,9 +135,9 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
       if (building || builder.busy) { again(); return; }
       const now = fresh(world);
       // the launch has gone quiet: what it compiled since the last look is all there is for now
-      if (now >= MIN_FRESH && now === last) {
+      if ((now >= MIN_FRESH || verdictChanges > 0) && now === last) {
         building = true;
-        refine(world).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
+        refine(world, 1).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
           .finally(() => { building = false; if (++refines >= MAX_REFINES) builder.close(undefined, false); else again(); });
         return;
       }
