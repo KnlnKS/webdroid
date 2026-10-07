@@ -63,7 +63,7 @@ export function recordDefinedClass(w: World, loader: Loader, name: string, key: 
 }
 
 export function objectOfLoader(w: World, loader: Loader): object | null {
-  return loader.object ?? (loader === w.prog.root ? stateOf(w).appLoader : null);
+  return loader.object ?? (loader === w.prog.root ? states.get(w)?.appLoader ?? null : null);
 }
 
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
