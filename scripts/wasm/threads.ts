@@ -33,16 +33,30 @@ sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).f
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0, rejectAdmission = false;
+let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0, rejectAdmission = false, idleBeforeResume = false;
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (rejectAdmission) return Promise.reject(new Error("admission timer rejected")); if (admissionProbe) admissionTurns++; if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
+} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => {
+  if (rejectAdmission) return Promise.reject(new Error("admission timer rejected"));
+  if (admissionProbe) admissionTurns++;
+  if (arithmeticProbe) { turns++; return Promise.resolve(); }
+  const pending = defaultLoop.yield(soon);
+  if (idleBeforeResume) {
+    // Model another entry completing between the admission reaction and the engine's resume.
+    const then = pending.then.bind(pending);
+    pending.then = ((done: (value: void) => unknown, failed?: (error: unknown) => unknown) => then(value => {
+      const result = done(value); queueMicrotask(() => w.sched.idle()); return result;
+    }, failed)) as typeof pending.then;
+  }
+  return pending;
+} } });
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
 const ordered: (() => void)[] = [];
 let callbackOwner: typeof rt.cur | null = null;
 const TH: Record<string, HostFn> = {
+  "admissionIdentity()I": () => +!w.sched.current().root,
   "orderedWait(I)I": async (x: number) => { await new Promise<void>(resolve => { ordered[x] = resolve; }); return x; },
   "delayedCallback(I)I": async (x: number) => {
     callbackOwner = rt.cur;
@@ -127,6 +141,9 @@ if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffe
 if (substrate) {
   admissionProbe = true;
   try {
+    idleBeforeResume = true;
+    try { expect("admitted Wasm restores ownership after another completion idles", await show(() => w.entryAsync("Th", "linkAdmissionIdentity", "(I)I")(0)), 1); }
+    finally { idleBeforeResume = false; }
     w.addHostClass(nativeSource.hostSpecs!().find(spec => spec.name === "webdroid/FnRunnable")!);
     let runnableResult = 0;
     const runnable = fnRunnable(() => Promise.resolve(callbackEntry.scall("Th", "inner", "(I)I", 5)).then(value => { runnableResult = value as number; }));

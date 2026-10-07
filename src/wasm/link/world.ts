@@ -19,7 +19,7 @@ import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { Sched, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
+import { Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes";
 import { HostClasses } from "./hostclass";
@@ -41,6 +41,7 @@ import { AotRuntime, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type Ap
 import type { UnitResult, UpgradeJob } from "./unit";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
+type LinkImports = { link: number; due: number; wait: number; sync: number; state: [number, number, number] };
 type CompiledActivation = Pick<ColdSnapshot, "item" | "method" | "owner" | "sync" | "depth" | "executedPc" | "edges">;
 
 export interface WorldOptions {
@@ -492,7 +493,7 @@ export class World {
     const links = this.linkImports(mb);
     const params = d.params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, d.ret === "V" ? [] : [kindVT(b.tObj, d.ret)]);
     mb.addElemActive(0, slot, [mb.addFunc(sig, this.stubBody(slot, sig, params, links), "stub:" + name)]);
-    this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host });
+    this.instantiate(mb.build(), { rt: this.rtImports(), host: this.host });
     return slot;
   }
   /** the slot of synthetic function `name`, if it has one */
@@ -541,22 +542,32 @@ export class World {
     const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
     const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
     mb.export("f", "func", mb.addFunc(sig, this.stubBody(slot, sig, params, links), "stub"));
-    return this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports.f as Function;
+    return this.instantiate(mb.build(), { rt: this.rtImports(), host: this.host }).exports.f as Function;
   }
-  private linkImports(mb: ModuleBuilder): [number, number, number] {
+  private linkImports(mb: ModuleBuilder, state: [number, number, number] = [mb.importGlobal("rt", "sid", T.i32, true), mb.importGlobal("rt", "thr", T.anyref, true), mb.importGlobal("rt", "depth", T.i32, true)]): LinkImports {
     const sig = mb.addFuncType([T.i32], []);
-    return [mb.importFunc("host", "link", sig), mb.importFunc("host", "linkDue", mb.addFuncType([], [T.i32])), mb.importFunc("host", "linkWait", sig)];
+    return { link: mb.importFunc("host", "link", sig), due: mb.importFunc("host", "linkDue", mb.addFuncType([], [T.i32])), wait: mb.importFunc("host", "linkWait", sig), sync: mb.importFunc("host", "sync", mb.addFuncType([T.i32, T.externref, T.f64], [T.i32])), state };
   }
-  private stubBody(slot: number, sig: number, params: VT[], [link, due, wait]: [number, number, number]): number[] {
+  private stubBody(slot: number, sig: number, params: VT[], { link, due, wait, sync, state }: LinkImports): number[] {
     const c = new Code(params.length);
-    c.call(due).if_().i32(slot).call(wait).else_().i32(slot).call(link).end();
+    const saved = [c.newLocal(T.i32), c.newLocal(T.anyref), c.newLocal(T.i32)];
+    const restore = () => {
+      state.forEach((global, i) => c.lget(saved[i]).gset(global));
+      c.i32(Sync.Resume).refNull(-17).f64const(0n).call(sync).drop();
+    };
+    c.call(due).if_();
+    state.forEach((global, i) => c.gget(global).lset(saved[i]));
+    // Promise reactions may idle another strand after admission restores it, before Wasm resumes.
+    c.block().block(T.exnref).tryTable(null, [[3, 0, 0]]).i32(slot).call(wait).end().br(1).end();
+    restore(); c.throwRef(); c.end();
+    restore();
+    c.else_().i32(slot).call(link).end();
     params.forEach((_, i) => c.lget(i));
     return c.i32(slot).callIndirect(sig).finish();
   }
   private startRuntime(): void {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
-    const links = this.linkImports(mb);
     mb.export("tag", "tag", mb.addTag(b.tTagFn));
     const i32Init = (v: number) => { const o = [0x41]; sleb(v, o); return o; };
     const uleb2 = (v: number) => { const o: number[] = []; uleb(v, o); return o; };
@@ -564,9 +575,9 @@ export class World {
     mb.export("hash", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     // the Class objects by class id (grown by classOf) and the id of the running Java thread, which init words record
     mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
-    mb.export("sid", "global", mb.addGlobal(T.i32, true, i32Init(ROOT)));
-    mb.export("thr", "global", mb.addGlobal(T.anyref, true, [0xd0, 0x6e]));
-    mb.export("depth", "global", mb.addGlobal(T.i32, true, i32Init(0)));
+    const sid = mb.addGlobal(T.i32, true, i32Init(ROOT)), thr = mb.addGlobal(T.anyref, true, [0xd0, 0x6e]), depth = mb.addGlobal(T.i32, true, i32Init(0));
+    mb.export("sid", "global", sid); mb.export("thr", "global", thr); mb.export("depth", "global", depth);
+    const links = this.linkImports(mb, [sid, thr, depth]);
     mb.export("iw", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     mb.export("wait", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
