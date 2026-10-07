@@ -1352,6 +1352,12 @@ export class World {
     return resolveClass(this, loader, name, owner);
   }
   private rebindResolution(change: () => string[], undo: () => string[], reason: string): void {
+    const targets = new Map<Assumption, { target: MethodInfo; declared: MethodInfo }>();
+    for (const a of this.assumptions.values()) {
+      const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
+      const declared = this.prog.resolve(a.decl, a.name, a.desc);
+      if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
+    }
     const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {
       const at = key.indexOf("(");
       return this.prog.implFor(name, key.slice(0, at), key.slice(at));
@@ -1393,9 +1399,24 @@ export class World {
       for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();
-    for (const assumption of this.assumptions.values()) for (const slot of assumption.slots) this.invalidate(slot);
-    this.assumptions.clear();
     this.refreshLate();
+    for (const [key, a] of this.assumptions) {
+      for (const slot of a.slots) {
+        const state = this.peek(slot);
+        // Unmaterialized AOT slots and private helper owners can still hold live code.
+        if (!this.helperInvalidations.has(slot) && state && (state.k === "ensure" || !state.done)) a.slots.delete(slot);
+      }
+      if (!a.slots.size) { this.assumptions.delete(key); continue; }
+      const saved = targets.get(a), declared = this.prog.resolve(a.decl, a.name, a.desc);
+      const sameTarget = saved && saved.target === this.prog.get(a.tc)?.byKey.get(a.tk) && saved.target.key === a.tk && saved.target.desc === a.desc;
+      const samePrototype = declared && declared === saved?.declared && !declared.isStatic && declared.desc === a.desc;
+      if (sameTarget && samePrototype && this.holds(a, this.late.get(a.decl) ?? [])) {
+        delete a.stands;
+        continue;
+      }
+      for (const slot of a.slots) this.invalidate(slot);
+      this.assumptions.delete(key);
+    }
     for (const slots of this.absent.values()) for (const slot of slots) this.invalidate(slot);
     this.absent.clear();
   }
