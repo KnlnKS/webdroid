@@ -198,16 +198,16 @@ export function methodKey(dex: DexFile, methodIdx: number): MethodKey {
 }
 
 /** Resolved on first call, not when the class body is generated: a JNI_OnLoad run later may
- *  register the native. Captured entries keep the cell after resolution. */
+ *  register the native. Keep its defining frame after caching the JNI target. */
 function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const target = holder((m.flags & ACC.STATIC) !== 0);
   const cls = JSON.stringify(info.name), v = `$n${m.methodIdx}`;
   const ps = paramList(desc), arity = parseMethodDesc(desc).params.length;
-  return `let ${v};${target}.${mangled}=function(${ps}){` +
-    `if(!${v}&&!(${v}=${target}.${mangled}=R.jniFn(${cls},${JSON.stringify(name + desc)})))` +
+  return `let ${v};${target}.${mangled}=R.frameMethod(function(${ps}){` +
+    `if(!${v}&&!(${v}=R.jniFn(${cls},${JSON.stringify(name + desc)})))` +
     `throw R.ulink(${cls},${JSON.stringify(name)},${JSON.stringify(desc)});` +
-    `return ${v}.call(this${ps ? "," + ps : ""})};${target}.${xname(mangled)}=R.jf(${target}.${mangled},${arity});`;
+    `return ${v}.call(this${ps ? "," + ps : ""})},${JSON.stringify(frameName(info.name, name, m.methodIdx))});${target}.${xname(mangled)}=R.jf(${target}.${mangled},${arity});`;
 }
 
 /** A hot entry. A frame that suspends hands itself to `$R()`, the method's resumable body.
@@ -433,7 +433,7 @@ ${regions?.length === 1 && !this.hasTries ? body : `$l:for(;;){\n${body}\n}`}
 ${profileEnd}
 }`;
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "hotEmit", performance.now() - started);
-    return source;
+    return `R.frameMethod(${source})`;
   }
 
   /** One save point per method: a helper's suspension sets `$r` (0 for a back-edge yield) and `pc`

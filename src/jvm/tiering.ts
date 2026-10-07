@@ -10,7 +10,7 @@ import { jvmProfiler } from "./profile";
 import { jvmCoverage } from "./coverage";
 import { perf } from "../perf";
 import { setJava, setPublic, xname } from "./suspend";
-import { parseMethodDesc } from "./abi";
+import { frameName, parseMethodDesc } from "./abi";
 
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 export type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
@@ -106,19 +106,19 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   function resume(make = resumeSource, limit = Infinity): ResumeBody | undefined {
     if (resumable) return resumable;
     const persisted = persist ? stored(resumeKey) : undefined;
-    if (persisted) return resumable = bind(persisted) as ResumeBody;
+    if (persisted) return resumable = R.frameMethod(bind(persisted) as ResumeBody, frameName(info.name, rec.name, rec.m.methodIdx));
     const body = make();
     if (persist) recordBody(resumeKey, body, "r");
     if (owner.hotSourceBytes + body.length > limit) return undefined;
     const fn = bodyScript(resumeKey, `${label}.resume`, PARAMS, "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
     owner.hotSourceBytes += body.length;
-    return resumable = fn;
+    return resumable = R.frameMethod(fn, frameName(info.name, rec.name, rec.m.methodIdx));
   }
   const installed = (): JvmFunction => {
     const fn = target[xname(rec.mangled)];
     if (typeof fn !== "function") throw new Error("invalid compiled method");
     if (rec.intrinsic) setPublic(target, rec.mangled, rec.intrinsic, arity);
-    return fn as JvmFunction;
+    return R.frameMethod(fn as JvmFunction, frameName(info.name, rec.name, rec.m.methodIdx));
   };
   const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;

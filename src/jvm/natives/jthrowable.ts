@@ -2,9 +2,10 @@
 // their lines), and a throwable no Java frame catches: one escaping a thread, or a call no Java
 // frame waits on (detached, with an Escape policy).
 
-import { awaited, rt, JObj, type ClassInfo, type NativeSpec, driven, type Gen } from "../runtime";
+import { awaited, rt, JObj, type ClassInfo, type NativeSpec, driven, type Gen, type Runtime } from "../runtime";
 import { mangleMethod, mangleField, demangle, frameOf, jarray, dotName } from "../abi";
 import { coldStack, COLD_SOURCE, type ColdAt } from "../cold";
+import { frameOwner } from "../frames";
 import { frameSource, type FrameAt } from "../stacklines";
 import { Strand } from "../suspend";
 import { processExited } from "../../process-exit";
@@ -45,7 +46,7 @@ function captureStack(t: JThrowable): void {
   t.coldFrames = coldStack.length ? coldStack.slice(-STACK_DEPTH).map(({ method, next }) => ({ method, next })) : NO_FRAMES;
 }
 /** A trace's frame: class, method, and where it was (null for a native method's) */
-type JavaFrame = [cls: string, method: string, at: FrameAt | null];
+type JavaFrame = [cls: string, method: string, at: FrameAt | null, owner?: Runtime];
 /** The Java frames of a captured JS stack, innermost first. A compiled body's function name names
  *  its class and method (abi's frameName), each cold handler frame is the next interpreted method
  *  outward, and a class's own source ("wd/pkg/Class.js") holds its native methods' stubs. */
@@ -56,12 +57,15 @@ function javaFrames(js: string | undefined, cold: readonly ColdAt[]): JavaFrame[
     const at = /^\s*at (?:(.*) \()?(.*?)(?::(\d+):\d+)?\)?$/.exec(line);
     if (!at) continue;
     const [, fn = "", url, row] = at, compiled = frameOf(fn);
-    if (compiled) out.push([compiled[0], compiled[1], { url, line: Number(row), methodIdx: compiled[2] }]);
+    if (compiled) {
+      const owner = frameOwner(fn);
+      out.push([compiled[0], compiled[1], { url, line: Number(row), methodIdx: compiled[2], owner }, owner]);
+    }
     else if (url === COLD_SOURCE) {
       const c = cold[--k];
       if (c) {
         const name = c.method.name, dot = name.indexOf(".");
-        out.push([name.slice(0, dot), name.slice(dot + 1, name.indexOf("(", dot)), c]);
+        out.push([name.slice(0, dot), name.slice(dot + 1, name.indexOf("(", dot)), c, c.method.R]);
       }
     } else {
       const cls = /^wd\/([^.?]*)\.js$/.exec(url)?.[1];
@@ -85,7 +89,7 @@ function stackTrace(frames: JavaFrame[]): unknown[] {
     e[STE_CLASS] = dotName(cls); e[STE_METHOD] = method; e[STE_FILE] = file; e[STE_LINE] = line;
     return e;
   };
-  const out = frames.map(([cls, method, at]) => element(cls, method, frameSource(rt, cls, at)));
+  const out = frames.map(([cls, method, at, owner = rt]) => element(cls, method, frameSource(owner, cls, at)));
   if (!out.length) out.push(element("", "", ["", -1]));
   return jarray(out, "Ljava/lang/StackTraceElement;");
 }
@@ -104,16 +108,16 @@ rt.javaFrames = () => framesHere().map(([cls, method]) => dotName(cls) + "." + m
 /** Thread.getStackTrace: ART's trace names the natives that took it */
 const VM_STACK: JavaFrame = ["dalvik/system/VMStack", "getThreadStackTrace", null];
 /** the running thread's frames as its traces report them, without looking up their lines */
-const threadFrames = (): JavaFrame[] => framesHere().map(([cls, method]) => [cls, method, null]);
+const threadFrames = (): JavaFrame[] => framesHere().map(([cls, method, , owner]) => [cls, method, null, owner]);
 export function threadTrace(): unknown[] { return stackTrace([VM_STACK, ["java/lang/Thread", "getStackTrace", null], ...threadFrames()]); }
 /** VMStack.getStackClassN: the class `n` frames out from the native's caller */
-const stackClass = (n: number) => { const frame = framesHere()[n]; return frame ? rt.classFor(frame[0]) : null; };
+const stackClass = (n: number) => { const frame = framesHere()[n]; return frame ? (frame[3] ?? rt).classFor(frame[0]) : null; };
 rt.register({ name: "dalvik/system/VMStack", ctor: class extends JObj {}, methods: {
   "static getStackClass1()Ljava/lang/Class;": () => stackClass(1),
   "static getStackClass2()Ljava/lang/Class;": () => stackClass(2),
   // the defining loader of the innermost frame whose class is not the platform's
   "static getClosestUserClassLoader()Ljava/lang/ClassLoader;": () => {
-    for (const [cls] of framesHere()) if (!rt.platformClasses.has(cls) && !rt.natives.has(cls)) return (rt.link(cls).owner ?? rt).classLoader ?? null;
+    for (const [cls, , , owner = rt] of framesHere()) if (!owner.platformClasses.has(cls) && !owner.natives.has(cls)) return (owner.link(cls).owner ?? owner).classLoader ?? null;
     return null;
   },
   // another cooperative thread's frames are not on the JS stack: none, as for a thread not running

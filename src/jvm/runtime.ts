@@ -5,6 +5,7 @@
 // may suspend). Instances only exist after init, so prototype methods are always present
 // when virtual dispatch happens.
 
+import { nameFrame } from "./frames";
 import { turnElapsed, wakeSoon, yieldToLoop } from "./yield";
 import { Strand, SUSPENDED, javaFace, publicFace, setPublic, suspendWith, xname } from "./suspend";
 import { decodeString } from "./charset";
@@ -794,6 +795,8 @@ export class Runtime {
     info.state = 2;
     return info;
   }
+
+  frameMethod<F extends Function>(fn: F, name?: string): F { return nameFrame(this, fn, name); }
 
   /** returns promise only if init work needed. `from` = class whose <clinit> performs the access */
   initClass(info: ClassInfo, from?: ClassInfo): Promise<void> | null {

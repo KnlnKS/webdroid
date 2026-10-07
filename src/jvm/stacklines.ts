@@ -9,7 +9,7 @@ import { bodyAt, type Form } from "./codecache";
 import type { ColdAt } from "./cold";
 
 /** a compiled frame: the script line its JS stack line names, and the method its function name does */
-export interface CompiledAt { readonly url: string; readonly line: number; readonly methodIdx: number }
+export interface CompiledAt { readonly url: string; readonly line: number; readonly methodIdx: number; readonly owner?: Runtime }
 export type FrameAt = ColdAt | CompiledAt;
 
 /** a body's pc by line, -1 above its first instruction */
@@ -39,7 +39,7 @@ export function frameSource(R: Runtime, cls: string, at: FrameAt | null): [file:
     const { R: owner, D, codeOff } = at.method;
     return [sourceFile(owner.classes.get(cls)?.def), codeOff === undefined ? -1 : D.dex.lineAt(codeOff, at.next - 1)];
   }
-  const body = at && bodyAt(at.url, at.line), owner = body && body.methodIdx === at.methodIdx ? runtimeOfDex(body.dexId) : undefined;
+  const body = at && bodyAt(at.url, at.line), owner = at && at.owner ? at.owner : body && body.methodIdx === at.methodIdx ? runtimeOfDex(body.dexId) : undefined;
   const info = owner?.classes.get(cls);
   if (!body || !owner || !info) return [sourceFile(R.classes.get(cls)?.def), -1];
   const rec = info.lazy?.find((r) => r.m.methodIdx === body.methodIdx && r.dex.id === body.dexId);
