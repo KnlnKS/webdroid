@@ -69,7 +69,7 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
     useEntry(wasmEntry(x)); fieldNames.find = fieldNamesOf(x);
     await processStateAsync(x);
     for (const m of ["runnable", "list", "http"]) {
-      const got = String(x.entry("Hc", m, "()Ljava/lang/String;")()), want = js.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
+      const got = String(await x.entryAsync("Hc", m, "()Ljava/lang/String;")()), want = js.find((l) => l.startsWith("Hc." + m + ":"))!.slice(m.length + 8);
       if (got !== want) fail(`a World over a shared platform Program answers Hc.${m} ${got}, not ${want}`);
     }
   }

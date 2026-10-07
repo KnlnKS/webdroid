@@ -65,8 +65,8 @@ const r2 = await compare(pick(cases, true), (m) => entries.get(m)!, jdkOnly, pic
 let wideBad = 0;
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
-  const wide = world([dex, ...PLATFORM_JARS.slice(0, 2).map((j) => join(AOSP, j))], { natives });
-  const wideEntry = asyncEntries ? wide.entryAsync.bind(wide) : wide.entry.bind(wide);
+  const wide = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives });
+  const wideEntry = wide.entryAsync.bind(wide);
   while (wide.names.length < 65536) wide.idOf("reflection/reserved/" + wide.names.length);
   for (const i of wideCases) {
     const { m, args } = cases[i], call = wideEntry(m.cls, m.name, m.desc), got = await call(Number(args[0]));

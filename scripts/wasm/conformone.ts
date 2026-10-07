@@ -9,7 +9,7 @@ import { extraBootEntries } from "../../src/wasm/host/hostnatives";
 import { suspendedNatives } from "../../src/wasm/host/suspend";
 import { fieldNamesOf, hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { loadDexes, world } from "./lib";
-import { jsTier, natives, processState } from "./oracle";
+import { jsTier, natives, processStateAsync } from "./oracle";
 import { AOSP } from "./paths";
 import { vfs } from "../../src/shell/vfs";
 
@@ -29,7 +29,7 @@ if (existsSync(join(dexDir, "resources.jar"))) {
   vfs.write("/data/local/tmp/resources.jar", new Uint8Array(readFileSync(join(dexDir, "resources.jar"))));
   extraBootEntries.push("/data/local/tmp/resources.jar");
 }
-processState(w);
+await processStateAsync(w);
 console.warn = () => {};
 /** a throwable's string, its first frames and its causes, on one line */
 async function describe(t: unknown): Promise<string> {

@@ -7,7 +7,7 @@ import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { useEntry } from "../../src/jvm/natives/jentry";
 import { wasmEntry } from "../../src/wasm/host/entry";
 import { loadDexes, world } from "./lib";
-import { jsTier, natives, processState } from "./oracle";
+import { jsTier, natives, processStateAsync } from "./oracle";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
 
@@ -18,7 +18,7 @@ const dex = join(out, "classes.dex");
 await jsTier(loadDexes(dex));
 const w = world([dex, ...[0, 1, 12].map((i) => join(AOSP, PLATFORM_JARS[i]))], { natives });
 useEntry(wasmEntry(w));
-processState(w);
+await processStateAsync(w);
 const listed = await w.entryAsync("Nest", "loop", "(I)I")(3) as number;
 let failed = 0;
 for (const n of [100, 3000, 10000]) {

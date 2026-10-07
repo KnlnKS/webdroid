@@ -95,29 +95,29 @@ export async function hostCases(blocking: (cls: string, name: string, desc: stri
   await line("class", () => classNameOf(c));
   await line("instance of", () => [iof(c, "wdtest/Counter"), iof(c, "java/lang/Runnable"), iof(c, "java/util/function/IntSupplier"), iof(c, "java/lang/Object"), iof(c, STR)]);
   await line("a host method nested in another", () => vcall(c, "nested", `(${OBJ})I`, null));
-  await line("inc inc", () => [vcall(c, "inc", "()I"), vcall(c, "inc", "()I")]);
+  await line("inc inc", async () => [await vcall(c, "inc", "()I"), await vcall(c, "inc", "()I")]);
   await line("a host field", () => (c as JCounter).n);
   await line("through the alias", () => vcall(c, "getAsInt", "()I"));
-  await line("self is the receiver", () => vcall(c, "self", "()Lwdtest/Counter;") === c);
-  await line("kept is the object", () => scall("Hc", "keep", `(${OBJ})${OBJ}`, c) === c && scall("Hc", "kept", `(I)${OBJ}`, 0) === c);
-  await line("static make", () => { const m = scall("wdtest/Counter", "make", "(I)Lwdtest/Counter;", 9) as JCounter; return [m instanceof JCounter, m.n, vcall(m, "get", "()I"), m === c]; });
+  await line("self is the receiver", async () => await vcall(c, "self", "()Lwdtest/Counter;") === c);
+  await line("kept is the object", async () => await scall("Hc", "keep", `(${OBJ})${OBJ}`, c) === c && await scall("Hc", "kept", `(I)${OBJ}`, 0) === c);
+  await line("static make", async () => { const m = await scall("wdtest/Counter", "make", "(I)Lwdtest/Counter;", 9) as JCounter; return [m instanceof JCounter, m.n, await vcall(m, "get", "()I"), m === c]; });
 
   const made = new JCounter();
   made.n = 4;
-  await line("a host-made object in Java", () => [scall("Hc", "keep", `(${OBJ})${OBJ}`, made) === made, vcall(made, "inc", "()I"), made.n, classNameOf(made), iof(made, "java/lang/Runnable")]);
-  await line("both ways", () => scall("Hc", "kept", `(I)${OBJ}`, 1) === made);
-  await line("equal", () => [vcall(c, "equals", `(${OBJ})Z`, c), vcall(c, "equals", `(${OBJ})Z`, made), vcall(made, "hashCode", "()I") === vcall(made, "hashCode", "()I")]);
+  await line("a host-made object in Java", async () => [await scall("Hc", "keep", `(${OBJ})${OBJ}`, made) === made, await vcall(made, "inc", "()I"), made.n, classNameOf(made), iof(made, "java/lang/Runnable")]);
+  await line("both ways", async () => await scall("Hc", "kept", `(I)${OBJ}`, 1) === made);
+  await line("equal", async () => [await vcall(c, "equals", `(${OBJ})Z`, c), await vcall(c, "equals", `(${OBJ})Z`, made), await vcall(made, "hashCode", "()I") === await vcall(made, "hashCode", "()I")]);
 
   const sub = await scall("Hc", "newSub", `()${OBJ}`) as JCounter;
-  await line("Java-made subclass", () => [classNameOf(sub), sub instanceof JCounter, iof(sub, "wdtest/Counter"), vcall(sub, "inc", "()I"), vcall(sub, "twice", "()I"), sub.n]);
-  await line("its host object", () => scall("Hc", "keep", `(${OBJ})${OBJ}`, sub) === sub && scall("Hc", "kept", `(I)${OBJ}`, 2) === sub);
+  await line("Java-made subclass", async () => [classNameOf(sub), sub instanceof JCounter, iof(sub, "wdtest/Counter"), await vcall(sub, "inc", "()I"), await vcall(sub, "twice", "()I"), sub.n]);
+  await line("its host object", async () => await scall("Hc", "keep", `(${OBJ})${OBJ}`, sub) === sub && await scall("Hc", "kept", `(I)${OBJ}`, 2) === sub);
   await scall("Hc", "forget", "()V");
 
   const url = await newObj("java/net/URL", `(${STR})V`, "http://example.org/x");
   const conn = await newObj("Hc$Conn", "(Ljava/net/URL;)V", url) as Record<string, unknown>;
   await line("connection fields", () => [conn.method, conn.responseCode, conn.follow, conn.chunkLength, conn.fixedContentLengthLong, getDeclared(conn, "java/net/URLConnection", "connected"),
     getDeclared(conn, "java/net/HttpURLConnection", "method")]);
-  await line("a field Java writes", () => { vcall(conn, "method", `(${STR})V`, "POST"); return [conn.method, vcall(conn, "getRequestMethod", `()${STR}`)]; });
+  await line("a field Java writes", async () => { await vcall(conn, "method", `(${STR})V`, "POST"); return [conn.method, await vcall(conn, "getRequestMethod", `()${STR}`)]; });
   await line("a field the host writes", () => { conn.method = "HEAD"; return vcall(conn, "method", `()${STR}`); });
   return out;
 }
