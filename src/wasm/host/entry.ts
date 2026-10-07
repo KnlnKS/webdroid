@@ -4,7 +4,8 @@
 // strand of the thread that owns the turn, so it may wait; the result is the value at once if it did not, else a Promise, as on the JS tier. A native that a
 // Java frame called is on that frame's stack, which cannot suspend, and calls Java on it.
 import { rt, JObj } from "../../jvm/runtime";
-import { JThread, curThread, mainThread, setCurThread } from "../../jvm/natives/jentry";
+import { JThread, curThread, mainThread, resumeAs, setCurThread } from "../../jvm/natives/jentry";
+import { Strand as HostStrand } from "../../jvm/suspend";
 import { processExited, never } from "../../process-exit";
 import { mangleField } from "../../jvm/abi";
 import { JThrowable } from "../../jvm/natives/jthrowable";
@@ -31,6 +32,7 @@ export function wasmEntry(w: World): Entry {
   const { bridge, prog, sched } = w;
   const missing = (what: string): Error => rt.unimplemented(what);
   const jthreads = new WeakMap<ThreadRec, JThread>(), recs = new WeakMap<JThread, ThreadRec>();
+  const hostStrands = new WeakMap<Strand, HostStrand>(), javaStrands = new WeakMap<HostStrand, Strand>();
   const jthreadOf = (rec: ThreadRec): JThread => {
     if (rec === sched.mainRec) return mainThread;
     let t = jthreads.get(rec);
@@ -46,9 +48,20 @@ export function wasmEntry(w: World): Entry {
   };
   // what the host had as its current thread when it last entered Java from the top level, which it has again when no strand runs
   let hostCurrent = curThread;
-  sched.onThread = (rec, idle) => setCurThread(idle ? hostCurrent : jthreadOf(rec));
+  sched.onThread = (rec, idle) => {
+    if (idle) { setCurThread(hostCurrent); return; }
+    const s = sched.current();
+    let host = hostStrands.get(s);
+    if (!host) { host = new HostStrand(jthreadOf(rec)); hostStrands.set(s, host); javaStrands.set(host, s); }
+    resumeAs(host);
+  };
   /** the strand whose native is entering Java: the one running on this stack, or the one a Suspending native runs for after its first wait */
-  const nativeOf = (): Strand | null => { const s = sched.current(); return s.root ? sched.running?.root ? null : sched.running : s; };
+  const nativeOf = (): Strand | null => {
+    const s = sched.current(), running = s.root ? sched.running?.root ? null : sched.running : s;
+    if (running) return running;
+    const captured = javaStrands.get(rt.cur);
+    return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
+  };
   /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
   let entering: ThreadRec | null = null;
   const threadNow = (): ThreadRec => entering ?? nativeOf()?.thread ?? recOf(curThread);
@@ -60,7 +73,7 @@ export function wasmEntry(w: World): Entry {
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
     if (sched.current().root && !sched.running) hostCurrent = curThread;
-    const thread = threadNow(), s = sched.strand(thread, nativeOf() ?? thread.native);
+    const thread = threadNow(), s = sched.strand(thread, nativeOf());
     let r: T;
     try { r = f(s); } catch (e) { s.end(); throw e; }
     if (r instanceof Promise) void r.then(() => s.end(), () => s.end()); else s.end();

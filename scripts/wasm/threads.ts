@@ -17,6 +17,8 @@ import { rt } from "../../src/jvm/runtime";
 import { perf } from "../../src/perf";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
 import { defaultLoop } from "../../src/wasm/link/sched";
+import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
+import { resumeAs } from "../../src/jvm/natives/jentry";
 import { hasJspi } from "../../src/wasm/link/module";
 import { javaFrames } from "../../src/wasm/link/exc";
 import { AOSP, JAVA } from "./paths";
@@ -37,7 +39,17 @@ const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].m
 } satisfies NativeSource), loop: { ...defaultLoop, due: () => arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
+const ordered: (() => void)[] = [];
+let callbackOwner: typeof rt.cur | null = null;
 const TH: Record<string, HostFn> = {
+  "orderedWait(I)I": async (x: number) => { await new Promise<void>(resolve => { ordered[x] = resolve; }); return x; },
+  "delayedCallback(I)I": async (x: number) => {
+    callbackOwner = rt.cur;
+    return await rt.drive((function* () {
+      yield Promise.resolve();
+      return callbackEntry.scall("Th", "callbackLock", "(I)I", x);
+    })());
+  },
   "await(I)I": async (x: number) => { await sleep(1); return x + 1; },
   "driven(I)I": Object.assign(() => { throw new Error("the generator form runs"); }, { $g: function* (x: number) { const v: number = yield Promise.resolve(x * 3); return v + 1; } }),
   "nested(I)I": async (x: number) => (await w.entryAsync("Th", "inner", "(I)I")(x) as number) + 1,
@@ -50,6 +62,7 @@ const gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
 const js = await jsTier(loadDexes(dex));
 processState(w);
+const callbackEntry = wasmEntry(w);
 
 let bad = 0, checks = 0;
 const timed = <T,>(p: Promise<T>, ms = Number(process.env.J2W_TIMEOUT ?? 60000)): Promise<T> => Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms} ms`)), ms).unref())]);
@@ -58,6 +71,22 @@ const expect = (what: string, got: unknown, want: unknown) => { checks++; if (St
 
 // ---------- the Java cases against the JDK and the JS tier
 const only = process.argv[2]?.split(","), substrate = !only || only.includes("substrate");
+if (substrate || only?.includes("nativeCallback")) {
+  expect("native callback after a wait reenters its caller's monitor", await show(() => callbackEntry.scall("Th", "callbackOwner", "(I)I", 41)), "42");
+  expect("settled native callback releases its strand", w.sched.strands.filter(Boolean).length, 1);
+  const previous = rt.cur;
+  resumeAs(callbackOwner!);
+  try { expect("a callback token of an ended native is not reused", onNestedStrand(w, s => s.parent), null); }
+  finally { resumeAs(previous); }
+  for (const order of [[0, 1], [1, 0]]) {
+    const waits = [w.entryAsync("Th", "orderedWait", "(I)I")(0), w.entryAsync("Th", "orderedWait", "(I)I")(1)];
+    expect("unrelated host entry does not borrow a waiting native", onNestedStrand(w, s => s.parent), null);
+    ordered[order[0]](); await waits[order[0]];
+    expect("first settlement keeps the second native live", w.sched.strands.filter(Boolean).length, 2);
+    ordered[order[1]](); await waits[order[1]];
+    expect("settlement does not restore an ended native", onNestedStrand(w, s => s.parent), null);
+  }
+}
 if (!only || only.includes("loopTrace")) {
   const m = { ...w.prog.resolve("Th", "loopTrace", "(I)I")!, cls: "legal/Owner#loop", name: "method#loop", key: "method#loop(I)I" };
   const name = "legal/Owner#loop.method#loop(I)I", traces = new Map([[name, { name, m, offsets: new Int32Array([16, 32]), pcs: new Int32Array([0, 8500]) }]]);
