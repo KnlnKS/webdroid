@@ -63,17 +63,22 @@ export function wasmEntry(w: World): Entry {
     return captured && !captured.root && sched.strands[captured.id] === captured ? captured : null;
   };
   /** the thread whose turn callOn is running; else the thread of the native that enters Java, else the main thread */
-  let entering: ThreadRec | null = null;
+  let entering: ThreadRec | null = null, enteringParent: Strand | null = null;
   const threadNow = (): ThreadRec => entering ?? nativeOf()?.thread ?? recOf(curThread);
-  const asThread = <T>(rec: ThreadRec, f: () => T): T => {
-    const was = entering, prev = curThread;
-    entering = rec; setCurThread(jthreadOf(rec));
-    try { return f(); } finally { entering = was; setCurThread(prev); }
+  // A thread switch cannot inherit a different thread's native monitor ancestry.
+  const parentOf = (rec: ThreadRec): Strand | null => {
+    const parent = entering ? enteringParent : nativeOf();
+    return parent?.thread === rec ? parent : null;
+  };
+  const asThread = <T>(rec: ThreadRec, f: () => T, parent = parentOf(rec)): T => {
+    const was = entering, wasParent = enteringParent, prev = curThread;
+    entering = rec; enteringParent = parent; setCurThread(jthreadOf(rec));
+    try { return f(); } finally { entering = was; enteringParent = wasParent; setCurThread(prev); }
   };
   /** `f` on a new strand of the turn's thread, holding what the strand of the native that enters Java holds; the strand ends with the call */
   const onStrand = <T>(f: (s: Strand) => T): T => {
     if (sched.current().root && !sched.running) hostCurrent = curThread;
-    const thread = threadNow(), s = sched.strand(thread, nativeOf());
+    const thread = threadNow(), s = sched.strand(thread, parentOf(thread));
     // A JNI guest slice can own a host strand while the Wasm globals are idle.
     const caller = rt.cur;
     let r: T;
@@ -92,7 +97,11 @@ export function wasmEntry(w: World): Entry {
       return r instanceof Promise ? r.catch((e) => { throw fail(e); }) as T : r;
     } catch (e) { throw fail(e); }
   };
-  const chain = <A, B>(r: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => r instanceof Promise ? r.then(f) : f(r);
+  const chain = <A, B>(r: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => {
+    if (!(r instanceof Promise)) return f(r);
+    const rec = threadNow(), parent = parentOf(rec);
+    return r.then(v => asThread(rec, () => f(v), parent));
+  };
   /** Java method `m` with host arguments */
   const invoke = (m: MethodInfo, recv: object | null, args: unknown[]): unknown => onStrand((s) => bridge.invokeOn(s, m, recv, args));
   /** a call made of `body` */
@@ -204,7 +213,7 @@ export function wasmEntry(w: World): Entry {
     },
     classNameOf,
     callOn: (thread, run) => processExited() ? never() as never : asThread(recOf(thread), run),
-    after: (r, f) => { if (!(r instanceof Promise)) return f(r); const rec = threadNow(); return r.then((v) => asThread(rec, () => f(v))); },
+    after: chain,
   };
 }
 

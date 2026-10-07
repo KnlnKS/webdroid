@@ -4,9 +4,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { fieldNames, rt } from "../../src/jvm/runtime";
-import { jsEntry, useEntry } from "../../src/jvm/natives/jentry";
+import { JThread, jsEntry, resumeAs, useEntry } from "../../src/jvm/natives/jentry";
 import { perf } from "../../src/perf";
-import { fieldNamesOf, wasmEntry } from "../../src/wasm/host/entry";
+import { fieldNamesOf, runningThread, wasmEntry } from "../../src/wasm/host/entry";
 import { loadDexes, world } from "./lib";
 import { jsTier, natives } from "./oracle";
 import { AOSP } from "./paths";
@@ -20,7 +20,8 @@ const js = await entryCases();
 
 const w = world([dex, ...jars], { natives }), gaps: string[] = [];
 w.onGap = (id) => gaps.push(w.gapList[id]);
-useEntry(wasmEntry(w));
+const entry = wasmEntry(w);
+useEntry(entry);
 fieldNames.find = fieldNamesOf(w);
 const missesBefore = perf.wasmFacadeMisses;
 const wasm = await entryCases();
@@ -32,6 +33,65 @@ let failed = 0;
 js.forEach((want, i) => { if (wasm[i] !== want) { failed++; console.log(`FAIL wasm: ${want.split(":")[0]}\n  js    ${want}\n  wasm  ${wasm[i]}`); } });
 if (wasm.length !== js.length) { failed++; console.log(`FAIL wasm: ${wasm.length} answers for ${js.length}`); }
 if (!counted) { failed++; console.log("FAIL a read no field backs is not counted in perf and the missing entries"); }
+// An allocation may wait before newObj enters its constructor. Another completion owns the
+// host turn then; the constructor still belongs to the allocating caller, including a non-main caller.
+const ownerFailures = failed;
+const origin = Object.assign(new JThread(), { jname: "allocation-origin" });
+const background = Object.assign(new JThread(), { jname: "interposed-background" });
+const expected = await entry.callOn(origin, () => entry.scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"));
+await entry.callOn(origin, () => entry.initClass("E$Owner"));
+await entry.callOn(origin, () => entry.newObj("E$Owner"));
+const immediate = w.synchronous(() => entry.callOn(origin, () => entry.newObj("E$Owner")));
+if (immediate instanceof Promise) { failed++; console.log("FAIL warm synchronous constructor became asynchronous"); }
+const immediateObject = await immediate;
+if (await entry.callOn(origin, () => entry.vcall(immediateObject, "owner", "()Ljava/lang/Thread;")) !== expected) { failed++; console.log("FAIL synchronous constructor caller"); }
+const originalCall = w.callFn;
+try {
+  w.callFn = (key, ...a) => {
+    const f = originalCall.call(w, key, ...a);
+    return key !== "e:new:E$Owner" ? f : (s, ...args) => Promise.resolve(f(s, ...args)).then(value => {
+      w.sched.idle(); resumeAs(background.root); return value;
+    });
+  };
+  const delayed = await entry.callOn(origin, () => entry.newObj("E$Owner"));
+  if (await entry.callOn(origin, () => entry.vcall(delayed, "owner", "()Ljava/lang/Thread;")) !== expected) { failed++; console.log("FAIL asynchronous constructor lost allocating caller"); }
+} finally { w.callFn = originalCall; }
+console.log(failed === ownerFailures ? "3/3 constructor ownership checks pass" : "FAIL constructor ownership checks");
+const parentFailures = failed;
+const originRec = entry.callOn(origin, () => runningThread(w)), backgroundRec = entry.callOn(background, () => runningThread(w));
+await entry.callOn(background, () => entry.scall("java/lang/Thread", "currentThread", "()Ljava/lang/Thread;"));
+const parent = w.sched.strand(originRec), interposed = w.sched.strand(backgroundRec), globals = w.rtImports();
+const lock = w.bridge.toJava(facade, "LE;") as object;
+const activate = (s: typeof parent) => {
+  globals.sid.value = s.id; globals.thr.value = s.thread.obj; globals.depth.value = 0;
+  w.sched.running = s; w.sched.onThread?.(s.thread, false);
+};
+let constructorParent: typeof parent | null = null;
+const originalInvoke = w.bridge.invokeOn;
+try {
+  w.sched.monitors.tryEnter(lock, parent);
+  w.bridge.invokeOn = function (s, m, ...a) {
+    if (m.cls === "E$Owner" && m.name === "<init>") constructorParent = s.parent;
+    return originalInvoke.call(this, s, m, ...a);
+  };
+  w.callFn = (key, ...a) => {
+    const f = originalCall.call(w, key, ...a);
+    return key !== "e:new:E$Owner" ? f : (s, ...args) => Promise.resolve(f(s, ...args)).then(value => { activate(interposed); return value; });
+  };
+  for (const reentry of [true, false]) {
+    activate(reentry ? parent : interposed);
+    const construct = () => entry.newObj("E$Owner", "(Ljava/lang/Object;)V", facade);
+    const object = await (reentry ? construct() : entry.callOn(origin, construct));
+    const keptParent = constructorParent === (reentry ? parent : null);
+    w.sched.idle();
+    const held = await entry.callOn(origin, () => entry.vcall(object, "held", "()Z"));
+    if (!keptParent || !!held !== reentry) { failed++; console.log(`FAIL constructor ${reentry ? "reentry" : "thread switch"} parent/monitor ownership`); }
+  }
+} finally {
+  w.callFn = originalCall; w.bridge.invokeOn = originalInvoke;
+  w.sched.monitors.exit(lock, parent); parent.end(); interposed.end(); w.sched.idle();
+}
+console.log(failed === parentFailures ? "2/2 constructor parent/monitor contexts pass" : "FAIL constructor parent/monitor contexts");
 if (gaps.length) { failed++; console.log(`FAIL gaps hit: ${[...new Set(gaps)].join("; ")}`); }
 // what the process on the Wasm tier is compared with, and the values of the natives the JS tier settled for it (it has no JS tier to settle them)
 writeFileSync(process.env.WASM_ENTRY_OUT!, JSON.stringify({ js, settled: [...settled] }));

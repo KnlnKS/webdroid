@@ -9,6 +9,15 @@ public class E {
     public static String NAME = "entry";
     public static E INSTANCE = new E(11);
 
+    public static class Owner {
+        public final Thread thread = Thread.currentThread();
+        public final boolean held;
+        public Owner() { this(null); }
+        public Owner(Object lock) { held = lock != null && Thread.holdsLock(lock); }
+        public Thread owner() { return thread; }
+        public boolean held() { return held; }
+    }
+
     public static class Err extends RuntimeException {
         public Err(String m, Throwable cause) { super(m, cause); }
     }
