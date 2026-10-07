@@ -185,14 +185,14 @@ for(const mutate of [(s:typeof state)=>{s.result!.pc=otherCall.pc;s.executedPc=o
   expect("shared resume validation leaves destination intact",bad.bits[destination],state.bits[destination]);
 }
 for(const opcode of [0xfe,0xff]) {
-  const unsupported={regs:1,ins:0,tries:[],insns:new Uint16Array([opcode,0,0x000e])};
-  const dex=new Proxy(method.dex,{get(target,key){return key==="code"?()=>unsupported:Reflect.get(target,key);}});
-  expect("unsupported constant preflight",supportsColdBody({...method,dex}),false);
+  const supported={regs:1,ins:0,tries:[],insns:new Uint16Array([opcode,0,0x000e])};
+  const dex=new Proxy(method.dex,{get(target,key){return key==="code"?()=>supported:Reflect.get(target,key);}});
+  expect("method constant preflight",supportsColdBody({...method,dex}),true);
 }
 {
   let reads=0;
   const supported={regs:1,ins:0,tries:[],insns:new Uint16Array([0x000e])};
-  const unsupported={...supported,insns:new Uint16Array([0xfe,0,0x000e])};
+  const unsupported={...supported,insns:new Uint16Array([0xe3,0,0x000e])};
   const dex=new Proxy(method.dex,{get(target,key){return key==="code"?(off:number)=>{reads++;return off===1?supported:unsupported}:Reflect.get(target,key);}});
   const candidate={...method,dex,codeOff:1};
   expect("eligibility checks original body",supportsColdBody(candidate),true);

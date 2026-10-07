@@ -4,6 +4,9 @@ import java.lang.reflect.Method;
 /** MethodHandle call sites: invoke-polymorphic on MethodHandle.invoke and invokeExact over handles of each direct kind. */
 public class Mh {
   int f = 7; static int sf = 3; long lf = 5; String s = "str";
+  final int readOnly = 23;
+  static int initializations;
+  static class Dormant { static int f = ++initializations; }
   static int add(int a, int b) { return a + b; }
   static long wide(long a, double d, int i) { return a + (long) d + i; }
   static float flt(float a, boolean z, char c, byte b, short s) { return z ? a + c + b + s : -a; }
@@ -38,4 +41,51 @@ public class Mh {
   /** a combinator: its handle is a transformer, which needs ART's EmulatedStackFrame (link/mhandles.ts) */
   public static int tBind(int a) throws Throwable { return (int) L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).bindTo(new Mh()).invokeExact(a); }
   public static int tType(int a) throws Throwable { return L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).type().parameterCount() + a; }
+  public static int tConstStatic(int a) throws Throwable { return (int) Mc.hStatic().invokeExact(a, 4); }
+  public static int tConstVirtual(int a) throws Throwable { return (int) Mc.hVirtual().invokeExact((Mh) new Mc(), a); }
+  public static int tConstInterface(int a) throws Throwable { return ((String) Mc.hInterface().invoke((Ig) new Pq(a, "name"))).length(); }
+  public static int tConstDirect(int a) throws Throwable { return (int) Mc.hDirect().invokeExact(new Mc(), a); }
+  public static int tConstSuper(int a) throws Throwable { return (int) Mc.hSuper().invoke(new Mc(), a); }
+  public static int tConstConstructor(int a) throws Throwable { return ((Mh) Mc.hConstructor().invokeExact()).f + a; }
+  public static int tConstString(int a) throws Throwable { return ((String) Mc.hStringConstructor().invokeExact(new char[]{'a', 'b'})).length() + a; }
+  public static int tConstClone(int a) throws Throwable {
+    int[] source = {a}; int[] copy = (int[]) (Object) Mc.hClone().invokeExact(source);
+    copy[0]++; return copy != source && source[0] == a ? copy[0] : -999;
+  }
+  public static int tConstFields(int a) throws Throwable {
+    Mh m = new Mh(); Mc.hPut().invokeExact(m, a); Mc.hStaticPut().invokeExact(a + 2);
+    return (int) Mc.hGet().invokeExact(m) + (int) Mc.hStaticGet().invokeExact();
+  }
+  public static int tConstType(int a) {
+    MethodType t = Mc.type();
+    return (t == Mc.type() && t.parameterCount() == 3 && t.parameterType(0) == String[].class && t.parameterType(1) == long.class
+      && t.parameterType(2) == double.class && t.returnType() == Object.class ? 100 : -100) + a;
+  }
+  public static int tConstErrors(int a) {
+    int errors = 0;
+    try { Mc.hDenied(); } catch (IllegalAccessError e) { errors++; }
+    try { Mc.hMissing(); } catch (NoSuchMethodError e) { errors += 2; }
+    try { Mc.hWrongKind(); } catch (IncompatibleClassChangeError e) { errors += 4; }
+    try { Mc.missingType(); } catch (NoClassDefFoundError e) { errors += 8; }
+    try { Mc.hMissingField(); } catch (NoSuchFieldError e) { errors += 16; }
+    try { Mc.hFinalPut(); } catch (IllegalAccessError e) { errors += 32; }
+    try { Mc.hMissingConstructor(); } catch (NoSuchMethodError e) { errors += 64; }
+    return errors + a;
+  }
+  public static int tConstNoInit(int a) {
+    Mc.dormantType(); Mc.hDormant(); return initializations + a;
+  }
+  static int waiting(int a, Thread thread, Object lock) throws InterruptedException {
+    if (Thread.currentThread() != thread || !Thread.holdsLock(lock)) return -999;
+    Thread.sleep(1);
+    if (a < 0) throw new IllegalStateException();
+    return a + 1;
+  }
+  public static int tConstWait(int a) throws Throwable {
+    Object lock = Mh.class;
+    synchronized (lock) {
+      try { return (int) Mc.hWait().invokeExact(a, Thread.currentThread(), lock); }
+      catch (IllegalStateException e) { return -777; }
+    }
+  }
 }

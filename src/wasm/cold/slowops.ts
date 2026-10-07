@@ -47,7 +47,8 @@ export class ColdSlowOps {
   constructor(private readonly w: World) {}
 
   static supports(ins: PreparedInstruction): boolean {
-    return /^(move-result|move-exception|invoke-|iget|sget|iput|sput|aget|aput|monitor-|fill-array-data|throw|const-string|const-class|new-instance|new-array|filled-new-array|check-cast|array-length|instance-of|(?:div|rem)-(?:int|long|float|double))/.test(ins.name);
+    if (ins.name.endsWith("-quick")) return false;
+    return /^(move-result|move-exception|invoke-|iget|sget|iput|sput|aget|aput|monitor-|fill-array-data|throw|const-string|const-class|const-method-|new-instance|new-array|filled-new-array|check-cast|array-length|instance-of|(?:div|rem)-(?:int|long|float|double))/.test(ins.name);
   }
 
   private analysis(m: MethodInfo): Analysis {
@@ -76,7 +77,7 @@ export class ColdSlowOps {
     if (/^(iget|sget)/.test(n)) return kindOf(m.dex.type(m.dex.field(n.startsWith("iget") ? ins.c : ins.b).type));
     if (n.startsWith("aget")) return n === "aget-object" ? "L" : n === "aget-wide" ? "J" : "I";
     if (/^(iput|sput|aput|monitor-|fill-array-data|throw)/.test(n)) return "V";
-    if (/^(const-string|const-class|new-instance|new-array|filled-new-array|check-cast)/.test(n)) {
+    if (/^(const-string|const-class|const-method-|new-instance|new-array|filled-new-array|check-cast)/.test(n)) {
       return "L";
     }
     if (n === "array-length" || n === "instance-of") return "I";

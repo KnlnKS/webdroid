@@ -53,7 +53,7 @@ function interfaces(w: World, name: string): string[] {
 }
 /** Reflection's access rule for a member of `decl` with `flags` used by class `caller`: the class must be public or in the caller's package, then the member public,
  *  the caller's own, in the caller's package, or protected and inherited */
-function canAccess(caller: string, decl: JClass, flags: number, w: World): boolean {
+export function canAccess(caller: string, decl: JClass, flags: number, w: World): boolean {
   const pkg = (n: string) => n.slice(0, n.lastIndexOf("/") + 1), samePackage = pkg(caller) === pkg(decl.name);
   if (!(decl.flags & ACC.PUBLIC) && !samePackage) return false;
   if (flags & ACC.PUBLIC || caller === decl.name) return true;

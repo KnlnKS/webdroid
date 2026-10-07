@@ -10,6 +10,7 @@ import { mid } from "./ids";
 import { constClass, emitStoreCheck } from "../link/classes";
 import { emitPolymorphic } from "./poly";
 import { emitCustom } from "./custom";
+import { emitHandleConstant, emitTypeConstant } from "../link/mhandles";
 import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure } from "./linkage";
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
@@ -868,8 +869,8 @@ export class MC {
       case "const-wide/high16": this.constWide(BigInt(b) << 48n); return;
       case "const-class": if (this.unresolved(dex.type(b))) return; constClass(cx, c, descToName(dex.type(b))); this.set("L"); return;
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
-      case "const-method-handle": case "const-method-type":
-        cx.gap(c, `${mid(this.m)}: ${ins.name}`); return;
+      case "const-method-handle": emitHandleConstant(this, b); return;
+      case "const-method-type": emitTypeConstant(this, b); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); this.monitor(ins.name === "monitor-enter"); return;
       case "check-cast": {
         if (this.unresolved(dex.type(b))) return;

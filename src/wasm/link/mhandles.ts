@@ -6,8 +6,8 @@
 // bindTo, filterArguments, asType of a different shape) runs Java code over ART's EmulatedStackFrame, which this does not model: that is a gap.
 import { OP } from "../compiler/code";
 import { T } from "../compiler/wasmbin";
-import { javaName, kindOf } from "../compiler/program";
-import { isWide, descToName } from "../../jvm/abi";
+import { ACC, javaName, kindOf, type Program } from "../compiler/program";
+import { isWide, descToName, parseMethodDesc } from "../../jvm/abi";
 import { hostReflect, RInfo, BOX } from "./reflect";
 import { prettyType } from "../compiler/linkage";
 import { WIDEN } from "../compiler/fields";
@@ -16,8 +16,97 @@ import type { Compiler } from "../compiler/j2w";
 import type { World } from "./world";
 import type { MC } from "../compiler/method";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
+import { canAccess, constClass, typeName } from "./classes";
+import { failed, resolveFieldRef, resolveInvoke } from "../compiler/linkage";
+import { emitSave } from "./sched";
+import type { Kind } from "../compiler/program";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
+
+function handleKinds(prog: Program): Record<string, number> {
+  const jc = prog.require(MH), fields = jc.fields.filter(f => f.isStatic), kinds: Record<string, number> = {};
+  jc.dex!.encodedArray(jc.def!.staticValuesOff).forEach((v, i) => { if (fields[i]) kinds[fields[i].name] = v as number; });
+  return kinds;
+}
+
+/** ART resolves the signature without initializing its classes; libcore interns MethodType. */
+function emitType(mc: MC, ret: string, params: string[], returnFirst = true): boolean {
+  const resolutionOrder = returnFirst ? [ret, ...params] : [...params, ret];
+  if (resolutionOrder.some(d => mc.unresolved(d))) return false;
+  const { cx, code: c } = mc, arr = c.newLocal(T.anyref);
+  cx.emitEnsure(c, MT);
+  cx.emitNewArray(c, `[L${CLASS};`, () => c.i32(params.length)); c.lset(arr);
+  params.forEach((d, i) => {
+    c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i);
+    constClass(cx, c, typeName(d)); c.arraySet(cx.tData.ref);
+  });
+  constClass(cx, c, typeName(ret)); c.lget(arr);
+  cx.callMethod(c, cx.prog.resolve(MT, "methodType", `(L${CLASS};[L${CLASS};)L${MT};`)!);
+  return true;
+}
+
+export function emitTypeConstant(mc: MC, index: number): void {
+  const p = mc.dex.proto(index);
+  if (emitType(mc, mc.dex.type(p.ret), p.params.map(t => mc.dex.type(t)))) mc.set("L");
+}
+
+/** const-method-handle uses the referring loader, member access checks and ART's direct handle kinds. */
+export function emitHandleConstant(mc: MC, index: number): void {
+  const { cx, code: c, dex } = mc, prog = cx.prog, h = dex.methodHandle(index), K = handleKinds(prog);
+  const error = (cls: string, message: string) => {
+    const local = c.newLocal(T.anyref);
+    cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.ltee(local); cx.str.literal(c, message);
+    cx.callMethod(c, prog.resolve(cls, "<init>", "(Ljava/lang/String;)V")!); c.lget(local).throw_(cx.tag);
+  };
+  const access = (owner: string, flags: number, member: string): boolean => {
+    const allowed = canAccess(mc.m.cls, prog.require(owner), flags, cx.w);
+    if (!allowed) error("java/lang/IllegalAccessError", `${javaName(mc.m.cls)} cannot access ${javaName(owner)}.${member}`);
+    return allowed;
+  };
+  let kind: number, art: bigint, ret: string, params: string[];
+  if (h.type <= 3) {
+    const stat = h.type <= 1, put = h.type === 0 || h.type === 2, r = resolveFieldRef(prog, dex, h.idx, stat, mc.m.cls);
+    if (failed(r)) { mc.linkFail(r); return; }
+    const f = r.f;
+    if (!access(f.owner, f.flags, f.name)) return;
+    if (put && f.flags & ACC.FINAL) { error("java/lang/IllegalAccessError", `Cannot write final field ${javaName(f.owner)}.${f.name}`); return; }
+    kind = stat ? put ? K.SPUT : K.SGET : put ? K.IPUT : K.IGET;
+    art = BigInt(cx.idOf(f.owner) * 4096 + prog.require(f.owner).fields.indexOf(f));
+    ret = put ? "V" : f.desc; params = [...stat ? [] : [`L${f.owner};`], ...put ? [f.desc] : []];
+  } else {
+    const mr = dex.method(h.idx), cls = descToName(dex.type(mr.cls)), desc = dex.methodDesc(h.idx);
+    let invoke = h.type === 4 ? "invoke-static" : h.type === 8 ? "invoke-interface" : h.type === 6 ? "invoke-direct" : "invoke-virtual";
+    if (h.type === 7) {
+      const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, mc.m.cls);
+      if (failed(target)) { mc.linkFail(target); return; }
+      invoke = target.flags & ACC.PRIVATE ? "invoke-direct" : "invoke-super";
+    }
+    const m = resolveInvoke(prog, invoke, cls, mr.name, desc, mc.m.cls);
+    if (failed(m)) { mc.linkFail(m); return; }
+    if (h.type === 6 && (m.cls !== cls || !m.isCtor)) {
+      mc.linkFail({ thrower: "nsme", message: `No constructor ${mr.name}${desc} in class ${javaName(cls)}` }); return;
+    }
+    if (!access(m.cls, m.flags, m.name)) return;
+    if (m.name === "<clinit>") { error("java/lang/ClassFormatError", "Method handles can't target class initializer method"); return; }
+    if (h.type === 6) {
+      if (!emitType(mc, m.ret, m.params, false)) return;
+      const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
+      c.lset(type); cx.emitEnsure(c, L); cx.emitNew(c, L); c.ltee(lookup); constClass(cx, c, mc.m.cls); c.i32(15);
+      cx.callMethod(c, prog.resolve(L, "<init>", `(L${CLASS};I)V`)!);
+      c.lget(lookup); constClass(cx, c, cls); c.lget(type);
+      cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); mc.set("L"); return;
+    }
+    kind = invoke === "invoke-static" ? K.INVOKE_STATIC : invoke === "invoke-interface" ? K.INVOKE_INTERFACE
+      : invoke === "invoke-direct" ? K.INVOKE_DIRECT : invoke === "invoke-super" ? K.INVOKE_SUPER : K.INVOKE_VIRTUAL;
+    art = BigInt(cx.idOf(m.cls)) << 16n | BigInt(prog.require(m.cls).methods.indexOf(m));
+    const sig = parseMethodDesc(desc);
+    ret = sig.ret; params = [...m.isStatic ? [] : [descOfName(cls)], ...sig.params];
+  }
+  if (!emitType(mc, ret, params, false)) return;
+  const type = c.newLocal(T.anyref), handle = c.newLocal(T.anyref), impl = MH + "Impl";
+  c.lset(type); cx.emitEnsure(c, impl); cx.emitNew(c, impl); c.ltee(handle).i64(art).i32(kind).lget(type);
+  cx.callMethod(c, prog.resolve(impl, "<init>", `(JIL${MT};)V`)!); c.lget(handle); mc.set("L");
+}
 
 /** pushes the wrapper of the primitive `desc` on the stack (valueOf) */
 function box(cx: Compiler, c: Code, desc: string): void {
@@ -45,7 +134,10 @@ export function emitHandleCall(mc: MC, ins: Ins, exact: boolean): void {
     if (BOX[p]) box(cx, c, p);
     c.arraySet(data);
   });
-  c.lget(handle).externConvertAny().lget(arr).externConvertAny().gget(cx.stringConst(`(${params.join("")})${ret}`)).i32(exact ? 1 : 0).call(cx.imp.mhInvoke).anyConvertExtern();
+  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
+  c.lget(handle).externConvertAny().lget(arr).externConvertAny().gget(cx.stringConst(`(${params.join("")})${ret}`)).i32(exact ? 1 : 0).call(cx.imp.mhInvoke);
+  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait); c.end().anyConvertExtern(); restore();
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
@@ -62,8 +154,7 @@ const states = new WeakMap<World, State>();
 function state(w: World): State {
   let s = states.get(w);
   if (s) return s;
-  const jc = w.prog.get(MH)!, sf = jc.fields.filter((f) => f.isStatic), kinds: Record<string, number> = {};
-  jc.dex!.encodedArray(jc.def!.staticValuesOff).forEach((v, i) => { if (sf[i]) kinds[sf[i].name] = v as number; });
+  const kinds = handleKinds(w.prog);
   s = {
     kinds,
     handleKind: w.fieldReader<number>(MH, "handleKind", "I"), art: w.fieldReader<bigint>(MH, "artFieldOrMethod", "J"), typeOf: w.fieldReader<object>(MH, "type", `L${MT};`),
@@ -83,7 +174,20 @@ const descOfName = (n: string) => n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n
 const wrapperOf = (d: string) => BOX[d][0];
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
-export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number): object | null {
+/** A Java target may suspend. Preserve the calling thread and monitor ownership on a nested strand. */
+function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void): (...args: (object | null)[]) => unknown {
+  return (...args) => {
+    const parent = w.sched.current();
+    if (parent.root) return w.unwound(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }))(...args));
+    const s = w.sched.strand(parent.thread, parent);
+    let result: unknown;
+    try { result = w.callFn(name, params, ret, body)(s, ...args); } catch (e) { s.end(); throw e; }
+    if (result instanceof Promise) return result.finally(() => s.end());
+    s.end(); return result;
+  };
+}
+
+export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number): object | null | Promise<object | null> {
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw w.exception(w.makeThrowable(cls, msg)); };
   const site = /^\((.*)\)(.*)$/.exec(siteId)!, sp = parseDescs(site[1]), sr = site[2];
@@ -106,22 +210,44 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
     return v === null || isInstance(w, to, v) ? v : fail("java/lang/ClassCastException", `Cannot cast ${javaName(nameOfObj(w, v)).replace(/\//g, ".")} to ${prettyType(to)}`);
   };
   const given = Array.from({ length: sp.length }, (_, i) => convert(s.aget(args, i), sp[i], np[i]));
-  const out = (v: object | null) => convert(v, nr, sr);
+  const out = (v: unknown): object | null | Promise<object | null> => v instanceof Promise ? v.then(r => convert(r, nr, sr)) : convert(v as object | null, nr, sr);
   const call = (info: RInfo, cid: number, idx: number, recv: object | null, rest: (object | null)[]) => {
     const list = s.newArray(rest.length);
     rest.forEach((v, i) => s.aset(list, i, v));
-    return (w.table.get(hostReflect(w, info, cid, idx)) as Function)(recv, list) as object | null;
+    const m = w.prog.require(w.nameOf(cid)).methods[idx];
+    if (m.isCtor && m.cls === "java/lang/String") {
+      return handleThunk(w, `mh:string:${m.desc}`, ["L"], "L", (cx, c, arg) => {
+        m.params.forEach((p, i) => {
+          arg(0); c.refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i).arrayGet(cx.tData.ref);
+          if (BOX[p]) unbox(cx, c, p);
+        });
+        const factory = cx.str.factory(m.desc);
+        if (factory === undefined) cx.gap(c, `String constructor ${m.desc}`); else c.call(factory);
+      })(list);
+    }
+    const slot = hostReflect(w, info, cid, idx);
+    return handleThunk(w, `mh:call:${info}:${cid}:${idx}`, ["L", "L"], "L", (cx, c, arg) => {
+      arg(0); arg(1); c.i32(slot).callIndirect(cx.sig(["L", "L"], "L"));
+    })(recv, list);
   };
+  // libcore's constructor transformer has one direct constructor target; the existing reflection thunk allocates and invokes it.
+  if (w.classNameOf(mh!) === "java/lang/invoke/Transformers$Construct") {
+    const target = w.fieldReader<object>("java/lang/invoke/Transformers$Construct", "constructorHandle", `L${MH};`)(mh!);
+    const ctor = s.art(target), cid = Number(ctor >> 16n), idx = Number(ctor & 0xffffn), cls = w.prog.require(w.nameOf(cid));
+    if (cls.flags & ACC.ABSTRACT) fail("java/lang/InstantiationException", `Can't instantiate ${cls.isInterface ? "interface" : "abstract class"} ${javaName(cls.name)}`);
+    return out(call(RInfo.MethodCallDirect, cid, idx, null, given));
+  }
   switch (kind) {
     case K.INVOKE_STATIC: return out(call(RInfo.MethodCall, Number(art >> 16n), Number(art & 0xffffn), null, given));
     case K.INVOKE_VIRTUAL: case K.INVOKE_INTERFACE:
       return out(call(RInfo.MethodCall, Number(art >> 16n), Number(art & 0xffffn), given[0], given.slice(1)));
     case K.INVOKE_DIRECT: case K.INVOKE_SUPER:
-      return out(call(RInfo.MethodCallDirect, Number(art >> 16n), Number(art & 0xffffn), given[0], given.slice(1)));
+      return out(call(RInfo.MethodCallDirect, Number(art >> 16n), Number(art & 0xffffn), given[0],
+        w.prog.require(w.nameOf(Number(art >> 16n))).methods[Number(art & 0xffffn)].isCtor ? given : given.slice(1)));
     case K.IGET: case K.SGET: case K.IPUT: case K.SPUT: {
       const id = Number(art), put = kind === K.IPUT || kind === K.SPUT, stat = kind === K.SGET || kind === K.SPUT;
       const r = fieldAccess(w, id, put, stat)(...(stat ? given : given.slice(0, put ? 2 : 1)));
-      return out(put ? null : r);
+      return out(put ? r instanceof Promise ? r.then(() => null) : null : r);
     }
   }
   w.onGap(w.gapId(`MethodHandle.${exact ? "invokeExact" : "invoke"} of a transformer handle (kind ${kind}): needs EmulatedStackFrame`));
@@ -149,20 +275,20 @@ function primConv(w: World, from: string, to: string): (v: object | null) => obj
 }
 
 /** the generated accessor of field `id` (class id << 12 | index) on boxed values: get(obj?) answers the boxed value, put(obj?, value) stores it */
-function fieldAccess(w: World, id: number, put: boolean, stat: boolean): (...a: (object | null)[]) => object | null {
+function fieldAccess(w: World, id: number, put: boolean, stat: boolean): (...a: (object | null)[]) => unknown {
   const jc = w.prog.get(w.nameOf(id >>> 12))!, f = jc.fields[id & 0xfff];
-  return w.hostFn(`mh:${put ? "put" : "get"}:${id}`, [...stat ? [] : ["L" as const], ...put ? ["L" as const] : []], put ? "V" : "L", (cx, c) => {
+  return handleThunk(w, `mh:${put ? "put" : "get"}:${id}`, [...stat ? [] : ["L" as const], ...put ? ["L" as const] : []], put ? "V" : "L", (cx, c, arg) => {
     const st = cx.structFor(jc.name), at = stat ? -1 : cx.fieldIndex(jc.name, f), value = stat ? 0 : 1;
     if (stat) cx.emitEnsure(c, jc.name);
-    else { c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); }
-    const target = () => { c.lget(0).refCast(st); };
+    else { arg(0); c.refIsNull().if_(); cx.callThrower(c, "npe"); c.end(); }
+    const target = () => { arg(0); c.refCast(st); };
     if (!put) {
       if (stat) c.gget(cx.staticGlobal(jc.name, f.name, f.desc)); else { target(); c.structGet(st, at); }
       if (BOX[f.desc]) box(cx, c, f.desc);
       return;
     }
     if (!stat) target();
-    c.lget(value);
+    arg(value);
     if (BOX[f.desc]) unbox(cx, c, f.desc);
     if (stat) c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); else c.structSet(st, at);
   }) as never;

@@ -214,7 +214,11 @@ export class World {
       annotationWait: suspending(() => null),
       proxy: (name: unknown, interfaces: object, loader: object | null, methods: object, exceptions: object) => this.javaValue(generateProxy(this, this.hostString(name) as string, interfaces, loader, methods, exceptions)),
       net: (op: number, node: unknown, a: number, b: number) => opts.net ? opts.net(this, op, this.hostString(node) as string, a, b) : ASYNC,
-      mhInvoke: (mh: object, args: object, site: string, exact: number) => this.javaValue(mhInvoke(this, mh, args, site, exact)),
+      mhInvoke: (mh: object, args: object, site: string, exact: number) => {
+        const value = mhInvoke(this, mh, args, site, exact);
+        if (!(value instanceof Promise)) return this.javaValue(value);
+        this.sched.parkNative(value.then(v => this.javaValue(v))); return null;
+      },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
