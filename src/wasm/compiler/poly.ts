@@ -2,7 +2,7 @@
 // Exact accessor types use guarded storage operations; conversions and views use the canonical Java bridge.
 import { OP } from "./code";
 import { T, refNull, type VT } from "./wasmbin";
-import { kindOf, type Kind } from "./program";
+import { ACC, kindOf, type Kind } from "./program";
 import { elemKindOf } from "./consts";
 import { descToName, isWide, varHandleValues } from "../../jvm/abi";
 import { emitStoreCheck, classMethod, constClass, typeName, Info } from "../link/classes";
@@ -78,8 +78,17 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
   sameClass("varType", variable); sameClass("coordinateType0", coords[0]); sameClass("coordinateType1", coords[1]);
   c.ltee(match).if_();
   const accessMode = `${VH}$AccessMode`;
-  c.lget(handle); cx.emitEnsure(c, accessMode); cx.str.literal(c, mode);
-  cx.callMethod(c, cx.prog.resolve(accessMode, "valueFromMethodName", `(Ljava/lang/String;)L${accessMode};`)!);
+  const owner = cx.prog.lookup(cx.prog.boot, accessMode);
+  const name = mode.replace(/[A-Z]/g, letter => "_" + letter).toUpperCase();
+  const field = owner && cx.prog.get(owner)?.fields.find(f => f.name === name && f.desc === `L${owner};`
+    && f.isStatic && (f.flags & (ACC.PUBLIC | ACC.FINAL | ACC.ENUM)) === (ACC.PUBLIC | ACC.FINAL | ACC.ENUM));
+  c.lget(handle);
+  if (field) {
+    cx.emitEnsure(c, field.owner); c.gget(cx.staticGlobal(field.owner, field.name, field.desc));
+  } else {
+    cx.emitEnsure(c, accessMode); cx.str.literal(c, mode);
+    cx.callMethod(c, cx.prog.resolve(accessMode, "valueFromMethodName", `(Ljava/lang/String;)L${accessMode};`)!);
+  }
   cx.callMethod(c, cx.prog.resolve(VH, "isAccessModeSupported", `(L${accessMode};)Z`)!);
   c.lset(match).end();
   c.lget(match).if_();
