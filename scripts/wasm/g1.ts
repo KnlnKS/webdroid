@@ -1,6 +1,6 @@
-// G1 timing: every jbench workload the Wasm tier already reproduces, first call and steady state, Wasm against the production JS tier,
+// G1 timing: all selected Bench and G1 workloads, first call and steady state, Wasm against the production JS tier,
 // in node and in headless Chrome (so Liftoff and TurboFan tiering are both represented). A workload is a `case` of scripts/jbench/Bench.java;
-// new ones join as soon as their Wasm result matches the JS tier's. Every measurement is a fresh engine; runs interleave JS and Wasm.
+// all selected workloads are attempted and failures retained. Every measurement is a fresh process/context; runs interleave JS and Wasm.
 //   bun g1.ts [workload ...] [--reps 100] [--runs 5] [--engines node,chrome] [--json out.json] [--ref earlier.json] [--v8-flags "--flag ..."] [--installed DIR [--inline]]
 // --ref takes the JS tier's numbers (and which workloads match) from an earlier --json run and measures only Wasm, for A/B work on the compiler.
 // --installed DIR runs the Wasm tier as a launch of the installed app (g1app.ts made DIR over the platform build in WEBDROID_AOT): its saved build attached, the host's classes, and in
@@ -245,5 +245,5 @@ if (guardFailures.length) {
 }
 const peak = Math.max(...loads), noisy = peak > 2;
 report.loads = loads;
-console.log(`\nload average (1 min) at each pass: ${loads.map((l) => l.toFixed(1)).join(" ")} on ${cpus().length} cores${noisy ? "  *** NOISY: other agents were running; indicative only ***" : ""}`);
+console.log(`\nload average (1 min) at each pass: ${loads.map((l) => l.toFixed(1)).join(" ")} on ${cpus().length} cores${noisy ? "  *** Elevated load average; idle provenance unverified ***" : ""}`);
 if (jsonOut) writeFileSync(jsonOut, JSON.stringify(report, null, 1));
