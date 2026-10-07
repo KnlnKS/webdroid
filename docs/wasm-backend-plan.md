@@ -13,7 +13,15 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
-### Current recovery checkpoint (2026-10-07, production `a83afdb5`)
+### Current recovery checkpoint (2026-10-07, production `87facb0e`)
+
+JNI virtual/nonvirtual calls now preserve valid abstract declarations and raise AbstractMethodError at invocation; 24 real JDK/guest JNI compiled/cold comparisons pass. Full typecheck passes. The unchanged unit repeat passes 1,207 tests/79,592 assertions; two browser syntax failures in the initial full invocation remain unexplained and retained. Fresh ordinary `1445f5d2a547c5df` and guarded `33af20a7d731b8d5` assets match source `3d597a9a95aa930a82d9ecc90f27410c268230d240bc872dd5ae93641d442859`. The all-19 broad run, cold-slow, OSR and both framework exercises pass on preceding source `aa2f7267a896`; current-source broad/application/conformance coverage remains required.
+
+All 74 G1 workloads complete on both engines with 149,480 validated calls and zero errors/omissions. Primary-ten JS/Wasm means are Node first 1.849/steady 0.633 and Chrome first 0.281/steady 0.571: G1 fails. The exclusive diagnostic window has no competing agent CPU, but continuous CPU-owner utilization was not recorded; load provenance remains provisional. Default G4 shapes reach their measured references within 100 ms; cold irreducible's reference is unstable and correlated engine-tier traces are absent. G4 remains open. Commands/hashes/raw measurements: `/tmp/webdroid-final-gates-87fac/handoff.json`.
+
+Same-source JavaScript Doodle passes all six checkpoints. Bounded Wasm captures prove a two-monitor wait cycle between main and a distinct JNI Java Thread after a working title. The pending callback and unchanged bytecode supply an opposite-lock-order candidate; direct field equality, main inner call and actual JS Thread comparison remain required. A separate unchanged-DEX control confirms that conflicting concrete defaults incorrectly execute an ancestor body in Wasm. Its JDK virtual/interface errors differ, so Android call-site error selection remains under investigation. No gate or default-tier switch follows.
+
+### Preceding recovery checkpoint (2026-10-07, production `a83afdb5`)
 
 Format 9 retains matching flat/shared platform layouts. Ordinary defaults now use canonical maximal declarations on both tiers; an abstract redeclaration suppresses inherited defaults and fails at the call site. The unchanged binary-evolution control passes 22 compiled/cold/root/separate-loader cases. Host-entry continuations retain the allocating caller's Thread and same-thread native ancestry across waits, while explicit thread switches retain independent monitor ownership. Full typecheck, 1,207 unit tests/79,592 assertions and 48 Wasm/40 JS positive default controls pass. These focused checks do not replace the complete integrated execution matrix.
 
@@ -42,10 +50,10 @@ Recovered from `1d7fdeea` after the session crash. The gate definitions in secti
 
 | Gate | Recovered evidence and work still required |
 |---|---|
-| G1 | Open. The merged WP-A shared-host measurements meet the steady-state bars, but Chrome first calls remain slower. Verify the follow-up changes and repeat on an idle host after correctness stabilizes. |
+| G1 | Open; current primary protocol fails. All 74 workloads complete correctly; primary-ten steady means are Node 0.633x/Chrome 0.571x, with Chrome first 0.281x. Attribute warm crossings and compile/tier-up costs before a corrected idle repeat. |
 | G2 | Open for final acceptance. Differential suites and `fwtest` (31/31) pass. The TestNG runner now recovers 6,123 previously skipped executions; the affected classes pass 8,065 cases without skips. The nine-suite serial recovery cut now reports 410,872 raw passes, 597 failure records and zero skips, with zero unexplained differences; the final integrated source/browser gate remains open (section 6). A compile sweep checks translation, not execution of every method. |
 | G3 | Open. The stated bar is 30% less cold-call compile time and every gated tap at most 150 ms. Record matching cold/warm compile counters for every named app; launch parity is also required by S4/S6. X1's launch timings alone do not settle the compile-time criterion. |
-| G4 | Open for final acceptance. The merged WP-A shared-host measurements reach the optimized reference in 22–23 ms for all three loop shapes. Repeat against frozen integrated source on an idle host, including cold promotion/reentry and correctness coverage. |
+| G4 | Open. Current default shapes reach the measured reference in 21–47 ms and two cold shapes in 20–26 ms. Cold irreducible has an unstable reference/no established speed window; correlated engine-tier proof remains required. |
 | G5 | Open. The string representation comparison is measured; the required boundary share below 5% of a heavy tap has not been demonstrated. |
 | G6 | Not implemented. X1 records a measured decision to pursue module-loading reductions instead of a heap image; this is a design decision, not a successful image-loader measurement. |
 | G7 | Measured for Chrome and the WebKit build. Firefox is excluded by the user's instruction. |

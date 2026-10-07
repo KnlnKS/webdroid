@@ -25,3 +25,5 @@ semantics, live-heap pressure and completed rendering. Record the result here be
 changing the object model. The user's ordering puts the conditional linear-memory
 stage and optional extensions after the main stages and gates; this decision does
 not start that work.
+
+The 2026-10-07 primary-protocol repeat on production `87facb0e` completes all 74 workloads correctly but fails G1: primary-ten steady means are 0.633x in Node and 0.571x in Chrome; Chrome first-call mean is 0.281x. Source/assets are guarded, while continuous CPU-owner utilization is absent. These measurements supersede the earlier steady-state optimism for this source. They do not attribute the losses to the GC heap. Measure actual symbolic/host crossings, native field and boxing paths, and compile/tier-up work before changing the object model. Raw commands/results and qualification are in `/tmp/webdroid-final-gates-87fac/handoff.json`.
