@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { AotStore } from "../../src/wasm/link/aot";
-import { DEOPT_ABI, sameMarks } from "../../src/wasm/link/aot";
+import { APP_VERSION, VERSION, DEOPT_ABI, packModule, sameMarks } from "../../src/wasm/link/aot";
 import { Program } from "../../src/wasm/compiler/program";
 import { World, type WorldOptions } from "../../src/wasm/link/world";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
@@ -164,6 +164,10 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
     check("it forgot the selector it numbered", worker.selectors.has("pst.extra()V"), false);
     check("and has the page's", sameMarks(worker.numbering(), page.numbering()), true);
     const next = page.upgradeJob(slot)!, again = uc.upgrade(next);
+    if (typeof again !== "string") {
+      check("a worker unit without a stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: undefined } }, page.epoch), false);
+      check("a worker unit with the previous stub format is rejected", page.adoptUnit(slot, next, { ...again, header: { ...again.header, version: VERSION - 1 } }, page.epoch), false);
+    }
     check("a unit made then is taken", typeof again !== "string" && page.adoptUnit(slot, next, again, page.epoch), true);
   }
 }
@@ -263,6 +267,14 @@ if (saved) {
   wrongPolicy.set("index.json", new TextEncoder().encode(JSON.stringify({ ...index, deopt: index.deopt ? 0 : DEOPT_ABI })));
   check("saved module policy must match its index", await SavedBuild.open(wrongPolicy), undefined);
   check("app activation policy differs from platform", world(app, { app: { index: { ...index, deopt: index.deopt ? 0 : DEOPT_ABI }, store } }).appAttached, false);
+  const oldIndex = { ...index, version: APP_VERSION - 1 }, oldSaved = new Map(savedFiles!);
+  oldSaved.set("index.json", new TextEncoder().encode(JSON.stringify(oldIndex)));
+  check("previous app index is rejected by persistence", await SavedBuild.open(oldSaved), undefined);
+  check("previous app index is rejected before attachment", world(app, { app: { index: oldIndex, store } }).appAttached, false);
+  const oldData = new Map(savedFiles!);
+  const dataName = [...oldData.keys()].find(name => /^e\d+\.wasm$/.test(name))!;
+  oldData.set(dataName, packModule({ version: VERSION - 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0)));
+  check("previous data stub format is rejected by persistence", await SavedBuild.open(oldData), undefined);
   const plain = world(app);
   answers(plain);
   const w = world(app, { app: { index, store } });

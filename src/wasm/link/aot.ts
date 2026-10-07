@@ -59,9 +59,10 @@ export interface AotIndex {
   cOf: number[];
 }
 /** what a module says about itself, in its custom section "aot" */
-export interface DHeader { classes: number[]; touch: number[]; synth: string[] }
+export interface DHeader { version?: number; classes: number[]; touch: number[]; synth: string[] }
 /** what compiled code relies on and needs before it runs: the same for a precompiled module and for a unit a worker compiled */
 export interface UnitHeader {
+  version?: number;
   deopt?: number;
   /** the classes (ids) and runtime functions its code names a table slot of, which need their stubs */
   touch: number[]; synth: string[];
@@ -83,7 +84,8 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-export const VERSION = 5;
+/** Slot-aware linkDue imports; earlier data/app/worker units must not install their zero-argument stubs. */
+export const VERSION = 6;
 
 /** the sizes of what a World numbers, which only grow */
 export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
@@ -94,7 +96,7 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 5;
+export const APP_VERSION = 6;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[]; verdicts?: Verdict[] }
 /** whether a decision of the platform build (`decl.name+desc` resolves to `tc`'s `tk`) stands over the app's classes, as a launch found it */
@@ -130,7 +132,7 @@ export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHead
     const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
     if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
   }
-  return { deopt: cx.deopt ? DEOPT_ABI : 0, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
+  return { version: VERSION, deopt: cx.deopt ? DEOPT_ABI : 0, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
     natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), assumptions, allocs: [...cx.allocs],
     missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]), gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)) };
 }
@@ -158,7 +160,7 @@ export function packModule(header: object, wasm: Uint8Array, traces?: { slot: nu
     uleb(slot, t); uleb(body.length, t);
     for (const x of body) t.push(x);
   }
-  const parts = [wasm, ...section("aot", new TextEncoder().encode(JSON.stringify(header))), ...(traces ? section("aottrace", Uint8Array.from(t)) : [])];
+  const parts = [wasm, ...section("aot", new TextEncoder().encode(JSON.stringify({ version: VERSION, ...header }))), ...(traces ? section("aottrace", Uint8Array.from(t)) : [])];
   const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
   let at = 0;
   for (const x of parts) { out.set(x, at); at += x.length; }
@@ -362,6 +364,7 @@ export class AotRuntime {
     const w = this.w, mod = this.module(file);
     if (!mod) return undefined;
     const head = header<DHeader>(mod);
+    if (head.version !== VERSION) return undefined;
     ex = memo[g] = w.instantiate(mod, { rt: w.rtImports(), host: w.host }).exports;
     w.stats.aot.d++;
     // the classes the vtables and `ensure` functions of the group name must have stubs before anything runs
@@ -383,7 +386,7 @@ export class AotRuntime {
     this.synthState[k] = LOADING;
     if (!mod) { this.synthState[k] = DEAD; return false; }
     const head = header<SHeader>(mod);
-    if ((head.deopt ?? 0) !== this.deopt) { this.synthState[k] = DEAD; return false; }
+    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt) { this.synthState[k] = DEAD; return false; }
     if (!head.natives.every((id) => w.nativeBound(id))) { this.synthState[k] = DEAD; return false; }
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
@@ -453,7 +456,7 @@ export class AotRuntime {
     // Byte stores are already local. Only asynchronously compiled modules need a delivery wait.
     if (ArrayBuffer.isView(mod)) return [];
     const head = header<CHeader>(mod);
-    if ((head.deopt ?? 0) !== this.deopt || !head.natives.every(id => this.w.nativeBound(id)) || head.mods.some(m => this.fallbackD.has(+m.slice(1)))) return [];
+    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt || !head.natives.every(id => this.w.nativeBound(id)) || head.mods.some(m => this.fallbackD.has(+m.slice(1)))) return [];
     return head.mods.map(m => `d${m.slice(1)}.wasm`).filter(f => !this.store!.get(f));
   }
   needsPreparation(slot: number): boolean {
@@ -471,11 +474,12 @@ export class AotRuntime {
     if (!files.length) return;
     const store = this.store!;
     this.prepared.add(c);
+    const deadline = performance.now() + PREPARATION_MS;
     let timer: ReturnType<typeof setTimeout>;
     const bound = new Promise<void>(done => { timer = setTimeout(done, PREPARATION_MS); });
     const delivery = (async () => {
       await store.prefetch!(files);
-      if (this.store !== store || this.preparationModule(slot) !== c) return;
+      if (performance.now() >= deadline || this.store !== store || this.preparationModule(slot) !== c) return;
       const data = this.preparationFiles(c).filter(f => f.startsWith("d"));
       if (data.length) await store.prefetch!(data);
     })();
@@ -492,10 +496,10 @@ export class AotRuntime {
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
-    const w = this.w, app = c >= this.appFrom, file = app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`, retry = this.missed.has(file), mod = this.module(file);
+    const w = this.w, app = c >= this.appFrom, file = app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`, mod = this.module(file);
     if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
-    if ((head.deopt ?? 0) !== this.deopt) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
     // a store that lacks a D module) its methods are compiled on demand
     if (!head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
@@ -504,7 +508,7 @@ export class AotRuntime {
     let dataReady = true;
     for (const m of head.mods) if (!this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
     if (!dataReady) return false;
-    if (retry && !head.mods.every(m => !!this.loadD(+m.slice(1)))) return false;
+    if (!head.mods.every(m => !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);

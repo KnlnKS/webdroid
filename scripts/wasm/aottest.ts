@@ -128,11 +128,12 @@ const modules = /^[cd]\d+\.wasm$/;
   const held = new Set<string>(), delivered = new Map<string, WebAssembly.Module>();
   const requests: string[][] = [];
   let mode: "deliver" | "missing" | "fail" | "stall" = "deliver";
+  let finishLate = () => {};
   const store: AotStore = {
     get: f => delivered.get(f) ?? (held.has(f) ? undefined : fileOf(f)),
     prefetch: files => {
       requests.push(files);
-      if (mode === "stall") return new Promise(() => {});
+      if (mode === "stall") return new Promise<void>(done => { finishLate = () => { for (const f of files) delivered.set(f, compileModule(fileOf(f))); done(); }; });
       if (mode === "missing") return Promise.resolve();
       if (mode === "fail") return Promise.reject(new Error("delivery failed"));
       return Promise.resolve().then(() => { for (const f of files) delivered.set(f, compileModule(fileOf(f))); });
@@ -188,11 +189,14 @@ const modules = /^[cd]\d+\.wasm$/;
   check("failed delivery falls back", failed.aot!.install(slot), false);
   check("failed delivery Java result", failed.entry("Aot", "plain", "()I")(), 0);
   delivered.clear(); requests.length = 0; mode = "stall";
+  held.add(dataFile);
   const stalled = make();
   await stalled.aot!.prepare(slot);
   check("stalled delivery returns to fallback", stalled.aot!.install(slot), false);
   check("expired preparation does not wait again", stalled.aot!.prepare(slot), undefined);
-  check("stalled delivery only requested demanded code", requests.flat().join(), cfile);
+  finishLate(); await Promise.resolve(); await Promise.resolve();
+  check("late completion does not start data delivery after deadline", requests.flat().join(), cfile);
+  check("late completion publishes no globals", stalled.stats.classes, 0);
 }
 // Late code is reusable only against the original data globals; late data must never replace fallback globals.
 {
@@ -237,6 +241,14 @@ const modules = /^[cd]\d+\.wasm$/;
   check("late policy rejection stays terminal", w.aot!.install(slot), false);
   const stale = new TextEncoder().encode(JSON.stringify({ ...index, version: VERSION + 1 }));
   check("unsupported AOT index version rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? stale : fileOf(f) } }).aot, false);
+  const previous = new TextEncoder().encode(JSON.stringify({ ...index, version: VERSION - 1 }));
+  check("previous zero-argument stub index rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? previous : fileOf(f) } }).aot, false);
+  const legacyD = packModule({ version: VERSION - 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
+  const oldData = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^d\d+\.wasm$/.test(f) ? legacyD : fileOf(f) } });
+  const oldSlot = oldData.slotOf(oldData.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!);
+  check("previous D stub format cannot authorize C", oldData.aot!.install(oldSlot), false);
+  check("previous D stub format instantiates no original globals", oldData.stats.aot.d, 0);
+  check("previous D stub format uses ordinary Java fallback", oldData.entry("Aot", "plain", "()I")(), 0);
   const foreign = new TextEncoder().encode(JSON.stringify({ ...index, dexes: index.dexes.map(() => "foreign-platform") }));
   check("foreign platform index rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? foreign : fileOf(f) } }).aot, false);
 }

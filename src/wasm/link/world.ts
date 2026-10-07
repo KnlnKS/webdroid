@@ -39,7 +39,7 @@ import { mid, methodOf } from "../compiler/ids";
 import { unresolvedClass } from "../compiler/linkage";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
-import { AotRuntime, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
+import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
@@ -1041,7 +1041,7 @@ export class World {
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const s = this.slotAt(slot), head = result.header, clock = this.unitClock();
     this.release(slot);
-    if ((head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
+    if (head.version !== VERSION || (head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
     const n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
     for (const id of head.touch) this.link(this.names[id]);

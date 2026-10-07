@@ -1,7 +1,7 @@
 // Compiled app code persisted across launches (the Wasm tier's counterpart of src/jvm/codecache.ts): the files of an app build (link/apps.ts) in OPFS, or in Cache Storage where
 // OPFS is not available, under a key made of the app's dex files and the platform build. Loaded before the launch; a key whose platform build or dex files changed finds nothing and
 // the old entry is evicted when space is needed. The store is bounded: an entry larger than `entry` is not kept, and the least recently used entries go when the total passes `total`.
-import { APP_VERSION, DEOPT_ABI, type AotStore, type AppIndex, type UnitHeader } from "../link/aot";
+import { APP_VERSION, VERSION, DEOPT_ABI, type AotStore, type AppIndex, type UnitHeader } from "../link/aot";
 import { compileBytes } from "../link/module";
 import type { DexFile } from "../../jvm/dex";
 import { COMPILED_CODE_DIR } from "../../shell/hostfs";
@@ -85,10 +85,11 @@ export class SavedBuild implements AotStore {
       build = new SavedBuild(index);
       await Promise.all([...files].filter(([name]) => name.endsWith(".wasm")).map(async ([name, bytes]) => {
         const mod = await compileBytes(bytes);
-        if (/^[as]\d+\.wasm$/.test(name)) {
-          const section = WebAssembly.Module.customSections(mod, "aot")[0];
-          if (!section || (JSON.parse(new TextDecoder().decode(section)) as UnitHeader).deopt !== index.deopt) throw new Error("saved activation policy mismatch");
-        }
+        const section = WebAssembly.Module.customSections(mod, "aot")[0];
+        if (!section) throw new Error("saved module header missing");
+        const header = JSON.parse(new TextDecoder().decode(section)) as UnitHeader;
+        if (header.version !== VERSION) throw new Error("saved module format mismatch");
+        if (/^[as]\d+\.wasm$/.test(name) && header.deopt !== index.deopt) throw new Error("saved activation policy mismatch");
         build.modules.set(name, mod);
       }));
     } catch { return undefined; }
