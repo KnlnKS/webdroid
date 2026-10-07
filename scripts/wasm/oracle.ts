@@ -47,6 +47,9 @@ export function processState(w: World): void {
 
 /** AOT imports keep their emitted suspension ABI even after ICU values settle. */
 export async function processStateAsync(w: World): Promise<void> {
+  // Zygote preloads VMClassLoader before FileSystems. Its lazy resource jars otherwise
+  // re-enter FileSystems while the default provider is still being constructed.
+  await w.entryAsync("java/lang/VMClassLoader", "getBootClassPathEntries", "()[Ljava/lang/String;")();
   await w.entryAsync("dalvik/system/CloseGuard", "setEnabled", "(Z)V")(0);
   await w.entryAsync("java/lang/System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")("java.io.tmpdir", "/data/local/tmp");
 }
