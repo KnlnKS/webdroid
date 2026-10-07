@@ -68,6 +68,10 @@ export class MC {
   /** Loops and dispatch cycles run in functions of their own, re-entered every chunk of iterations, so a long activation reaches the engine's optimized code (G4).
    *  The second tier runs code that has already been hot: its loops stay in the method, unless the first tier saw one run 64 chunks in one entry (World.longLoops). */
   private outlining: boolean;
+  /** The first tier starts a loop in the method and moves it to its chunks at a fuel tick (and the loops around it at their next iteration): a short loop then costs neither
+   *  the state of an activation nor the engine's compiling of two more functions */
+  private deferred: boolean;
+  private armedLocal = -1;
   private chunk?: { code: Code; label: string; count: number; entry: number; exits: { pc: number; block: number; final: boolean }[]; locals: number[]; f: number; dispatch: number; cycle?: number[] };
   private cycleChunks = new Map<number[], NonNullable<MC["chunk"]>>();
   /** the state field in which the dispatchers count the iterations the activation's chunks ran, toward its fuel (the chunks themselves only count to CHUNK) */
@@ -95,6 +99,7 @@ export class MC {
     }
     this.tries = this.item.tries.length > 0;
     this.outlining = cx.counting || !!resume || cx.w.longLoops.has(mid(m));
+    this.deferred = cx.counting && !resume;
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
@@ -241,6 +246,8 @@ export class MC {
       if (!this.tries) this.excLocal = c.newLocal(T.anyref);
     }
     if (this.resume || this.deopt || hasLoops || this.planDepth()) this.weights.push(...cx.emitEnter(c, this.entryDepth = c.newLocal(T.i32)));
+    // a deferred loop's iterations count toward the method's budget when it returns
+    if (hasLoops && this.deferred) this.fuelLocal = c.newLocal(T.i32);
     if (this.deopt) {
       // Resume rejects uninitialized aliases; only this activation's String operations can block later handoff.
       this.stringAliases = this.prepared.instructions.some(ins => ins.name === "new-instance" ? descToName(this.dex.type(ins.b)) === "java/lang/String" : ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && descToName(this.dex.type(this.dex.method(ins.b).cls)) === "java/lang/String");
@@ -304,7 +311,7 @@ export class MC {
       if (t <= b.pc) this.waiting.add(t);
     }
   }
-  private fuel() { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32))); }
+  private fuel(tick?: () => void) { this.cx.emitFuel(this.code, this.fuelLocal >= 0 ? this.fuelLocal : (this.fuelLocal = this.code.newLocal(T.i32)), tick); }
   /** where the frame's weight (exc.ts MAX_DEPTH) goes in the code, known once the locals are */
   private weights: number[] = [];
   private leave() { if (this.entryDepth >= 0) this.cx.emitLeave(this.code, this.entryDepth, false); }
@@ -332,7 +339,7 @@ export class MC {
       d.lget(0).call(ch.f).lset(status);
       // the activation's fuel: the iterations of every chunk it ran
       d.lget(0).structGet(this.stateType, this.chunkFuel).lget(0).structGet(this.stateType, ch.count).raw(OP.i32_add).ltee(fuel).i32(FUEL).raw(OP.i32_ge_u).if_();
-      this.cx.callRt(d, "yieldFuel"); d.i32(0).lset(fuel).end();
+      this.cx.callRt(d, "yieldNow"); d.i32(0).lset(fuel).end();
       d.lget(0).lget(fuel).structSet(this.stateType, this.chunkFuel);
       d.lget(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
       d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end();
@@ -425,11 +432,17 @@ export class MC {
   push(l: string) { this.nest.push(l); }
   pop() { this.nest.pop(); }
   depth(label: string): number { const i = this.nest.lastIndexOf(label); if (i < 0) throw new Error("no label " + label); return this.nest.length - 1 - i; }
-  blk(label: string, loop: boolean, bt: VT | null = null) {
+  blk(label: string, loop: boolean, bt: VT | null = null, deferred?: { nested: boolean }) {
     this.push(label);
     if (!loop) { this.code.block(bt); return; }
     this.code.loop(bt);
-    if (label[0] === "L") {
+    if (deferred) {
+      const c = this.code, armed = this.armedLocal >= 0 ? this.armedLocal : (this.armedLocal = this.root.newLocal(T.i32));
+      if (deferred.nested) c.lget(armed).brIf(this.depth("$xfer" + label));
+      this.push("if");
+      this.fuel(() => c.i32(1).lset(armed).br(this.depth("$xfer" + label)));
+      this.pop();
+    } else if (label[0] === "L") {
       if (this.chunk?.label === label) {
         const ch = this.chunk, c = this.code;
         c.lget(ch.count).i32(CHUNK).raw(OP.i32_eq).if_(); this.push("if");
@@ -526,7 +539,8 @@ export class MC {
         if (s.loop && this.outlining) {
           let last = next + 1;
           while (last < scopes.length && scopes[last].open < s.close) last++;
-          this.outline(r, s, scopes.slice(next + 1, last));
+          if (this.deferred && !this.chunk) this.deferLoop(r, s, scopes.slice(next + 1, last));
+          else this.outline(r, s, scopes.slice(next + 1, last));
           next = last; p = s.close; outlined = true;
           break;
         }
@@ -536,6 +550,18 @@ export class MC {
       if (p < end) this.emitBlock(r.order[p]);
       p++;
     }
+  }
+  /** the loop in the method, left for its chunks at a fuel tick or once a loop inside it was */
+  private deferLoop(r: Flow["regions"][number], scope: Flow["regions"][number]["scopes"][number], scopes: Flow["regions"][number]["scopes"]) {
+    const c = this.code, after = "$after" + scope.label;
+    this.push(after); c.block();
+    this.push("$xfer" + scope.label); c.block();
+    this.blk(scope.label, true, null, { nested: scopes.some((s) => s.loop) });
+    this.emitSpan(r, scope.open, scope.close, scopes);
+    this.endBlk(); c.br(this.depth(after));
+    this.pop(); c.end();
+    this.outline(r, scope, scopes);
+    this.pop(); c.end();
   }
   private chunkReturn(status: number): void {
     this.code.i32(status).br(this.depth("$chunkReturn"));
@@ -611,7 +637,10 @@ export class MC {
     if (this.chunk) {
       if (this.resultLocal >= 0) this.code.lset(this.resultLocal);
       this.chunkReturn(2);
-    } else { this.leave(); this.code.ret(); }
+    } else {
+      if (this.deferred && this.fuelLocal >= 0) this.cx.emitCount(this.code, this.m, this.fuelLocal);
+      this.leave(); this.code.ret();
+    }
   }
   private captureOrder?: { ordered: { local: number; type: VT }[]; indices: Map<number, number> };
   private captureLayout() {

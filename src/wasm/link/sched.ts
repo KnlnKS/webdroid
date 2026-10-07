@@ -82,7 +82,6 @@ rt("yieldNow", [], "V", (cx, c) => {
   emitBlock(cx, c, Block.Yield); c.drop();
   c.end().end().end();
 }, true);
-rt("yieldFuel", [], "V", (cx, c) => { cx.callRt(c, "yieldNow"); }, true);
 // initWait(class id): 1 when the request proceeds with the statics as they are (a cycle), 0 once the initialization it waited for is over
 rt("initWait", ["I"], "I", (cx, c) => {
   const st = c.newLocal(T.i32);

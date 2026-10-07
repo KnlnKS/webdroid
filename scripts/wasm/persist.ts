@@ -12,6 +12,7 @@ import { Program } from "../../src/wasm/compiler/program";
 import { World, type WorldOptions } from "../../src/wasm/link/world";
 import { externs, intrinsics } from "../../src/wasm/link/intrinsics";
 import { UnitCompiler } from "../../src/wasm/link/unit";
+import { buildApp } from "../../src/wasm/link/apps";
 import { serveCompile, type CompileEnv } from "../../src/wasm/host/compile-serve";
 import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler";
 import { prepareApp } from "../../src/wasm/host/appcode";
@@ -72,6 +73,24 @@ const answers = (w: World) => {
 };
 const expected = answers(world(app));
 check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
+
+// A partial final group can discover dependencies that discover another group.
+{
+  const w = world(app, { compileOnly: true });
+  const padding = 64 - w.synths().length % 64;
+  for (let i = 0; i < padding; i++) w.synthSlot(`pst:padding:${i}`, { params: [], ret: "V", body: () => {} });
+  const leaf = { params: [], ret: "V" as const, body: () => {} };
+  w.synthSlot("pst:parent", { ...leaf, body: (cx, c) => {
+    const slot = cx.w.synthSlot("pst:child", { ...leaf, body: (next, code) => {
+      code.i32(next.w.synthSlot("pst:leaf", leaf)).callIndirect(next.sig([], "V"));
+    } });
+    c.i32(slot).callIndirect(cx.sig([], "V"));
+  } });
+  const built = buildApp(w, [], { classes: [], methods: [], infos: [] });
+  const kept = new Set(built.index.synths.flat());
+  check("partial synthetic group keeps its discovered child", kept.has("pst:child"), true);
+  check("discovered synthetic group keeps its own dependency", kept.has("pst:leaf"), true);
+}
 
 // ---- the numbering handshake, without a worker: a unit made by a World that follows the page's numbering is the page's only while the page has numbered nothing else
 {

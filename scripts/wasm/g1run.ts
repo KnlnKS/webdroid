@@ -1,37 +1,52 @@
 // One G1 measurement in one fresh engine: a Bench workload as Wasm (lazy linking over the AOSP boot dex) or on the production JS tier,
 // timed per call. Bundled by g1.ts for node (argv[2] is the JSON config) and for a page (globalThis.g1run).
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot";
 import { FetchStore } from "../../src/wasm/link/aotstore";
 import { compileBytes } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
+import { Program } from "../../src/wasm/compiler/program";
+import { externs } from "../../src/wasm/link/intrinsics";
+import { prepareApp } from "../../src/wasm/host/appcode";
+import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
+import type { World } from "../../src/wasm/link/world";
 import { jsTier, natives, processState, processStateAsync } from "./oracle";
 import { HEAP_LIMIT } from "../../src/wasm/link/exc";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 
 /** the build is opened the way the app opens it: the index and the modules a start loads are compiled before the World runs. A page fetches them (and a module it lacks is a miss);
- *  node reads them, and reads any other module when it is wanted. */
+ *  node reads them, and reads any other module when it is wanted. An installed app (g1app.ts) brings its saved build and the list of platform modules its launches load. */
 const inPage = !!(globalThis as { document?: unknown }).document;
 const aotDir = (globalThis as { G1_AOT?: string }).G1_AOT ?? (inPage ? undefined : process.env.WEBDROID_AOT);
+const appDir = (globalThis as { G1_APP?: string }).G1_APP ?? (inPage ? undefined : process.env.G1_APP);
+let appFiles: Map<string, Uint8Array> | undefined;
+let appReadMs = 0;
+if (appDir) {
+  const t0 = performance.now();
+  const names = inPage ? await (await fetch("/app/files.json")).json() as string[] : readdirSync(appDir);
+  appFiles = new Map(await Promise.all(names.map(async (n) => [n, inPage ? new Uint8Array(await (await fetch(`/app/${n}`)).arrayBuffer()) : new Uint8Array(readFileSync(join(appDir, n)))] as [string, Uint8Array])));
+  appReadMs = performance.now() - t0;
+}
+const startupList = async (read: (f: string) => Uint8Array | Promise<Uint8Array>): Promise<string[]> => JSON.parse(new TextDecoder().decode(appFiles?.get("startup.json") ?? await read("startup.json"))) as string[];
 if (aotDir) {
   const t0 = performance.now();
   if (inPage) {
     const store = new FetchStore(`/aot/${aotDir.split("/").pop()}/`);
     await store.fetchBytes("index.json");
-    await store.prefetch(JSON.parse(new TextDecoder().decode(await store.fetchBytes("startup.json"))) as string[]);
+    await store.prefetch(await startupList((f) => store.fetchBytes(f)));
     (globalThis as { G1_STORE?: AotStore }).G1_STORE = store;
   } else {
     const ahead = new Map<string, WebAssembly.Module>(), file = (f: string) => new Uint8Array(readFileSync(join(aotDir, f)));
-    await Promise.all((JSON.parse(readFileSync(join(aotDir, "startup.json"), "utf8")) as string[]).map(async (f) => ahead.set(f, await compileBytes(file(f)))));
+    await Promise.all((await startupList(file)).map(async (f) => ahead.set(f, await compileBytes(file(f)))));
     (globalThis as { G1_STORE?: AotStore }).G1_STORE = { get: (f) => ahead.get(f) ?? file(f) };
   }
   (globalThis as { G1_AHEAD?: number }).G1_AHEAD = performance.now() - t0;
 }
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string; cold?: boolean }
-export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
+export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; setup?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
 let heapBase = 0;
@@ -43,17 +58,54 @@ const collectedHeap = () => {
   return heapUsed();
 };
 
+/** a launch of the installed app as the page makes one (host/boot.ts, host/appcode.ts): the app's Program over the platform's, the saved build found and its modules compiled
+ *  before the World is made, the host's classes, and in a page the compile worker that takes the second tier */
+async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: () => Promise<void> }> {
+  const platform = new Program(PLATFORM_JARS.flatMap((j) => loadDexes(`${cfg.root}/vendor/aosp/${j}`))); platform.addExterns(externs);
+  const dexes = loadDexes(cfg.dex), key = basename(aotDir!), persist = new Persist(memoryBackend());
+  await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
+  const code = await prepareApp({ dexes, aot: { base: `/aot/${key}/`, key } as unknown as FetchStore, persist, roots: { launch: [] },
+    spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return new Worker("/wasm-compile-worker.js", { type: "module" }) as never; } });
+  if (!code.hit) throw new Error("the installed app's build was not found");
+  heapBase = heapUsed();
+  const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;
+  const w = world(new Program(dexes, platform), { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.options.app, ...(worker && { compiler: code.compiler }) });
+  if (!w.appAttached) throw new Error("the installed app's build does not attach");
+  for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
+  let startWorker: (() => Promise<void>) | undefined;
+  if (worker) {
+    code.start(w);
+    // This supplemental scenario forces worker readiness before the first-call timer.
+    startWorker = async () => {
+      code.compiler.submit(w, 0);
+      for (const t0 = performance.now(); !code.compiler.ready && !code.compiler.retired && performance.now() - t0 < 60000;) await new Promise((r) => setTimeout(r, 10));
+      if (!code.compiler.ready) throw new Error(`the compile worker did not start: ${code.compiler.retired ?? "timed out"}`);
+    };
+  }
+  return { world: w, startWorker };
+}
+
 export async function g1run(cfg: G1Config): Promise<G1Result> {
   const out: G1Result = { workload: cfg.workload, mode: cfg.mode, result: "", times: [] };
   const js = await jsTier(loadDexes(cfg.dex));
   console.warn = () => {};
-  const prog = cfg.mode === "wasm" ? program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]) : null;
-  // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
-  heapBase = heapUsed();
-  const w = prog ? world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold!==undefined&&{cold:cfg.cold}) }) : null;
+  let w: World | null = null;
+  let startWorker: (() => Promise<void>) | undefined;
+  const setupAt = performance.now();
+  if (cfg.mode === "wasm" && appFiles) { const code = await installed(cfg); w = code.world; startWorker = code.startWorker; }
+  else if (cfg.mode === "wasm") {
+    const prog = program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]);
+    // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
+    heapBase = heapUsed();
+    w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold!==undefined&&{cold:cfg.cold}) });
+  }
+  if (w) { out.worldSetupMs = performance.now() - setupAt; out.appReadMs = appReadMs; }
   let hit = 0;
   if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { if (aotDir) await processStateAsync(w); else processState(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
   const name = `w_${cfg.workload}`;
+  out.prestartedWorker = !!startWorker;
+  if (startWorker) { const t = performance.now(); await startWorker(); out.workerStartMs = performance.now() - t; }
+  if (w) out.setup = structuredClone(w.stats);
   const t0 = performance.now();
   const call = w ? w.entryAsync(cfg.cls, name, "()I") : () => js(cfg.cls, name, "()I", []);
   try {
@@ -61,7 +113,11 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     out.result = String(await call());
     out.times.push(performance.now() - t0);
     if (w) out.first = structuredClone(w.stats);
-    for (let i = 0; i < cfg.reps; i++) { const t = performance.now(); await call(); out.times.push(performance.now() - t); if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0)); }
+    for (let i = 0; i < cfg.reps; i++) {
+      const t = performance.now(), value = await call(); out.times.push(performance.now() - t);
+      if (String(value) !== out.result) throw new Error(`call ${i + 2} returned ${String(value)}, expected ${out.result}`);
+      if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0));
+    }
   } catch (e) { const t = w?.throwable(e); out.error = hit ? `gap ${w!.gapList[0]}` : t ? `uncaught ${w!.classNameOf(t)}` : String(e).slice(0, 900); }
   if (w) { out.compileMs = w.stats.compileMs; out.units = w.stats.units; out.stats = structuredClone(w.stats); }
   return out;

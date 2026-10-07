@@ -325,7 +325,7 @@ export class ColdSlowOps {
       // Slow operations also split numeric fuel slices, so honor the canonical
       // turn deadline here even when no stack quota or numeric slice expires.
       const pending = strand.canSuspend && !state.sync && this.w.sched.current() === strand && (this.w.sched.owes() || this.w.sched.turnDue())
-        ? Promise.resolve(this.w.callFn("cold:slow:yield", [], "V", (cx, c) => cx.callRt(c, "yieldFuel"))(strand)).then(invoke)
+        ? Promise.resolve(this.w.callFn("cold:slow:yield", [], "V", (cx, c) => cx.callRt(c, "yieldNow"))(strand)).then(invoke)
         : invoke();
       if (pending instanceof Promise) { this.w.stats.coldSlowWaits++; return pending.then(success, failure).finally(() => this.busy.delete(state)); }
       const answer = success(pending); this.busy.delete(state); return answer;
