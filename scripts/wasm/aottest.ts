@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { packModule, VERSION, DEOPT_ABI, type AotStore } from "../../src/wasm/link/aot";
+import { packModule, VERSION, DEOPT_ABI, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot";
+import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { buildApp } from "../../src/wasm/link/apps";
@@ -96,6 +97,28 @@ const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
 // A page has fetched only some of the modules (FetchStore): the code of the others is compiled on demand and runs as before, whatever the order the files arrive in.
 const modules = /^[cd]\d+\.wasm$/;
+{
+  let withheld = "", available = false;
+  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === withheld && !available ? undefined : fileOf(f) } });
+  const block = w.ids.get("java/util/ArrayList")! - 1, slot = w.blockBase[block];
+  const c = w.aot!.platformModule(block), head = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(`c${c}.wasm`)), "aot")[0]))) as CHeader;
+  withheld = `d${head.mods[0].slice(1)}.wasm`;
+  check("preflight D miss leaves C pending", w.aot!.install(slot), false);
+  check("preflight D miss is not a permanent rejection", w.stats.aot.dead, 0);
+  check("preflight D miss publishes no fallback globals", w.stats.classes, 0);
+  available = true;
+  check("preflight D arrival permits C", w.aot!.install(slot), true);
+  check("preflight D recovery Java result", w.entry("Aot", "plain", "()I")(), 0);
+  available = false;
+  const published = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === withheld && !available ? undefined : fileOf(f) } });
+  check("preflight before publication", published.aot!.install(slot), false);
+  const data = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(withheld)), "aot")[0]))) as DHeader;
+  const cls = published.link(published.names[data.classes[0]]), globals = cls.exports;
+  available = true;
+  check("publication after preflight keeps C blocked", published.aot!.install(slot), false);
+  check("publication after preflight keeps globals", published.link(cls.name).exports, globals);
+  check("publication after preflight Java result", published.entry("Aot", "plain", "()I")(), 0);
+}
 // Late code is reusable only against the original data globals; late data must never replace fallback globals.
 {
   let available = false;

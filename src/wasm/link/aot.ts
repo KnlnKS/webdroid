@@ -177,6 +177,7 @@ export class AotRuntime {
   private dOf = new Int32Array(0);
   private cOf = new Int32Array(0);
   private dExports: (WebAssembly.Exports | undefined)[] = [];
+  private fallbackD = new Set<number>();
   private cState: number[] = [];
   private cAbsent: (Set<number> | undefined)[] = [];
   private overridden = new Set<number>();
@@ -345,6 +346,8 @@ export class AotRuntime {
       base = slots;
     }
     const exports = this.building || w.opts.compileOnly ? {} : app === undefined ? this.loadD(g) : this.data(`e${app}.wasm`, this.appD, app);
+    // Returning without data hands publication to World.link. Block the group before class building can re-enter it.
+    if (!exports && app === undefined) this.fallbackD.add(g);
     const jc = w.prog.get(name);
     return exports && { name, id, mod: (app === undefined ? "g" + g : "e" + app), slotBase: base, nMethods: jc ? methodCount(jc) : 0, exports };
   }
@@ -402,11 +405,14 @@ export class AotRuntime {
   }
   /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (scripts/wasm/aot-startup.ts) */
   loaded: string[] = [];
-  /** Files absent on first use. Data misses remain terminal: late D modules would redefine published fallback globals. Code can retry against original D modules. */
+  /** Files absent on first use. A preflight data miss can retry until World.link begins publishing fallback globals for its group. */
   missed = new Set<string>();
   private ready(file: string): boolean {
     const missed = this.missed.has(file);
-    if (missed && !/^c\d+\.wasm$/.test(file)) return false;
+    if (missed && !/^c\d+\.wasm$/.test(file)) {
+      const data = /^d(\d+)\.wasm$/.exec(file);
+      if (!data || this.fallbackD.has(+data[1])) return false;
+    }
     if (this.store!.get(file)) return true;
     if (!missed) { this.missed.add(file); this.w.stats.aot.missed++; }
     return false;
@@ -444,7 +450,11 @@ export class AotRuntime {
     if ((head.deopt ?? 0) !== this.deopt) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
     // a store that lacks a D module) its methods are compiled on demand
-    if (!head.natives.every((id) => w.nativeBound(id)) || !head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) {
+      if (head.mods.some(m => this.fallbackD.has(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; }
+      return false;
+    }
     if (retry && !head.mods.every(m => !!this.loadD(+m.slice(1)))) return false;
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) this.touch(id);
