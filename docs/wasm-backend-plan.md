@@ -8,7 +8,13 @@ with its suites in `scripts/wasm/` (`bun run wasm <suite>`) and its Java fixture
 (its `mid` is `compiler/ids.ts`). `floatbench.ts`, `lazybench.ts` and the j2w `dis.ts` were deleted.
 This is a report plus a staged plan for a different coding agent to execute.
 
-## Recovery status (2026-10-06)
+## Recovery status (2026-10-07)
+
+### Current recovery checkpoint (2026-10-07, `d4534435`)
+
+Format 8 includes initialization-time cross-loader signature constraints, runtime-package-aware dispatch, abstract-interface slot reuse and canonical qualified-slot selection. All 19 core sections pass on this frozen source, alongside full typecheck, 1,201 unit tests, cold-slow/OSR and 31 framework exercises. Fresh ordinary/guarded eight-jar assets share its source fingerprint. The preceding 18/19 host callback failure, disproved owner hypothesis and physical layout repair are recorded in the implementation history. Full current-source conformance, application/Worker coverage and idle G1/G3/G4/G5 measurements remain required; no default-tier switch or gate closure follows from the core result.
+
+
 
 The recovered compiler, launch/cache and correctness packages are merged through `c0bbbd81`. Full typecheck and the 1,200-case unit suite pass on the combined source. The broad Wasm run passes every suite except its initial loader fixture, which failed on a missing shared-library control declaration. That declaration is restored, and the corrected loader suite passes in a focused repeat; the original run retains its failed exit status. Earlier frozen `7d5f8ae2` passed all suites and 31 framework exercises, but those results do not substitute for combined-source verification. The generic generated-proxy defining-loader repair is integrated at `a4eaa981`; clean-tree loader, class differential, thread, host-class, AOT/persistence and typecheck checks pass. Fresh dual-policy eight-jar AOT compiles 290,828 methods per policy with five existing binding gaps. The default iframe quick gate passes 7/7 flows and 105 checkpoints. All nine frozen-source conformance suites pass with zero regressions and zero unexplained differences (410,872 raw passes, 597 failure records, zero skips). The full browser matrix finishes with five failing flows and a Resy field-resolution difference, so final acceptance remains open. Full conformance and browser coverage remain required for final G2 acceptance; the implementation history records the commands and evidence limits.
 
@@ -1807,8 +1813,3 @@ Bootstrap optionally publishes a display port for an entry with a page canvas, i
 Two existing Chromium core fixtures pass (12 assertions), full typecheck and diff check pass. A real Worker transfers red/blue snapshots while a middle frame is replaced, then changes the source canvas to yellow; received pixels remain red/blue. Bitmap detachment/release, changed dimensions, sink-error propagation, pending/future close rejection are checked. Actual broker replacement, failed initial handoff and independent death close four display owners with future rejection, alongside the existing archive/clock/command checks. The production Worker attachment receives its optional display port and exits with canonical cleanup. Initial fixture-only failures were a split-build dynamic import path and transferToImageBitmap before creating a context; both were corrected without changing the transport mechanism. Evidence: `webdroid-shots/y2-s5-endpoint/worker-frame-{core,tsc,typecheck}.log`.
 
 No application JVM Worker is enabled and no app/AOT or performance acceptance is claimed. Input, IME, WebView, diagnostics, remaining canonical stores and FD/ashmem coherence remain open. Parent owns accounts owner files; Y2 will integrate its committed AccountCalls into process wiring.
-
-
-### Current recovery checkpoint (2026-10-07, `d4534435`)
-
-Format 8 includes initialization-time cross-loader signature constraints, runtime-package-aware dispatch, abstract-interface slot reuse and canonical qualified-slot selection. All 19 core sections pass on this frozen source, alongside full typecheck, 1,201 unit tests, cold-slow/OSR and 31 framework exercises. Fresh ordinary/guarded eight-jar assets share its source fingerprint. The preceding 18/19 host callback failure, disproved owner hypothesis and physical layout repair are recorded in the implementation history. Full current-source conformance, application/Worker coverage and idle G1/G3/G4/G5 measurements remain required; no default-tier switch or gate closure follows from the core result.
