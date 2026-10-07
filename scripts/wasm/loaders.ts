@@ -144,6 +144,16 @@ if (!process.argv.includes("--hierarchy")) {
   const caught = await w.entryAsync("Ldr", "catchResolution", "(Ljava/lang/String;)I")(paths[1]);
   if (caught !== 31) throw new Error(`executed catch loader: wasm=${caught}, expected=31`);
   console.log("executed catch loader: wasm=31; untaken handler types stay lazy, suspended denial retries, successful identity stays cached, missing types preserve the original exception");
+  {
+    const boot = world(new Program([], program([...PLATFORM_JARS.map(j => join(AOSP, j)), common, b])), { natives, cold: false });
+    if (boot.prog.loaderOf("Shared") !== boot.prog.boot) throw new Error("catch fixture is not boot-defined");
+    const select = boot.entry("Shared", "catchOnly", "(Z)I");
+    if (select(0) !== 7 || boot.prog.initiatedBy(boot.prog.boot, "CatchOnly")) throw new Error("untaken boot catch resolved its type");
+    if (select(1) !== 42 || await boot.entryAsync("Shared", "catchOnly", "(Z)I")(1) !== 42) throw new Error("compiled boot catch did not preserve the original throwable");
+    if (boot.prog.initiatedBy(boot.prog.boot, "CatchOnly") !== "CatchOnly" || boot.prog.initiatedBy(boot.prog.boot, "MissingCatch")) throw new Error("executed boot catches did not retain only successful resolution");
+    if (boot.stats.coldMethods || !boot.stats.methods) throw new Error("boot catch fixture did not run compiled code");
+    console.log("compiled boot catch: plain and strand select RuntimeException after missing/nonmatching catch types; cold methods 0");
+  }
   if (process.argv.includes("--catch-only")) process.exit(0);
   const actualType = await w.entryAsync("Ldr", "typeDelegateLast", desc)(...paths);
   if (actualType !== 7) throw new Error(`executed method-type loader: wasm=${actualType}, expected=7`);

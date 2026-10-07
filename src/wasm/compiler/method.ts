@@ -766,10 +766,10 @@ export class MC {
     }
   }
   emitCatch() {
-    const c = this.code, dex = this.dex;
+    const c = this.code;
     if (this.entryDepth >= 0) this.weights.push(...this.cx.emitLeave(c, this.entryDepth, true));
     const dispatchTo = (addr: number) => { const ri = this.regionOfPc.get(addr); if (ri === undefined) throw new Error("handler not region entry"); c.i32(ri).lset(this.regionLocal).br(this.depth("$disp")); };
-    if (this.cx.prog.loaderOf(this.m.cls) !== this.cx.prog.boot) {
+    if (this.item.tries.some(t => t.handlers.length > 0)) {
       const target = c.newLocal(T.i32), restore = emitSave(this.cx, c);
       const args = () => c.i32(this.cx.idOf(this.m.cls)).i32(this.m.index).lget(this.pcLocal).lget(this.excLocal).externConvertAny();
       c.call(this.cx.imp.catchSync).if_(T.i32); args(); c.call(this.cx.imp.catchBlock);
@@ -782,12 +782,6 @@ export class MC {
     }
     for (const t of this.item.tries) {
       c.lget(this.pcLocal).i32(t.start).raw(OP.i32_ge_s).lget(this.pcLocal).i32(t.end).raw(OP.i32_lt_s).raw(OP.i32_and).if_(); this.push("if");
-      for (const [ty, addr] of t.handlers) {
-        const name = descToName(dex.type(ty));
-        if (name === "java/lang/Throwable") { dispatchTo(addr); continue; }
-        this.emitInstanceOfTest(name, () => c.lget(this.excLocal));
-        c.if_(); this.push("if"); dispatchTo(addr); this.pop(); c.end();
-      }
       if (t.catchAllAddr >= 0) dispatchTo(t.catchAllAddr);
       this.pop(); c.end();
     }
@@ -799,8 +793,6 @@ export class MC {
     return !!f;
   }
   linkFail(f: LinkFailure) { this.cx.linkError(this.code, f); }
-  /** pushes i32: obj (pushed by `obj`) is an instance of class/interface/array `name` (null -> 0) */
-  emitInstanceOfTest(name: string, obj: () => void) { obj(); this.code.call(this.cx.instanceOfFn(name)); }
   /** push a non-null (ref null $Obj) of register `reg`, throwing NPE when null */
   nonNull(reg: number) {
     const c = this.code, cx = this.cx;
