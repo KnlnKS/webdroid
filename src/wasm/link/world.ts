@@ -29,6 +29,7 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
+import { resolveClass } from "./resolution";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -1204,6 +1205,9 @@ export class World {
     if (prior) throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
     if (this.prog.lookup(loader, name) === key) { this.prog.initiate(loader, name, key); return; }
     this.rebindResolution(() => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation");
+  }
+  resolveClass(loader: Loader, name: string, owner: Strand): string | Promise<string> {
+    return resolveClass(this, loader, name, owner);
   }
   private rebindResolution(change: () => string[], undo: () => string[], reason: string): void {
     const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {

@@ -13,6 +13,8 @@ import { Program, ACC, type JClass } from "../../src/wasm/compiler/program";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
+import { definingLoader } from "../../src/wasm/link/loaders";
+import { St } from "../../src/wasm/link/monitor";
 import { HOSTED } from "../../src/wasm/link/hostapi";
 import { hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { useEntry } from "../../src/jvm/natives/jentry";
@@ -172,6 +174,47 @@ for (const asynchronous of [false, true]) {
   const result = await cold.entryAsync("Ldr", "delegateLast", desc)(...paths);
   if (result !== jsDelegate || !cold.stats.coldCalls) throw new Error(`cold delegate-last initiation: ${result}; cold calls=${cold.stats.coldCalls}`);
   useEntry(wasmEntry(w));
+}
+{
+  const resolver = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+  useEntry(wasmEntry(resolver));
+  const calls = () => resolver.entryAsync("Ldr", "resolverCalls", "()I")();
+  for (const mode of [0, 1, 2, 3]) {
+    const object = await resolver.entryAsync("Ldr", "resolverLoader", "(Ljava/lang/String;I)Ljava/lang/ClassLoader;")(paths[0], mode) as object;
+    const loader = definingLoader(resolver, object), owner = resolver.sched.strand();
+    const before = await calls() as number;
+    try {
+      if (mode === 0) {
+        const pending = resolver.resolveClass(loader, "Shared", owner);
+        if (!(pending instanceof Promise)) throw new Error("loader suspension was bypassed");
+        const key = await pending;
+        if (resolver.resolveClass(loader, "Shared", owner) !== key || await resolver.resolveClass(loader, "[LShared;", owner) !== `[L${key};` || await calls() !== before + 1) throw new Error("successful loader initiation was not canonical");
+      } else {
+        const expected = mode === 1 ? "java/lang/ClassNotFoundException" : mode === 2 ? "java/lang/NullPointerException" : "java/lang/NoClassDefFoundError";
+        for (let retry = 0; retry < 2; retry++) {
+          try { await resolver.resolveClass(loader, "Shared", owner); throw new Error("invalid loader result accepted"); }
+          catch (e) { const t = resolver.throwable(e); if (!t || resolver.classNameOf(t) !== expected) throw e; }
+        }
+        if (resolver.prog.initiatedBy(loader, "Shared") || await calls() !== before + 2) throw new Error("failed loader result was cached");
+      }
+    } finally { owner.end(); }
+  }
+  for (const mode of [4, 5, 6]) {
+    const object = await resolver.entryAsync("Ldr", "resolverLoader", "(Ljava/lang/String;I)Ljava/lang/ClassLoader;")(paths[0], mode) as object;
+    const loader = definingLoader(resolver, object), first = resolver.sched.strand(), second = resolver.sched.strand();
+    try {
+      if (mode === 6) {
+        if (resolver.sched.monitors.tryEnter(object, first) !== St.Ok) throw new Error("resolver fixture monitor acquisition failed");
+        try {
+          await resolver.resolveClass(loader, "Shared", first);
+          if (!resolver.sched.monitors.holds(object, first) || resolver.sched.monitors.holds(object, second)) throw new Error("resolver callback lost or borrowed unrelated monitor ownership");
+        } finally { if (resolver.sched.monitors.exit(object, first) !== St.Ok) throw new Error("resolver fixture monitor release failed"); }
+      } else {
+        const results = await Promise.all([resolver.resolveClass(loader, "Shared", first), resolver.resolveClass(loader, "Shared", second)]);
+        if (results[0] !== results[1] || results[0] !== resolver.prog.initiatedBy(loader, "Shared")) throw new Error("racing loader calls did not preserve first successful initiation");
+      }
+    } finally { first.end(); second.end(); }
+  }
 }
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);

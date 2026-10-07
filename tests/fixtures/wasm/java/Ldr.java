@@ -9,6 +9,27 @@ interface Tag { int tag(); }
 
 /** Two DexClassLoaders over dex files that define the class Shared (ldr1, ldr2): each sees its own class, with its own statics, and both see the app's Tag. */
 public class Ldr {
+  private static int resolverCalls;
+  public static int resolverCalls() { return resolverCalls; }
+  public static ClassLoader resolverLoader(String path, int mode) {
+    ClassLoader parent = new DexClassLoader(path, null, null, Ldr.class.getClassLoader());
+    return new ClassLoader(parent) {
+      private int attempts;
+      @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
+        resolverCalls++;
+        int attempt = ++attempts;
+        if (mode == 1) throw new ClassNotFoundException(name);
+        if (mode == 2) return null;
+        if (mode == 3) return String.class;
+        if (mode == 6 && !Thread.holdsLock(this)) throw new IllegalMonitorStateException();
+        try { Thread.sleep((mode == 4 && attempt == 1 || mode == 5 && attempt == 2) ? 15 : 1); } catch (InterruptedException e) { throw new RuntimeException(e); }
+        if (mode == 6 && !Thread.holdsLock(this)) throw new IllegalMonitorStateException();
+        if (mode == 4 && attempt == 1) throw new ClassNotFoundException(name);
+        if (mode == 5 && attempt == 2) return String.class;
+        return getParent().loadClass(name);
+      }
+    };
+  }
   public static int proxyLoaders(String pathA, String pathB) throws Exception {
     ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
     ClassLoader b = new DexClassLoader(pathB, null, null, Ldr.class.getClassLoader());

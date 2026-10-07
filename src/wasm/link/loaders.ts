@@ -61,6 +61,10 @@ export function recordDefinedClass(w: World, loader: Loader, name: string, key: 
   w.initiateClass(loader, name, key);
 }
 
+export function objectOfLoader(w: World, loader: Loader): object | null {
+  return loader.object ?? (loader === w.prog.root ? stateOf(w).appLoader : null);
+}
+
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const s = stateOf(w), prior = s.libraries.get(object);
   if (prior) return prior;
