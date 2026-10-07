@@ -74,8 +74,11 @@ export function wasmEntry(w: World): Entry {
   const onStrand = <T>(f: (s: Strand) => T): T => {
     if (sched.current().root && !sched.running) hostCurrent = curThread;
     const thread = threadNow(), s = sched.strand(thread, nativeOf());
+    // A JNI guest slice can own a host strand while the Wasm globals are idle.
+    const caller = rt.cur;
     let r: T;
     try { r = f(s); } catch (e) { s.end(); throw e; }
+    finally { resumeAs(caller); }
     if (r instanceof Promise) void r.then(() => s.end(), () => s.end()); else s.end();
     return r;
   };

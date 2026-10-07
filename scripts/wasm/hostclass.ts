@@ -5,12 +5,13 @@ import { runInNewContext } from "node:vm";
 import { setFlagsFromString } from "node:v8";
 import { join } from "node:path";
 import { fieldNames, rt } from "../../src/jvm/runtime";
-import { jsEntry, scall, useEntry } from "../../src/jvm/natives/jentry";
+import { jsEntry, resumeAs, scall, useEntry } from "../../src/jvm/natives/jentry";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import { fieldNamesOf, hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
+import { fieldNamesOf, hostThrowable, onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
 import { Program } from "../../src/wasm/compiler/program";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { Block, emitBlock } from "../../src/wasm/link/sched";
+import { St } from "../../src/wasm/link/monitor";
 import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { jsTier, natives, processStateAsync } from "./oracle";
@@ -143,6 +144,23 @@ async function handleAfter(cls: "own" | "plain"): Promise<boolean> {
 if (await handleAfter("own")) fail("a handle stored in a field of a class that frees it in finalize() outlives the object");
 if (!await handleAfter("plain")) fail("a handle stored in a field of a class that does not free it is released with the object");
 
+{
+  const callback = w.callFn("callback:context", [], "I", (_cx, c) => { c.i32(42); });
+  const lock = w.hostFn("callback:lock", [], "L", (cx, c) => cx.emitNew(c, "java/lang/Object"))() as object;
+  const owner = w.sched.strand();
+  w.rtImports().sid.value = owner.id;
+  w.sched.onThread?.(owner.thread, false);
+  const caller = rt.cur;
+  w.sched.idle(); resumeAs(caller);
+  try {
+    if (w.sched.monitors.tryEnter(lock, owner) !== St.Ok) fail("callback owner cannot acquire monitor");
+    if (onNestedStrand(w, s => callback(s)) !== 42 || rt.cur !== caller) fail("synchronous JNI callback loses its host strand");
+    onNestedStrand(w, s => {
+      if (s.parent !== owner || w.sched.monitors.tryEnter(lock, s) !== St.Ok) fail("following JNI callback loses monitor reentry");
+      else w.sched.monitors.exit(lock, s);
+    });
+  } finally { w.sched.monitors.exit(lock, owner); owner.end(); w.sched.idle(); }
+}
 
 {
   const fresh = world([dex, ...jars], { natives, cold: true });
