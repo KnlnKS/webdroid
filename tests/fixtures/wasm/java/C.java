@@ -71,7 +71,7 @@ public class C {
     I a = new A(), d = new D();
     return a.f() * 100 + d.f() + (a.g() + d.g()) * 1000;
   }
-  public static int jsWrong_defaultSpecific(int n) { I b = new B(); return b.f() + new B().f() * 10; }
+  public static int defaultSpecific(int n) { I b = new B(); return b.f() + new B().f() * 10; }
   public static int arrayClone(int n) {
     int[] a = {1, 2, 3}; int[] b = a.clone(); b[0] = 9;
     long[] l = {5L, 6L}; long[] m = l.clone();
@@ -252,7 +252,7 @@ public class C {
     int[][] p = (int[][]) java.lang.reflect.Array.newInstance(int.class, new int[] {2, 3});
     return p[1].length * 1000000 + a.length + a[1].length * 10 + (a.getClass() == A[][].class ? 100 : 0) + (a[0].getClass() == A[].class ? 1000 : 0) + z[1].length * 10000 + (z.getClass() == int[][][].class ? 100000 : 0);
   }
-  public static int jsWrong_reflectMethods(int n) throws Exception {
+  public static int reflectMethods(int n) throws Exception {
     java.lang.reflect.Method m = A.class.getMethod("g");
     java.lang.reflect.Method f = I.class.getMethod("f");
     java.lang.reflect.Constructor<?> k = A.class.getDeclaredConstructor();
