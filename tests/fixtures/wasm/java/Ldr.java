@@ -130,6 +130,18 @@ public class Ldr {
     ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
     return new dalvik.system.DelegateLastClassLoader(pathB, parent);
   }
+  public static int typeDelegateLast(String pathA, String pathB) throws Exception {
+    ClassLoader loader = symbolicLoader(pathA, pathB);
+    Class<?> site = loader.loadClass("TypeSite");
+    java.lang.invoke.MethodType type = (java.lang.invoke.MethodType) site.getMethod("value").invoke(null);
+    int result = type.returnType().getClassLoader() == loader ? 1 : 0;
+    if (type.parameterType(0) == type.returnType()) result |= 2;
+    try { site.getMethod("missing").invoke(null); }
+    catch (InvocationTargetException expected) {
+      if (expected.getCause() instanceof NoClassDefFoundError) result |= 4;
+    }
+    return result;
+  }
   public static int symbolicDelegateLast(String pathA, String pathB) throws Exception {
     return (Integer) symbolicLoader(pathA, pathB).loadClass("Shared").getMethod("symbolic").invoke(null);
   }

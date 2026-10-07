@@ -2,6 +2,7 @@ import { javaName, type Kind, type Loader } from "../compiler/program";
 import { idOfClass } from "./classes";
 import { definingLoader, objectOfLoader } from "./loaders";
 import { T } from "../compiler/wasmbin";
+import { methodTypeSignatureTypes, type SignatureType } from "./mhandles";
 import type { Strand } from "./sched";
 import type { World } from "./world";
 import type { MethodInfo } from "../compiler/program";
@@ -44,8 +45,21 @@ export function initiatedInstruction(w: World, method: MethodInfo, ins: Prepared
   return key && definitionReady(w, key) ? { name, key } : undefined;
 }
 
-/** Resolve the class named by this executed instruction, not its unused siblings. */
+/** Resolve an executed signature in the supplied ART order, without initializing its types. */
+export function resolveSignatureTypes(w: World, types: SignatureType[], owner: Strand): void | Promise<void> {
+  const next = (at: number): void | Promise<void> => {
+    if (at === types.length) return;
+    const { descriptor, owner: referrer } = types[at];
+    if (descriptor[0] !== "L" && descriptor[0] !== "[") return next(at + 1);
+    const result = resolveType(w, w.prog.loaderOf(referrer), descToName(descriptor), owner);
+    return result instanceof Promise ? result.then(() => next(at + 1)) : next(at + 1);
+  };
+  return next(0);
+}
+
+/** Resolve only references used by this executed instruction. */
 export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): void | Promise<void> {
+  if (ins.name === "const-method-type") return resolveSignatureTypes(w, methodTypeSignatureTypes(method, ins.b), owner);
   const name = instructionClass(method, ins);
   if (!name) return;
   const key = resolveType(w, w.prog.loaderOf(method.cls), name, owner);

@@ -21,6 +21,7 @@ import { ldp, PTR } from "../../src/native/host";
 import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
+import { Pool, u2, u4 } from "./classfile";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { typeFailure } from "../../src/wasm/compiler/linkage";
 import type { Code } from "../../src/wasm/compiler/code";
@@ -43,7 +44,16 @@ const sh = shellIn(out), androidJar = `${androidPlatform(35)}/android.jar`;
 const build = (dir: string, sources: string[], classpath?: string) => {
   sh(["mkdir", "-p", dir]);
   sh(["javac", "--release", "11", "-Xlint:-options", "-cp", [androidJar, classpath].filter(Boolean).join(":"), "-d", join(out, dir), ...sources.map((s) => join(JAVA, s))]);
-  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !path.endsWith("/AbsentOptional.class"))]);
+  if (dir === "b") {
+    const p = new Pool(), self = p.cls("TypeSite"), sup = p.cls("java/lang/Object");
+    const method = (name: string, descriptor: string) => {
+      const code = [0x13, ...u2(p.methodType(descriptor)), 0xb0], body = [...u2(1), ...u2(0), ...u4(code.length), ...code, ...u2(0), ...u2(0)];
+      return [...u2(9), ...u2(p.utf8(name)), ...u2(p.utf8("()Ljava/lang/invoke/MethodType;")), ...u2(1), ...u2(p.utf8("Code")), ...u4(body.length), ...body];
+    };
+    const methods = [method("value", "(LShared;)LShared;"), method("missing", "()LAbsentOptional;")];
+    writeFileSync(join(out, dir, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
+  }
+  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !path.endsWith("/AbsentOptional.class"))]);
   return join(out, dir, "classes.dex");
 };
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
@@ -102,6 +112,9 @@ if (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy")
   if (process.argv.includes("--hierarchy")) process.exit(0);
 }
 if (!process.argv.includes("--hierarchy")) {
+  const actualType = await w.entryAsync("Ldr", "typeDelegateLast", desc)(...paths);
+  if (actualType !== 7) throw new Error(`executed method-type loader: wasm=${actualType}, expected=7`);
+  console.log("executed method-type loader: wasm=7; unused optional signature stays lazy (JS const-method-type unsupported)");
   const expected = await js("Ldr", "symbolicDelegateLast", desc, paths);
   const result = await w.entryAsync("Ldr", "symbolicDelegateLast", desc)(...paths);
   if (expected !== 42 || result !== expected) throw new Error(`uninitiated symbolic class reference: js=${expected}, wasm=${result}, expected=42`);

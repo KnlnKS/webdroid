@@ -13,7 +13,7 @@ export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): bo
   const n = ins.name, dex = m.dex;
   if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;
   if (/^invoke-direct/.test(n) && dex.method(ins.b).name === "<init>" && dex.rawType(dex.method(ins.b).cls) === "Ljava/lang/String;") return false;
-  return /^(const-class|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super))/.test(n);
+  return /^(const-method-type|const-class|check-cast|instance-of|new-instance|new-array|filled-new-array|iget|iput|sget|sput|invoke-(virtual|interface|static|direct|super))/.test(n);
 }
 
 export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
