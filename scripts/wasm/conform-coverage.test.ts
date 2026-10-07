@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { classFailureReason, classSetupFailures, noRunnableClass } from "./conform-coverage";
+import { classFailureReason, classSetupFailures, noRunnableClass, noRunnableCoverage } from "./conform-coverage";
 import type { Outcome } from "../conform/results";
 
 const cls = "example.PrivateSuite";
@@ -10,6 +10,13 @@ const failed = (message: string): Outcome => ({ ok: false, message });
 test("only the exact pinned private-suite validation permits missing baseline rows", () => {
   const results = new Map([[validation, failed(noRunnable)]]);
   expect(noRunnableClass(cls, results)).toBe(true);
+  const peer = new Map(results);
+  expect(noRunnableCoverage(cls, results, peer)).toBe(true);
+  peer.set(validation, failed("java.lang.ExceptionInInitializerError"));
+  expect(noRunnableCoverage(cls, results, peer)).toBe(false);
+  peer.set(validation, failed(noRunnable));
+  peer.set("testOther(example.PrivateSuite)", failed("java.lang.AssertionError"));
+  expect(noRunnableCoverage(cls, results, peer)).toBe(false);
   expect(classFailureReason(cls, results)).toBe(noRunnable);
   expect(classSetupFailures(cls, results, 59, true)).toEqual([]);
   expect(classSetupFailures(cls, results, 59, false)).toHaveLength(1);

@@ -77,7 +77,7 @@
     {
       "class": "harmony\\.tests\\.java\\.io\\.(OutputStreamTesterTest|WriterTesterTest)$",
       "test": ".",
-      "why": "The class declares a private static suite(). The JS tier's Class.getMethod(\"suite\") returns that private method, so JUnit runs the suite; AOSP and the JDK do not find it, JUnit reports 'No runnable methods', and the Wasm tier runs AOSP's Class.getMethod.",
+      "why": "These classes declare private static suite() methods. Public JUnit discovery reports the exact solitary 'No runnable methods' validation on both tiers. The baseline includes 59+65 passing names from historical JS exposure of those private suites; they remain explicitly absent, not executed or passed. This rule admits only that validation as a known coverage limit, separately from divergence hits.",
       "because": "No runnable methods"
     },
     {

@@ -23,6 +23,10 @@ export function noRunnableClass(cls: string, tests: Map<string, Outcome>): boole
     `org.junit.runners.model.InvalidTestClassError: Invalid test class '${cls}': 1. No runnable methods`;
 }
 
+export function noRunnableCoverage(cls: string, tests: Map<string, Outcome>, peer?: Map<string, Outcome>): boolean {
+  return noRunnableClass(cls, tests) && (!peer || noRunnableClass(cls, peer));
+}
+
 /** A shared setup failure must not turn lost baseline executions into benign name drift. */
 export function classSetupFailures(cls: string, tests: Map<string, Outcome>, baselineCount: number, pinnedNoRunnable: boolean): string[] {
   if (!baselineCount || pinnedNoRunnable && noRunnableClass(cls, tests)) return [];

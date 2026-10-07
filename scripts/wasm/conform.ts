@@ -3,7 +3,7 @@
 //   bun run wasm conform <suite|quick> [class-substring | --test name-substring] [--no-js] [--jobs n] [--out directory]
 // A test that passes in the baseline and fails on the Wasm tier is a regression. A test the two tiers answer differently is a divergence: it must be pinned in
 // tests/conformance/wasm-pins.json with its mechanism (the JS tier is wrong, or a limit the Wasm tier has), or the run fails it as unexplained, and a pin that
-// no longer diverges is stale. A pin is a class regex, a test-name regex and a `why`; with `because` (a regex) it covers only the tests whose Wasm result has a reason that matches:
+// neither explains a divergence nor admits an exact no-runnable coverage validation is stale. A pin is a class regex, a test-name regex and a `why`; with `because` (a regex) it covers only the tests whose Wasm result has a reason that matches:
 // the test's own failure, the reason its runner gave for skipping the method, or the failure of the whole class. A `flaky` pin names tests whose result depends on timing and varies from run to run on both tiers: it is never stale.
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -12,7 +12,7 @@ import { hash, parseLines, type Outcome } from "../conform/results";
 import { SUITES } from "../conform/suites";
 import { consume } from "../args";
 import { bundleForNode } from "./undernode";
-import { arrayProviderFailures, classFailureReason, classSetupFailures, noRunnableClass } from "./conform-coverage";
+import { arrayProviderFailures, classFailureReason, classSetupFailures, noRunnableCoverage } from "./conform-coverage";
 
 /** a few classes of each kind of suite, in seconds: collections, time, util, concurrency, io */
 const QUICK: [suite: string, classMatch: string][] = [
@@ -98,8 +98,9 @@ for (const [suiteName, classMatch] of plan) {
     console.log(`  ${tier.padEnd(4)} ${cls}: ${pass} pass, ${r.executions.fail} fail${note} (${r.seconds.toFixed(1)}s)${r.tests.has(cls) ? ` class failed: ${r.tests.get(cls)!.message}` : ""}`);
   });
 
-  const rules = (pins[suiteName] ?? []).map((p) => ({ ...p, cls: new RegExp(p.class), test: new RegExp(p.test), because: p.because ? new RegExp(p.because) : null, hits: 0 }));
+  const rules = (pins[suiteName] ?? []).map((p) => ({ ...p, cls: new RegExp(p.class), test: new RegExp(p.test), because: p.because ? new RegExp(p.because) : null, hits: 0, coverageHits: 0 }));
   let wasmPass = 0, jsPass = 0, tests = 0, before = 0, drift = 0;
+  let coverageClasses = 0, coverageAbsent = 0;
   const regressions: string[] = [], unexplained: string[] = [];
   for (const cls of selected) {
     const w = wasm.get(cls)!, j = js.get(cls), passed = new Set(baseline[cls] ?? []), explained = new Set<string>(), skips = skipped.get(cls)!;
@@ -111,8 +112,15 @@ for (const [suiteName, classMatch] of plan) {
     // These are provider setup failures, not absent baseline tests or baseline drift.
     // The runner marks adapted providers so a lost provider fails even when both tiers skip it.
     regressions.push(...arrayProviderFailures(cls, skips));
-    const pinnedNoRunnable = noRunnableClass(cls, w) && rules.some((r) => r.cls.test(cls) && r.test.source === "." && r.because?.test(classFailureReason(cls, w)!));
-    if (!testFilter) regressions.push(...classSetupFailures(cls, w, passed.size, pinnedNoRunnable));
+    const coverageRule = noRunnableCoverage(cls, w, j) && rules.find((r) => r.cls.test(cls) && r.test.source === "." && r.because?.test(classFailureReason(cls, w)!));
+    if (!testFilter) {
+      regressions.push(...classSetupFailures(cls, w, passed.size, !!coverageRule));
+      if (coverageRule && passed.size) {
+        coverageRule.coverageHits++;
+        coverageClasses++;
+        coverageAbsent += passed.size;
+      }
+    }
     before += passed.size;
     for (const o of w.values()) { tests++; if (o.ok) wasmPass++; }
     for (const name of new Set([...w.keys(), ...(j?.keys() ?? [])])) {
@@ -130,12 +138,13 @@ for (const [suiteName, classMatch] of plan) {
     const ran = new Set([...w.keys(), ...(j?.keys() ?? [])].map(hash)), vanished = [...passed].filter((h) => !ran.has(h) && !explained.has(h)).length;
     if (vanished && !testFilter) { if (j) drift += vanished; else regressions.push(`${cls}: ${vanished} passing tests no longer ran`); }
   }
-  for (const r of rules) if (!r.hits && !r.flaky && !classMatch && !testFilter && withJs) unexplained.push(`pin ${r.class} ${r.test}  matches no divergence any more`);
+  for (const r of rules) if (!r.hits && !r.coverageHits && !r.flaky && !classMatch && !testFilter && withJs) unexplained.push(`pin ${r.class} ${r.test}  matches no divergence any more`);
   totals.wasm += wasmPass; totals.js += jsPass; totals.tests += tests; totals.baseline += before;
   const pinned = rules.reduce((n, r) => n + r.hits, 0);
   console.log(`${suiteName}: wasm ${wasmPass}/${tests}${withJs ? `, js ${jsPass}` : ""}, baseline ${before}; ${regressions.length} regressions, ${pinned} pinned divergences${drift ? `, ${drift} baseline tests neither tier runs` : ""}, ` +
     `${unexplained.length} unexplained (${((performance.now() - started) / 1000).toFixed(0)}s wall, ${seconds.wasm.toFixed(0)}s wasm${withJs ? ` ${seconds.js.toFixed(0)}s js` : ""})`);
   console.log(`  Wasm executions: ${executions.pass + executions.fail}, ${executions.pass} pass, ${executions.fail} fail, ${executions.skipped} skipped (comparison above uses unique test names)`);
+  if (coverageClasses) console.log(`  Exact no-runnable coverage validations: ${coverageClasses} classes, ${coverageAbsent} baseline tests not executed`);
   for (const r of grouped(regressions)) console.log(`  regressed ${r}`);
   for (const r of grouped(unexplained)) console.log(`  diverges ${r}`);
   failed ||= regressions.length > 0 || unexplained.length > 0;
