@@ -79,7 +79,10 @@ async function runSuite(name: string, args: string[]): Promise<number> {
   if (name === "aot") return buildAot(args);
   if (name === "fuzz" && !args.length) {
     let status = 0;
-    for (const seed of FUZZ_SEEDS) status ||= await exec(name, ["--seed", String(seed)], process.env);
+    for (const seed of FUZZ_SEEDS) {
+      const result = await exec(name, ["--seed", String(seed)], process.env);
+      status ||= result;
+    }
     return status;
   }
   if (name === "entry") {
