@@ -67,6 +67,10 @@ if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
   const platform = program(jars), mk = () => { const x = world(new Program(loadDexes(dex), platform), { natives }); for (const spec of natives.source!.hostSpecs!()) x.addHostClass(spec); return x; };
   const worlds = [mk(), mk()], name = (x: typeof w) => x.hostClassNames().join();
   if (!name(worlds[0]) || name(worlds[0]) !== name(worlds[1])) fail("Worlds over one platform Program have different host classes");
+  for (const cls of ["java/lang/StringBuilder", "java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor"]) {
+    const slots = w.vslots(cls);
+    if (new Set(slots).size !== slots.length || slots.join("\n") !== worlds[0].vslots(cls).join("\n")) fail(`flat/shared dispatch layout differs for ${cls}`);
+  }
   for (const x of [worlds[0], worlds[1], worlds[0]]) {
     useEntry(wasmEntry(x)); fieldNames.find = fieldNamesOf(x);
     await processStateAsync(x);

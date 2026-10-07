@@ -102,7 +102,7 @@ export function symbolicImplFor(prog: Program, cls: string, slot: string, includ
     const c = prog.get(owner);
     if (!c) return;
     const m = symbolicMethod(c, name, desc);
-    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
+    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) { if (includeAbstract || !(m.flags & ACC.ABSTRACT)) found.push(m); return; }
     c.ifaces.forEach(visit);
   };
   for (const owner of prog.chain(cls)) prog.require(owner).ifaces.forEach(visit);
