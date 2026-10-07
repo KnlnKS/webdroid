@@ -8,16 +8,20 @@ with its suites in `scripts/wasm/` (`bun run wasm <suite>`) and its Java fixture
 (its `mid` is `compiler/ids.ts`). `floatbench.ts`, `lazybench.ts` and the j2w `dis.ts` were deleted.
 This is a report plus a staged plan for a different coding agent to execute.
 
-## Recovery status (2026-10-05)
+## Recovery status (2026-10-06)
+
+Integration is at `7d5f8ae2`. The recovered WP-A changes are merged; WP-B launch/boundary and WP-C correctness changes remain in their worktrees and require review and verification before integration. The interrupted WP-A first-call follow-up also has pending source changes. Typecheck and the 1,199-case unit suite pass on the frozen integration source. The broader Wasm suite is being rerun; partial results are not final G2 acceptance.
+
+The shared-host G1/G4 measurements recorded in the implementation history are provisional: G1 steady-state geometric mean is about 2x with the weakest measured installed-app workload at 0.91x, while Chrome first-call geometric mean remains 0.93x installed and 0.31x on demand. The three G4 loop shapes reached their measured optimized reference in 22–23 ms. Final acceptance still requires matching idle-host measurements after correctness and source integration stabilize. S6 retains the JavaScript oracle for one release after the default switch, as specified below.
 
 Recovered from `1d7fdeea` after the session crash. The gate definitions in section 6 remain the acceptance criteria; historical measurements and a successful compile sweep do not establish full runtime parity.
 
 | Gate | Recovered evidence and work still required |
 |---|---|
-| G1 | Open. Shared-host runs beat the steady-state geometric mean, but some workloads lose more than 10% and Chrome first calls are slower. Repeat on an idle host after correctness stabilizes. |
+| G1 | Open. The merged WP-A shared-host measurements meet the steady-state bars, but Chrome first calls remain slower. Verify the follow-up changes and repeat on an idle host after correctness stabilizes. |
 | G2 | Open for final acceptance. Differential suites and `fwtest` (31/31) pass. The TestNG runner now recovers 6,123 previously skipped executions; the affected classes pass 8,065 cases without skips. The nine-suite serial recovery cut now reports 410,870 raw passes, 599 failure records and zero skips, with zero unexplained differences; the final integrated source/browser gate remains open (section 6). A compile sweep checks translation, not execution of every method. |
 | G3 | Open. The stated bar is 30% less cold-call compile time and every gated tap at most 150 ms. Record matching cold/warm compile counters for every named app; launch parity is also required by S4/S6. X1's launch timings alone do not settle the compile-time criterion. |
-| G4 | Open. Typed outlined loops and bounded re-entry are integrated. Core differential, thread, fuzz and AOT checks pass; shared-load timing approaches repeated-call speed but does not establish the 100 ms criterion. Compact native chunk locals fix the matched Komikku recursion regression; the unmodified 23-step flow passes at `2ace54d6`. Code size, tiny-loop overhead and the 100 ms criterion still need measurement. |
+| G4 | Open for final acceptance. The merged WP-A shared-host measurements reach the optimized reference in 22–23 ms for all three loop shapes. Repeat against frozen integrated source on an idle host, including cold promotion/reentry and correctness coverage. |
 | G5 | Open. The string representation comparison is measured; the required boundary share below 5% of a heavy tap has not been demonstrated. |
 | G6 | Not implemented. X1 records a measured decision to pursue module-loading reductions instead of a heap image; this is a design decision, not a successful image-loader measurement. |
 | G7 | Measured for Chrome and the WebKit build. Firefox is excluded by the user's instruction. |
