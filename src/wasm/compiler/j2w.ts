@@ -4,6 +4,9 @@ import { Code, OP } from "./code";
 import { Program, kindOf, type Kind, type MethodInfo } from "./program";
 import { mid } from "./ids";
 import { H, elemKindOf, type ElemKind } from "./consts";
+import { declareSymbolicSites, type SymbolicSite } from "./sites";
+import type { PreparedMethod } from "../../jvm/prepared";
+import type { Typing } from "./infer";
 import { compileMethod, MC } from "./method";
 import type { ClassRt, World } from "../link/world";
 import { rtfns, type Synth } from "./rtfns";
@@ -72,6 +75,9 @@ export class Compiler implements Base {
   str: StringRepr;
   /** the production natives this module imports, by method id, and their import indices */
   nativeImports = new Map<string, number>();
+  methodAnalyses = new Map<MethodInfo, { prepared: PreparedMethod; typing: Typing }>();
+  symbolicTable?: number;
+  symbolicImports = new Map<string, { slot: number; site: SymbolicSite }>();
   private memory = false;
   private guestMemory = false;
   private classStruct = new Map<string, number>();
@@ -619,6 +625,7 @@ export class Compiler implements Base {
     const { mb, w } = this, all = methods.concat(copies);
     this.counting = !hot;
     this.natives.declare(this, all);
+    declareSymbolicSites(this, all);
     // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
     const label = (m: MethodInfo, i: number) => (hot || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
     all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
@@ -644,6 +651,7 @@ export class Compiler implements Base {
     if (this.fn.size || this.codes.size) throw new Error("resume needs a fresh compiler");
     if (!m.codeOff || this.intrinsic(m)) throw new Error("resume needs a bytecode body");
     this.natives.declare(this, [m]);
+    declareSymbolicSites(this, [m]);
     const name = `${mid(m)}#resume${pc}`, ret = m.ret === "V" ? "V" : kindOf(m.ret);
     const bits = this.mb.importFunc("resume", "bits", this.mb.addFuncType([T.externref, T.i32], [T.i64]));
     const reference = this.mb.importFunc("resume", "reference", this.mb.addFuncType([T.externref, T.i32], [T.externref]));
@@ -654,6 +662,11 @@ export class Compiler implements Base {
     const code = mc.weigh(); this.mb.setBody(f, code.finish()); this.mb.export("resume", "func", f);
     const built = this.finishModule([{ name, f, code, m }]);
     return { ...built, registers: mc.resumeRegisters };
+  }
+  buildSyntheticGroup(bodies: { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void }[]) {
+    const parts = bodies.map(body => ({ ...body, f: this.mb.reserveFunc(this.sig(body.params, body.ret), "$" + body.name), code: new Code(body.params.length) }));
+    for (const part of parts) { part.body(part.code); this.mb.setBody(part.f, part.code.finish()); this.mb.export(part.name, "func", part.f); }
+    return this.finishModule(parts.map(part => ({ name: "$" + part.name, f: part.f, code: part.code })));
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
   buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m", abiParams?: VT[]): { bytes: Uint8Array; traces: FnTrace[] } {

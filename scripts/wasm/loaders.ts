@@ -38,10 +38,11 @@ const sh = shellIn(out), androidJar = `${androidPlatform(35)}/android.jar`;
 const build = (dir: string, sources: string[], classpath?: string) => {
   sh(["mkdir", "-p", dir]);
   sh(["javac", "--release", "11", "-Xlint:-options", "-cp", [androidJar, classpath].filter(Boolean).join(":"), "-d", join(out, dir), ...sources.map((s) => join(JAVA, s))]);
-  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/)]);
+  sh([androidTool("d8"), "--min-api", "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !path.endsWith("/AbsentOptional.class"))]);
   return join(out, dir, "classes.dex");
 };
-const app = build("app", ["Ldr.java"]);
+const app = build("app", ["Ldr.java", "Tag.java"]);
+const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
 const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java"], join(out, "app"));
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
@@ -62,7 +63,7 @@ try {
 const files = new Map([["/data/local/tmp/a.dex", a], ["/data/local/tmp/b.dex", b]]);
 for (const [path, file] of files) vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(file))));
 const js = await jsTier(loadDexes(app));
-const w = world([app, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
+const w = world([app, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { ...(process.argv.includes("--cold") && { cold: true }), natives, dexes: (path) => (files.has(path) ? loadDexes(files.get(path)!) : undefined) });
 
 const CHECKS = ["the loaders define distinct Shared classes", "getClassLoader", "loadClass finds the class again", "statics are separate", "isInstance does not cross", "both implement the app's Tag",
   "cast across loaders fails", "Class.forName with a loader", "a class only the other loader defines, and its superclass", "the parent's classes are found through the loader", "signatures name the loader's class",
@@ -88,6 +89,34 @@ w.opts.dexes = async (path) => {
 const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
 if (deferred) { failed++; console.log(`FAIL deferred archive checks: ${deferred}`); }
 const desc = "(Ljava/lang/String;Ljava/lang/String;)I", paths = ["/data/local/tmp/a.dex", "/data/local/tmp/b.dex"];
+if (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy")) {
+  const expected = await js("Ldr", "hierarchyDelegateLast", desc, paths);
+  const result = await w.entryAsync("Ldr", "hierarchyDelegateLast", desc)(...paths);
+  if (expected !== 7 || result !== expected) throw new Error(`defining hierarchy mirrors: js=${expected}, wasm=${result}, expected=7`);
+  console.log(`defining hierarchy mirrors: js=${expected}, wasm=${result}`);
+  if (process.argv.includes("--hierarchy")) process.exit(0);
+}
+if (!process.argv.includes("--hierarchy")) {
+  const expected = await js("Ldr", "symbolicDelegateLast", desc, paths);
+  const result = await w.entryAsync("Ldr", "symbolicDelegateLast", desc)(...paths);
+  if (expected !== 42 || result !== expected) throw new Error(`uninitiated symbolic class reference: js=${expected}, wasm=${result}, expected=42`);
+  const object = await w.entryAsync("Ldr", "symbolicLoader", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/ClassLoader;")(...paths) as object;
+  const owner = w.sched.strand();
+  let key: string;
+  try { key = await w.resolveClass(definingLoader(w, object), "Shared", owner); } finally { owner.end(); }
+  const call = w.entryAsync(key, "symbolic", "()I");
+  if (await call() !== 42) throw new Error("symbolic direct entry failed");
+  const resolutions = w.symbolicResolutions, stubModules = w.symbolicStubModules;
+  for (let i = 0; i < 3; i++) if (await call() !== 42) throw new Error("cached symbolic operation failed");
+  if (!w.opts.cold && w.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
+  if (w.symbolicStubModules !== stubModules) throw new Error("warm symbolic operation rebuilt stub modules");
+  console.log(`symbolic cache: first resolutions=${resolutions}, stub modules=${stubModules}; repeat resolutions=${w.symbolicResolutions - resolutions}, stub modules=${w.symbolicStubModules - stubModules}`);
+  if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
+  try { await w.entryAsync(key, "optional", "(Z)I")(1); throw new Error("missing optional reference accepted"); }
+  catch (e) { const t = w.throwable(e); if (!t || w.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }
+  console.log(`uninitiated symbolic class reference: js=${expected}, wasm=${result}${w.opts.cold ? " (cold)" : " (compiled)"}${w.opts.cold ? "" : "; warm site resolutions=0"}; optional reference lazy`);
+  if (process.argv.includes("--symbolic")) process.exit(0);
+}
 const jsCustom = await js("Ldr", "customParent", desc, paths);
 const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
 if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: js=${jsCustom}, wasm=${wasmCustom}, expected=121`); }
@@ -125,8 +154,8 @@ try {
   catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
 }
 for (const asynchronous of [false, true]) {
-  const appDexes = loadDexes(a), base = program(PLATFORM_JARS.map(j => join(AOSP, j)));
-  const p = new Program([...loadDexes(app), ...appDexes], base), layered = world(p, { natives, dexes: path => {
+  const appDexes = loadDexes(a), base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
+  const p = new Program([...loadDexes(layeredApp), ...appDexes], base), layered = world(p, { natives, dexes: path => {
     const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined;
     return asynchronous ? Promise.resolve().then(() => dexes) : dexes;
   } });
@@ -248,8 +277,11 @@ for (const asynchronous of [false, true]) {
           if (!resolver.sched.monitors.holds(object, first) || resolver.sched.monitors.holds(object, second)) throw new Error("resolver callback lost or borrowed unrelated monitor ownership");
         } finally { if (resolver.sched.monitors.exit(object, first) !== St.Ok) throw new Error("resolver fixture monitor release failed"); }
       } else {
-        const results = await Promise.all([resolver.resolveClass(loader, "Shared", first), resolver.resolveClass(loader, "Shared", second)]);
-        if (results[0] !== results[1] || results[0] !== resolver.prog.initiatedBy(loader, "Shared")) throw new Error("racing loader calls did not preserve first successful initiation");
+        const pending = [resolver.resolveClass(loader, "Shared", first), resolver.resolveClass(loader, "Shared", second)];
+        const winner = await pending[mode === 4 ? 1 : 0];
+        await resolver.entryAsync("Ldr", "resolverReleaseRace", "()V")();
+        const results = await Promise.all(pending);
+        if (results[0] !== results[1] || results[0] !== winner || winner !== resolver.prog.initiatedBy(loader, "Shared")) throw new Error("racing loader calls did not preserve first successful initiation");
       }
     } finally { first.end(); second.end(); }
   }

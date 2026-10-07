@@ -4,6 +4,39 @@ import { definingLoader, objectOfLoader } from "./loaders";
 import { T } from "../compiler/wasmbin";
 import type { Strand } from "./sched";
 import type { World } from "./world";
+import type { MethodInfo } from "../compiler/program";
+import type { PreparedInstruction } from "../../jvm/prepared";
+import { descToName } from "../../jvm/abi";
+
+function resolveType(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
+  const fail = (error: unknown): never => {
+    const cause = w.throwable(error);
+    if (!cause || !w.prog.isSubclass(w.classNameOf(cause), "java/lang/ClassNotFoundException")) throw error;
+    const throwable = w.makeThrowable("java/lang/NoClassDefFoundError", `Failed resolution of: ${name[0] === "[" ? name : `L${name};`}`);
+    w.hostFn("resolve:type:cause", ["L", "L"], "V", (cx, c) => {
+      const cls = "java/lang/Throwable", st = cx.structFor(cls);
+      c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(cls, { owner: cls, name: "cause", desc: "Ljava/lang/Throwable;" }));
+    })(throwable, cause);
+    throw w.exception(throwable);
+  };
+  try { const key = resolveClass(w, loader, name, owner); return key instanceof Promise ? key.catch(fail) : key; }
+  catch (error) { return fail(error); }
+}
+
+/** Resolve the class named by this executed instruction, not its unused siblings. */
+export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): void | Promise<void> {
+  const dex = method.dex, n = ins.name;
+  const index = /^(const-class|check-cast|new-instance|filled-new-array)/.test(n) ? ins.b
+    : n === "instance-of" || n === "new-array" ? ins.c
+    : /^(iget|iput)/.test(n) ? dex.field(ins.c).cls
+    : /^(sget|sput)/.test(n) ? dex.field(ins.b).cls
+    : /^invoke-(virtual|interface|static|direct|super|polymorphic)/.test(n) ? dex.method(ins.b).cls : undefined;
+  if (index === undefined) return;
+  const descriptor = dex.rawType(index);
+  if (descriptor[0] !== "L" && descriptor[0] !== "[") return;
+  const key = resolveType(w, w.prog.loaderOf(method.cls), descToName(descriptor), owner);
+  if (key instanceof Promise) return key.then(() => {});
+}
 
 function callJava(w: World, owner: Strand, name: string, params: Kind[], ret: Kind | "V", body: Parameters<World["callFn"]>[3], ...args: unknown[]): unknown {
   if (w.inSynchronousJava() || owner.root) {
@@ -47,6 +80,46 @@ export function resolveForName(w: World, name: string, object: object | null, ow
   }
 }
 
+type Definition = { owner: Strand["thread"]; state: "resolving" | "ready" | "failed"; wait: Promise<string>; error?: unknown };
+const definitions = new WeakMap<World, Map<string, Definition>>();
+
+/** Resolve only declaration hierarchy before a definition publishes layout or its mirror. */
+export function prepareDefinition(w: World, key: string, owner: Strand): string | Promise<string> {
+  const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
+  if (!cls?.dex || !cls.def || loader === w.prog.boot || !objectOfLoader(w, loader)) return key;
+  let states = definitions.get(w);
+  if (!states) definitions.set(w, states = new Map());
+  const prior = states.get(key);
+  if (prior) {
+    if (prior.state === "ready") return key;
+    if (prior.state === "failed") throw prior.error;
+    if (prior.owner === owner.thread) throw w.exception(w.makeThrowable("java/lang/ClassCircularityError", javaName(key)));
+    return prior.wait;
+  }
+  let complete!: (key: string) => void, reject!: (error: unknown) => void;
+  const wait = new Promise<string>((yes, no) => { complete = yes; reject = no; });
+  wait.catch(() => {});
+  const state: Definition = { owner: owner.thread, state: "resolving", wait };
+  states.set(key, state);
+  const { superIdx, interfaces } = cls.def, dex = cls.dex;
+  const names = [...superIdx === 0xffffffff ? [] : [superIdx], ...interfaces].map(i => descToName(dex.rawType(i)));
+  const finish = () => { state.state = "ready"; complete(key); return key; };
+  const fail = (error: unknown): never => { state.state = "failed"; state.error = error; reject(error); throw error; };
+  const next = (at: number): string | Promise<string> => {
+    if (at === names.length) return finish();
+    const result = resolveType(w, loader, names[at], owner);
+    return result instanceof Promise ? result.then(() => next(at + 1)) : next(at + 1);
+  };
+  try { const result = next(0); return result instanceof Promise ? result.catch(fail) : result; }
+  catch (error) { return fail(error); }
+}
+
+export function resolvedMirror(w: World, key: string, owner: Strand): object | Promise<object> {
+  return callJava(w, owner, "resolve:definition:mirror", ["I"], "L", (cx, c, arg) => {
+    arg(0); cx.callRt(c, "classOf");
+  }, w.idOf(key)) as object | Promise<object>;
+}
+
 /** Resolve one executed symbolic request without linking its class module. */
 export function resolveClass(w: World, loader: Loader, name: string, owner: Strand): string | Promise<string> {
   const missing = (): never => { throw w.exception(w.makeThrowable("java/lang/ClassNotFoundException", name.replace(/\//g, "."))); };
@@ -59,7 +132,7 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     return found instanceof Promise ? found.then(array) : array(found);
   }
   const loaded = w.prog.initiatedBy(loader, name);
-  if (loaded) return loaded;
+  if (loaded) return prepareDefinition(w, loaded, owner);
   const object = objectOfLoader(w, loader);
   if (!object) {
     // The boot namespace and the host's startup namespace have no Java loader peer yet.
@@ -74,19 +147,19 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
   const body: Parameters<World["callFn"]>[3] = (cx, c, arg) => {
     arg(0); arg(1); cx.callMethod(c, method);
   };
-  const accept = (mirror: unknown): string => {
+  const accept = (mirror: unknown): string | Promise<string> => {
     if (!mirror) throw w.exception(w.makeThrowable("java/lang/NullPointerException", `ClassLoader.loadClass returned null for ${name.replace(/\//g, ".")}`));
     const id = w.hostFn("resolve:classId", ["L"], "I", (cx, c) => { c.lget(0); idOfClass(cx, c); })(mirror) as number;
     const key = w.nameOf(id);
     const winner = w.prog.initiatedBy(loader, name);
-    if (winner) return winner;
+    if (winner) return prepareDefinition(w, winner, owner);
     if (javaName(key) !== name) throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `${name} (wrong name: ${javaName(key)})`));
     w.initiateClass(loader, name, key);
-    return key;
+    return prepareDefinition(w, key, owner);
   };
-  const failed = (error: unknown): string => {
+  const failed = (error: unknown): string | Promise<string> => {
     const winner = w.prog.initiatedBy(loader, name);
-    if (winner) return winner;
+    if (winner) return prepareDefinition(w, winner, owner);
     throw error;
   };
   let result: unknown;

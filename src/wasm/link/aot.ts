@@ -1,3 +1,4 @@
+import type { SymbolicSite } from "../compiler/sites";
 // Ahead-of-time compilation of the platform classes (plan S4): the code Compiler.buildUnit and World.classModule would produce on demand is
 // produced once, at build time, and stored as static assets; at run time the World loads them instead of compiling.
 //
@@ -63,6 +64,7 @@ export interface UnitHeader {
   touch: number[]; synth: string[];
   /** native imports by method id */
   natives: string[];
+  symbols?: SymbolicSite[];
   /** class-hierarchy decisions: declaring class, name, descriptor, the one target's class and key ("" without one), and the slot of the method that relies on it */
   assumptions: [string, string, string, string, string, number][];
   allocs: string[];
@@ -78,7 +80,7 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-export const VERSION = 3;
+export const VERSION = 4;
 
 /** the sizes of what a World numbers, which only grow */
 export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
@@ -89,7 +91,7 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 3;
+export const APP_VERSION = 4;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[]; verdicts?: Verdict[] }
 /** whether a decision of the platform build (`decl.name+desc` resolves to `tc`'s `tk`) stands over the app's classes, as a launch found it */
@@ -126,7 +128,7 @@ export function unitHeader(w: World, cx: Compiler, touch: Set<string>): UnitHead
     if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
   }
   return { deopt: cx.deopt ? DEOPT_ABI : 0, touch: [...touch].filter((n) => n[0] !== "!").map((n) => w.idOf(n)), synth: [...touch].filter((n) => n[0] === "!").map((n) => n.slice(1)),
-    natives: [...cx.nativeImports.keys()], assumptions, allocs: [...cx.allocs],
+    natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), assumptions, allocs: [...cx.allocs],
     missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]), gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)) };
 }
 /** what identifies a dex of the platform: DexFile.id is its SHA-1, but only where the engine has Uint8Array.toHex for views into a larger buffer */
@@ -379,7 +381,7 @@ export class AotRuntime {
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
     for (const s of head.synth) if (this.synthIn.get(s) !== k) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), deopt: w.deoptImports };
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };
     w.classImports(mod, imports);
     w.instantiate(mod, imports);
     for (const n of head.names) { const slot = w.synthSlotOf(n); if (slot !== undefined && !w.isStubbed(slot)) w.holdsSynth(n, slot); }
@@ -446,7 +448,7 @@ export class AotRuntime {
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
-    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), deopt: w.deoptImports };
+    const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };
     for (const m of head.mods) imports[m] = this.dExports[+m.slice(1)];
     if (app) w.classImports(mod, imports);
     w.instantiate(mod, imports);

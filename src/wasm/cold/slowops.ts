@@ -7,11 +7,13 @@ import { MC } from "../compiler/method";
 import { mid } from "../compiler/ids";
 import { declaredMethod, kindOf, type Kind, type MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
-import type { Compiler } from "../compiler/j2w";
+import { Compiler } from "../compiler/j2w";
+import { siteOperands } from "../compiler/sites";
 import { T } from "../compiler/wasmbin";
 import { validateColdSnapshot, type ColdSnapshot } from "./state";
 import type { Strand } from "../link/sched";
 import type { World } from "../link/world";
+import { resolveInstruction } from "../link/resolution";
 
 
 export class UnsupportedSlowOperation extends Error {}
@@ -25,6 +27,7 @@ const abi = (kind: number): Kind => kind === R ? "L" : kind === J || kind === D 
 // Slow adapters contain no copied callees. Always resolve virtual calls through
 // the receiver's current slot, including when a callback loads an override.
 class SlowMC extends MC {
+  override symbolic = false;
   override callee(ins: PreparedInstruction): MethodInfo | "dynamic" | null {
     return /^invoke-(virtual|interface)/.test(ins.name) ? "dynamic" : super.callee(ins);
   }
@@ -49,6 +52,25 @@ export class ColdSlowOps {
   static supports(ins: PreparedInstruction): boolean {
     if (ins.name.endsWith("-quick")) return false;
     return /^(move-result|move-exception|invoke-|iget|sget|iput|sput|aget|aput|monitor-|fill-array-data|throw|const-string|const-class|const-method-|new-instance|new-array|filled-new-array|check-cast|array-length|instance-of|(?:div|rem)-(?:int|long|float|double))/.test(ins.name);
+  }
+
+  site(m: MethodInfo, pc: number) {
+    const analysis = this.analysis(m), ins = analysis.instructions.get(pc);
+    if (!ins) throw new UnsupportedSlowOperation(`${mid(m)} at ${pc}`);
+    return { ins, ...siteOperands(m, ins, analysis.typing) };
+  }
+
+  compileSite(m: MethodInfo, pc: number) {
+    const { ins, inputs, output } = this.site(m, pc), cx = new Compiler(this.w);
+    const emit = this.operation(m, ins, inputs, output);
+    const built = cx.buildSynthetic(`symbolic:${m.cls}:${m.index}:${pc}`, inputs.map(i => i.kind), c => {
+      const weights = emit(cx, c, i => {
+        if (i < 2) c.gget(cx.global("rt", i ? "thr" : "depth", i ? T.anyref : T.i32, true));
+        else c.lget(i - 2);
+      });
+      for (const at of weights) c.patch(at, 4 + c.nparams + c.localTypes.length);
+    }, output);
+    return { cx, built };
   }
 
   private analysis(m: MethodInfo): Analysis {
@@ -94,7 +116,7 @@ export class ColdSlowOps {
       this.adapters.set(m, cache = new Map());
       // Seal deterministic, bounded ABI batches before any helper is emitted.
       // Snapshot-only operations and String allocation do not need an adapter.
-      for (const op of analysis.prepared.instructions) {
+      for (const op of this.w.prog.loaderOf(m.cls) === this.w.prog.boot ? analysis.prepared.instructions : []) {
         if (!analysis.typing.reached(op.pc) || !ColdSlowOps.supports(op) || /^(move-result|move-exception)/.test(op.name)
           || op.name === "new-instance" && descToName(m.dex.type(op.b)) === "java/lang/String") continue;
         this.adapter(m, op);
@@ -102,7 +124,7 @@ export class ColdSlowOps {
     }
     let found = cache.get(ins.pc);
     if (found) return found;
-    const { prepared, typing } = this.analysis(m), output = this.output(m, ins), inputs: { reg: number; kind: Kind; web: number }[] = [];
+    const { typing } = this.analysis(m), output = this.output(m, ins), inputs: { reg: number; kind: Kind; web: number }[] = [];
     const seen = new Set<number>();
     for (const reg of registersOf(ins)) {
       const web = typing.use(ins.pc, reg);
@@ -132,7 +154,32 @@ export class ColdSlowOps {
       return adapter;
     };
     if (shared) return finish(shared);
-    const body = (cx: Compiler, c: Code, arg: (i: number) => void) => {
+    const body = this.operation(m, ins, inputs, output);
+    // String factories embed native imports: an unexecuted constructor must
+    // not reserve a native declaration when another case first runs.
+    const constructor = this.stringConstructor(m, ins);
+    const signature = inputs.map(i => i.kind).join("") + ":" + output + (constructor ? ":factory:" + ins.pc : "");
+    let groups = this.batches.get(m);
+    if (!groups) this.batches.set(m, groups = new Map());
+    let list = groups.get(signature);
+    if (!list) groups.set(signature, list = []);
+    let batch = list.at(-1);
+    if (!batch || batch.entries.length === (this.w.prog.loaderOf(m.cls) === this.w.prog.boot ? BATCH_SIZE : 1)) {
+      batch = this.batch(`cold:slow:${mid(m)}:${ins.pc}`, ["I", "L", "I", ...inputs.map(i => i.kind)], output);
+      list.push(batch);
+    }
+    const selector = batch.entries.length;
+    const ctor = constructor
+      ? declaredMethod(this.w.prog.get("java/lang/String"), "<init>" + m.dex.methodDesc(ins.b)) : undefined;
+    batch.entries.push({ body, ctor });
+    const call: Adapter["call"] = (strand, sync, depth, peer, ...args) => batch!.call(strand, sync, selector, depth, peer, ...args);
+    calls.set(key, call);
+    return finish(call);
+  }
+
+  private operation(m: MethodInfo, ins: PreparedInstruction, inputs: { reg: number; kind: Kind; web: number }[], output: Kind | "V"): SlowBody {
+    const { prepared, typing } = this.analysis(m);
+    return (cx: Compiler, c: Code, arg: (i: number) => void) => {
       arg(0); c.gset(cx.global("rt", "depth", T.i32, true));
       arg(1); c.gset(cx.global("rt", "thr", T.anyref, true));
       const mc = new SlowMC(cx, m);
@@ -161,26 +208,6 @@ export class ColdSlowOps {
       if (output !== "V") c.lget(mc.outputLocal);
       return weights;
     };
-    // String factories embed native imports: an unexecuted constructor must
-    // not reserve a native declaration when another case first runs.
-    const constructor = this.stringConstructor(m, ins);
-    const signature = inputs.map(i => i.kind).join("") + ":" + output + (constructor ? ":factory:" + ins.pc : "");
-    let groups = this.batches.get(m);
-    if (!groups) this.batches.set(m, groups = new Map());
-    let list = groups.get(signature);
-    if (!list) groups.set(signature, list = []);
-    let batch = list.at(-1);
-    if (!batch || batch.entries.length === BATCH_SIZE) {
-      batch = this.batch(`cold:slow:${mid(m)}:${ins.pc}`, ["I", "L", "I", ...inputs.map(i => i.kind)], output);
-      list.push(batch);
-    }
-    const selector = batch.entries.length;
-    const ctor = constructor
-      ? declaredMethod(this.w.prog.get("java/lang/String"), "<init>" + m.dex.methodDesc(ins.b)) : undefined;
-    batch.entries.push({ body, ctor });
-    const call: Adapter["call"] = (strand, sync, depth, peer, ...args) => batch!.call(strand, sync, selector, depth, peer, ...args);
-    calls.set(key, call);
-    return finish(call);
   }
 
   private batch(name: string, params: Kind[], output: Kind | "V"): Batch {
@@ -284,7 +311,7 @@ export class ColdSlowOps {
       this.write(state, ins.a, "L", token); state.result = undefined;
       state.executedPc = ins.pc; state.pc += ins.len; return "next";
     }
-    const adapter = this.adapter(m, ins), args = adapter.inputs.map(i => this.read(state, i.reg, i.kind));
+    let adapter: Adapter;
     const constructor = this.stringConstructor(m, ins), receiver = constructor ? state.references[ins.regs[0]] : undefined;
     if (constructor && !state.uninitialized.some(a => a.reference === receiver)) throw new Error("String constructor requires an uninitialized allocation");
     this.busy.add(state); state.result = undefined;
@@ -319,7 +346,16 @@ export class ColdSlowOps {
     // A peer can be allocated but not yet bound during Thread construction.
     // Capture it before yielding; callFn enters a fresh engine stack using the bound peer.
     const peer = this.w.rtImports().thr.value;
-    const call = () => adapter.call(strand, state.sync, depth, peer, ...args);
+    const call = () => {
+      const resolve = () => resolveInstruction(this.w, m, ins, strand);
+      const found = state.sync ? this.w.synchronous(resolve) : resolve();
+      const execute = () => {
+        adapter = this.adapter(m, ins);
+        const args = adapter.inputs.map(i => this.read(state, i.reg, i.kind));
+        return adapter.call(strand, state.sync, depth, peer, ...args);
+      };
+      return found instanceof Promise ? found.then(execute) : execute();
+    };
     const invoke = () => caller && !strand.root && !state.sync ? this.w.withBridgeCaller(caller, call) : call();
     try {
       // Ready async natives release engine stacks but only resume microtasks.

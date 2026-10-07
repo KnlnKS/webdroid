@@ -340,7 +340,10 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
+  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
+  c.lget(1); cx.str.toHost(c); c.lget(0).externConvertAny(); c.i32(Lookup.Defined); c.call(cx.imp.classByName).lset(id);
+  c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
+  c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end(); restore();
 });
 
 // Class.getInnerClassFlags(default): the InnerClass annotation's flags, else `default`

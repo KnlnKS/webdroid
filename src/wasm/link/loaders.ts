@@ -8,6 +8,7 @@ import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Loader } from "../compiler/program";
 import { dexesIn, type DexFile } from "../../jvm/dex";
 import type { World } from "./world";
+import { prepareDefinition, resolvedMirror } from "./resolution";
 import { emitSave } from "./sched";
 
 /** how host.classByName reads its scope: the loader whose view of the names is asked for, the loader whose own classes are asked for, or the dex files of a cookie */
@@ -82,7 +83,7 @@ function librariesOf(w: World, object: object): [Loader[], Loader[]] {
 }
 
 /** host.classByName(name, scope, mode): the id of the class a binary name ("a.B$C", "[La.B;") stands for in the scope, or 0 */
-export function classByName(w: World, name: string, scope: unknown, mode: Lookup): number {
+export function classByName(w: World, name: string, scope: unknown, mode: Lookup): number | Promise<object> {
   const n = name.replace(/\./g, "/");
   if (n === "" || n.includes("@")) return 0;
   const prog = w.prog, s = stateOf(w), cookie = mode === Lookup.Cookie ? s.cookies.get(w.hostString(scope) as string) : undefined;
@@ -96,9 +97,18 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
     return key;
   };
   const e = n.replace(/^\[+/, "");
-  if (e === n) { const key = find(n); return key === undefined ? 0 : w.idOf(key); }
+  if (e === n) {
+    const key = find(n);
+    if (key === undefined) return 0;
+    const owner = w.sched.current(), prepared = prepareDefinition(w, key, owner);
+    return prepared instanceof Promise ? prepared.then(key => resolvedMirror(w, key, owner)) : w.idOf(key);
+  }
   const element = /^L(.+);$/.exec(e), key = element ? find(element[1]) : /^[ZBCSIJFD]$/.test(e) ? "" : undefined;
-  return key === undefined ? 0 : w.idOf(key === "" ? n : `${n.slice(0, n.length - e.length)}L${key};`);
+  if (key === undefined) return 0;
+  if (key === "") return w.idOf(n);
+  const owner = w.sched.current(), prepared = prepareDefinition(w, key, owner);
+  const array = (component: string) => `${n.slice(0, n.length - e.length)}L${component};`;
+  return prepared instanceof Promise ? prepared.then(component => resolvedMirror(w, array(component), owner)) : w.idOf(array(key));
 }
 
 /** host.dexOpen(path, loader): the cookie of the dex files at `path`, whose classes are defined in the namespace of the ClassLoader object `loader` */
@@ -162,7 +172,11 @@ def("dalvik/system/DexFile.openDexFileNative(Ljava/lang/String;Ljava/lang/String
 def("dalvik/system/DexFile.defineClassNative(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Object;Ldalvik/system/DexFile;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(0).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
-  c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.Cookie); c.call(cx.imp.classByName).ltee(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end();
+  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
+  c.lget(0); cx.str.toHost(c); c.lget(2).externConvertAny(); c.i32(Lookup.Cookie); c.call(cx.imp.classByName).lset(id);
+  c.gget(wait).if_(T.anyref).i32(0).gset(wait).call(cx.imp.annotationWait).anyConvertExtern();
+  c.else_().lget(id).if_(T.anyref).lget(id); cx.callRt(c, "classOf"); c.else_().anyNull().end().end();
+  restore();
 });
 // classes are never unloaded, so a closed dex is still in use
 def("dalvik/system/DexFile.closeDexFile(Ljava/lang/Object;)Z", (cx, c) => { c.i32(0); });

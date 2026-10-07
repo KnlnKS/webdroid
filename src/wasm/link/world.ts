@@ -8,6 +8,7 @@
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { ColdInterpreter } from "../cold/interpreter";
+import type { SymbolicSite } from "../compiler/sites";
 import { ColdSlowOps } from "../cold/slowops";
 import { resumeUnit, type ResumeState } from "../compiler/resume";
 import type { ColdSnapshot } from "../cold/state";
@@ -19,7 +20,7 @@ import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
+import { emitSave, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes";
 import { HostClasses } from "./hostclass";
@@ -29,7 +30,7 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { resolveClass, resolveForName } from "./resolution";
+import { resolveInstruction, resolveClass, resolveForName } from "./resolution";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -228,8 +229,8 @@ export class World {
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
       classByName: (name: string, scope: unknown, mode: number) => {
         const text = this.hostString(name) as string;
-        if (mode !== Lookup.ForName) return classByName(this, text, scope, mode);
-        const value = resolveForName(this, text, scope as object | null, this.sched.current());
+        const value = mode === Lookup.ForName ? resolveForName(this, text, scope as object | null, this.sched.current())
+          : classByName(this, text, scope, mode);
         if (!(value instanceof Promise)) return value;
         this.sched.parkNative(value); return 0;
       },
@@ -1014,7 +1015,7 @@ export class World {
     const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]) };
-    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), deopt: this.deoptImports };
+    const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []), deopt: this.deoptImports };
     this.classImports(mod, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
@@ -1071,7 +1072,7 @@ export class World {
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
-      n: this.nativeImports(cx.nativeImports.keys()), deopt: this.deoptImports };
+      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site)), deopt: this.deoptImports };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
   }
@@ -1081,6 +1082,62 @@ export class World {
     for (const id of ids) { const f = this.nativeFns.get(id); if (f) out[id] = f; else miss.push(id); }
     if (miss.length) for (const [id, f] of Object.entries(this.natives.imports(this.hostContext(), miss))) this.nativeFns.set(id, out[id] = f);
     return out;
+  }
+  symbolicResolutions = 0;
+  private symbolicOps?: ColdSlowOps;
+  private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
+  private symbolicSites = new Map<string, { slot: WebAssembly.Global; stub: Function }>();
+  symbolicStubModules = 0;
+  symbolicImports(sites: SymbolicSite[]): Record<string, unknown> {
+    const out: Record<string, unknown> = { table: this.symbolicTable };
+    const fresh = sites.filter(([name]) => !this.symbolicSites.has(name));
+    if (fresh.length) {
+      const cx = new Compiler(this), table = cx.mb.importTable("symbolic", "table", T.funcref, 0);
+      const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
+      const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
+      const ops = this.symbolicOps ??= new ColdSlowOps(this);
+      const pending = fresh.map(([name, cls, index, pc]) => {
+        const method = methodAt(this.prog.require(cls), index);
+        if (!method) throw new Error(`Missing symbolic site method ${name}`);
+        const { inputs, output } = ops.site(method, pc), slot = this.symbolicTable.grow(1);
+        const plain = cx.mb.importFunc("symbolic", name, cx.sig([], "V")), wait = cx.mb.importFunc("symbolic", name + "#s", cx.sig([], "V"));
+        const resolver = this.symbolicResolver(method, pc, slot);
+        binding[name] = resolver.plain; binding[name + "#s"] = resolver.wait;
+        return { name, slot, inputs, output, plain, wait };
+      });
+      const built = cx.buildSyntheticGroup(pending.map(({ name, slot, inputs, output, plain, wait }) => ({
+        name, params: inputs.map(i => i.kind), ret: output, body: (c: Code) => {
+          const restore = emitSave(cx, c);
+          c.call(sync).if_().call(plain).else_().call(wait).end(); restore();
+          inputs.forEach((_, i) => c.lget(i)); c.i32(slot).callIndirect(cx.sig(inputs.map(i => i.kind), output), table);
+        },
+      })));
+      const imports = this.unitImports(cx); imports.symbolic = binding;
+      const exports = this.instantiate(built.bytes, imports).exports;
+      this.symbolicStubModules++;
+      for (const { name, slot } of pending) {
+        const stub = exports[name] as Function;
+        this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot), stub });
+        this.symbolicTable.set(slot, stub);
+      }
+    }
+    for (const [name] of sites) out[name] = this.symbolicSites.get(name)!.slot;
+    return out;
+  }
+  private symbolicSync(): number { return +(this.inSynchronousJava() || this.sched.current().root); }
+  private symbolicResolver(method: MethodInfo, pc: number, slot: number) {
+    const ops = this.symbolicOps!, ins = ops.site(method, pc).ins;
+    const run = () => {
+      this.symbolicResolutions++;
+      const owner = this.sched.current();
+      const install = () => {
+        const { cx, built } = ops.compileSite(method, pc);
+        this.symbolicTable.set(slot, this.instantiate(built.bytes, this.unitImports(cx)).exports.m as Function);
+      };
+      const ready = resolveInstruction(this, method, ins, owner);
+      return ready instanceof Promise ? ready.then(install) : install();
+    };
+    return { plain: () => this.synchronous(run), wait: this.sched.suspending(run) };
   }
   private nativeFns = new Map<string, Function>();
   private hostCtx?: HostContext;

@@ -1,3 +1,4 @@
+import { emitSymbolicSite } from "./sites";
 import { Code, OP } from "./code";
 import { T, ref, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind, type MethodInfo } from "./program";
@@ -45,6 +46,7 @@ export function compileMethod(cx: Compiler, m: MethodInfo): Code {
 }
 
 export class MC {
+  symbolic = true;
   code: Code; prepared!: PreparedMethod; flow!: Flow; typing!: Typing; item; dex;
   /** wasm local of each web */
   webLocal: number[] = [];
@@ -170,7 +172,8 @@ export class MC {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
     let t = performance.now();
     const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
-    let prepared = prepareMethod(this.dex, item, m.desc, m.isStatic);
+    const analysis = cx.methodAnalyses.get(m);
+    let prepared = analysis?.prepared ?? prepareMethod(this.dex, item, m.desc, m.isStatic);
     if (this.resume) {
       const instruction = prepared.instructions.find((i) => i.pc === this.resume!.pc);
       if (!instruction) throw new Error("invalid resume PC");
@@ -192,7 +195,8 @@ export class MC {
     } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
     lap("flow");
-    this.typing = inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions, this.resume?.pc);
+    this.typing = !this.resume && analysis ? analysis.typing
+      : inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions, this.resume?.pc);
     lap("infer");
     // blocks
     let cur = -1;
@@ -375,6 +379,7 @@ export class MC {
    *  them, since the engine's stack holds the limit twice over and these frames add at most MAX_UNCOUNTED to the counted ones; around the one or two calls that are
    *  not such methods (a slow path, a recursion); else for the whole frame. Answers whether it is for the whole frame, which a handler must restore */
   private planDepth(): boolean {
+    if (this.prepared.instructions.some(ins => this.deferredSite(ins))) return true;
     const calls = this.prepared.instructions.filter((i) => i.name.startsWith("invoke"));
     if (!calls.length) return false;
     if (this.tries) return true;
@@ -411,7 +416,11 @@ export class MC {
     return virtual ? this.cx.guards(...virtual) : [];
   }
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
+  private deferredSite(ins: Ins): boolean {
+    return this.symbolic && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
+  }
   callee(ins: Ins): MethodInfo | null | "dynamic" {
+    if (this.deferredSite(ins)) return "dynamic";
     let r = this.callees.get(ins.pc);
     if (r === undefined) this.callees.set(ins.pc, r = this.resolveCallee(ins));
     return r;
@@ -791,6 +800,7 @@ export class MC {
   ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
   /** the class whose initialization `ins` requests, as its translation does */
   ensureTarget(ins: Ins): string | undefined {
+    if (this.deferredSite(ins)) return undefined;
     const n = ins.name;
     if (n === "new-instance") { const name = descToName(this.dex.type(ins.b)); return this.cx.str.isString(name) ? undefined : name; }
     if (n.startsWith("sget") || n.startsWith("sput")) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
@@ -814,6 +824,7 @@ export class MC {
   }
   /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
   shadowKey(ins: Ins): string | undefined {
+    if (this.deferredSite(ins)) return undefined;
     if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
     const w = this.typing.use(ins.pc, ins.b);
     if (w < 0) return undefined;
@@ -825,6 +836,7 @@ export class MC {
   private findShadows() {
     const seen = new Set<string>();
     for (const ins of this.prepared.instructions) {
+      if (this.deferredSite(ins)) continue;
       if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) continue;
       const w = this.typing.use(ins.pc, ins.b);
       if (w < 0) continue;
@@ -848,6 +860,7 @@ export class MC {
     if (this.consumed.has(ins.pc)) return;
     this.cur = ins; c.pc = ins.pc;
     if (!this.typing.reached(ins.pc)) { c.unreachable(); return; }
+    if (emitSymbolicSite(this, ins)) return;
     switch (n) {
       case "nop": return;
       case "move": case "move/from16": case "move/16": case "move-wide": case "move-wide/from16": case "move-wide/16":

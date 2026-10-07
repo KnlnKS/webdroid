@@ -223,18 +223,19 @@ if (saved) {
   check("its modules were loaded", loaded.length > 0, true);
   check("it compiled fewer methods on demand", w.stats.methods < plain.stats.methods, true);
   console.log(`  with the app build: ${w.stats.methods} methods compiled on demand against ${plain.stats.methods}, ${loaded.length} app module(s), ${w.stats.units} units`);
-  // CHA: Base.f has one implementation in the build; a dex added later falsifies it
+  // A later override must be honoured without losing sound code from the saved build.
   const later = world(app, { app: { index, store } });
   check("chain before", later.entry("Pst", "chain", "()I")(), 6);
   later.addDexes(late);
   check("a falsified decision of the app build is undone", later.entry("Pst2", "sub", "()I")(), 500);
-  check("from the code of the build", later.stats.invalidated >= 1, true);
+  const resolutions = later.symbolicResolutions;
   check("and the others hold", later.entry("Pst", "chain", "()I")(), 6);
+  check("late dex preserves resolved symbolic identities", later.symbolicResolutions, resolutions);
   // the dex is in the Program from the start, behind the app's: the build still attaches, and the decision does not hold
   const together = world([...app, ...late], { app: { index, store } });
   check("the build attaches with later dex files in the Program", together.appAttached, true);
   check("their override is honoured by the code of the build", together.entry("Pst2", "sub", "()I")(), 500);
-  check("which put the method back to be compiled on demand", together.stats.aot.dead >= 1, true);
+  check("sound code from the build remains in use", together.stats.aot.c > 0, true);
   check("and the rest is as before", answers(together).join(), expected.join());
   // what does not match is not used
   check("other dex files find no build", world(late, { app: { index, store } }).appAttached, false);

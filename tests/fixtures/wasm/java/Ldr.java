@@ -4,8 +4,6 @@ import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
-/** An interface the app's dex defines and the classes of the two loaders implement. */
-interface Tag { int tag(); }
 
 /** Two DexClassLoaders over dex files that define the class Shared (ldr1, ldr2): each sees its own class, with its own statics, and both see the app's Tag. */
 public class Ldr {
@@ -43,19 +41,26 @@ public class Ldr {
     return 0;
   }
   private static int resolverCalls;
+  private static volatile boolean resolverRaceRelease;
+  public static void resolverReleaseRace() { resolverRaceRelease = true; }
   public static int resolverCalls() { return resolverCalls; }
   public static ClassLoader resolverLoader(String path, int mode) {
+    if (mode == 4 || mode == 5) resolverRaceRelease = false;
     ClassLoader parent = new DexClassLoader(path, null, null, Ldr.class.getClassLoader());
     return new ClassLoader(parent) {
       private int attempts;
       @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
-        resolverCalls++;
-        int attempt = ++attempts;
+        int attempt;
+        synchronized (this) { resolverCalls++; attempt = ++attempts; }
         if (mode == 1) throw new ClassNotFoundException(name);
         if (mode == 2) return null;
         if (mode == 3) return String.class;
         if (mode == 6 && !Thread.holdsLock(this)) throw new IllegalMonitorStateException();
-        try { Thread.sleep((mode == 4 && attempt == 1 || mode == 5 && attempt == 2) ? 15 : 1); } catch (InterruptedException e) { throw new RuntimeException(e); }
+        try {
+          if (mode == 4 && attempt == 1 || mode == 5 && attempt == 2) {
+            while (!resolverRaceRelease) Thread.sleep(1);
+          } else Thread.sleep(1);
+        } catch (InterruptedException e) { throw new RuntimeException(e); }
         if (mode == 6 && !Thread.holdsLock(this)) throw new IllegalMonitorStateException();
         if (mode == 4 && attempt == 1) throw new ClassNotFoundException(name);
         if (mode == 5 && attempt == 2) return String.class;
@@ -110,6 +115,24 @@ public class Ldr {
     if (ordinary.loadClass("Shared") == inherited) result |= 16;
     return result;
   }
+  public static int hierarchyDelegateLast(String pathA, String pathB) throws Exception {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    parent.loadClass("Shared"); parent.loadClass("NamespaceFace");
+    ClassLoader child = new dalvik.system.DelegateLastClassLoader(pathB, parent);
+    Class<?> sub = child.loadClass("Sub"), sup = sub.getSuperclass();
+    Class<?> face = sup.getInterfaces()[1];
+    int result = sup.getClassLoader() == child ? 1 : 0;
+    if (face.getClassLoader() == child) result |= 2;
+    if (child.loadClass("Shared") == sup && child.loadClass("NamespaceFace") == face) result |= 4;
+    return result;
+  }
+  public static ClassLoader symbolicLoader(String pathA, String pathB) {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    return new dalvik.system.DelegateLastClassLoader(pathB, parent);
+  }
+  public static int symbolicDelegateLast(String pathA, String pathB) throws Exception {
+    return (Integer) symbolicLoader(pathA, pathB).loadClass("Shared").getMethod("symbolic").invoke(null);
+  }
   public static int customParent(String pathA, String pathB) throws Exception {
     ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
     ClassLoader parent = new ClassLoader(a) {};
@@ -121,11 +144,12 @@ public class Ldr {
   static void expect(int bit, boolean ok) { if (!ok) failed |= 1 << bit; }
 
   public static int libraries(String pathA, String pathB) throws Exception {
-    ClassLoader library = new PathClassLoader(pathB, null);
+    ClassLoader boot = Object.class.getClassLoader();
+    ClassLoader library = new PathClassLoader(pathB, boot);
     ClassLoader[] libraries = new ClassLoader[] { library };
     java.lang.reflect.Constructor<?> ctor = PathClassLoader.class.getDeclaredConstructor(String.class, String.class, ClassLoader.class, ClassLoader[].class, ClassLoader[].class);
-    ClassLoader before = (ClassLoader) ctor.newInstance(pathA, null, null, libraries, null);
-    ClassLoader after = (ClassLoader) ctor.newInstance(pathA, null, null, null, libraries);
+    ClassLoader before = (ClassLoader) ctor.newInstance(pathA, null, boot, libraries, null);
+    ClassLoader after = (ClassLoader) ctor.newInstance(pathA, null, boot, null, libraries);
     Class<?> ca = before.loadClass("Shared"), cb = after.loadClass("Shared");
     Object a = ca.newInstance(), b = cb.newInstance();
     int x = (Integer) ca.getMethod("tag").invoke(a), y = (Integer) cb.getMethod("tag").invoke(b);
