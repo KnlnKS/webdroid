@@ -11,7 +11,7 @@ import { externs } from "../../src/wasm/link/intrinsics";
 import { prepareApp } from "../../src/wasm/host/appcode";
 import { Persist, appKey, memoryBackend } from "../../src/wasm/host/persist";
 import type { World } from "../../src/wasm/link/world";
-import { jsTier, natives, processState, processStateAsync } from "./oracle";
+import { jsTier, natives, processStateAsync } from "./oracle";
 import { HEAP_LIMIT } from "../../src/wasm/link/exc";
 import { heapUsed } from "../../src/wasm/host/stats";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
@@ -101,7 +101,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   }
   if (w) { out.worldSetupMs = performance.now() - setupAt; out.appReadMs = appReadMs; }
   let hit = 0;
-  if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { if (aotDir) await processStateAsync(w); else processState(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
+  if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { await processStateAsync(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
   const name = `w_${cfg.workload}`;
   out.prestartedWorker = !!startWorker;
   if (startWorker) { const t = performance.now(); await startWorker(); out.workerStartMs = performance.now() - t; }
