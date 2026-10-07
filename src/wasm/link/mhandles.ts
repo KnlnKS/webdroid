@@ -196,7 +196,7 @@ const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).
 /** Capture the parent before a wait: a Promise continuation may run while the scheduler is idle. Child strands share its thread and monitor ancestry. */
 export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current()): (...args: (object | null)[]) => unknown {
   return (...args) => {
-    if (parent.root) return w.unwound(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }))(...args));
+    if (parent.root || w.inSynchronousJava()) return w.unwound(() => w.synchronous(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }))(...args)));
     const s = w.sched.strand(parent.thread, parent);
     let result: unknown;
     try { result = w.callFn(name, params, ret, body)(s, ...args); } catch (e) { s.end(); throw e; }
@@ -210,7 +210,7 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   if (exact === FRAME_INVOKE) return invokeFrame(w, mh!, args, parent);
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw w.exception(w.makeThrowable(cls, msg)); };
-  const site = /^\((.*)\)(.*)$/.exec(siteId)!, sp = parseDescs(site[1]), sr = site[2];
+  const { params: sp, ret: sr } = parseMethodDesc(siteId);
   const nominal = s.typeOf(mh!), pt = s.ptypes(nominal), np = Array.from({ length: s.alen(pt) }, (_, i) => descOfName(w.nameOf(s.classId(s.aget(pt, i))))), nr = descOfName(w.nameOf(s.classId(s.rtype(nominal))));
   const wrong = () => fail("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
   const same = np.length === sp.length && np.every((d, i) => d === sp[i]) && nr === sr;
@@ -273,7 +273,6 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
   return fail("java/lang/UnsatisfiedLinkError", `MethodHandle invocation kind ${kind}`);
 }
 
-function parseDescs(s: string): string[] { return s.match(/\[*(L[^;]*;|[ZBCSIJFD])/g) ?? []; }
 /** the generated accessor of field `id` (class id << 12 | index) on boxed values: get(obj?) answers the boxed value, put(obj?, value) stores it */
 function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: Strand): (...a: (object | null)[]) => unknown {
   const jc = w.prog.get(w.nameOf(id >>> 12))!, f = jc.fields[id & 0xfff];

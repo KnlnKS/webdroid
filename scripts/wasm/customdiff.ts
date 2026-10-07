@@ -11,6 +11,7 @@ import { compare, genCases } from "./cases";
 import { Pool, u2, u4 } from "./classfile";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
+import { handleThunk } from "../../src/wasm/link/mhandles";
 import { decodeInstructions } from "../../src/jvm/prepared";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
@@ -170,6 +171,22 @@ for (const tier of [w, cold]) {
   if (await tier.entryAsync("Bootstrap", "tCustomRace", "(I)I")(0) !== 1) throw new Error("racing bootstrap contenders must invoke the installed winner");
 }
 console.log("8 ART collector/retry/racing cases match on both tiers");
+// A plain callback with a captured async owner cannot create a child stack that outlives its caller.
+for (const tier of [w, cold]) {
+  const owner = tier.sched.strand(), before = tier.rtImports().depth.value;
+  const call = handleThunk(tier, "mh:syncCallbackTest", [], "I", (cx, c) => {
+    c.i64(1n); cx.callMethod(c, cx.prog.resolve("java/lang/Thread", "sleep", "(J)V")!); c.i32(7);
+  }, owner);
+  try {
+    tier.synchronous(() => call());
+    throw new Error("plain handle callback must reject blocking");
+  } catch (e) {
+    const t = tier.throwable(e);
+    if (!t || tier.classNameOf(t) !== "java/lang/IllegalStateException") throw e;
+    if (tier.rtImports().depth.value !== before || tier.sched.strands.some(s => s?.parent === owner)) throw new Error("plain handle callback leaked depth or a nested strand");
+  } finally { owner.end(); }
+}
+console.log("2 synchronous handle callbacks reject blocking without orphan strands");
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);
 // Missing bootstrap classes fail resolution; libcore LambdaMetafactory returns null and ART wraps that CCE in BME.
 const outcome = (name: string) => { try { w.entry("Ind", name, "(I)I")(3); return "returned"; } catch (e) { const t = w.throwable(e); return t ? `${w.classNameOf(t)}: ${w.bridge.toHost(w.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(t))}` : String(e); } };

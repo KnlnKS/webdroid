@@ -1,4 +1,4 @@
-/** Drives the classes customdiff.ts writes by hand: Pq and Pq2 take their toString, equals and hashCode from ObjectMethods.bootstrap over getters that are virtual and interface methods. */
+/** Drives the classes customdiff.ts writes by hand: Pq and Pq2 take their toString, equals and hashCode from ObjectMethods.bootstrap over virtual getters with the same receiver type. */
 public class Pt {
   public static int ts(int a) { return new Pq(a, a % 2 == 0 ? null : "n").toString().hashCode() * 31 + new Pq2(a, "m").toString().hashCode(); }
   public static int hc(int a) { return new Pq(a, "n").hashCode() * 7 + new Pq2(a, "m").hashCode() + new Pq(a, null).hashCode(); }
