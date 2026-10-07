@@ -21,7 +21,7 @@ import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
-import { emitSave, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
+import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
 import { hostInfo, infoRecord, replayInfo, typeName, type InfoRecord } from "./classes";
 import { HostClasses } from "./hostclass";
@@ -1209,8 +1209,7 @@ export class World {
       }
       const built = cx.buildSyntheticGroup(pending.map(({ name, slot, params, output, plain, wait }) => ({
         name, params, ret: output, body: (c: Code) => {
-          const restore = emitSave(cx, c);
-          c.call(sync).if_().call(plain).else_().call(wait).end(); restore();
+          emitRestored(cx, c, [], [], () => { c.call(sync).if_().call(plain).else_().call(wait).end(); });
           params.forEach((_, i) => c.lget(i)); c.i32(slot).callIndirect(cx.sig(params, output), table);
         },
       })));

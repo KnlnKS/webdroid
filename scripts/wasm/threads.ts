@@ -17,7 +17,7 @@ import { rt } from "../../src/jvm/runtime";
 import { perf } from "../../src/perf";
 import { fnRunnable } from "../../src/android/mainloop";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
-import { defaultLoop } from "../../src/wasm/link/sched";
+import { defaultLoop, emitRestored } from "../../src/wasm/link/sched";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
 import { resumeAs } from "../../src/jvm/natives/jentry";
 import { hasJspi } from "../../src/wasm/link/module";
@@ -143,11 +143,23 @@ if (substrate) {
   const importStrand = w.sched.strand(w.sched.hostThread()), globals = w.rtImports();
   try {
     await importStrand.call(w.hostFn("substrate:import-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));
-    for (const deferred of [false, true]) {
-      const error = new Error("suspending import failure"), mode = deferred ? "rejected" : "immediate";
+    for (const mode of ["immediate", "rejected", "interposed"] as const) {
+      const deferred = mode !== "immediate";
+      const error = new Error("suspending import failure");
       let fail = 0, prepare = 0, caught = 0;
       w.host.importThrowPrepare = () => { globals.depth.value = 23; };
-      w.host.importThrow = w.sched.suspending(() => { if (deferred) return Promise.reject(error); throw error; });
+      w.host.importThrow = w.sched.suspending(() => {
+        if (!deferred) throw error;
+        const p = Promise.reject(error);
+        if (mode === "interposed") {
+          const then = p.then.bind(p);
+          p.then = ((ok, failed) => then(ok, e => {
+            try { return failed!(e); }
+            finally { queueMicrotask(() => w.sched.idle()); }
+          })) as typeof p.then;
+        }
+        return p;
+      });
       w.host.importThrowCaught = () => {
         expect(`${mode} import catch retains strand`, w.sched.current().id, importStrand.id);
         expect(`${mode} import catch retains Thread`, globals.thr.value === importStrand.thread.obj, true);
@@ -155,7 +167,10 @@ if (substrate) {
         if (!deferred) expect("immediate import catch retains native owner", w.sched.running === importStrand, true);
       };
       const f = w.hostFn("substrate:import-throw:" + mode, [], "V", (_cx, c) => {
-        c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]).call(fail).end().br(1).end();
+        c.call(prepare).block().block(T.exnref).tryTable(null, [[3, 0, 0]]);
+        if (mode === "interposed") emitRestored(_cx, c, [], [], () => { c.call(fail); });
+        else c.call(fail);
+        c.end().br(1).end();
         c.call(caught).throwRef().end();
       }, cx => {
         prepare = cx.mb.importFunc("host", "importThrowPrepare", cx.sig([], "V"));

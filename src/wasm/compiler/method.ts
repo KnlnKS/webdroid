@@ -16,7 +16,7 @@ import { failed, resolveFieldRef, resolveInvoke, typeFailure, type LinkFailure }
 import { analyze, cloneFacts, newFacts, step, type Facts } from "./facts";
 import { COUNT_SLOTS, MAX_UNCOUNTED, isStackOverflow } from "../link/exc";
 import { NO_THROW } from "./opinfo";
-import { emitSave, FUEL } from "../link/sched";
+import { emitRestored, FUEL } from "../link/sched";
 
 /** the calls of a method that may count its frame around themselves instead of in a prologue */
 const MAX_SITES = 2;
@@ -770,10 +770,13 @@ export class MC {
     if (this.entryDepth >= 0) this.weights.push(...this.cx.emitLeave(c, this.entryDepth, true));
     const dispatchTo = (addr: number) => { const ri = this.regionOfPc.get(addr); if (ri === undefined) throw new Error("handler not region entry"); c.i32(ri).lset(this.regionLocal).br(this.depth("$disp")); };
     if (this.item.tries.some(t => t.handlers.length > 0)) {
-      const target = c.newLocal(T.i32), restore = emitSave(this.cx, c);
+      const target = c.newLocal(T.i32);
       const args = () => c.i32(this.cx.idOf(this.m.cls)).i32(this.m.index).lget(this.pcLocal).lget(this.excLocal).externConvertAny();
-      c.call(this.cx.imp.catchSync).if_(T.i32); args(); c.call(this.cx.imp.catchBlock);
-      c.else_(); args(); c.call(this.cx.imp.catchBlockWait); c.end().lset(target); restore();
+      emitRestored(this.cx, c, [], [T.i32], () => {
+        c.call(this.cx.imp.catchSync).if_(T.i32); args(); c.call(this.cx.imp.catchBlock);
+        c.else_(); args(); c.call(this.cx.imp.catchBlockWait); c.end();
+      });
+      c.lset(target);
       const targets = new Set(this.item.tries.flatMap(t => [...t.handlers.map(h => h[1]), ...t.catchAllAddr >= 0 ? [t.catchAllAddr] : []]));
       for (const addr of targets) {
         c.lget(target).i32(addr).raw(OP.i32_eq).if_(); this.push("if"); dispatchTo(addr); this.pop(); c.end();

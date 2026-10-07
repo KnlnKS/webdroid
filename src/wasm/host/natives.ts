@@ -17,7 +17,7 @@ import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, w
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi";
 import type { World } from "../link/world";
 import { SIZE, VIEWS, copyFn, type View } from "../compiler/copy";
-import { emitSave, ROOT } from "../link/sched";
+import { emitSave, emitRestored, ROOT } from "../link/sched";
 import { crossings } from "./stats";
 
 /** the primitive array classes natives take and return */
@@ -208,24 +208,19 @@ export class Natives implements NativeBinder {
         c.gget(wait);
         if (p.ret === null) c.if_(); else c.ifType(cx.mb.addFuncType([p.ret], [p.ret]));
         if (p.ret !== null) c.drop();
-        c.i32(0).gset(wait).call(settle);
-        parkedRestore!();
+        c.i32(0).gset(wait);
+        emitRestored(cx, c, [], p.ret === null ? [] : [p.ret], () => { c.call(settle); }, parkedRestore!);
         c.end();
       }
     }
     else {
       // a throw out of the call finds the globals as another strand left them: they are set again before it goes on
-      const results = lands(p) ? [T.externref] : p.ret === null ? [] : [p.ret], run = cx.mb.addFuncType(p.params, results), thrown = cx.mb.addFuncType(p.params, [T.exnref]);
-      c.blockType(run).blockType(thrown).tryTableType(run, [[3, 0, 0]]);
-      if (p.always) c.call(imp);
-      else {
+      const results = lands(p) ? [T.externref] : p.ret === null ? [] : [p.ret], run = cx.mb.addFuncType(p.params, results);
+      emitRestored(cx, c, p.params, results, () => {
+        if (p.always) { c.call(imp); return; }
         // the host's top level has no stack to suspend: it calls the plain import, which reports a Promise
         c.gget(cx.global("rt", "sid", T.i32, true)).i32(ROOT).raw(OP.i32_eq).ifType(run).call(imp).else_().call(cx.nativeImports.get(p.id + "#s")!).end();
-      }
-      c.end().br(1).end();
-      restore(); c.throwRef();
-      c.end();
-      restore();
+      }, restore);
       // Each call carries its private arrays through JSPI; only the resumed Wasm caller writes shared scratch.
       if (landed >= 0) {
         const land = cx.nativeImports.get("land")!;

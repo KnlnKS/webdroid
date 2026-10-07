@@ -9,7 +9,7 @@ import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import { rt } from "../compiler/rtfns";
 import { OP } from "../compiler/code";
-import { T } from "../compiler/wasmbin";
+import { T, type VT } from "../compiler/wasmbin";
 import { Monitors, St, type Header } from "./monitor";
 import { promising, suspending } from "./module";
 import type { World } from "./world";
@@ -43,8 +43,9 @@ export function emitBlock(cx: Compiler, c: Code, op: Block, obj: (() => void) | 
   emitSync(cx, c, Sync.Plain); c.drop().i32(St.Nbs);
   c.else_();
   const restore = emitSave(cx, c);
-  c.i32(op); operands(c, obj, a); if (b) b(); else c.i32(0); c.call(cx.imp.block);
-  restore();
+  emitRestored(cx, c, [], [T.i32], () => {
+    c.i32(op); operands(c, obj, a); if (b) b(); else c.i32(0); c.call(cx.imp.block);
+  }, restore);
   c.end();
 }
 /** keeps who the strand is (its id, its Thread and how deep its stack is) in locals; the function sets the globals again, after a call that other strands ran in */
@@ -52,6 +53,15 @@ export function emitSave(cx: Compiler, c: Code): () => void {
   const sid = sidOf(cx), thr = thrOf(cx), depth = cx.global("rt", "depth", T.i32, true), s = c.newLocal(T.i32), t = c.newLocal(T.anyref), d = c.newLocal(T.i32);
   c.gget(sid).lset(s).gget(thr).lset(t).gget(depth).lset(d);
   return () => { c.lget(s).gset(sid).lget(t).gset(thr).lget(d).gset(depth); emitSync(cx, c, Sync.Resume); c.drop(); };
+}
+/** JS Promise reactions can idle another strand before the engine resumes this catch. */
+export function emitRestored(cx: Compiler, c: Code, params: VT[], results: VT[], call: () => void, restore = emitSave(cx, c)): void {
+  const run = cx.mb.addFuncType(params, results), thrown = cx.mb.addFuncType(params, [T.exnref]);
+  c.blockType(run).blockType(thrown).tryTableType(run, [[3, 0, 0]]);
+  call();
+  c.end().br(1).end();
+  restore(); c.throwRef(); c.end();
+  restore();
 }
 /** milliseconds and nanoseconds in locals `ms` (i64) and `ns` (i32), as one number of milliseconds */
 const millis = (c: Code, ms: number, ns: number) => c.lget(ms).raw(OP.f64_convert_i64_s).lget(ns).raw(OP.f64_convert_i32_s).f64const(MILLION).raw(OP.f64_div, OP.f64_add);
