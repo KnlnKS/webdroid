@@ -134,7 +134,10 @@ export function wasmEntry(w: World): Entry {
     };
     cls = {
       name,
-      new: () => scoped(() => enter(() => bridge.toHost(alloc(name)) as object)),
+      new: () => scoped(() => enter(() => {
+        const allocate = w.hostFn("e:alloc:" + name, [], "L", (cx, c) => cx.emitNew(c, name));
+        return bridge.toHost(allocate()) as object;
+      })),
       static: (field, desc) => {
         const f = staticOf(name, field, desc);
         if (!f) return undefined;

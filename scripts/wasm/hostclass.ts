@@ -38,6 +38,7 @@ js.forEach((want, i) => { if (wasm[i] !== want) fail(`${want.split(":")[0]}\n  j
 if (wasm.length !== js.length) fail(`${wasm.length} answers for ${js.length}`);
 if (gaps.length) fail(`gaps hit: ${[...new Set(gaps)].join("; ")}`);
 
+
 {
   const array = w.bridge.toJava(new Int32Array(2), "[I") as object, before = handle(array), mark = w.bridge.begin();
   try {
@@ -141,6 +142,21 @@ async function handleAfter(cls: "own" | "plain"): Promise<boolean> {
 }
 if (await handleAfter("own")) fail("a handle stored in a field of a class that frees it in finalize() outlives the object");
 if (!await handleAfter("plain")) fail("a handle stored in a field of a class that does not free it is released with the object");
+
+
+{
+  const fresh = world([dex, ...jars], { natives, cold: true });
+  for (const spec of natives.source!.hostSpecs!()) fresh.addHostClass(spec);
+  fresh.sched.turnDue = () => true;
+  const entry = wasmEntry(fresh);
+  for (const name of ["Hc$Boot", "javax/net/ssl/HttpsURLConnection"]) {
+    try {
+      const object = entry.linkClass(name).new();
+      if (object instanceof Promise || entry.classNameOf(object) !== name) fail(`linked allocation is not synchronous: ${name}`);
+      if (fresh.initialized(name)) fail(`linked allocation initialized ${name}`);
+    } catch (error) { fail(`linked allocation ${name}: ${String(error)}`); }
+  }
+}
 
 console.log(failed ? `${failed} failures` : `${js.length} cases answer alike on the JS tier and on a World with host classes`);
 process.exit(failed ? 1 : 0);
