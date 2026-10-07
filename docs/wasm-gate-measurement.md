@@ -4,7 +4,7 @@ These tools always write `accepted: false`. Run them serially after the parent a
 
 ## G4: one active invocation
 
-From the Y1 checkout, run the untraced speed sample first:
+From the frozen integration checkout on `knlnks/bytecode-wasm`, run the untraced speed sample first. Use a fresh output directory for each source epoch; the paths below are examples.
 
 ```sh
 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bun scripts/wasm/gate-browser.ts \
@@ -38,7 +38,7 @@ The only V8 flag is compilation tracing; there is no forced tiering budget or ea
 
 ```sh
 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH \
-WEBDROID_AOT=/Users/kunalan/Projects/webdroid-wasm-y1/vendor/wasm-aot/KEY \
+WEBDROID_AOT=/Users/kunalan/Projects/webdroid-wasm/vendor/wasm-aot/KEY \
   bun run wasm g1 listAddGet listIter mapInt deque sort linkedList treeMap random casts jsonParse \
   --engines chrome --runs 5 --reps 100 --phases \
   --json tests/e2e/actual/y1-recovery/idle-g1.json

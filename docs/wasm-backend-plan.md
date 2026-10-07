@@ -10,7 +10,7 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-06)
 
-Integration is at `7d5f8ae2`. The recovered WP-A changes are merged; WP-B launch/boundary and WP-C correctness changes remain in their worktrees and require review and verification before integration. The interrupted WP-A first-call follow-up also has pending source changes. Typecheck and the 1,199-case unit suite pass on the frozen integration source. The broader Wasm suite is being rerun; partial results are not final G2 acceptance.
+The integration source is at `7d5f8ae2`. The recovered WP-A changes are merged; WP-B launch/boundary and WP-C correctness changes remain in their worktrees and require review and verification before integration. The interrupted WP-A first-call follow-up also has pending source changes. Typecheck, the 1,199-case unit suite, all 31 Wasm framework exercises and every suite in `bun run wasm all` pass on this frozen source. Full conformance and browser coverage remain required for final G2 acceptance; the implementation history records the commands and evidence limits.
 
 The shared-host G1/G4 measurements recorded in the implementation history are provisional: G1 steady-state geometric mean is about 2x with the weakest measured installed-app workload at 0.91x, while Chrome first-call geometric mean remains 0.93x installed and 0.31x on demand. The three G4 loop shapes reached their measured optimized reference in 22–23 ms. Final acceptance still requires matching idle-host measurements after correctness and source integration stabilize. S6 retains the JavaScript oracle for one release after the default switch, as specified below.
 
