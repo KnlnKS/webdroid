@@ -27,7 +27,7 @@ for (const target of targets) {
   const dexes = jars.includes(target) ? jars.map(loadDexes) : [...jars.map(loadDexes), loadDexes(target)];
   const mine = new Set(dexes.at(jars.includes(target) ? jars.indexOf(target) : -1)), prog = new Program(dexes.flat());
   prog.addExterns(externs);
-  const w = world(prog, { natives });
+  const w = world(prog, { natives, compileOnly: true });
   const names = new Set([...prog.all()].filter((c) => c.dex && mine.has(c.dex)).map((c) => c.name));
   const causes = new Map<string, string[]>();
   let total = 0, clean = 0, bodyless = 0;
