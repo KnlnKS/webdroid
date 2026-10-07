@@ -54,12 +54,12 @@ const build = (dir: string, sources: string[], classpath?: string) => {
     const methods = [method("value", "(LShared;)LShared;"), method("missing", "()LAbsentOptional;")];
     writeFileSync(join(out, dir, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
   }
-  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !/\/(AbsentOptional|MissingCatch)\.class$/.test(path))]);
+  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath?.split(":").flatMap(path => ["--classpath", path]) ?? []), ...filesIn(join(out, dir), /\.class$/).filter(path => !/\/(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path))]);
   return join(out, dir, "classes.dex");
 };
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java"], join(out, "app"));
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/MemberBase.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/MemberUse.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
 const ordered = world([apk, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives });
@@ -128,6 +128,11 @@ w.opts.dexes = async (path) => {
 const deferred = await w.entryAsync("Ldr", "check", "(Ljava/lang/String;Ljava/lang/String;)I")("/data/local/tmp/a.dex", "/data/local/tmp/b.dex") as number;
 if (deferred) { failed++; console.log(`FAIL deferred archive checks: ${deferred}`); }
 const desc = "(Ljava/lang/String;Ljava/lang/String;)I", paths = ["/data/local/tmp/a.dex", "/data/local/tmp/b.dex"];
+const memberExpected = await js("Ldr", "memberResolution", desc, paths);
+const memberResult = await w.entryAsync("Ldr", "memberResolution", desc)(...paths);
+if (memberExpected !== 31 || memberResult !== memberExpected) throw new Error(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}, expected=31`);
+console.log(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}; denied type retries, unused prototype stays lazy, declaring reflection identity preserved`);
+if (process.argv.includes("--member-only")) process.exit(0);
 if (!process.argv.includes("--catch-only") && (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy"))) {
   const expected = await js("Ldr", "hierarchyDelegateLast", desc, paths);
   const result = await w.entryAsync("Ldr", "hierarchyDelegateLast", desc)(...paths);

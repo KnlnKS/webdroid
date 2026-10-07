@@ -145,6 +145,38 @@ public class Ldr {
   public static int symbolicDelegateLast(String pathA, String pathB) throws Exception {
     return (Integer) symbolicLoader(pathA, pathB).loadClass("Shared").getMethod("symbolic").invoke(null);
   }
+  public static class MemberLoader extends DexClassLoader {
+    public int typeCalls;
+    public boolean deny = true;
+    MemberLoader(String path, ClassLoader parent) { super(path, null, null, parent); }
+    @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
+      if (name.equals("MemberUse") || name.equals("MemberType")) {
+        if (name.equals("MemberType")) {
+          typeCalls++;
+          if (deny) { deny = false; throw new ClassNotFoundException(name); }
+          try { Thread.sleep(1); } catch (InterruptedException e) { throw new ClassNotFoundException(name, e); }
+        }
+        Class<?> loaded = findLoadedClass(name);
+        return loaded == null ? findClass(name) : loaded;
+      }
+      return super.loadClass(name);
+    }
+  }
+  public static int memberResolution(String pathA, String pathB) throws Exception {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    Class<?> base = parent.loadClass("MemberBase"), parentType = parent.loadClass("MemberType");
+    MemberLoader loader = new MemberLoader(pathB, parent);
+    Tag value = (Tag) loader.loadClass("MemberUse").newInstance();
+    int result = value.tag() == 42 && loader.typeCalls == 0 ? 1 : 0;
+    try { loader.loadClass("MemberType"); }
+    catch (ClassNotFoundException expected) { if (loader.typeCalls == 1) result |= 2; }
+    Class<?> own = Class.forName("MemberType", false, loader);
+    if (own != parentType && own.getClassLoader() == loader && loader.typeCalls == 2) result |= 4;
+    if (value.tag() == 42 && loader.typeCalls == 2) result |= 8;
+    java.lang.reflect.Field field = base.getField("peer");
+    if (field.getType() == parentType && field.getDeclaringClass() == base) result |= 16;
+    return result;
+  }
   public static class CatchLoader extends DexClassLoader {
     public int missing, present;
     public boolean denyPresent = true;

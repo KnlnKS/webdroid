@@ -435,8 +435,8 @@ export class MC {
     if (kind === "invoke-static") return target;
     if (kind === "invoke-direct" && cx.str.isString(decl) && mr.name === "<init>") return "dynamic";
     if (kind === "invoke-direct" || kind === "invoke-super") return target;
-    const only = cx.devirt(decl, mr.name, desc);
-    this.virtuals.set(ins.pc, [decl, mr.name, desc]);
+    const only = cx.devirt(decl, mr.name, target.desc);
+    this.virtuals.set(ins.pc, [decl, mr.name, target.desc]);
     return only === "many" ? "dynamic" : only;
   }
   push(l: string) { this.nest.push(l); }
@@ -1180,11 +1180,11 @@ export class MC {
       recv();
       c.lget(this.tmpL); cx.str.vtab(c, decl);
       if (declC && !declC.isInterface) {
-        c.i32(cx.w.vslot(decl, key)).arrayGet(cx.tVT);
-      } else if (prog.get("java/lang/Object")!.byKey.has(key)) {
-        c.i32(cx.w.vslot("java/lang/Object", key)).arrayGet(cx.tVT);
+        c.i32(cx.w.vslot(decl, target.key)).arrayGet(cx.tVT);
+      } else if (prog.get("java/lang/Object")!.byKey.has(target.key)) {
+        c.i32(cx.w.vslot("java/lang/Object", target.key)).arrayGet(cx.tVT);
       } else {
-        const sel = cx.w.selectorId(key), s = sel % H.IMT_N;
+        const sel = cx.w.selectorId(target.key), s = sel % H.IMT_N;
         // fn = vt[IMT+2s] == sel ? vt[IMT+2s+1] : imtslow(vt, sel)
         const vtl = this.vtLocal();
         c.lset(vtl);
