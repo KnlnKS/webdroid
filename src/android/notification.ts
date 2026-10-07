@@ -64,7 +64,7 @@ export class NotificationStore {
     const data = await parcelledWithRights(notification, { stage: fd => kernel.stageLocal(PROCESS_PID, fd), discard: token => kernel.discard(PROCESS_PID, token, true) });
     return StoredParcel.retain(kernel, PROCESS_PID, data);
   }
-  read(data: StoredParcel): Promise<JObj> {
+  readStored(data: StoredParcel): Promise<JObj> {
     const scope = parcelScope();
     if (!scope) throw new Error("Notification decode requires broker descriptor scope");
     return data.readLocal(PROCESS_PID, (data, take, discard) => unparcelledScoped(N, data, scope, take, discard));
@@ -299,7 +299,7 @@ function groupKey(r: PostedNotification): string {
 const find = (pkg: string, tag: string | null, id: number, userId: number) =>
   notificationStore.posted.find((r) => r.pkg === pkg && r.tag === tag && r.id === id && r.userId === userId) ?? null;
 function* statusBarNotification(r: PostedNotification): Gen<JObj> {
-  const notification = yield* awaited(notificationStore.read(r.data));
+  const notification = yield* awaited(notificationStore.readStored(r.data));
   const user = yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", r.userId);
   return yield newObj("android/service/notification/StatusBarNotification",
     "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;IILandroid/app/Notification;Landroid/os/UserHandle;Ljava/lang/String;J)V",
@@ -360,7 +360,7 @@ function* summaryLook(pkg: string, members: Ungrouped[]): Gen<{ icon: JObj; colo
   let icon: JObj | null = null;
   if (sameIcon) {
     const holder = notificationStore.posted.find((r) => notificationStore.ungrouped.get(packageKey(r.userId, r.pkg))?.get(r.key)?.icon === members[0].icon);
-    if (holder) icon = yield vcall(yield* awaited(notificationStore.read(holder.data)), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
+    if (holder) icon = yield vcall(yield* awaited(notificationStore.readStored(holder.data)), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
   }
   return { icon: icon ?? (yield* monochromeAppIcon(pkg)), color, visibility };
 }
@@ -409,7 +409,7 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
   if (notificationStore.autobundled.has(pk)) return;
   const look = yield* summaryLook(trigger.pkg, members);
   const context = yield* awaited(serviceContext());
-  const triggering = yield* awaited(notificationStore.read(trigger.data));
+  const triggering = yield* awaited(notificationStore.readStored(trigger.data));
   let builder = yield newObj(`${N}$Builder`, "(Landroid/content/Context;Ljava/lang/String;)V", context, trigger.channel);
   const B = `L${N}$Builder;`;
   builder = yield vcall(builder, "setSmallIcon", `(Landroid/graphics/drawable/Icon;)${B}`, look.icon);
@@ -445,7 +445,7 @@ function* updateAutobundledSummary(trigger: PostedNotification, flags: number, m
   const record = key && notificationStore.posted.find((r) => r.key === key);
   if (!record) return;
   const previous = record.data;
-  const summary = yield* awaited(notificationStore.read(record.data)), look = yield* summaryLook(trigger.pkg, members);
+  const summary = yield* awaited(notificationStore.readStored(record.data)), look = yield* summaryLook(trigger.pkg, members);
   const sameLook = (yield* iconIdentity(yield vcall(summary, "getSmallIcon", "()Landroid/graphics/drawable/Icon;"))) === (yield* iconIdentity(look.icon))
     && getDeclared<number>(summary, N, "color") === look.color && getDeclared<number>(summary, N, "visibility") === look.visibility;
   if (record.flags === flags && sameLook) return;
@@ -640,7 +640,7 @@ function* stopForeground(pkg: string | undefined, id: number, remove: boolean): 
   if (!r) return;
   if (remove) return yield* removeRecords([r]);
   const previous = r.data;
-  const n = yield* awaited(notificationStore.read(r.data));
+  const n = yield* awaited(notificationStore.readStored(r.data));
   const flags = r.flags & ~FLAG_FOREGROUND_SERVICE;
   setDeclared(n, N, { flags });
   const data = yield* awaited(notificationStore.capture(n));
