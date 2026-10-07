@@ -1176,14 +1176,13 @@ export class World {
   makeThrowable(cls: string, msg: string | null): object {
     let make = this.throwMakers.get(cls);
     if (!make) {
-      const cx = new Compiler(this), ctor = this.prog.resolve(cls, "<init>", "()V"), detail = this.prog.resolveField("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")!, st = cx.structFor("java/lang/Throwable");
-      const { bytes } = cx.buildSynthetic("mk:" + cls, ["L"], (c) => {
+      const f = this.hostFn("mk:" + cls, ["L"], "L", (cx, c) => {
+        const ctor = this.prog.resolve(cls, "<init>", "()V"), detail = this.prog.resolveField("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")!, st = cx.structFor("java/lang/Throwable");
         const exn = c.newLocal(T.anyref);
         cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(exn);
         if (ctor?.codeOff) { c.lget(exn); cx.callMethod(c, ctor); }
         c.lget(exn).refCast(st).lget(0).structSet(st, cx.fieldIndex("java/lang/Throwable", detail)).lget(exn);
-      }, "L");
-      const f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m;
+      });
       this.throwMakers.set(cls, make = (m) => f(m === null ? null : this.javaString(m)));
     }
     return this.synchronous(() => make!(msg));
@@ -1720,9 +1719,11 @@ export class World {
     if (!read) {
       const f = this.prog.resolveField(cls, name, desc);
       if (!f) throw new Error(`field ${cls}.${name} not found`);
-      const cx = new Compiler(this), st = cx.structFor(cls);
-      const { bytes } = cx.buildSynthetic("get:" + name, ["L"], (c) => { c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f)); }, f.kind);
-      this.fieldReaders.set(key, read = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m as (obj: object) => unknown);
+      const helper = this.buildHostFn("get:" + key, ["L"], f.kind, (cx, c) => {
+        const st = cx.structFor(cls);
+        c.lget(0).refAsNonNull().refCast(st).structGet(st, cx.fieldIndex(cls, f));
+      });
+      this.fieldReaders.set(key, read = (helper.raw ? this.sched.synchronousExport(helper.raw) : this.synchronousHelper(helper.get)) as (obj: object) => unknown);
     }
     return read as (obj: object) => T;
   }

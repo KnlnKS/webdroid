@@ -165,6 +165,16 @@ if (!process.argv.includes("--hierarchy")) {
       if (helper() !== 42 || await waitingHelper(resumed) !== 42 || w.stats.units !== units) throw new Error("warm helper recompiled");
     } finally { resumed.end(); }
     console.log("helper accounting: two owned absence slots recover cached sync/strand functions after class arrival; warm calls unchanged");
+    const accountingWorld = world(w.prog, { natives }), initial = { ...accountingWorld.stats };
+    const throwable = accountingWorld.makeThrowable("java/lang/IllegalStateException", "accounted helper");
+    if (accountingWorld.stats.units <= initial.units || accountingWorld.stats.bytes <= initial.bytes || accountingWorld.stats.compileMs <= initial.compileMs || !accountingWorld.traces.has("$mk:java/lang/IllegalStateException")) throw new Error("throwable helper compilation unaccounted");
+    const beforeReader = { ...accountingWorld.stats }, reader = accountingWorld.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;");
+    if (accountingWorld.stats.units !== beforeReader.units + 1 || accountingWorld.stats.bytes <= beforeReader.bytes || accountingWorld.stats.compileMs <= beforeReader.compileMs || !accountingWorld.traces.has("$get:java/lang/Throwable.detailMessage:Ljava/lang/String;")) throw new Error("field reader compilation unaccounted");
+    if (accountingWorld.hostString(reader(throwable)!) !== "accounted helper") throw new Error("accounted throwable detail changed");
+    const warmHelpers = { ...accountingWorld.stats };
+    const again = accountingWorld.makeThrowable("java/lang/IllegalStateException", null);
+    if (reader(again) !== null || accountingWorld.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;") !== reader || accountingWorld.stats.units !== warmHelpers.units || accountingWorld.stats.bytes !== warmHelpers.bytes || accountingWorld.stats.compileMs !== warmHelpers.compileMs) throw new Error("warm throwable or reader helper compiled again");
+    console.log("helper accounting: throwable and field reader record units, bytes and traces; warm calls unchanged");
     if (process.argv.includes("--memory")) {
       const analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [], seen = new WeakSet<object>();
       let probeOps: ColdSlowOps | undefined;
