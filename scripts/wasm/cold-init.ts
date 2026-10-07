@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { world, loadDexes } from "./lib";
-import { natives, jsTier } from "./oracle";
+import { natives, jsTier, processStateAsync } from "./oracle";
 import { shellIn } from "./tools";
 import { AOSP } from "./paths";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
@@ -50,7 +50,7 @@ public class ColdInit {
 }`);
 sh(["javac", "--release", "11", "-d", dir, join(dir, "ColdInit.java")]);
 sh(["d8", "--release", "--min-api", "34", "--output", dir, ...readdirSync(dir).filter(f => f.endsWith(".class")).map(f => join(dir, f))]);
-const dex = join(dir, "classes.dex"), paths = [dex, ...PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j))];
+const dex = join(dir, "classes.dex"), paths = [dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map(j => join(AOSP, j))];
 await jsTier(loadDexes(dex)); rt.mkThrowable = hostThrowable;
 const cases = ["concurrentAnnotations", "annotationDefault", "annotation", "publicFields", "sleep", "run", "lookup", "trace", "recursive", "mixed", "sites"], jdk = sh(["java", "-cp", dir, "ColdInit"]).trim().split("\n");
 let checks = 0;
@@ -58,6 +58,7 @@ for (const cold of [false, true]) for (const [i, name] of cases.entries()) {
   const w = world(paths, { cold, natives }), gaps: string[] = [];
   w.onGap = id => gaps.push(w.gapList[id]);
   useEntry(wasmEntry(w));
+  await processStateAsync(w);
   const got = await w.entryAsync("ColdInit", name, "()I")();
   if (String(got) !== jdk[i] || gaps.length) throw new Error(`${cold ? "cold" : "compiled"} ${name}: ${got} != JDK ${jdk[i]}; ${gaps.join(",")}`);
   if (cold && !w.stats.coldCalls) throw new Error("fixture bypassed cold execution");
@@ -65,6 +66,7 @@ for (const cold of [false, true]) for (const [i, name] of cases.entries()) {
 }
 const concurrent = world(paths, { cold: true, natives });
 useEntry(wasmEntry(concurrent));
+await processStateAsync(concurrent);
 const values = await Promise.all(Array.from({ length: 8 }, () => concurrent.entryAsync("ColdInit", "mixed", "()I")()));
 if (values.some(v => String(v) !== jdk[cases.indexOf("mixed")])) throw new Error(`concurrent strands lost callers: ${values}`);
 checks++;
