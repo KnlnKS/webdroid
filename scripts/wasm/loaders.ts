@@ -21,6 +21,8 @@ import { ldp, PTR } from "../../src/native/host";
 import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
+import { Compiler } from "../../src/wasm/compiler/j2w";
+import { ColdSlowOps } from "../../src/wasm/cold/slowops";
 import { St } from "../../src/wasm/link/monitor";
 import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
@@ -115,7 +117,7 @@ if (!process.argv.includes("--hierarchy")) {
   if (!w.opts.cold) {
     const method = w.prog.require(key).byKey.get("symbolic()I")!;
     const ins = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic).instructions.find(ins => ins.name === "invoke-static")!;
-    const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc]]);
+    const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc, [], "I"]]);
     if (w.stats.units !== before.units + 1 || w.stats.bytes <= before.bytes || w.stats.compileMs <= before.compileMs || !w.traces.has("$accounting:probe")) throw new Error("symbolic stub compilation unaccounted");
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
     const stub = { ...w.stats };
@@ -125,6 +127,31 @@ if (!process.argv.includes("--hierarchy")) {
     const warm = { ...w.stats };
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) throw new Error("warm symbolic operation compiled again");
     console.log("symbolic accounting: stub and operation each recorded one unit, bytes and traces; warm execution unchanged");
+    if (process.argv.includes("--memory")) {
+      const analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [];
+      const prepare = ColdSlowOps.prototype.prepareSite, emit = Compiler.prototype.buildSynthetic, group = Compiler.prototype.buildSyntheticGroup;
+      ColdSlowOps.prototype.prepareSite = function (...args: Parameters<typeof prepare>) { const site = prepare.apply(this, args); analyses.push(new WeakRef(site.analysis)); return site; };
+      Compiler.prototype.buildSynthetic = function (...args: Parameters<typeof emit>) { compilers.push(new WeakRef(this)); return emit.apply(this, args); };
+      Compiler.prototype.buildSyntheticGroup = function (...args: Parameters<typeof group>) { compilers.push(new WeakRef(this)); return group.apply(this, args); };
+      const before = w.stats.symbolicTypingMethods;
+      try {
+        const bindings = w.symbolicImports(Array.from({ length: 32 }, (_, i) => [`memory:${i}`, key, method.index, ins.pc, [], "I"]));
+        if (w.stats.symbolicTypingMethods !== before) throw new Error("stub declaration inferred full method IR again");
+        for (let i = 0; i < 32; i++) {
+          const slot = (bindings[`memory:${i}`] as WebAssembly.Global).value as number;
+          if ((bindings.table as WebAssembly.Table).get(slot)!() !== 42) throw new Error("memory probe operation failed");
+        }
+      } finally {
+        ColdSlowOps.prototype.prepareSite = prepare; Compiler.prototype.buildSynthetic = emit; Compiler.prototype.buildSyntheticGroup = group;
+      }
+      const collect = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+      if (!collect || analyses.length !== 32 || compilers.length !== 33) throw new Error("symbolic lifetime probe missing emitters or GC");
+      const heapBefore = process.memoryUsage().heapUsed;
+      for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
+      const retained = analyses.filter(ref => ref.deref()).length, retainedCompilers = compilers.filter(ref => ref.deref()).length;
+      console.log(`symbolic lifetime: analyses=${analyses.length}, retained=${retained}; compilers=${compilers.length}, retained=${retainedCompilers}; heap before GC=${heapBefore}, after GC=${process.memoryUsage().heapUsed}`);
+      if (retained || retainedCompilers || w.prog.require(key).byKey.get("symbolic()I") !== method || table.get(slot)!() !== 42) throw new Error("symbolic IR retained by live Program or compiled operation");
+    }
   }
   if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
   try { await w.entryAsync(key, "optional", "(Z)I")(1); throw new Error("missing optional reference accepted"); }

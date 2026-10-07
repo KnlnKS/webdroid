@@ -116,7 +116,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, symbolicTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -1043,10 +1043,13 @@ export class World {
   private unitClock(): { start: number; accounted: number } { return { start: performance.now(), accounted: this.stats.compileMs }; }
   private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): Record<string, any> {
     // Imports can compile nested units; charge that work once, to its own unit.
-    this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
+    this.accountCompilation(clock);
     const exports = this.instantiate(built.bytes, imports).exports;
     this.recordUnit(cx, built.traces, slot);
     return exports;
+  }
+  private accountCompilation(clock: { start: number; accounted: number }): void {
+    this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
   }
   private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot: number): void {
     for (const t of traces) this.traces.set(t.name, t);
@@ -1102,21 +1105,21 @@ export class World {
       const cx = new Compiler(this), table = cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
       const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
-      const ops = this.symbolicOps ??= new ColdSlowOps(this);
-      const pending = fresh.map(([name, cls, index, pc]) => {
+      this.symbolicOps ??= new ColdSlowOps(this);
+      const pending = fresh.map(([name, cls, index, pc, params, output]) => {
         const method = methodAt(this.prog.require(cls), index);
         if (!method) throw new Error(`Missing symbolic site method ${name}`);
-        const { inputs, output } = ops.site(method, pc), slot = this.symbolicTable.grow(1);
+        const slot = this.symbolicTable.grow(1);
         const plain = cx.mb.importFunc("symbolic", name, cx.sig([], "V")), wait = cx.mb.importFunc("symbolic", name + "#s", cx.sig([], "V"));
         const resolver = this.symbolicResolver(method, pc, slot);
         binding[name] = resolver.plain; binding[name + "#s"] = resolver.wait;
-        return { name, slot, inputs, output, plain, wait, method };
+        return { name, slot, params, output, plain, wait, method };
       });
-      const built = cx.buildSyntheticGroup(pending.map(({ name, slot, inputs, output, plain, wait }) => ({
-        name, params: inputs.map(i => i.kind), ret: output, body: (c: Code) => {
+      const built = cx.buildSyntheticGroup(pending.map(({ name, slot, params, output, plain, wait }) => ({
+        name, params, ret: output, body: (c: Code) => {
           const restore = emitSave(cx, c);
           c.call(sync).if_().call(plain).else_().call(wait).end(); restore();
-          inputs.forEach((_, i) => c.lget(i)); c.i32(slot).callIndirect(cx.sig(inputs.map(i => i.kind), output), table);
+          params.forEach((_, i) => c.lget(i)); c.i32(slot).callIndirect(cx.sig(params, output), table);
         },
       })));
       const imports = this.unitImports(cx); imports.symbolic = binding;
@@ -1134,17 +1137,19 @@ export class World {
   }
   private symbolicSync(): number { return +(this.inSynchronousJava() || this.sched.current().root); }
   private symbolicResolver(method: MethodInfo, pc: number, slot: number) {
-    const ops = this.symbolicOps!, ins = ops.site(method, pc).ins;
+    const ops = this.symbolicOps!;
     const run = () => {
       this.symbolicResolutions++;
-      const owner = this.sched.current();
+      const owner = this.sched.current(), clock = this.unitClock(), site = ops.prepareSite(method, pc);
+      this.accountCompilation(clock);
       const install = () => {
-        const clock = this.unitClock(), { cx, built } = ops.compileSite(method, pc);
+        const clock = this.unitClock();
+        const { cx, built } = ops.compileSite(method, pc, site);
         this.stats.units++;
         const exports = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock);
         this.symbolicTable.set(slot, exports.m as Function);
       };
-      const ready = resolveInstruction(this, method, ins, owner);
+      const ready = resolveInstruction(this, method, site.ins, owner);
       return ready instanceof Promise ? ready.then(install) : install();
     };
     return { plain: () => this.synchronous(run), wait: this.sched.suspending(run) };

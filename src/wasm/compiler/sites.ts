@@ -5,7 +5,7 @@ import type { Compiler } from "./j2w";
 import { T } from "./wasmbin";
 import type { MC } from "./method";
 
-export type SymbolicSite = [name: string, cls: string, method: number, pc: number];
+export type SymbolicSite = [name: string, cls: string, method: number, pc: number, params: Kind[], ret: Kind | "V"];
 export interface SiteOperands { inputs: { reg: number; kind: Kind; web: number }[]; output: Kind | "V"; producer: boolean }
 
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
@@ -60,7 +60,8 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
       if (cx.symbolicImports.has(name)) continue;
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const slot = cx.mb.importGlobal("symbolic", name, T.i32, false);
-      cx.symbolicImports.set(name, { slot, site: [name, m.cls, m.index, ins.pc] });
+      const operands = siteOperands(m, ins, typing);
+      cx.symbolicImports.set(name, { slot, site: [name, m.cls, m.index, ins.pc, operands.inputs.map(input => input.kind), operands.output] });
     }
   }
 }

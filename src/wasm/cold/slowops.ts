@@ -54,15 +54,21 @@ export class ColdSlowOps {
     return /^(move-result|move-exception|invoke-|iget|sget|iput|sput|aget|aput|monitor-|fill-array-data|throw|const-string|const-class|const-method-|new-instance|new-array|filled-new-array|check-cast|array-length|instance-of|(?:div|rem)-(?:int|long|float|double))/.test(ins.name);
   }
 
-  site(m: MethodInfo, pc: number) {
-    const analysis = this.analysis(m), ins = analysis.instructions.get(pc);
+  private site(m: MethodInfo, pc: number, analysis: Analysis) {
+    const ins = analysis.instructions.get(pc);
     if (!ins) throw new UnsupportedSlowOperation(`${mid(m)} at ${pc}`);
     return { ins, ...siteOperands(m, ins, analysis.typing) };
   }
 
-  compileSite(m: MethodInfo, pc: number) {
-    const { ins, inputs, output } = this.site(m, pc), cx = new Compiler(this.w);
-    const emit = this.operation(m, ins, inputs, output);
+  prepareSite(m: MethodInfo, pc: number) {
+    const analysis = this.prepareAnalysis(m);
+    this.w.stats.symbolicTypingMethods++;
+    return { ...this.site(m, pc, analysis), analysis };
+  }
+
+  compileSite(m: MethodInfo, pc: number, site = this.prepareSite(m, pc)) {
+    const { ins, inputs, output, analysis } = site, cx = new Compiler(this.w);
+    const emit = this.operation(m, ins, inputs, output, analysis);
     const built = cx.buildSynthetic(`symbolic:${m.cls}:${m.index}:${pc}`, inputs.map(i => i.kind), c => {
       const weights = emit(cx, c, i => {
         if (i < 2) c.gget(cx.global("rt", i ? "thr" : "depth", i ? T.anyref : T.i32, true));
@@ -76,13 +82,18 @@ export class ColdSlowOps {
   private analysis(m: MethodInfo): Analysis {
     let found = this.analyses.get(m);
     if (!found) {
-      const start = performance.now(), item = m.dex.code(m.codeOff), prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
-      this.w.stats.phase.prepare += performance.now() - start;
-      const infer = performance.now();
-      this.analyses.set(m, found = { prepared, typing: inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions), instructions: new Map(prepared.instructions.map(ins => [ins.pc, ins])) });
-      this.w.stats.phase.infer += performance.now() - infer; this.w.stats.coldTypingMethods++;
+      this.analyses.set(m, found = this.prepareAnalysis(m));
+      this.w.stats.coldTypingMethods++;
     }
     return found;
+  }
+
+  private prepareAnalysis(m: MethodInfo): Analysis {
+    const start = performance.now(), item = m.dex.code(m.codeOff), prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
+    this.w.stats.phase.prepare += performance.now() - start;
+    const infer = performance.now(), typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions);
+    this.w.stats.phase.infer += performance.now() - infer;
+    return { prepared, typing, instructions: new Map(prepared.instructions.map(ins => [ins.pc, ins])) };
   }
 
   private output(m: MethodInfo, ins: PreparedInstruction): Kind | "V" {
@@ -190,8 +201,8 @@ export class ColdSlowOps {
     return finish(call);
   }
 
-  private operation(m: MethodInfo, ins: PreparedInstruction, inputs: { reg: number; kind: Kind; web: number }[], output: Kind | "V"): SlowBody {
-    const { prepared, typing } = this.analysis(m);
+  private operation(m: MethodInfo, ins: PreparedInstruction, inputs: { reg: number; kind: Kind; web: number }[], output: Kind | "V", analysis = this.analysis(m)): SlowBody {
+    const { prepared, typing } = analysis;
     return (cx: Compiler, c: Code, arg: (i: number) => void) => {
       arg(0); c.gset(cx.global("rt", "depth", T.i32, true));
       arg(1); c.gset(cx.global("rt", "thr", T.anyref, true));
