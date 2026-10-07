@@ -45,8 +45,8 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
 }
 
 export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void {
-  if (cx.w.aot?.building) return;
   for (const m of methods) {
+    if (cx.w.aot?.building && !cx.w.opts.build?.appDexes?.has(m.dex)) continue;
     if (!m.codeOff || cx.intrinsic(m) || cx.prog.loaderOf(m.cls) === cx.prog.boot) continue;
     const phase = cx.w.stats.phase, item = m.dex.code(m.codeOff);
     let t = performance.now();

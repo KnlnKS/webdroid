@@ -102,9 +102,10 @@ function withSupers(names: string[]): string[] {
 const dexes = PLATFORM_JARS.map((j) => loadDexes(join(AOSP, j)));
 // an app compiled at build time, as at install: its classes are numbered after the platform's and the Program starts with the same dexes
 const appDexes = appPath ? loadDexes(appPath) : [];
-const prog = new Program([...dexes.flat(), ...appDexes]); prog.addExterns(externs);
+const platform = new Program(dexes.flat()); platform.addExterns(externs);
+const prog = appDexes.length ? new Program(appDexes, platform) : platform;
 rmSync(out, { recursive: true, force: true }); mkdirSync(out, { recursive: true });
-const w = world(prog, { natives, deopt: !!deopt, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]) } });
+const w = world(prog, { natives, deopt: !!deopt, build: { dGroup: hotChunked(withSupers(hot.linked.length ? hot.linked : hot.called), classSize("d"), maxHot, "hotD", chunked(dMode, classSize("d"), maxModule)), cGroup: hotChunked(hot.called.filter((n) => prog.get(n)?.dex), classSize("c"), maxHot, "hotC", chunked(cMode, classSize("c"), maxModule)), dexes: new Set([...dexes.filter((_, i) => jars.includes(PLATFORM_JARS[i])).flat(), ...appDexes]), appDexes: new Set(appDexes) } });
 const aot = w.aot!;
 const t0 = performance.now();
 let cBytes = 0, dBytes = 0, nMethods = 0, v8Ms = 0, mapBytes = 0, largest = 0;
