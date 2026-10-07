@@ -402,13 +402,13 @@ export class AotRuntime {
   }
   /** the module files loaded so far, in order: what a page fetches ahead for a start like this one (scripts/wasm/aot-startup.ts) */
   loaded: string[] = [];
-  /** the files the store did not have when they were first wanted. The answer is kept: a D module that arrived later would define again the globals of a class
-   *  already compiled on demand, and a C module is only used with the D modules it was made against. */
+  /** Files absent on first use. Data misses remain terminal: late D modules would redefine published fallback globals. Code can retry against original D modules. */
   missed = new Set<string>();
   private ready(file: string): boolean {
-    if (this.missed.has(file)) return false;
+    const missed = this.missed.has(file);
+    if (missed && !/^c\d+\.wasm$/.test(file)) return false;
     if (this.store!.get(file)) return true;
-    this.missed.add(file); this.w.stats.aot.missed++;
+    if (!missed) { this.missed.add(file); this.w.stats.aot.missed++; }
     return false;
   }
   /** a file of the build as a compiled module, or undefined for a miss */
@@ -438,13 +438,14 @@ export class AotRuntime {
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
-    const w = this.w, app = c >= this.appFrom, mod = this.module(app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`);
-    if (!mod) { this.cState[c] = DEAD; return false; }
+    const w = this.w, app = c >= this.appFrom, file = app ? `a${c - this.appFrom}.wasm` : `c${c}.wasm`, retry = this.missed.has(file), mod = this.module(file);
+    if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
     if ((head.deopt ?? 0) !== this.deopt) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
     // a store that lacks a D module) its methods are compiled on demand
     if (!head.natives.every((id) => w.nativeBound(id)) || !head.mods.every((m) => this.ready(`d${m.slice(1)}.wasm`))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (retry && !head.mods.every(m => !!this.loadD(+m.slice(1)))) return false;
     this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);

@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
-import type { AotStore } from "../../src/wasm/link/aot";
+import { packModule, VERSION, DEOPT_ABI, type AotStore } from "../../src/wasm/link/aot";
 import { loadDexes, program, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { buildApp } from "../../src/wasm/link/apps";
@@ -26,8 +26,8 @@ sh(["d8", "--release", "--output", out, ...filesIn(out, /^Aot(\$\w+)?\.class$/)]
 sh(["mkdir", "-p", "out2"]);
 sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Aot2(\$\w+)?\.class$/)]);
 
-let failed = 0;
-const check = (what: string, got: unknown, want: unknown) => { if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };
+let failed = 0, checks = 0;
+const check = (what: string, got: unknown, want: unknown) => { checks++; if (got !== want) { failed++; console.log(`FAIL ${what}: got ${String(got)}, want ${String(want)}`); } };
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
 const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
@@ -96,6 +96,52 @@ const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
 // A page has fetched only some of the modules (FetchStore): the code of the others is compiled on demand and runs as before, whatever the order the files arrive in.
 const modules = /^[cd]\d+\.wasm$/;
+// Late code is reusable only against the original data globals; late data must never replace fallback globals.
+{
+  let available = false;
+  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^c\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
+  const m = w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!, slot = w.slotOf(m);
+  check("late C first miss", w.aot!.install(slot), false);
+  check("late C fallback runs first", w.entry("Aot", "plain", "()I")(), 0);
+  const globals = w.link("java/util/ArrayList").exports;
+  const misses = w.stats.aot.missed;
+  available = true;
+  check("late C installs against original D", w.aot!.install(slot), true);
+  check("late C installed method", w.aot!.installed(w.blockOf(slot), m), true);
+  check("late C counts first miss once", w.stats.aot.missed, misses);
+  check("late C retains original globals", w.link("java/util/ArrayList").exports, globals);
+  check("late C Java result", w.entry("Aot", "plain", "()I")(), 0);
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")));
+  check("late C still invalidates for subclass", w.entry("Aot2", "sub", "()I")(), 1);
+}
+{
+  let available = false;
+  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
+  const cls = w.link("java/util/ArrayList"), globals = cls.exports;
+  const m = w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!, slot = w.slotOf(m);
+  available = true;
+  check("late D cannot authorize C", w.aot!.install(slot), false);
+  check("late D retains published class", w.link("java/util/ArrayList"), cls);
+  check("late D retains published globals", cls.exports, globals);
+  check("late D fallback Java result", w.entry("Aot", "plain", "()I")(), 0);
+}
+{
+  let available = false, rejected = false;
+  const index = JSON.parse(new TextDecoder().decode(fileOf("index.json")));
+  const wrong = packModule({ deopt: index.deopt === DEOPT_ABI ? 0 : DEOPT_ABI }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
+  const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^c\d+\.wasm$/.test(f) ? !available ? undefined : !rejected ? wrong : fileOf(f) : fileOf(f) } });
+  const slot = w.slotOf(w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!);
+  check("late policy first miss", w.aot!.install(slot), false);
+  available = true;
+  check("late incompatible policy rejected", w.aot!.install(slot), false);
+  check("late incompatible policy records rejection", w.stats.aot.dead, 1);
+  rejected = true;
+  check("late policy rejection stays terminal", w.aot!.install(slot), false);
+  const stale = new TextEncoder().encode(JSON.stringify({ ...index, version: VERSION + 1 }));
+  check("unsupported AOT index version rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? stale : fileOf(f) } }).aot, false);
+  const foreign = new TextEncoder().encode(JSON.stringify({ ...index, dexes: index.dexes.map(() => "foreign-platform") }));
+  check("foreign platform index rejected", !!world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => f === "index.json" ? foreign : fileOf(f) } }).aot, false);
+}
 const stores: [string, (seen: Set<string>) => AotStore, (w: ReturnType<typeof world>) => boolean][] = [
   ["a build with every other module", () => ({ get: (f) => (modules.test(f) && /[13579]\.wasm$/.test(f) ? undefined : fileOf(f)) }), (w) => w.stats.aot.missed > 0 && w.stats.aot.c + w.stats.aot.d > 0],
   ["a build without any module", () => ({ get: (f) => (modules.test(f) ? undefined : fileOf(f)) }), (w) => w.stats.aot.missed > 0 && w.stats.aot.c + w.stats.aot.d === 0],
@@ -110,5 +156,5 @@ for (const [what, make, expected] of stores) {
   check(`${what}: a subclass overriding indexOf takes effect`, w.entry("Aot2", "sub", "()I")(), 1);
   check(`${what}: and the plain list is as before`, w.entry("Aot2", "plain", "()I")(), 0);
 }
-console.log(failed ? `${failed} failures` : "aottest: all pass");
+console.log(failed ? `${failed} failures / ${checks} checks` : `aottest: all ${checks} checks pass`);
 process.exit(failed ? 1 : 0);
