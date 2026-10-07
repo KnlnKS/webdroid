@@ -152,7 +152,16 @@ export class ModuleBuilder {
         entries.push(e); i = j;
       }
       vec(1, entries); }
-    if (this.imports.length) vec(2, this.imports.map((im) => { const e: number[] = []; name(im.mod, e); name(im.name, e); for (const x of im.desc) e.push(x); return e; }));
+    if (this.imports.length) {
+      const modules = new Map<string, number[]>();
+      vec(2, this.imports.map(im => {
+        let prefix = modules.get(im.mod);
+        if (!prefix) { prefix = []; name(im.mod, prefix); modules.set(im.mod, prefix); }
+        const e = prefix.slice(); name(im.name, e);
+        for (const x of im.desc) e.push(x);
+        return e;
+      }));
+    }
     vec(3, this.funcTypes.map((t) => { const e: number[] = []; uleb(t, e); return e; }));
     if (this.tables.length) vec(4, this.tables);
     if (this.memories.length) vec(5, this.memories);
