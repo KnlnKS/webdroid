@@ -197,7 +197,7 @@ export const parcelAt = (ptr: bigint): NativeParcel => deref<NativeParcel>(ptr);
 const ok = (f: () => void) => { f(); return 0; };
 
 rt.registerJnis("android/os/Parcel", {
-  "nativeCreate()J": () => ownedHandle(new NativeParcel()),
+  "nativeCreate()J": () => { const p = new NativeParcel(); return ownedHandle(p, () => freeData(p)); },
   "nativeDestroy(J)V": (ptr: bigint) => { const p = parcelAt(ptr); if (p) { freeData(p); release(ptr); } },
   "nativeFreeBuffer(J)V": (ptr: bigint) => { const p = parcelAt(ptr); freeData(p); p.allowFds = true; },
   "nativeMarkSensitive(J)V": () => {},

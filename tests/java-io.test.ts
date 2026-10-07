@@ -3,7 +3,8 @@ import "../src/natives";
 import { mkPfd, pfdBackingBytes, fdContents } from "../src/android/os";
 import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel } from "../src/android/binder";
 import { StoredParcel } from "../src/shell/stored-parcel";
-import { nativeParcel } from "../src/android/parcel";
+import { nativeParcel, freeData } from "../src/android/parcel";
+import { handle, release as releaseHandle, take } from "../src/android/handles";
 import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
 import { newFile, fdInt, setFdInt, mkFd } from "../src/jvm/natives/jio";
@@ -14,7 +15,7 @@ import { Cpu, setA64 } from "../src/native/cpu";
 import { defineHost, lookupHost } from "../src/native/host";
 import { libcInit } from "../src/native/libc";
 import { mem, guestAt } from "../src/native/mem";
-import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath } from "../src/native/fs";
+import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs";
 import { kernelInit } from "../src/native/syscall";
 import { BytesFile } from "../src/shell/lazyfile";
 import { scall, loadLibcore } from "./java";
@@ -54,6 +55,31 @@ describe("android-pfd", () => {
 
 describe("file-descriptor", () => {
   const FD = "()Ljava/io/FileDescriptor;";
+
+  test("Java Parcel owner release closes only its descriptor side table", async () => {
+    const path = "/data/data/test/fd/parcel-owner.bin";
+    vfs.write(path, Uint8Array.of(1, 2));
+    const fd = javaOpenFd(path, 2), file = openFd(fd)!;
+    const parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;"), native = nativeParcel(parcel), ptr = handle(native);
+    try {
+      await vcall(parcel, "writeFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
+      expect(file.references).toBe(2);
+      releaseHandle(ptr);
+      expect(file.references).toBe(1);
+      expect(native.objects.size).toBe(0);
+      const byte = new Uint8Array(1);
+      expect(javaReadFd(fd, byte)).toBe(1);
+      expect([...byte]).toEqual([1]);
+      freeData(native);
+      expect(file.references).toBe(1);
+      const transferred = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
+      await vcall(transferred, "writeFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
+      const taken = take<typeof native>(handle(nativeParcel(transferred)));
+      try { expect(file.references).toBe(2); }
+      finally { freeData(taken); }
+      expect(file.references).toBe(1);
+    } finally { freeData(native); releaseHandle(ptr); javaCloseFd(fd); vfs.delete(path); }
+  });
 
   test("retained Java Parcel rights replay shared offsets after sender death and survive store replacement",async()=>{
     const path="/data/data/test/fd/retained.bin",kernel=new FileDescriptors();

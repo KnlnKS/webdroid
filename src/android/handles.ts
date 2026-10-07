@@ -9,6 +9,7 @@
 import { rt } from "../jvm/runtime";
 
 const objs: (object | undefined)[] = [undefined];
+const disposers = new WeakMap<object, () => void>();
 /** Engines that reject Wasm GC weak keys use the strong table. */
 const weak = new WeakMap<object, bigint>(), strong = new Map<object, bigint>();
 const byObj = {
@@ -76,14 +77,17 @@ export function release(h: bigint): void {
   const n = Number(h);
   if (!objs[n]) return;
   const old = objs[n] === WEAK ? refs[n]!.deref() : objs[n];
-  if (old) byObj.delete(old);
+  const dispose = old && disposers.get(old);
+  if (old) { byObj.delete(old); disposers.delete(old); }
   objs[n] = refs[n] = undefined;
   free.push(n);
+  dispose?.();
 }
 /** the object behind a handle its receiver takes over, as a JNI unique_ptr's release does: the
  *  handle is freed */
 export function take<T>(h: bigint): T {
   const o = deref<T>(h);
+  if (o && typeof o === "object") disposers.delete(o);
   release(h);
   return o;
 }
@@ -94,9 +98,10 @@ export function take<T>(h: bigint): T {
 // long as the first Java object to store it (Runtime.link routes those classes' long fields here).
 const owned = new WeakSet<object>();
 const owners = new FinalizationRegistry<{ h: bigint; o: object }>(({ h, o }) => { if (objs[Number(h)] === o) release(h); });
-/** a handle whose native state belongs to the Java object that stores it */
-export function ownedHandle(o: object): bigint {
+/** Native state follows its Java owner; release disposes it, while take transfers it. */
+export function ownedHandle(o: object, dispose?: () => void): bigint {
   owned.add(o);
+  if (dispose) disposers.set(o, dispose);
   return handle(o);
 }
 rt.claimHandle = (owner: object, h: bigint) => {
