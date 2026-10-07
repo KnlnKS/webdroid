@@ -388,7 +388,8 @@ function installProbe(cfg: ProbeConfig): void {
     }
     const actionMs = performance.now() - actionAt;
     const controlled = spec.timing === "controlled";
-    const settleBound = (spec.wait.kind === "live" || spec.wait.kind === "live-sample" ? spec.wait.timeoutMs : spec.wait.maxRealMs) + PHASE_BOUND_MS;
+    const horizonMs = spec.wait.kind === "live" ? spec.wait.horizonMs : spec.wait.kind === "live-sample" ? spec.wait.atRealMs : 0;
+    const settleBound = horizonMs + (spec.wait.kind === "live" || spec.wait.kind === "live-sample" ? spec.wait.timeoutMs : spec.wait.maxRealMs) + PHASE_BOUND_MS;
     const settled = await bounded("settle", settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen), settleBound,
       { how: "timeout", ms: settleBound, busy: { hang: 1 } } as Settled, hangs);
     const aliveAt = performance.now();
