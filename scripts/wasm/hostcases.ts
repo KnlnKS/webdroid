@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getDeclared, JObj, rt } from "../../src/jvm/runtime";
+import { driven, getDeclared, JObj, rt, type Gen } from "../../src/jvm/runtime";
 import { classNameOf, iof, newObj, scall, vcall } from "../../src/jvm/natives/jentry";
 import { androidPlatform, androidTool } from "../android-sdk";
 import { JAVA } from "./paths";
@@ -30,7 +30,7 @@ rt.register({
     "setTag(Ljava/lang/String;)V": function (this: JCounter, tag: string) { this.tag = tag; },
     "getTag()Ljava/lang/String;": function (this: JCounter) { return this.tag; },
     // the host calls Java on its own receiver: a subclass's override answers
-    "twice()I": function (this: JCounter) { return 2 * (vcall(this, "get", "()I") as number); },
+    "twice()I": driven(function* (this: JCounter): Gen<number> { return 2 * ((yield vcall(this, "get", "()I")) as number); }),
     "pause(I)I": async function (this: JCounter, by: number) { await sleep(); this.n += by; return this.n; },
     "reenterInit()I": () => scall("Hc$Boot", "get", "()I"),
     "reenter()I": async function () { return (await enter.call("Hc", "locked", "()I")) as number; },
