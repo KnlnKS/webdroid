@@ -91,7 +91,9 @@ export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names &&
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
 export const APP_VERSION = 3;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
-export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
+export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[]; verdicts?: Verdict[] }
+/** whether a decision of the platform build (`decl.name+desc` resolves to `tc`'s `tk`) stands over the app's classes, as a launch found it */
+export type Verdict = [key: string, tc: string, tk: string, stands: boolean];
 export interface AppIndex {
   version: number;
   deopt?: number;
@@ -198,6 +200,24 @@ export class AotRuntime {
   private synthState: number[] = [];
   private appDOf = new Map<number, number>();
   private appClasses = new Set<string>();
+  /** per supertype, its concrete classes added since the build (World.late), split by whether `within` holds them; extended as that list grows */
+  private parts = new Map<Set<string>, Map<string, { of: string[]; seen: number; within: string[]; beyond: string[] }>>();
+  private split(within: Set<string>, decl: string): { within: string[]; beyond: string[] } | undefined {
+    const all = this.w.late.get(decl);
+    if (!all?.length) return undefined;
+    const parts = this.parts.get(within) ?? this.parts.set(within, new Map()).get(within)!;
+    let e = parts.get(decl);
+    if (e?.of !== all) parts.set(decl, e = { of: all, seen: 0, within: [], beyond: [] });
+    for (; e.seen < all.length; e.seen++) (within.has(all[e.seen]) ? e.within : e.beyond).push(all[e.seen]);
+    return e;
+  }
+  /** the classes `rest` names, and whether each platform decision stands over those of them that are concrete subtypes of its class: known from a launch before (the app build carries
+   *  the verdicts) or found now. Not kept once the Program's view of the app's classes has changed (`unbindApp`). */
+  private restSet?: Set<string>;
+  private verdicts = new Map<string, [tc: string, tk: string, stands: boolean]>();
+  private verdictsHold = true;
+  /** the verdicts this launch knows, which the next app build carries */
+  verdictList(): Verdict[] { return [...this.verdicts].map(([key, [tc, tk, stands]]) => [key, tc, tk, stands]); }
   // ---- build
   private dexSigs = new Set<string>();
   dGroupOf: number[] = [];
@@ -280,6 +300,8 @@ export class AotRuntime {
     const w = this.w, sigs = this.appDexes(app.classes);
     if ((app.deopt ?? 0) !== this.deopt || w.opts.cold && app.deopt !== DEOPT_ABI || app.version !== APP_VERSION || this.rest.length < app.classes || !sameMarks(w.numbering(), app.base) || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) || !w.adopt(app.numbering)) return false;
     this.appClasses = new Set(this.rest.slice(0, app.classes));
+    // Verdicts cover the build's whole app, not an arbitrary prefix of this World's app.
+    if (app.classes === this.rest.length) for (const [key, tc, tk, stands] of app.demand.verdicts ?? []) this.verdicts.set(key, [tc, tk, stands]);
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
     cOf.set(this.cOf);
     this.appFrom = this.cState.length;
@@ -442,10 +464,16 @@ export class AotRuntime {
       if (!e) w.assumptions.set(key, e = { decl, name, desc, tc, tk, slots: new Set() });
       e.slots.add(owner);
       // the classes of an app build are the ones its code was made with
-      const by = app ? w.late.get(decl)?.filter((n) => !this.appClasses.has(n)) : w.late.get(decl);
+      const same = e.tc === tc && e.tk === tk, a = { name, desc, tc, tk };
+      let stands: boolean;
+      if (app) { const by = this.split(this.appClasses, decl)?.beyond; stands = !by?.length || w.holds(a, by); }
       // the answer for the classes added so far is the same for every module that relies on the decision (later classes are checked as they arrive, World.addDexes)
-      const same = e.tc === tc && e.tk === tk, known = !app && same ? e.stands : undefined, stands = !by?.length || (known ?? w.holds({ name, desc, tc, tk }, by));
-      if (!app && same) e.stands = stands;
+      else if (same && e.stands !== undefined) stands = e.stands;
+      else {
+        const by = this.split(this.restSet ??= new Set(this.rest), decl);
+        stands = !by || this.overRest(key, a, by.within) && (!by.beyond.length || w.holds(a, by.beyond));
+        if (same) e.stands = stands;
+      }
       if (!stands) { w.invalidate(owner); w.stats.aot.dead++; }
     }
     for (const cls of head.allocs) w.allocated.add(cls);
@@ -468,9 +496,21 @@ export class AotRuntime {
     return true;
   }
 
+  /** whether decision `a` stands over the app's classes `classes`: what a launch before found, or found now (deciding means building the members of every one of them) */
+  private overRest(key: string, a: { name: string; desc: string; tc: string; tk: string }, classes: string[]): boolean {
+    if (!classes.length) return true;
+    const v = this.verdicts.get(key);
+    if (this.verdictsHold && v && v[0] === a.tc && v[1] === a.tk) return v[2];
+    const stands = this.w.holds(a, classes);
+    if (this.verdictsHold) this.verdicts.set(key, [a.tc, a.tk, stands]);
+    return stands;
+  }
+
   // ---- invalidation
   /** App units were compiled before the runtime loader's library graph was known. Keep platform modules and stable numbering, but discard the app's old resolution. */
   unbindApp(): void {
+    this.verdictsHold = false;
+    this.verdicts.clear(); this.parts.clear(); this.restSet = undefined;
     for (let c = this.appFrom; c < this.cState.length; c++) this.cState[c] = DEAD;
     this.appDOf.clear();
     this.patchesOver.clear();

@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { AotStore } from "../../src/wasm/link/aot";
-import { loadDexes, world } from "./lib";
+import { loadDexes, program, world } from "./lib";
+import { Program } from "../../src/wasm/compiler/program";
+import { buildApp } from "../../src/wasm/link/apps";
+import { Persist, SavedBuild, buildFiles, memoryBackend } from "../../src/wasm/host/persist";
 import { natives } from "./oracle";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
@@ -19,7 +22,7 @@ const jars = PLATFORM_JARS.map((j) => join(AOSP, j));
 const out = mkdtempSync(join(tmpdir(), "j2w-aot-"));
 const sh = shellIn(out);
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", out, join(JAVA, "Aot.java"), join(JAVA, "Aot2.java")]);
-sh(["d8", "--release", "--output", out, ...filesIn(out, /^Aot\.class$/)]);
+sh(["d8", "--release", "--output", out, ...filesIn(out, /^Aot(\$\w+)?\.class$/)]);
 sh(["mkdir", "-p", "out2"]);
 sh(["d8", "--release", "--output", join(out, "out2"), "--classpath", out, ...filesIn(out, /^Aot2(\$\w+)?\.class$/)]);
 
@@ -38,6 +41,41 @@ const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
   check("the decision is undone", w.stats.invalidated >= 1, true);
   check("a subclass overriding indexOf takes effect", w.entry("Aot2", "sub", "()I")(), 1);
   check("and the plain list is as before", w.entry("Aot2", "plain", "()I")(), 0);
+}
+
+// A persisted verdict may cover the entire app, only its prefix, or an obsolete loader graph.
+{
+  const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex")), platform = program(jars);
+  const make = (dexes = app, saved?: SavedBuild) => world(new Program(dexes, platform), { natives, ...(saved && { app: { index: saved.index, store: saved } }) });
+  const observed = make();
+  check("inherited platform target", observed.entry("Aot", "inherited", "()I")(), 0);
+  const verdicts = observed.aot!.verdictList();
+  check("the launch records a true indexOf verdict", verdicts.some(([k, , , stands]) => k === key && stands), true);
+  const built = buildApp(make(), [], { methods: [], classes: [], infos: [], verdicts });
+  const persist = new Persist(memoryBackend());
+  await persist.save("verdict", buildFiles(built));
+  const saved = (await SavedBuild.open((await persist.load("verdict"))!))!;
+  check("the persisted verdict survives loading", saved.index.demand.verdicts?.some(([k, , , stands]) => k === key && stands), true);
+  const matching = make(app, saved);
+  check("the matching app attaches", matching.appAttached, true);
+  let checks = 0;
+  const holds = matching.holds.bind(matching);
+  matching.holds = (a, by) => { if (a.name === "indexOf" && by.includes("Aot$MyList")) checks++; return holds(a, by); };
+  check("cached inherited target", matching.entry("Aot", "inherited", "()I")(), 0);
+  check("the cached target avoids rechecking the app", checks, 0);
+  matching.addDexes(late);
+  check("later override invalidates cached platform code", matching.entry("Aot2", "sub", "()I")(), 1);
+  const prefix = make([...app, ...late], saved);
+  check("a prefix app build still attaches", prefix.appAttached, true);
+  check("a prefix verdict does not hide the extra override", prefix.entry("Aot2", "sub", "()I")(), 1);
+  check("the enlarged app records the falsified target", prefix.aot!.verdictList().some(([k, , , stands]) => k === key && !stands), true);
+  const rebound = make(app, saved), library = rebound.prog.newLoader(rebound.prog.boot, null);
+  rebound.addDexes(late, library);
+  rebound.bindLibraries(rebound.prog.root, [library], []);
+  check("loader rebinding retires persisted verdicts", rebound.aot!.verdictList().length, 0);
+  const cls = rebound.prog.definedBy(library, "Aot2")!;
+  check("the rebound library override takes effect", rebound.entry(cls, "sub", "()I")(), 1);
+  check("obsolete loader verdicts are not exported again", rebound.aot!.verdictList().length, 0);
 }
 {
   const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars], { natives });

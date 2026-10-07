@@ -61,7 +61,7 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       for (const f of wanted) ordered.add(f);
       const mb = (kind: string) => (wanted.filter((f) => f[0] === kind).reduce((n, f) => n + statSync(join(AOT_ROOT, key, f)).size, 0) / 1e6).toFixed(1);
       console.log(`${apk} ${launch}: ${wanted.length} files wanted (C ${wanted.filter((f) => f[0] === "c").length}, ${mb("c")} MB; D ${wanted.filter((f) => f[0] === "d").length}, ${mb("d")} MB), ${ordered.size - before} new`);
-      if (launch === "settled") await exportBundles(page);
+      if (launch === "settled") { await settleBuilds(page); await exportBundles(page); }
       await page.close();
     }
   } catch (e) {
@@ -85,31 +85,48 @@ if (classes) {
   console.log(`${files.length} files in ${key}/startup.json`);
 }
 
+/** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */
+async function settleBuilds(page: import("playwright").Page): Promise<void> {
+  for (const frame of page.frames()) {
+    const built = await frame.evaluate(async () => {
+      const settle = window.__wdCold?.appSettle;
+      return settle ? (await settle()) ?? null : undefined;
+    }).catch(() => undefined);
+    if (built !== undefined) console.log(`${frame.url()}: ${built ? `settled build ${built.methods} methods, ${built.modules} modules${built.kept ? "" : ", not kept"}` : "nothing to settle"}`);
+  }
+}
+
 /** the app builds in the page's store, written beside the platform build's modules */
 async function exportBundles(page: import("playwright").Page): Promise<void> {
   const dir = join(AOT_ROOT, key);
   const listing = await page.evaluate(async (name) => {
-    const root = await navigator.storage.getDirectory(), store = await root.getDirectoryHandle(name);
-    const meta = JSON.parse(await (await (await store.getFileHandle("meta.json")).getFile()).text()) as { entries: Record<string, { files: Record<string, number> }> };
+    let text: string;
+    try {
+      const root = await navigator.storage.getDirectory(), store = await root.getDirectoryHandle(name);
+      text = await (await (await store.getFileHandle("meta.json")).getFile()).text();
+    } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return {}; throw error; }
+    const meta = JSON.parse(text) as { entries: Record<string, { files: Record<string, number> }> };
     return Object.fromEntries(Object.entries(meta.entries).map(([k, e]) => [k, Object.keys(e.files)]));
   }, COMPILED_CODE_DIR);
+  if (!Object.keys(listing).length) console.log("no app build was kept");
   for (const [entry, names] of Object.entries(listing)) {
-    const app = await page.evaluate(async ([store, entry]) => {
-      const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
-      return JSON.parse(await (await (await dir.getFileHandle("index.json")).getFile()).text());
-    }, [COMPILED_CODE_DIR, entry]) as AppIndex;
+    // the realms of a tab share the store's meta.json without a lock: an entry another realm evicted meanwhile is skipped
+    const files = await page.evaluate(async ([store, entry, names]) => {
+      try {
+        const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
+        return await Promise.all(names.map(async (name) => {
+          const bytes = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
+          let text = "";
+          for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          return btoa(text);
+        }));
+      } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error; }
+    }, [COMPILED_CODE_DIR, entry, names] as const);
+    if (!files) { console.log(`app build ${entry}: evicted while listed, skipped`); continue; }
+    const app = JSON.parse(Buffer.from(files[names.indexOf("index.json")], "base64").toString()) as AppIndex;
     if ((app.deopt ?? 0) !== policy) throw new Error(`app build ${entry}: activation policy differs from platform`);
     for (const old of readdirSync(dir).filter((f) => f.startsWith(`app.${entry}.`))) rmSync(join(dir, old));
-    for (const name of names) {
-      const base64 = await page.evaluate(async ([store, entry, name]) => {
-        const root = await navigator.storage.getDirectory(), dir = await (await root.getDirectoryHandle(store)).getDirectoryHandle(entry);
-        const bytes = new Uint8Array(await (await (await dir.getFileHandle(name)).getFile()).arrayBuffer());
-        let text = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        return btoa(text);
-      }, [COMPILED_CODE_DIR, entry, name]);
-      writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(base64, "base64"));
-    }
+    names.forEach((name, i) => writeFileSync(join(dir, `app.${entry}.${name}`), Buffer.from(files[i], "base64")));
     writeFileSync(join(dir, `app.${entry}.json`), JSON.stringify(names));
     console.log(`app build ${entry}: ${names.length} files`);
   }
@@ -125,11 +142,13 @@ async function readProfiles(page: import("playwright").Page): Promise<AotProfile
     const url = new URL(frame.url());
     return url.origin === origin && ["/", "/process"].includes(url.pathname);
   });
-  const profiles = await Promise.all(frames.map(frame => frame.evaluate(async () => {
+  const profiles = (await Promise.all(frames.map(frame => frame.evaluate(async () => {
+    // a same-origin process frame shares the page's store (pageShared), which the page reads
+    if (!window.__wdAot && window.parent !== window && window.parent.__wdAot) return null;
     const store = await window.__wdAot;
     if (!store) throw new Error("AOT profile unavailable");
     return {key:store.key,wanted:[...store.wanted],worlds:[...store.worlds].map(read => read())};
-  })));
+  })))).filter((profile): profile is AotProfile => profile !== null);
   const workers = await page.evaluate(async () => {
     const read = globalThis.wd && Reflect.get(globalThis.wd,"workerAotProfiles") as (() => Promise<WorkerProfile[]>) | undefined;
     if (read) return read();
