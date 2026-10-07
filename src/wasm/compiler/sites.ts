@@ -4,6 +4,7 @@ import { inferTyping, R, J, D, type Typing } from "./infer";
 import type { Compiler } from "./j2w";
 import { T } from "./wasmbin";
 import type { MC } from "./method";
+import { initiatedInstruction } from "../link/resolution";
 
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, params: Kind[], ret: Kind | "V"];
 export interface SiteOperands { inputs: { reg: number; kind: Kind; web: number }[]; output: Kind | "V"; producer: boolean }
@@ -55,7 +56,7 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
     phase.infer += performance.now() - t;
     cx.methodAnalyses.set(m, { prepared, typing });
     for (const ins of prepared.instructions) {
-      if (!typing.reached(ins.pc) || !symbolicInstruction(m, ins)) continue;
+      if (!typing.reached(ins.pc) || !symbolicInstruction(m, ins) || initiatedInstruction(cx.w, m, ins)) continue;
       const name = `${m.cls}:${m.index}:${ins.pc}`;
       if (cx.symbolicImports.has(name)) continue;
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);

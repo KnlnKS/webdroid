@@ -19,6 +19,8 @@ export interface UpgradeJob {
   plan: [string, string[]][];
   /** the classes whose initialization has finished since the previous job */
   initialized: string[];
+  /** Successful, prepared initiating identities needed by these methods. */
+  resolved?: [referrer: string, name: string, key: string][];
   /** the methods of the unit that ran a long loop (World.longLoops) */
   long: string[];
 }
@@ -46,6 +48,10 @@ export class UnitCompiler {
   /** the unit for `job`: an error message if the compiler's code does not validate */
   upgrade(job: UpgradeJob): UnitResult | string {
     const w = this.w, method = (id: string) => methodOf(w.prog, id)!;
+    for (const [referrer, name, key] of job.resolved ?? []) {
+      if (!w.prog.has(referrer) || !w.prog.has(key)) return `missing resolved worker identity ${referrer}: ${name} -> ${key}`;
+      w.initiateClass(w.prog.loaderOf(referrer), name, key);
+    }
     job.initialized.forEach((c) => w.preInitialized.add(c));
     w.plan = new Map(job.plan.map(([key, ids]) => [key, ids.map(method)]));
     w.longLoops = new Set(job.long);

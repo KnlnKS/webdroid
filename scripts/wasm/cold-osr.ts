@@ -15,11 +15,11 @@ const out = mkdtempSync(join(tmpdir(), "cold-osr-")), sh = shellIn(out);
 writeFileSync(join(out, "Osr.java"), `public class Osr {
   public interface I { int f(); }
   public static class Base implements I { public int f(){return 1;} }
-  static int effects; static final Object lock=new Object();
+  static int effects; static Class<?> resolved; static final Object lock=new Object();
   static native I late(I before); static native int await(int value, boolean fail); static native void invalidate();
   public static int effects(){return effects;}
   public static Object lock(){return lock;}
-  public static int run(int n){effects++; I r=new Base(); if(n<0)return 0; int x=0; for(int i=0;i<n;i++)x+=i; return late(r).f()+x;}
+  public static int run(int n){effects++; resolved=I.class; I r=new Base(); if(n<0)return 0; int x=0; for(int i=0;i<n;i++)x+=i; return late(r).f()+x;}
   public static int nested(int n){effects++; synchronized(lock){int x=0; for(int i=0;i<n;i++)for(int j=0;j<3;j++){x++; if(i==n/2 && j==0)invalidate();} return x;}}
   public static long raw(long j,float f,double d,Object r){effects++; invalidate(); return j ^ Float.floatToRawIntBits(f) ^ Double.doubleToRawLongBits(d) ^ (r==null?0:9);}
   public static int wide(${Array.from({length:65},(_,i)=>`int a${i}`).join(',')}){effects++;invalidate();if(a0<0)return 0;return ${Array.from({length:65},(_,i)=>`a${i}`).join('+')};}

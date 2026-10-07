@@ -7,6 +7,7 @@
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
+import { prepareMethod } from "../../jvm/prepared";
 import { ColdInterpreter } from "../cold/interpreter";
 import type { SymbolicSite } from "../compiler/sites";
 import { ColdSlowOps } from "../cold/slowops";
@@ -30,7 +31,7 @@ import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { resolveInstruction, resolveClass, resolveForName } from "./resolution";
+import { initiatedInstruction, resolveInstruction, resolveClass, resolveForName } from "./resolution";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -973,8 +974,18 @@ export class World {
   upgradeJob(slot: number): UpgradeJob | undefined {
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return undefined;
-    const { installed, copies } = this.group(s.m);
-    return { unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+    const clock = this.unitClock(), { installed, copies } = this.group(s.m);
+    const resolved: [string, string, string][] = [];
+    for (const method of [...installed, ...copies]) if (method.codeOff && !this.intrinsic(method)) {
+      const start = performance.now(), prepared = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic);
+      this.stats.phase.prepare += performance.now() - start;
+      for (const ins of prepared.instructions) {
+        const owner = initiatedInstruction(this, method, ins);
+        if (owner && !resolved.some(([referrer, name]) => referrer === method.cls && name === owner.name)) resolved.push([method.cls, owner.name, owner.key]);
+      }
+    }
+    this.accountCompilation(clock);
+    return { resolved, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {

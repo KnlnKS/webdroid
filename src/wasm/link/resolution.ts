@@ -36,6 +36,14 @@ export function instructionClass(method: MethodInfo, ins: PreparedInstruction): 
   return descToName(descriptor);
 }
 
+export function initiatedInstruction(w: World, method: MethodInfo, ins: PreparedInstruction): { name: string; key: string } | undefined {
+  const symbolic = instructionClass(method, ins);
+  if (!symbolic) return;
+  const component = symbolic.replace(/^\[+/, ""), name = symbolic[0] === "[" && component[0] === "L" ? component.slice(1, -1) : symbolic;
+  const key = w.prog.initiatedBy(w.prog.loaderOf(method.cls), name);
+  return key && definitionReady(w, key) ? { name, key } : undefined;
+}
+
 /** Resolve the class named by this executed instruction, not its unused siblings. */
 export function resolveInstruction(w: World, method: MethodInfo, ins: PreparedInstruction, owner: Strand): void | Promise<void> {
   const name = instructionClass(method, ins);
