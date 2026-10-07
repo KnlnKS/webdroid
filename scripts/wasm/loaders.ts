@@ -102,6 +102,13 @@ if (jsDelegate !== 31 || wasmDelegate !== jsDelegate) { failed++; console.log(`F
 
 const jsLibraries = await js("Ldr", "libraries", desc, paths);
 if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibraries}`);
+try {
+  const jsForName = await js("Ldr", "resolverForName", "(Ljava/lang/String;)I", [paths[0]]);
+  if (jsForName !== 63) throw new Error(`JS Class.forName fixture: ${jsForName} (expected 63)`);
+} catch (error) {
+  if (!(error instanceof Error) || error.message !== "java/lang/ClassNotFoundException: [LShared;") throw error;
+  console.log("JS Class.forName reference-array control throws ClassNotFoundException: [LShared;");
+}
 {
   const p = new Program(loadDexes(a), program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]));
   const cache = world(p, { natives }), child = p.newLoader(p.root, null);
@@ -188,7 +195,7 @@ for (const asynchronous of [false, true]) {
   const base = new Program(loadDexes(a)), custom = base.newLoader(base.boot, null);
   base.add(loadDexes(b), custom);
   const derived = new Program(loadDexes(app), base), platform = derived.get("Shared")!;
-  if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || derived.loaderOf("[I") !== derived.boot || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") throw new Error("inherited DEX defining loader identity changed class path or confused app and bootstrap");
+  if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || ["[I", "#I", "#V"].some(name => derived.loaderOf(name) !== derived.boot) || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") throw new Error("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
   const cold = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, cold: true, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
@@ -200,6 +207,15 @@ for (const asynchronous of [false, true]) {
 {
   const resolver = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
   useEntry(wasmEntry(resolver));
+  let forName: unknown;
+  try { forName = await resolver.entryAsync("Ldr", "resolverForName", "(Ljava/lang/String;)I")(paths[0]); }
+  catch (error) {
+    const value = resolver.throwable(error);
+    if (value) console.log("Class.forName fixture failure", resolver.classNameOf(value), resolver.hostString(resolver.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;")(value)), resolver.stackTrace(resolver.fieldReader<object>("java/lang/Throwable", "backtrace", "Ljava/lang/Object;")(value)));
+    throw error;
+  }
+  if (forName !== 63) throw new Error(`Class.forName loader/error boundaries: ${forName}`);
+  if (await resolver.entryAsync("Ldr", "resolverForNameInit", "()I")() !== 1) throw new Error("Class.forName initialization boundary failed");
   const calls = () => resolver.entryAsync("Ldr", "resolverCalls", "()I")();
   for (const mode of [0, 1, 2, 3]) {
     const object = await resolver.entryAsync("Ldr", "resolverLoader", "(Ljava/lang/String;I)Ljava/lang/ClassLoader;")(paths[0], mode) as object;

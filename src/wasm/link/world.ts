@@ -28,8 +28,8 @@ import { hostText } from "./members";
 import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
-import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS } from "./loaders";
-import { resolveClass } from "./resolution";
+import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
+import { resolveClass, resolveForName } from "./resolution";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
@@ -223,7 +223,13 @@ export class World {
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
-      classByName: (name: string, scope: unknown, mode: number) => classByName(this, this.hostString(name) as string, scope, mode),
+      classByName: (name: string, scope: unknown, mode: number) => {
+        const text = this.hostString(name) as string;
+        if (mode !== Lookup.ForName) return classByName(this, text, scope, mode);
+        const value = resolveForName(this, text, scope as object | null, this.sched.current());
+        if (!(value instanceof Promise)) return value;
+        this.sched.parkNative(value); return 0;
+      },
       dexOpen: (path: unknown, loader: object | null) => {
         const value = dexOpen(this, path, loader);
         if (!(value instanceof Promise)) return value;

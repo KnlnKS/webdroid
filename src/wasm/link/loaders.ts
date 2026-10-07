@@ -11,7 +11,7 @@ import type { World } from "./world";
 import { emitSave } from "./sched";
 
 /** how host.classByName reads its scope: the loader whose view of the names is asked for, the loader whose own classes are asked for, or the dex files of a cookie */
-export const enum Lookup { Visible, Defined, Cookie }
+export const enum Lookup { Visible, Defined, Cookie, ForName }
 /** the kind of host.obj that answers the ClassLoader object of a class id */
 export const LOADER_OF_CLASS = 100;
 

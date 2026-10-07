@@ -9,6 +9,39 @@ interface Tag { int tag(); }
 
 /** Two DexClassLoaders over dex files that define the class Shared (ldr1, ldr2): each sees its own class, with its own statics, and both see the app's Tag. */
 public class Ldr {
+  static class FailedInit {
+    static int value = fail();
+    static int fail() { throw new IllegalStateException("fixture initializer"); }
+  }
+  public static int resolverForName(String path) throws Exception {
+    int result = 0;
+    ClassLoader loader = resolverLoader(path, 0);
+    Class<?> type = Class.forName("Shared", false, loader);
+    if (Class.forName("[LShared;", false, loader).getComponentType() == type) result |= 1;
+    if (Class.forName("[[I", false, loader).getClassLoader() == Object.class.getClassLoader()) result |= 2;
+    for (int mode = 1; mode <= 2; mode++) {
+      try { Class.forName("Shared", false, resolverLoader(path, mode)); }
+      catch (ClassNotFoundException expected) {
+        Throwable cause = expected.getCause();
+        if (mode == 1 && cause instanceof ClassNotFoundException || mode == 2 && cause instanceof NullPointerException) result |= 1 << (mode + 1);
+      }
+    }
+    Method intrinsic = Class.class.getDeclaredMethod("classForName", String.class, boolean.class, ClassLoader.class);
+    intrinsic.setAccessible(true);
+    try { intrinsic.invoke(null, "Shared", false, resolverLoader(path, 3)); }
+    catch (InvocationTargetException expected) {
+      if (expected.getCause() instanceof ClassNotFoundException && expected.getCause().getCause() instanceof NoClassDefFoundError) result |= 16;
+    }
+    try { Class.forName("Shared", false, resolverLoader(path, 3)); }
+    catch (NoClassDefFoundError expected) { result |= 32; }
+    return result;
+  }
+  public static int resolverForNameInit() throws Exception {
+    Class.forName("Ldr$FailedInit", false, Ldr.class.getClassLoader());
+    try { Class.forName("Ldr$FailedInit", true, Ldr.class.getClassLoader()); }
+    catch (ExceptionInInitializerError expected) { return 1; }
+    return 0;
+  }
   private static int resolverCalls;
   public static int resolverCalls() { return resolverCalls; }
   public static ClassLoader resolverLoader(String path, int mode) {
