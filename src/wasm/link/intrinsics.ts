@@ -15,6 +15,7 @@ import { memberIntrinsics } from "./members";
 import { inetIntrinsics } from "./inet";
 import { proxyIntrinsics } from "./proxy";
 import { annotationIntrinsics } from "./annotations";
+import { handleIntrinsics } from "./mhandles";
 import { loaderIntrinsics } from "./loaders";
 
 export const intrinsics = new Map<string, Intrinsic>([...stringIntrinsics, ...charIntrinsics]);
@@ -111,4 +112,4 @@ for (const [d, k] of [["Z", "i8"], ["B", "i8"], ["C", "i16"], ["S", "i16"], ["I"
 // Math natives with a Wasm instruction: Math.floor/ceil/rint are f64.floor/ceil/nearest, which round as Java does
 for (const [name, op] of [["floor", 0x9c], ["ceil", 0x9b], ["rint", 0x9e]] as const) def(`java/lang/Math.${name}(D)D`, (cx, m, c) => { c.lget(0).raw(OP.f64_reinterpret_i64, op, OP.i64_reinterpret_f64); });
 
-for (const [key, f] of [...classIntrinsics, ...unsafeIntrinsics, ...reflectIntrinsics, ...threadIntrinsics, ...refIntrinsics, ...memoryIntrinsics, ...fieldIntrinsics, ...memberIntrinsics, ...inetIntrinsics, ...proxyIntrinsics, ...annotationIntrinsics, ...loaderIntrinsics]) intrinsics.set(key, f);
+for (const [key, f] of [...classIntrinsics, ...unsafeIntrinsics, ...reflectIntrinsics, ...threadIntrinsics, ...refIntrinsics, ...memoryIntrinsics, ...fieldIntrinsics, ...memberIntrinsics, ...inetIntrinsics, ...proxyIntrinsics, ...annotationIntrinsics, ...loaderIntrinsics, ...handleIntrinsics]) intrinsics.set(key, f);

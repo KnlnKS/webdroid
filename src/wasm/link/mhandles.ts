@@ -1,24 +1,22 @@
 // MethodHandle.invoke and invokeExact call sites (art/runtime/mirror/method_handle_impl.cc and method_handles.cc). A handle made by MethodHandles.Lookup
 // is a MethodHandleImpl whose handleKind and artFieldOrMethod say what it calls: a method (a cookie as Executable.artMethod, reflect.ts) or a field (the
 // id of Field.get, fields.ts). The site boxes its arguments into an Object[] and passes it with its own method type; the host (mhInvoke) checks the
-// type against the handle's (invokeExact: equal, else WrongMethodTypeException; invoke: asType's conversions of boxing, unboxing, widening and casts),
-// calls the member through a generated thunk and answers the boxed result, which the site unboxes. A handle that is a transformer (a combinator:
-// bindTo, filterArguments, asType of a different shape) runs Java code over ART's EmulatedStackFrame, which this does not model: that is a gap.
-import { OP } from "../compiler/code";
+// type against the handle's (invokeExact: equal, else WrongMethodTypeException; invoke: libcore's asType handles the conversions),
+// calls the member through a generated thunk and answers the boxed result, which the site unboxes. Transformer handles run their unchanged
+// libcore Java code over EmulatedStackFrame; invokeExactWithFrame re-enters the direct-handle dispatcher.
 import { T } from "../compiler/wasmbin";
 import { ACC, javaName, kindOf, type Program } from "../compiler/program";
 import { isWide, descToName, parseMethodDesc } from "../../jvm/abi";
 import { hostReflect, RInfo, BOX } from "./reflect";
 import { prettyType } from "../compiler/linkage";
-import { WIDEN } from "../compiler/fields";
 import type { Code } from "../compiler/code";
-import type { Compiler } from "../compiler/j2w";
+import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
 import type { MC } from "../compiler/method";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import { canAccess, constClass, typeName } from "./classes";
 import { failed, resolveFieldRef, resolveInvoke } from "../compiler/linkage";
-import { emitSave } from "./sched";
+import { emitSave, type Strand } from "./sched";
 import type { Kind } from "../compiler/program";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
@@ -33,7 +31,11 @@ function handleKinds(prog: Program): Record<string, number> {
 function emitType(mc: MC, ret: string, params: string[], returnFirst = true): boolean {
   const resolutionOrder = returnFirst ? [ret, ...params] : [...params, ret];
   if (resolutionOrder.some(d => mc.unresolved(d))) return false;
-  const { cx, code: c } = mc, arr = c.newLocal(T.anyref);
+  emitMethodType(mc.cx, mc.code, ret, params);
+  return true;
+}
+function emitMethodType(cx: Compiler, c: Code, ret: string, params: string[]): void {
+  const arr = c.newLocal(T.anyref);
   cx.emitEnsure(c, MT);
   cx.emitNewArray(c, `[L${CLASS};`, () => c.i32(params.length)); c.lset(arr);
   params.forEach((d, i) => {
@@ -42,7 +44,6 @@ function emitType(mc: MC, ret: string, params: string[], returnFirst = true): bo
   });
   constClass(cx, c, typeName(ret)); c.lget(arr);
   cx.callMethod(c, cx.prog.resolve(MT, "methodType", `(L${CLASS};[L${CLASS};)L${MT};`)!);
-  return true;
 }
 
 export function emitTypeConstant(mc: MC, index: number): void {
@@ -91,8 +92,8 @@ export function emitHandleConstant(mc: MC, index: number): void {
     if (h.type === 6) {
       if (!emitType(mc, m.ret, m.params, false)) return;
       const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
-      c.lset(type); cx.emitEnsure(c, L); cx.emitNew(c, L); c.ltee(lookup); constClass(cx, c, mc.m.cls); c.i32(15);
-      cx.callMethod(c, prog.resolve(L, "<init>", `(L${CLASS};I)V`)!);
+      c.lset(type); cx.emitEnsure(c, "java/lang/invoke/MethodHandles");
+      cx.callMethod(c, prog.resolve("java/lang/invoke/MethodHandles", "lookup", `()L${L};`)!); c.lset(lookup);
       c.lget(lookup); constClass(cx, c, cls); c.lget(type);
       cx.callMethod(c, prog.resolve(L, "findConstructor", `(L${CLASS};L${MT};)L${MH};`)!); mc.set("L"); return;
     }
@@ -134,14 +135,26 @@ export function emitHandleCall(mc: MC, ins: Ins, exact: boolean): void {
     if (BOX[p]) box(cx, c, p);
     c.arraySet(data);
   });
-  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
-  c.lget(handle).externConvertAny().lget(arr).externConvertAny().gget(cx.stringConst(`(${params.join("")})${ret}`)).i32(exact ? 1 : 0).call(cx.imp.mhInvoke);
-  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
-  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait); c.end().anyConvertExtern(); restore();
+  emitInvokeImport(cx, c, () => c.lget(handle), () => c.lget(arr), `(${params.join("")})${ret}`, exact ? 1 : 0);
   if (ret === "V") c.drop();
   else if (BOX[ret]) { unbox(cx, c, ret); mc.finishResult(ins, kindOf(ret)); }
   else { if (ret !== "Ljava/lang/Object;") c.call(cx.castFn(ret[0] === "L" ? descToName(ret) : ret)); mc.finishResult(ins, "L"); }
 }
+
+function emitInvokeImport(cx: Compiler, c: Code, handle: () => void, args: () => void, site: string, mode: number): void {
+  const restore = emitSave(cx, c), wait = cx.global("rt", "wait", T.i32, true);
+  handle(); c.externConvertAny(); args(); c.externConvertAny().gget(cx.stringConst(site)).i32(mode).call(cx.imp.mhInvoke);
+  c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+  c.drop().i32(0).gset(wait).call(cx.imp.annotationWait); c.end().anyConvertExtern(); restore();
+}
+
+const FRAME = "dalvik/system/EmulatedStackFrame", FRAME_INVOKE = 2;
+export const handleIntrinsics = new Map<string, Intrinsic>([
+  [`${MH}.invokeExactWithFrame(L${FRAME};)V`, (cx, _m, c) => {
+    c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();
+    emitInvokeImport(cx, c, () => c.lget(0), () => c.lget(1), "", FRAME_INVOKE); c.drop();
+  }],
+]);
 
 // ---------- the host side
 interface State {
@@ -168,16 +181,12 @@ function state(w: World): State {
   return s;
 }
 
-const nameOfObj = (w: World, v: object) => (typeof v === "string" ? "java/lang/String" : w.classNameOf(v));
-const WRAPPER = new Map(Object.entries(BOX).map(([d, [cls]]) => [cls, d]));
 const descOfName = (n: string) => n[0] === "#" ? n[1] : n[0] === "[" ? n : `L${n};`;
-const wrapperOf = (d: string) => BOX[d][0];
 const prettySig = (params: string[], ret: string) => `(${params.map(prettyType).join(",")})${prettyType(ret)}`;
 
-/** A Java target may suspend. Preserve the calling thread and monitor ownership on a nested strand. */
-function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void): (...args: (object | null)[]) => unknown {
+/** Capture the parent before a wait: a Promise continuation may run while the scheduler is idle. Child strands share its thread and monitor ancestry. */
+function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, parent = w.sched.current()): (...args: (object | null)[]) => unknown {
   return (...args) => {
-    const parent = w.sched.current();
     if (parent.root) return w.unwound(() => w.hostFn(name, params, ret, (cx, c) => body(cx, c, i => { c.lget(i); }))(...args));
     const s = w.sched.strand(parent.thread, parent);
     let result: unknown;
@@ -187,30 +196,26 @@ function handleThunk(w: World, name: string, params: Kind[], ret: Kind | "V", bo
   };
 }
 
-export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number): object | null | Promise<object | null> {
+export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number, parent = w.sched.current()): object | null | Promise<object | null> {
+  if (exact === FRAME_INVOKE) return invokeFrame(w, mh!, args, parent);
   const s = state(w);
   const fail = (cls: string, msg: string | null): never => { throw w.exception(w.makeThrowable(cls, msg)); };
   const site = /^\((.*)\)(.*)$/.exec(siteId)!, sp = parseDescs(site[1]), sr = site[2];
   const nominal = s.typeOf(mh!), pt = s.ptypes(nominal), np = Array.from({ length: s.alen(pt) }, (_, i) => descOfName(w.nameOf(s.classId(s.aget(pt, i))))), nr = descOfName(w.nameOf(s.classId(s.rtype(nominal))));
   const wrong = () => fail("java/lang/invoke/WrongMethodTypeException", `Expected ${prettySig(np, nr)} but was ${prettySig(sp, sr)}`);
   const same = np.length === sp.length && np.every((d, i) => d === sp[i]) && nr === sr;
-  if (!same && (exact || np.length !== sp.length)) wrong();
+  if (!same && exact) wrong();
+  if (!same && !exact) {
+    const adapted = handleThunk(w, `mh:asType:${w.classNameOf(mh!)}:${siteId}`, ["L"], "L", (cx, c, arg) => {
+      arg(0); emitMethodType(cx, c, sr, sp);
+      const m = cx.prog.implFor(w.classNameOf(mh!), "asType", `(L${MT};)L${MH};`)!; cx.callMethod(c, m);
+    }, parent)(mh!) as object | Promise<object>;
+    return chain(adapted, adapted => mhInvoke(w, adapted, args, siteId, 1, parent));
+  }
   const kind = s.handleKind(mh!), K = s.kinds, art = s.art(mh!);
-  const convert = (v: object | null, from: string, to: string): object | null => {
-    if (from === to) return v;
-    if (to === "V") return null;
-    if (from === "V") return to.length === 1 ? zero(w, to) : null;
-    if (to.length === 1 && from.length === 1) return WIDEN[from]?.includes(to) ? primConv(w, from, to)(v) : wrong();
-    if (from.length === 1) return w.prog.isSubclass(wrapperOf(from), descToName(to)) || to === "Ljava/lang/Object;" ? v : wrong();
-    if (to.length === 1) {
-      if (v === null) return fail("java/lang/NullPointerException", `Expected to unbox a '${prettyType(from)}' primitive type but was returned null`);
-      const have = WRAPPER.get(nameOfObj(w, v));
-      return have === undefined || !WIDEN[have].includes(to) ? fail("java/lang/ClassCastException", `Cannot convert ${javaName(nameOfObj(w, v)).replace(/\//g, ".")} to ${prettyType(to)}`) : primConv(w, have, to)(v);
-    }
-    return v === null || isInstance(w, to, v) ? v : fail("java/lang/ClassCastException", `Cannot cast ${javaName(nameOfObj(w, v)).replace(/\//g, ".")} to ${prettyType(to)}`);
-  };
-  const given = Array.from({ length: sp.length }, (_, i) => convert(s.aget(args, i), sp[i], np[i]));
-  const out = (v: unknown): object | null | Promise<object | null> => v instanceof Promise ? v.then(r => convert(r, nr, sr)) : convert(v as object | null, nr, sr);
+  if (kind === K.INVOKE_TRANSFORM) return transform(w, mh!, args, sp, sr, parent);
+  const given = Array.from({ length: sp.length }, (_, i) => s.aget(args, i));
+  const out = (v: unknown) => v as object | null | Promise<object | null>;
   const call = (info: RInfo, cid: number, idx: number, recv: object | null, rest: (object | null)[]) => {
     const list = s.newArray(rest.length);
     rest.forEach((v, i) => s.aset(list, i, v));
@@ -223,59 +228,44 @@ export function mhInvoke(w: World, mh: object | null, args: object, siteId: stri
         });
         const factory = cx.str.factory(m.desc);
         if (factory === undefined) cx.gap(c, `String constructor ${m.desc}`); else c.call(factory);
-      })(list);
+      }, parent)(list);
+    }
+    if (m.isCtor && recv !== null) {
+      return handleThunk(w, `mh:init:${cid}:${idx}`, ["L", "L"], "L", (cx, c, arg) => {
+        arg(0);
+        m.params.forEach((p, i) => {
+          arg(1); c.refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i).arrayGet(cx.tData.ref);
+          if (BOX[p]) unbox(cx, c, p);
+        });
+        cx.callMethod(c, m); c.anyNull();
+      }, parent)(recv, list);
     }
     const slot = hostReflect(w, info, cid, idx);
     return handleThunk(w, `mh:call:${info}:${cid}:${idx}`, ["L", "L"], "L", (cx, c, arg) => {
       arg(0); arg(1); c.i32(slot).callIndirect(cx.sig(["L", "L"], "L"));
-    })(recv, list);
+    }, parent)(recv, list);
   };
-  // libcore's constructor transformer has one direct constructor target; the existing reflection thunk allocates and invokes it.
-  if (w.classNameOf(mh!) === "java/lang/invoke/Transformers$Construct") {
-    const target = w.fieldReader<object>("java/lang/invoke/Transformers$Construct", "constructorHandle", `L${MH};`)(mh!);
-    const ctor = s.art(target), cid = Number(ctor >> 16n), idx = Number(ctor & 0xffffn), cls = w.prog.require(w.nameOf(cid));
-    if (cls.flags & ACC.ABSTRACT) fail("java/lang/InstantiationException", `Can't instantiate ${cls.isInterface ? "interface" : "abstract class"} ${javaName(cls.name)}`);
-    return out(call(RInfo.MethodCallDirect, cid, idx, null, given));
-  }
   switch (kind) {
     case K.INVOKE_STATIC: return out(call(RInfo.MethodCall, Number(art >> 16n), Number(art & 0xffffn), null, given));
     case K.INVOKE_VIRTUAL: case K.INVOKE_INTERFACE:
       return out(call(RInfo.MethodCall, Number(art >> 16n), Number(art & 0xffffn), given[0], given.slice(1)));
-    case K.INVOKE_DIRECT: case K.INVOKE_SUPER:
-      return out(call(RInfo.MethodCallDirect, Number(art >> 16n), Number(art & 0xffffn), given[0],
-        w.prog.require(w.nameOf(Number(art >> 16n))).methods[Number(art & 0xffffn)].isCtor ? given : given.slice(1)));
+    case K.INVOKE_DIRECT: case K.INVOKE_SUPER: {
+      const cid = Number(art >> 16n), idx = Number(art & 0xffffn), m = w.prog.require(w.nameOf(cid)).methods[idx];
+      return out(call(RInfo.MethodCallDirect, cid, idx, given[0], m.isCtor && m.cls === "java/lang/String" ? given : given.slice(1)));
+    }
     case K.IGET: case K.SGET: case K.IPUT: case K.SPUT: {
       const id = Number(art), put = kind === K.IPUT || kind === K.SPUT, stat = kind === K.SGET || kind === K.SPUT;
-      const r = fieldAccess(w, id, put, stat)(...(stat ? given : given.slice(0, put ? 2 : 1)));
+      const r = fieldAccess(w, id, put, stat, parent)(...(stat ? given : given.slice(0, put ? 2 : 1)));
       return out(put ? r instanceof Promise ? r.then(() => null) : null : r);
     }
   }
-  w.onGap(w.gapId(`MethodHandle.${exact ? "invokeExact" : "invoke"} of a transformer handle (kind ${kind}): needs EmulatedStackFrame`));
-  return fail("java/lang/UnsatisfiedLinkError", `MethodHandle transformer (kind ${kind})`);
+  w.onGap(w.gapId(`MethodHandle invocation kind ${kind}`));
+  return fail("java/lang/UnsatisfiedLinkError", `MethodHandle invocation kind ${kind}`);
 }
 
 function parseDescs(s: string): string[] { return s.match(/\[*(L[^;]*;|[ZBCSIJFD])/g) ?? []; }
-const zero = (w: World, d: string): object => w.hostFn(`mh:zero:${d}`, [], "L", (cx, c) => { kindOf(d) === "J" ? c.i64(0n) : c.i32(0); box(cx, c, d); })() as object;
-const isInstance = (w: World, desc: string, v: object): boolean => !!w.hostFn(`mh:inst:${desc}`, ["L"], "I", (cx, c) => { c.lget(0).call(cx.instanceOfFn(desc[0] === "L" ? descToName(desc) : desc)); })(v);
-
-/** a boxed `from` as a boxed `to`, widening as the language does */
-function primConv(w: World, from: string, to: string): (v: object | null) => object | null {
-  return w.hostFn(`mh:conv:${from}${to}`, ["L"], "L", (cx, c) => {
-    c.lget(0);
-    unbox(cx, c, from);
-    // float and double values are their bits here; compute in f32/f64
-    const fk = from === "J" || from === "D" ? "J" : "I";
-    if (from === "F") c.raw(OP.f32_reinterpret_i32); else if (from === "D") c.raw(OP.f64_reinterpret_i64);
-    const asLong = (f: string) => f === "J";
-    if (to === "J") { if (fk === "I") c.raw(OP.i64_extend_i32_s); }
-    else if (to === "F") { if (from !== "F") c.raw(asLong(from) ? OP.f32_convert_i64_s : OP.f32_convert_i32_s); c.raw(OP.i32_reinterpret_f32); }
-    else if (to === "D") { if (from === "F") c.raw(OP.f64_promote_f32); else if (from !== "D") c.raw(asLong(from) ? OP.f64_convert_i64_s : OP.f64_convert_i32_s); c.raw(OP.i64_reinterpret_f64); }
-    box(cx, c, to);
-  }) as never;
-}
-
 /** the generated accessor of field `id` (class id << 12 | index) on boxed values: get(obj?) answers the boxed value, put(obj?, value) stores it */
-function fieldAccess(w: World, id: number, put: boolean, stat: boolean): (...a: (object | null)[]) => unknown {
+function fieldAccess(w: World, id: number, put: boolean, stat: boolean, parent: Strand): (...a: (object | null)[]) => unknown {
   const jc = w.prog.get(w.nameOf(id >>> 12))!, f = jc.fields[id & 0xfff];
   return handleThunk(w, `mh:${put ? "put" : "get"}:${id}`, [...stat ? [] : ["L" as const], ...put ? ["L" as const] : []], put ? "V" : "L", (cx, c, arg) => {
     const st = cx.structFor(jc.name), at = stat ? -1 : cx.fieldIndex(jc.name, f), value = stat ? 0 : 1;
@@ -291,5 +281,72 @@ function fieldAccess(w: World, id: number, put: boolean, stat: boolean): (...a: 
     arg(value);
     if (BOX[f.desc]) unbox(cx, c, f.desc);
     if (stat) c.gset(cx.staticGlobal(jc.name, f.name, f.desc)); else c.structSet(st, at);
-  }) as never;
+  }, parent) as never;
+}
+
+const primitiveNames: Record<string, string> = { Z: "Boolean", B: "Byte", C: "Char", S: "Short", I: "Int", J: "Long", F: "Float", D: "Double" };
+const chain = <A, B>(value: A | Promise<A>, next: (v: A) => B | Promise<B>): B | Promise<B> => value instanceof Promise ? value.then(next) : next(value);
+
+/** Use libcore's frame accessors: they own reference slots, little-endian primitive storage and return offsets. */
+function accessor(cx: Compiler, c: Code, frame: () => void, write: boolean, ret: boolean): number {
+  const name = `${FRAME}$StackFrame${write ? "Writer" : "Reader"}`, base = `${FRAME}$StackFrameAccessor`, local = c.newLocal(T.anyref);
+  cx.emitEnsure(c, name); cx.emitNew(c, name); c.ltee(local); cx.callMethod(c, cx.prog.resolve(name, "<init>", "()V")!);
+  c.lget(local); frame(); cx.callMethod(c, cx.prog.resolve(base, "attach", `(L${FRAME};)L${base};`)!); c.drop();
+  if (ret) { c.lget(local); cx.callMethod(c, cx.prog.resolve(base, "makeReturnValueAccessor", "()V")!); }
+  return local;
+}
+function readFrame(cx: Compiler, c: Code, reader: number, desc: string): void {
+  const name = `${FRAME}$StackFrameReader`;
+  c.lget(reader);
+  if (BOX[desc]) { cx.callMethod(c, cx.prog.resolve(name, "next" + primitiveNames[desc], `()${desc}`)!); box(cx, c, desc); }
+  else { constClass(cx, c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "nextReference", `(L${CLASS};)Ljava/lang/Object;`)!); }
+}
+function writeFrame(cx: Compiler, c: Code, writer: number, desc: string, value: () => void): void {
+  const name = `${FRAME}$StackFrameWriter`;
+  c.lget(writer); value();
+  if (BOX[desc]) { unbox(cx, c, desc); cx.callMethod(c, cx.prog.resolve(name, "putNext" + primitiveNames[desc], `(${desc})V`)!); }
+  else { constClass(cx, c, typeName(desc)); cx.callMethod(c, cx.prog.resolve(name, "putNextReference", `(Ljava/lang/Object;L${CLASS};)V`)!); }
+}
+function signatureOf(w: World, type: object): { params: string[]; ret: string } {
+  const s = state(w), p = s.ptypes(type), desc = (cls: object) => descOfName(w.nameOf(s.classId(cls)));
+  return { params: Array.from({ length: s.alen(p) }, (_, i) => desc(s.aget(p, i))), ret: desc(s.rtype(type)) };
+}
+function frameArgs(w: World, frame: object, params: string[], parent: Strand): object | Promise<object> {
+  return handleThunk(w, `mh:frameArgs:(${params.join("")})`, ["L"], "L", (cx, c, arg) => {
+    const reader = accessor(cx, c, () => arg(0), false, false), arr = c.newLocal(T.anyref);
+    cx.emitNewArray(c, OBJECTS, () => c.i32(params.length)); c.lset(arr);
+    params.forEach((p, i) => {
+      c.lget(arr).refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i); readFrame(cx, c, reader, p); c.arraySet(cx.tData.ref);
+    });
+    c.lget(arr);
+  }, parent)(frame) as object | Promise<object>;
+}
+function invokeFrame(w: World, mh: object, frame: object, parent: Strand): object | null | Promise<object | null> {
+  const type = w.fieldReader<object>(FRAME, "type", `L${MT};`)(frame), { params, ret } = signatureOf(w, type);
+  return chain(frameArgs(w, frame, params, parent), args => chain(mhInvoke(w, mh, args, `(${params.join("")})${ret}`, 1, parent), value => {
+    if (ret === "V") return null;
+    return chain(handleThunk(w, `mh:frameReturn:${ret}`, ["L", "L"], "V", (cx, c, arg) => {
+      const writer = accessor(cx, c, () => arg(0), true, true); writeFrame(cx, c, writer, ret, () => arg(1));
+    }, parent)(frame, value), () => null);
+  }));
+}
+function transform(w: World, mh: object, args: object, params: string[], ret: string, parent: Strand): object | null | Promise<object | null> {
+  const sig = `(${params.join("")})${ret}`;
+  const frame = handleThunk(w, `mh:newFrame:${sig}`, ["L"], "L", (cx, c, arg) => {
+    emitMethodType(cx, c, ret, params);
+    cx.emitEnsure(c, FRAME); cx.callMethod(c, cx.prog.resolve(FRAME, "create", `(L${MT};)L${FRAME};`)!);
+    const local = c.newLocal(T.anyref); c.lset(local);
+    const writer = accessor(cx, c, () => c.lget(local), true, false);
+    params.forEach((p, i) => writeFrame(cx, c, writer, p, () => { arg(0); c.refCast(cx.tArr.ref).structGet(cx.tArr.ref, 2).i32(i).arrayGet(cx.tData.ref); }));
+    c.lget(local);
+  }, parent)(args) as object | Promise<object>;
+  return chain(frame, frame => {
+    const m = w.prog.implFor(w.classNameOf(mh), "transform", `(L${FRAME};)V`)!;
+    return chain(handleThunk(w, `mh:transform:${m.cls}`, ["L", "L"], "V", (cx, c, arg) => { arg(0); arg(1); cx.callMethod(c, m); }, parent)(mh, frame), () => {
+      if (ret === "V") return null;
+      return handleThunk(w, `mh:readReturn:${ret}`, ["L"], "L", (cx, c, arg) => {
+        const reader = accessor(cx, c, () => arg(0), false, true); readFrame(cx, c, reader, ret);
+      }, parent)(frame) as object | Promise<object>;
+    });
+  });
 }

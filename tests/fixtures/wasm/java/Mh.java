@@ -7,6 +7,8 @@ public class Mh {
   final int readOnly = 23;
   static int initializations;
   static class Dormant { static int f = ++initializations; }
+  public Mh() {}
+  public Mh(int value) { f = value; }
   static int add(int a, int b) { return a + b; }
   static long wide(long a, double d, int i) { return a + (long) d + i; }
   static float flt(float a, boolean z, char c, byte b, short s) { return z ? a + c + b + s : -a; }
@@ -38,8 +40,77 @@ public class Mh {
   public static int tNullRecv(int a) throws Throwable { try { return (int) L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).invokeExact((Mh) null, a); } catch (NullPointerException e) { return -200; } }
   public static int tWrongType(int a) throws Throwable { try { return (int) L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).invokeExact((long) a, 4); } catch (WrongMethodTypeException e) { return -300; } }
   public static int tCast(int a) throws Throwable { try { return (int) L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).invoke((Object) "s", 4); } catch (ClassCastException e) { return -400; } }
-  /** a combinator: its handle is a transformer, which needs ART's EmulatedStackFrame (link/mhandles.ts) */
+  /** A combinator runs libcore Java over ART's EmulatedStackFrame. */
   public static int tBind(int a) throws Throwable { return (int) L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).bindTo(new Mh()).invokeExact(a); }
+  public static int tTransformFloat(int a) throws Throwable {
+    MethodHandle h = MethodHandles.insertArguments(L.findStatic(Mh.class, "flt", mt(float.class, float.class, boolean.class, char.class, byte.class, short.class)),
+      1, true, (char) 65, (byte) -2, (short) -3);
+    return Float.floatToIntBits((float) h.invokeExact(a * 1.5f));
+  }
+  public static long tTransformDouble(int a) throws Throwable {
+    MethodHandle h = MethodHandles.dropArguments(MethodHandles.identity(double.class), 0, String.class);
+    return Double.doubleToLongBits((double) h.invokeExact((String) null, -((double) a) / 3));
+  }
+  public static int tTransformVoid(int a) throws Throwable {
+    MethodHandle h = MethodHandles.dropArguments(L.findStatic(Mh.class, "sink", mt(void.class, int.class)), 0, String.class);
+    int before = sf; h.invokeExact((String) null, a); return sf - before;
+  }
+  public static long tTransformMixed(int a) throws Throwable {
+    MethodHandle h = MethodHandles.insertArguments(L.findStatic(Mh.class, "wide", mt(long.class, long.class, double.class, int.class)), 1, 2.5);
+    return (long) h.invokeExact((long) a * 3, a);
+  }
+  public static int tTransformFilter(int a) throws Throwable {
+    MethodHandle plus = L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).bindTo(new Mh());
+    MethodHandle h = MethodHandles.filterArguments(L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)), 0, plus);
+    return (int) MethodHandles.filterReturnValue(h, plus).invokeExact(a, 2);
+  }
+  public static int tTransformPermutation(int a) throws Throwable {
+    MethodHandle h = MethodHandles.permuteArguments(L.findStatic(Mh.class, "wide", mt(long.class, long.class, double.class, int.class)), mt(long.class, int.class, double.class, long.class, Object.class), 2, 1, 0);
+    return (int) (long) h.invokeExact(a, 0.5, (long) a * 4, (Object) null);
+  }
+  static int handled(IllegalStateException ex, int a) { return a - 100; }
+  public static int tTransformCatch(int a) throws Throwable {
+    MethodHandle h = MethodHandles.catchException(L.findStatic(Mh.class, "boom", mt(int.class, int.class)), IllegalStateException.class,
+      L.findStatic(Mh.class, "handled", mt(int.class, IllegalStateException.class, int.class)));
+    return (int) h.invokeExact(a);
+  }
+  public static int tTransformAdapt(int a) throws Throwable {
+    MethodHandle h = L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).bindTo(new Mh()).asType(mt(Object.class, Object.class));
+    return (Integer) (Object) h.invokeExact((Object) Integer.valueOf(a));
+  }
+  public static int tTransformPlain(int a) throws Throwable {
+    return (Integer) (Object) L.findVirtual(Mh.class, "plus", mt(int.class, int.class)).bindTo(new Mh()).invoke((short) a);
+  }
+  static int sum(int... values) { int n = 0; for (int value : values) n += value; return n; }
+  public static int tTransformVarargs(int a) throws Throwable {
+    MethodHandle h = L.findStatic(Mh.class, "sum", mt(int.class, int[].class));
+    return (int) h.invoke(a, 2, 3);
+  }
+  public static int tTransformSpread(int a) throws Throwable {
+    MethodHandle h = L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).asSpreader(int[].class, 2);
+    return (int) h.invokeExact(new int[]{a, 4});
+  }
+  public static int tTransformRefs(int a) throws Throwable {
+    MethodHandle h = MethodHandles.dropArguments(MethodHandles.identity(String.class), 0, int.class, double.class);
+    String value = (a == 0 ? null : "xyz");
+    String result = (String) h.invokeExact(a, 0.25, value);
+    return result == null ? -1 : result.length();
+  }
+  public static int tTransformWait(int a) throws Throwable {
+    Object lock = Mh.class;
+    synchronized (lock) {
+      MethodHandle h = MethodHandles.insertArguments(Mc.hWait(), 1, Thread.currentThread(), lock);
+      h = MethodHandles.filterReturnValue(h, MethodHandles.identity(int.class));
+      try { return (int) h.invokeExact(a); } catch (IllegalStateException e) { return -777; }
+    }
+  }
+  public static int tTransformConcurrent(final int a) throws InterruptedException {
+    final int[] results = {-999, -999};
+    Thread first = new Thread() { public void run() { try { results[0] = tTransformWait(a); } catch (Throwable e) { results[0] = -998; } } };
+    Thread second = new Thread() { public void run() { try { results[1] = tTransformWait(a + 1); } catch (Throwable e) { results[1] = -998; } } };
+    first.start(); second.start(); first.join(); second.join();
+    return results[0] * 10 + results[1];
+  }
   public static int tType(int a) throws Throwable { return L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).type().parameterCount() + a; }
   public static int tConstStatic(int a) throws Throwable { return (int) Mc.hStatic().invokeExact(a, 4); }
   public static int tConstVirtual(int a) throws Throwable { return (int) Mc.hVirtual().invokeExact((Mh) new Mc(), a); }
@@ -47,6 +118,7 @@ public class Mh {
   public static int tConstDirect(int a) throws Throwable { return (int) Mc.hDirect().invokeExact(new Mc(), a); }
   public static int tConstSuper(int a) throws Throwable { return (int) Mc.hSuper().invoke(new Mc(), a); }
   public static int tConstConstructor(int a) throws Throwable { return ((Mh) Mc.hConstructor().invokeExact()).f + a; }
+  public static int tConstPrivateCtor(int a) throws Throwable { return ((Mc) Mc.hPrivateConstructor().invokeExact(a)).f; }
   public static int tConstString(int a) throws Throwable { return ((String) Mc.hStringConstructor().invokeExact(new char[]{'a', 'b'})).length() + a; }
   public static int tConstClone(int a) throws Throwable {
     int[] source = {a}; int[] copy = (int[]) (Object) Mc.hClone().invokeExact(source);
@@ -78,6 +150,7 @@ public class Mh {
   static int waiting(int a, Thread thread, Object lock) throws InterruptedException {
     if (Thread.currentThread() != thread || !Thread.holdsLock(lock)) return -999;
     Thread.sleep(1);
+    if (Thread.currentThread() != thread || !Thread.holdsLock(lock)) return -998;
     if (a < 0) throw new IllegalStateException();
     return a + 1;
   }
