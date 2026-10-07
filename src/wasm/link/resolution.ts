@@ -67,6 +67,8 @@ export function instructionClass(method: MethodInfo, ins: PreparedInstruction): 
 }
 
 export function initiatedInstruction(w: World, method: MethodInfo, ins: PreparedInstruction): { name: string; key: string } | undefined {
+  // An initiated MH/VH owner does not establish resolution of the separate call-site prototype.
+  if (ins.name.startsWith("invoke-polymorphic")) return;
   const symbolic = instructionClass(method, ins);
   if (!symbolic) return;
   const component = symbolic.replace(/^\[+/, ""), name = symbolic[0] === "[" && component[0] === "L" ? component.slice(1, -1) : symbolic;

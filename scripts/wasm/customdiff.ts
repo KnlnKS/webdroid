@@ -21,6 +21,7 @@ import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { idOfClass } from "../../src/wasm/link/classes";
+import { definitionReady } from "../../src/wasm/link/resolution";
 import { androidPlatform } from "../android-sdk";
 
 /** Pq and Pq2 as javac would not write them: ObjectMethods.bootstrap over a virtual getter (overridden in Pq2) and a virtual name getter, including overridden accessors */
@@ -106,6 +107,8 @@ function handClasses(): Record<string, Uint8Array> {
       constant("handle", handle, "MethodHandle"),
       method(p, 9, "identity", "(LMh$Signature;)LMh$Signature;", [0x2a, 0xb0], 1),
       method(p, 9, "poly", "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;", [0x2a, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LMh$Signature;)LMh$Signature;")), 0xb0], 1),
+      method(p, 9, "arrayHandle", "()Ljava/lang/invoke/VarHandle;", [0x13, ...u2(p.cls("[LMh$Signature;")), 0xb8, ...u2(p.member(10, "java/lang/invoke/MethodHandles", "arrayElementVarHandle", "(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;")), 0xb0], 0),
+      method(p, 9, "vh", "(Ljava/lang/invoke/VarHandle;)Ljava/lang/Object;", [0x2a, 0x01, 0x03, 0xb6, ...u2(p.member(10, "java/lang/invoke/VarHandle", "get", "([LMh$Signature;I)LMh$Signature;")), 0xb0], 1),
       method(p, 9, "nullPoly", "()I", [0x01, 0x01, 0xb6, ...u2(p.member(10, "java/lang/invoke/MethodHandle", "invokeExact", "(LAbsent;)LAbsent;")), 0x57, 0x03, 0xac], 0),
       method(p, 9, "custom", "()Ljava/lang/Object;", [0x01, 0xba, ...u2(p.invokeDynamic(0, "signature", signature)), 0, 0, 0xb0], 0)
     ], [[...u2(p.utf8("BootstrapMethods")), ...u4(body.length), ...body]]);
@@ -324,6 +327,26 @@ async function checkDeferredSignatures(): Promise<void> {
     catch (e) { const t = tier.throwable(e); throw new Error(`signature child resolution: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
     finally { strand.end(); }
     if (name === "Mt" || loads !== 1) throw new Error("signature fixture did not load deferred child DEX");
+    const ownerLoader = definingLoader(tier, object), ownerStrand = tier.sched.strand();
+    try {
+      for (const cls of ["java/lang/invoke/MethodHandle", "java/lang/invoke/VarHandle"]) {
+        await tier.resolveClass(ownerLoader, cls, ownerStrand);
+        const key = tier.prog.initiatedBy(ownerLoader, cls);
+        if (!key || !definitionReady(tier, key)) throw new Error("polymorphic owner fixture is not initiated and definition ready");
+      }
+    } catch (e) { const t = tier.throwable(e); throw new Error(`polymorphic owner initiation: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    finally { ownerStrand.end(); }
+    let parentHandle: unknown, parentArrayHandle: unknown;
+    try {
+      parentHandle = await tier.entryAsync("Mt", "handle", "()Ljava/lang/invoke/MethodHandle;")();
+      parentArrayHandle = await tier.entryAsync("Mt", "arrayHandle", "()Ljava/lang/invoke/VarHandle;")();
+    } catch (e) { const t = tier.throwable(e); throw new Error(`parent polymorphic handles: ${t ? tier.classNameOf(t) : String(e)} (${tier.lastMessage})`, { cause: e }); }
+    const prototypeFailures: string[] = [];
+    for (const [method, desc, handle] of [["poly", tier.prog.viewOf(name, "(Ljava/lang/invoke/MethodHandle;)LMh$Signature;"), parentHandle], ["vh", "(Ljava/lang/invoke/VarHandle;)Ljava/lang/Object;", parentArrayHandle]] as const) {
+      try { await tier.entryAsync(name, method, desc)(handle); throw new Error(`${method} initiated owner bypassed denied prototype`); }
+      catch (e) { const t = tier.throwable(e); if (!t || tier.classNameOf(t) !== "java/lang/NoClassDefFoundError") prototypeFailures.push(`${method}: ${t ? tier.classNameOf(t) : String(e)}`); }
+    }
+    if (prototypeFailures.length) throw new Error(`initiated owner bypassed denied prototype: ${prototypeFailures.join("; ")}`);
     for (const [method, desc] of [["type", "()Ljava/lang/invoke/MethodType;"], ["handle", "()Ljava/lang/invoke/MethodHandle;"], ["custom", "()Ljava/lang/Object;"]]) {
       try { await tier.entryAsync(name, method, desc)(); throw new Error(`${method} bypassed Java loader signature denial`); }
       catch (e) { const t = tier.throwable(e); if (!t || tier.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }
@@ -350,5 +373,5 @@ async function checkDeferredSignatures(): Promise<void> {
     try { bootstrap = await tier.resolveClass(definingLoader(tier, object), "Bootstrap", bootstrapOwner); } finally { bootstrapOwner.end(); }
     if (await tier.entryAsync(bootstrap, "tCustomConstants", "(I)I")(3) !== 8) throw new Error("deferred bootstrap encoded constants lost defining identities");
   }
-  console.log("14 deferred Java-loader constant/polymorphic/bootstrap checks preserve defining identities, denial/retry and null precedence");
+  console.log("18 deferred Java-loader constant/polymorphic/bootstrap checks preserve defining identities, initiated-owner denial/retry and null precedence");
 }
