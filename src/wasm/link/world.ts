@@ -437,7 +437,7 @@ export class World {
       const addIface = (i: string) => {
         const ic = this.prog.get(i);
         if (!ic) return;
-        for (const m of ic.methods) if (!(m.flags & (ACC.STATIC | ACC.PRIVATE)) && !s!.some(key => dispatchMethodKey(key) === javaName(m.key) && !!((symbolicImplFor(this.prog, n, key)?.flags ?? 0) & ACC.PUBLIC))) s!.push(javaName(m.key));
+        for (const m of ic.methods) if (!(m.flags & (ACC.STATIC | ACC.PRIVATE)) && !s!.some(key => dispatchMethodKey(key) === javaName(m.key) && !!((symbolicImplFor(this.prog, n, key, true)?.flags ?? 0) & ACC.PUBLIC))) s!.push(javaName(m.key));
         ic.ifaces.forEach(addIface);
       };
       for (let k: JClass | undefined = c; k; k = k.sup ? this.prog.get(k.sup) : undefined) k.ifaces.forEach(addIface);
