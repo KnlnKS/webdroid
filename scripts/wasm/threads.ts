@@ -179,6 +179,26 @@ if (substrate) {
       expect("throwing link retains its strand", w.sched.current(), rejected);
       expect("throwing link retains frame depth", globals.depth.value, 17);
     } finally { rejectAdmission = false; rejected.end(); w.sched.idle(); }
+    const readyStrand = w.sched.strand();
+    globals.sid.value = readyStrand.id; globals.thr.value = readyStrand.thread.obj; globals.depth.value = 19;
+    admissionProbe = false;
+    try {
+      let prepared = 0;
+      await w.sched.admitLink(() => {
+        expect("delivery admission restores its strand before linking", w.sched.current(), readyStrand);
+        expect("delivery admission restores depth", globals.depth.value, 19);
+      }, () => { prepared++; return Promise.resolve(); });
+      expect("delivery admission waits without exhausted turn budget", prepared, 1);
+      w.synchronous(() => w.sched.admitLink(() => {}, () => { prepared++; return Promise.resolve(); }));
+      expect("synchronous Java does not prepare delivery", prepared, 1);
+      try { await w.sched.admitLink(() => { throw new Error("rejected preparation ran link"); }, () => Promise.reject(new Error("preparation rejected"))); }
+      catch (error) { expect("preparation rejection is retained", (error as Error).message, "preparation rejected"); }
+      expect("rejected preparation restores its strand", w.sched.current(), readyStrand);
+      expect("rejected preparation restores depth", globals.depth.value, 19);
+      w.sched.idle();
+      w.sched.admitLink(() => {}, () => { prepared++; return Promise.resolve(); });
+      expect("root host does not prepare delivery", prepared, 1);
+    } finally { readyStrand.end(); w.sched.idle(); admissionProbe = true; }
     expect("admission releases its strands", w.sched.strands.filter(Boolean).length, 1);
   } finally { admissionProbe = false; }
   const cold = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives(nativeSource) });

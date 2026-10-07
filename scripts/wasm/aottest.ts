@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { packModule, VERSION, DEOPT_ABI, type AotStore, type CHeader, type DHeader } from "../../src/wasm/link/aot";
+import { defaultLoop } from "../../src/wasm/link/sched";
 import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
@@ -121,6 +122,77 @@ const modules = /^[cd]\d+\.wasm$/;
   check("published fallback rejects before requesting more data", head.mods.every(m => !requested.has(`d${m.slice(1)}.wasm`)), true);
   check("publication after preflight keeps globals", published.link(cls.name).exports, globals);
   check("publication after preflight Java result", published.entry("Aot", "plain", "()I")(), 0);
+}
+// Demand preparation fetches code then its original data, but publishes nothing and has a finite fallback path.
+{
+  const held = new Set<string>(), delivered = new Map<string, WebAssembly.Module>();
+  const requests: string[][] = [];
+  let mode: "deliver" | "missing" | "fail" | "stall" = "deliver";
+  const store: AotStore = {
+    get: f => delivered.get(f) ?? (held.has(f) ? undefined : fileOf(f)),
+    prefetch: files => {
+      requests.push(files);
+      if (mode === "stall") return new Promise(() => {});
+      if (mode === "missing") return Promise.resolve();
+      if (mode === "fail") return Promise.reject(new Error("delivery failed"));
+      return Promise.resolve().then(() => { for (const f of files) delivered.set(f, compileModule(fileOf(f))); });
+    },
+  };
+  const make = () => world([join(out, "classes.dex"), ...jars], { natives, aot: store });
+  const w = make(), block = w.ids.get("java/util/ArrayList")! - 1, slot = w.blockBase[block];
+  const cfile = `c${w.aot!.platformModule(block)}.wasm`;
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(cfile)), "aot")[0]))) as CHeader;
+  held.add(cfile); held.add(`d${head.mods[0].slice(1)}.wasm`);
+  check("missing delivery requests preparation", w.aot!.needsPreparation(slot), true);
+  const pending = w.aot!.prepare(slot)!;
+  check("concurrent preparation shares delivery", w.aot!.prepare(slot), pending);
+  await pending;
+  check("preparation fetches code then required data", requests.length, 2);
+  check("preparation publishes no globals", w.stats.classes, 0);
+  check("prepared code installs original data", w.aot!.install(slot), true);
+  check("prepared Java result", w.entry("Aot", "plain", "()I")(), 0);
+  requests.length = 0;
+  const published = make();
+  const dataFile = `d${head.mods[0].slice(1)}.wasm`;
+  delivered.delete(dataFile);
+  const dh = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(dataFile)), "aot")[0]))) as DHeader;
+  const cls = published.link(published.names[dh.classes[0]]), globals = cls.exports;
+  check("published fallback does not prepare", published.aot!.prepare(slot), undefined);
+  check("published fallback prepares no files", requests.length, 0);
+  delivered.set(dataFile, compileModule(fileOf(dataFile)));
+  check("preparation cannot replace published globals", published.link(cls.name).exports, globals);
+  delivered.set(cfile, compileModule(packModule({ deopt: head.deopt === DEOPT_ABI ? 0 : DEOPT_ABI }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0))));
+  const policy = make();
+  check("incompatible policy does not prepare", policy.aot!.prepare(slot), undefined);
+  check("incompatible policy prepares no files", requests.length, 0);
+  delivered.clear(); requests.length = 0;
+  held.delete(dataFile);
+  const automatic = world([join(out, "classes.dex"), ...jars], { natives, aot: store, loop: { ...defaultLoop, due: () => false } });
+  automatic.link("java/util/ArrayList");
+  const ctor = automatic.prog.get("java/util/ArrayList")!.byKey.get("<init>()V")!, ctorSlot = automatic.slotOf(ctor);
+  automatic.table.set(ctorSlot, automatic.restoreStub(ctorSlot, ctor));
+  check("fresh stub admits delivery before its turn expires", await automatic.entryAsync("Aot", "plain", "()I")(), 0);
+  check("fresh stub prepares demanded code once", requests.filter(fs => fs.includes(cfile)).length, 1);
+  delivered.clear(); requests.length = 0;
+  const changed = make(), changing = changed.aot!.prepare(slot);
+  changed.addDexes(loadDexes(join(out, "out2/classes.dex")));
+  await changing;
+  check("delivery wait revalidates a newly added overriding class", await changed.entryAsync("Aot2", "sub", "()I")(), 1);
+  delivered.clear(); requests.length = 0; mode = "missing";
+  const absent = make();
+  await absent.aot!.prepare(slot);
+  check("completed delivery without a file falls back", absent.aot!.install(slot), false);
+  delivered.clear(); requests.length = 0; mode = "fail";
+  const failed = make();
+  await failed.aot!.prepare(slot);
+  check("failed delivery falls back", failed.aot!.install(slot), false);
+  check("failed delivery Java result", failed.entry("Aot", "plain", "()I")(), 0);
+  delivered.clear(); requests.length = 0; mode = "stall";
+  const stalled = make();
+  await stalled.aot!.prepare(slot);
+  check("stalled delivery returns to fallback", stalled.aot!.install(slot), false);
+  check("expired preparation does not wait again", stalled.aot!.prepare(slot), undefined);
+  check("stalled delivery only requested demanded code", requests.flat().join(), cfile);
 }
 // Late code is reusable only against the original data globals; late data must never replace fallback globals.
 {

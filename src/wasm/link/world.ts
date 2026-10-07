@@ -193,8 +193,8 @@ export class World {
       fmod: (a: number, b: number) => a % b,
       gap: (id: number) => { this.lastGap = id; this.onGap(id); },
       link: (slot: number) => this.linkSlot(slot),
-      linkDue: () => +(hasJspi() && this.sched.canWait() && !this.inSynchronousJava() && this.sched.turnDue()),
-      linkWait: hasJspi() ? suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot))) : (slot: number) => this.linkSlot(slot),
+      linkDue: (slot: number) => +(hasJspi() && this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
+      linkWait: hasJspi() ? suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot), () => this.aot?.prepare(slot))) : (slot: number) => this.linkSlot(slot),
       sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
       // without JSPI (Bun) nothing can wait, which the first attempt says
       block: hasJspi() ? suspending((op: number, obj: object | null, a: number, b: number) => {
@@ -556,7 +556,7 @@ export class World {
   }
   private linkImports(mb: ModuleBuilder, state: [number, number, number] = [mb.importGlobal("rt", "sid", T.i32, true), mb.importGlobal("rt", "thr", T.anyref, true), mb.importGlobal("rt", "depth", T.i32, true)]): LinkImports {
     const sig = mb.addFuncType([T.i32], []);
-    return { link: mb.importFunc("host", "link", sig), due: mb.importFunc("host", "linkDue", mb.addFuncType([], [T.i32])), wait: mb.importFunc("host", "linkWait", sig), sync: mb.importFunc("host", "sync", mb.addFuncType([T.i32, T.externref, T.f64], [T.i32])), state };
+    return { link: mb.importFunc("host", "link", sig), due: mb.importFunc("host", "linkDue", mb.addFuncType([T.i32], [T.i32])), wait: mb.importFunc("host", "linkWait", sig), sync: mb.importFunc("host", "sync", mb.addFuncType([T.i32, T.externref, T.f64], [T.i32])), state };
   }
   private stubBody(slot: number, sig: number, params: VT[], { link, due, wait, sync, state }: LinkImports): number[] {
     const c = new Code(params.length);
@@ -565,7 +565,7 @@ export class World {
       state.forEach((global, i) => c.lget(saved[i]).gset(global));
       c.i32(Sync.Resume).refNull(-17).f64const(0n).call(sync).drop();
     };
-    c.call(due).if_();
+    c.i32(slot).call(due).if_();
     state.forEach((global, i) => c.gget(global).lset(saved[i]));
     // Promise reactions may idle another strand after admission restores it, before Wasm resumes.
     c.block().block(T.exnref).tryTable(null, [[3, 0, 0]]).i32(slot).call(wait).end().br(1).end();

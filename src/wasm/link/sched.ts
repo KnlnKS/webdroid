@@ -247,12 +247,14 @@ export class Sched {
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
   /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
-   * Restore the caller before compilation; the stub restores it again when Wasm resumes. */
-  admitLink(run: () => void): void | Promise<void> {
+   * Delivery preparation may wait before the turn expires. Restore the caller before compilation and again in the resumed stub. */
+  admitLink(run: () => void, prepare?: () => Promise<void> | undefined): void | Promise<void> {
     const s = this.current();
-    if (s.root || this.w.inSynchronousJava() || !this.loop.due()) return run();
+    if (s.root || this.w.inSynchronousJava()) return run();
     const { sid, thr, depth } = this.g, saved = [sid.value, thr.value, depth.value] as const;
-    const pending = this.loop.yield(s.thread === this.main);
+    const delivery = prepare?.(), due = this.loop.due();
+    if (!delivery && !due) return run();
+    const pending = due ? Promise.all([delivery, this.loop.yield(s.thread === this.main)]) : delivery!;
     this.suspensions++; s.nested = 0;
     this.idle();
     const restore = () => {

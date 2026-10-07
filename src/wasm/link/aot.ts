@@ -24,11 +24,14 @@ export interface AotStore {
   /** a module file: its bytes, or the module itself where the host has compiled it ahead of use; "index.json" is always bytes. A file the host does not
    *  have is a miss: the code it holds is compiled on demand instead. */
   get(file: string): Uint8Array | WebAssembly.Module | undefined;
+  /** Optional asynchronous delivery; failure leaves files absent for the ordinary fallback linker. */
+  prefetch?(files: string[]): Promise<void>;
 }
 /** how a build groups the platform classes: classes with the same key share a D (data) or C (code) module; no C key leaves a class to the on-demand compiler */
 export interface AotBuild { dGroup(cls: string): string; cGroup(cls: string): string | null; /** the dexes whose classes are numbered and compiled */ dexes: Set<DexFile>; /** application dexes included by an optional combined image */ appDexes?: Set<DexFile> }
 
 export const DEOPT_ABI = 3;
+const PREPARATION_MS = 50;
 export interface AotIndex {
   version: number;
   /** 0: no handoff support; DEOPT_ABI: runtime-guarded compiled activation contract. */
@@ -316,7 +319,8 @@ export class AotRuntime {
     for (const [block, module] of app.dOf) this.appDOf.set(block, module);
     this.appD.length = app.dModules;
     // the app build's files are a<module>.wasm, e<module>.wasm and s<module>.wasm, which no platform file is named like
-    this.store = { get: (file) => ("aes".includes(file[0]) ? store : platform).get(file) };
+    this.store = { get: (file) => ("aes".includes(file[0]) ? store : platform).get(file),
+      ...(platform.prefetch && { prefetch: (files: string[]) => platform.prefetch!(files) }) };
     return true;
   }
 
@@ -437,6 +441,50 @@ export class AotRuntime {
   /** whether platform method `m` of block `b` was installed by a loaded code module */
   installed(b: number, m: MethodInfo): boolean { const c = this.cOf[b]; return c >= 0 && this.cState[c] === LIVE && this.has(c, this.w.blockBase[b] + m.index); }
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
+  private preparation = new Map<number, Promise<void>>();
+  private prepared = new Set<number>();
+  private preparationModule(slot: number): number {
+    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b] ?? -1;
+    return !this.store?.prefetch || this.building || this.w.opts.compileOnly || c < 0 || c >= this.appFrom || this.cState[c] ? -1 : c;
+  }
+  private preparationFiles(c: number): string[] {
+    const file = `c${c}.wasm`, mod = this.store!.get(file);
+    if (!mod) return [file];
+    // Byte stores are already local. Only asynchronously compiled modules need a delivery wait.
+    if (ArrayBuffer.isView(mod)) return [];
+    const head = header<CHeader>(mod);
+    if ((head.deopt ?? 0) !== this.deopt || !head.natives.every(id => this.w.nativeBound(id)) || head.mods.some(m => this.fallbackD.has(+m.slice(1)))) return [];
+    return head.mods.map(m => `d${m.slice(1)}.wasm`).filter(f => !this.store!.get(f));
+  }
+  needsPreparation(slot: number): boolean {
+    const c = this.preparationModule(slot);
+    return c >= 0 && (this.preparation.has(c) || !this.prepared.has(c) && this.preparationFiles(c).length > 0);
+  }
+  /** One bounded delivery attempt per demanded code group, before the ordinary linker publishes any globals. */
+  prepare(slot: number): Promise<void> | undefined {
+    const c = this.preparationModule(slot);
+    if (c < 0) return;
+    const pending = this.preparation.get(c);
+    if (pending) return pending;
+    if (this.prepared.has(c)) return;
+    const files = this.preparationFiles(c);
+    if (!files.length) return;
+    const store = this.store!;
+    this.prepared.add(c);
+    let timer: ReturnType<typeof setTimeout>;
+    const bound = new Promise<void>(done => { timer = setTimeout(done, PREPARATION_MS); });
+    const delivery = (async () => {
+      await store.prefetch!(files);
+      if (this.store !== store || this.preparationModule(slot) !== c) return;
+      const data = this.preparationFiles(c).filter(f => f.startsWith("d"));
+      if (data.length) await store.prefetch!(data);
+    })();
+    const result = Promise.race([delivery.catch(() => {}), bound]).finally(() => {
+      clearTimeout(timer); this.preparation.delete(c);
+    });
+    this.preparation.set(c, result);
+    return result;
+  }
   /** the first call of a method the build compiled: loads its code module. Whether the method is installed afterwards is in its slot. */
   install(slot: number): boolean {
     const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
