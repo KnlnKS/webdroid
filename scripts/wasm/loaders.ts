@@ -21,6 +21,7 @@ import { ldp, PTR } from "../../src/native/host";
 import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { St } from "../../src/wasm/link/monitor";
+import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
 import { hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { useEntry } from "../../src/jvm/natives/jentry";
@@ -171,6 +172,15 @@ for (const asynchronous of [false, true]) {
   base.addClass(synthetic("fixture/BaseApp"), base.root);
   base.addClass(synthetic("fixture/BaseBoot@0"), base.boot);
   base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
+  const peer = synthetic("fixture/Peer");
+  base.addClass(peer, base.root);
+  const accessWorld = world(base);
+  const appClass = base.require("fixture/BaseApp"), childClass = base.require(`fixture/BaseCustom@${custom.id}`);
+  if (!canAccess(peer.name, appClass, 0, accessWorld) || canAccess(childClass.name, appClass, 0, accessWorld)
+    || !canAccess(childClass.name, appClass, ACC.PUBLIC, accessWorld)) throw new Error("runtime package access lost defining-loader identity");
+  appClass.flags = 0;
+  if (!canAccess(peer.name, appClass, ACC.PUBLIC, accessWorld) || canAccess(childClass.name, appClass, ACC.PUBLIC, accessWorld)) throw new Error("non-public class crossed runtime packages");
+  appClass.flags = ACC.PUBLIC;
   const derived = new Program([], base);
   if (derived.lookup(derived.boot, "fixture/BaseApp") || derived.lookup(derived.boot, "fixture/BaseCustom") || derived.lookup(derived.boot, "fixture/BaseBoot") !== "fixture/BaseBoot@0" || derived.loaderOf("fixture/BaseApp") !== base.root || derived.loaderOf(`[Lfixture/BaseCustom@${custom.id};`) !== custom || derived.loaderOf("[Lfixture/BaseBoot@0;") !== derived.boot) throw new Error("inherited synthetic defining loader or bootstrap visibility changed");
 }
