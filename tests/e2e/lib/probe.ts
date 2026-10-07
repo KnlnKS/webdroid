@@ -319,6 +319,7 @@ function installProbe(cfg: ProbeConfig): void {
         if (now > horizonAt) hashes.push(lastHash);
         if (hashes.length > q.stableFrames * 2) hashes.shift();
         wantSample = true;
+        if (lastHash < 0) g.wd.redraw();
         // each sample is a synchronous GPU readback, which under SwiftShader can take most of a
         // busy app's main thread: a screen whose every sample differs (a spinner) is sampled less
         // often until a frame repeats
@@ -337,7 +338,7 @@ function installProbe(cfg: ProbeConfig): void {
       const working = b.some((k) => k.startsWith("job:") || k === "queued" || k === "transition") ||
         (!controlled && activeSince > 0 && now - activeSince < 1500);
       const h = working ? undefined : stableFrame(hashes, q.stableFrames);
-      if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
+      if (h !== undefined && h >= 0) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
       if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
       await sleep(25);
     }
