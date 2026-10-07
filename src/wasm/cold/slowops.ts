@@ -22,6 +22,7 @@ type Adapter = { call: (strand: Strand, sync: boolean, depth: number, peer: unkn
 type SlowBody = (cx: Compiler, c: Code, arg: (i: number) => void) => number[];
 type Batch = { readonly sealed: boolean; entries: { body: SlowBody; ctor?: MethodInfo }[]; call: (strand: Strand, sync: boolean, selector: number, depth: number, peer: unknown, ...args: unknown[]) => unknown };
 const BATCH_SIZE = 16;
+export const SYMBOLIC_ANALYSIS_METHODS = 4, SYMBOLIC_ANALYSIS_CELLS = 65536;
 const abi = (kind: number): Kind => kind === R ? "L" : kind === J || kind === D ? "J" : "I";
 
 // Slow adapters contain no copied callees. Always resolve virtual calls through
@@ -43,6 +44,8 @@ class SlowMC extends MC {
 /** Executes one supported slow opcode, committing its registers only on success. */
 export class ColdSlowOps {
   private analyses = new WeakMap<MethodInfo, Analysis>();
+  private recent = new Map<MethodInfo, { analysis: Analysis; cells: number; dex: MethodInfo["dex"]; codeOff: number }>();
+  private recentCells = 0;
   private adapters = new WeakMap<MethodInfo, Map<number, Adapter>>();
   private calls = new WeakMap<MethodInfo, Map<string, Adapter["call"]>>();
   private batches = new WeakMap<MethodInfo, Map<string, Batch[]>>();
@@ -61,8 +64,28 @@ export class ColdSlowOps {
   }
 
   prepareSite(m: MethodInfo, pc: number) {
-    const analysis = this.prepareAnalysis(m);
-    this.w.stats.symbolicTypingMethods++;
+    let found = this.recent.get(m);
+    if (found && (found.dex !== m.dex || found.codeOff !== m.codeOff)) {
+      this.recent.delete(m); this.recentCells -= found.cells; found = undefined;
+    }
+    let analysis: Analysis;
+    if (found) {
+      analysis = found.analysis; this.recent.delete(m); this.recent.set(m, found);
+      this.w.stats.symbolicAnalysisHits++;
+    } else {
+      analysis = this.prepareAnalysis(m); this.w.stats.symbolicTypingMethods++;
+      const item = m.dex.code(m.codeOff), cells = item.insns.length + (analysis.prepared.instructions.length + 1) * (item.regs + 16);
+      if (cells <= SYMBOLIC_ANALYSIS_CELLS) {
+        while (this.recent.size >= SYMBOLIC_ANALYSIS_METHODS || this.recentCells + cells > SYMBOLIC_ANALYSIS_CELLS) {
+          const oldest = this.recent.keys().next().value!;
+          this.recentCells -= this.recent.get(oldest)!.cells; this.recent.delete(oldest);
+        }
+        this.recent.set(m, { analysis, cells, dex: m.dex, codeOff: m.codeOff }); this.recentCells += cells;
+      } else this.w.stats.symbolicAnalysisOversize++;
+    }
+    this.w.stats.symbolicAnalysisEntries = this.recent.size; this.w.stats.symbolicAnalysisCells = this.recentCells;
+    this.w.stats.symbolicAnalysisPeakEntries = Math.max(this.w.stats.symbolicAnalysisPeakEntries, this.recent.size);
+    this.w.stats.symbolicAnalysisPeakCells = Math.max(this.w.stats.symbolicAnalysisPeakCells, this.recentCells);
     return { ...this.site(m, pc, analysis), analysis };
   }
 

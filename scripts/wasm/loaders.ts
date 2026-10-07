@@ -22,7 +22,7 @@ import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
 import { Compiler } from "../../src/wasm/compiler/j2w";
-import { ColdSlowOps } from "../../src/wasm/cold/slowops";
+import { ColdSlowOps, SYMBOLIC_ANALYSIS_METHODS, SYMBOLIC_ANALYSIS_CELLS } from "../../src/wasm/cold/slowops";
 import { St } from "../../src/wasm/link/monitor";
 import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
@@ -44,7 +44,7 @@ const build = (dir: string, sources: string[], classpath?: string) => {
   sh([androidTool("d8"), "--min-api", "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath ? ["--classpath", classpath] : []), ...filesIn(join(out, dir), /\.class$/).filter(path => !path.endsWith("/AbsentOptional.class"))]);
   return join(out, dir, "classes.dex");
 };
-const app = build("app", ["Ldr.java", "Tag.java"]);
+const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
 const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java"], join(out, "app"));
 const apk = join(out, "ordered.apk");
@@ -128,9 +128,10 @@ if (!process.argv.includes("--hierarchy")) {
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) throw new Error("warm symbolic operation compiled again");
     console.log("symbolic accounting: stub and operation each recorded one unit, bytes and traces; warm execution unchanged");
     if (process.argv.includes("--memory")) {
-      const analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [];
+      const analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [], seen = new WeakSet<object>();
+      let probeOps: ColdSlowOps | undefined;
       const prepare = ColdSlowOps.prototype.prepareSite, emit = Compiler.prototype.buildSynthetic, group = Compiler.prototype.buildSyntheticGroup;
-      ColdSlowOps.prototype.prepareSite = function (...args: Parameters<typeof prepare>) { const site = prepare.apply(this, args); analyses.push(new WeakRef(site.analysis)); return site; };
+      ColdSlowOps.prototype.prepareSite = function (...args: Parameters<typeof prepare>) { const site = prepare.apply(this, args); probeOps = this; if (!seen.has(site.analysis)) { seen.add(site.analysis); analyses.push(new WeakRef(site.analysis)); } return site; };
       Compiler.prototype.buildSynthetic = function (...args: Parameters<typeof emit>) { compilers.push(new WeakRef(this)); return emit.apply(this, args); };
       Compiler.prototype.buildSyntheticGroup = function (...args: Parameters<typeof group>) { compilers.push(new WeakRef(this)); return group.apply(this, args); };
       const before = w.stats.symbolicTypingMethods;
@@ -141,16 +142,31 @@ if (!process.argv.includes("--hierarchy")) {
           const slot = (bindings[`memory:${i}`] as WebAssembly.Global).value as number;
           if ((bindings.table as WebAssembly.Table).get(slot)!() !== 42) throw new Error("memory probe operation failed");
         }
+        if (w.stats.symbolicTypingMethods - before > 1) throw new Error("ordinary analysis repeated per site");
+        const varied = w.prog.require("MemorySites").byKey.get("run()I")!, code = varied.dex.code(varied.codeOff);
+        const pcs = prepareMethod(varied.dex, code, varied.desc, varied.isStatic).instructions.filter(ins => ins.name === "invoke-static").map(ins => ins.pc);
+        const inferences = w.stats.symbolicTypingMethods, hits = w.stats.symbolicAnalysisHits;
+        for (const pc of pcs) probeOps!.prepareSite(varied, pc);
+        if (pcs.length !== 32 || w.stats.symbolicTypingMethods - inferences !== 1 || w.stats.symbolicAnalysisHits - hits !== 31) throw new Error("distinct PCs repeated full method inference");
+        let pressure = 0;
+        for (const candidate of w.prog.require("Ldr").methods) if (candidate.codeOff) {
+          const item = candidate.dex.code(candidate.codeOff), prepared = prepareMethod(candidate.dex, item, candidate.desc, candidate.isStatic);
+          if (item.insns.length + (prepared.instructions.length + 1) * (item.regs + 16) > SYMBOLIC_ANALYSIS_CELLS) continue;
+          probeOps!.prepareSite(candidate, prepared.instructions[0].pc);
+          if (++pressure === SYMBOLIC_ANALYSIS_METHODS + 1) break;
+        }
+        if (pressure <= SYMBOLIC_ANALYSIS_METHODS || w.stats.symbolicAnalysisPeakEntries > SYMBOLIC_ANALYSIS_METHODS || w.stats.symbolicAnalysisPeakCells > SYMBOLIC_ANALYSIS_CELLS) throw new Error("ordinary analysis cache exceeds its retention budget");
       } finally {
         ColdSlowOps.prototype.prepareSite = prepare; Compiler.prototype.buildSynthetic = emit; Compiler.prototype.buildSyntheticGroup = group;
       }
       const collect = (globalThis as typeof globalThis & { gc?: () => void }).gc;
-      if (!collect || analyses.length !== 32 || compilers.length !== 33) throw new Error("symbolic lifetime probe missing emitters or GC");
+      if (!collect || analyses.length !== SYMBOLIC_ANALYSIS_METHODS + 3 || compilers.length !== 33) throw new Error("symbolic lifetime probe missing emitters or GC");
+      console.log(`symbolic analysis work: 32 distinct PCs use one full inference and 31 cache hits; peak entries=${w.stats.symbolicAnalysisPeakEntries}, peak cells=${w.stats.symbolicAnalysisPeakCells}, hits=${w.stats.symbolicAnalysisHits}, oversize=${w.stats.symbolicAnalysisOversize}`);
       const heapBefore = process.memoryUsage().heapUsed;
       for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
       const retained = analyses.filter(ref => ref.deref()).length, retainedCompilers = compilers.filter(ref => ref.deref()).length;
       console.log(`symbolic lifetime: analyses=${analyses.length}, retained=${retained}; compilers=${compilers.length}, retained=${retainedCompilers}; heap before GC=${heapBefore}, after GC=${process.memoryUsage().heapUsed}`);
-      if (retained || retainedCompilers || w.prog.require(key).byKey.get("symbolic()I") !== method || table.get(slot)!() !== 42) throw new Error("symbolic IR retained by live Program or compiled operation");
+      if (retained > SYMBOLIC_ANALYSIS_METHODS || analyses[0].deref() || retainedCompilers || w.prog.require(key).byKey.get("symbolic()I") !== method || table.get(slot)!() !== 42) throw new Error("symbolic IR retained by live Program or compiled operation");
     }
   }
   if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
