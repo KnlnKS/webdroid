@@ -32,11 +32,11 @@ sh(["d8", "--release", "--min-api", "34", "--output", out, ...readdirSync(out).f
 
 const dex = join(out, "classes.dex");
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-let arithmeticProbe = false, turns = 0;
+let arithmeticProbe = false, turns = 0, admissionProbe = false, admissionTurns = 0;
 const w = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives({
   ...nativeSource,
   find: (cls, key, isStatic, hasBody) => cls === "Th" ? TH[key] : nativeSource.find(cls, key, isStatic, hasBody),
-} satisfies NativeSource), loop: { ...defaultLoop, due: () => arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
+} satisfies NativeSource), loop: { ...defaultLoop, due: () => admissionProbe || arithmeticProbe || defaultLoop.due(), yield: (soon) => { if (admissionProbe) admissionTurns++; if (arithmeticProbe) { turns++; return Promise.resolve(); } return defaultLoop.yield(soon); } } });
 // the natives that wait together are resumed from one Promise, so their continuations run one after another before any of the stacks does
 let gate: Promise<void> | null = null;
 const ordered: (() => void)[] = [];
@@ -124,6 +124,23 @@ if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffe
 
 // ---------- the substrate, directly
 if (substrate) {
+  admissionProbe = true;
+  try {
+    expect("lazy admission preserves initializer, thread and callback monitor", await show(() => w.entryAsync("Th", "linkAdmission", "(I)I")(0)), 49);
+    expect("lazy links admit event-loop turns", admissionTurns > 0, true);
+    const methods = w.stats.methods;
+    const sameSlot = w.entryAsync("Th", "linkAdmissionWinner", "(I)I");
+    expect("two admitted callers observe the winning link", (await Promise.all([sameSlot(3), sameSlot(7)])).join(), "4,8");
+    expect("the admitted slot is compiled only once", w.stats.methods - methods, 1);
+    const before = admissionTurns;
+    const helper = w.hostFn("admission:plain", ["I"], "I", (cx, c) => {
+      c.lget(0); cx.callMethod(c, w.prog.resolve("Th", "linkAdmissionPlain", "(I)I")!);
+    });
+    expect("fresh plain helper links synchronously with an exhausted budget", helper(0), 11);
+    expect("plain host entry remains synchronous with an exhausted budget", w.entry("Th", "linkAdmissionPlain", "(I)I")(0), 11);
+    expect("plain host entry does not admit a turn", admissionTurns, before);
+    expect("admission releases its strands", w.sched.strands.filter(Boolean).length, 1);
+  } finally { admissionProbe = false; }
   const cold = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives: new Natives(nativeSource) });
   expect("lazy linking near the stack limit", await cold.entryAsync("Th", "linkDeep", "(I)I")(0), 0);
   // natives that wait: async, a generator, one that enters Java through a promising entry that waits again

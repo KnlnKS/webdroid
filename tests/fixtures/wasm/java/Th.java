@@ -9,6 +9,16 @@ public class Th {
   static native int delayedCallback(int x);
   static native int orderedWait(int x);
   static synchronized int callbackLock(int x) { return x + 1; }
+  static class AdmissionA { static int value = AdmissionB.value + 1; }
+  static class AdmissionB { static int value = 7; }
+  static class AdmissionC { static int value = 11; }
+  static int linkAdmissionWinner(int n) { return n + 1; }
+  static int linkAdmissionPlain(int ignored) { return AdmissionC.value; }
+  static synchronized int linkAdmission(int ignored) {
+    Thread owner = Thread.currentThread();
+    int answer = AdmissionA.value + delayedCallback(40);
+    return owner == Thread.currentThread() && Thread.holdsLock(Th.class) ? answer : -1;
+  }
   static synchronized int callbackOwner(int x) { return delayedCallback(x); }
   static native int await(int x);       // an async native
   static native int driven(int x);      // a generator native

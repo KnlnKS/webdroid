@@ -190,6 +190,8 @@ export class World {
       fmod: (a: number, b: number) => a % b,
       gap: (id: number) => { this.lastGap = id; this.onGap(id); },
       link: (slot: number) => this.linkSlot(slot),
+      linkDue: () => +(hasJspi() && this.sched.canWait() && !this.inSynchronousJava() && this.sched.turnDue()),
+      linkWait: hasJspi() ? suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot))) : (slot: number) => this.linkSlot(slot),
       sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
       // without JSPI (Bun) nothing can wait, which the first attempt says
       block: hasJspi() ? suspending((op: number, obj: object | null, a: number, b: number) => {
@@ -487,9 +489,9 @@ export class World {
     if (this.aot?.installSynth(name)) { (this.slots[slot] as { done: boolean }).done = true; return slot; }
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
-    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    const links = this.linkImports(mb);
     const params = d.params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, d.ret === "V" ? [] : [kindVT(b.tObj, d.ret)]);
-    mb.addElemActive(0, slot, [mb.addFunc(sig, this.stubBody(slot, sig, params, link), "stub:" + name)]);
+    mb.addElemActive(0, slot, [mb.addFunc(sig, this.stubBody(slot, sig, params, links), "stub:" + name)]);
     this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host });
     return slot;
   }
@@ -535,22 +537,26 @@ export class World {
   restoreStub(slot: number, m: MethodInfo): Function {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
-    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    const links = this.linkImports(mb);
     const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
     const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-    mb.export("f", "func", mb.addFunc(sig, this.stubBody(slot, sig, params, link), "stub"));
+    mb.export("f", "func", mb.addFunc(sig, this.stubBody(slot, sig, params, links), "stub"));
     return this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports.f as Function;
   }
-  private stubBody(slot: number, sig: number, params: VT[], link: number): number[] {
+  private linkImports(mb: ModuleBuilder): [number, number, number] {
+    const sig = mb.addFuncType([T.i32], []);
+    return [mb.importFunc("host", "link", sig), mb.importFunc("host", "linkDue", mb.addFuncType([], [T.i32])), mb.importFunc("host", "linkWait", sig)];
+  }
+  private stubBody(slot: number, sig: number, params: VT[], [link, due, wait]: [number, number, number]): number[] {
     const c = new Code(params.length);
-    c.i32(slot).call(link);
+    c.call(due).if_().i32(slot).call(wait).else_().i32(slot).call(link).end();
     params.forEach((_, i) => c.lget(i));
     return c.i32(slot).callIndirect(sig).finish();
   }
   private startRuntime(): void {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
-    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    const links = this.linkImports(mb);
     mb.export("tag", "tag", mb.addTag(b.tTagFn));
     const i32Init = (v: number) => { const o = [0x41]; sleb(v, o); return o; };
     const uleb2 = (v: number) => { const o: number[] = []; uleb(v, o); return o; };
@@ -567,7 +573,7 @@ export class World {
     mb.export("classId", "func", cid);
     for (const name of Object.keys(SLOT) as Thrower[]) {
       const params = THROWERS[name].params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, []);
-      const f = mb.addFunc(sig, this.stubBody(SLOT[name], sig, params, link), "stub:" + name);
+      const f = mb.addFunc(sig, this.stubBody(SLOT[name], sig, params, links), "stub:" + name);
       mb.addElemActive(0, SLOT[name], [f]);
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
@@ -614,7 +620,7 @@ export class World {
   classModule(rts: ClassRt[]): Uint8Array {
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
-    const link = mb.importFunc("host", "link", mb.addFuncType([T.i32], []));
+    const links = this.linkImports(mb);
     const sid = mb.importGlobal("rt", "sid", T.i32, true), iw = mb.importGlobal("rt", "iw", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
     // the String constants of the static values are imported before the module defines a global of its own
     const consts = new Map<string, number>();
@@ -645,7 +651,7 @@ export class World {
       const stubs = methods.map((m, i) => {
         const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
         const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-        return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link));
+        return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, links));
       });
       if (initialize) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc!, initG, statics, consts, fromChars, rt, sid, iw, tag)));
       else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
@@ -1386,7 +1392,7 @@ export class World {
     const m = this.prog.resolve(cls, name, desc);
     if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
     const slot = this.slotOf(m);
-    return (...args) => {
+    return (...args) => this.synchronous(() => {
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
       try {
@@ -1394,7 +1400,7 @@ export class World {
         const r = (this.table.get(slot) as Function)(...args.map((a) => typeof a === "string" ? this.javaString(a) : a));
         return typeof r === "object" && r !== null && this.classNameOf(r) === "java/lang/String" ? this.bridge.toHost(r) : r;
       } catch (e) { throw this.boundary(e); } finally { this.rt.depth.value = depth; }
-    };
+    });
   }
   /** `entry` for a call that may block: it runs on a stack of its own, as a new strand of the main thread, and answers a Promise */
   entryAsync(cls: string, name: string, desc: string): (...args: unknown[]) => Promise<unknown> {
@@ -1488,7 +1494,8 @@ export class World {
     if (!f) {
       const cx = new Compiler(this); prepare?.(cx);
       const { bytes } = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
-      this.hostFns.set(name, f = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m);
+      const raw = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m as Function;
+      this.hostFns.set(name, f = this.sched.synchronousExport(raw));
     }
     return f as never;
   }

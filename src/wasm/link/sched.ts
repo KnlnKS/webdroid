@@ -246,6 +246,21 @@ export class Sched {
   canWait(): boolean { return !this.current().root; }
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
+  /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
+   * The import restores its caller itself because existing stubs have no blocking-call epilogue. */
+  admitLink(run: () => void): void | Promise<void> {
+    const s = this.current();
+    if (s.root || this.w.inSynchronousJava() || !this.loop.due()) return run();
+    const { sid, thr, depth } = this.g, saved = [sid.value, thr.value, depth.value] as const;
+    const pending = this.loop.yield(s.thread === this.main);
+    this.suspensions++; s.nested = 0;
+    this.idle();
+    return pending.then(() => {
+      sid.value = saved[0]; thr.value = saved[1]; depth.value = saved[2];
+      this.running = s; this.onThread?.(s.thread, false);
+      run();
+    });
+  }
   /** the Promise a native answered where it could not wait, which the call site settles next (natives.ts park) */
   pending: Promise<unknown> | null = null;
   private main = new ThreadRec(null);
@@ -254,6 +269,7 @@ export class Sched {
   private pendingContext = new Set<object>();
   private initWaiters = new Map<number, { go: () => void }[]>();
   private promised = new WeakMap<Function, Function>();
+  private synchronousExports = new WeakMap<Function, Function>();
   private fns = new Map<string, Function>();
 
   constructor(private w: World, private g: Globals, private loop: HostLoop) {
@@ -321,7 +337,14 @@ export class Sched {
     if (!r && create) this.threads.set(obj, r = new ThreadRec(obj));
     return r;
   }
+  /** Host calls are plain; a strand entry unwraps the same export before WebAssembly.promising. */
+  synchronousExport(raw: Function): Function {
+    const host = (...args: unknown[]) => this.w.synchronous(() => raw(...args));
+    this.synchronousExports.set(host, raw);
+    return host;
+  }
   private promising(f: Function): Function {
+    f = this.synchronousExports.get(f) ?? f;
     let p = this.promised.get(f);
     if (!p) this.promised.set(f, p = promising(f));
     return p;
