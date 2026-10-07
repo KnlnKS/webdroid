@@ -37,7 +37,7 @@ import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, 
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
-import { dispatchMethodKey, dispatchSlotKey, overridesMethod, symbolicImplFor, symbolicOverride, symbolicMethod, unresolvedClass } from "../compiler/linkage";
+import { dispatchMethodKey, dispatchSlotKey, overridesMethod, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
@@ -448,7 +448,11 @@ export class World {
   vslot(decl: string, key: string): number {
     const slots = this.vslots(decl), raw = javaName(key);
     let i = slots.indexOf(raw);
-    if (i < 0) i = slots.findIndex(slot => dispatchMethodKey(slot) === raw && !!symbolicImplFor(this.prog, decl, slot, true));
+    if (i < 0) {
+      const at = key.indexOf("("), target = resolveSymbolicMethod(this.prog, decl, key.slice(0, at), key.slice(at));
+      // Several inaccessible declarations may share a binary prototype and distinct slots.
+      i = slots.findIndex(slot => dispatchMethodKey(slot) === raw && !!target && symbolicImplFor(this.prog, decl, slot, true) === target);
+    }
     if (i < 0) throw new Error(`no vtable slot for ${decl}.${key}`);
     return H.VTAB + i;
   }

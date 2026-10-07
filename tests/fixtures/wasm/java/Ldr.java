@@ -152,7 +152,7 @@ public class Ldr {
     public String reenter;
     MemberLoader(String path, ClassLoader parent) { super(path, null, null, parent); }
     @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
-      if (name.equals("MemberUse") || name.equals("MemberOverride") || name.equals("MemberImplementation") || name.equals("pack.PackageChild") || name.equals("pack.PackageType") || name.equals("MemberType")) {
+      if (name.equals("MemberUse") || name.equals("MemberOverride") || name.equals("MemberImplementation") || name.equals("pack.PackageChild") || name.equals("pack.PackagePrivateChild") || name.equals("pack.PackageType") || name.equals("MemberType")) {
         if (name.equals("MemberType") || name.equals("pack.PackageType")) {
           typeCalls++;
           if (deny) { deny = false; throw new ClassNotFoundException(name); }
@@ -279,6 +279,24 @@ public class Ldr {
     ClassLoader loader = new DexClassLoader(pathA + ":" + pathB, null, null, Ldr.class.getClassLoader());
     Class<?> cls = loader.loadClass("pack.PackageChild"); Object value = cls.newInstance();
     return (Integer) cls.getMethod("inherited").invoke(value) * 100 + (Integer) cls.getMethod("own").invoke(value);
+  }
+  public static int packagePrivateMembers(String pathA, String pathB, boolean ownType) throws Exception {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    parent.loadClass("pack.PackageBase"); parent.loadClass("pack.PackageType");
+    MemberLoader loader = new MemberLoader(pathB, parent);
+    loader.deny = false; loader.ownType = ownType;
+    Class.forName("pack.PackageType", false, loader);
+    return packagePrivateDispatch(loader);
+  }
+  public static int packagePrivateSameLoader(String pathA, String pathB) throws Exception {
+    return packagePrivateDispatch(new DexClassLoader(pathA + ":" + pathB, null, null, Ldr.class.getClassLoader()));
+  }
+  private static int packagePrivateDispatch(ClassLoader loader) throws Exception {
+    Class<?> cls = loader.loadClass("pack.PackagePrivateChild"); Object value = cls.newInstance();
+    Class<?> type = Class.forName("pack.PackageType", false, loader);
+    java.lang.reflect.Method foo = cls.getDeclaredMethod("foo", type); foo.setAccessible(true);
+    return (Integer) cls.getMethod("inherited").invoke(value) * 10000
+      + (Integer) cls.getMethod("own").invoke(value) * 100 + (Integer) foo.invoke(value, new Object[] { null });
   }
   private static final MemberLoader[] retryMemberLoaders = new MemberLoader[2];
   public static int memberHostRetry(String pathA, String pathB) throws Exception { return memberHostRetry(pathA, pathB, 0); }

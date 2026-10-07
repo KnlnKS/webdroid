@@ -7,7 +7,7 @@ public class PackageLoaderControl {
     ClassLoader parent = new URLClassLoader(new URL[] { a }, ClassLoader.getPlatformClassLoader());
     ClassLoader child = new URLClassLoader(new URL[] { b }, parent) {
       @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        if (name.equals("pack.PackageChild") || name.equals("pack.PackageType")) {
+        if (name.equals("pack.PackageChild") || name.equals("pack.PackagePrivateChild") || name.equals("pack.PackageType")) {
           Class<?> c = findLoadedClass(name);
           return c == null ? findClass(name) : c;
         }
@@ -19,6 +19,12 @@ public class PackageLoaderControl {
     for (ClassLoader loader : new ClassLoader[] { child, delegated, same }) {
       Class<?> cls = loader.loadClass("pack.PackageChild"); Object value = cls.getDeclaredConstructor().newInstance();
       System.out.println((Integer) cls.getMethod("inherited").invoke(value) * 100 + (Integer) cls.getMethod("own").invoke(value));
+    }
+    for (ClassLoader loader : new ClassLoader[] { child, delegated, same }) {
+      Class<?> cls = loader.loadClass("pack.PackagePrivateChild"); Object value = cls.getDeclaredConstructor().newInstance();
+      java.lang.reflect.Method foo = cls.getDeclaredMethod("foo", loader.loadClass("pack.PackageType")); foo.setAccessible(true);
+      System.out.println((Integer) cls.getMethod("inherited").invoke(value) * 10000
+        + (Integer) cls.getMethod("own").invoke(value) * 100 + (Integer) foo.invoke(value, new Object[] { null }));
     }
   }
 }

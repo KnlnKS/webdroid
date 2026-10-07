@@ -59,7 +59,7 @@ const build = (dir: string, sources: string[], classpath?: string) => {
 };
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackagePrivateChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
 const ordered = world([apk, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives });
@@ -170,7 +170,7 @@ if (!process.argv.includes("--member-only") || process.argv.includes("--package"
   sh(["mkdir", "-p", "witness"]);
   sh(["javac", "--release", "11", "-d", join(out, "witness"), join(JAVA, "PackageLoaderControl.java")]);
   const control = sh(["java", "-cp", join(out, "witness"), "PackageLoaderControl", join(out, "a"), join(out, "b")]).trim();
-  if (control !== "1122\n1122\n2222") throw new Error(`package runtime-package JDK control: ${control}`);
+  if (control !== "1122\n1122\n2222\n112222\n112222\n222222") throw new Error(`package runtime-package JDK control: ${control}`);
   console.log(`package runtime-package JDK control: ${control.replaceAll("\n", ",")}`);
   for (const ownType of [true, false]) {
     const signature = "(Ljava/lang/String;Ljava/lang/String;Z)I", args = [...paths, ownType];
@@ -182,6 +182,14 @@ if (!process.argv.includes("--member-only") || process.argv.includes("--package"
   const same = await w.entryAsync("Ldr", "packageSameLoader", desc)(...paths);
   if (same !== 2222) throw new Error(`same-loader package-private override: ${same}`);
   console.log(`same-loader package-private override: wasm=${same}, jdk=2222`);
+  for (const ownType of [true, false]) {
+    const result = await w.entryAsync("Ldr", "packagePrivateMembers", "(Ljava/lang/String;Ljava/lang/String;Z)I")(...paths, ownType);
+    console.log(`package-private child ownType=${ownType}: wasm=${result}, jdk=112222 (inherited11, own22, reflective22)`);
+    if (result !== 112222) throw new Error(`package-private child slot: ${result}`);
+  }
+  const privateSame = await w.entryAsync("Ldr", "packagePrivateSameLoader", desc)(...paths);
+  if (privateSame !== 222222) throw new Error(`same-loader package-private child slot: ${privateSame}`);
+  console.log(`same-loader package-private child: wasm=${privateSame}, jdk=222222`);
   const packageOwners = [...w.prog.all()].filter(c => javaName(c.name) === "pack/PackageBase");
   for (const [index, flags] of [0, ACC.PRIVATE, ACC.PROTECTED].entries()) {
     const owner = packageOwners[index].name;
