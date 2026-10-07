@@ -22,9 +22,12 @@ const inPage = !!(globalThis as { document?: unknown }).document;
 const aotDir = (globalThis as { G1_AOT?: string }).G1_AOT ?? (inPage ? undefined : process.env.WEBDROID_AOT);
 const appDir = (globalThis as { G1_APP?: string }).G1_APP ?? (inPage ? undefined : process.env.G1_APP);
 let appFiles: Map<string, Uint8Array> | undefined;
+let appReadMs = 0;
 if (appDir) {
+  const t0 = performance.now();
   const names = inPage ? await (await fetch("/app/files.json")).json() as string[] : readdirSync(appDir);
   appFiles = new Map(await Promise.all(names.map(async (n) => [n, inPage ? new Uint8Array(await (await fetch(`/app/${n}`)).arrayBuffer()) : new Uint8Array(readFileSync(join(appDir, n)))] as [string, Uint8Array])));
+  appReadMs = performance.now() - t0;
 }
 const startupList = async (read: (f: string) => Uint8Array | Promise<Uint8Array>): Promise<string[]> => JSON.parse(new TextDecoder().decode(appFiles?.get("startup.json") ?? await read("startup.json"))) as string[];
 if (aotDir) {
@@ -43,7 +46,7 @@ if (aotDir) {
 }
 
 export interface G1Config { mode: "wasm" | "js"; cls: string; workload: string; reps: number; dex: string; root: string; cold?: boolean }
-export interface G1Result { bootMs?: number; ahead?: number; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
+export interface G1Result { bootMs?: number; ahead?: number; appReadMs?: number; worldSetupMs?: number; workerStartMs?: number; prestartedWorker?: boolean; workload: string; mode: string; result: string; times: number[]; compileMs?: number; units?: number; boot?: Record<string, unknown>; setup?: Record<string, unknown>; first?: Record<string, unknown>; stats?: Record<string, unknown>; error?: string }
 
 /** the heap in use, after a collection once it looks over the limit: reps of one workload in one World leave garbage the engine has not yet collected */
 let heapBase = 0;
@@ -57,7 +60,7 @@ const collectedHeap = () => {
 
 /** a launch of the installed app as the page makes one (host/boot.ts, host/appcode.ts): the app's Program over the platform's, the saved build found and its modules compiled
  *  before the World is made, the host's classes, and in a page the compile worker that takes the second tier */
-async function installed(cfg: G1Config): Promise<World> {
+async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: () => Promise<void> }> {
   const platform = new Program(PLATFORM_JARS.flatMap((j) => loadDexes(`${cfg.root}/vendor/aosp/${j}`))); platform.addExterns(externs);
   const dexes = loadDexes(cfg.dex), key = basename(aotDir!), persist = new Persist(memoryBackend());
   await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
@@ -69,35 +72,40 @@ async function installed(cfg: G1Config): Promise<World> {
   const w = world(new Program(dexes, platform), { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.options.app, ...(worker && { compiler: code.compiler }) });
   if (!w.appAttached) throw new Error("the installed app's build does not attach");
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
+  let startWorker: (() => Promise<void>) | undefined;
   if (worker) {
     code.start(w);
-    // a launch has had hot methods by the time its app's code runs, so its compile worker is up: the first request starts it, as it would
-    started = async () => {
+    // This supplemental scenario forces worker readiness before the first-call timer.
+    startWorker = async () => {
       code.compiler.submit(w, 0);
       for (const t0 = performance.now(); !code.compiler.ready && !code.compiler.retired && performance.now() - t0 < 60000;) await new Promise((r) => setTimeout(r, 10));
       if (!code.compiler.ready) throw new Error(`the compile worker did not start: ${code.compiler.retired ?? "timed out"}`);
     };
   }
-  return w;
+  return { world: w, startWorker };
 }
-let started: (() => Promise<void>) | undefined;
 
 export async function g1run(cfg: G1Config): Promise<G1Result> {
   const out: G1Result = { workload: cfg.workload, mode: cfg.mode, result: "", times: [] };
   const js = await jsTier(loadDexes(cfg.dex));
   console.warn = () => {};
   let w: World | null = null;
-  if (cfg.mode === "wasm" && appFiles) w = await installed(cfg);
+  let startWorker: (() => Promise<void>) | undefined;
+  const setupAt = performance.now();
+  if (cfg.mode === "wasm" && appFiles) { const code = await installed(cfg); w = code.world; startWorker = code.startWorker; }
   else if (cfg.mode === "wasm") {
     const prog = program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]);
     // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
     heapBase = heapUsed();
     w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold!==undefined&&{cold:cfg.cold}) });
   }
+  if (w) { out.worldSetupMs = performance.now() - setupAt; out.appReadMs = appReadMs; }
   let hit = 0;
   if (w) { const b0 = performance.now(); w.onGap = () => hit++; try { if (aotDir) await processStateAsync(w); else processState(w); } catch (e) { const t = w.throwable(e); const cause = t ? w.fieldReader("java/lang/Throwable", "cause", "Ljava/lang/Throwable;")(t) as object | null : null; throw new Error("boot: " + (t ? w.classNameOf(t) : String(e)) + (cause ? " <- " + w.classNameOf(cause) : "") + " " + w.lastMessage); } out.bootMs = performance.now() - b0; out.ahead = (globalThis as { G1_AHEAD?: number }).G1_AHEAD; out.boot = structuredClone(w.stats); }
   const name = `w_${cfg.workload}`;
-  await started?.();
+  out.prestartedWorker = !!startWorker;
+  if (startWorker) { const t = performance.now(); await startWorker(); out.workerStartMs = performance.now() - t; }
+  if (w) out.setup = structuredClone(w.stats);
   const t0 = performance.now();
   const call = w ? w.entryAsync(cfg.cls, name, "()I") : () => js(cfg.cls, name, "()I", []);
   try {
@@ -105,7 +113,11 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
     out.result = String(await call());
     out.times.push(performance.now() - t0);
     if (w) out.first = structuredClone(w.stats);
-    for (let i = 0; i < cfg.reps; i++) { const t = performance.now(); await call(); out.times.push(performance.now() - t); if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0)); }
+    for (let i = 0; i < cfg.reps; i++) {
+      const t = performance.now(), value = await call(); out.times.push(performance.now() - t);
+      if (String(value) !== out.result) throw new Error(`call ${i + 2} returned ${String(value)}, expected ${out.result}`);
+      if (i % 8 === 7) await new Promise((r) => setTimeout(r, 0));
+    }
   } catch (e) { const t = w?.throwable(e); out.error = hit ? `gap ${w!.gapList[0]}` : t ? `uncaught ${w!.classNameOf(t)}` : String(e).slice(0, 900); }
   if (w) { out.compileMs = w.stats.compileMs; out.units = w.stats.units; out.stats = structuredClone(w.stats); }
   return out;
