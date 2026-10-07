@@ -62,11 +62,19 @@ const r1 = await compare(pick(cases, false), (m) => entries.get(m)!, js, pick(jd
 let at = 0;
 const jdkOnly = async () => { const v = pick(jdk, true)[at++]; if (v === "throw") throw new Error("throw"); return Number(v); };
 const r2 = await compare(pick(cases, true), (m) => entries.get(m)!, jdkOnly, pick(jdk, true), hit);
-let wideBad = 0;
+let wideBad = 0, dispatchBad = 0;
 const wideCases = ["members", "annots"].map((name) => cases.findIndex((c) => c.m.cls === "N" && c.m.name === name)).filter((i) => i >= 0);
 if (wideCases.length) {
   const wide = world([dex, ...[...PLATFORM_JARS.slice(0, 2), "boot/core-icu4j.jar"].map((j) => join(AOSP, j))], { natives });
   const wideEntry = wide.entryAsync.bind(wide);
+  const a = wide.idOf("java/util/ArrayList"), b = wide.idOf("java/util/HashMap"), low = wide.selectorId("hashCode()I");
+  if (b !== a + 1) throw new Error("full-width dispatch fixture requires adjacent class IDs");
+  while (wide.selKeys.length < low + 65536) wide.selectorId("reserved" + wide.selKeys.length + "()I");
+  const high = wide.selectorId("size()I");
+  wide.host.imtMiss(a, high);
+  const expected = wide.slotOf(wide.prog.implFor("java/util/HashMap", "hashCode", "()I")!);
+  if (wide.host.imtMiss(b, low) !== expected) { dispatchBad++; console.log("MISMATCH full-width interface dispatch cache"); }
+  else console.log("full-width interface dispatch cache: distinct class/selector pairs remain distinct");
   while (wide.names.length < 65536) wide.idOf("reflection/reserved/" + wide.names.length);
   for (const i of wideCases) {
     const { m, args } = cases[i], call = wideEntry(m.cls, m.name, m.desc), got = await call(Number(args[0]));
@@ -74,7 +82,7 @@ if (wideCases.length) {
   }
   console.log(`${wideCases.length - wideBad}/${wideCases.length} full-width reflection cases match the JDK`);
 }
-const bad = r1.bad + r2.bad + wideBad, explained = r1.explained + r2.explained, blocked = r1.blocked + r2.blocked;
+const bad = r1.bad + r2.bad + wideBad + dispatchBad, explained = r1.explained + r2.explained, blocked = r1.blocked + r2.blocked;
 console.log(`${cases.length - blocked - bad}/${cases.length - blocked} cases match across ${methods.length} methods (wasm, js tier, jdk)${explained ? `; ${explained} js-tier results explained by JSC wording` : ""}`);
 console.log(`compiled ${w.stats.methods} methods (${w.stats.units} modules) in ${w.stats.compileMs.toFixed(0)} ms, ${w.stats.classes} class modules, instantiate ${w.stats.instantiateMs.toFixed(0)} ms`);
 if (blocked) console.log(`${blocked} cases blocked by a compiler gap: ${[...new Set(hit)].join("; ")}`);

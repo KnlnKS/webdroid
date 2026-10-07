@@ -177,7 +177,7 @@ export class World {
   epoch = 0;
   private deoptEpoch = new WebAssembly.Global({ value: "i32", mutable: true }, 0);
   private touching: Set<string> | null = null;
-  private imtCache = new Map<number, number>();
+  private imtCache = new Map<number, Map<number, number>>();
   private compiled = new Map<MethodInfo, string[]>();
 
   constructor(prog: Program, public opts: WorldOptions) {
@@ -467,12 +467,13 @@ export class World {
     return Int32Array.from(body);
   }
   private imtMiss(cls: number, sel: number): number {
-    const k = cls * 65536 + sel;
-    let slot = this.imtCache.get(k);
+    let cache = this.imtCache.get(cls);
+    if (!cache) this.imtCache.set(cls, cache = new Map());
+    let slot = cache.get(sel);
     if (slot === undefined) {
       const key = this.selKeys[sel], j = key.indexOf("("), name = this.names[cls];
       const m = this.prog.implFor(name[0] === "[" ? "java/lang/Object" : name, key.slice(0, j), key.slice(j));
-      this.imtCache.set(k, slot = m ? this.slotOf(m) : this.abstractSlot(key));
+      cache.set(sel, slot = m ? this.slotOf(m) : this.abstractSlot(key));
     }
     return slot;
   }
