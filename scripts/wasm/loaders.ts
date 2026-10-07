@@ -80,6 +80,8 @@ const jsCustom = await js("Ldr", "customParent", desc, paths);
 const wasmCustom = await w.entryAsync("Ldr", "customParent", desc)(...paths);
 if (wasmCustom !== 121) { failed++; console.log(`FAIL inherited parent-first loader: js=${jsCustom}, wasm=${wasmCustom}, expected=121`); }
 if (jsCustom !== 121) console.log(`JS loader superclass differs from parent-first resolution: ${jsCustom} (expected 121)`);
+const jsLibraries = await js("Ldr", "libraries", desc, paths);
+if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibraries}`);
 for (const asynchronous of [false, true]) {
   const appDexes = loadDexes(a), base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]);
   const p = new Program(appDexes, base), layered = world(p, { natives, dexes: path => {
