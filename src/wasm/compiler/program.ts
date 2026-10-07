@@ -190,7 +190,7 @@ export class Program {
   }
   /** the loader that defines the class with this key */
   loaderOf(key: string): Loader {
-    if (/^\[+[ZBCSIJFD]$/.test(key)) return this.boot;
+    if (/^(?:\[+[ZBCSIJFD]|#[ZBCSIJFDV])$/.test(key)) return this.boot;
     const component = key.replace(/^\[+L(.*);$/, "$1");
     for (let p: Program | undefined = this; p; p = p.base) {
       const loader = p.syntheticLoaders.get(component);
