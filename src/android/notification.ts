@@ -13,12 +13,15 @@ import { systemResource } from "./resnative";
 import { newArrayList, toJsArray } from "../jvm/natives/jcoll";
 import { csText } from "../jvm/natives/jchars";
 import { jarray, stringHash } from "../jvm/abi";
-import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, type ParcelData, type Caller } from "./binder";
+import { hostStub, hostedService, callingIdentity, withCallingIdentity, serviceContext, parcelled, unparcelled, parceledList, copyParcelable, parcelledWithRights, releaseBinderParcel, unparcelledScoped, parcelScope, withParcelScope, type ParcelData, type Caller } from "./binder";
 import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 import { postMain } from "./mainloop";
 import { preferenceStore, Prefs } from "./sharedprefs";
 import type { DataClear } from "../shell/packagedata";
 import { packages } from "./packages";
+import { FileDescriptors } from "../shell/file-descriptors";
+import { StoredParcel } from "../shell/stored-parcel";
+import { PROCESS_PID } from "./os";
 import { appHost } from "./apphost";
 import { coverTop, foreground } from "./server/atm";
 import { permissionGranted, grantPrompted } from "./permissions";
@@ -44,13 +47,35 @@ interface PostedNotification {
   postTime: bigint; channel: string; flags: number; group: string | null; sortKey: string | null;
   /** the group key an adjustment overrides the app's with (GroupHelper's autogroup) */
   override: string | null;
-  data: ParcelData;
+  data: StoredParcel;
 }
 /** GroupHelper's view of an ungrouped notification; `icon` identifies its small icon as Icon.sameAs compares */
 interface Ungrouped { flags: number; icon: string; color: number; visibility: number }
 /** NotificationManagerService's notification list and the state its posting rules keep, shared by
  *  every process through the broker */
-class NotificationStore {
+export class NotificationStore {
+  private kernel = new FileDescriptors();
+  private epochs = new Map<string, number>();
+  bindDescriptors(kernel: FileDescriptors): void { this.kernel = kernel; }
+  epoch(pkg: string): number { return this.epochs.get(pkg) ?? 0; }
+  async capture(notification: JObj): Promise<StoredParcel> {
+    this.kernel.ensureReceiver(PROCESS_PID);
+    const kernel = this.kernel;
+    const data = await parcelledWithRights(notification, { stage: fd => kernel.stageLocal(PROCESS_PID, fd), discard: token => kernel.discard(PROCESS_PID, token, true) });
+    return StoredParcel.retain(kernel, PROCESS_PID, data);
+  }
+  read(data: StoredParcel): Promise<JObj> {
+    const scope = parcelScope();
+    if (!scope) throw new Error("Notification decode requires broker descriptor scope");
+    return data.readLocal(PROCESS_PID, (data, take, discard) => unparcelledScoped(N, data, scope, take, discard));
+  }
+  decode(data: ParcelData): JObj | Promise<JObj> {
+    const scope = parcelScope();
+    if (!scope) throw new Error("Notification decode requires broker descriptor scope");
+    const kernel = this.kernel;
+    return unparcelledScoped(N, data, scope, token => kernel.takeLocal(PROCESS_PID, token),
+      async data => { await Promise.all(data.objects.map(([,o]) => o && "descriptor" in o ? kernel.discard(PROCESS_PID, o.descriptor, false) : undefined)); });
+  }
   readonly posted: PostedNotification[] = [];
   readonly enqueueRates = new Map<string, { interarrival: number; last: number | null }>();
   /** userId|pkg → its autogroup summary's key (mAutobundledSummaries) */
@@ -62,12 +87,15 @@ class NotificationStore {
   /** INotificationManager.clearData, unless the clear keeps the package's state: the package's
    *  notifications go, with the grouping state they kept, and its channels unless it cleared its own
    *  data (PreferencesHelper.clearData) */
-  clear(pkg: string, _uid: number | undefined, { fromApp, keepState }: DataClear): void {
+  async clear(pkg: string, _uid: number | undefined, { fromApp, keepState }: DataClear): Promise<void> {
     if (keepState) return;
+    this.epochs.set(pkg, this.epoch(pkg) + 1);
+    const removed = this.posted.filter(r => r.pkg === pkg);
     for (let i = this.posted.length; i--;) if (this.posted[i].pkg === pkg) this.posted.splice(i, 1);
     for (const key of [...this.autobundled.keys(), ...this.ungrouped.keys()]) if (key.endsWith("|" + pkg)) { this.autobundled.delete(key); this.ungrouped.delete(key); }
     for (const key of this.foreground) if (key.startsWith(pkg + "|")) this.foreground.delete(key);
     if (!fromApp) preferenceStore.delete(policyFile(pkg));
+    await Promise.all(removed.map(r => r.data.close()));
   }
 }
 export let notificationStore = new NotificationStore();
@@ -79,7 +107,7 @@ const hashOrder = <T>(items: T[], key: (item: T) => string): T[] =>
   items.map((item, i) => ({ item, hash: stringHash(key(item)), i })).sort((a, b) => a.hash - b.hash || a.i - b.i).map(({ item }) => item);
 
 /** what a binder call hands the service: a copy of the caller's object */
-function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield* awaited(unparcelled(cls, yield* awaited(parcelled(o)))); }
+function* copyOf(cls: string, o: JObj): Gen<JObj> { return yield* awaited(copyParcelable(cls, o)); }
 function* sliceItems(slice: JObj | null): Gen<JObj[]> {
   return slice ? (yield* awaited(toJsArray(yield vcall(slice, "getList", "()Ljava/util/List;")))) as JObj[] : rt.npe();
 }
@@ -271,7 +299,7 @@ function groupKey(r: PostedNotification): string {
 const find = (pkg: string, tag: string | null, id: number, userId: number) =>
   notificationStore.posted.find((r) => r.pkg === pkg && r.tag === tag && r.id === id && r.userId === userId) ?? null;
 function* statusBarNotification(r: PostedNotification): Gen<JObj> {
-  const notification = yield* awaited(unparcelled(N, r.data));
+  const notification = yield* awaited(notificationStore.read(r.data));
   const user = yield scall("android/os/UserHandle", "of", "(I)Landroid/os/UserHandle;", r.userId);
   return yield newObj("android/service/notification/StatusBarNotification",
     "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;IILandroid/app/Notification;Landroid/os/UserHandle;Ljava/lang/String;J)V",
@@ -287,6 +315,7 @@ function* removeRecords(removed: PostedNotification[]): Gen<void> {
     const pk = packageKey(r.userId, r.pkg);
     if (notificationStore.autobundled.get(pk) === r.key) notificationStore.autobundled.delete(pk);
   }
+  yield* awaited(Promise.all(removed.map(r => r.data.close())));
   for (const r of removed) yield* groupHelperUngroup(r, true);
 }
 /** cancelGroupChildrenLocked: a summary's children go with it, except those `keep` spares */
@@ -331,7 +360,7 @@ function* summaryLook(pkg: string, members: Ungrouped[]): Gen<{ icon: JObj; colo
   let icon: JObj | null = null;
   if (sameIcon) {
     const holder = notificationStore.posted.find((r) => notificationStore.ungrouped.get(packageKey(r.userId, r.pkg))?.get(r.key)?.icon === members[0].icon);
-    if (holder) icon = yield vcall(yield* awaited(unparcelled(N, holder.data)), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
+    if (holder) icon = yield vcall(yield* awaited(notificationStore.read(holder.data)), "getSmallIcon", "()Landroid/graphics/drawable/Icon;");
   }
   return { icon: icon ?? (yield* monochromeAppIcon(pkg)), color, visibility };
 }
@@ -376,10 +405,11 @@ function* groupHelperUngroup(r: PostedNotification, removed: boolean): Gen<void>
 /** createAutoGroupSummary, posted as the app's own notification */
 function* addAutoGroupSummary(trigger: PostedNotification, flags: number, members: Ungrouped[]): Gen<void> {
   const pk = packageKey(trigger.userId, trigger.pkg);
+  const epoch = notificationStore.epoch(trigger.pkg);
   if (notificationStore.autobundled.has(pk)) return;
   const look = yield* summaryLook(trigger.pkg, members);
   const context = yield* awaited(serviceContext());
-  const triggering = yield* awaited(unparcelled(N, trigger.data));
+  const triggering = yield* awaited(notificationStore.read(trigger.data));
   let builder = yield newObj(`${N}$Builder`, "(Landroid/content/Context;Ljava/lang/String;)V", context, trigger.channel);
   const B = `L${N}$Builder;`;
   builder = yield vcall(builder, "setSmallIcon", `(Landroid/graphics/drawable/Icon;)${B}`, look.icon);
@@ -398,26 +428,34 @@ function* addAutoGroupSummary(trigger: PostedNotification, flags: number, member
     "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 0, launch, 0x4000000) });
   const record: PostedNotification = {
     ...trigger, key: `${keyOf(trigger.userId, trigger.pkg, 0x7fffffff, RANKER_GROUP, trigger.uid)}|${RANKER_GROUP}`, id: 0x7fffffff, tag: RANKER_GROUP,
-    postTime: BigInt(Date.now()), flags: getDeclared<number>(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(parcelled(summary)),
+    postTime: BigInt(Date.now()), flags: getDeclared<number>(summary, N, "flags"), group: RANKER_GROUP, sortKey: null, override: RANKER_GROUP, data: yield* awaited(notificationStore.capture(summary)),
   };
-  notificationStore.autobundled.set(pk, record.key);
-  if (!(yield* awaited(hasPermission(record.uid))) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
-  insert(record);
+  try {
+    if (epoch !== notificationStore.epoch(trigger.pkg) || !notificationStore.posted.includes(trigger)) return;
+    notificationStore.autobundled.set(pk, record.key);
+    if (!(yield* awaited(hasPermission(record.uid))) || (yield* channelImportance(record)) === IMPORTANCE_NONE) return;
+    if (epoch !== notificationStore.epoch(trigger.pkg) || !notificationStore.posted.includes(trigger)) return;
+    const old = insert(record);
+    if (old) yield* awaited(old.data.close());
+  } finally { if (!notificationStore.posted.includes(record)) yield* awaited(record.data.close()); }
 }
 /** updateAutobundledSummaryLocked: the summary follows its members' flags and look */
 function* updateAutobundledSummary(trigger: PostedNotification, flags: number, members: Ungrouped[]): Gen<void> {
   const key = notificationStore.autobundled.get(packageKey(trigger.userId, trigger.pkg));
   const record = key && notificationStore.posted.find((r) => r.key === key);
   if (!record) return;
-  const summary = yield* awaited(unparcelled(N, record.data)), look = yield* summaryLook(trigger.pkg, members);
+  const previous = record.data;
+  const summary = yield* awaited(notificationStore.read(record.data)), look = yield* summaryLook(trigger.pkg, members);
   const sameLook = (yield* iconIdentity(yield vcall(summary, "getSmallIcon", "()Landroid/graphics/drawable/Icon;"))) === (yield* iconIdentity(look.icon))
     && getDeclared<number>(summary, N, "color") === look.color && getDeclared<number>(summary, N, "visibility") === look.visibility;
   if (record.flags === flags && sameLook) return;
   setDeclared(summary, N, { flags });
   yield vcall(summary, "setSmallIcon", "(Landroid/graphics/drawable/Icon;)V", look.icon);
   setDeclared(summary, N, { color: look.color, visibility: look.visibility });
-  record.flags = flags;
-  record.data = yield* awaited(parcelled(summary));
+  const data = yield* awaited(notificationStore.capture(summary));
+  if (!notificationStore.posted.includes(record) || record.data !== previous) { yield* awaited(data.close()); return; }
+  const old = record.data; record.flags = flags; record.data = data;
+  yield* awaited(old.close());
 }
 function* channelImportance(r: PostedNotification): Gen<number> {
   const channel = yield* channelFor(new Preferences(r.pkg), r.channel, true);
@@ -489,6 +527,7 @@ function enqueueRate(pkg: string, now: number, update: boolean): number {
 function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: string | null, id: number, notification: JObj | null, userId: number,
   fromService = false): Gen<void> {
   if (pkg === null || notification === null) fail("java/lang/IllegalArgumentException", `null not allowed: pkg=${pkg} id=${id} notification=${notification === null ? "null" : yield vcall(notification, "toString", "()Ljava/lang/String;")}`);
+  const epoch = notificationStore.epoch(pkg!);
   const { uid, pid } = callingIdentity();
   if (userId === -1) userId = 0;
   const notifyUid = yield* awaited(resolveNotificationUid(opPkg, pkg!, uid, userId));
@@ -529,11 +568,15 @@ function* enqueueNotification(pkg: string | null, opPkg: string | null, tag: str
   setDeclared(n, N, { flags });
   const record: PostedNotification = {
     key, pkg: pkg!, opPkg: opPkg ?? pkg!, id, tag, uid: notifyUid, pid, userId, postTime: BigInt(Date.now()),
-    channel: yield vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: yield* awaited(parcelled(n)),
+    channel: yield vcall(channel, "getId", "()Ljava/lang/String;"), flags, group, sortKey, override: old?.override ?? null, data: yield* awaited(notificationStore.capture(n)),
   };
-  if (old && isGroupSummary(old) && (!isGroupSummary(record) || groupKey(old) !== groupKey(record)))
-    yield* removeRecords(groupChildren(old, (f) => (f & (FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB)) !== 0));
-  insert(record);
+  try {
+    if (old && isGroupSummary(old) && (!isGroupSummary(record) || groupKey(old) !== groupKey(record)))
+      yield* removeRecords(groupChildren(old, (f) => (f & (FLAG_FOREGROUND_SERVICE | FLAG_USER_INITIATED_JOB)) !== 0));
+    if (epoch !== notificationStore.epoch(pkg!)) return;
+    const replaced = insert(record);
+    if (replaced) yield* awaited(replaced.data.close());
+  } finally { if (!notificationStore.posted.includes(record)) yield* awaited(record.data.close()); }
   // GroupHelper sees a post that is new or changed its group or flags
   if ((yield vcall(n, "getSmallIcon", "()Landroid/graphics/drawable/Icon;")) && (!old || old.group !== record.group || old.flags !== record.flags))
     yield* groupHelperPosted(record, n);
@@ -560,18 +603,21 @@ export type ForegroundNotificationRequest = { kind: "start"; id: number; data: P
   | { kind: "stop"; id: number; remove: boolean };
 export const notificationTransport = { foreground: null as ((request: ForegroundNotificationRequest) => Promise<void>) | null };
 export function receiveForegroundNotification(pkg: string, caller: Caller, request: ForegroundNotificationRequest): Promise<void> {
-  return withCallingIdentity(caller, () => rt.drive(function* (): Gen<void> {
+  return withCallingIdentity(caller, () => withParcelScope(() => rt.drive(function* (): Gen<void> {
     if (request.kind === "stop") return yield* stopForeground(pkg, request.id, request.remove);
-    const notification = request.data ? yield* awaited(unparcelled(N, request.data)) : null;
+    if (request.data?.objects.some(([,o]) => o && "bytes" in o)) fail("android/os/BadParcelableException", "Notification descriptors require transferred rights");
+    const notification = request.data ? yield* awaited(notificationStore.decode(request.data)) : null;
     yield* startForeground(pkg, request.id, notification);
-  }()));
+  }())));
 }
 export const startForegroundNotification = driven(function* (id: number, notification: JObj | null): Gen<void> {
   if (notificationTransport.foreground) {
-    yield* awaited(notificationTransport.foreground({ kind: "start", id, data: notification && (yield* awaited(parcelled(notification))) }));
+    const data = notification && (yield* awaited(parcelledWithRights(notification)));
+    try { yield* awaited(notificationTransport.foreground({ kind: "start", id, data })); }
+    finally { if (data) yield* awaited(releaseBinderParcel(data)); }
     return;
   }
-  yield* startForeground(appHost?.pkg, id, notification);
+  yield* awaited(withParcelScope(() => rt.drive(startForeground(appHost?.pkg, id, notification))));
 });
 function* startForeground(pkg: string | undefined, id: number, notification: JObj | null): Gen<void> {
   if (!pkg || !id) return;
@@ -585,7 +631,7 @@ export const stopForegroundNotification = driven(function* (id: number, remove: 
     yield* awaited(notificationTransport.foreground({ kind: "stop", id, remove }));
     return;
   }
-  yield* stopForeground(appHost?.pkg, id, remove);
+  yield* awaited(withParcelScope(() => rt.drive(stopForeground(appHost?.pkg, id, remove))));
 });
 function* stopForeground(pkg: string | undefined, id: number, remove: boolean): Gen<void> {
   if (!pkg) return;
@@ -593,9 +639,14 @@ function* stopForeground(pkg: string | undefined, id: number, remove: boolean): 
   const r = find(pkg, null, id, 0);
   if (!r) return;
   if (remove) return yield* removeRecords([r]);
-  const n = yield* awaited(unparcelled(N, r.data));
-  setDeclared(n, N, { flags: r.flags &= ~FLAG_FOREGROUND_SERVICE });
-  r.data = yield* awaited(parcelled(n));
+  const previous = r.data;
+  const n = yield* awaited(notificationStore.read(r.data));
+  const flags = r.flags & ~FLAG_FOREGROUND_SERVICE;
+  setDeclared(n, N, { flags });
+  const data = yield* awaited(notificationStore.capture(n));
+  if (!notificationStore.posted.includes(r) || r.data !== previous) { yield* awaited(data.close()); return; }
+  const old = r.data; r.flags = flags; r.data = data;
+  yield* awaited(old.close());
 }
 
 const POLICY = "android/app/NotificationManager$Policy";
@@ -815,7 +866,7 @@ rt.register({ name: "webdroid/NotificationManagerService", ctor: class extends J
     return SYSTEM_UIDS.has(callingIdentity().uid) ? 0 : fail("java/lang/SecurityException", "Only available for notification listeners");
   },
 } });
-hostStub("notification", "webdroid/NotificationManagerService");
+hostStub("notification", "webdroid/NotificationManagerService", true);
 
 function areNotificationsEnabledForPackage(pkg: string, uid: number): number | Promise<number> {
   enforceSystemOrSystemUIOrSamePackage(pkg, "Caller not system or systemui or same package");

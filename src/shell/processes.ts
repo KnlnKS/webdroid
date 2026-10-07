@@ -30,6 +30,7 @@ import { attrStr } from "../android/axml";
 import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
 import { preferenceStore, canonicalPreferenceCommands, type PreferenceCalls } from "../android/sharedprefs";
 import { notificationStore, receiveForegroundNotification, type ForegroundNotificationRequest } from "../android/notification";
+import { PROCESS_PID } from "../android/os";
 import { settingsStore } from "../android/settings";
 import { awaited, rt, type Gen, type JObj } from "../jvm/runtime";
 import type { WebCookies } from "./webcookies";
@@ -167,7 +168,10 @@ export class ProcessBroker {
   readonly location = new BrowserLocation();
   private locationTokens = new Map<string, number>();
   readonly settings = settingsStore();
-  constructor() { this.location.enabledChanged = () => this.settings.changed("secure", "location_mode"); }
+  constructor() {
+    this.location.enabledChanged = () => this.settings.changed("secure", "location_mode");
+    this.notifications.bindDescriptors(this.fileDescriptors);
+  }
   readonly permissions = new PermissionStore();
   private cookieStores = new Map<string, Promise<WebCookies>>();
   cookies(pkg: string): Promise<WebCookies> {
@@ -465,7 +469,16 @@ export class ProcessBroker {
       },
       notificationForeground: async request => {
         const caller = this.entry(pid);
-        await receiveForegroundNotification(caller.pkg, {pid:caller.pid,uid:caller.uid}, request);
+        if (request.kind === "stop" || !request.data) return receiveForegroundNotification(caller.pkg, {pid:caller.pid,uid:caller.uid}, request);
+        let received: ParcelData | undefined;
+        try {
+          received = await this.transferDescriptors(pid, PROCESS_PID, request.data, true);
+          this.entry(pid);
+          await receiveForegroundNotification(caller.pkg, {pid:caller.pid,uid:caller.uid}, {...request,data:received});
+        } finally {
+          if (received) await this.discardDescriptors(PROCESS_PID, received, false);
+          await this.discardDescriptors(pid, request.data, true);
+        }
       },
       filePrepare: async pkg => {
         const caller = this.entry(pid);
@@ -801,8 +814,8 @@ export class ProcessBroker {
   private async discardDescriptors(pid: number, data: ParcelData, staged: boolean): Promise<void> {
     await Promise.all(data.objects.map(([,object]) => object && "descriptor" in object ? this.fileDescriptors.discard(pid,object.descriptor,staged) : undefined));
   }
-  private async transferDescriptors(from: number, to: number, data: ParcelData): Promise<ParcelData> {
-    this.entry(from);this.entry(to);this.fileDescriptors.ensureReceiver(to);
+  private async transferDescriptors(from: number, to: number, data: ParcelData, broker = false): Promise<ParcelData> {
+    this.entry(from);if (!broker) this.entry(to);this.fileDescriptors.ensureReceiver(to);
     const transferred: ParcelData = {bytes:data.bytes.slice(),objects:[]};
     try {
       for (const [at,object] of data.objects) {
