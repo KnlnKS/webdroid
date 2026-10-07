@@ -1,10 +1,10 @@
 // webdroid driver — Playwright over the dev server. Every action, settle and capture happens in
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserServer, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types";
 import { BASE_URL, webdroidUrl } from "../lib/util";
-import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
+import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, stepDeadlineMs, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
 
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
@@ -39,12 +39,27 @@ export const CONTEXT_OPTS = {
   geolocation: { latitude: 37.422, longitude: -122.084, accuracy: 20 },
   permissions: ["geolocation"],
 };
-export const launchBrowser = (gpu: "software" | "hardware" = "software") => chromium.launch({
+const launchOptions = (gpu: "software" | "hardware" = "software") => ({
   headless: true,
   channel: gpu === "hardware" ? "chromium" : undefined,
   args: [...LAUNCH_ARGS, ...(gpu === "software" ? ["--use-gl=angle", "--use-angle=swiftshader", "--disable-partial-raster", "--disable-skia-runtime-opts"] : [])],
   ignoreDefaultArgs: [...(ISOLATED ? ["--disable-features=IsolateOrigins,site-per-process"] : []), ...(gpu === "hardware" ? ["--enable-unsafe-swiftshader"] : [])],
 });
+
+export const launchBrowser = (gpu: "software" | "hardware" = "software") => chromium.launch(launchOptions(gpu));
+
+async function within<T>(work: Promise<T>, ms: number, reason: string | Error): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(typeof reason === "string" ? new Error(reason) : reason), ms); })]); }
+  finally { clearTimeout(timer!); }
+}
+
+async function closeOwned(server: BrowserServer): Promise<void> {
+  try { await within(server.close(), 3000, "browser graceful close deadline"); }
+  catch { await within(server.kill(), 3000, "owned browser kill deadline"); }
+  const child = server.process();
+  if (child.exitCode === null && child.signalCode === null) throw new Error("owned browser did not exit");
+}
 
 type LaunchOpts = {
   screen?: CaptureScreen;
@@ -67,39 +82,46 @@ type StepOptions = {
 
 export class WebdroidDriver {
   readonly errors: string[] = [];
-  constructor(private browser: Browser, public page: Page, readonly screen: CaptureScreen) {}
+  private closing?: Promise<void>;
+  constructor(private browser: Browser, public page: Page, readonly screen: CaptureScreen, private server?: BrowserServer) {}
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();
-    const browser = await launchBrowser();
-    const ctx = await browser.newContext(CONTEXT_OPTS);
-    await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
-    if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
-      Object.defineProperty(window, name, { value: undefined, configurable: true });` });
-    const page = await ctx.newPage();
-    if (process.env.WEBDROID_CPU_THROTTLE) await (await ctx.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.WEBDROID_CPU_THROTTLE) });
-    const drv = new WebdroidDriver(browser, page, screen);
-    page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
-    page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
-    await drv.open(!!opts.controlled);
-    if (opts.privateStorage) {
-      const files = await Promise.all(opts.privateStorage.files.map(async ({ path, fixture }) => ({
-        path, bytes: Array.from(new Uint8Array(await Bun.file(new URL(`../fixtures/${fixture}`, import.meta.url)).arrayBuffer())),
-      })));
-      await page.evaluate(async (items) => {
-        const root = await navigator.storage.getDirectory();
-        for (const item of items) {
-          const parts = item.path.split("/");
-          let dir = root;
-          for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create: true });
-          const file = await dir.getFileHandle(parts.at(-1)!, { create: true });
-          const writer = await file.createWritable();
-          await writer.write(new Uint8Array(item.bytes));
-          await writer.close();
-        }
-      }, files);
+    const server = await chromium.launchServer(launchOptions());
+    try {
+      const browser = await chromium.connect(server.wsEndpoint());
+      const ctx = await browser.newContext(CONTEXT_OPTS);
+      await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
+      if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
+        Object.defineProperty(window, name, { value: undefined, configurable: true });` });
+      const page = await ctx.newPage();
+      if (process.env.WEBDROID_CPU_THROTTLE) await (await ctx.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.WEBDROID_CPU_THROTTLE) });
+      const drv = new WebdroidDriver(browser, page, screen, server);
+      page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
+      page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
+      await drv.open(!!opts.controlled);
+      if (opts.privateStorage) {
+        const files = await Promise.all(opts.privateStorage.files.map(async ({ path, fixture }) => ({
+          path, bytes: Array.from(new Uint8Array(await Bun.file(new URL(`../fixtures/${fixture}`, import.meta.url)).arrayBuffer())),
+        })));
+        await page.evaluate(async (items) => {
+          const root = await navigator.storage.getDirectory();
+          for (const item of items) {
+            const parts = item.path.split("/");
+            let dir = root;
+            for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create: true });
+            const file = await dir.getFileHandle(parts.at(-1)!, { create: true });
+            const writer = await file.createWritable();
+            await writer.write(new Uint8Array(item.bytes));
+            await writer.close();
+          }
+        }, files);
+      }
+      return drv;
+    } catch (error) {
+      await closeOwned(server);
+      throw error;
     }
-    return drv;
   }
 
   private async open(controlled = false): Promise<void> {
@@ -127,7 +149,16 @@ export class WebdroidDriver {
       capture: options.capture ?? true,
       timing,
     };
-    return this.page.evaluate((s) => globalThis.__wd.step(s), spec);
+    const ms = stepDeadlineMs(spec);
+    const deadline = new Error(`host step deadline (${ms} ms)`);
+    return within(this.page.evaluate((s) => globalThis.__wd.step(s), spec), ms, deadline).catch(error => {
+      if (error === deadline) {
+        this.errors.push(error.message);
+        // Reject now so capture persists the partial flow before cleanup finishes.
+        void this.close().catch(cause => { this.errors.push(String(cause)); });
+      }
+      throw error;
+    });
   }
 
   /** An action on its own, awaited to completion under the settle timeout. */
@@ -146,6 +177,6 @@ export class WebdroidDriver {
   }
 
   close(): Promise<void> {
-    return this.browser.close();
+    return this.closing ??= this.server ? closeOwned(this.server) : within(this.browser.close(), 3000, "browser close deadline (no owned process)");
   }
 }

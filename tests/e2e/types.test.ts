@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { executionFlow, flowSchemaHash, sameDimensions, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
+import { deviceScreen, executionFlow, flowSchemaHash, sameDimensions, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
+
+import { DEFAULT_QUIESCENCE, stepDeadlineMs, waitBudget, type StepSpec } from "./lib/probe";
 
 const flow = (text: string, timeoutMs: number): Flow => ({
   app: "fixture",
@@ -60,4 +62,14 @@ test("reference geometry distinguishes status insets from the normal browser pro
   expect(screenOf(undefined, { ...browser, statusBarDp: 28 })).toEqual(screenOf(manifest));
   manifest.device.statusBarDp = -1;
   expect(() => screenOf(manifest)).toThrow("Invalid status-bar inset");
+});
+
+test("host step envelope preserves requested live dwell and action repetitions", () => {
+  const spec: StepSpec = { act: { type: "none" }, screen: deviceScreen(),
+    wait: wait.liveSample(90_000), quiescence: DEFAULT_QUIESCENCE, aliveMs: 3000, capture: true, timing: "controlled" };
+  expect(waitBudget(spec.wait)).toEqual({ actionMs: 20_000, settleMs: 140_000 });
+  expect(stepDeadlineMs(spec)).toBe(343_000);
+  expect(waitBudget(wait.live(90_000))).toEqual({ actionMs: 20_000, settleMs: 140_000 });
+  const repeated = { ...spec, act: { type: "tap" as const, x: 0.5, y: 0.5, repeat: 3, everyMs: 60_000 } };
+  expect(stepDeadlineMs(repeated)).toBe(stepDeadlineMs(spec) + 40_000 + 120_000);
 });

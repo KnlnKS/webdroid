@@ -76,6 +76,37 @@ export type StepResult = {
 
 export const DEFAULT_QUIESCENCE: Quiescence = { stableMs: 150, intervalMs: 250, stableFrames: 4 };
 export const DEFAULT_ACTION_TIMEOUT_MS = 20_000;
+export const PHASE_BOUND_MS = 30_000;
+
+/** Includes real live dwell even when the virtual clock is controlled. */
+export function waitBudget(wait: WaitPolicy): { actionMs: number; settleMs: number } {
+  const actionMs = wait.kind === "live" || wait.kind === "live-sample" ? wait.timeoutMs : wait.maxRealMs;
+  const horizonMs = wait.kind === "live" ? wait.horizonMs : wait.kind === "live-sample" ? wait.atRealMs : 0;
+  return { actionMs, settleMs: horizonMs + actionMs + PHASE_BOUND_MS };
+}
+
+/** A host envelope for the existing page phases; it does not change their budgets. */
+export function stepDeadlineMs(spec: StepSpec): number {
+  const { actionMs, settleMs } = waitBudget(spec.wait), a = spec.act;
+  let calls = 1, dwell = 0;
+  if (a.type === "tap") {
+    if (a.whileText) {
+      calls = 2;
+      dwell = (a.appearMs ?? 0) + Math.max(1500, (a.repeat ?? 1) * (a.everyMs ?? 500) + 400 + (a.quietMs ?? 400));
+    }
+    else { calls = a.repeat ?? 1; dwell = Math.max(0, calls - 1) * (a.everyMs ?? 500); }
+    if (a.unlessResource) calls++;
+  } else if (a.type === "back" && a.whileText) { calls = 2; dwell = (a.appearMs ?? 0) + 1500; }
+  else if (a.type === "swipe") {
+    calls = (a.maxSwipes ?? 1) * (a.untilText ? 2 : 1);
+    dwell = (a.maxSwipes ?? 1) * (a.ms + (a.untilText ? 500 : 0));
+  }
+  else if (a.type === "tapText") calls = 2;
+  else if (a.type === "background") dwell = a.ms;
+  else if (a.type === "type") { calls = a.x === undefined ? 1 : 3; dwell = 250; }
+  // Worker reads, capture, UI dump, wedged liveness and bounded hang diagnostics.
+  return calls * actionMs + dwell + settleMs + spec.aliveMs + 6 * PHASE_BOUND_MS;
+}
 
 declare global {
   var wd: any;
@@ -355,7 +386,6 @@ function installProbe(cfg: ProbeConfig): void {
   };
   // a phase that can wait on the main looper (settle's test frames, the UI dump) past this bound
   // records the looper and the threads, then the step goes on without it
-  const PHASE_BOUND_MS = 30_000;
   const bounded = async <T>(phase: string, work: Promise<T>, ms: number, fallback: T, hangs: Hang[]): Promise<T> => {
     let id = 0;
     const late = new Promise<"late">((r) => { id = rawSetTimeout(() => r("late"), ms); });
@@ -380,17 +410,14 @@ function installProbe(cfg: ProbeConfig): void {
     let semanticHit: boolean | undefined, error: string | undefined;
     const actionAt = performance.now();
     try {
-      const maxActionMs = spec.wait.kind === "live" || spec.wait.kind === "live-sample"
-        ? spec.wait.timeoutMs
-        : spec.wait.maxRealMs;
+      const { actionMs: maxActionMs } = waitBudget(spec.wait);
       semanticHit = await act(spec.act, spec.screen, maxActionMs, spec.timing === "controlled");
     } catch (e) {
       error = String((e as Error)?.message ?? e).slice(0, 300);
     }
     const actionMs = performance.now() - actionAt;
     const controlled = spec.timing === "controlled";
-    const horizonMs = spec.wait.kind === "live" ? spec.wait.horizonMs : spec.wait.kind === "live-sample" ? spec.wait.atRealMs : 0;
-    const settleBound = horizonMs + (spec.wait.kind === "live" || spec.wait.kind === "live-sample" ? spec.wait.timeoutMs : spec.wait.maxRealMs) + PHASE_BOUND_MS;
+    const { settleMs: settleBound } = waitBudget(spec.wait);
     const settled = await bounded("settle", settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen), settleBound,
       { how: "timeout", ms: settleBound, busy: { hang: 1 } } as Settled, hangs);
     const aliveAt = performance.now();
@@ -438,4 +465,4 @@ function installProbe(cfg: ProbeConfig): void {
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */
 export const probeScript = (cfg: ProbeConfig): string =>
-  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${performAction.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;
+  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${performAction.toString()}; const PHASE_BOUND_MS=${PHASE_BOUND_MS}; ${waitBudget.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;
