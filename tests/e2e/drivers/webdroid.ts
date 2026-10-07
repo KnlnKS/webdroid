@@ -119,7 +119,8 @@ export class WebdroidDriver {
       }
       return drv;
     } catch (error) {
-      await closeOwned(server);
+      try { await closeOwned(server); }
+      catch (cleanup) { throw new AggregateError([error, cleanup], `Browser startup failed: ${String(error)}; cleanup failed: ${String(cleanup)}`, { cause: error }); }
       throw error;
     }
   }
