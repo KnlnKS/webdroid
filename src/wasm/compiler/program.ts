@@ -32,6 +32,11 @@ export interface Loader {
 const SUFFIX = /@(\d+);?$/;
 /** the name Java code sees for a class key (and for the key of an array class) */
 export const javaName = (key: string): string => (key.includes("@") ? key.replace(/@\d+(?=;|$)/g, "") : key);
+/** Runtime packages include the defining loader, not just the binary package name. */
+export function sameRuntimePackage(prog: Program, a: string, b: string): boolean {
+  const pkg = (name: string) => { name = javaName(name); return name.slice(0, name.lastIndexOf("/") + 1); };
+  return pkg(a) === pkg(b) && prog.loaderOf(a) === prog.loaderOf(b);
+}
 /** the id of the loader that defines the class (or the element class of the array class) with this key */
 export const loaderIdOf = (key: string): number => +(SUFFIX.exec(key)?.[1] ?? 0);
 

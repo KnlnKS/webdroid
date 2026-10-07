@@ -10,7 +10,7 @@
 import { OP } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, type ElemKind } from "../compiler/consts";
-import { ACC, javaName as stripLoader, type JClass } from "../compiler/program";
+import { ACC, sameRuntimePackage, javaName as stripLoader, type JClass } from "../compiler/program";
 import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
@@ -55,8 +55,7 @@ function interfaces(w: World, name: string): string[] {
 /** Reflection's access rule for a member of `decl` with `flags` used by class `caller`: the class must be public or in the caller's package, then the member public,
  *  the caller's own, in the caller's package, or protected and inherited */
 export function canAccess(caller: string, decl: JClass, flags: number, w: World): boolean {
-  const pkg = (n: string) => { const binary = stripLoader(n); return binary.slice(0, binary.lastIndexOf("/") + 1); };
-  const samePackage = pkg(caller) === pkg(decl.name) && w.prog.loaderOf(caller) === w.prog.loaderOf(decl.name);
+  const samePackage = sameRuntimePackage(w.prog, caller, decl.name);
   if (!(decl.flags & ACC.PUBLIC) && !samePackage) return false;
   if (flags & ACC.PUBLIC || caller === decl.name) return true;
   if (flags & ACC.PRIVATE) return false;

@@ -1,7 +1,7 @@
 // Class loaders: two DexClassLoaders over dex files that define the same class name (tests/fixtures/wasm/java/Ldr.java) keep distinct classes, statics and Class
 // objects, see the app's interface through their parent, and answer Class.forName, loadClass, getClassLoader and reflection each in its own namespace.
 // Needs javac and d8. Run: bun run wasm loaders
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { zipSync } from "fflate";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
 import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive";
 import { loadDexes, program, world } from "./lib";
-import { Program, ACC, type JClass } from "../../src/wasm/compiler/program";
+import { Program, ACC, javaName, type JClass } from "../../src/wasm/compiler/program";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
@@ -35,7 +35,7 @@ import { useEntry } from "../../src/jvm/natives/jentry";
 import { rt } from "../../src/jvm/runtime";
 import { jsTier, natives } from "./oracle";
 import { AOSP, JAVA } from "./paths";
-import { filesIn, shellIn } from "./tools";
+import { shellIn } from "./tools";
 
 import { androidPlatform, androidTool } from "../android-sdk";
 
@@ -54,12 +54,12 @@ const build = (dir: string, sources: string[], classpath?: string) => {
     const methods = [method("value", "(LShared;)LShared;"), method("missing", "()LAbsentOptional;")];
     writeFileSync(join(out, dir, "TypeSite.class"), Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(p.count), ...p.bytes, ...u2(0x21), ...u2(self), ...u2(sup), ...u2(0), ...u2(0), ...u2(methods.length), ...methods.flat(), ...u2(0)]));
   }
-  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath?.split(":").flatMap(path => ["--classpath", path]) ?? []), ...filesIn(join(out, dir), /\.class$/).filter(path => !/\/(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path))]);
+  sh([androidTool("d8"), "--min-api", dir === "b" ? "34" : "26", "--output", join(out, dir), "--lib", androidJar, ...(classpath?.split(":").flatMap(path => ["--classpath", path]) ?? []), ...readdirSync(join(out, dir), { recursive: true, encoding: "utf8" }).filter(path => /\.class$/.test(path)).map(path => join(out, dir, path)).filter(path => !/\/(AbsentOptional|MissingCatch|UnusedMemberType)\.class$/.test(path))]);
   return join(out, dir, "classes.dex");
 };
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
-const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
+const a = build("a", ["ldr1/Shared.java", "ldr1/Boom.java", "members1/pack/PackageBase.java", "members1/pack/PackageType.java", "members1/MemberBase.java", "members1/MemberContract.java", "members1/MemberType.java"], join(out, "app")), b = build("b", ["ldr2/Shared.java", "ldr2/Boom.java", "ldr2/Sub.java", "members2/pack/PackageChild.java", "members2/pack/PackageType.java", "members2/MemberUse.java", "members2/MemberOverride.java", "members2/MemberImplementation.java", "members2/MemberType.java"], [join(out, "app"), join(out, "a")].join(":"));
 const apk = join(out, "ordered.apk");
 writeFileSync(apk, zipSync({ "classes10.dex": new Uint8Array(readFileSync(b)), "classes2.dex": new Uint8Array(readFileSync(a)), "classes1000.dex": new Uint8Array(readFileSync(b)), "classes.dex": new Uint8Array(readFileSync(app)) }));
 const ordered = world([apk, ...PLATFORM_JARS.map((j) => join(AOSP, j))], { natives });
@@ -133,12 +133,71 @@ const memberResult = await w.entryAsync("Ldr", "memberResolution", desc)(...path
 if (memberExpected !== 31 || memberResult !== memberExpected) throw new Error(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}, expected=31`);
 console.log(`binary member descriptors: js=${memberExpected}, wasm=${memberResult}; denied type retries, unused prototype stays lazy, declaring reflection identity preserved`);
 if (!process.argv.includes("--member-only") || process.argv.includes("--constraints")) {
-  for (const method of ["memberConstraints", "memberInterfaceConstraints"]) {
+  for (const method of ["memberConstraints", "memberInterfaceConstraints", "memberIndirectConstraints", "memberReentrantConstraints"]) {
     const baseline = await js("Ldr", method, desc, paths);
     const result = await w.entryAsync("Ldr", method, desc)(...paths);
-    console.log(`${method}: js=${baseline}, wasm=${result}, ART expected=255`);
+    console.log(`${method}: js=${baseline}, wasm=${result}, expected=255`);
     if (result !== 255) throw new Error(`${method}: ${result}`);
   }
+}
+if (!process.argv.includes("--member-only") || process.argv.includes("--constraints")) {
+  for (const method of ["memberHostRetry", "memberHostWaitRetry"]) {
+    const original = w.javaString, hostFn = w.hostFn, failure = new Error("constraint host failure");
+    let injected = false;
+    if (method === "memberHostRetry") w.javaString = function(value: string) {
+      if (!injected && value === "MemberType") { injected = true; throw failure; }
+      return original.call(this, value);
+    };
+    else w.hostFn = function(...args: Parameters<typeof hostFn>) {
+      const fn = hostFn.apply(this, args);
+      return args[0] !== "resolve:classId" ? fn : (...values: unknown[]) => {
+        const id = fn(...values);
+        if (!injected && javaName(w.nameOf(id)) === "MemberType") { injected = true; throw failure; }
+        return id;
+      };
+    };
+    try {
+      let caught: unknown;
+      try { await w.entryAsync("Ldr", method, desc)(...paths); } catch (error) { caught = error; }
+      if (caught !== failure || !injected) throw new Error(`${method}: signature host failure changed kind`);
+    } finally { w.javaString = original; w.hostFn = hostFn; }
+    const retry = await w.entryAsync("Ldr", method, desc)(...paths);
+    if (retry !== 7) throw new Error(`${method}: signature host failure prevented retry: ${retry}`);
+    console.log(`${method}: original host error propagated, same class retries successfully`);
+  }
+}
+if (!process.argv.includes("--member-only") || process.argv.includes("--package")) {
+  sh(["mkdir", "-p", "witness"]);
+  sh(["javac", "--release", "11", "-d", join(out, "witness"), join(JAVA, "PackageLoaderControl.java")]);
+  const control = sh(["java", "-cp", join(out, "witness"), "PackageLoaderControl", join(out, "a"), join(out, "b")]).trim();
+  if (control !== "1122\n1122\n2222") throw new Error(`package runtime-package JDK control: ${control}`);
+  console.log(`package runtime-package JDK control: ${control.replaceAll("\n", ",")}`);
+  for (const ownType of [true, false]) {
+    const signature = "(Ljava/lang/String;Ljava/lang/String;Z)I", args = [...paths, ownType];
+    const result = await w.entryAsync("Ldr", "packageMembers", signature)(...args);
+    const baseline = await js("Ldr", "packageMembers", signature, args);
+    console.log(`package-private dispatch ownType=${ownType}: js=${baseline}, wasm=${result}, expected=1122`);
+    if (result !== 1122) throw new Error(`package-private dispatch: ${result}`);
+  }
+  const same = await w.entryAsync("Ldr", "packageSameLoader", desc)(...paths);
+  if (same !== 2222) throw new Error(`same-loader package-private override: ${same}`);
+  console.log(`same-loader package-private override: wasm=${same}, jdk=2222`);
+  const packageOwners = [...w.prog.all()].filter(c => javaName(c.name) === "pack/PackageBase");
+  for (const [index, flags] of [0, ACC.PRIVATE, ACC.PROTECTED].entries()) {
+    const owner = packageOwners[index].name;
+    const method = w.prog.require(owner).methods.find(m => m.name === "foo")!, original = method.flags;
+    method.flags = flags;
+    try {
+      const selector = w.selectorId(method.key), slot = w.host.imtMiss(w.idOf(owner), selector) as number;
+      const call = w.hostFn(`interface-access:${flags}`, ["L", "L"], "I", (cx, c) => c.lget(0).lget(1).i32(slot).callIndirect(cx.sig(["L", "L"], "I")));
+      let error: unknown;
+      const strand = w.sched.strand();
+      try { await strand.call(call, null, null); } catch (e) { error = e; } finally { strand.end(); }
+      const throwable = w.throwable(error);
+      if (!throwable || w.classNameOf(throwable) !== "java/lang/IllegalAccessError") throw new Error(`nonpublic IMT implementation accepted: ${flags}`);
+    } finally { method.flags = original; }
+  }
+  console.log("nonpublic IMT miss: package/private/protected rejected with IllegalAccessError");
 }
 if (process.argv.includes("--member-only")) process.exit(0);
 if (!process.argv.includes("--catch-only") && (!process.argv.includes("--symbolic") || process.argv.includes("--hierarchy"))) {

@@ -84,8 +84,8 @@ export interface CHeader extends UnitHeader {
   /** the slots of methods of its classes the module lacks: abstract ones, natives without an implementation, and those the compiler produced invalid code for */
   absent: number[];
 }
-/** Slot-aware linkDue imports; earlier data/app/worker units must not install their zero-argument stubs. */
-export const VERSION = 6;
+// Runtime-package-qualified dispatch slots are incompatible with format 6.
+export const VERSION = 7;
 
 /** the sizes of what a World numbers, which only grow */
 export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
@@ -96,7 +96,7 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 6;
+export const APP_VERSION = 7;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[]; verdicts?: Verdict[] }
 /** whether a decision of the platform build (`decl.name+desc` resolves to `tc`'s `tk`) stands over the app's classes, as a launch found it */

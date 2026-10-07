@@ -1,3 +1,4 @@
+import { symbolicOverride } from "./linkage";
 import type { DexFile } from "../../jvm/dex";
 import { ACC, classDefIdx, declaredMethod, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
 
@@ -91,6 +92,7 @@ export class Cha {
     const key = decl + "\0" + mkey(name, desc);
     let out = this.memo.get(key);
     if (out) return out;
+    const declared = this.prog.resolve(decl, name, desc), packageMethod = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED));
     const found = new Set<MethodInfo>(), seen = new Set<string>(), stack = [decl];
     // a small hierarchy is walked; a large one (decl = Object) is answered from the methods that can be implementations
     let budget = WALK;
@@ -99,11 +101,12 @@ export class Cha {
       if (seen.has(n)) continue;
       seen.add(n); budget--;
       const c = this.prog.get(n);
-      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) { const m = this.prog.implFor(n, name, desc); if (m) found.add(m); }
+      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) { const m = packageMethod ? symbolicOverride(this.prog, n, declared!) : this.prog.implFor(n, name, desc); if (m) found.add(m); }
       for (const sub of this.subsOf(n)) stack.push(sub);
     }
     if (budget <= 0 && stack.length && found.size < 2) {
       found.clear();
+      if (packageMethod) return [];
       const key = mkey(name, desc);
       for (const cls of this.declaring(key)) {
         const m = declaredMethod(this.prog.get(cls), key)!;

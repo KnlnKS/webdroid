@@ -16,7 +16,7 @@ import type { ColdSnapshot } from "../cold/state";
 import { coldUnit, supportsColdBody } from "../cold/runtime";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
+import { Program, ACC, kindOf, declaredMethod, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
@@ -37,7 +37,7 @@ import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, 
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
-import { unresolvedClass } from "../compiler/linkage";
+import { dispatchMethodKey, dispatchSlotKey, overridesMethod, symbolicImplFor, symbolicOverride, symbolicMethod, unresolvedClass } from "../compiler/linkage";
 import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
@@ -377,6 +377,7 @@ export class World {
     return id;
   }
   selectorId(key: string): number {
+    key = javaName(key);
     let s = this.selectors.get(key);
     if (!s) { this.selectors.set(key, s = this.selKeys.length); this.selKeys.push(key); }
     return s;
@@ -410,7 +411,7 @@ export class World {
   private madeUp = new Map<string, Intrinsic>();
   needsInit(n: string): boolean {
     const c = this.prog.get(n); if (!c) return false;
-    if (c.byKey.has("<clinit>()V") || c.def?.staticValuesOff || hasSignatureConstraints(this, n)) return true;
+    if (declaredMethod(c, "<clinit>()V") || c.def?.staticValuesOff || hasSignatureConstraints(this, n)) return true;
     return (c.sup ? this.needsInit(c.sup) : false) || (!c.isInterface && this.prog.defaultIfaces(n).some((i) => this.needsInit(i)));
   }
   /** the init word of the class with id `id` (0 before its module is built) */
@@ -419,21 +420,35 @@ export class World {
   initialized(n: string): boolean { if (this.preInitialized.has(n)) return true; const rt = this.loadedClass(n); return (rt?.exports[rt.id + ":init"] as WebAssembly.Global | undefined)?.value === INIT_DONE; }
   /** the record of a class whose module is built or loaded; a platform module loaded for the classes beside it gives its other classes theirs here */
   private loadedClass(name: string): ClassRt | undefined { return this.classes.get(name) ?? (this.aot?.hasLoaded(name) ? this.link(name) : undefined); }
-  /** virtual method keys of a class in slot order: superclass slots first, then its own and interface methods */
+  /** Binary DEX method keys in slot order. Resolving signature Class identities must not renumber published dispatch slots. */
   vslots(n: string): string[] {
     let s = this.vslotCache.get(n); if (s) return s;
     const c = this.prog.get(n);
     s = n === "java/lang/Object" || !c ? [] : [...this.vslots(c.sup ?? "java/lang/Object")];
     if (c && !c.isInterface) {
-      for (const m of c.methods) if (!m.isStatic && !m.isCtor && !(m.flags & ACC.PRIVATE) && !s.includes(m.key)) s.push(m.key);
-      const addIface = (i: string) => { const ic = this.prog.get(i); if (!ic) return; for (const m of ic.methods) if (!m.isStatic && !s!.includes(m.key)) s!.push(m.key); ic.ifaces.forEach(addIface); };
+      for (const m of c.methods) if (!m.isStatic && !m.isCtor && !(m.flags & ACC.PRIVATE)) {
+        const overrides = s.some(key => {
+          if (dispatchMethodKey(key) !== javaName(m.key)) return false;
+          const inherited = c.sup ? symbolicImplFor(this.prog, c.sup, key, true) : undefined;
+          return inherited && overridesMethod(this.prog, n, inherited);
+        });
+        if (!overrides) s.push(dispatchSlotKey(m));
+      }
+      const addIface = (i: string) => {
+        const ic = this.prog.get(i);
+        if (!ic) return;
+        for (const m of ic.methods) if (!(m.flags & (ACC.STATIC | ACC.PRIVATE)) && !s!.some(key => dispatchMethodKey(key) === javaName(m.key) && !!((symbolicImplFor(this.prog, n, key)?.flags ?? 0) & ACC.PUBLIC))) s!.push(javaName(m.key));
+        ic.ifaces.forEach(addIface);
+      };
       for (let k: JClass | undefined = c; k; k = k.sup ? this.prog.get(k.sup) : undefined) k.ifaces.forEach(addIface);
     }
     this.vslotCache.set(n, s); return s;
   }
   /** vtable index of virtual method `key` as seen from class `decl` */
   vslot(decl: string, key: string): number {
-    const i = this.vslots(decl).indexOf(key);
+    const slots = this.vslots(decl), raw = javaName(key);
+    let i = slots.indexOf(raw);
+    if (i < 0) i = slots.findIndex(slot => dispatchMethodKey(slot) === raw && !!symbolicImplFor(this.prog, decl, slot, true));
     if (i < 0) throw new Error(`no vtable slot for ${decl}.${key}`);
     return H.VTAB + i;
   }
@@ -441,7 +456,7 @@ export class World {
     const prog = this.prog, arr = name[0] === "[", c = prog.get(name);
     const chain = arr ? ["java/lang/Object", name] : prog.chain(name).reverse();   // Object first
     const depth = chain.length - 1;
-    const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => { const j = key.indexOf("("); return prog.implFor(arr ? "java/lang/Object" : name, key.slice(0, j), key.slice(j)); };
+    const keys = this.vslots(arr ? "java/lang/Object" : name), impl = (key: string) => symbolicImplFor(prog, arr ? "java/lang/Object" : name, key);
     const body: number[] = new Array(H.VTAB + keys.length).fill(0);
     body[H.ID] = id; body[H.DEPTH] = depth;
     // ancestors beyond the fixed display are tested like interfaces, from the id list at the end
@@ -456,7 +471,7 @@ export class World {
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];
     if (!arr) for (const key of keys) {
-      const sel = this.selectors.get(key), m = sel ? impl(key) : undefined;
+      const sel = this.selectors.get(dispatchMethodKey(key)), target = sel ? impl(key) : undefined, m = (target?.flags ?? 0) & ACC.PUBLIC ? target : undefined;
       if (!sel || !m) continue;
       const s = sel % H.IMT_N, f = this.slotOf(m);
       if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
@@ -475,9 +490,15 @@ export class World {
     if (!cache) this.imtCache.set(cls, cache = new Map());
     let slot = cache.get(sel);
     if (slot === undefined) {
-      const key = this.selKeys[sel], j = key.indexOf("("), name = this.names[cls];
-      const m = this.prog.implFor(name[0] === "[" ? "java/lang/Object" : name, key.slice(0, j), key.slice(j));
-      cache.set(sel, slot = m ? this.slotOf(m) : this.abstractSlot(key));
+      const key = this.selKeys[sel], name = this.names[cls];
+      const receiver = name[0] === "[" ? "java/lang/Object" : name, at = key.indexOf("(");
+      let m: MethodInfo | undefined;
+      for (const owner of this.prog.chain(receiver)) {
+        const candidate = symbolicMethod(this.prog.require(owner), key.slice(0, at), key.slice(at));
+        if (candidate && !candidate.isStatic) { m = candidate; break; }
+      }
+      m ??= symbolicImplFor(this.prog, receiver, key);
+      cache.set(sel, slot = m ? m.flags & ACC.PUBLIC ? this.slotOf(m) : this.interfaceAccessSlot(key) : this.abstractSlot(key));
     }
     return slot;
   }
@@ -527,6 +548,8 @@ export class World {
   replay(infos: InfoRecord[]): void { for (const r of infos) { try { replayInfo(this, r); } catch { /* a question the Program no longer answers */ } } }
   /** the synthetic function `name` a precompiled module calls, which its numbering has reserved but whose stub may not exist yet */
   ensureSynth(name: string): void {
+    const access = /^interfaceAccess:([ILJ]*)>([ILJV])$/.exec(name);
+    if (access) { this.interfaceAccessSlot("method(" + [...access[1]].slice(1).map(k => k === "L" ? "Ljava/lang/Object;" : k).join("") + ")" + (access[2] === "L" ? "Ljava/lang/Object;" : access[2])); return; }
     const m = /^abstract:([ILJ]*)>([ILJV])$/.exec(name);
     this.synthSlot(name, m ? { params: [...m[1]] as Kind[], ret: m[2] as Kind | "V", body: (cx, c) => { cx.callThrower(c, "ame"); } } : rtfns.get(name)!);
   }
@@ -535,6 +558,15 @@ export class World {
     const p = parseMethodDesc(key.slice(key.indexOf("(")));
     const params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
     return this.synthSlot(`abstract:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => { cx.callThrower(c, "ame"); } });
+  }
+
+  private interfaceAccessSlot(key: string): number {
+    const p = parseMethodDesc(key.slice(key.indexOf("("))), params: Kind[] = ["L", ...p.params.map(kindOf)], ret: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
+    return this.synthSlot(`interfaceAccess:${params.join("")}>${ret}`, { params, ret, body: (cx, c) => {
+      const cls = "java/lang/IllegalAccessError", e = c.newLocal(T.anyref);
+      cx.emitEnsure(c, cls); cx.emitNew(c, cls); c.lset(e).lget(e);
+      cx.callMethod(c, cx.prog.resolve(cls, "<init>", "()V")!); c.lget(e).throw_(cx.tag);
+    } });
   }
 
   // ---------- runtime and class modules
@@ -1324,10 +1356,11 @@ export class World {
     const key = `${decl}.${name}${desc}`;
     let memo = this.implemented.get(key);
     if (!memo) this.implemented.set(key, memo = { seen: 0, count: new Map() });
+    const declared = this.prog.resolve(decl, name, desc);
     let i = 0;
     for (const cls of this.allocated) {
       if (i++ < memo.seen || cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
-      const t = this.prog.implFor(cls, name, desc);
+      const t = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED)) ? symbolicOverride(this.prog, cls, declared) : this.prog.implFor(cls, name, desc);
       if (t) memo.count.set(t, (memo.count.get(t) ?? 0) + 1);
     }
     memo.seen = i;
@@ -1371,8 +1404,7 @@ export class World {
       if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
     }
     const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {
-      const at = key.indexOf("(");
-      return this.prog.implFor(name, key.slice(0, at), key.slice(at));
+      return symbolicImplFor(this.prog, name, key);
     }) }));
     const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
     const existing = [...this.classes].filter(([name]) => own.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
@@ -1380,7 +1412,7 @@ export class World {
     if (!names.length) return;
     this.vslotCache.clear();
     for (const old of dispatch) {
-      const methods = this.vslots(old.name).map(key => { const at = key.indexOf("("); return this.prog.implFor(old.name, key.slice(0, at), key.slice(at)); });
+      const methods = this.vslots(old.name).map(key => symbolicImplFor(this.prog, old.name, key));
       if (methods.length !== old.methods.length || methods.some((m, i) => m !== old.methods[i])) {
         undo(); this.vslotCache.clear();
         throw this.exception(this.makeThrowable("java/lang/LinkageError", `${reason} changed linked dispatch of ${old.name}`));

@@ -1,5 +1,6 @@
 import { descToName } from "../../jvm/abi";
-import { ACC, declaredMethod, declaredMethods, javaName, type MethodInfo } from "../compiler/program";
+import { ACC, declaredMethods, javaName, type MethodInfo } from "../compiler/program";
+import { symbolicMethod } from "../compiler/linkage";
 import { rt } from "../compiler/rtfns";
 import { T } from "../compiler/wasmbin";
 import { canAccess } from "./classes";
@@ -7,27 +8,46 @@ import { resolveType } from "./resolution";
 import { emitSave, type Strand } from "./sched";
 import type { World } from "./world";
 
-type Pair = [MethodInfo, MethodInfo];
+type Declaration = { cls: string; key: string; flags: number };
+type Pair = [Declaration, Declaration];
 const virtual = (key: string, flags: number) => !(flags & (ACC.STATIC | ACC.PRIVATE | ACC.CONSTRUCTOR)) && key[0] !== "<";
 
-function virtualMethods(w: World, cls: string, caller: string): Map<string, MethodInfo> {
-  const methods = new Map<string, MethodInfo>();
-  for (const name of w.prog.chain(cls)) {
+function virtualMethods(w: World, cls: string, caller: string): Map<string, Declaration> {
+  const methods = new Map<string, Declaration>();
+  for (const name of w.prog.chain(cls).reverse()) {
     const c = w.prog.require(name);
     for (const [key, flags] of declaredMethods(c)) {
-      const raw = javaName(key);
-      if (!virtual(key, flags) || methods.has(raw) || !canAccess(caller, c, flags, w)) continue;
-      methods.set(raw, declaredMethod(c, key)!);
+      if (virtual(key, flags) && canAccess(caller, c, flags, w)) methods.set(javaName(key), { cls: name, key, flags });
     }
   }
   return methods;
+}
+
+function defaultMethod(w: World, cls: string, key: string): Declaration | undefined {
+  const seen = new Set<string>(), found: Declaration[] = [];
+  const visit = (name: string) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const c = w.prog.get(name);
+    if (!c) return;
+    const entry = declaredMethods(c).find(([candidate, flags]) => virtual(candidate, flags) && javaName(candidate) === key);
+    if (entry) {
+      if (!(entry[1] & ACC.ABSTRACT)) found.push({ cls: name, key: entry[0], flags: entry[1] });
+      return;
+    }
+    c.ifaces.forEach(visit);
+  };
+  for (const name of w.prog.chain(cls)) w.prog.require(name).ifaces.forEach(visit);
+  return found.find(m => found.every(other => other === m || !w.prog.isSubclass(other.cls, m.cls)));
 }
 
 /** ART ValidateSuperClassDescriptors checks changed dispatch entries, not unused prototypes. */
 function constraints(w: World, cls: string): Pair[] {
   const c = w.prog.get(cls);
   if (!c || c.isInterface) return [];
-  const loader = w.prog.loaderOf(cls), interfaces = new Set<string>();
+  const loader = w.prog.loaderOf(cls);
+  if (loader === w.prog.boot) return [];
+  const interfaces = new Set<string>();
   const visit = (name: string) => {
     if (interfaces.has(name)) return;
     interfaces.add(name); w.prog.get(name)?.ifaces.forEach(visit);
@@ -37,16 +57,17 @@ function constraints(w: World, cls: string): Pair[] {
   const differentIfaces = [...interfaces].filter(name => loader !== w.prog.loaderOf(name));
   if (!differentSuper && !differentIfaces.length) return [];
   const methods = virtualMethods(w, cls, cls), pairs: Pair[] = [];
-  if (differentSuper) for (const [key, base] of virtualMethods(w, c.sup!, cls)) {
+  const changed = (a: Declaration, b: Declaration) => a.cls !== b.cls || a.key !== b.key;
+  if (differentSuper) for (const [key, base] of [...virtualMethods(w, c.sup!, cls)].reverse()) {
     const method = methods.get(key);
-    if (method && method !== base) pairs.push([method, base]);
+    if (method && changed(method, base)) pairs.push([method, base]);
   }
   for (const name of differentIfaces) {
     const iface = w.prog.require(name);
     for (const [key, flags] of declaredMethods(iface)) {
       if (!virtual(key, flags)) continue;
-      const base = declaredMethod(iface, key)!, method = methods.get(javaName(key)) ?? w.prog.implFor(cls, base.name, base.desc);
-      if (method && virtual(method.key, method.flags) && method !== base) pairs.push([method, base]);
+      const base = { cls: name, key, flags }, method = methods.get(javaName(key)) ?? defaultMethod(w, cls, javaName(key));
+      if (method && changed(method, base)) pairs.push([method, base]);
     }
   }
   return pairs;
@@ -71,7 +92,10 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
     if ("ready" in prior) return;
     const erroneous = (): never => { throw w.exception(w.makeThrowable("java/lang/NoClassDefFoundError", `Could not initialize class ${javaName(cls)}`)); };
     if ("failed" in prior) return erroneous();
-    if (prior.thread !== owner.thread) return prior.wait.catch(erroneous);
+    if (prior.thread !== owner.thread) return prior.wait.catch(error => {
+      if (w.throwable(error)) return erroneous();
+      throw error;
+    });
   }
   const pairs = constraints(w, cls);
   const linkage = (message: string, error?: unknown): never => {
@@ -92,7 +116,13 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
   };
   const nextPair = (at: number): void | Promise<void> => {
     if (at === pairs.length) return;
-    const [target, base] = pairs[at], a = signature(target), b = signature(base);
+    const [targetDecl, baseDecl] = pairs[at];
+    const hydrate = (d: Declaration): MethodInfo => {
+      const at = d.key.indexOf("(");
+      return symbolicMethod(w.prog.require(d.cls), d.key.slice(0, at), d.key.slice(at))!;
+    };
+    const target = hydrate(targetDecl), base = hydrate(baseDecl);
+    const a = signature(target), b = signature(base);
     const message = `Class ${javaName(cls)} method ${javaName(target.key)} signature against ${javaName(base.cls)}`;
     const nextType = (index: number): void | Promise<void> => {
       if (index === a.length) return nextPair(at + 1);
@@ -115,7 +145,10 @@ export function validateSignatures(w: World, cls: string, owner: Strand): void |
     return nextType(0);
   };
   const ready = () => { states!.set(cls, { ready: true }); };
-  const failed = (error: unknown): never => { states!.set(cls, { failed: true }); throw error; };
+  const failed = (error: unknown): never => {
+    if (w.throwable(error)) states!.set(cls, { failed: true }); else states!.delete(cls);
+    throw error;
+  };
   try {
     const value = nextPair(0);
     if (value instanceof Promise) {

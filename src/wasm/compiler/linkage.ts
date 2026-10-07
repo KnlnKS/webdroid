@@ -3,7 +3,7 @@
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex";
 import { descToName } from "../../jvm/abi";
-import { ACC, declaredMethod, declaredMethods, javaName, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
+import { ACC, declaredMethod, declaredMethods, javaName, sameRuntimePackage, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
 import type { Thrower } from "../link/exc";
 
 export interface LinkFailure {
@@ -37,7 +37,7 @@ export const unresolvedClass = (message: string): string | undefined => message.
 const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.isCtor || m.flags & ACC.PRIVATE ? "direct" : prog.get(m.cls)?.isInterface ? "interface" : "virtual");
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
-function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
+export function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
   const exact = declaredMethod(c, name + desc);
   if (exact) return exact;
   const raw = name + javaName(desc), key = declaredMethods(c).find(([key]) => javaName(key) === raw)?.[0];
@@ -64,6 +64,49 @@ function resolveSymbolicMethod(prog: Program, cls: string, name: string, desc: s
   for (const key of prog.chain(cls)) for (const iface of prog.require(key).ifaces) {
     const found = visit(iface); if (found) return found;
   }
+}
+
+/** Package-private slots retain their declaring runtime package even when binary prototypes match. */
+export const dispatchMethodKey = (key: string): string => key.slice(key.indexOf("\0") + 1);
+export const dispatchSlotKey = (m: MethodInfo): string => (m.flags & (ACC.PUBLIC | ACC.PROTECTED) ? "" : m.cls + "\0") + javaName(m.key);
+export const overridesMethod = (prog: Program, cls: string, m: MethodInfo): boolean => !(m.flags & ACC.PRIVATE) && (!!(m.flags & (ACC.PUBLIC | ACC.PROTECTED)) || sameRuntimePackage(prog, cls, m.cls));
+
+/** Select an override of this declaration, rather than a same-named inaccessible member. */
+export function symbolicOverride(prog: Program, cls: string, declared: MethodInfo, includeAbstract = false): MethodInfo | undefined {
+  let method = declared, reached = false;
+  for (const owner of prog.chain(cls).reverse()) {
+    if (owner === declared.cls) { reached = true; continue; }
+    if (!reached) continue;
+    const candidate = symbolicMethod(prog.require(owner), declared.name, javaName(declared.desc));
+    if (candidate && !(candidate.flags & (ACC.STATIC | ACC.PRIVATE)) && overridesMethod(prog, owner, method)) method = candidate;
+  }
+  return !includeAbstract && method.flags & ACC.ABSTRACT ? undefined : method;
+}
+
+/** DEX name/prototype equality selects true overrides; initialization checks their Class identities. */
+export function symbolicImplFor(prog: Program, cls: string, slot: string, includeAbstract = false): MethodInfo | undefined {
+  const key = dispatchMethodKey(slot), at = key.indexOf("("), name = key.slice(0, at), desc = key.slice(at), split = slot.indexOf("\0");
+  if (split >= 0) {
+    const declared = symbolicMethod(prog.require(slot.slice(0, split)), name, desc);
+    return declared ? symbolicOverride(prog, cls, declared, includeAbstract) : undefined;
+  }
+  if (prog.loaderOf(cls) === prog.boot) return includeAbstract ? prog.resolve(cls, name, desc) : prog.implFor(cls, name, desc);
+  for (const owner of prog.chain(cls).reverse()) {
+    const m = symbolicMethod(prog.require(owner), name, desc);
+    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE)) && m.flags & (ACC.PUBLIC | ACC.PROTECTED)) return symbolicOverride(prog, cls, m, includeAbstract);
+  }
+  const seen = new Set<string>(), found: MethodInfo[] = [];
+  const visit = (owner: string) => {
+    if (seen.has(owner)) return;
+    seen.add(owner);
+    const c = prog.get(owner);
+    if (!c) return;
+    const m = symbolicMethod(c, name, desc);
+    if (m && !(m.flags & (ACC.STATIC | ACC.PRIVATE))) { if (!(m.flags & ACC.ABSTRACT)) found.push(m); return; }
+    c.ifaces.forEach(visit);
+  };
+  for (const owner of prog.chain(cls)) prog.require(owner).ifaces.forEach(visit);
+  return found.find(m => found.every(other => other === m || !prog.isSubclass(other.cls, m.cls)));
 }
 
 function resolveSymbolicField(prog: Program, cls: string, name: string, desc: string): FieldInfo | undefined {

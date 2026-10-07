@@ -149,13 +149,15 @@ public class Ldr {
   public static class MemberLoader extends DexClassLoader {
     public int typeCalls;
     public boolean deny = true, ownType = true;
+    public String reenter;
     MemberLoader(String path, ClassLoader parent) { super(path, null, null, parent); }
     @Override public Class<?> loadClass(String name) throws ClassNotFoundException {
-      if (name.equals("MemberUse") || name.equals("MemberOverride") || name.equals("MemberImplementation") || name.equals("MemberType")) {
-        if (name.equals("MemberType")) {
+      if (name.equals("MemberUse") || name.equals("MemberOverride") || name.equals("MemberImplementation") || name.equals("pack.PackageChild") || name.equals("pack.PackageType") || name.equals("MemberType")) {
+        if (name.equals("MemberType") || name.equals("pack.PackageType")) {
           typeCalls++;
           if (deny) { deny = false; throw new ClassNotFoundException(name); }
           try { Thread.sleep(1); } catch (InterruptedException e) { throw new ClassNotFoundException(name, e); }
+          if (reenter != null) { String target = reenter; reenter = null; Class.forName(target, true, this); }
           if (!ownType) return super.loadClass(name);
         }
         Class<?> loaded = findLoadedClass(name);
@@ -180,23 +182,40 @@ public class Ldr {
     return result;
   }
   public static int memberConstraints(String pathA, String pathB) throws Exception {
-    return memberConstraints(pathA, pathB, "MemberOverride", 1);
+    return memberConstraints(pathA, pathB, "MemberOverride", 1, false, false);
   }
   public static int memberInterfaceConstraints(String pathA, String pathB) throws Exception {
-    return memberConstraints(pathA, pathB, "MemberImplementation", 0);
+    return memberConstraints(pathA, pathB, "MemberImplementation", 0, false, false);
   }
-  private static int memberConstraints(String pathA, String pathB, String name, int effects) throws Exception {
-    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+  public static int memberIndirectConstraints(String pathA, String pathB) throws Exception {
+    return memberConstraints(pathA, pathB, "MemberOverride", 1, true, false);
+  }
+  public static int memberReentrantConstraints(String pathA, String pathB) throws Exception {
+    return memberConstraints(pathA, pathB, "MemberOverride", 1, false, true);
+  }
+  private static int memberConstraints(String pathA, String pathB, String name, int effects, boolean indirect, boolean reentrant) throws Exception {
+    ClassLoader provider = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    ClassLoader parent = indirect ? new ClassLoader(Ldr.class.getClassLoader()) {
+      @Override protected Class<?> loadClass(String binary, boolean resolve) throws ClassNotFoundException {
+        if (binary.equals("MemberBase") || binary.equals("MemberContract") || binary.equals("MemberType")) return provider.loadClass(binary);
+        return super.loadClass(binary, resolve);
+      }
+      @Override public Class<?> loadClass(String binary) throws ClassNotFoundException {
+        if (binary.equals("MemberBase") || binary.equals("MemberContract") || binary.equals("MemberType")) return provider.loadClass(binary);
+        return super.loadClass(binary);
+      }
+    } : provider;
     parent.loadClass("MemberBase"); parent.loadClass("MemberContract"); parent.loadClass("MemberType");
     memberInitEffects = 0; memberDispatchEffects = 0;
     MemberLoader valid = new MemberLoader(pathB, parent);
-    valid.deny = false; valid.ownType = false;
+    valid.deny = false; valid.ownType = false; valid.reenter = reentrant ? name : null;
+    int typeCalls = reentrant ? 2 : 1;
     Class.forName(name, false, valid);
     int result = valid.typeCalls == 0 && memberInitEffects == 0 ? 1 : 0;
     Class<?> value = Class.forName(name, true, valid);
-    if (valid.typeCalls == 1 && memberInitEffects == effects && (Integer) value.getMethod("dispatch").invoke(value.newInstance()) == 1) result |= 2;
+    if (valid.typeCalls == typeCalls && memberInitEffects == effects && (Integer) value.getMethod("dispatch").invoke(value.newInstance()) == 1) result |= 2;
     Class.forName(name, true, valid);
-    if (valid.typeCalls == 1 && memberInitEffects == effects) result |= 4;
+    if (valid.typeCalls == typeCalls && memberInitEffects == effects) result |= 4;
     MemberLoader invalid = new MemberLoader(pathB, parent);
     invalid.deny = false;
     Class.forName(name, false, invalid);
@@ -241,6 +260,42 @@ public class Ldr {
     first.start(); second.start(); first.join(); second.join();
     if (errors[0] == 1 && errors[1] == 1 && failing.typeCalls == 1 && memberInitEffects == 0) result |= 128;
     return result;
+  }
+  public static int packageMembers(String pathA, String pathB, boolean ownType) throws Exception {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    parent.loadClass("pack.PackageBase"); Class<?> parentType = parent.loadClass("pack.PackageType");
+    MemberLoader loader = new MemberLoader(pathB, parent);
+    loader.deny = false; loader.ownType = ownType;
+    Class<?> child = loader.loadClass("pack.PackageChild");
+    Class<?> type = Class.forName("pack.PackageType", false, loader);
+    int identity = (type != parentType) == ownType ? 0 : 100000;
+    Object value = child.newInstance();
+    java.lang.reflect.Method inherited = child.getMethod("inherited"), own = child.getMethod("own");
+    int result = 0;
+    for (int i = 0; i < 64; i++) result += (Integer) inherited.invoke(value) * 100 + (Integer) own.invoke(value);
+    return identity + result / 64;
+  }
+  public static int packageSameLoader(String pathA, String pathB) throws Exception {
+    ClassLoader loader = new DexClassLoader(pathA + ":" + pathB, null, null, Ldr.class.getClassLoader());
+    Class<?> cls = loader.loadClass("pack.PackageChild"); Object value = cls.newInstance();
+    return (Integer) cls.getMethod("inherited").invoke(value) * 100 + (Integer) cls.getMethod("own").invoke(value);
+  }
+  private static final MemberLoader[] retryMemberLoaders = new MemberLoader[2];
+  public static int memberHostRetry(String pathA, String pathB) throws Exception { return memberHostRetry(pathA, pathB, 0); }
+  public static int memberHostWaitRetry(String pathA, String pathB) throws Exception { return memberHostRetry(pathA, pathB, 1); }
+  private static int memberHostRetry(String pathA, String pathB, int index) throws Exception {
+    MemberLoader loader = retryMemberLoaders[index];
+    if (loader == null) {
+      ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+      parent.loadClass("MemberBase"); parent.loadClass("MemberType");
+      loader = new MemberLoader(pathB, parent);
+      retryMemberLoaders[index] = loader;
+      loader.deny = false; loader.ownType = false;
+      memberInitEffects = 0;
+      Class.forName("MemberOverride", false, loader);
+    }
+    Class.forName("MemberOverride", true, loader);
+    return loader.typeCalls == index + 1 && memberInitEffects == 1 ? 7 : 0;
   }
   public static class CatchLoader extends DexClassLoader {
     public int missing, present;
