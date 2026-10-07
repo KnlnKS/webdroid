@@ -208,6 +208,10 @@ export function handleThunk(w: World, name: string, params: Kind[], ret: Kind | 
 }
 
 export function mhInvoke(w: World, mh: object | null, args: object, siteId: string, exact: number, parent = w.sched.current()): object | null | Promise<object | null> {
+  // V8 retains completed helper stacks until their caller waits, as for the native binder's entry quota.
+  if (!parent.root && !w.inSynchronousJava() && w.sched.current() === parent && w.sched.owes()) {
+    return Promise.resolve().then(() => mhInvoke(w, mh, args, siteId, exact, parent));
+  }
   if (exact === 3) return invokeCustom(w, siteId, args, parent);
   if (exact === VAR_HANDLE_INVOKE) {
     const separator = siteId.indexOf("@"), mode = siteId.slice(0, separator), site = parseMethodDesc(siteId.slice(separator + 1));
