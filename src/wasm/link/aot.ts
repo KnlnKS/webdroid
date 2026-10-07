@@ -514,8 +514,8 @@ export class AotRuntime {
     for (const b of head.classes) {
       const base = w.blockBase[b], n = w.methodsIn(b);
       for (let i = 0; i < n; i++) {
-        const slot = base + i;
-        if (absent.has(slot) || this.originalStubs.has(slot) || w.peek(slot)?.done) continue;
+        const slot = base + i, state = w.peek(slot);
+        if (absent.has(slot) || this.originalStubs.has(slot) || state?.k === "method" && state.done) continue;
         const stub = w.table.get(slot);
         if (stub) this.originalStubs.set(slot, stub);
       }
