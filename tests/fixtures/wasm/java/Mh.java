@@ -113,6 +113,14 @@ public class Mh {
   }
   public static int tType(int a) throws Throwable { return L.findStatic(Mh.class, "add", mt(int.class, int.class, int.class)).type().parameterCount() + a; }
   public static int tConstStatic(int a) throws Throwable { return (int) Mc.hStatic().invokeExact(a, 4); }
+  public static int tConstLoaderType(int a) {
+    MethodType type = Mc.loaderType(), virtual = Mc.hVirtual().type();
+    return (type.returnType() == Mh.class ? 1 : 0) | (type.parameterType(0) == Mh.class ? 2 : 0) | (virtual.parameterType(0) == Mh.class ? 4 : 0);
+  }
+  static int loaderMismatch(MethodHandle handle) throws Throwable {
+    try { int value = (int) handle.invokeExact(new Mh(), 1); return 0; }
+    catch (WrongMethodTypeException expected) { return 1; }
+  }
   public static int tConstVirtual(int a) throws Throwable { return (int) Mc.hVirtual().invokeExact((Mh) new Mc(), a); }
   public static int tConstInterface(int a) throws Throwable { return ((String) Mc.hInterface().invoke((Ig) new Pq(a, "name"))).length(); }
   public static int tConstDirect(int a) throws Throwable { return (int) Mc.hDirect().invokeExact(new Mc(), a); }

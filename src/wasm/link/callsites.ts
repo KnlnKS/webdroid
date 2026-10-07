@@ -20,6 +20,19 @@ const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", 
 const linked = new WeakMap<World, WeakMap<DexFile, Map<number, object>>>();
 const chain = <A, B>(v: A | Promise<A>, f: (v: A) => B | Promise<B>): B | Promise<B> => v instanceof Promise ? v.then(f) : f(v);
 const scalarType: Record<number, string> = { 0: "I", 2: "I", 3: "I", 4: "I", 6: "J", 0x10: "F", 0x11: "D", 0x15: `L${MT};`, 0x16: `L${MH};`, 0x17: "Ljava/lang/String;", 0x18: "Ljava/lang/Class;", 0x1f: "I" };
+export type BootstrapReference = { argument: number } & (
+  { kind: "handle" | "methodType"; index: number } | { kind: "class"; owner: string; descriptor: string }
+);
+
+/** Ordered metadata, consumed inside bootstrap validation's error boundary, never while compiling unused sites. */
+export function bootstrapReferences(referrer: MethodInfo, index: number): BootstrapReference[] {
+  return referrer.dex.callSiteValues(index).flatMap(({ type, value }, argument): BootstrapReference[] => {
+    if (type !== 0x15 && type !== 0x16 && type !== 0x18) return [];
+    const idx = (value as { idx: number }).idx;
+    return [type === 0x18 ? { argument, kind: "class", owner: referrer.cls, descriptor: referrer.dex.rawType(idx) }
+      : { argument, kind: type === 0x16 ? "handle" : "methodType", index: idx }];
+  });
+}
 // ART method_handles.cc uses these conversions before invocation so incompatible BSM types throw CCE, not WMTE.
 function convertible(prog: Program, from: string, to: string): boolean {
   if (from === to) return true;

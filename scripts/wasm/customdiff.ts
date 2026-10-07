@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { jsTier, natives, processState } from "./oracle";
-import { loadDexes, world } from "./lib";
-import { ACC } from "../../src/wasm/compiler/program";
+import { loadDexes, program, world } from "./lib";
+import { ACC, Program } from "../../src/wasm/compiler/program";
 import { compare, genCases } from "./cases";
 import { Pool, u2, u4 } from "./classfile";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
-import { handleThunk } from "../../src/wasm/link/mhandles";
+import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatureTypes } from "../../src/wasm/link/mhandles";
+import { bootstrapReferences } from "../../src/wasm/link/callsites";
 import { hostBytes, hostAddress, mapExternal, unmapExternal } from "../../src/jvm/natives/jmemory";
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { UInfo } from "../../src/wasm/link/unsafe";
@@ -85,6 +86,7 @@ function handClasses(): Record<string, Uint8Array> {
     constant("type", p.methodType("([Ljava/lang/String;JD)Ljava/lang/Object;"), "MethodType");
     constant("dormantType", p.methodType("()LMh$Dormant;"), "MethodType");
     constant("missingType", p.methodType("()LAbsent;"), "MethodType");
+    constant("loaderType", p.methodType("(LMh;)LMh;"), "MethodType");
     build("Mc", 0x21, "Mh", [], p, [], methods, []);
   }
   {
@@ -130,6 +132,17 @@ const w = world([dex, ...jars], { natives, loop }), hit: string[] = [];
 const constants = w.prog.require("Mc").methods.filter(m => m.codeOff).flatMap(m => decodeInstructions(m.dex.code(m.codeOff).insns));
 const kinds = new Set(constants.filter(i => i.name === "const-method-handle").map(i => w.prog.require("Mc").dex!.methodHandle(i.b).type));
 if (kinds.size !== 9 || !constants.some(i => i.name === "const-method-type")) throw new Error("constant fixture must retain both DEX opcodes and all nine handle kinds");
+const constantSite = (name: string) => {
+  const method = w.prog.require("Mc").methods.find(m => m.name === name)!;
+  return { method, index: decodeInstructions(method.dex.code(method.codeOff).insns).find(i => i.name.startsWith("const-method-"))!.b };
+};
+const virtualSite = constantSite("hVirtual"), typeSite = constantSite("loaderType");
+if (handleMemberOwner(virtualSite.method, virtualSite.index) !== "Mh"
+  || JSON.stringify(handleSignatureTypes(virtualSite.method, virtualSite.index)) !== JSON.stringify([{ owner: "Mc", descriptor: "I" }, { owner: "Mc", descriptor: "I" }])
+  || methodTypeSignatureTypes(typeSite.method, typeSite.index).some(t => t.owner !== "Mc" || t.descriptor !== "LMh;")) throw new Error("executed signature metadata contract changed");
+const dyn = w.prog.require("Dyn").methods.find(m => m.name === "constants")!;
+const customIndex = decodeInstructions(dyn.dex.code(dyn.codeOff).insns).find(i => i.name.startsWith("invoke-custom"))!.b;
+if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,methodType,class,methodType,handle") throw new Error("bootstrap reference ordering changed");
 // Pure accessors must already be installed when their host lookup returns, even when lazy admission is due.
 const assertEagerFieldAccessors = (tier: typeof w) => {
   const info = tier.host.info;
@@ -185,6 +198,23 @@ for (const { m, args, i } of constantCases) {
   if (String(value) !== jdk[i]) throw new Error(`cold ${m.name}: ${value} != ${jdk[i]}`);
 }
 console.log(`${constantCases.length} constant/transformer/bootstrap cases match on the cold tier`);
+// Actual DEX definitions in sibling namespaces must keep their Class identities through constants and polymorphic calls.
+for (const isCold of [false, true]) {
+  const tier = world(new Program([], program(jars)), { cold: isCold, natives, loop });
+  processState(tier);
+  const loaders = [tier.prog.newLoader(tier.prog.boot, null), tier.prog.newLoader(tier.prog.boot, null)];
+  for (const loader of loaders) tier.addDexes(loadDexes(dex), loader);
+  const names = loaders.map(loader => `Mh@${loader.id}`), constants = loaders.map(loader => `Mc@${loader.id}`);
+  for (const name of names) {
+    if (await tier.entryAsync(name, "tConstLoaderType", "(I)I")(0) !== 7) throw new Error("constant signature lost defining loader identity");
+    if (await tier.entryAsync(name, "tConstVirtual", "(I)I")(3) !== 999) throw new Error("polymorphic signature lost defining loader identity");
+    const bootstrap = name.replace("Mh@", "Bootstrap@");
+    if (await tier.entryAsync(bootstrap, "tCustomConstants", "(I)I")(3) !== 8) throw new Error("bootstrap constants lost defining loader identity");
+  }
+  const other = await tier.entryAsync(constants[1], "hVirtual", "()Ljava/lang/invoke/MethodHandle;")();
+  if (await tier.entryAsync(names[0], "loaderMismatch", "(Ljava/lang/invoke/MethodHandle;)I")(other) !== 1) throw new Error("invokeExact accepted a sibling loader signature");
+}
+console.log("14 executed cross-loader constant/polymorphic/bootstrap checks preserve sibling DEX identities");
 let suspendedCases = 0;
 for (const [cls, name] of [...["tConstWait", "tTransformWait", "tTransformConcurrent"].map(name => ["Mh", name]), ["Vh", "tInvokerConcurrent"]]) {
   forceAdmission = name === "tInvokerConcurrent";

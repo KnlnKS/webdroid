@@ -21,10 +21,35 @@ import type { DexFile } from "../../jvm/dex";
 import { emitVarHandleAccess } from "../compiler/poly";
 import { invokeVarHandleView } from "./vhandleviews";
 import { invokeCustom } from "./callsites";
-import type { MethodInfo } from "../compiler/program";
+import type { MethodInfo, FieldInfo } from "../compiler/program";
 import type { Kind } from "../compiler/program";
 
 const MH = "java/lang/invoke/MethodHandle", MT = "java/lang/invoke/MethodType", CLASS = "java/lang/Class", OBJECTS = "[Ljava/lang/Object;";
+
+export interface SignatureType { owner: string; descriptor: string }
+
+/** Metadata only: the executed-site resolver owns loading, ordering and suspension. */
+export function methodTypeSignatureTypes(referrer: MethodInfo, index: number): SignatureType[] {
+  const dex = referrer.dex, proto = dex.proto(index);
+  return [proto.ret, ...proto.params].map(t => ({ owner: referrer.cls, descriptor: dex.rawType(t) }));
+}
+
+export function handleMemberOwner(referrer: MethodInfo, index: number): string {
+  const dex = referrer.dex, handle = dex.methodHandle(index);
+  const member = handle.type <= 3 ? dex.field(handle.idx) : dex.method(handle.idx);
+  return descToName(dex.rawType(member.cls));
+}
+
+/** Invoke after member/access checks. Field type resolution belongs to its declaration's loader. */
+export function handleSignatureTypes(referrer: MethodInfo, index: number, field?: FieldInfo): SignatureType[] {
+  const dex = referrer.dex, handle = dex.methodHandle(index);
+  if (handle.type <= 3) {
+    if (!field) throw new Error("Resolved field required for method handle signature");
+    return [{ owner: field.owner, descriptor: javaName(field.desc) }];
+  }
+  const proto = dex.proto(dex.method(handle.idx).proto);
+  return [...proto.params, proto.ret].map(t => ({ owner: referrer.cls, descriptor: dex.rawType(t) }));
+}
 
 function handleKinds(prog: Program): Record<string, number> {
   const jc = prog.require(MH), fields = jc.fields.filter(f => f.isStatic), kinds: Record<string, number> = {};
@@ -100,8 +125,9 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
     }
     if (!access(m.cls, m.flags, m.name)) return false;
     if (m.name === "<clinit>") { error("java/lang/ClassFormatError", "Method handles can't target class initializer method"); return false; }
+    const sig = parseMethodDesc(desc);
     if (h.type === 6) {
-      if (!emitType(cx, c, m.ret, m.params, false)) return false;
+      if (!emitType(cx, c, sig.ret, sig.params, false)) return false;
       const type = c.newLocal(T.anyref), lookup = c.newLocal(T.anyref), L = "java/lang/invoke/MethodHandles$Lookup";
       c.lset(type); cx.emitEnsure(c, "java/lang/invoke/MethodHandles");
       cx.callMethod(c, prog.resolve("java/lang/invoke/MethodHandles", "lookup", `()L${L};`)!); c.lset(lookup);
@@ -111,7 +137,6 @@ export function emitHandleValue(cx: Compiler, c: Code, referrer: MethodInfo, ind
     kind = invoke === "invoke-static" ? K.INVOKE_STATIC : invoke === "invoke-interface" ? K.INVOKE_INTERFACE
       : invoke === "invoke-direct" ? K.INVOKE_DIRECT : invoke === "invoke-super" ? K.INVOKE_SUPER : K.INVOKE_VIRTUAL;
     art = BigInt(cx.idOf(m.cls)) << 16n | BigInt(prog.require(m.cls).methods.indexOf(m));
-    const sig = parseMethodDesc(desc);
     ret = sig.ret; params = [...m.isStatic ? [] : [descOfName(cls)], ...sig.params];
   }
   if (!emitType(cx, c, ret, params, false)) return false;
