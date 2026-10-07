@@ -13,7 +13,15 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
-### Current recovery checkpoint (2026-10-07, production `87facb0e`)
+### Current recovery checkpoint (2026-10-07, production `b40fec33` plus MethodHandle follow-up)
+
+Concrete default conflicts now remain explicit through virtual/interface, host and JNI invocation, including serialized replay and CHA invalidation. Format10/APP_VERSION10 rejects earlier concrete-target semantics. Fixed VarHandle access modes use validated canonical boot enum fields; inherited public reflection preserves defining Runtime; wide CHA can stop at a matching class body. Core private controls and all 54,871 flat/shared layout vectors pass. The integrated first full unit run has eight failures; the reproduced MethodHandle lookup regression is repaired and the full repeat passes 1,207 tests/79,592 assertions, while seven initial browser JThrowable failures remain unexplained. Matching production AOT, current broad/application/conformance checks and full performance repeats are pending.
+
+The validated Doodle capture identifies both actual lock objects and Java frames: main holds serviceLock while entering billingLock; a distinct JNI Java Thread holds billingLock while entering serviceLock. Same-source JS gameplay passes and its billing callback keeps the native CPU's actual Thread. JS service-callback placement and the trigger for the Wasm-only inversion remain under investigation. No app lock rewriting or forced callback ownership is introduced.
+
+G1 remains failed on the preceding complete 74-workload run; G4 cold irreducible reference stability and engine-tier proof remain open. The VarHandle change reduces emitted lookup work but has no accepted latency result. Default JS remains unchanged. Evidence and limits are recorded in the implementation history.
+
+### Preceding recovery checkpoint (2026-10-07, production `87facb0e`)
 
 JNI virtual/nonvirtual calls now preserve valid abstract declarations and raise AbstractMethodError at invocation; 24 real JDK/guest JNI compiled/cold comparisons pass. Full typecheck passes. The unchanged unit repeat passes 1,207 tests/79,592 assertions; two browser syntax failures in the initial full invocation remain unexplained and retained. Fresh ordinary `1445f5d2a547c5df` and guarded `33af20a7d731b8d5` assets match source `3d597a9a95aa930a82d9ecc90f27410c268230d240bc872dd5ae93641d442859`. The all-19 broad run, cold-slow, OSR and both framework exercises pass on preceding source `aa2f7267a896`; current-source broad/application/conformance coverage remains required.
 
