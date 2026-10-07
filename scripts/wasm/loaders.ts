@@ -20,6 +20,7 @@ import { mem } from "../../src/native/mem";
 import { ldp, PTR } from "../../src/native/host";
 import { mainThread } from "../../src/jvm/natives/jentry";
 import { definingLoader } from "../../src/wasm/link/loaders";
+import { prepareMethod } from "../../src/jvm/prepared";
 import { St } from "../../src/wasm/link/monitor";
 import { canAccess } from "../../src/wasm/link/classes";
 import { HOSTED } from "../../src/wasm/link/hostapi";
@@ -111,6 +112,20 @@ if (!process.argv.includes("--hierarchy")) {
   if (!w.opts.cold && w.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
   if (w.symbolicStubModules !== stubModules) throw new Error("warm symbolic operation rebuilt stub modules");
   console.log(`symbolic cache: first resolutions=${resolutions}, stub modules=${stubModules}; repeat resolutions=${w.symbolicResolutions - resolutions}, stub modules=${w.symbolicStubModules - stubModules}`);
+  if (!w.opts.cold) {
+    const method = w.prog.require(key).byKey.get("symbolic()I")!;
+    const ins = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic).instructions.find(ins => ins.name === "invoke-static")!;
+    const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc]]);
+    if (w.stats.units !== before.units + 1 || w.stats.bytes <= before.bytes || w.stats.compileMs <= before.compileMs || !w.traces.has("$accounting:probe")) throw new Error("symbolic stub compilation unaccounted");
+    const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
+    const stub = { ...w.stats };
+    if (table.get(slot)!() !== 42) throw new Error("accounted symbolic operation failed");
+    const trace = w.traces.get(`$symbolic:${key}:${method.index}:${ins.pc}`);
+    if (w.stats.units !== stub.units + 1 || w.stats.bytes <= stub.bytes || w.stats.compileMs <= stub.compileMs || !trace) throw new Error("symbolic operation compilation unaccounted");
+    const warm = { ...w.stats };
+    if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) throw new Error("warm symbolic operation compiled again");
+    console.log("symbolic accounting: stub and operation each recorded one unit, bytes and traces; warm execution unchanged");
+  }
   if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
   try { await w.entryAsync(key, "optional", "(Z)I")(1); throw new Error("missing optional reference accepted"); }
   catch (e) { const t = w.throwable(e); if (!t || w.classNameOf(t) !== "java/lang/NoClassDefFoundError") throw e; }

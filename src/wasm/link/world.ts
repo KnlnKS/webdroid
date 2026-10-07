@@ -729,14 +729,14 @@ export class World {
     const s = this.slotAt(slot);
     if (!s || s.k === "ensure" || s.done) return;
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
-    const t0 = performance.now();
-    if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, t0)) return;
+    const clock = this.unitClock();
+    if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, clock)) return;
     const cx = new Compiler(this);
     if (s.k === "method") this.demand.methods.add(s.m);
     const built = s.k === "method" ? cx.buildUnit([s.m]) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.units++; this.stats.methods += 1;
-    this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, t0);
+    this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, clock);
   }
   private cold?: ColdInterpreter;
   private coldValidation?: ColdSlowOps;
@@ -900,12 +900,12 @@ export class World {
     return frame;
   }
   canDeopt(m: MethodInfo): boolean { return !(m.flags & ACC.SYNCHRONIZED) && supportsColdBody(m, false); }
-  private installCold(slot: number, m: MethodInfo, t0: number): boolean {
+  private installCold(slot: number, m: MethodInfo, clock: { start: number; accounted: number }): boolean {
     if (!m.codeOff || this.intrinsic(m) || m.flags & ACC.SYNCHRONIZED || !supportsColdBody(m)) return false;
     const cold = this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports));
     const unit = coldUnit(this, m, cold);
     if (!unit) return false;
-    this.install([slot], false, unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, slot, t0);
+    this.install([slot], false, unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, slot, clock);
     this.demand.methods.add(m); this.stats.coldMethods++; this.stats.methods++; this.stats.units++;
     return true;
   }
@@ -927,7 +927,7 @@ export class World {
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
     // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
     // else to the one that has waited longest and asked again since, so it is still hot
-    const t0 = performance.now();
+    const t0 = performance.now(), clock = this.unitClock();
     this.hotSince ??= t0;
     const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
     if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) { wait(); return; }
@@ -941,7 +941,7 @@ export class World {
     const m = (this.slotAt(pick) as { m: MethodInfo }).m, cx = new Compiler(this), { installed, copies } = this.group(m);
     const built = cx.buildUnit(installed, copies, true);
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
-    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, t0);
+    this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, clock);
     this.upgradeMs += performance.now() - t0;
   }
   /** the outermost Java frame of the running stack whose method waits for the second tier (V8 names Wasm frames by function, which are named by method id) */
@@ -1003,7 +1003,7 @@ export class World {
   /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here: nothing was added to the Program since `epoch`, and the numbering its code relies on
    *  is this World's (it was numbered from `result.numbering.from`) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
-    const s = this.slotAt(slot), head = result.header, t0 = performance.now();
+    const s = this.slotAt(slot), head = result.header, clock = this.unitClock();
     this.release(slot);
     if ((head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
     const n = result.numbering;
@@ -1020,17 +1020,16 @@ export class World {
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
     this.stats.methods += job.installed.length + job.copies.length; this.stats.upgrades++;
-    this.install(job.installed.map((id) => this.slotOf(method(id)!)), true, unit, imports, { bytes: mod, traces }, slot, t0);
+    this.install(job.installed.map((id) => this.slotOf(method(id)!)), true, unit, imports, { bytes: mod, traces }, slot, clock);
     return true;
   }
   private hotSince?: number;
   private upgradeMs = 0;
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, t0: number): void {
+  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): void {
     const s = this.slotAt(slot)!;
-    this.stats.compileMs += performance.now() - t0;
     let exports: Record<string, any>;
-    try { exports = this.instantiate(built.bytes, imports).exports as Record<string, any>; } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
+    try { exports = this.instantiateUnit(cx, imports, built, slot, clock); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
     const set = (at: number, name: string) => {
       const sl = this.slotAt(at) as Exclude<Slot, { k: "ensure" }>;
       if (!sl.done) sl.stub = this.table.get(at) as Function;
@@ -1040,7 +1039,14 @@ export class World {
     if (s.k === "method") {
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) new Int32Array(this.mem.buffer, COUNT_BASE + 4 * x, 1)[0] = 0; }
     } else set(slot, "m");
+  }
+  private unitClock(): { start: number; accounted: number } { return { start: performance.now(), accounted: this.stats.compileMs }; }
+  private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): Record<string, any> {
+    // Imports can compile nested units; charge that work once, to its own unit.
+    this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
+    const exports = this.instantiate(built.bytes, imports).exports;
     this.recordUnit(cx, built.traces, slot);
+    return exports;
   }
   private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot: number): void {
     for (const t of traces) this.traces.set(t.name, t);
@@ -1092,6 +1098,7 @@ export class World {
     const out: Record<string, unknown> = { table: this.symbolicTable };
     const fresh = sites.filter(([name]) => !this.symbolicSites.has(name));
     if (fresh.length) {
+      const clock = this.unitClock();
       const cx = new Compiler(this), table = cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
       const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
@@ -1103,7 +1110,7 @@ export class World {
         const plain = cx.mb.importFunc("symbolic", name, cx.sig([], "V")), wait = cx.mb.importFunc("symbolic", name + "#s", cx.sig([], "V"));
         const resolver = this.symbolicResolver(method, pc, slot);
         binding[name] = resolver.plain; binding[name + "#s"] = resolver.wait;
-        return { name, slot, inputs, output, plain, wait };
+        return { name, slot, inputs, output, plain, wait, method };
       });
       const built = cx.buildSyntheticGroup(pending.map(({ name, slot, inputs, output, plain, wait }) => ({
         name, params: inputs.map(i => i.kind), ret: output, body: (c: Code) => {
@@ -1113,7 +1120,8 @@ export class World {
         },
       })));
       const imports = this.unitImports(cx); imports.symbolic = binding;
-      const exports = this.instantiate(built.bytes, imports).exports;
+      this.stats.units++;
+      const exports = this.instantiateUnit(cx, imports, built, this.slotOf(pending[0].method), clock);
       this.symbolicStubModules++;
       for (const { name, slot } of pending) {
         const stub = exports[name] as Function;
@@ -1131,8 +1139,10 @@ export class World {
       this.symbolicResolutions++;
       const owner = this.sched.current();
       const install = () => {
-        const { cx, built } = ops.compileSite(method, pc);
-        this.symbolicTable.set(slot, this.instantiate(built.bytes, this.unitImports(cx)).exports.m as Function);
+        const clock = this.unitClock(), { cx, built } = ops.compileSite(method, pc);
+        this.stats.units++;
+        const exports = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock);
+        this.symbolicTable.set(slot, exports.m as Function);
       };
       const ready = resolveInstruction(this, method, ins, owner);
       return ready instanceof Promise ? ready.then(install) : install();
