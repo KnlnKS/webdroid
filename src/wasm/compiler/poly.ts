@@ -59,7 +59,9 @@ export function emitPolymorphic(mc: MC, ins: Ins): void {
 /** Compare the live libcore accessor classes, including defining loader identity, before using unboxed storage. */
 function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
   const { cx, code: c, dex } = mc, proto = dex.proto(ins.c), params = proto.params.map(t => dex.type(t)), ret = dex.type(proto.ret);
-  const nv = varHandleValues(mode)!, coords = params.slice(0, params.length - nv), values = params.slice(params.length - nv), op = opOf(mode);
+  const nv = varHandleValues(mode)!;
+  if (params.length < nv) return false;
+  const coords = params.slice(0, params.length - nv), values = params.slice(params.length - nv), op = opOf(mode);
   const variable = nv ? values[nv - 1] : ret;
   const nullValues = values.map((t, i) => t === variable ? -1 : i).filter(i => i >= 0);
   if (variable === "V" || nullValues.some(i => family(values[i]) !== "L" || family(variable) !== "L")
