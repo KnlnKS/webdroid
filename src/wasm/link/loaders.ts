@@ -143,9 +143,7 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
 
 /** host.obj(LOADER_OF_CLASS, id): the ClassLoader object of the loader that defines class `id`, or null for the boot loader and the platform's classes */
 export function loaderObject(w: World, id: number): object | null {
-  const name = w.nameOf(id), loader = w.prog.loaderOf(name);
-  // the app's classes are the default namespace's too, but its class loader is the one that opened the app's dex files, not the boot loader
-  return loader.object ?? (loader === w.prog.root && !w.prog.base?.has(name) ? stateOf(w).appLoader : null);
+  return objectOfLoader(w, w.prog.loaderOf(w.nameOf(id)));
 }
 
 export const loaderIntrinsics = new Map<string, Intrinsic>();

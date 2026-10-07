@@ -190,11 +190,18 @@ export class Program {
   }
   /** the loader that defines the class with this key */
   loaderOf(key: string): Loader {
+    if (/^\[+[ZBCSIJFD]$/.test(key)) return this.boot;
     const component = key.replace(/^\[+L(.*);$/, "$1");
     for (let p: Program | undefined = this; p; p = p.base) {
       const loader = p.syntheticLoaders.get(component);
-      if (loader) return loader;
-      if (p.classes.has(component)) break;
+      if (loader) return loader === p.boot ? this.boot : loader;
+      const cls = p.classes.get(component);
+      if (cls) {
+        const owner = cls.dex ? p.dexLoader.get(cls.dex) : undefined;
+        // The immutable base's root DEX is this realm's bootstrap class path.
+        // Its numbered custom namespaces retain their explicit owners.
+        return owner === p.root && p !== this ? this.boot : owner ?? p.loaders[loaderIdOf(key)];
+      }
     }
     return this.loaders[loaderIdOf(key)];
   }

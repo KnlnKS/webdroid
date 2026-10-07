@@ -117,8 +117,8 @@ if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibrarie
   catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
 }
 for (const asynchronous of [false, true]) {
-  const appDexes = loadDexes(a), base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]);
-  const p = new Program(appDexes, base), layered = world(p, { natives, dexes: path => {
+  const appDexes = loadDexes(a), base = program(PLATFORM_JARS.map(j => join(AOSP, j)));
+  const p = new Program([...loadDexes(app), ...appDexes], base), layered = world(p, { natives, dexes: path => {
     const dexes = path === paths[0] ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined;
     return asynchronous ? Promise.resolve().then(() => dexes) : dexes;
   } });
@@ -136,7 +136,7 @@ for (const asynchronous of [false, true]) {
     const owner = jni.find(name, null)!;
     const expected = p.lookup(p.loaderOf(name), "Shared")!;
     if (p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;") !== `([L${expected};Ljava/lang/String;)L${expected};` || jni.find("[LShared;", null, owner)?.name !== `[L${expected};`) {
-      failed++; console.log(`FAIL JNI descriptor/array namespace of ${name}`);
+      failed++; console.log(`FAIL JNI descriptor/array namespace of ${name}: expected=${expected}, descriptor=${p.viewOf(name, "([LShared;Ljava/lang/String;)LShared;")}, array=${jni.find("[LShared;", null, owner)?.name}`);
     }
   }
   const shared = jni.find(visible!, null)!;
@@ -172,7 +172,13 @@ for (const asynchronous of [false, true]) {
   base.addClass(synthetic("fixture/BaseBoot@0"), base.boot);
   base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
   const derived = new Program([], base);
-  if (derived.lookup(derived.boot, "fixture/BaseApp") || derived.lookup(derived.boot, "fixture/BaseCustom") || derived.lookup(derived.boot, "fixture/BaseBoot") !== "fixture/BaseBoot@0" || derived.loaderOf("fixture/BaseApp") !== base.root || derived.loaderOf(`[Lfixture/BaseCustom@${custom.id};`) !== custom || derived.loaderOf("[Lfixture/BaseBoot@0;") !== base.boot) throw new Error("inherited synthetic defining loader or bootstrap visibility changed");
+  if (derived.lookup(derived.boot, "fixture/BaseApp") || derived.lookup(derived.boot, "fixture/BaseCustom") || derived.lookup(derived.boot, "fixture/BaseBoot") !== "fixture/BaseBoot@0" || derived.loaderOf("fixture/BaseApp") !== base.root || derived.loaderOf(`[Lfixture/BaseCustom@${custom.id};`) !== custom || derived.loaderOf("[Lfixture/BaseBoot@0;") !== derived.boot) throw new Error("inherited synthetic defining loader or bootstrap visibility changed");
+}
+{
+  const base = new Program(loadDexes(a)), custom = base.newLoader(base.boot, null);
+  base.add(loadDexes(b), custom);
+  const derived = new Program(loadDexes(app), base), platform = derived.get("Shared")!;
+  if (!platform.dex || derived.loaderOf("Shared") !== derived.boot || derived.loaderOf("[[LShared;") !== derived.boot || derived.loaderOf("[I") !== derived.boot || derived.loaderOf("Ldr") !== derived.root || derived.loaderOf(base.definedBy(custom, "Sub")!) !== custom || derived.loaderOfDex(platform.dex) !== base.root || derived.lookup(derived.boot, "Shared") !== "Shared") throw new Error("inherited DEX defining loader identity changed class path or confused app and bootstrap");
 }
 {
   const cold = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, cold: true, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
