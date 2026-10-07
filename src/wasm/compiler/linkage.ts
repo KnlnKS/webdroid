@@ -46,6 +46,7 @@ function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | und
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */
 function resolveSymbolicMethod(prog: Program, cls: string, name: string, desc: string): MethodInfo | undefined {
+  if (prog.loaderOf(cls) === prog.boot) return prog.resolve(cls, name, desc);
   for (const key of prog.chain(cls)) {
     const m = symbolicMethod(prog.require(key), name, desc);
     if (m) return m;
