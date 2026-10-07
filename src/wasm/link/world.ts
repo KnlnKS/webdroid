@@ -761,11 +761,9 @@ export class World {
     if (!entries) this.coldResumes.set(m, entries = new Map());
     let entry = entries.get(state.pc);
     if (!entry) {
-      const t0 = performance.now(), unit = resumeUnit(new Compiler(this), m, state.pc);
-      this.stats.compileMs += performance.now() - t0;
-      const instance = this.instantiate(unit.built.bytes, { ...this.unitImports(unit.cx), ...unit.imports });
-      this.recordUnit(unit.cx, unit.built.traces, slot);
-      entry = { fn: instance.exports.resume as Function, take: unit.take({
+      const clock = this.unitClock(), unit = resumeUnit(new Compiler(this), m, state.pc);
+      const exports = this.instantiateUnit(unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, slot, clock);
+      entry = { fn: exports.resume as Function, take: unit.take({
         validate: s => { this.validateColdSnapshot(s, this.sched.current()); },
         claim: s => { cold.transfer(s.activation); this.rt.depth.value = s.depth; this.stats.coldResumes++; },
       }) };
@@ -883,9 +881,8 @@ export class World {
       this.validateColdSnapshot(s, this.sched.current());
       let fn = this.coldDeoptEntries.get(s.method);
       if (!fn) {
-        const unit = coldUnit(this, s.method, this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports)), true);
-        fn = this.instantiate(unit.built.bytes, { ...this.unitImports(unit.cx), ...unit.imports }).exports.resume as Function;
-        this.recordUnit(unit.cx, unit.built.traces, this.slotOf(s.method));
+        const clock = this.unitClock(), unit = coldUnit(this, s.method, this.cold ??= new ColdInterpreter((bytes, imports) => this.instantiate(bytes, imports)), true);
+        fn = this.instantiateUnit(unit.cx, { ...this.unitImports(unit.cx), ...unit.imports }, unit.built, this.slotOf(s.method), clock).resume as Function;
         this.coldDeoptEntries.set(s.method, fn); this.stats.units++;
       }
       this.validateColdSnapshot(s, this.sched.current()); frame.claimed = true;
@@ -1052,7 +1049,7 @@ export class World {
     } else set(slot, "m");
   }
   private unitClock(): { start: number; accounted: number } { return { start: performance.now(), accounted: this.stats.compileMs }; }
-  private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): Record<string, any> {
+  private instantiateUnit(cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number | undefined, clock: { start: number; accounted: number }): Record<string, any> {
     // Imports can compile nested units; charge that work once, to its own unit.
     this.accountCompilation(clock);
     const exports = this.instantiate(built.bytes, imports).exports;
@@ -1062,17 +1059,19 @@ export class World {
   private accountCompilation(clock: { start: number; accounted: number }): void {
     this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
   }
-  private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot: number): void {
+  private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot?: number): void {
     for (const t of traces) this.traces.set(t.name, t);
     for (const [decl, name, desc, target, owner] of cx.assumptions) {
       const key = `${decl}.${name}${desc}`;
       let a = this.assumptions.get(key);
       if (!a) this.assumptions.set(key, a = { decl, name, desc, tc: target?.cls ?? "", tk: target?.key ?? "", slots: new Set() });
-      a.slots.add(owner ? this.slotOf(owner) : slot);
+      const at = owner ? this.slotOf(owner) : slot;
+      if (at !== undefined) a.slots.add(at);
     }
     for (const [name, owner] of cx.absent) {
       const slots = this.absent.get(name) ?? this.absent.set(name, new Set()).get(name)!;
-      slots.add(owner ? this.slotOf(owner) : slot);
+      const at = owner ? this.slotOf(owner) : slot;
+      if (at !== undefined) slots.add(at);
     }
   }
   /** the class globals module `mod` imports from modules the caller has not named: each comes from the module of the class whose id starts its name (code made by another World,
@@ -1586,9 +1585,10 @@ export class World {
   hostFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code) => void, prepare?: (cx: Compiler) => void): (...a: any[]) => any {
     let f = this.hostFns.get(name);
     if (!f) {
-      const cx = new Compiler(this); prepare?.(cx);
-      const { bytes } = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
-      const raw = (this.instantiate(bytes, this.unitImports(cx)).exports as Record<string, any>).m as Function;
+      const clock = this.unitClock(), cx = new Compiler(this); prepare?.(cx);
+      const built = cx.buildSynthetic(name, params, (c) => body(cx, c), ret);
+      this.stats.units++;
+      const raw = this.instantiateUnit(cx, this.unitImports(cx), built, undefined, clock).m as Function;
       this.hostFns.set(name, f = this.sched.synchronousExport(raw));
     }
     return f as never;
@@ -1603,11 +1603,11 @@ export class World {
   // The compiled call must not retain the emitter closure and its Compiler.
   // Build it in a separate activation from the persistent token/caller state.
   private buildCallFn(name: string, params: Kind[], ret: Kind | "V", body: (cx: Compiler, c: Code, arg: (i: number) => void) => void, prepare?: (cx: Compiler) => void) {
-    const cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
+    const clock = this.unitClock(), cx = new Compiler(this), vt = ret === "V" ? T.i32 : ret === "L" ? T.externref : kindVT(cx.tObj, ret);
     prepare?.(cx);
     const d = new WebAssembly.Global({ value: "i32", mutable: true }, 0), thr = new WebAssembly.Global({ value: "externref", mutable: true }, null);
     const v = new WebAssembly.Global({ value: ret === "J" ? "i64" : ret === "L" ? "externref" : "i32", mutable: true }, ret === "J" ? 0n : ret === "L" ? null : 0);
-    const { bytes } = cx.buildSynthetic(name, ["I", ...params], (c) => {
+    const built = cx.buildSynthetic(name, ["I", ...params], (c) => {
       const done = cx.global("call", "d", T.i32, true), value = cx.global("call", "v", vt, true), thrown = cx.global("call", "x", T.externref, true);
       const e = c.newLocal(T.anyref), res = ret === "V" ? -1 : c.newLocal(kindVT(cx.tObj, ret));
       c.block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
@@ -1618,7 +1618,8 @@ export class World {
       c.ret().end().unreachable().end();
       c.lset(e).lget(e).externConvertAny().gset(thrown).i32(0).lget(0).raw(OP.i32_sub).gset(done).lget(e).throw_(cx.tag);
     }, ret);
-    const fn = (this.instantiate(bytes, { ...this.unitImports(cx), call: { d, v, x: thr } }).exports as Record<string, any>).m as Function;
+    this.stats.units++;
+    const fn = this.instantiateUnit(cx, { ...this.unitImports(cx), call: { d, v, x: thr } }, built, undefined, clock).m as Function;
     return { fn, d, v, thr };
   }
   /** a Java call that may wait, made of `body` over the parameters (`arg(i)` pushes parameter i; the body leaves a result of kind `ret`), run on strand `s`: the result at once when the
