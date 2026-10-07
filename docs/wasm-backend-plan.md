@@ -71,6 +71,8 @@ At `efad9424`, the actual InputChannel cleaner/reused-RenderNode cause is repair
 
 At `5f4d4225`, explicit copied Worker AOT profiling and bounded/lazy compiler-worker lifetimes are integrated. The actual Worker profile fixture passes1/11; persistence adoption, refinement and stale-unit checks pass. The memory agent's matching unchanged ChatGPT control observes at most two compiler targets and no renderer crash, but exits on a Cronet constructor NPE before UI. No complete OOM, ChatGPT, full cold application or idle timing acceptance is claimed. Final integrated conformance/full/live/corpus, canonical stored descriptor/shared mappings, G1/G3/G4/G5 and S6 remain open.
 
+The `71326ca9` integration adds selective packed-archive DEX loading, bounded compiler-typing reuse, active-range Java-loader catch resolution, prepared Worker hierarchy certificates, binary-descriptor member lookup and bounded demanded AOT readiness. Module format 6 rejects the previous lazy-link ABI. The preceding fresh-AOT Resy and ChatGPT diagnostics still fail; Resy's root trace identifies a background whole-archive DEX wait, and the selective loader repair passes its matching core control. Cross-loader initialization constraints, compiled boot catch semantics, fresh integrated application/conformance verification and idle performance remain open. Detailed commands and evidence limits are in the implementation history.
+
 ## 0. How to read this
 
 - **Measured** = I ran it (Chrome 153 on an M4 Pro, headless, single runs, other agents idle or lightly
