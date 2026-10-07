@@ -186,6 +186,7 @@ export class AotRuntime {
   private rejectedData = new Set<string>();
   private cState: number[] = [];
   private cAbsent: (Set<number> | undefined)[] = [];
+  private originalStubs = new Map<number, Function>();
   private overridden = new Set<number>();
   /** the overridden slots by the code module that holds them, made from `overridden` when it has grown */
   private overriddenBy = new Map<number, number[]>();
@@ -508,7 +509,18 @@ export class AotRuntime {
     for (const m of head.mods) if (!this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
     if (!dataReady) return false;
     if (!head.mods.every(m => !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = new Set(head.absent);
+    const absent = new Set(head.absent);
+    // D installed these lazy stubs; retain them before C overwrites the table, without materializing method metadata.
+    for (const b of head.classes) {
+      const base = w.blockBase[b], n = w.methodsIn(b);
+      for (let i = 0; i < n; i++) {
+        const slot = base + i;
+        if (absent.has(slot) || this.originalStubs.has(slot) || w.peek(slot)?.done) continue;
+        const stub = w.table.get(slot);
+        if (stub) this.originalStubs.set(slot, stub);
+      }
+    }
+    this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = absent;
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
     const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };
@@ -584,7 +596,7 @@ export class AotRuntime {
   /** the lazy-link stub for a slot whose precompiled code was undone */
   stub(slot: number): Function | undefined {
     const w = this.w, s = w.peek(slot);
-    return s?.k === "method" ? w.restoreStub(slot, s.m) : undefined;
+    return s?.k === "method" ? this.originalStubs.get(slot) ?? w.restoreStub(slot, s.m) : undefined;
   }
   // ---- stack traces
   /** the trace of function `name` of a loaded code module, whose section is indexed the first time a stack needs one of its functions and read function by function */

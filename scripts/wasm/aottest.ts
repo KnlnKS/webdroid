@@ -39,8 +39,12 @@ const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
   check("it relies on the one indexOf", w.assumptions.has(key), true);
+  let replacements = 0;
+  const restore = w.restoreStub.bind(w);
+  w.restoreStub = (slot, method) => { replacements++; return restore(slot, method); };
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
   check("the decision is undone", w.stats.invalidated >= 1, true);
+  check("AOT invalidation reuses original D stubs", replacements, 0);
   check("a subclass overriding indexOf takes effect", w.entry("Aot2", "sub", "()I")(), 1);
   check("and the plain list is as before", w.entry("Aot2", "plain", "()I")(), 0);
 }
