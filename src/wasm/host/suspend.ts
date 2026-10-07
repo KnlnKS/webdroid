@@ -12,6 +12,7 @@ type Native = HostFn & { $g?: (...a: unknown[]) => Generator<unknown, unknown, u
 /** natives whose production implementation answers a Promise for some arguments without being written as a generator or an async function (the
  *  survey's flag C: `after(...)` and `awaited(...)` results returned as they are) */
 export const MAY_SUSPEND = new Set<string>([
+  "webdroid/FnRunnable.run()V",
   "com/android/org/conscrypt/NativeCrypto.EVP_DigestFinal_ex(Lcom/android/org/conscrypt/NativeRef$EVP_MD_CTX;[BI)I",
   "android/graphics/Typeface.nativeWarmUpCache(Ljava/lang/String;)V",
   "libcore/io/Linux.readBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;II)I",

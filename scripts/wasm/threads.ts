@@ -15,6 +15,7 @@ import { Natives } from "../../src/wasm/host/natives";
 import { suspendedNatives } from "../../src/wasm/host/suspend";
 import { rt } from "../../src/jvm/runtime";
 import { perf } from "../../src/perf";
+import { fnRunnable } from "../../src/android/mainloop";
 import type { HostFn, NativeSource } from "../../src/wasm/link/hostapi";
 import { defaultLoop } from "../../src/wasm/link/sched";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
@@ -126,6 +127,14 @@ if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffe
 if (substrate) {
   admissionProbe = true;
   try {
+    w.addHostClass(nativeSource.hostSpecs!().find(spec => spec.name === "webdroid/FnRunnable")!);
+    let runnableResult = 0;
+    const runnable = fnRunnable(() => Promise.resolve(callbackEntry.scall("Th", "inner", "(I)I", 5)).then(value => { runnableResult = value as number; }));
+    expect("host Runnable waits for its conditional Java callback", await show(() => callbackEntry.vcall(runnable, "run", "()V")), "undefined");
+    expect("host Runnable completes its Java callback", runnableResult, 12);
+    const inlineRunnable = fnRunnable(() => { runnableResult++; });
+    expect("host Runnable also accepts an immediate callback", await show(() => callbackEntry.vcall(inlineRunnable, "run", "()V")), "undefined");
+    expect("immediate Runnable callback completes once", runnableResult, 13);
     expect("lazy admission preserves initializer, thread and callback monitor", await show(() => w.entryAsync("Th", "linkAdmission", "(I)I")(0)), 49);
     expect("lazy links admit event-loop turns", admissionTurns > 0, true);
     const methods = w.stats.methods;
