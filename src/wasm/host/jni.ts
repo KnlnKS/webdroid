@@ -4,6 +4,7 @@ import { rt } from "../../jvm/runtime";
 import { refOf, type Bridge } from "./bridge";
 import { constClass, idOfClass, typeName } from "../link/classes";
 import { ACC, javaName, type FieldInfo, type MethodInfo } from "../compiler/program";
+import { symbolicImplFor } from "../compiler/linkage";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
 import { onNestedStrand, runningThread } from "./entry";
@@ -110,7 +111,12 @@ export function wasmJni(w: World): JniVm {
     invoke(c, name, sig, isStatic, self, args, nonvirtual) {
       if (!isStatic && (self === null || self === undefined)) return fail("java/lang/NullPointerException", "JNI call on null " + name);
       const desc = view(c, sig), m = isStatic || nonvirtual ? prog.resolve(c.name, name, desc) : prog.implFor(w.classNameOf(self as object), name, desc);
+      if (!m && !isStatic && !nonvirtual) {
+        const declared = prog.resolve(c.name, name, desc), target = symbolicImplFor(prog, w.classNameOf(self as object), name + javaName(desc), true);
+        if (declared && !declared.isStatic && target && target.flags & ACC.ABSTRACT) return fail("java/lang/AbstractMethodError", target.cls + "." + target.key);
+      }
       if (!m || m.isStatic !== isStatic) return noSuchMethod(name, sig);
+      if (!isStatic && m.flags & ACC.ABSTRACT) return fail("java/lang/AbstractMethodError", m.cls + "." + m.key);
       return nest((s) => bridge.callOn(s, m, isStatic ? null : self as object, args));
     },
     construct(c, sig, args) {
