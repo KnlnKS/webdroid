@@ -21,14 +21,13 @@ interface State {
   parentOf: (loader: object) => object | null;
   libraries: WeakMap<object, [Loader[], Loader[]]>;
   copies: WeakMap<object, Map<DexFile, DexFile>>;
-  initiated: Map<Loader, Map<string, string>>;
   /** the ClassLoader object that opened the app's own dex files, which the classes of the default namespace that the app defines answer to getClassLoader */
   appLoader: object | null;
 }
 const states = new WeakMap<World, State>();
 function stateOf(w: World): State {
   let s = states.get(w);
-  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), initiated: new Map(), appLoader: null });
+  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null });
   return s;
 }
 
@@ -59,10 +58,7 @@ export function definingLoader(w: World, object: object | null): Loader {
 }
 
 export function recordDefinedClass(w: World, loader: Loader, name: string, key: string): void {
-  const s = stateOf(w);
-  let initiated = s.initiated.get(loader);
-  if (!initiated) s.initiated.set(loader, initiated = new Map());
-  initiated.set(name, key);
+  w.initiateClass(loader, name, key);
 }
 
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
@@ -89,12 +85,10 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
   const loader = mode === Lookup.Cookie ? cookie?.loader : loaderFor(w, scope as object | null);
   if (!loader) return 0;
   const find = (cls: string): string | undefined => {
-    if (mode === Lookup.Defined) return s.initiated.get(loader)?.get(cls);
-    const key = mode === Lookup.Visible ? s.initiated.get(loader)?.get(cls) ?? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
+    if (mode === Lookup.Defined) return prog.initiatedBy(loader, cls);
+    const key = mode === Lookup.Visible ? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
     if (key === undefined || cookie && !cookie.dexes.includes(prog.get(key)!.dex!)) return undefined;
-    let loaded = s.initiated.get(loader);
-    if (!loaded) s.initiated.set(loader, loaded = new Map());
-    loaded.set(cls, key);
+    w.initiateClass(loader, cls, key);
     return key;
   };
   const e = n.replace(/^\[+/, "");

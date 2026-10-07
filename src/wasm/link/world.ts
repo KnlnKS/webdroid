@@ -1196,28 +1196,38 @@ export class World {
     const priorBefore = loader.before ?? [], priorAfter = loader.after ?? [];
     const same = (a: Loader[], b: Loader[]) => a.length === b.length && a.every((l, i) => l === b[i]);
     if (same(priorBefore, before) && same(priorAfter, after)) return;
+    this.rebindResolution(() => this.prog.libraries(loader, before, after), () => this.prog.libraries(loader, priorBefore, priorAfter), "Class loader libraries");
+  }
+  initiateClass(loader: Loader, name: string, key: string): void {
+    const prior = this.prog.initiatedBy(loader, name);
+    if (prior === key) return;
+    if (prior) throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
+    if (this.prog.lookup(loader, name) === key) { this.prog.initiate(loader, name, key); return; }
+    this.rebindResolution(() => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation");
+  }
+  private rebindResolution(change: () => string[], undo: () => string[], reason: string): void {
     const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {
       const at = key.indexOf("(");
       return this.prog.implFor(name, key.slice(0, at), key.slice(at));
     }) }));
     const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
     const existing = [...this.classes].filter(([name]) => own.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
-    const names = this.prog.libraries(loader, before, after);
+    const names = change();
     if (!names.length) return;
     this.vslotCache.clear();
     for (const old of dispatch) {
       const methods = this.vslots(old.name).map(key => { const at = key.indexOf("("); return this.prog.implFor(old.name, key.slice(0, at), key.slice(at)); });
       if (methods.length !== old.methods.length || methods.some((m, i) => m !== old.methods[i])) {
-        this.prog.libraries(loader, priorBefore, priorAfter); this.vslotCache.clear();
-        throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader libraries changed linked dispatch of ${old.name}`));
+        undo(); this.vslotCache.clear();
+        throw this.exception(this.makeThrowable("java/lang/LinkageError", `${reason} changed linked dispatch of ${old.name}`));
       }
     }
     // A changed superclass would change the physical GC layout of already linked instances. Constructor-time library binding must precede that resolution.
     for (const old of existing) {
       const cls = this.prog.get(old.name)!;
       if (cls.sup !== old.sup || cls.ifaces.join("\0") !== old.ifaces.join("\0")) {
-        this.prog.libraries(loader, priorBefore, priorAfter); this.vslotCache.clear();
-        throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader libraries changed linked hierarchy of ${old.name}`));
+        undo(); this.vslotCache.clear();
+        throw this.exception(this.makeThrowable("java/lang/LinkageError", `${reason} changed linked hierarchy of ${old.name}`));
       }
     }
     for (const old of existing) {

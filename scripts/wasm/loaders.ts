@@ -14,7 +14,9 @@ import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
 import { HOSTED } from "../../src/wasm/link/hostapi";
-import { wasmEntry } from "../../src/wasm/host/entry";
+import { hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
+import { useEntry } from "../../src/jvm/natives/jentry";
+import { rt } from "../../src/jvm/runtime";
 import { jsTier, natives } from "./oracle";
 import { AOSP, JAVA } from "./paths";
 import { filesIn, shellIn } from "./tools";
@@ -85,8 +87,27 @@ if (jsCustom !== 121) console.log(`JS loader superclass differs from parent-firs
   const proxies = await w.entryAsync("Ldr", "proxyLoaders", desc)(...paths);
   if (proxies !== 8191) { failed++; console.log(`FAIL proxy defining loaders, duplicate binary names, bootstrap isolation, public cache, arrays and defensive duplicate rejection: ${proxies} (expected 8191)`); }
 }
+const jsDelegate = await js("Ldr", "delegateLast", desc, paths);
+const wasmDelegate = await w.entryAsync("Ldr", "delegateLast", desc)(...paths);
+if (jsDelegate !== 31 || wasmDelegate !== jsDelegate) { failed++; console.log(`FAIL actual delegate-last initiation and ordinary parent-first control: js=${jsDelegate}, wasm=${wasmDelegate}, expected=31`); }
+
 const jsLibraries = await js("Ldr", "libraries", desc, paths);
 if (jsLibraries !== 21) throw new Error(`JS shared-library control: ${jsLibraries}`);
+{
+  const p = new Program(loadDexes(a), program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]));
+  const cache = world(p, { natives }), child = p.newLoader(p.root, null);
+  cache.addDexes(loadDexes(b), child);
+  const key = p.definedBy(child, "Shared")!, cls = p.get(key)!;
+  const self = cls.byKey.get("self()LShared;")!, peer = cls.fields.find(f => f.name === "peer")!;
+  const type = cls.dex!.proto(cls.dex!.method(self.methodIdx).proto).ret;
+  if (cls.dex!.type(type) !== "LShared;" || peer.desc !== "LShared;") throw new Error("fixture did not warm the parent resolution");
+  const epoch = cache.epoch;
+  cache.initiateClass(child, "Shared", key);
+  if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) throw new Error("initiating identity retained stale DEX/member caches");
+  cache.link(key);
+  try { cache.initiateClass(child, "Shared", "Shared"); throw new Error("conflicting initiated identity accepted"); }
+  catch (e) { const t = cache.throwable(e); if (!t || cache.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(child, "Shared") !== key) throw e; }
+}
 for (const asynchronous of [false, true]) {
   const appDexes = loadDexes(a), base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), app]);
   const p = new Program(appDexes, base), layered = world(p, { natives, dexes: path => {
@@ -144,6 +165,13 @@ for (const asynchronous of [false, true]) {
   base.addClass(synthetic(`fixture/BaseCustom@${custom.id}`), custom);
   const derived = new Program([], base);
   if (derived.lookup(derived.boot, "fixture/BaseApp") || derived.lookup(derived.boot, "fixture/BaseCustom") || derived.lookup(derived.boot, "fixture/BaseBoot") !== "fixture/BaseBoot@0" || derived.loaderOf("fixture/BaseApp") !== base.root || derived.loaderOf(`[Lfixture/BaseCustom@${custom.id};`) !== custom || derived.loaderOf("[Lfixture/BaseBoot@0;") !== base.boot) throw new Error("inherited synthetic defining loader or bootstrap visibility changed");
+}
+{
+  const cold = world([app, ...PLATFORM_JARS.map(j => join(AOSP, j))], { natives, cold: true, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+  useEntry(wasmEntry(cold)); rt.mkThrowable = hostThrowable;
+  const result = await cold.entryAsync("Ldr", "delegateLast", desc)(...paths);
+  if (result !== jsDelegate || !cold.stats.coldCalls) throw new Error(`cold delegate-last initiation: ${result}; cold calls=${cold.stats.coldCalls}`);
+  useEntry(wasmEntry(w));
 }
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);

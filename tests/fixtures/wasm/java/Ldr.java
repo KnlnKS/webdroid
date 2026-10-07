@@ -43,6 +43,19 @@ public class Ldr {
     if (java.lang.reflect.Modifier.isPublic(ca.getModifiers()) && java.lang.reflect.Modifier.isFinal(ca.getModifiers())) result |= 4096;
     return result;
   }
+  public static int delegateLast(String pathA, String pathB) throws Exception {
+    ClassLoader parent = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
+    ClassLoader child = new dalvik.system.DelegateLastClassLoader(pathB, parent);
+    Class<?> own = child.loadClass("Shared"), inherited = parent.loadClass("Shared");
+    int result = own != inherited && own.getClassLoader() == child ? 1 : 0;
+    if (child.loadClass("Shared") == own && Class.forName("Shared", false, child) == own) result |= 2;
+    Object instance = own.newInstance();
+    if (own.getField("childOnly").getInt(instance) == 42) result |= 4;
+    if (own.getMethod("self").getReturnType() == own && own.getField("peer").getType() == own) result |= 8;
+    ClassLoader ordinary = new DexClassLoader(pathB, null, null, parent);
+    if (ordinary.loadClass("Shared") == inherited) result |= 16;
+    return result;
+  }
   public static int customParent(String pathA, String pathB) throws Exception {
     ClassLoader a = new DexClassLoader(pathA, null, null, Ldr.class.getClassLoader());
     ClassLoader parent = new ClassLoader(a) {};

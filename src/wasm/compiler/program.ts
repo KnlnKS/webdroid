@@ -144,6 +144,7 @@ export class Program {
   /** the classes this Program adds to its base's, by key */
   private classes = new Map<string, JClass>();
   private syntheticLoaders = new Map<string, Loader>();
+  private initiated = new WeakMap<Loader, Map<string, string>>();
   readonly root: Loader = { id: 0, parent: null, object: null, defined: new Map() };
   readonly boot: Loader = { id: 0, parent: null, object: null, defined: new Map() };
   private loaders: Loader[] = [this.root];
@@ -197,10 +198,12 @@ export class Program {
     }
     return this.loaders[loaderIdOf(key)];
   }
-  /** the key of the class `name` as `loader` sees it: the first of its ancestors (parent first) and itself that defines it */
+  /** An initiated identity wins; otherwise search the loader's parent-first namespace. */
   lookup(loader: Loader, name: string, seen = new Set<Loader>()): string | undefined {
     if (seen.has(loader)) return undefined;
     seen.add(loader);
+    const loaded = this.initiatedBy(loader, name);
+    if (loaded) return loaded;
     if (loader === this.boot) return this.boot.defined.get(name) ?? (this.base ? this.base.lookup(this.base.boot, name) : this.inBoot(name) ? name : undefined);
     const parent = loader.parent ? this.lookup(loader.parent, name, seen) : this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name);
     if (parent) return parent;
@@ -214,6 +217,22 @@ export class Program {
     const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
     if (same(loader.before, before) && same(loader.after, after)) return [];
     loader.before = before; loader.after = after;
+    return this.refreshResolution(loader);
+  }
+  initiatedBy(loader: Loader, name: string): string | undefined { return this.initiated.get(loader)?.get(name); }
+  /** A successful native definition fixes the initiating loader's identity before its bytecode is resolved. */
+  initiate(loader: Loader, name: string, key: string): string[] {
+    const visible = this.lookup(loader, name);
+    let loaded = this.initiated.get(loader);
+    if (!loaded) this.initiated.set(loader, loaded = new Map());
+    loaded.set(name, key);
+    return visible === key ? [] : this.refreshResolution(loader);
+  }
+  forgetInitiated(loader: Loader, name: string): string[] {
+    this.initiated.get(loader)?.delete(name);
+    return this.refreshResolution(loader);
+  }
+  private refreshResolution(loader: Loader): string[] {
     const depends = (view: Loader, seen = new Set<Loader>()): boolean => {
       if (view === loader) return true;
       if (view === this.boot || seen.has(view)) return false;
