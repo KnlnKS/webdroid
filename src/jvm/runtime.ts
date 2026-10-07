@@ -12,7 +12,7 @@ import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36, idHash, parseMethodDesc } from "./abi";
 import { compileClass, compileLazyMethod, installLazy, methodKey, type LazyMethod } from "./compiler";
-import type { CompiledCtor, ResumeBody } from "./tiering";
+import type { CompiledCtor, ResumeBody, JvmFunction } from "./tiering";
 import { DexLink, instanceFieldOf, findStaticOwner } from "./link";
 import { insnLen } from "./opcodes";
 import { gapsOf, recordGaps, markPlatformDex, type Gap } from "./codecache";
@@ -825,7 +825,38 @@ export class Runtime {
     this.copyDefaults(info);
   }
 
-  /** copy inherited interface defaults so both class dispatch and interface super calls resolve */
+  /** Interface-super selects declarations, not defaults previously copied onto a prototype. */
+  interfaceSuper(info: ClassInfo, mangled: string): JvmFunction {
+    const flagsOf = (c: ClassInfo): number | undefined => {
+      if (c.def && c.dex) {
+        const dex = c.dex;
+        return c.def.virtualMethods.find(m => methodKey(dex, m.methodIdx).mangled === mangled)?.flags;
+      }
+      return c.ownMethods.includes(mangled) ? 0 : undefined;
+    };
+    const body = (c: ClassInfo, flags: number): JvmFunction => {
+      if (flags & ACC.ABSTRACT) throw this.mkThrowable("java/lang/AbstractMethodError", `${c.name}.${mangled}`);
+      this.ensureCompiled(c);
+      return c.ctor.prototype[xname(mangled)] ?? this.nsm(`${c.name}.${mangled} (super)`);
+    };
+    const own = flagsOf(info);
+    if (own !== undefined) return body(info, own);
+    const seen = new Set<ClassInfo>(), candidates: [ClassInfo, number][] = [];
+    const visit = (c: ClassInfo) => {
+      if (seen.has(c)) return;
+      seen.add(c);
+      const flags = flagsOf(c);
+      if (flags !== undefined && !(flags & (ACC.STATIC | ACC.PRIVATE))) candidates.push([c, flags]);
+      c.interfaces.forEach(visit);
+    };
+    info.interfaces.forEach(visit);
+    const maximal = candidates.filter(([c]) => !candidates.some(([other]) => other !== c && other.assignableTo(c)));
+    const defaults = maximal.filter(([, flags]) => !(flags & ACC.ABSTRACT));
+    if (defaults.length > 1) throw this.mkThrowable("java/lang/IncompatibleClassChangeError", `Conflicting default methods for ${info.name}.${mangled}`);
+    const target = defaults[0] ?? maximal[0];
+    return target ? body(...target) : this.nsm(`${info.name}.${mangled} (super)`);
+  }
+
   /** the default body an interface of `info` gives `mangled`: what a platform body that cannot
    *  run on a native class yields to, as HashMap's computeIfAbsent does to Map's */
   interfaceDefault(info: ClassInfo, mangled: string): unknown {

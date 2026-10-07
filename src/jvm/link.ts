@@ -3,7 +3,7 @@ import type { ClassInfo, Runtime } from "./runtime";
 import type { DexFile } from "./dex";
 import { descToName, directName, mangleMethod, mangleStaticField, parseMethodDesc } from "./abi";
 import { javaFace, xname } from "./suspend";
-import { addCell, type Cells } from "./tiering";
+import { addCell, type Cells, type CompiledCtor, type JvmFunction } from "./tiering";
 
 function siteCache(c: unknown[], k: number, fn: Cells): unknown {
   addCell(fn, c, k);
@@ -14,6 +14,8 @@ export class DexLink {
   readonly cl: any[];                  // typeIdx → linked ctor
   readonly ic: any[];                  // typeIdx → initialized ctor
   readonly s: readonly (string | undefined)[];
+  /** One DEX reference can be invoked from different lexical superclass contexts. */
+  private readonly supers = new WeakMap<CompiledCtor, (JvmFunction & Cells)[]>();
   readonly dp: any[] = [];             // methodIdx → direct-invoke prototype fn
   readonly fs: any[] = [];             // fieldIdx → initialized declaring ctor
   readonly cs: any[] = [];             // callSiteIdx → linked invoke-custom target
@@ -67,6 +69,24 @@ export class DexLink {
     return fn instanceof Promise ? fn : siteCache(c, k, fn);
   }
   rdc0(c: unknown[], k: number, i: number): unknown { return siteCache(c, k, this.dp[i] ?? this.rdp0(i)); }
+
+  rsp(i: number, sup: CompiledCtor): JvmFunction & Cells {
+    let cache = this.supers.get(sup);
+    if (!cache) this.supers.set(sup, cache = []);
+    if (cache[i]) return cache[i];
+    const m = this.dex.method(i), info = this.linfo(m.cls), R = this.runtime;
+    if (info.stub) throw R.ncdfe(info.name);
+    const mangled = mangleMethod(m.name, this.dex.methodDesc(i));
+    let fn: JvmFunction & Cells;
+    if (info.isInterface) fn = R.interfaceSuper(info, mangled);
+    else {
+      R.ensureCompiled(info);
+      fn = sup.prototype[xname(mangled)] ?? info.ctor.prototype[xname(mangled)] ?? R.nsm(`${info.name}.${m.name}${this.dex.methodDesc(i)} (super)`);
+    }
+    addCell(fn, cache, i);
+    return cache[i] = fn;
+  }
+  rsc(c: unknown[], k: number, i: number, sup: CompiledCtor): unknown { return siteCache(c, k, this.rsp(i, sup)); }
 
   rsf(i: number, from?: number): any {
     const dex = this.dex, R = this.runtime, fr = dex.field(i), start = this.linfo(fr.cls);

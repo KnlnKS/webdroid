@@ -766,10 +766,9 @@ ${profileEnd}
         break;
       }
       case "invoke-super": {
-        // resolve against the superclass prototype; an interface-default super call
-        // (Iface.super.m()) instead resolves on the declared interface's prototype
-        const x = this.prop(xname(mangled));
-        this.call(`(S.prototype${x}??(D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)})).prototype${x}??R.nsm(${this.literal(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""})`, out);
+        const k = this.ics++;
+        const fn = this.cold ? `D.rsp(${this.literal(i.b)},S)` : `($ic[${k}]??D.rsc($ic,${k},${i.b},S))`;
+        this.call(`${fn}.call(${recv}${argStr ? "," + argStr : ""})`, out);
         break;
       }
       case "invoke-direct": {

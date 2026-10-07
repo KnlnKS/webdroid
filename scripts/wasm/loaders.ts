@@ -35,6 +35,10 @@ import { HOSTED } from "../../src/wasm/link/hostapi";
 import { hostThrowable, wasmEntry } from "../../src/wasm/host/entry";
 import { useEntry } from "../../src/jvm/natives/jentry";
 import { rt } from "../../src/jvm/runtime";
+import { mangleMethod } from "../../src/jvm/abi";
+import { callOn } from "../../src/jvm/natives/jentry";
+import { jvmProfiler } from "../../src/jvm/profile";
+import { perf } from "../../src/perf";
 import { jsTier, natives } from "./oracle";
 import { AOSP, JAVA } from "./paths";
 import { shellIn } from "./tools";
@@ -594,7 +598,7 @@ async function interfaceSuperControl(): Promise<void> {
   const dex = build("interfaceSuper", ["InterfaceSuper.java"]);
   const names = ["selected", "reversed", "declared", "inherited", "classSuper"];
   const jdk = sh(["java", "-cp", join(out, "interfaceSuper"), "InterfaceSuper"]).trim().split("\n").map(Number);
-  if (jdk.join(",") !== "22,22,33,11,44") throw new Error("interface-super JDK control changed");
+  if (jdk.slice(0, 5).join(",") !== "22,22,33,11,44") throw new Error("interface-super JDK control changed");
   const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
   let checks = 0;
   for (const cold of [false, true]) {
@@ -602,15 +606,17 @@ async function interfaceSuperControl(): Promise<void> {
     const code = target.dex.code(target.codeOff).insns, ref = target.dex.method(code[1]);
     if ((code[0] & 0xff) !== 0x6f || target.dex.rawType(ref.cls) !== "LInterfaceSuper$C;") throw new Error("D8 did not preserve invoke-super C.f");
     const current = world(p, { cold }), mirrors = new Set<object>();
-    for (const namespace of ["root", "first", "second"]) {
+    for (const [index, namespace] of ["root", "first", "second"].entries()) {
       let cls = "InterfaceSuper";
       if (namespace !== "root") {
         const loader = p.newLoader(p.boot, null);
         current.addDexes(loadDexes(dex), loader); cls += "@" + loader.id;
       }
+      await current.entryAsync(cls, "setOffset", "(I)V")(index * 17);
       for (let i = 0; i < names.length; i++) {
+        const expected = jdk[index * names.length + i];
         const got = await current.entryAsync(cls, names[i], "()I")();
-        if (got !== jdk[i]) throw new Error(`interface-super ${cold ? "cold" : "compiled"}/${namespace}/${names[i]}: ${got}, expected ${jdk[i]}`);
+        if (got !== expected) throw new Error(`interface-super ${cold ? "cold" : "compiled"}/${namespace}/${names[i]}: ${got}, expected ${expected}`);
         checks++;
       }
       mirrors.add(await current.entryAsync(cls, "self", "()Ljava/lang/Class;")() as object);
@@ -618,5 +624,32 @@ async function interfaceSuperControl(): Promise<void> {
     if (mirrors.size !== 3) throw new Error("interface-super loaders aliased Class identities");
     if (cold && !current.stats.coldCalls) throw new Error("interface-super cold control did not execute the interpreter");
   }
+  await jsTier(loadDexes(dex));
+  const previous = jvmProfiler.tier;
+  let jsChecks = 0;
+  try {
+    for (const mode of ["js", "cold"] as const) {
+      jvmProfiler.tier = mode;
+      const owners = mode === "js" ? [rt, rt.fork(), rt.fork()] : [rt.fork(), rt.fork()];
+      const shared = loadDexes(dex), mirrors = new Set<object>(), before = perf.coldCalls;
+      for (const [index, owner] of owners.entries()) {
+        if (owner !== rt) shared.forEach(d => owner.loadDex(d));
+        const info = owner.link("InterfaceSuper");
+        await owner.initClass(info);
+        const scope = mode === "js" ? index : index + 3;
+        await callOn(mainThread, () => info.ctor[mangleMethod("setOffset", "(I)V")](scope * 17));
+        for (let i = 0; i < names.length; i++) {
+          const got = await callOn(mainThread, () => info.ctor[mangleMethod(names[i], "()I")]());
+          const expected = jdk[scope * names.length + i];
+          if (got !== expected) throw new Error(`JS interface-super ${mode}/${names[i]}: ${got}, expected ${expected}`);
+          jsChecks++;
+        }
+        mirrors.add(owner.classFor("InterfaceSuper"));
+      }
+      if (mirrors.size !== owners.length || mode === "cold" && mirrors.has(rt.classFor("InterfaceSuper"))) throw new Error("JS interface-super loaders aliased Class identities");
+      if (mode === "cold" && perf.coldCalls === before) throw new Error("JS interface-super cold control did not execute the interpreter");
+    }
+  } finally { jvmProfiler.tier = previous; }
+  console.log(`JS interface-super: ${jsChecks} root/two-fork compiled and two-fork cold cases match JDK; Class identities stay distinct`);
   console.log(`interface-super: ${checks} compiled/cold root/two-loader cases match JDK; DEX retains invoke-super C.f; Class identities stay distinct`);
 }
