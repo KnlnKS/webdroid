@@ -1093,7 +1093,7 @@ export class World {
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
-      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site)), deopt: this.deoptImports };
+      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site), cx.methodAnalyses), deopt: this.deoptImports };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
   }
@@ -1109,7 +1109,7 @@ export class World {
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
   private symbolicSites = new Map<string, { slot: WebAssembly.Global; stub: Function }>();
   symbolicStubModules = 0;
-  symbolicImports(sites: SymbolicSite[]): Record<string, unknown> {
+  symbolicImports(sites: SymbolicSite[], analyses?: Compiler["methodAnalyses"]): Record<string, unknown> {
     const out: Record<string, unknown> = { table: this.symbolicTable };
     const fresh = sites.filter(([name]) => !this.symbolicSites.has(name));
     if (fresh.length) {
@@ -1127,6 +1127,10 @@ export class World {
         binding[name] = resolver.plain; binding[name + "#s"] = resolver.wait;
         return { name, slot, params, output, plain, wait, method };
       });
+      if (analyses?.size) for (const method of new Set(pending.map(entry => entry.method))) {
+        const analysis = analyses.get(method);
+        if (analysis) this.symbolicOps.rememberAnalysis(method, analysis);
+      }
       const built = cx.buildSyntheticGroup(pending.map(({ name, slot, params, output, plain, wait }) => ({
         name, params, ret: output, body: (c: Code) => {
           const restore = emitSave(cx, c);

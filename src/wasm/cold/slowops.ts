@@ -74,19 +74,35 @@ export class ColdSlowOps {
       this.w.stats.symbolicAnalysisHits++;
     } else {
       analysis = this.prepareAnalysis(m); this.w.stats.symbolicTypingMethods++;
-      const item = m.dex.code(m.codeOff), cells = item.insns.length + (analysis.prepared.instructions.length + 1) * (item.regs + 16);
-      if (cells <= SYMBOLIC_ANALYSIS_CELLS) {
-        while (this.recent.size >= SYMBOLIC_ANALYSIS_METHODS || this.recentCells + cells > SYMBOLIC_ANALYSIS_CELLS) {
-          const oldest = this.recent.keys().next().value!;
-          this.recentCells -= this.recent.get(oldest)!.cells; this.recent.delete(oldest);
-        }
-        this.recent.set(m, { analysis, cells, dex: m.dex, codeOff: m.codeOff }); this.recentCells += cells;
-      } else this.w.stats.symbolicAnalysisOversize++;
+      this.retainAnalysis(m, analysis);
     }
+    this.analysisStats();
+    return { ...this.site(m, pc, analysis), analysis };
+  }
+
+  /** Keep only the compiler's immutable method data, within the same executed-site budget. */
+  rememberAnalysis(m: MethodInfo, analysis: Pick<Analysis, "prepared" | "typing">): void {
+    this.retainAnalysis(m, analysis);
+    this.analysisStats();
+  }
+
+  private retainAnalysis(m: MethodInfo, analysis: Analysis | Pick<Analysis, "prepared" | "typing">): void {
+    const prior = this.recent.get(m);
+    if (prior) { this.recent.delete(m); this.recentCells -= prior.cells; }
+    const item = m.dex.code(m.codeOff), cells = item.insns.length + (analysis.prepared.instructions.length + 1) * (item.regs + 16);
+    if (cells > SYMBOLIC_ANALYSIS_CELLS) { this.w.stats.symbolicAnalysisOversize++; return; }
+    while (this.recent.size >= SYMBOLIC_ANALYSIS_METHODS || this.recentCells + cells > SYMBOLIC_ANALYSIS_CELLS) {
+      const oldest = this.recent.keys().next().value!;
+      this.recentCells -= this.recent.get(oldest)!.cells; this.recent.delete(oldest);
+    }
+    const complete = "instructions" in analysis ? analysis : { ...analysis, instructions: new Map(analysis.prepared.instructions.map(ins => [ins.pc, ins])) };
+    this.recent.set(m, { analysis: complete, cells, dex: m.dex, codeOff: m.codeOff }); this.recentCells += cells;
+  }
+
+  private analysisStats(): void {
     this.w.stats.symbolicAnalysisEntries = this.recent.size; this.w.stats.symbolicAnalysisCells = this.recentCells;
     this.w.stats.symbolicAnalysisPeakEntries = Math.max(this.w.stats.symbolicAnalysisPeakEntries, this.recent.size);
     this.w.stats.symbolicAnalysisPeakCells = Math.max(this.w.stats.symbolicAnalysisPeakCells, this.recentCells);
-    return { ...this.site(m, pc, analysis), analysis };
   }
 
   compileSite(m: MethodInfo, pc: number, site = this.prepareSite(m, pc)) {

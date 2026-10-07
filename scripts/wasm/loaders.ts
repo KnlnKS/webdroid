@@ -146,8 +146,21 @@ if (!process.argv.includes("--hierarchy")) {
   const owner = w.sched.strand();
   let key: string;
   try { key = await w.resolveClass(definingLoader(w, object), "Shared", owner); } finally { owner.end(); }
-  const call = w.entryAsync(key, "symbolic", "()I");
-  if (await call() !== 42) throw new Error("symbolic direct entry failed");
+  const handedData: WeakRef<object>[] = [], handingCompilers: WeakRef<object>[] = [];
+  const buildUnit = Compiler.prototype.buildUnit;
+  if (process.argv.includes("--memory")) Compiler.prototype.buildUnit = function (...args: Parameters<typeof buildUnit>) {
+    const built = buildUnit.apply(this, args);
+    const method = w.prog.require(key).byKey.get("symbolic()I")!, analysis = this.methodAnalyses.get(method);
+    if (analysis) { handingCompilers.push(new WeakRef(this)); handedData.push(new WeakRef(analysis.prepared), new WeakRef(analysis.typing)); }
+    return built;
+  };
+  const typingBefore = w.stats.symbolicTypingMethods, hitsBefore = w.stats.symbolicAnalysisHits;
+  let call: ReturnType<typeof w.entryAsync>;
+  try {
+    call = w.entryAsync(key, "symbolic", "()I");
+    if (await call() !== 42) throw new Error("symbolic direct entry failed");
+  } finally { Compiler.prototype.buildUnit = buildUnit; }
+  console.log(`symbolic first-call analysis: inferences=${w.stats.symbolicTypingMethods - typingBefore}, hits=${w.stats.symbolicAnalysisHits - hitsBefore}; workload total inferences=${w.stats.symbolicTypingMethods}, hits=${w.stats.symbolicAnalysisHits}`);
   const resolutions = w.symbolicResolutions, stubModules = w.symbolicStubModules;
   for (let i = 0; i < 3; i++) if (await call() !== 42) throw new Error("cached symbolic operation failed");
   if (!w.opts.cold && w.symbolicResolutions !== resolutions) throw new Error("resolved symbolic site entered the loader bridge again");
@@ -232,13 +245,16 @@ if (!process.argv.includes("--hierarchy")) {
         ColdSlowOps.prototype.prepareSite = prepare; Compiler.prototype.buildSynthetic = emit; Compiler.prototype.buildSyntheticGroup = group;
       }
       const collect = (globalThis as typeof globalThis & { gc?: () => void }).gc;
-      if (!collect || analyses.length !== SYMBOLIC_ANALYSIS_METHODS + 3 || compilers.length !== 33) throw new Error("symbolic lifetime probe missing emitters or GC");
+      if (!collect || analyses.length !== SYMBOLIC_ANALYSIS_METHODS + 3 || compilers.length !== 33) throw new Error(`symbolic lifetime probe missing emitters or GC: analyses=${analyses.length}, compilers=${compilers.length}, gc=${!!collect}`);
       console.log(`symbolic analysis work: 32 distinct PCs use one full inference and 31 cache hits; peak entries=${w.stats.symbolicAnalysisPeakEntries}, peak cells=${w.stats.symbolicAnalysisPeakCells}, hits=${w.stats.symbolicAnalysisHits}, oversize=${w.stats.symbolicAnalysisOversize}`);
       const heapBefore = process.memoryUsage().heapUsed;
       for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
       const retained = analyses.filter(ref => ref.deref()).length, retainedCompilers = compilers.filter(ref => ref.deref()).length;
       console.log(`symbolic lifetime: analyses=${analyses.length}, retained=${retained}; compilers=${compilers.length}, retained=${retainedCompilers}; heap before GC=${heapBefore}, after GC=${process.memoryUsage().heapUsed}`);
       if (retained > SYMBOLIC_ANALYSIS_METHODS || analyses[0].deref() || retainedCompilers || w.prog.require(key).byKey.get("symbolic()I") !== method || table.get(slot)!() !== 42) throw new Error("symbolic IR retained by live Program or compiled operation");
+      const heldCompilers = handingCompilers.filter(ref => ref.deref()).length, heldData = handedData.filter(ref => ref.deref()).length;
+      console.log(`compiler typing handoff lifetime: compilers=${handingCompilers.length}, retained=${heldCompilers}; data=${handedData.length}, retained after eviction=${heldData}`);
+      if (handingCompilers.length !== 1 || handedData.length !== 2 || heldCompilers || heldData) throw new Error("compiler handoff retained compiler or evicted typing");
     }
   }
   if (await w.entryAsync(key, "optional", "(Z)I")(0) !== 7) throw new Error("unused optional reference resolved eagerly");
