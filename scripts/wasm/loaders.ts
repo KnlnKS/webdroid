@@ -26,7 +26,7 @@ import { definingLoader } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
 import { Pool, u2, u4 } from "./classfile";
 import { Compiler } from "../../src/wasm/compiler/j2w";
-import { typeFailure } from "../../src/wasm/compiler/linkage";
+import { typeFailure, symbolicImplFor } from "../../src/wasm/compiler/linkage";
 import type { Code } from "../../src/wasm/compiler/code";
 import { ColdSlowOps, SYMBOLIC_ANALYSIS_METHODS, SYMBOLIC_ANALYSIS_CELLS } from "../../src/wasm/cold/slowops";
 import { St } from "../../src/wasm/link/monitor";
@@ -596,15 +596,22 @@ process.exit(failed ? 1 : 0);
 
 async function interfaceSuperControl(): Promise<void> {
   const dex = build("interfaceSuper", ["InterfaceSuper.java"]);
-  const names = ["selected", "reversed", "declared", "inherited", "classSuper"];
+  const names = ["selected", "reversed", "declared", "inherited", "classSuper", "virtualDefault", "interfaceDefault", "unusedAbstract"];
   const jdk = sh(["java", "-cp", join(out, "interfaceSuper"), "InterfaceSuper"]).trim().split("\n").map(Number);
-  if (jdk.slice(0, 5).join(",") !== "22,22,33,11,44") throw new Error("interface-super JDK control changed");
+  if (jdk.slice(0, names.length).join(",") !== "22,22,33,11,44,22,22,55") throw new Error("interface-super JDK control changed");
   const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
   let checks = 0;
   for (const cold of [false, true]) {
     const p = new Program(loadDexes(dex), base), target = p.get("InterfaceSuper$Select")!.byKey.get("f()I")!;
     const code = target.dex.code(target.codeOff).insns, ref = target.dex.method(code[1]);
     if ((code[0] & 0xff) !== 0x6f || target.dex.rawType(ref.cls) !== "LInterfaceSuper$C;") throw new Error("D8 did not preserve invoke-super C.f");
+    if (p.get("InterfaceSuper$Default")!.byKey.has("f()I")) throw new Error("D8 introduced a default forwarder");
+    for (const [method, kind, owner] of [["virtualDefault", "invoke-virtual", "Default"], ["interfaceDefault", "invoke-interface", "C"]]) {
+      const m = p.get("InterfaceSuper")!.byKey.get(method + "()I")!;
+      const prepared = prepareMethod(m.dex, m.dex.code(m.codeOff), m.desc, m.isStatic);
+      const call = prepared.instructions.find(i => i.name === kind && m.dex.method(i.b).name === "f");
+      if (!call || m.dex.rawType(m.dex.method(call.b).cls) !== `LInterfaceSuper$${owner};`) throw new Error("D8 changed ordinary default dispatch");
+    }
     const current = world(p, { cold }), mirrors = new Set<object>();
     for (const [index, namespace] of ["root", "first", "second"].entries()) {
       let cls = "InterfaceSuper";
@@ -612,6 +619,9 @@ async function interfaceSuperControl(): Promise<void> {
         const loader = p.newLoader(p.boot, null);
         current.addDexes(loadDexes(dex), loader); cls += "@" + loader.id;
       }
+      const suffix = cls.slice("InterfaceSuper".length), defaultClass = "InterfaceSuper$Default" + suffix;
+      const selected = "InterfaceSuper$B" + suffix;
+      if (p.implFor(defaultClass, "f", "()I")?.cls !== selected || symbolicImplFor(p, defaultClass, "f()I")?.cls !== selected) throw new Error("ordinary Wasm default selector lost maximal declaration or loader identity");
       await current.entryAsync(cls, "setOffset", "(I)V")(index * 17);
       for (let i = 0; i < names.length; i++) {
         const expected = jdk[index * names.length + i];
@@ -624,6 +634,7 @@ async function interfaceSuperControl(): Promise<void> {
     if (mirrors.size !== 3) throw new Error("interface-super loaders aliased Class identities");
     if (cold && !current.stats.coldCalls) throw new Error("interface-super cold control did not execute the interpreter");
   }
+  console.log(`interface-super/default: ${checks} Wasm cases match JDK; implFor and symbolicImplFor select the owning B declaration`);
   await jsTier(loadDexes(dex));
   const previous = jvmProfiler.tier;
   let jsChecks = 0;
@@ -650,6 +661,6 @@ async function interfaceSuperControl(): Promise<void> {
       if (mode === "cold" && perf.coldCalls === before) throw new Error("JS interface-super cold control did not execute the interpreter");
     }
   } finally { jvmProfiler.tier = previous; }
-  console.log(`JS interface-super: ${jsChecks} root/two-fork compiled and two-fork cold cases match JDK; Class identities stay distinct`);
-  console.log(`interface-super: ${checks} compiled/cold root/two-loader cases match JDK; DEX retains invoke-super C.f; Class identities stay distinct`);
+  console.log(`JS interface-super/default: ${jsChecks} root/two-fork compiled and two-fork cold cases match JDK; Class identities stay distinct`);
+
 }

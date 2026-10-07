@@ -11,6 +11,10 @@ public class InterfaceSuper {
   static class Reverse implements Reversed { public int f() { return Reversed.super.f(); } }
   static class Declared implements Own { public int f() { return Own.super.f(); } }
   static class Inherited implements Basic { public int f() { return Basic.super.f(); } }
+  static class Default implements C {}
+  interface Reabstracted extends C { int f(); }
+  static abstract class AbstractDefault implements Reabstracted {}
+  static class ConcreteDefault extends AbstractDefault { public int f() { return 55 + offset; } }
   static class Parent { public int f() { return 44 + offset; } }
   static class Child extends Parent { public int f() { return super.f(); } }
   public static int selected() { return new Select().f(); }
@@ -18,12 +22,16 @@ public class InterfaceSuper {
   public static int declared() { return new Declared().f(); }
   public static int inherited() { return new Inherited().f(); }
   public static int classSuper() { return new Child().f(); }
+  public static int virtualDefault() { return new Default().f(); }
+  public static int interfaceDefault() { C value = new Default(); return value.f(); }
+  public static int unusedAbstract() { return new ConcreteDefault().f(); }
   public static Class<?> self() { return InterfaceSuper.class; }
   public static void main(String[] args) {
     for (int value : new int[] {0, 17, 34, 51, 68}) {
       setOffset(value);
       System.out.println(selected()); System.out.println(reversed());
       System.out.println(declared()); System.out.println(inherited()); System.out.println(classSuper());
+      System.out.println(virtualDefault()); System.out.println(interfaceDefault()); System.out.println(unusedAbstract());
     }
   }
 }

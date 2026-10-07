@@ -7,7 +7,7 @@
 
 import { nameFrame } from "./frames";
 import { turnElapsed, wakeSoon, yieldToLoop } from "./yield";
-import { Strand, SUSPENDED, javaFace, publicFace, setPublic, suspendWith, xname } from "./suspend";
+import { Strand, SUSPENDED, javaFace, publicFace, setPublic, setJava, suspendWith, xname } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, directName, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, dotName, demangle, primElem, splitSig, hash36, idHash, parseMethodDesc } from "./abi";
@@ -825,76 +825,70 @@ export class Runtime {
     this.copyDefaults(info);
   }
 
-  /** Interface-super selects declarations, not defaults previously copied onto a prototype. */
-  interfaceSuper(info: ClassInfo, mangled: string): JvmFunction {
-    const flagsOf = (c: ClassInfo): number | undefined => {
-      if (c.def && c.dex) {
-        const dex = c.dex;
-        return c.def.virtualMethods.find(m => methodKey(dex, m.methodIdx).mangled === mangled)?.flags;
-      }
-      return c.ownMethods.includes(mangled) ? 0 : undefined;
-    };
-    const body = (c: ClassInfo, flags: number): JvmFunction => {
-      if (flags & ACC.ABSTRACT) throw this.mkThrowable("java/lang/AbstractMethodError", `${c.name}.${mangled}`);
-      this.ensureCompiled(c);
-      return c.ctor.prototype[xname(mangled)] ?? this.nsm(`${c.name}.${mangled} (super)`);
-    };
-    const own = flagsOf(info);
-    if (own !== undefined) return body(info, own);
+  private declaredMethodFlags(info: ClassInfo, mangled: string): number | undefined {
+    if (info.def && info.dex) {
+      const dex = info.dex;
+      return info.def.virtualMethods.find(m => methodKey(dex, m.methodIdx).mangled === mangled)?.flags;
+    }
+    return info.ownMethods.includes(mangled) ? 0 : undefined;
+  }
+
+  /** Select declarations rather than defaults previously copied onto a prototype. */
+  private interfaceDeclarations(info: ClassInfo, mangled: string): [ClassInfo, number][] {
+    const own = info.isInterface ? this.declaredMethodFlags(info, mangled) : undefined;
+    if (own !== undefined) return [[info, own]];
     const seen = new Set<ClassInfo>(), candidates: [ClassInfo, number][] = [];
     const visit = (c: ClassInfo) => {
       if (seen.has(c)) return;
       seen.add(c);
-      const flags = flagsOf(c);
+      const flags = this.declaredMethodFlags(c, mangled);
       if (flags !== undefined && !(flags & (ACC.STATIC | ACC.PRIVATE))) candidates.push([c, flags]);
       c.interfaces.forEach(visit);
     };
-    info.interfaces.forEach(visit);
-    const maximal = candidates.filter(([c]) => !candidates.some(([other]) => other !== c && other.assignableTo(c)));
-    const defaults = maximal.filter(([, flags]) => !(flags & ACC.ABSTRACT));
-    if (defaults.length > 1) throw this.mkThrowable("java/lang/IncompatibleClassChangeError", `Conflicting default methods for ${info.name}.${mangled}`);
-    const target = defaults[0] ?? maximal[0];
-    return target ? body(...target) : this.nsm(`${info.name}.${mangled} (super)`);
+    for (let c: ClassInfo | null = info; c; c = c.superInfo) c.interfaces.forEach(visit);
+    return candidates.filter(([c]) => !candidates.some(([other]) => other !== c && other.assignableTo(c)));
   }
 
-  /** the default body an interface of `info` gives `mangled`: what a platform body that cannot
-   *  run on a native class yields to, as HashMap's computeIfAbsent does to Map's */
-  interfaceDefault(info: ClassInfo, mangled: string): unknown {
-    const seen = new Set<ClassInfo>();
-    const walk = (i: ClassInfo): unknown => {
-      for (const iface of i.interfaces) {
-        if (seen.has(iface)) continue;
-        seen.add(iface);
-        this.ensureCompiled(iface);
-        if (iface.ownMethods.includes(mangled)) return iface.ctor.prototype[xname(mangled)];
-        const body = walk(iface);
-        if (body) return body;
-      }
-      return i.superInfo ? walk(i.superInfo) : undefined;
-    };
-    return walk(info);
+  private interfaceBody(info: ClassInfo, mangled: string, includeAbstract: boolean): JvmFunction | undefined {
+    const maximal = this.interfaceDeclarations(info, mangled), defaults = maximal.filter(([, flags]) => !(flags & ACC.ABSTRACT));
+    if (defaults.length > 1) return () => { throw this.mkThrowable("java/lang/IncompatibleClassChangeError", `Conflicting default methods for ${info.name}.${mangled}`); };
+    const target = defaults[0] ?? (includeAbstract ? maximal[0] : undefined);
+    if (!target) return undefined;
+    const [c, flags] = target;
+    if (flags & ACC.ABSTRACT) return () => { throw this.mkThrowable("java/lang/AbstractMethodError", `${c.name}.${mangled}`); };
+    this.ensureCompiled(c);
+    return c.ctor.prototype[xname(mangled)] ?? this.nsm(`${c.name}.${mangled} (super)`);
+  }
+
+  interfaceSuper(info: ClassInfo, mangled: string): JvmFunction {
+    return this.interfaceBody(info, mangled, true) ?? this.nsm(`${info.name}.${mangled} (super)`);
+  }
+
+  /** The default body a platform fallthrough yields to, as HashMap's computeIfAbsent does to Map's. */
+  interfaceDefault(info: ClassInfo, mangled: string): JvmFunction | undefined {
+    return this.interfaceBody(info, mangled, false);
   }
 
   private copyDefaults(info: ClassInfo) {
     if (!info.ctor || info.defaultsCopied) return;
     info.defaultsCopied = true;
-    const seen = new Set<ClassInfo>();
-    const walk = (i: ClassInfo) => {
-      for (const iface of i.interfaces) {
-        if (seen.has(iface)) continue;
-        seen.add(iface);
-        this.ensureCompiled(iface);
-        for (const m of iface.ownMethods) {
-          if (!(m in info.ctor.prototype)) {
-            info.ctor.prototype[m] = iface.ctor.prototype[m];
-            info.ctor.prototype[xname(m)] = iface.ctor.prototype[xname(m)];
-          }
-        }
-        walk(iface);
-      }
-      if (i.superInfo) walk(i.superInfo);
+    const seen = new Set<ClassInfo>(), methods = new Set<string>();
+    const visit = (c: ClassInfo) => {
+      if (seen.has(c)) return;
+      seen.add(c);
+      this.ensureCompiled(c);
+      c.ownMethods.forEach(m => methods.add(m));
+      c.interfaces.forEach(visit);
     };
-    walk(info);
+    for (let c: ClassInfo | null = info; c; c = c.superInfo) c.interfaces.forEach(visit);
+    for (const mangled of methods) {
+      // A real class declaration wins; an inherited copied default can be overridden by a subinterface.
+      let declared = false;
+      for (let c: ClassInfo | null = info; c; c = c.superInfo) if (this.declaredMethodFlags(c, mangled) !== undefined) { declared = true; break; }
+      if (declared) continue;
+      const fn = this.interfaceDefault(info, mangled);
+      if (fn) setJava(info.ctor.prototype, mangled, fn, parseMethodDesc(demangle(mangled)![1]).params.length);
+    }
   }
 
   encToJs(dex: DexFile, v: EncVal): unknown {
