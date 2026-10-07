@@ -247,7 +247,7 @@ export class Sched {
   /** a native answered a Promise: the call site that called it settles it, waiting on this strand's stack */
   parkNative(p: Promise<unknown>): void { this.pending = p; this.g.wait.value = 1; }
   /** Lazy links share the turn budget: many short methods can compile without reaching a loop fuel check.
-   * The import restores its caller itself because existing stubs have no blocking-call epilogue. */
+   * Restore the caller before compilation; the stub restores it again when Wasm resumes. */
   admitLink(run: () => void): void | Promise<void> {
     const s = this.current();
     if (s.root || this.w.inSynchronousJava() || !this.loop.due()) return run();
