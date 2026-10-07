@@ -253,17 +253,21 @@ function installProbe(cfg: ProbeConfig): void {
       wantSample = false;
       return presentation > before;
     };
-    if (policy.kind === "state") {
-      const virtualEnd = (g.wd.guestClock?.now() ?? 0) + policy.maxVirtualMs;
+    if (policy.kind === "state" || policy.kind === "live" && policy.condition) {
+      const condition = policy.condition!;
+      const maxRealMs = policy.kind === "state" ? policy.maxRealMs : policy.horizonMs + policy.timeoutMs;
+      const maxVirtualMs = policy.kind === "state" ? policy.maxVirtualMs : 0;
+      const stableMs = policy.kind === "state" ? policy.stableMs : 0;
+      const virtualEnd = (g.wd.guestClock?.now() ?? 0) + maxVirtualMs;
       let matchedAt = 0;
       for (;;) {
         const now = performance.now();
-        const matches = stateMatches(policy.condition, screen, await g.wd.uiTree());
+        const matches = stateMatches(condition, screen, await g.wd.uiTree());
         if (matches) {
           matchedAt ||= now;
-          if (now - matchedAt >= policy.stableMs) break;
+          if (now - matchedAt >= stableMs) break;
         } else matchedAt = 0;
-        if (performance.now() - t0 >= policy.maxRealMs) return done("timeout", { state: 1 });
+        if (performance.now() - t0 >= maxRealMs) return done("timeout", { state: 1 });
         const next = controlled ? g.wd.guestClock.nextDeadline() : null;
         if (controlled && g.wd.guestClock.now() < virtualEnd) {
           await g.wd.guestClock.advanceTo(Math.min(virtualEnd, next ?? g.wd.guestClock.now() + 16));
@@ -271,8 +275,8 @@ function installProbe(cfg: ProbeConfig): void {
         } else await sleep(10);
       }
       const alive = controlled
-        ? await g.wd.guestClock.drive(g.wd.alive(policy.maxRealMs), policy.maxVirtualMs)
-        : await g.wd.alive(policy.maxRealMs);
+        ? await g.wd.guestClock.drive(g.wd.alive(maxRealMs), maxVirtualMs)
+        : await g.wd.alive(maxRealMs);
       if (!alive) return done("timeout", { queued: 1 });
       if (!capture) return done("state");
       return await samplePresentation() ? done("state") : done("timeout", { presentation: 1 });

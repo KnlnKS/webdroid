@@ -49,7 +49,7 @@ export type WaitPolicy =
   | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number; stableMs: number }
   | { kind: "quiescent"; maxVirtualMs: number; maxRealMs: number }
   | { kind: "sample"; atVirtualMs: number; maxRealMs: number; minRealMs: number }
-  | { kind: "live"; horizonMs: number; timeoutMs: number }
+  | { kind: "live"; horizonMs: number; timeoutMs: number; condition?: StateCondition }
   | { kind: "live-sample"; atRealMs: number; timeoutMs: number };
 type StateWait = Extract<WaitPolicy, { kind: "state" }>;
 type LiveWait = Extract<WaitPolicy, { kind: "live" }>;
