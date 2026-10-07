@@ -10,7 +10,7 @@ import { isExternal, mapExternal, memoryAt, memorySync, unmapExternal, writeAt }
 import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
-import { javaFdSource, javaIsSocketFd, fdFile, inoOf } from "../../native/fs";
+import { javaFdSource, javaIsSocketFd, fdFile, inoOf, fdLease } from "../../native/fs";
 import { processCloseFd as javaCloseFd, processSeekFd as javaSeekFd, processReadFd as javaReadFd, processPreadFd as javaPreadFd, processWriteFd as javaWriteFd, processPwriteFd as javaPwriteFd, processTruncateFd as javaTruncateFd, processFcntlFd as javaFcntlFd, processSyncFd as javaSyncFd, processFdStat as javaFdStat, processIoctlIntFd as javaIoctlIntFd } from "../../native/process-fd";
 
 /** a java.io.File's path as the VFS names it (libcore's File resolves a relative one against "/") */
@@ -51,12 +51,31 @@ const FILE_DESCRIPTOR = "java/io/FileDescriptor", O_APPEND = 0x400;
 /** a FileDescriptor's int, -1 for none (JNIHelp's jniGetFDFromFileDescriptor) */
 let descriptorProp: string | undefined;
 const descriptor = () => descriptorProp ??= declaredField(FILE_DESCRIPTOR, "descriptor");
-export const fdInt = (d: JObj | null): number => d ? (d as unknown as Record<string, number>)[descriptor()] : -1;
-export function setFdInt(d: JObj, fd: number): void { (d as unknown as Record<string, number>)[descriptor()] = fd; }
+const scopedDescriptors = new WeakMap<JObj, ReturnType<typeof fdLease>>();
+export function fdInt(d: JObj | null): number {
+  if (!d) return -1;
+  const fd = (d as unknown as Record<string, number>)[descriptor()];
+  const prior = scopedDescriptors.get(d);
+  if (prior && fd >= 0) return prior.fd;
+  const lease = fdLease(fd);
+  if (lease?.owner) {
+    scopedDescriptors.set(d, lease);
+    lease.onClose(() => { if ((d as unknown as Record<string, number>)[descriptor()] === fd) setFdInt(d, -1); });
+  }
+  return fd;
+}
+export function setFdInt(d: JObj, fd: number): void { scopedDescriptors.delete(d); (d as unknown as Record<string, number>)[descriptor()] = fd; }
 /** jniCreateFileDescriptor: a `new FileDescriptor()` given `fd` through setInt$, which also
  *  records whether it appends */
 export function mkFd(fd: number): JObj | Promise<JObj> {
-  return after(newObj(FILE_DESCRIPTOR), (d: JObj) => after(vcall(d, "setInt$", "(I)V", fd), () => d));
+  const lease = fdLease(fd), scoped = !!lease?.owner;
+  return after(newObj(FILE_DESCRIPTOR), (d: JObj) => after(vcall(d, "setInt$", "(I)V", fd), () => {
+    if (scoped) {
+      if (lease!.fd < 0) setFdInt(d, -1);
+      else fdInt(d);
+    }
+    return d;
+  }));
 }
 rt.registerJni("java/io/FileDescriptor", "isSocket(I)Z", (fd: number) => +javaIsSocketFd(fd));
 // OpenJDK tests the bits of F_GETFL's result as is, so a failure reads as appending

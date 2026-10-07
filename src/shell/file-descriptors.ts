@@ -1,7 +1,7 @@
 import { E } from "../native/abi";
 import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  type OpenFile } from "../native/fs";
+  detachFdScope, type OpenFile } from "../native/fs";
 import { vfs } from "./vfs";
 
 export type DescriptorRequest = { kind: "open"; path: string; flags: number }
@@ -67,6 +67,7 @@ export class FileDescriptors {
 
   private put(session: Session, fd: number): number {
     if (fd < 0) return fd;
+    detachFdScope(fd);
     const file = openFd(fd)!;
     // Pipes/sockets must not wait behind their own blocking read. They require their
     // existing independent readiness protocol, not this regular-file operation queue.

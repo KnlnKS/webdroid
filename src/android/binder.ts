@@ -7,7 +7,7 @@ import { logUncaught, detached, type Escape } from "../jvm/natives/jthrowable";
 import { exitProcess, processExited } from "../process-exit";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { PROCESS_PID, PROCESS_UID, ashmemFd, ashmemProt, fdOverBytes, fdContents } from "./os";
-import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd } from "../native/fs";
+import { O_ACCMODE, javaCloseFd, javaDupFd, javaFcntlFd, javaPwriteFd, javaTruncateFd, FdScope, detachFdScope } from "../native/fs";
 import { stageBinderFd, takeBinderFd, unstageBinderFd, discardBinderFd } from "../native/process-fd";
 import { NativeParcel, OwnedFd, freeData, nativeParcel, parcelAt, newParcel, setParcelBytes, transactionSize, readInt, readString, writeInt, writeString, createByteArray } from "./parcel";
 import { jarray, i8, u8 } from "../jvm/abi";
@@ -121,10 +121,11 @@ function* exportObject(o: unknown, descriptors = false): Gen<BinderHandle | File
   const writer = new JFileWriter(); writer.fd = javaDupFd(o.fd);
   return { bytes, writer: exportBinder(writer), ...region };
 }
-function importObject(o: BinderHandle | FileHandle | DescriptorHandle | null): unknown {
-  if (o && "descriptor" in o) return after(takeBinderFd(o.descriptor),fd => {
+type TakeDescriptor = (token: number) => number | Promise<number>;
+function importObject(o: BinderHandle | FileHandle | DescriptorHandle | null, scope?: FdScope, take: TakeDescriptor = takeBinderFd): unknown {
+  if (o && "descriptor" in o) return after(take(o.descriptor),fd => {
     if (fd < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Cannot import Binder descriptor: " + fd);
-    return new OwnedFd(fd);
+    return new OwnedFd(fd, scope);
   });
   if (!o || !("bytes" in o)) return importBinder(o);
   return after(o.writer && importBinder(o.writer), (writer) => {
@@ -134,7 +135,7 @@ function importObject(o: BinderHandle | FileHandle | DescriptorHandle | null): u
       yield vcall(writer, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, data, null, 0);
     });
     const bytes = new Uint8Array(o.bytes);
-    return new OwnedFd(o.prot === undefined ? fdOverBytes(bytes, sink) : ashmemFd(bytes, o.prot, sink));
+    return new OwnedFd(o.prot === undefined ? fdOverBytes(bytes, sink) : ashmemFd(bytes, o.prot, sink), scope);
   });
 }
 /** what a parcel carries across processes: its bytes and its side table */
@@ -160,14 +161,15 @@ export async function releaseBinderParcel(data: ParcelData): Promise<void> {
     if (object && "descriptor" in object) await unstageBinderFd(object.descriptor);
   }));
 }
-const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData): Gen<void> {
+const fillParcel = driven(function* fillParcel(p: NativeParcel, data: ParcelData, take: TakeDescriptor = takeBinderFd, scope: FdScope | undefined = p.fdScope,
+  discard: typeof discardReceivedDescriptors = discardReceivedDescriptors): Gen<void> {
   const objects: [number, unknown][] = [];
   try {
-    for (const [at, o] of data.objects) objects.push([at, yield importObject(o)]);
+    for (const [at, o] of data.objects) objects.push([at, yield importObject(o, scope, take)]);
     setParcelBytes(p, data.bytes, objects);
   } catch (error) {
     for (const [,o] of objects) if (o instanceof OwnedFd) javaCloseFd(o.fd);
-    try { yield* awaited(discardReceivedDescriptors(data)); } catch (cleanup) { logUncaught(cleanup); }
+    try { yield* awaited(discard(data)); } catch (cleanup) { logUncaught(cleanup); }
     throw error;
   }
 });
@@ -189,7 +191,8 @@ export const parcelled = driven(function* parcelled(o: JObj): Gen<ParcelData> {
   } finally { yield vcall(parcel, "recycle", "()V"); }
 });
 /** A retaining broker consumes staged regular-FD rights; it must release them on failure. */
-export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj): Gen<ParcelData> {
+export type ParcelRights = { stage(fd: number): number | Promise<number> | null; discard(token: number): Promise<number> };
+export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj, rights: ParcelRights = { stage: stageBinderFd, discard: unstageBinderFd }): Gen<ParcelData> {
   const parcel=yield* awaited(newParcel()),data:ParcelData={bytes:new Uint8Array(),objects:[]};
   try {
     yield vcall(o,"writeToParcel","(Landroid/os/Parcel;I)V",parcel,0);
@@ -197,12 +200,12 @@ export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj):
     for (const [at,object] of native.objects) {
       if (!(object instanceof OwnedFd)) {data.objects.push([at,exportBinder(object)]);continue;}
       if (ashmemProt(object.fd) !== undefined) throw rt.mkThrowable("android/os/BadParcelableException","Shared ashmem rights are not supported by this transport");
-      const token=yield* awaited(stageBinderFd(object.fd));
+      const token=yield* awaited(rights.stage(object.fd));
       if (token === null || token < 0) throw rt.mkThrowable("android/os/BadParcelableException","Cannot retain descriptor right");
       data.objects.push([at,{descriptor:token}]);
     }
     return data;
-  } catch (error) {yield* awaited(releaseBinderParcel(data));throw error;}
+  } catch (error) {yield* awaited(Promise.all(data.objects.map(([,o]) => o && "descriptor" in o ? rights.discard(o.descriptor) : undefined)));throw error;}
   finally {yield vcall(parcel,"recycle","()V");}
 });
 /** a Parcelable of class `cls` read back by its CREATOR; the parcel, and the descriptors it
@@ -212,10 +215,31 @@ export const unparcelled = driven(function* unparcelled(cls: string, data: Parce
   try { return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel); }
   finally { yield vcall(parcel, "recycle", "()V"); }
 });
+/** Explicit broker borrowing; ordinary unparcelled callers retain their Java ownership. */
+export const unparcelledScoped = driven(function* (cls: string, data: ParcelData, scope: FdScope, take: TakeDescriptor = takeBinderFd,
+  discard: typeof discardReceivedDescriptors = discardReceivedDescriptors): Gen<JObj> {
+  const parcel = yield* awaited(newParcel());
+  try {
+    yield* awaited(fillParcel(nativeParcel(parcel), data, take, scope, discard));
+    const creator = (yield* awaited(linkInit(cls))).static("CREATOR");
+    return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);
+  } finally { yield vcall(parcel, "recycle", "()V"); }
+});
+/** A local Parcelable copy keeps descriptor identity without a wire snapshot. */
+export const copyParcelable = driven(function* (cls: string, object: JObj, scope: FdScope | undefined = parcelScope()): Gen<JObj> {
+  const parcel = yield* awaited(newParcel()), native = nativeParcel(parcel);
+  try {
+    yield vcall(object, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
+    if (scope) for (const [at, o] of native.objects) if (o instanceof OwnedFd) native.objects.set(at, new OwnedFd(o.fd, scope));
+    native.pos = 0;
+    const creator = (yield* awaited(linkInit(cls))).static("CREATOR");
+    return yield vcall(creator, "createFromParcel", "(Landroid/os/Parcel;)Ljava/lang/Object;", parcel);
+  } finally { yield vcall(parcel, "recycle", "()V"); }
+});
 
 // ── IPCThreadState: a thread's calling identity (`explicit` once cleared), StrictMode policy and
 // work source, and whether it transacts as system_server
-type IpcState = { caller: Caller | undefined; explicit: boolean; policy: number; workSource: { uid: number; propagate: boolean }; system: boolean };
+type IpcState = { caller: Caller | undefined; explicit: boolean; policy: number; workSource: { uid: number; propagate: boolean }; system: boolean; parcelScope?: FdScope };
 const UNSET_WORK_SOURCE = -1;
 const ipcStates = new WeakMap<JThread, IpcState>();
 function ipc(thread = curThread): IpcState {
@@ -230,6 +254,14 @@ function setWorkSource(uid: number, propagate: boolean): bigint {
   return BigInt(+was.propagate) << 32n | BigInt(was.uid >>> 0);
 }
 const transactionCaller = (): Caller | undefined => ipc().caller;
+export const parcelScope = (): FdScope | undefined => ipc().parcelScope;
+export async function withParcelScope<T>(work: () => T | Promise<T>, transfer = false): Promise<T> {
+  const state = ipc();
+  if (state.parcelScope) return work();
+  const scope = new FdScope(); state.parcelScope = scope;
+  try { const value = await work(); if (transfer) scope.transfer(); return value; }
+  finally { state.parcelScope = undefined; scope.close(); }
+}
 export const callingIdentity = (): Caller => transactionCaller() ?? { pid: PROCESS_PID, uid: PROCESS_UID };
 const SIGABRT = 6;
 /** an exception escaping a stub's method, as JavaBBinder's report_exception takes it: logged,
@@ -285,7 +317,9 @@ export function asSystem<T>(call: () => T | Promise<T>): Promise<T> {
  *  hears an exception that escapes execTransact, as JavaBBinder reports it; without it the caller does. */
 function* execTransact<T>(binder: JObj, code: number, flags: number, size: number, fill: (data: NativeParcel) => unknown,
   read: ((reply: NativeParcel) => T | Promise<T>) | null, escaped?: (error: unknown) => void): Gen<{ handled: number; reply: T | null }> {
-  const data = new NativeParcel(), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
+  const scope = scopedServices.has(binder) ? new FdScope() : undefined, state = ipc(), previous = state.parcelScope;
+  if (scope) state.parcelScope = scope;
+  const data = new NativeParcel(scope), reply = new NativeParcel(), dataPtr = handle(data), replyPtr = handle(reply);
   try {
     yield fill(data);
     let handled = 0;
@@ -293,7 +327,10 @@ function* execTransact<T>(binder: JObj, code: number, flags: number, size: numbe
     catch (error) { if (!escaped) throw error; escaped(error); }
     if (read) checkBuffer(reply, false, size);
     return { handled, reply: read && (yield read(reply)) as T };
-  } finally { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
+  } finally {
+    try { freeData(data); freeData(reply); release(dataPtr); release(replyPtr); }
+    finally { if (scope) { state.parcelScope = previous; scope.close(); } }
+  }
 }
 /** JavaBBinder::onTransact: Binder.execTransact over the transaction's parcels, on a binder thread */
 export async function receiveTransaction(request: Transaction, caller: Caller): Promise<TransactionReply> {
@@ -406,8 +443,14 @@ function checkBuffer(p: NativeParcel, oneway: boolean, dataSize: number): void {
 /** a parcel's copy, its binders as `view` makes them and its descriptors duplicated, as the driver delivers one */
 const copyParcel = driven(function* copyParcel(from: NativeParcel, to: NativeParcel, view: (o: unknown) => unknown): Gen<void> {
   const objects: [number, unknown][] = [];
-  for (const [at, o] of from.objects) objects.push([at, o instanceof OwnedFd ? new OwnedFd(javaDupFd(o.fd)) : yield view(o)]);
-  setParcelBytes(to, from.buf.subarray(0, from.size), objects);
+  try {
+    for (const [at, o] of from.objects) {
+      if (!(o instanceof OwnedFd)) { objects.push([at, yield view(o)]); continue; }
+      const fd = javaDupFd(o.fd); detachFdScope(fd);
+      objects.push([at, new OwnedFd(fd, to.fdScope)]);
+    }
+    setParcelBytes(to, from.buf.subarray(0, from.size), objects);
+  } catch (error) { for (const [,o] of objects) if (o instanceof OwnedFd) javaCloseFd(o.fd); throw error; }
   for (const [at, len] of from.ashmem) to.ashmem.set(at, len);
 });
 /** a call from this process into a service it hosts for system_server: the stub reads a copy of
@@ -478,8 +521,9 @@ export const parceledList = (items: unknown[] = []): JObj | Promise<JObj> => aft
 /** Host a system service, a subclass of its AIDL Stub, made when first asked for. A Stub whose
  *  methods declare @EnforcePermission takes its enforcer at construction (its no-argument
  *  constructor asks the system context for one); none of the hosted methods calls it. */
-export function hostStub(name: string, cls: string): void {
-  binderServices.set(name, () => newStub(cls));
+const scopedServices = new WeakSet<object>();
+export function hostStub(name: string, cls: string, scopedDescriptors = false): void {
+  binderServices.set(name, () => after(newStub(cls), binder => { if (scopedDescriptors) scopedServices.add(binder); return binder; }));
 }
 /** a Stub subclass's instance, as hostStub makes one (also for binders a service hands out), on
  *  the asking thread: a class it initializes may be one that thread is already initializing */

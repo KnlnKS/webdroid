@@ -49,6 +49,13 @@ export class StoredParcel {
       throw error;
     }
   }
+  async readLocal<T>(pid: number, read: (data: ParcelData, take: (token: number) => number,
+    discard: (data: ParcelData) => Promise<void>) => T | Promise<T>): Promise<T> {
+    const data = await this.replay(pid);
+    const discard = async (value: ParcelData) => { await Promise.all(value.objects.map(([,o]) => o && "descriptor" in o ? this.kernel.discard(pid, o.descriptor, false) : undefined)); };
+    try { return await read(data, token => this.kernel.takeLocal(pid, token), discard); }
+    finally { await discard(data); }
+  }
   close(): Promise<void> {
     if(this.closing)return this.closing;
     this.closed=true;

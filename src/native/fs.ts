@@ -97,6 +97,38 @@ function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.spl
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
 export const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
+const leases = new Map<number, FdLease>();
+export class FdScope {
+  private leases = new Set<FdLease>();
+  private closed = false;
+  own(fd: number): FdLease {
+    if (this.closed) throw new Error("Descriptor scope has been released");
+    if (!fds.has(fd)) throw new Error("Invalid scoped descriptor");
+    const current = leases.get(fd);
+    if (current?.owner === this) return current;
+    const lease = new FdLease(fd, this);
+    leases.set(fd, lease); this.leases.add(lease);
+    return lease;
+  }
+  transfer(): void { for (const lease of this.leases) if (lease.owner === this) lease.owner = undefined; }
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const lease of this.leases) if (lease.owner === this) lease.close();
+    this.leases.clear();
+  }
+}
+class FdLease {
+  private callbacks = new Set<() => void>();
+  constructor(private number: number, public owner: FdScope | undefined) {}
+  get fd(): number { return leases.get(this.number) === this && fds.has(this.number) ? this.number : -1; }
+  close(): void { if (this.fd >= 0) javaCloseFd(this.fd); }
+  onClose(callback: () => void): void { this.callbacks.add(callback); }
+  closed(): void { for (const callback of this.callbacks) callback(); this.callbacks.clear(); }
+}
+export const fdLease = (fd: number) => leases.get(fd);
+/** Kernel grants are independent of temporary Java decoding ownership. */
+export function detachFdScope(fd: number): void { const lease = leases.get(fd); if (lease) lease.owner = undefined; }
 const closeOnExec = new Set<number>();
 export const openFd = (fd: number): Fd | undefined => fds.get(fd);
 
@@ -567,7 +599,9 @@ export function fdFile(fd: number): VfsFile | null {
 export function fdClose(cpu: Cpu | null, fd: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  fds.delete(fd); closeOnExec.delete(fd); releaseFd(fd);
+  const lease = leases.get(fd);
+  fds.delete(fd); leases.delete(fd); closeOnExec.delete(fd); releaseFd(fd);
+  lease?.closed();
   dropFile(f);
   // a socket call waiting on this descriptor ends with EBADF
   f.socket?.wake();
@@ -591,7 +625,9 @@ function fdDup(cpu: Cpu | null, fd: number, min = 0, cloexec = false): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   f.references++;
-  return put(f, cloexec, min);
+  const copy = put(f, cloexec, min);
+  leases.get(fd)?.owner?.own(copy);
+  return copy;
 }
 /** dup2's implicit close of `to`, which (unlike close) leaves bionic's fdsan owner tag in place */
 function closeReplaced(cpu: Cpu | null, to: number): () => number {
@@ -608,6 +644,7 @@ export function fdDup2(cpu: Cpu | null, fd: number, to: number, cloexec = false)
   f.references++;
   reserveFd(to);
   fds.set(to, f);
+  leases.get(fd)?.owner?.own(to);
   if (cloexec) closeOnExec.add(to);
   return retag();
 }

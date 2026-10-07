@@ -6,10 +6,11 @@ import { JObj, rt, declaredField } from "../jvm/runtime";
 import { utf8, u8, encodeModifiedUtf8 } from "../jvm/abi";
 import { scall, iof } from "../jvm/natives/jentry";
 import { fdInt, mkFd } from "../jvm/natives/jio";
-import { javaCloseFd, javaDupFd } from "../native/fs";
+import { javaCloseFd, javaDupFd, fdLease, type FdScope } from "../native/fs";
 import { ownedHandle, deref, release } from "./handles";
 
 export class NativeParcel {
+  constructor(readonly fdScope?: FdScope) {}
   buf = new Uint8Array(256);
   view = new DataView(this.buf.buffer);
   pos = 0;
@@ -38,7 +39,11 @@ export function transactionSize(p: NativeParcel): number {
   return ((size + 7) & ~7) + objects * 8;
 }
 /** a descriptor this parcel owns, as writeDupFileDescriptor leaves one */
-export class OwnedFd { constructor(readonly fd: number) {} }
+export class OwnedFd {
+  private lease: ReturnType<typeof fdLease>;
+  constructor(private number: number, scope?: FdScope) { this.lease = scope ? scope.own(number) : fdLease(number); }
+  get fd(): number { return this.lease ? this.lease.fd : this.number; }
+}
 
 let ptrField = "";
 /** the native parcel behind a Java Parcel */

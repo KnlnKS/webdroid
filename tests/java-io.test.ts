@@ -1,9 +1,9 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { mkPfd, pfdBackingBytes, fdContents } from "../src/android/os";
-import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel } from "../src/android/binder";
+import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel, copyParcelable, unparcelledScoped } from "../src/android/binder";
 import { StoredParcel } from "../src/shell/stored-parcel";
-import { nativeParcel, freeData } from "../src/android/parcel";
+import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel";
 import { handle, release as releaseHandle, take } from "../src/android/handles";
 import { newObj, vcall, vcallAsync, mainThread } from "../src/jvm/natives/jentry";
 import { rt, JObj } from "../src/jvm/runtime";
@@ -15,7 +15,7 @@ import { Cpu, setA64 } from "../src/native/cpu";
 import { defineHost, lookupHost } from "../src/native/host";
 import { libcInit } from "../src/native/libc";
 import { mem, guestAt } from "../src/native/mem";
-import { FS_SYSCALLS, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs";
+import { FS_SYSCALLS, FdScope, javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, javaPwriteFd, javaTruncateFd, renamePath, openFd } from "../src/native/fs";
 import { kernelInit } from "../src/native/syscall";
 import { BytesFile } from "../src/shell/lazyfile";
 import { scall, loadLibcore } from "./java";
@@ -118,6 +118,86 @@ describe("file-descriptor", () => {
       descriptorTransport.calls=previous.calls;Object.assign(descriptorTransport,previous);proxies.forEach(proxy=>proxy.close());stops.forEach(stop=>stop());
       kernel.close(1001);kernel.close(1002);vfs.delete(path);
     }
+  });
+
+  test("broker decode scope owns lazy Bundle and PFD duplicates but preserves retained and recipient rights", async () => {
+    const path = "/data/data/test/fd/scoped.bin", kernel = new FileDescriptors(), scope = new FdScope();
+    kernel.ensureReceiver(1001);
+    vfs.write(path, Uint8Array.of(1, 2, 3));
+    const fd = javaOpenFd(path, 2), file = openFd(fd)!;
+    let stored: StoredParcel | undefined, recipient: JObj | undefined, duplicate: JObj | undefined;
+    try {
+      const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
+      const bundle = await newObj("android/os/Bundle", "()V");
+      await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "fd", pfd);
+      const lazy = await copyParcelable("android/os/Bundle", bundle, scope);
+      const decoded = await vcall(lazy, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");
+      duplicate = await vcall(decoded, "dup", "()Landroid/os/ParcelFileDescriptor;");
+      const rights = { stage: (n: number) => kernel.stageLocal(1001, n), discard: (n: number) => kernel.discard(1001, n, true) };
+      stored = await StoredParcel.retain(kernel, 1001, await parcelledWithRights(lazy, rights));
+      scope.close(); scope.close();
+      expect(file.references).toBe(2);
+      expect(fdInt(await vcall(duplicate, "getFileDescriptor", FD))).toBe(-1);
+      javaCloseFd(fd); kernel.close(1001);
+      expect(file.references).toBe(1);
+      const recipientScope = new FdScope();
+      try {
+        const replayed = await stored.readLocal(1002, (data, take, discard) => unparcelledScoped("android/os/Bundle", data, recipientScope, take, discard));
+        recipient = await vcall(replayed, "getParcelable", "(Ljava/lang/String;)Landroid/os/Parcelable;", "fd");
+        recipientScope.transfer();
+      } finally { recipientScope.close(); }
+      await stored.close();
+      const byte = new Uint8Array(1);
+      expect(javaReadFd(fdInt(await vcall(recipient, "getFileDescriptor", FD)), byte)).toBe(1);
+      expect([...byte]).toEqual([1]);
+      await vcall(recipient, "close", "()V"); recipient = undefined;
+      expect(file.references).toBe(0);
+    } finally {
+      scope.close(); await stored?.close();
+      if (recipient) await vcall(recipient, "close", "()V");
+      if (duplicate) await vcall(duplicate, "close", "()V");
+      javaCloseFd(fd); kernel.close(1001); kernel.close(1002); vfs.delete(path);
+    }
+  });
+
+  test("broker decode scope cleans CREATOR and serialization failure without closing reused descriptor slots", async () => {
+    const path = "/data/data/test/fd/scoped-failure.bin", kernel = new FileDescriptors();
+    kernel.ensureReceiver(1001);
+    vfs.write(path, Uint8Array.of(4, 5));
+    const fd = javaOpenFd(path, 2), file = openFd(fd)!;
+    const scope = new FdScope();
+    let stored: StoredParcel | undefined;
+    try {
+      const pfd = await newObj("android/os/ParcelFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
+      const bundle = await newObj("android/os/Bundle", "()V");
+      for (const key of ["a", "b"]) await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", key, pfd);
+      let stages = 0;
+      const rights = { stage: (n: number) => { if (++stages === 2) throw new Error("stage failure"); return kernel.stageLocal(1001, n); },
+        discard: (n: number) => kernel.discard(1001, n, true) };
+      await expect(Promise.resolve(parcelledWithRights(bundle, rights))).rejects.toThrow("stage failure");
+      expect(file.references).toBe(1);
+      const data = await parcelledWithRights(bundle, { ...rights, stage: (n: number) => kernel.stageLocal(1001, n) });
+      data.bytes[4] = 0; // Corrupt Bundle's magic so its real CREATOR rejects the imported rights.
+      stored = await StoredParcel.retain(kernel, 1001, data);
+      let failed = false;
+      try { await stored.readLocal(1002, (data, take, discard) => unparcelledScoped("android/os/Bundle", data, scope, take, discard)); }
+      catch { failed = true; }
+      expect(failed).toBe(true);
+      scope.close(); await stored.close();
+      expect(file.references).toBe(1);
+      const reuseScope = new FdScope(), parcel = await scall("android/os/Parcel", "obtain", "()Landroid/os/Parcel;");
+      await vcall(parcel, "writeFileDescriptor", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
+      const native = nativeParcel(parcel), owned = [...native.objects.values()][0] as OwnedFd;
+      native.objects.set(0, new OwnedFd(owned.fd, reuseScope));
+      const slot = owned.fd;
+      reuseScope.close();
+      const replacement = javaOpenFd(path, 2);
+      try {
+        expect(replacement).toBe(slot);
+        freeData(native);
+        expect(javaReadFd(replacement, new Uint8Array(1))).toBe(1);
+      } finally { javaCloseFd(replacement); await vcall(parcel, "recycle", "()V"); }
+    } finally { scope.close(); await stored?.close(); kernel.close(1001); kernel.close(1002); javaCloseFd(fd); vfs.delete(path); }
   });
 
   test("canonical descriptors share live bytes and offsets across ports and retain a recipient after owner death", async () => {
