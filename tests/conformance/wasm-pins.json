@@ -12,11 +12,6 @@
       "class": "TestsFor(Lists|Sets|Maps|Queues)InJavaUtil$",
       "test": "^testToArray_emptyArrayOfWrongTypeForNonEmptyCollection\\[",
       "why": "The JS tier's toArray(T[]) does not throw ArrayStoreException for an array whose element type the elements do not extend (JUnit: 'toArray(notAssignableTo[]) should throw'); the Wasm tier runs the AOSP bytecode, which does."
-    },
-    {
-      "class": "TestsForMapsInJavaUtil$",
-      "test": "^testReplaceAll(Rotate|PreservesOrder)\\[ConcurrentSkipListMap",
-      "why": "The JS tier throws UnsupportedOperationException from replaceAll on a ConcurrentSkipListMap submap (the Map default reaching an immutable entry's setValue, apparently, where ConcurrentMap's default is the more specific one); the Wasm tier runs the AOSP bytecode and passes."
     }
   ],
   "jsr166": [
