@@ -9,7 +9,7 @@
 // Needs javac, d8, node and (for chrome) Playwright's Chrome. The host is shared: the load average is printed and a high one flags the table noisy.
 import { cpus, loadavg } from "node:os";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import type { G1Config, G1Result } from "./g1run";
 import { AOSP, G1_DIR, JAVA, ROOT } from "./paths";
@@ -119,7 +119,8 @@ const sample = (r: G1Result): Sample => ({ first: r.times[0], warm: med(r.times.
 const loads: number[] = [loadavg()[0]];
 type Row = { w: string; result: string; jsFirst: number[]; jsSteady: number[] };
 const ref: Record<string, { rows: Row[] }> | null = refPath ? JSON.parse(readFileSync(refPath, "utf8")).engines : null;
-const report: Record<string, unknown> = { installed: installedDir || null, inline: inlineTier, source:sourceKey(), dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], cold:process.argv.includes("--cold"), aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
+const startSource = sourceKey();
+const report: Record<string, unknown> = { installed: installedDir || null, inline: inlineTier, source:startSource, dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], cold:process.argv.includes("--cold"), aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
 const artifact = (dir: string, name: string) => ({ path: join(dir, name), sha256: createHash("sha256").update(readFileSync(join(dir, name))).digest("hex") });
 report.scenario = installedDir ? "installed-measured-demand-preload" : "ordinary-on-demand";
 report.startup = installedDir ? artifact(installedDir, "startup.json") : process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "startup.json") : null;
@@ -130,9 +131,43 @@ report.v8Flags = v8Flags;
 report.startupOverride = process.env.G1_STARTUP ?? null;
 report.primaryProtocol = !installedDir && !refPath && !v8Flags && !process.env.G1_STARTUP && !process.argv.includes("--cold");
 
+const aotDir = process.env.WEBDROID_AOT;
+if (aotDir) {
+  const manifestPath = ["current.json", "latest.json"].map(name => join(dirname(resolve(aotDir)), name)).find(path => {
+    if (!existsSync(path)) return false;
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    return manifest.source === startSource && [manifest.key, manifest.cold].includes(basename(resolve(aotDir)));
+  });
+  if (!manifestPath) throw new Error("WEBDROID_AOT requires a matching source/key in adjacent current.json or latest.json");
+  report.aotManifest = { ...artifact(dirname(manifestPath), basename(manifestPath)), ...JSON.parse(readFileSync(manifestPath, "utf8")) };
+}
+// Check outside timed calls: bundles are frozen, but subsequent processes still read fixtures and assets.
+const inputKey = () => {
+  const hash = createHash("sha256");
+  for (const path of [dex, ...sources.map(([, path]) => path), ...readdirSync(here).filter(name => name.endsWith(".ts")).sort().map(name => join(here, name))]) hash.update(path).update(readFileSync(path));
+  for (const dir of [aotDir, installedDir].filter((dir): dir is string => !!dir)) {
+    for (const name of readdirSync(dir, { recursive: true, encoding: "utf8" }).sort()) {
+      const path = join(dir, name), stat = statSync(path);
+      hash.update(JSON.stringify([path, stat.size, stat.mtimeMs, stat.ctimeMs]));
+    }
+  }
+  return hash.digest("hex");
+};
+const startInputs = inputKey(), guardFailures: string[] = [];
+report.inputStateSha256 = startInputs;
+const checkSource = (where: string) => {
+  if (guardFailures.length) return;
+  try {
+    if (sourceKey() !== startSource) guardFailures.push(`${where}: production source changed`);
+    if (inputKey() !== startInputs) guardFailures.push(`${where}: harness, fixture or asset inputs changed`);
+  } catch (error) { guardFailures.push(`${where}: ${String(error)}`); }
+};
+
 for (const engine of engines) {
   let run: (c: G1Config) => G1Result | Promise<G1Result>, label = "node " + Bun.spawnSync(["node", "-p", "process.version + ' (V8 ' + process.versions.v8 + ')'"]).stdout.toString().trim(), close = async () => {};
-  if (engine === "node") run = nodeRun(await bundle(false));
+  checkSource(`before ${engine} setup`);
+  if (guardFailures.length) run = c => ({ mode: c.mode, workload: c.workload, result: "", times: [], error: guardFailures.join("; ") });
+  else if (engine === "node") run = nodeRun(await bundle(false));
   else { const c = await chromeRun(); run = c.run; close = c.close; label = "Chrome " + c.version; }
   const refRows = new Map((ref?.[engine]?.rows ?? []).map((r) => [r.w, r]));
   const got = new Map<string, { js: Sample[]; wasm: Sample[]; blocked: boolean }>();
@@ -141,16 +176,20 @@ for (const engine of engines) {
     got.set(w, { js: r ? r.jsFirst.map((first, i) => ({ first, warm: 0, steady: r.jsSteady[i], completedCalls:0, result: r.result })) : [], wasm: [], blocked: false });
   }
   for (let i = 0; i < runs; i++) {
+    checkSource(`before ${engine} pass ${i}`);
     for (const w of got.keys()) for (const mode of (i%2?["wasm","js"]:["js","wasm"]) as ("js"|"wasm")[]) {
       const entry = got.get(w)!;
       if (ref && mode === "js") continue;
       let result: G1Result;
-      try { result = await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }); }
+      try {
+        if (guardFailures.length) throw new Error(guardFailures.join("; "));
+        result = await run({ mode, cls: classOf.get(w)!, workload: w, reps, dex, root: ROOT, cold:process.argv.includes("--cold") }); }
       catch (error) { result = { mode, workload: w, result: "", times: [], error: String(error).slice(0, 900) }; }
       const r = sample(result);
       entry[mode].push(r);
       if (mode === "wasm" && (r.error || r.result !== entry.js[0]?.result)) entry.blocked = true;
     }
+    checkSource(`after ${engine} pass ${i}`);
     loads.push(loadavg()[0]);
   }
   const failures = [...got].flatMap(([workload, e]) => (["js", "wasm"] as const).flatMap(mode => {
@@ -188,11 +227,21 @@ for (const engine of engines) {
         String(v((s) => s.aot.d)).padStart(5), String(v((s) => s.aot.c)).padStart(5), String(v((s) => s.aot.dead)).padStart(5), String(v((s) => s.aot.missed)).padStart(5), v((s) => s.aot.ms).toFixed(0).padStart(6), v((s) => s.aot.readMs).toFixed(0).padStart(5), (v((s) => s.aot.bytes) / 1024).toFixed(0).padStart(6), String(v((s) => s.upgrades)).padStart(4));
     }
   }
-  const complete = failures.length === 0 && omittedWorkloads.length === 0 && rows.length === todo.length && rows.length > 0;
+  const complete = guardFailures.length === 0 && failures.length === 0 && omittedWorkloads.length === 0 && rows.length === todo.length && rows.length > 0;
   if (complete) for (const [cls, r] of byClass) console.log(`geometric-mean speedup (js/wasm) over all ${r.steady.length} selected ${cls} workloads: first call ${geo(r.first).toFixed(2)}x, steady state ${geo(r.steady).toFixed(2)}x`);
   else { console.log("No full-selection geometric mean: failed or omitted workloads remain in samples/failures."); process.exitCode = 1; }
   (report.engines as Record<string, unknown>)[engine] = { label, workerPolicy: installedDir && engine !== "node" && !inlineTier ? "prestarted-before-first-call" : "inline", selected:got.size, selectedWorkloads:todo, omittedWorkloads, complete, blocked:[...got].filter(([,e])=>e.blocked).map(([w])=>w), failures, reference:refPath||null, rows, samples:Object.fromEntries(got), geoFirst: complete ? geo(ratios.first) : null, geoSteady: complete ? geo(ratios.steady) : null };
   await close();
+}
+checkSource("final");
+report.sourceStable = guardFailures.length === 0;
+report.sourceGuardFailures = guardFailures;
+if (guardFailures.length) {
+  process.exitCode = 1;
+  console.error(guardFailures.join("\n"));
+  for (const result of Object.values(report.engines as Record<string, { complete: boolean; geoFirst: number | null; geoSteady: number | null }>)) {
+    result.complete = false; result.geoFirst = null; result.geoSteady = null;
+  }
 }
 const peak = Math.max(...loads), noisy = peak > 2;
 report.loads = loads;
