@@ -21,7 +21,7 @@ import { defaultLoop, emitRestored } from "../../src/wasm/link/sched";
 import { onNestedStrand, wasmEntry } from "../../src/wasm/host/entry";
 import { resumeAs } from "../../src/jvm/natives/jentry";
 import { hasJspi } from "../../src/wasm/link/module";
-import { javaFrames } from "../../src/wasm/link/exc";
+import { ALLOC_WINDOW, HEAP_LIMIT, javaFrames } from "../../src/wasm/link/exc";
 import { T } from "../../src/wasm/compiler/wasmbin";
 import { classIntrinsics } from "../../src/wasm/link/classes";
 import { AOSP, JAVA } from "./paths";
@@ -141,6 +141,27 @@ if (jsDiffers.length) console.log(`the JS tier differs from the JDK on ${jsDiffe
 
 // ---------- the substrate, directly
 if (substrate) {
+  for (const mode of ["bridge", "full", "recovered"] as const) {
+    let full = false, turns = 0, bridge = 0;
+    const heap = world(w.prog, { heapUsed: () => full ? HEAP_LIMIT + 1 : 0, collect: () => {}, loop: {
+      ...defaultLoop, after: (ms, run) => defaultLoop.after(ms, () => { turns++; if (mode === "recovered") full = false; run(); }),
+    } });
+    heap.bridge.toJava(new Int8Array(1), "[B");
+    heap.host.heapBridge = () => { heap.bridge.toJava(new Int8Array(ALLOC_WINDOW), "[B"); };
+    const allocate = heap.hostFn("substrate:heap:" + mode, [], "V", (cx, c) => {
+      if (mode === "bridge") c.call(bridge);
+      else { cx.emitNewArray(c, "[B", () => c.i32(ALLOC_WINDOW)); c.drop(); }
+    }, cx => { bridge = cx.mb.importFunc("host", "heapBridge", cx.sig([], "V")); });
+    const strand = heap.sched.strand();
+    full = true;
+    let result = "allocated";
+    try { await strand.call(allocate); }
+    catch (error) { const throwable = heap.throwable(error); result = throwable ? heap.classNameOf(throwable) : String(error); }
+    finally { strand.end(); }
+    expect(`${mode} heap pressure result`, result, mode === "recovered" ? "allocated" : "java/lang/OutOfMemoryError");
+    expect(`${mode} heap pressure finalizer turns`, turns, mode === "bridge" ? 0 : mode === "full" ? 2 : 1);
+    expect(`${mode} heap pressure releases its strand`, heap.sched.strands.filter(Boolean).length, 1);
+  }
   const importStrand = w.sched.strand(w.sched.hostThread()), globals = w.rtImports();
   try {
     await importStrand.call(w.hostFn("substrate:import-thread", [], "L", (cx, c) => cx.callRt(c, "curThread")));

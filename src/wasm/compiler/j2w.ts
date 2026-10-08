@@ -12,7 +12,7 @@ import { compileMethod, MC } from "./method";
 import type { ClassRt, World } from "../link/world";
 import { rtfns, type Synth } from "./rtfns";
 import type { LinkFailure } from "./linkage";
-import { Block, FUEL, emitBlock } from "../link/sched";
+import { Block, Sync, FUEL, emitBlock, emitSync } from "../link/sched";
 import { SLOT, INIT_DONE, THROWERS, ALLOC_WINDOW, MAX_ARRAY_BYTES, MAX_DEPTH, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, type Thrower } from "../link/exc";
 import { StructStrings, stringCtor, type StringRepr } from "../link/strings";
 import { emitStoreCheck } from "../link/classes";
@@ -610,7 +610,11 @@ export class Compiler implements Base {
       case "allocSlow": return [t([], []), () => {
         const c = new Code(0), g = this.global("rt", "alloc", T.i32, true);
         c.i32(-ALLOC_WINDOW).gset(g);
-        for (let turn = 0; turn < 2; turn++) { c.call(this.imp.heapCheck).if_(); emitBlock(this, c, Block.Yield, null, null, () => c.i32(1)); c.drop(); }
+        for (let turn = 0; turn < 2; turn++) {
+          c.call(this.imp.heapCheck).if_();
+          emitSync(this, c, Sync.CanSuspend); c.if_();
+          emitBlock(this, c, Block.Yield, null, null, () => c.i32(1)); c.drop().end();
+        }
         c.call(this.imp.heapCheck).if_().i64(BigInt(ALLOC_WINDOW)); this.callThrower(c, "oom"); c.end();
         c.end().end();
         return c.finish();

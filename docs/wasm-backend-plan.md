@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Synchronous allocation checkpoint (2026-10-08)
+
+Heap-pressure handling now checks whether its caller can suspend before yielding for finalizers. A host byte-array conversion previously raised an engine `SuspendError`; it now raises Java's actual `OutOfMemoryError`. The previous compiler reproduces the focused failure; typecheck, 134 threading checks, lazy allocation/exception checks and 241 cold-operation checks pass. Matching AOT and application verification follow. The post-import-compaction YouTube capture shows lower instantiation-attributed heap samples and the intended video, but still ends with memory exhaustion; differing live paths prevent an APK-wide causal percentage. The history records raw receipts and limits.
+
 ### Import compaction checkpoint (2026-10-08)
 
 Generated modules now omit unused function imports while preserving function references and stack-trace offsets. All 291,144 default-sweep bodies validate; that isolated-method workload emits 28.15% fewer bytes and 92.94% fewer function imports. A production-Compiler helper probe saves about 4,400 live heap bytes per instance; batched platform AOT shrinks only about 0.2%. These are scoped structural/heap results, not an APK-wide or latency win.

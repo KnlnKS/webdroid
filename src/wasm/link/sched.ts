@@ -23,7 +23,7 @@ export const FUEL = 4096;
 export const ROOT = 1;
 
 /** operations that answer at once (`host.sync`) */
-export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady }
+export const enum Sync { Try = 1, Exit, Notify, NotifyAll, Unpark, Interrupt, Interrupted, IsInterrupted, Holds, Create, Status, InitDone, Bind, Plain, Resume, IsMain, ContextDeferred, ContextSet, SystemLoaderReady, CanSuspend }
 /** operations that may wait (`host.block`, Suspending) */
 export const enum Block { Enter = 1, Wait, Sleep, Park, Yield, Init, Net }
 
@@ -409,6 +409,7 @@ export class Sched {
       case Sync.Unpark: { const r = this.rec(obj!, true)!; if (r.parked) r.parked(); else r.permit = true; return 0; }
       case Sync.Status: return this.status(obj!, a !== 0);
       case Sync.Plain: this.blockedPlain++; return 0;
+      case Sync.CanSuspend: return +(!s.root && !this.w.inSynchronousJava());
       case Sync.Resume: this.onThread?.(s.thread, false); return 0;
       case Sync.InitDone: return this.initDone(a);
     }
