@@ -1,7 +1,4 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
-import { codeStats } from "./jvm/codecache";
-import { offeredCount } from "./jvm/aot";
-import { pendingCompilations } from "./jvm/tiering";
 import "./natives";
 import { PROCESS_PID } from "./android/os";
 import { recordVsync, vsyncScheduled } from "./android/vsync";
@@ -217,7 +214,6 @@ const wd = {
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj: (cls: string, desc?: string, ...args: unknown[]) => onMain(() => newObj(cls, desc, ...args)),
   vcall: (obj: unknown, name: string, desc: string, ...args: unknown[]) => onMain(() => vcall(obj, name, desc, ...args)),
-  code: () => ({ ...codeStats(), offered: offeredCount(), deferred: pendingCompilations() }),
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),

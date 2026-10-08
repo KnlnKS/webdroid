@@ -1,11 +1,11 @@
-// Tap latency gate (docs/bytecode-first-plan.md §4.8): pointerup to the first presented frame
-// that shows the app's response, for every gated tap of a scenario.
+// Tap latency proxy: pointerup to the first changed quantized screen bitmap. A release or ripple
+// can change it before the intended content responds; semantic response needs a separate check.
 //
 //   bun run lat [scenario ...] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
-// runs inside the page and reports through document.title. `--warm` launches each scenario twice
+// runs inside the page, signals through document.title and exports copied diagnostics without enabling Runtime. `--warm` launches each scenario twice
 // in one browser profile and gates the second: it starts from fresh app data (wd.reset) but with
 // the compiled code the first launch persisted.
 // A scenario is scripts/lat/scenarios/<name>.json:
@@ -29,6 +29,10 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
 const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile");
+const launchQuery = new URLSearchParams(query);
+if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "js");
+if (!launchQuery.has("processMode")) launchQuery.set("processMode", "iframe");
+if (!["js", "wasm"].includes(launchQuery.get("tier")!)) throw new Error("lat tier must be js or wasm");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
 /** the wd.perf counters a tap's breakdown reports, as deltas from pointerup to the response */
@@ -38,12 +42,56 @@ const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resPar
   "wasmMethods", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
-type Tap = { m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number> };
-/** navigation to the first presented frame, and to the launch going idle, with the counters at the first frame */
-type Launch = { firstFrame: number; idle: number; perf: Record<string, number>; marks: string[] };
+type Tap = { m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
+/** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
+type Launch = { firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
+  idle: number; perf: Record<string, number>; marks: string[] };
+type Capture = { launch?: Launch; taps: Tap[]; processesBefore?: unknown; processesAfter?: unknown;
+  codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
-const inPage = (steps: unknown, counters: string[]) => `(${async function run(steps: any[], counters: string[]) {
+const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean) {
   const w = globalThis as any;
+  const result: Capture = w.__wdLat = { taps: [] };
+  const realms = () => [window, ...[...document.querySelectorAll("iframe")].flatMap(f => {
+    try { return f.contentWindow && new URL(f.contentWindow.location.href).origin === location.origin && f.contentWindow.location.pathname === "/process" ? [f.contentWindow] : []; }
+    catch { return []; }
+  })];
+  const readRealm = (win: Window) => {
+    const wd = (win as any).wd, cold = win.__wdCold;
+    if (!wd) return { url: win.location.href, status: "unavailable" };
+    return { url: win.location.href, status: "ok", tier: wd.tier, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks,
+      pid: new URLSearchParams(win.location.search).get("pid"), process: new URLSearchParams(win.location.search).get("process"),
+      missing: [...wd.rt.missing], missingAt: Object.fromEntries([...wd.rt.missingAt ?? []].map(([name, frames]) => [name, frames.slice()])), placeholders: [...wd.rt.placeholders],
+      placeholderAt: Object.fromEntries([...wd.rt.placeholderAt].map(([name, frames]) => [name, frames.slice()])), native: wd.nativeRequirements(), logs: wd.logs?.slice() ?? null,
+      perf: { ...wd.perf }, queue: { ...wd.mainDbg }, coverage: wd.jvmCoverage?.snapshot?.() ?? null,
+      code: wd.code?.() ?? null, wasm: cold ? { enabled: cold.enabled, appSaved: cold.appSaved ?? null, appAttached: cold.appAttached ?? null,
+        aotKey: cold.aotKey ?? null, appBuilds: cold.appBuilds?.map(b => ({ ...b })) ?? [], worker: cold.worker ? { ...cold.worker } : null } : null };
+  };
+  const diagnostics = w.__wdLatRead = async () => {
+    let workers;
+    try { workers = w.wd?.workerProcesses ? await w.wd.workerProcesses() : []; }
+    catch (error) { workers = [{ error: String(error) }]; }
+    return { at: performance.now(), frames: realms().map(readRealm), workers };
+  };
+  const appRealms = () => realms().filter(win => !!(win as any).wd?.app());
+  const readiness = async (win: Window, save: boolean) => {
+    const wd = (win as any).wd, cold = win.__wdCold;
+    if (wd.tier === "wasm") {
+      if (save) {
+        if (!cold?.appSettle) throw new Error("Wasm app save hook unavailable: " + win.location.href);
+        await cold.appSettle();
+        if (!cold.appBuilds?.some(b => b.kept) && !cold.appSaved) throw new Error("Wasm app build was not saved: " + win.location.href);
+      } else if (!cold?.appSaved || !cold.appAttached) throw new Error("Wasm warm replay did not attach saved app code: " + win.location.href);
+      return readRealm(win);
+    }
+    if (save) await wd.codeSettle();
+    const code = wd.code(), paths: string[] = [];
+    for (const name of await win.caches.keys()) for (const request of await (await win.caches.open(name)).keys())
+      if (code.dir && new URL(request.url).pathname.startsWith(code.dir)) paths.push(request.url);
+    if (!paths.length || save && code.pending !== 0 || !save && code.loaded === 0)
+      throw new Error("JS app code is not " + (save ? "saved" : "loaded") + ": " + win.location.href);
+    return { ...readRealm(win), savedPaths: paths.sort() };
+  };
   const small = new OffscreenCanvas(54, 108), sctx = small.getContext("2d", { willReadFrequently: true })!;
   const sig = (src: CanvasImageSource) => {
     sctx.drawImage(src, 0, 0, 54, 108);
@@ -74,18 +122,31 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
       await sleep(100);
     }
   };
+  for (const until = performance.now() + 60_000; !appRealms().some(win => (win as any).wd.perf.presentations > 0);) {
+    if (performance.now() > until) throw new Error("First app presentation unavailable (Worker launches require a separate presentation protocol)");
+    await sleep(50);
+  }
   await idle();
   // the launch timeline: the marks (src/perf.ts) of this realm and of the frames in it, in ms since this navigation
   const marksOf = (win: Window, realm: string) => win.performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:"))
     .map((e) => `${realm}:${e.name.slice(3)}:${Math.round(win.performance.timeOrigin + e.startTime - performance.timeOrigin)}`);
   const marks = [...marksOf(window, "page"), ...[...document.querySelectorAll("iframe")].flatMap((f, i) => f.contentWindow ? marksOf(f.contentWindow, "frame" + i) : [])];
-  const launch = { firstFrame, idle: Math.round(performance.now()), perf: launchPerf, marks };
+  const appPresentationMarks = appRealms().flatMap(win => win.performance.getEntriesByName("wd:firstPresented").map(e => ({ url: win.location.href,
+    pkg: (win as any).wd.app().pkg, tier: (win as any).wd.tier, at: Math.round(win.performance.timeOrigin + e.startTime - performance.timeOrigin),
+    visible: !win.frameElement || !!win.frameElement.getBoundingClientRect().height })));
+  result.launch = { firstFrame, appPresentationMarks,
+    idle: Math.round(performance.now()), perf: launchPerf, marks };
+  result.processesBefore = await diagnostics();
+  if (replay) {
+    if (new URLSearchParams(location.search).get("processMode") === "worker") throw new Error("Worker warm readiness is unavailable");
+    result.codeReadiness = { phase: "attached", realms: await Promise.all(appRealms().map(win => readiness(win, false))) };
+  }
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
   const ev = (type: string, x: number, y: number) => {
     const c = screen(), r = c.getBoundingClientRect();
     c.dispatchEvent(new PointerEvent(type, { clientX: r.left + x * r.width / 1080, clientY: r.top + y * r.height / 2160, pointerId: 1, isPrimary: true, bubbles: true, pointerType: "touch" }));
   };
-  const out: Record<string, unknown>[] = [];
+  const out = result.taps;
   for (const s of steps) {
     if (s.wait) { await sleep(s.wait); await idle(); continue; }
     if (s.pick) {
@@ -115,6 +176,7 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
       if (!at) throw new Error(`no text "${s.text}" on screen`);
       ({ x, y } = at);
     }
+    const processesBefore = s.m ? await diagnostics() : undefined;
     const base = sig(screen());
     if (s.m) frames = [];
     const t0 = performance.now();
@@ -135,13 +197,21 @@ const inPage = (steps: unknown, counters: string[]) => `(${async function run(st
     for (const f of got) { const sg = sig(await f.bmp); if (sg !== prev) changes.push(f); prev = sg; }
     // the breakdown is the work done from pointerup until the frame that answered it
     const au = changes.find((f) => f.t >= tu), after = au?.perf ?? snapshot();
-    out.push({ m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
+    const tap: Tap = { m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
       settled: changes.length ? Math.round(changes.at(-1)!.t - t0) : null, frames: got.length,
-      perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) });
+      perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
+    out.push(tap);
     await idle();
+    tap.processesAfter = await diagnostics();
   }
-  document.title = "DONE:" + JSON.stringify({ launch, taps: out });
-}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}).catch((e) => { document.title = "DONE:ERROR " + e; });`;
+  result.processesAfter = await diagnostics();
+  if (save) result.codeReadiness = { phase: "saved", realms: await Promise.all(appRealms().map(win => readiness(win, true))) };
+  document.title = "DONE";
+}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}).catch(async e => {
+  const result = globalThis.__wdLat; result.error = String(e);
+  try { result.processesAfter = await globalThis.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
+  document.title = "DONE";
+});`;
 
 /** one headless Chrome over raw CDP, with its own profile directory */
 async function openBrowser(profile: string) {
@@ -154,7 +224,7 @@ async function openBrowser(profile: string) {
     await Bun.sleep(100);
     try { port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]; } catch { /* not yet */ }
   }
-  if (!port) throw new Error("Chrome did not open a debugging port");
+  if (!port) { proc.kill(); throw new Error("Chrome did not open a debugging port"); }
   const { webSocketDebuggerUrl } = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json() as { webSocketDebuggerUrl: string };
   const ws = new WebSocket(webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
@@ -169,24 +239,26 @@ async function openBrowser(profile: string) {
   return { send, close: () => { ws.close(); proc.kill(); } };
 }
 
-async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown, profile?: string): Promise<{ launch: Launch; taps: Tap[] }> {
+async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown, profile?: string, save = false, replay = false): Promise<Capture> {
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS)} });` }, sessionId);
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: `${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay)} });` }, sessionId);
   if (profile) { await send("Profiler.enable", {}, sessionId); await send("Profiler.setSamplingInterval", { interval: 200 }, sessionId); await send("Profiler.start", {}, sessionId); }
-  await send("Page.navigate", { url: `${BASE}/?apk=${encodeURIComponent(apk)}&screen=${encodeURIComponent(SCREEN)}${query ? "&" + query : ""}` }, sessionId);
+  const url = new URL("/", BASE);
+  url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
+  await send("Page.navigate", { url: url.href }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
       await Bun.sleep(500);
       const { targetInfo } = await send("Target.getTargetInfo", { targetId });
-      if (!targetInfo.title.startsWith("DONE:")) continue;
-      const body = targetInfo.title.slice(5);
-      if (body.startsWith("ERROR")) throw new Error(body);
+      if (targetInfo.title !== "DONE") continue;
       if (profile) await Bun.write(profile, JSON.stringify((await send("Profiler.stop", {}, sessionId)).profile));
-      return JSON.parse(body);
+      const read = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat)", returnByValue: true }, sessionId);
+      return JSON.parse(read.result.value);
     }
-    throw new Error("scenario timed out");
+    const partial = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId);
+    return { ...JSON.parse(partial.result.value), error: "scenario timed out" };
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
@@ -206,16 +278,31 @@ async function resetData(send: Awaited<ReturnType<typeof openBrowser>>["send"]):
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-const report: { scenario: string; launch: Launch; taps: Tap[] }[] = [];
+type Report = Capture & { scenario: string; apk?: string; tier: string; processMode: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
+  responseProxy: string; launchProxy: string };
+const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const { apk, steps } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
-  const profile = mkdtempSync(join(tmpdir(), "wdlat-"));
-  const browser = await openBrowser(profile);
+  const row: Report = { scenario: name, tier: launchQuery.get("tier")!, processMode: launchQuery.get("processMode")!, warm, query: launchQuery.toString(), taps: [],
+    responseProxy: "pointerup to first changed quantized screen bitmap; release/ripple may precede intended content",
+    launchProxy: "firstFrame/perf are root draw observations; appPresentationMarks identify realm bitmap transfers, with visibility observed later at startup snapshot" };
+  report.push(row);
+  let profile: string | undefined, browser: Awaited<ReturnType<typeof openBrowser>> | undefined;
   try {
-    if (warm) { await launch(browser.send, apk, steps); await resetData(browser.send); }
-    const { launch: started, taps } = await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`);
-    report.push({ scenario: name, launch: started, taps });
+    const { apk, steps } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
+    row.apk = apk; row.expectedTaps = steps.flatMap((step: { m?: string }) => step.m ? [step.m] : []);
+    if (row.processMode === "worker") throw new Error("Worker app presentation and persisted-code readiness need a separate capture protocol");
+    profile = mkdtempSync(join(tmpdir(), "wdlat-"));
+    browser = await openBrowser(profile);
+    if (warm) {
+      row.preparation = await launch(browser.send, apk, steps, undefined, true);
+      if (row.preparation.error) throw new Error("warm preparation: " + row.preparation.error);
+      await resetData(browser.send);
+    }
+    Object.assign(row, await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`, false, warm));
+    if (row.error) throw new Error(row.error);
+    const { launch: started, taps } = row;
+    if (!started || taps.length !== row.expectedTaps!.length || taps.some((tap, i) => tap.m !== row.expectedTaps![i])) throw new Error("incomplete scenario capture");
     const counters = Object.entries(started.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${Math.round(v)}`).join(" ");
     console.log(`     ${name.padEnd(12)} ${"launch".padEnd(14)} ${String(started.firstFrame).padStart(5)} ms  idle=${started.idle} ${counters}`);
     if (timeline) for (const [realm, name, ms] of started.marks.map((m) => m.split(":")).sort((a, b) => +a[2] - +b[2])) console.log(`       ${ms.padStart(6)} ms  ${realm.padEnd(7)} ${name}`);
@@ -227,12 +314,13 @@ for (const name of names) {
     }
   } catch (e) {
     failed = true;
-    console.log(`FAIL ${name}: ${e instanceof Error ? e.message : e}`);
+    row.error = e instanceof Error ? e.message : String(e);
+    console.log(`FAIL ${name}: ${row.error}`);
   } finally {
-    browser.close();
-    rmSync(profile, { recursive: true, force: true });
+    browser?.close();
+    if (profile) rmSync(profile, { recursive: true, force: true });
   }
 }
 if (jsonOut) await Bun.write(jsonOut, JSON.stringify(report, null, 1));
-console.log(failed ? `latency gate FAILED: a gated tap exceeded ${LIMIT_MS} ms or never responded` : `latency gate passed: every gated tap within ${LIMIT_MS} ms`);
+console.log(failed ? `latency gate FAILED: a scenario failed, or a gated tap exceeded ${LIMIT_MS} ms or never responded` : `latency proxy passed: every gated tap within ${LIMIT_MS} ms`);
 process.exit(failed ? 1 : 0);

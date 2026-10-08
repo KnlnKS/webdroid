@@ -228,6 +228,8 @@ function idle(): void {
 }
 
 let saving: Promise<void> = Promise.resolve(), lastSave = 0;
+/** Explicit diagnostic flush; ordinary launches persist during idle periods. */
+export const settleCode = (): Promise<void> => saveCode();
 /** append the pending bodies as a startup and a later chunk; a load that found too many chunks
  *  rewrites them all, once the later ones have loaded. Only an idle save may take more than one task. */
 function saveCode(idle = false): Promise<void> {
