@@ -233,7 +233,7 @@ export class World {
         this.sched.parkNative(value.then(v => this.javaValue(v))); return null;
       },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
-      gwrote: (address: number, length: number) => opts.guest!.wrote(address, length),
+      gwrote: (address: number, length: number) => opts.guest!.wrote(address >>> 0, length >>> 0),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
