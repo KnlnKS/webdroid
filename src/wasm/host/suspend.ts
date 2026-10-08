@@ -44,6 +44,7 @@ export const MAY_SUSPEND = new Set<string>([
   "android/graphics/ImageDecoder.nCreate(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
   "android/media/AudioTrack.native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I",
   "android/media/MediaExtractor.readSampleData(Ljava/nio/ByteBuffer;I)I",
+  "android/media/MediaCodec.native_configure([Ljava/lang/String;[Ljava/lang/Object;Landroid/view/Surface;Landroid/media/MediaCrypto;Landroid/os/IHwBinder;I)V",
   "android/graphics/Bitmap.nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V",
   "android/graphics/Bitmap.nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V",
   "dalvik/system/InMemoryDexClassLoader.<init>(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V",

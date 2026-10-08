@@ -1,9 +1,9 @@
 // A format as the media natives keep one (stagefright's AMessage), and its crossing to and from
 // the Map<String, Object> Java's MediaFormat wraps, its values tagged with MediaFormat's types.
 import { driven, type Gen, type JObj } from "../jvm/runtime";
-import { newObj, vcall } from "../jvm/natives/jentry";
+import { newObj, vcall, after } from "../jvm/natives/jentry";
 import { boxDesc, boxFloat, boxInt, boxLong, unbox } from "../jvm/natives/jbox";
-import { isBuffer, remainingBytes, type JBuffer } from "../jvm/natives/jnio";
+import { isBuffer, remainingBytes, readRemainingBytes, directCopy, type JBuffer } from "../jvm/natives/jnio";
 
 export const TYPE_INTEGER = 1, TYPE_LONG = 2, TYPE_FLOAT = 3, TYPE_STRING = 4, TYPE_BYTE_BUFFER = 5;
 type FormatValue = number | bigint | string | JBuffer;
@@ -30,6 +30,16 @@ export function formatFromJava(keys: string[] | null, values: unknown[] | null):
     else if (isBuffer(v)) format.set(keys![i], TYPE_BYTE_BUFFER, v as JBuffer);
   }
   return format;
+}
+/** ConvertKeyValueArraysToMessage owns a copy of each ByteBuffer's remaining bytes. */
+export function copiedFormatFromJava(keys: string[] | null, values: unknown[] | null): NativeFormat | Promise<NativeFormat> {
+  const format = formatFromJava(keys,values);
+  let pending: Promise<unknown>[] | undefined;
+  for (const [key,{type,value}] of format.values) if (type === TYPE_BYTE_BUFFER) {
+    const copy = after(readRemainingBytes(value as JBuffer),bytes => after(directCopy(bytes.slice()),buffer => format.set(key,type,buffer)));
+    if (copy instanceof Promise) (pending ??= []).push(copy);
+  }
+  return pending ? Promise.all(pending).then(() => format) : format;
 }
 /** a HashMap<String, Object>, as the JNI's ConvertMessageToMap makes one */
 export const formatToJava = driven(function* formatToJava$(format: NativeFormat): Gen<JObj> {

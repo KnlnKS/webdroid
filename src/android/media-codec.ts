@@ -5,7 +5,7 @@ import { awaited, JObj, rt, setDeclared, driven, type Gen } from "../jvm/runtime
 import { concat, jarray } from "../jvm/abi";
 import { after, newObj, vcall } from "../jvm/natives/jentry";
 import { type JBuffer, allocateDirectNow, bufferBytes, capacity as bufferCapacity, directReady, nativeOrder, setLimit, setPosition } from "../jvm/natives/jnio";
-import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, formatFromJava, formatToJava } from "./media-format";
+import { NativeFormat, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, csdBytes, copiedFormatFromJava, formatToJava } from "./media-format";
 import { surfaceTarget, presentSurface, type GlSurface } from "./glsurface";
 import { nativePeer, postNativeEvent } from "./media-native";
 
@@ -418,7 +418,7 @@ rt.registerJnis(MC, {
     keys: string[] | null, values: unknown[] | null, surface: JObj | null, crypto: unknown, descrambler: unknown, flags: number) => {
     // a decoder cannot encode (CONFIGURE_FLAG_ENCODE), and no crypto plugin exists to decrypt
     if (flags & 1 || crypto || descrambler) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-    c.configure(formatFromJava(keys, values), surface);
+    return after(copiedFormatFromJava(keys,values),format => c.configure(format,surface));
   }),
   "native_setCallback(Landroid/media/MediaCodec$Callback;)V": C((c, cb: JObj | null) => { c.async = !!cb; }),
   "native_enableOnFrameRenderedListener(Z)V": C((c, enable: number) => { c.frameEvents = !!enable; }),
