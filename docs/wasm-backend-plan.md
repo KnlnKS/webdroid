@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Stable symbolic-helper names checkpoint (2026-10-08)
+
+Resolved helpers retain their instructions, bindings and caller Java frame metadata while using one stable non-Java debug name. Fixed-work controls demonstrate lower engine code cost without adding a runtime cache; a private FitNotes comparison preserves all 39 screenshots and UI trees. Integrated typecheck, all 19 Wasm sections, the final 1,212-test unit repeat, framework/cold/OSR checks and FitNotes smoke pass. Two initial browser JAR-loading failures remain unexplained; their candidate and baseline fixture bundles are byte-identical and focused/full repeats pass. Source `251b90c37d16…` serves ordinary `f1aa39b747ea4e7b`/guarded `128b051fde702f7a`, with all 4,324 platform files unchanged. Current-source canonical application follow-through and the final gates remain open; JavaScript stays default.
+
 ### Current full application checkpoint (2026-10-08, production `1763b497`)
 
 Selective metadata/header refresh preserves loader semantics in matched controls and passes the integrated compiler/unit/framework/cold/OSR checks with byte-identical fresh AOT. The frozen `582ca82d` full matrix captures all 208 screenshots in 14 flows, but fails Doodle, Resy, Reddit, TikTok, YouTube and ChatGPT. All 709 observed process diagnostics respond; Doodle still has opposing thread waits, TikTok records an OOM, and rendered Resy/YouTube/ChatGPT screens do not establish the requested venue/playback/response. Five scored flows average 18.70% content difference. Source `67a3c407835365…` and ordinary `d4e184dbdd4fef0e`/guarded `0a4fa6880383d20c` assets remain frozen throughout. The history records per-flow evidence and limitations. Final application/conformance/Worker/corpus and performance acceptance remain open; JavaScript stays default.

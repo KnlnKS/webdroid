@@ -109,7 +109,8 @@ export class ColdSlowOps {
   compileSite(m: MethodInfo, pc: number, site = this.prepareSite(m, pc)) {
     const { ins, inputs, output, analysis } = site, cx = new Compiler(this.w);
     const emit = this.operation(m, ins, inputs, output, analysis);
-    const built = cx.buildSynthetic(`symbolic:${m.cls}:${m.index}:${pc}`, inputs.map(i => i.kind), c => {
+    // These helpers have no Java frame; stable names let engines reuse identical module code.
+    const built = cx.buildSynthetic("symbolic:operation", inputs.map(i => i.kind), c => {
       const weights = emit(cx, c, i => {
         if (i < 2) c.gget(cx.global("rt", i ? "thr" : "depth", i ? T.anyref : T.i32, true));
         else c.lget(i - 2);
