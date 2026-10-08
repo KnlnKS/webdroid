@@ -16,7 +16,8 @@ beforeAll(async () => {
   ]);
   browser = launched;
   if (!build.success) throw new AggregateError(build.logs, "browser fixture build failed");
-  const bundle = build.outputs[0], fontIndex = Bun.spawnSync(["bun", "scripts/font-index.ts"]).stdout.toString();
+  // Direct BuildArtifact responses have duplicated chunks under concurrent browser load.
+  const bundle = await build.outputs[0].text(), fontIndex = Bun.spawnSync(["bun", "scripts/font-index.ts"]).stdout.toString();
   server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/aosp/framework-res.apk`));
