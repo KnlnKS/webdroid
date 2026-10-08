@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { getDeclared, setDeclared } from "../../src/jvm/runtime";
 import { JThrowable } from "../../src/jvm/natives/jthrowable";
+import { boxDesc, unbox } from "../../src/jvm/natives/jbox";
 import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
 import { JAVA } from "./paths";
 import { dexAndroid, shellIn } from "./tools";
@@ -45,6 +46,12 @@ export async function entryCases(): Promise<string[]> {
   await line("not", () => scall(E, "not", "(Z)Z", 1));
   await line("next", () => scall(E, "next", "(C)C", 65));
   await line("lowByte", () => scall(E, "lowByte", "(I)B", 0x1ff));
+  for (const [name, desc, value] of [["Integer", "I", 1], ["Long", "J", 1234567890123n], ["Float", "F", 1.25], ["Double", "D", -0], ["Boolean", "Z", 1], ["Byte", "B", -7], ["Short", "S", -300], ["Character", "C", 65]] as const) {
+    await line("unbox " + name, async () => {
+      const boxed = await scall("java/lang/" + name, "valueOf", `(${desc})Ljava/lang/${name};`, value);
+      return [boxDesc(boxed), unbox(boxed)];
+    });
+  }
   await line("join", () => scall(E, "join", `(${STR}${STR})${STR}`, "a", "b"));
   await line("nul", () => scall(E, "nul", `(${STR})${STR}`, null));
   await line("sum", () => scall(E, "sum", "([I)I", Int32Array.of(1, 2, 3, 4)));

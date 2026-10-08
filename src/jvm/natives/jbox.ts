@@ -1,9 +1,9 @@
 // java.lang's boxes run from libcore. TS makes and reads them through these helpers, over each
 // class's own `value` field; §4.7 intrinsics box and unbox, and format and parse integers.
 import { mangleField, mangleStaticField, doubleToLongBits, floatToIntBits, intBitsToFloat, longBitsToDouble } from "../abi";
-import { rt, type ClassInfo, type Intrinsic } from "../runtime";
+import { rt, type Intrinsic } from "../runtime";
 import { tier } from "../tier";
-import { scall } from "./jentry";
+import { classNameOf, scall } from "./jentry";
 
 type Obj = Record<string, any>;
 export type BoxDesc = "I" | "J" | "F" | "D" | "Z" | "C" | "B" | "S";
@@ -17,7 +17,7 @@ const VALUE = Object.fromEntries(Object.entries(CLASS).map(([d, c]) => [d, mangl
 /** the primitive descriptor of a box, null for anything else */
 export function boxDesc(o: unknown): BoxDesc | null {
   if (typeof o !== "object" || o === null) return null;
-  return DESC.get((o.constructor as { $i?: ClassInfo }).$i?.name ?? "") ?? null;
+  return DESC.get(classNameOf(o) ?? "") ?? null;
 }
 /** a box's primitive value (a Boolean's as 0/1), undefined for anything else */
 export function unbox(o: unknown): number | bigint | undefined {
