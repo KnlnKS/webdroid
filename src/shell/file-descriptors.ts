@@ -3,6 +3,7 @@ import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadF
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
   detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
+import { SharedFile, type SharedFileLease, type SharedFilePage } from "./shared-file";
 
 export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "ashmemProtect"; fd: number; prot: number }
@@ -22,12 +23,14 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "mappingWrite"; fd: number; offset: number; bytes: Uint8Array }
   | { kind: "mappingRelease"; fd: number }
   | { kind: "mappingSync"; fd: number }
+  | { kind: "mappingPages"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
 export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
-  mapping?: { region: number; offset: number; length: number; prot: number } };
+  mapping?: { region: number; offset: number; length: number; prot: number };
+  pages?: { length: SharedArrayBuffer; pages: SharedFilePage[] } };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
-type Mapping = { fd: number; file: OpenFile; offset: number; length: number; prot: number };
+type Mapping = { fd: number; file: OpenFile; offset: number; length: number; prot: number; pages?: SharedFileLease };
 type Session = { dead: boolean; descriptors: Map<number, Descriptor>; mappings: Map<number, Mapping>; authorize(path: string, write: boolean): number; uid?: number };
 export type RetainedDescriptor = { readonly fd:number; readonly file:OpenFile; closed:boolean; closing?:Promise<void> };
 
@@ -103,15 +106,30 @@ export class FileDescriptors {
       catch { return {result:-E.NOMEM}; }
       return {result:this.put(session,installFile(file,true))};
     }
-    if (request.kind === "mappingRead" || request.kind === "mappingWrite" || request.kind === "mappingRelease" || request.kind === "mappingSync") {
+    if (request.kind === "mappingRead" || request.kind === "mappingWrite" || request.kind === "mappingRelease" || request.kind === "mappingSync" || request.kind === "mappingPages") {
       const mapping = session.mappings.get(request.fd);
       if (!mapping) return {result:-E.BADF};
       if (request.kind === "mappingRelease") session.mappings.delete(request.fd);
       const bytes = request.kind === "mappingWrite" ? request.bytes.slice() : undefined;
       return this.ordered(mapping.file, async () => {
-        if (request.kind === "mappingRelease") return {result:javaCloseFd(mapping.fd)};
+        if (request.kind === "mappingRelease") { try { mapping.pages?.release(); } finally { javaCloseFd(mapping.fd); } return {result:0}; }
         if (session.dead) return {result:-E.BADF};
-        if (request.kind === "mappingSync") { const result = javaSyncFd(mapping.fd); if (!result) await vfs.flush(); return {result}; }
+        if (request.kind === "mappingPages") {
+          if (!mapping.pages) {
+            try {
+              const source = vfs.sharedFile(mapping.file.content);
+              if (!source || mapping.offset + mapping.length > source.size) return {result:-E.NOTSUP};
+              mapping.pages = await source.acquire(mapping.offset, mapping.length);
+            } catch (error) { return {result:error instanceof RangeError ? -E.NOMEM : -E.IO}; }
+            if (session.dead) { mapping.pages.release(); mapping.pages = undefined; return {result:-E.BADF}; }
+          }
+          return {result:0,pages:{length:mapping.pages.length,pages:mapping.pages.pages}};
+        }
+        if (request.kind === "mappingSync") {
+          const result = javaSyncFd(mapping.fd), source = mapping.file.content.source;
+          if (!result) { if (source instanceof SharedFile) source.flush(); await vfs.flush(); }
+          return {result};
+        }
         const length = request.kind === "mappingRead" ? request.length : bytes!.length;
         if (!Number.isSafeInteger(request.offset) || request.offset < 0 || !Number.isSafeInteger(length) || length < 0 || request.offset > mapping.length - length) return {result:-E.INVAL};
         if (!(mapping.prot & (request.kind === "mappingRead" ? 1 : 2))) return {result:-E.ACCES};
@@ -183,7 +201,7 @@ export class FileDescriptors {
         case "truncate": reply = {result:javaTruncateFd(fd,operation.length)}; break;
         case "sync": {
           const result = javaSyncFd(fd);
-          if (result === 0) await vfs.flush();
+          if (result === 0) { const source = descriptor.file.content.source; if (source instanceof SharedFile) source.flush(); await vfs.flush(); }
           reply = {result}; break;
         }
         case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat,ashmemProt:descriptor.file.content.ashmem?.prot} : {result:-E.BADF}; break; }
@@ -249,7 +267,7 @@ export class FileDescriptors {
     this.sessions.delete(pid); session.dead = true;
     for (const table of [session.descriptors,session.mappings]) {
       for (const resource of table.values())
-        void this.ordered(resource.file, () => javaCloseFd(resource.fd)).catch(error => console.error("[descriptor cleanup]",error));
+        void this.ordered(resource.file, () => { try { if ("pages" in resource) resource.pages?.release(); } finally { javaCloseFd(resource.fd); } }).catch(error => console.error("[descriptor cleanup]",error));
       table.clear();
     }
   }

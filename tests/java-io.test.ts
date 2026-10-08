@@ -74,6 +74,9 @@ describe("file-descriptor", () => {
       const duplicate = (await call({kind:"dup",fd:token,cloexec:true})).result;
       const alias = await call({kind:"mappingAcquire",fd:duplicate,offset:1,length:4095,prot:1}), b = alias.result;
       expect(alias.mapping).toEqual({...acquired.mapping!,offset:1,length:4095,prot:1});
+      const pagesA = (await call({kind:"mappingPages",fd:a})).pages!, pagesB = structuredClone((await call({kind:"mappingPages",fd:b})).pages!);
+      expect(pagesA.pages[0].generation).toBe(pagesB.pages[0].generation);
+      const page = new Uint8Array(pagesB.pages[0].bytes), versions = new BigUint64Array(pagesA.pages[0].versions);
       await vcall(shared,"close","()V");
       await call({kind:"close",fd:token});
       await call({kind:"close",fd:duplicate});
@@ -81,15 +84,20 @@ describe("file-descriptor", () => {
       expect((await call({kind:"mappingWrite",fd:a,offset:0,bytes:Uint8Array.of(8)})).result).toBe(1);
       vfs.writeAt(file.content,1,Uint8Array.of(9));
       expect([...(await call({kind:"mappingRead",fd:a,offset:0,length:2})).bytes!]).toEqual([8,9]);
+      expect([...page.subarray(0,2)]).toEqual([8,9]);
+      expect(Atomics.load(versions,0)).toBe(2n);
       expect([...(await call({kind:"mappingRead",fd:b,offset:0,length:1})).bytes!]).toEqual([9]);
       expect(file.pos).toBe(23);
       expect((await call({kind:"mappingWrite",fd:b,offset:0,bytes:Uint8Array.of(7)})).result).toBe(-E.ACCES);
       expect((await clients[0].fileDescriptor({kind:"mappingRead",fd:a,offset:0,length:1})).result).toBe(-E.BADF);
       await call({kind:"mappingRelease",fd:a});
       expect(file.references).toBe(1);
+      vfs.writeAt(file.content,1,Uint8Array.of(10));
+      expect(page[1]).toBe(10);
       kernel.close(1002);
       await new Promise(resolve => setTimeout(resolve,0));
       expect(file.references).toBe(0);
+      expect(Atomics.load(new BigUint64Array(pagesA.pages[0].state),0)).toBe(0n);
       expect((await call({kind:"mappingRead",fd:b,offset:0,length:1})).result).toBe(-E.BADF);
     } finally {
       await vcall(shared,"close","()V"); kernel.close(1001); kernel.close(1002);
