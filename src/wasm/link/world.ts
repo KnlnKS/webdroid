@@ -1400,26 +1400,29 @@ export class World {
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
   plan = new Map<string, MethodInfo[]>();
   groupOf = new Map<number, number[]>();
-  private callees = new Map<MethodInfo, PreparedInstruction[]>();
+  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[] }>();
+  private planning(m: MethodInfo) {
+    let sites = this.planningSites.get(m);
+    if (!sites) {
+      const seen = new Set<string>(), allocations = new Set<string>(), calls: PreparedInstruction[] = [];
+      for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
+        if (ins.op === 0x22) allocations.add(descToName(m.dex.type(ins.b)));
+        if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
+        const key = `${ins.op}:${ins.b}`;
+        if (!seen.has(key)) { seen.add(key); calls.push(ins); }
+      }
+      this.planningSites.set(m, sites = { calls, allocations: [...allocations] });
+    }
+    return sites;
+  }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] : 0; }
   /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
   private smallCallees(m: MethodInfo): MethodInfo[] {
-    let sites = this.callees.get(m);
-    if (!sites) {
-      const seen = new Set<string>();
-      sites = decodeInstructions(m.dex.code(m.codeOff).insns).filter(ins => {
-        if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) return false;
-        const key = `${ins.op}:${ins.b}`;
-        if (seen.has(key)) return false;
-        seen.add(key); return true;
-      });
-      this.callees.set(m, sites);
-    }
     const out: MethodInfo[] = [];
     const dex = m.dex;
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
-    for (const ins of sites) {
+    for (const ins of this.planning(m).calls) {
       if (needsSymbolicSite(this, m, ins)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
       if (decl[0] === "[" || kind === "invoke-super") continue;
@@ -1431,16 +1434,12 @@ export class World {
   }
   /** the classes `m` allocates join the allocated set before its virtual calls are planned: it is about to run */
   private noteAllocations(m: MethodInfo): void {
-    for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
-      if (ins.op !== 0x22) continue;
-      const name = descToName(m.dex.type(ins.b));
-      if (this.prog.get(name)) this.allocated.add(name);
-    }
+    for (const name of this.planning(m).allocations) if (this.prog.get(name)) this.allocated.add(name);
   }
   /** the implementations of `m`'s virtual calls that are worth a guarded direct call, recorded in `plan` for the emitter */
   private guarded(m: MethodInfo): MethodInfo[] {
     const out: MethodInfo[] = [], dex = m.dex;
-    for (const ins of decodeInstructions(dex.code(m.codeOff).insns)) {
+    for (const ins of this.planning(m).calls) {
       const op = ins.op;
       if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78) continue;
       if (needsSymbolicSite(this, m, ins)) continue;
