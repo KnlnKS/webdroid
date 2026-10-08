@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Bounded polymorphic guards checkpoint (2026-10-08)
+
+The hot planner now retains its highest-ranked two eligible implementations when more qualify, preserving virtual dispatch for all others. Five-run Node and Chrome controls improve steady HashMap timing with matching answers; full primary G1 and first-call acceptance remain open. All 19 Wasm sections, 1,212 unit cases, typecheck, OSR/cold/framework checks and default eight-jar AOT pass. Source `8296c7ccc8bd…` identifies ordinary `0b51dc814a97fd73` and guarded `b0e4ab64daa0b929`; platform module files remain byte-identical to b4d0. The previous diagnostic cut now observes Doodle's mutual thread wait directly, but still fails the gameplay flow. History contains exact measurements and source guards.
+
 ### Linker retention and full conformance checkpoint (2026-10-08)
 
 The frozen `b4d0be2d` cut completes all nine conformance suites with zero regressions/unexplained differences and validates 6,227,619 method bodies across all 33 top-level APK/XAPK files with zero failures. Existing divergence pins and 134 baseline tests absent from both tiers remain explicit coverage limits. Matched Doodle still wedges after Play on Wasm while JavaScript reaches gameplay. Full YouTube still wedges; its differing live JS control cannot establish matched playback. These are correctness runs under concurrent load, not idle performance acceptance.
