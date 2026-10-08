@@ -25,9 +25,9 @@ TextEncoder.prototype.encode = function (text = "") {
   if (active) { calls++; characters += text.length; allocations += result.length; }
   return result;
 };
-ModuleBuilder.prototype.build = function () {
+ModuleBuilder.prototype.build = function (...args) {
   active = true;
-  try { const bytes = build.call(this); modules.push({ bytes: bytes.length, sha256: hash(bytes) }); return bytes; }
+  try { const bytes = build.apply(this, args); modules.push({ bytes: bytes.length, sha256: hash(bytes) }); return bytes; }
   finally { active = false; }
 };
 const roots: { method: string; sha256: string; traces: string; gaps: string[] }[] = [];

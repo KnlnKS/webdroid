@@ -1,5 +1,4 @@
-// Minimal WebAssembly binary builder (types incl. GC rec/sub, imports, funcs, tables, globals, tags, exports, elems, data).
-// Written for the DEX->Wasm research prototype; emits bytes directly (no text, no binaryen).
+// WebAssembly binary builder, including GC recursive types and subtypes.
 export const enum T { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, i8 = 0x78, i16 = 0x77,
   funcref = 0x70, externref = 0x6f, anyref = 0x6e, eqref = 0x6d, i31ref = 0x6c, structref = 0x6b, arrayref = 0x6a, exnref = 0x69, nullref = 0x71 }
 export function uleb(n: number | bigint, out: number[]): void {
@@ -50,20 +49,31 @@ type TypeDef =
   | { k: "struct"; fields: FieldT[]; sup?: number; final?: boolean }
   | { k: "array"; elem: FieldT; sup?: number; final?: boolean };
 
+// Function-index immediates are tracked independently of DEX stack-trace offsets.
+export type FuncBytes = number[] & { functionRefs?: number[] };
+export function functionIndex(index: number, out: FuncBytes): void {
+  (out.functionRefs ??= []).push(out.length); uleb(index, out);
+}
+function readIndex(bytes: number[], at: number): number {
+  let value = 0, shift = 0, b: number;
+  do { b = bytes[at++]; value += (b & 127) * 2 ** shift; shift += 7; } while (b & 128);
+  return value;
+}
+
 export class ModuleBuilder {
   /** type entries; consecutive entries with the same group id form a rec group */
   types: { def: TypeDef; group: number }[] = [];
   private groups = 0;
   imports: { mod: string; name: string; kind: "func" | "memory" | "table" | "global" | "tag"; desc: number[] }[] = [];
   funcTypes: number[] = [];       // type idx per defined function
-  bodies: number[][] = [];        // encoded bodies
+  bodies: FuncBytes[] = [];        // encoded bodies
   funcNames: string[] = [];
   /** after build(): module offset of each defined function's first body byte (its local declarations) */
   bodyOffsets: number[] = [];
   nImportedFuncs = 0; nImportedGlobals = 0; nImportedTags = 0; nImportedTables = 0;
   tables: number[][] = []; memories: number[][] = []; globals: number[][] = []; tags: number[] [] = [];
   exports: { name: string; kind: number; idx: number }[] = [];
-  elems: number[][] = []; datas: number[][] = []; declaredFuncs = new Set<number>();
+  elems: FuncBytes[] = []; datas: number[][] = [];
   customs: { name: string; bytes: number[] }[] = [];
   start = -1;
 
@@ -113,9 +123,9 @@ export class ModuleBuilder {
   export(nm: string, kind: "func" | "table" | "memory" | "global" | "tag", idx: number): void { this.exports.push({ name: nm, kind: { func: 0, table: 1, memory: 2, global: 3, tag: 4 }[kind], idx }); }
   /** active element segment writing funcs at table[offset...] */
   addElemActive(table: number, offset: number, funcs: number[]): void {
-    const d: number[] = [0x02]; uleb(table, d); d.push(0x41); sleb(offset, d); d.push(0x0b); d.push(0x00); uleb(funcs.length, d); for (const f of funcs) uleb(f, d); this.elems.push(d);
+    const d: number[] = [0x02]; uleb(table, d); d.push(0x41); sleb(offset, d); d.push(0x0b); d.push(0x00); uleb(funcs.length, d); for (const f of funcs) functionIndex(f, d); this.elems.push(d);
   }
-  addElemDeclare(funcs: number[]): void { if (!funcs.length) return; const d: number[] = [0x03, 0x00]; uleb(funcs.length, d); for (const f of funcs) uleb(f, d); this.elems.push(d); }
+  addElemDeclare(funcs: number[]): void { if (!funcs.length) return; const d: number[] = [0x03, 0x00]; uleb(funcs.length, d); for (const f of funcs) functionIndex(f, d); this.elems.push(d); }
   addDataPassive(bytes: Uint8Array | number[]): number { const d: number[] = [0x01]; uleb(bytes.length, d); for (const b of bytes) d.push(b); this.datas.push(d); return this.datas.length - 1; }
   addDataActive(mem: number, offset: number, bytes: Uint8Array | number[]): void { const d: number[] = [0x02]; uleb(mem, d); d.push(0x41); sleb(offset, d); d.push(0x0b); uleb(bytes.length, d); for (const b of bytes) d.push(b); this.datas.push(d); }
   addCustom(nm: string, bytes: number[]): void { this.customs.push({ name: nm, bytes }); }
@@ -129,7 +139,37 @@ export class ModuleBuilder {
       case "array": out.push(0x5e); vt(d.elem.t, out); out.push(d.elem.mut ? 1 : 0); break;
     }
   }
-  build(): Uint8Array {
+  build(compactImports = false): Uint8Array {
+    let imports = this.imports, imported = this.nImportedFuncs;
+    let index = (f: number) => f;
+    // Raw bodies or global initializers can contain untracked function references.
+    if (compactImports && !this.globals.length && [...this.bodies, ...this.elems].every(b => b.functionRefs)) {
+      const used = new Set<number>();
+      for (const b of [...this.bodies, ...this.elems]) for (const at of b.functionRefs!) { const f = readIndex(b, at); if (f < this.nImportedFuncs) used.add(f); }
+      for (const e of this.exports) if (e.kind === 0) used.add(e.idx);
+      if (this.start >= 0) used.add(this.start);
+      const indices = new Map<number, number>();
+      let old = 0; imported = 0;
+      imports = this.imports.filter(im => {
+        if (im.kind !== "func") return true;
+        const keep = used.has(old);
+        if (keep) indices.set(old, imported++);
+        old++; return keep;
+      });
+      const removed = this.nImportedFuncs - imported;
+      index = f => f < this.nImportedFuncs ? indices.get(f)! : f - removed;
+    }
+    const relocate = (body: FuncBytes): ArrayLike<number> => {
+      if (imported === this.nImportedFuncs || !body.functionRefs?.length) return body;
+      const bytes = Uint8Array.from(body);
+      for (const at of body.functionRefs) {
+        let value = index(readIndex(body, at)), i = at;
+        // Preserve immediate widths so stack-trace marks within a body stay valid.
+        while (body[i] & 128) { bytes[i++] = (value & 127) | 128; value = Math.floor(value / 128); }
+        bytes[i] = value;
+      }
+      return bytes;
+    };
     const parts: ArrayLike<number>[] = [Uint8Array.of(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0)];
     let size = 8;
     const put = (a: ArrayLike<number>) => { parts.push(a); size += a.length; };
@@ -152,9 +192,9 @@ export class ModuleBuilder {
         entries.push(e); i = j;
       }
       vec(1, entries); }
-    if (this.imports.length) {
+    if (imports.length) {
       const modules = new Map<string, number[]>();
-      vec(2, this.imports.map(im => {
+      vec(2, imports.map(im => {
         let prefix = modules.get(im.mod);
         if (!prefix) { prefix = []; name(im.mod, prefix); modules.set(im.mod, prefix); }
         const e = prefix.slice(); name(im.name, e);
@@ -167,9 +207,9 @@ export class ModuleBuilder {
     if (this.memories.length) vec(5, this.memories);
     if (this.tags.length) vec(13, this.tags);
     if (this.globals.length) vec(6, this.globals);
-    if (this.exports.length) vec(7, this.exports.map((x) => { const e: number[] = []; name(x.name, e); e.push(x.kind); uleb(x.idx, e); return e; }));
-    if (this.start >= 0) section(8, [count(this.start)]);
-    if (this.elems.length) vec(9, this.elems);
+    if (this.exports.length) vec(7, this.exports.map((x) => { const e: number[] = []; name(x.name, e); e.push(x.kind); uleb(x.kind === 0 ? index(x.idx) : x.idx, e); return e; }));
+    if (this.start >= 0) section(8, [count(index(this.start))]);
+    if (this.elems.length) vec(9, this.elems.map(relocate));
     // the data count section precedes the code
     if (this.datas.length) section(12, [count(this.datas.length)]);
     for (const cu of this.customs) { const c: number[] = []; name(cu.name, c); section(0, [c, cu.bytes]); }
@@ -180,11 +220,11 @@ export class ModuleBuilder {
       for (let i = 0; i < this.bodies.length; i++) len += lens[i].length + this.bodies[i].length;
       const h: number[] = [10]; uleb(len, h); put(h); put(count(this.bodies.length));
       this.bodyOffsets = [];
-      for (let i = 0; i < this.bodies.length; i++) { put(lens[i]); this.bodyOffsets.push(size); put(this.bodies[i]); }
+      for (let i = 0; i < this.bodies.length; i++) { put(lens[i]); this.bodyOffsets.push(size); put(relocate(this.bodies[i])); }
     }
     if (this.datas.length) vec(11, this.datas);
     // name section for function names (helps stack traces)
-    const named = this.funcNames.map((n, i) => [i + this.nImportedFuncs, n] as const).filter(([, n]) => n);
+    const named = this.funcNames.map((n, i) => [i + imported, n] as const).filter(([, n]) => n);
     if (named.length) {
       const sub: number[] = []; uleb(named.length, sub);
       for (const [i, n] of named) { uleb(i, sub); name(n, sub); }

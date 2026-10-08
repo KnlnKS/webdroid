@@ -13,6 +13,12 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Import compaction checkpoint (2026-10-08)
+
+Generated modules now omit unused function imports while preserving function references and stack-trace offsets. All 291,144 default-sweep bodies validate; that isolated-method workload emits 28.15% fewer bytes and 92.94% fewer function imports. A production-Compiler helper probe saves about 4,400 live heap bytes per instance; batched platform AOT shrinks only about 0.2%. These are scoped structural/heap results, not an APK-wide or latency win.
+
+Source `a49b6aa2f7cf…` serves ordinary `7d15d79983d11fc4` and guarded `5d552cdb5f4e9dac`. Typecheck, 19 Wasm suites, cold/OSR/framework checks and two 1,212-test unit repeats pass. An initial browser ZIP-loading failure remains unexplained after a passing prepared starting-commit control. Actual ordinary Chromium/WebKit and guarded Chromium FitNotes startup renders and advances ticks with matching guards. The preceding YouTube heap diagnostic attributes about 800 MB of a 2.14 GB sample to instantiation frames, but does not isolate unused imports or reproduce its earlier explicit OOM. The history records controls and limits. Application, conformance, Worker and performance gates below remain open; guarded WebKit remains unsupported.
+
 ### Compiler cleanup checkpoint (2026-10-08)
 
 Canonical descriptor parsing, void-result handling, opcode predicates and float-local emission lose redundant work without changing generated code. The default 291,144-body sweep is byte-identical; all 4,324 files inside fresh ordinary/guarded production builds also match the preceding build. Source `549677716dc4…` now identifies ordinary `b05d9363f111d0bd` and guarded `d98efc6ee340c4f1`. Typecheck, all 19 Wasm sections, 241 cold-operation checks, 41 OSR checks, 31 framework exercises and the standard 1,211-test unit run pass. No tests or dependencies are added. Measured work reductions and exact receipts are in the history; the application and performance gates below remain open.

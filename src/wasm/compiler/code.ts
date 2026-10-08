@@ -1,7 +1,7 @@
-import { T, sleb, uleb, vt, vtKey, type VT } from "./wasmbin";
+import { T, sleb, uleb, vt, vtKey, type VT, type FuncBytes, functionIndex } from "./wasmbin";
 /** instruction emitter for one function body */
 export class Code {
-  b: number[] = [];
+  b: FuncBytes = [];
   /** locals declared beyond params: type per local index offset */
   localTypes: VT[] = [];
   /** DEX pc of the instruction being emitted; calls and throws record (byte offset, pc) so a Wasm frame offset maps back to a pc */
@@ -54,7 +54,7 @@ export class Code {
   /** the functions called directly, and the number of calls through a table or a reference: what a body may run besides its own instructions */
   targets: number[] = [];
   indirect = 0;
-  call(f: number): this { this.mark(); this.targets.push(f); this.b.push(0x10); uleb(f, this.b); return this; }
+  call(f: number): this { this.mark(); this.targets.push(f); this.b.push(0x10); functionIndex(f, this.b); return this; }
   callIndirect(type: number, table = 0): this { this.mark(); this.indirect++; this.b.push(0x11); uleb(type, this.b); uleb(table, this.b); return this; }
   callRef(type: number): this { this.indirect++; this.b.push(0x14); uleb(type, this.b); return this; }
   returnCallRef(type: number): this { this.mark(); this.indirect++; this.b.push(0x15); uleb(type, this.b); return this; }
@@ -108,7 +108,7 @@ export class Code {
   refAsNonNull(): this { this.b.push(0xd4); return this; }
   brOnNonNull(d: number): this { this.b.push(0xd6); uleb(d, this.b); return this; }
   brOnNull(d: number): this { this.b.push(0xd5); uleb(d, this.b); return this; }
-  refFunc(f: number): this { this.b.push(0xd2); uleb(f, this.b); return this; }
+  refFunc(f: number): this { this.b.push(0xd2); functionIndex(f, this.b); return this; }
   gc(sub: number, ...imm: number[]): this { this.b.push(0xfb); uleb(sub, this.b); for (const i of imm) uleb(i, this.b); return this; }
   structNew(t: number): this { return this.gc(0, t); }
   structGet(t: number, f: number): this { return this.gc(2, t, f); }
@@ -135,25 +135,27 @@ export class Code {
   materialize(): void {
     if (!this.deferred.length) return;
     this.materializing = true;
-    const old = this.b, marks = this.marks;
-    this.b = []; this.marks = [];
-    let from = 0, mi = 0;
+    const old = this.b, marks = this.marks, refs = old.functionRefs ?? [];
+    this.b = []; this.b.functionRefs = []; this.marks = [];
+    let from = 0, mi = 0, ri = 0;
     for (const { at, emit } of this.deferred) {
       const offset = this.b.length - from;
+      while (ri < refs.length && refs[ri] < at) this.b.functionRefs.push(refs[ri++] + offset);
       while (mi < marks.length && marks[mi] < at) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
       for (let i = from; i < at; i++) this.b.push(old[i]);
       emit(this); from = at;
     }
     const offset = this.b.length - from;
+    while (ri < refs.length) this.b.functionRefs.push(refs[ri++] + offset);
     while (mi < marks.length) { this.marks.push(marks[mi] + offset, marks[mi + 1]); mi += 2; }
     for (let i = from; i < old.length; i++) this.b.push(old[i]);
     this.deferred = [];
     this.materializing = false;
   }
-  finish(): number[] {
+  finish(): FuncBytes {
     this.materialize();
     // locals: run-length encode consecutive identical types
-    const out: number[] = [];
+    const out: FuncBytes = [];
     const groups: [number, VT][] = [];
     let lastKey = "";
     for (const t of this.localTypes) {
@@ -163,6 +165,7 @@ export class Code {
     uleb(groups.length, out);
     for (const [n, t] of groups) { uleb(n, out); vt(t, out); }
     this.prefixLen = out.length;
+    out.functionRefs = (this.b.functionRefs ?? []).map(at => at + this.prefixLen);
     for (const x of this.b) out.push(x);
     out.push(0x0b);
     return out;

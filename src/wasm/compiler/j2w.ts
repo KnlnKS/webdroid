@@ -720,10 +720,10 @@ export class Compiler implements Base {
     fns = fns.concat(this.outlines);
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
-    this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), [0, 0x0b], "$start");
+    this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), new Code(0).finish(), "$start");
     const t0 = performance.now(), span = beginCompile("wasm.encode");
     let bytes: Uint8Array;
-    try { bytes = this.mb.build(); } finally { endCompile(span); }
+    try { bytes = this.mb.build(true); } finally { endCompile(span); }
     this.w.stats.phase.encode += performance.now() - t0;
     const traces = fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;
