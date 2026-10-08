@@ -8,12 +8,18 @@ with its suites in `scripts/wasm/` (`bun run wasm <suite>`) and its Java fixture
 (its `mid` is `compiler/ids.ts`). `floatbench.ts`, `lazybench.ts` and the j2w `dis.ts` were deleted.
 This is a report plus a staged plan for a different coding agent to execute.
 
-## Recovery status (2026-10-07)
+## Recovery status (2026-10-08)
 
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
-### Current recovery checkpoint (2026-10-07, production `269719d3`)
+### Current application checkpoint (2026-10-08, production `b020e09f`)
+
+The source-stable ordinary-Wasm full matrix completes all 208 steps across 14 flows and exits 1 for Doodle, Resy, Reddit, TikTok, YouTube and ChatGPT. All 722 observed process snapshots answer diagnostics, including 77 unbooted realms; reachable diagnostics do not prove app liveness. Lichess additionally fails visual review: all 15 screenshots are black despite its non-wedged smoke result, with a Flutter preferences-channel startup error. The five scored flows average 18.79% content difference; no visual-parity or idle-performance acceptance follows. Goldens and production/AOT/APK/native inputs remain unchanged throughout the capture.
+
+YouTube's OOM occurs after substantial compilation; its reported 8 MiB is a periodic allocation-check window, not an identified allocation size. Resy's missing touch-mode delegate is a later error than its initial stall. These need causal profiles and matching controls. The complete receipt is `/tmp/webdroid-b020-full/`; the implementation history records the per-flow evidence and limits. G2/S4/S5/S6 and the previously failing performance/Worker gates remain open. JavaScript remains default.
+
+### Core verification checkpoint (2026-10-07, production `269719d3`)
 
 Custom range invocations no longer establish a false non-null argument fact. Unit format 11 carries compiler-owned class-import metadata, removing WebKit's failing GC import reflection and consolidating platform header construction. Fresh matching ordinary `beac2b720f1b8642` and guarded `07bd5183b198b168` assets compile all 290,828 methods per policy with five existing binding gaps. Typecheck, all 19 broad Wasm sections and the unchanged full 1,211-test/79,749-assertion unit repeat pass. Nine initial browser parser failures remain unexplained. Actual ordinary-Wasm FitNotes startup/render/liveness passes in WebKit and Chromium with complete observed-realm diagnostics; guarded Chromium passes, while guarded WebKit fails with a JSPI RestoreFrameMode stack-scan error before app initialization.
 
