@@ -23,6 +23,8 @@ value in this file is a secondary claim until `probe.mjs` is ported to a working
 | Extended const | yes | yes | yes | not measured |
 | `wasm:js-string` builtins (instantiate with `builtins:["js-string"]`) | yes | yes | yes | not measured |
 | JSPI (`WebAssembly.Suspending`/`promising`), suspend+resume through pure wasm | yes | yes | yes | not measured |
+| JSPI after a same-module tail call (2026-10-07 repeat) | yes | yes | yes | not measured |
+| JSPI after a cross-module `return_call_ref` (2026-10-07 repeat) | yes | yes | NO: `RestoreFrameMode` stack scan error | not measured |
 | JSPI: suspending through a JS frame | `SuspendError: trying to suspend JS frames` | same | error "JavaScript frames found between WebAssembly.Suspending and ..." | not measured |
 | `Atomics.waitAsync` | yes | yes | yes | not measured |
 | SharedArrayBuffer | needs cross-origin isolation (absent on `about:blank`) | same | same | not measured |
@@ -38,6 +40,29 @@ is not a limit here). The 50,000 locals figure is right. The old "4 KB sync-comp
 Chrome only. Safari's engine supports JSPI, GC, EH and tail calls in the Playwright WebKit 2359 build but lacks memory64,
 multi-memory and relaxed SIMD, so the design must not use those on a WebKit-compatible path. Stack switching (WasmFX) was not
 probed (V8 flag only, Phase 3).
+
+### Composed JSPI and tail-call support (2026-10-07)
+
+`node research/wasm/probe.mjs <chrome|chromium|webkit> --nolimits` now executes
+suspension after a same-module tail call and after ordinary/tail reference calls to
+another instance. Chrome 153 and Chromium 151 return 2 for each. WebKit 26.5
+returns 2 for the ordinary and same-module cases, but the cross-module tail call
+throws `JSPI stack scan failed: unrecognized type of Wasm frame: RestoreFrameMode`.
+Separate feature support did not establish this composition. A private 64-case
+control varies caller/callee arities 0/1/4/16 and instance identity: all Chromium
+cases pass; precisely the 16 cross-instance tail cases fail in WebKit.
+
+The same error prevents actual guarded FitNotes startup, at a ClassLoader
+constructor's deoptimization into its cold resume entry. Ordinary Wasm startup
+renders and advances correctly after the class-import metadata repair. Treat the
+guarded tier as unsupported on this measured WebKit build; the ordinary path has
+only the observed application coverage, not universal browser acceptance. Replacing
+tail handoffs with ordinary calls is not established as a safe fallback: repeated
+promotion/deoptimization would retain physical frames and require renewed stack
+and caller validation. No such fallback or Java scheduling change is introduced.
+Raw controls: `/tmp/webdroid-jspi-probe-{chrome,chromium,webkit}.log`,
+`/tmp/webdroid-jspi-tail-probe.{ts,json}`, and
+`/tmp/webdroid-webkit-guarded-diagnostic.{ts,json}`.
 
 ### Compilation hints (G4)
 - Spec'd encoding, section `compilationHints` before the code section: vec of one byte per function; bits 0-1 strategy

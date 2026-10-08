@@ -7,8 +7,12 @@ const flags = (rest.find(a => a.startsWith("--flags=")) || "").slice(8).split(",
 const F = binaryen.Features;
 const asm = t => { const m = binaryen.parseText(t); m.setFeatures(F.All & ~(F.Strings | F.CompactImports | F.StackSwitching | F.SharedEverything | F.FP16 | F.CustomPageSizes | F.WideArithmetic | F.RelaxedAtomics | F.AcquireReleaseAtomics)); const b = [...m.emitBinary()]; m.dispose(); return b; };
 const bytes = {
-  jspi: asm(`(module (import "h" "s" (func $s (param i32) (result i32))) (import "h" "j" (func $j (param i32) (result i32))) (func (export "a") (param i32) (result i32) (call $s (local.get 0)))
- (func (export "b") (param i32) (result i32) (call $j (local.get 0))))`),
+  jspi: asm(`(module (import "h" "s" (func $s (param i32) (result i32))) (import "h" "j" (func $j (param i32) (result i32))) (func $a (export "a") (param i32) (result i32) (call $s (local.get 0)))
+ (func (export "b") (param i32) (result i32) (call $j (local.get 0)))
+ (func (export "tail") (param i32) (result i32) (return_call $a (local.get 0))))`),
+  jspiCross: asm(`(module (type $sig (func (param i32) (result i32))) (import "h" "callee" (func $callee (type $sig))) (elem declare func $callee)
+ (func (export "call") (param i32) (result i32) (call_ref $sig (local.get 0) (ref.func $callee)))
+ (func (export "tail") (param i32) (result i32) (return_call_ref $sig (local.get 0) (ref.func $callee))))`),
   gc: asm(`(module (type $s (struct (field i32))) (func (export "f") (result i32) (struct.get $s 0 (struct.new $s (i32.const 1)))))`),
   exnref: asm(`(module (tag $t) (func (export "f") (result i32) (block $h (result exnref) (try_table (catch_all_ref $h) (throw $t)) (return (i32.const 0))) (drop) (i32.const 1)))`),
   legacyEh: [0,97,115,109,1,0,0,0,1,4,1,96,0,0,3,2,1,0,13,3,1,0,0,10,9,1,7,0,6,64,7,0,11,11], // try/catch (0x06,0x07)
@@ -38,6 +42,12 @@ const featureFn = async bytes => {
     let inst; const imp = { h: { s: new WebAssembly.Suspending(async x => { await 0; return x + 1; }), j: x => inst.exports.a(x) } };
     inst = (await WebAssembly.instantiate(w, imp)).instance;
     try { out.jspiSuspend = await WebAssembly.promising(inst.exports.a)(1); } catch (e) { out.jspiSuspend = "err " + e.message; }
+    try { out.jspiLocalTail = await WebAssembly.promising(inst.exports.tail)(1); } catch (e) { out.jspiLocalTail = "err " + e.message; }
+    const cross = (await WebAssembly.instantiate(new Uint8Array(bytes.jspiCross), { h: { callee: inst.exports.a } })).instance;
+    for (const kind of ["call", "tail"]) {
+      try { out["jspiCrossModule_" + kind] = await WebAssembly.promising(cross.exports[kind])(1); }
+      catch (e) { out["jspiCrossModule_" + kind] = "err " + e.message; }
+    }
     try { out.jspiThroughJsFrame = "ok " + await WebAssembly.promising(inst.exports.b)(1); } catch (e) { out.jspiThroughJsFrame = "err " + e.message.slice(0, 60); }
   }
   return out;
