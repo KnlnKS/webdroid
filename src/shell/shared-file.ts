@@ -2,7 +2,7 @@ import { readFully, type WritableSource } from "./lazyfile";
 
 export const SHARED_PAGE_SIZE = 4096, SHARED_GRANULE_SIZE = 64;
 export type SharedFilePage = { offset: number; generation: number; state: SharedArrayBuffer; bytes: SharedArrayBuffer; versions: SharedArrayBuffer };
-export type SharedFileLease = { length: SharedArrayBuffer; pages: SharedFilePage[]; release(): void };
+export type SharedFileLease = { state: SharedArrayBuffer; length: SharedArrayBuffer; pages: SharedFilePage[]; release(): void };
 type Page = { bytes: Uint8Array; versions: BigUint64Array; state: BigUint64Array; generation: number; pins: number };
 
 class MemoryFile implements WritableSource {
@@ -113,9 +113,10 @@ export class SharedFile implements WritableSource {
         page.pins++; pinned.push([at, page]);
       }
     } catch (error) { this.release(pinned); throw error; }
+    const state = new Int32Array(new SharedArrayBuffer(4)); Atomics.store(state, 0, 1);
     let released = false;
-    return {length:this.length.buffer as SharedArrayBuffer, pages:pinned.map(([offset, page]) => ({offset, generation:page.generation, state:page.state.buffer as SharedArrayBuffer, bytes:page.bytes.buffer as SharedArrayBuffer, versions:page.versions.buffer as SharedArrayBuffer})),
-      release:() => { if (!released) { released = true; this.release(pinned); } }};
+    return {state:state.buffer as SharedArrayBuffer,length:this.length.buffer as SharedArrayBuffer, pages:pinned.map(([offset, page]) => ({offset, generation:page.generation, state:page.state.buffer as SharedArrayBuffer, bytes:page.bytes.buffer as SharedArrayBuffer, versions:page.versions.buffer as SharedArrayBuffer})),
+      release:() => { if (!released) { released = true; Atomics.store(state,0,0); this.release(pinned); } }};
   }
   private release(pages: [number, Page][]): void {
     for (const [at, page] of pages) {

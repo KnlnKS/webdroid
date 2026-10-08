@@ -3,7 +3,7 @@ import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadF
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
   detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
-import { SharedFile, type SharedFileLease, type SharedFilePage } from "./shared-file";
+import { SharedFile, type SharedFileLease } from "./shared-file";
 
 export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "ashmemProtect"; fd: number; prot: number }
@@ -27,7 +27,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
 export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
   mapping?: { region: number; offset: number; length: number; prot: number };
-  pages?: { length: SharedArrayBuffer; pages: SharedFilePage[] } };
+  pages?: Omit<SharedFileLease,"release"> };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
 type Mapping = { fd: number; file: OpenFile; offset: number; length: number; prot: number; pages?: SharedFileLease };
@@ -123,7 +123,7 @@ export class FileDescriptors {
             } catch (error) { return {result:error instanceof RangeError ? -E.NOMEM : -E.IO}; }
             if (session.dead) { mapping.pages.release(); mapping.pages = undefined; return {result:-E.BADF}; }
           }
-          return {result:0,pages:{length:mapping.pages.length,pages:mapping.pages.pages}};
+          return {result:0,pages:{state:mapping.pages.state,length:mapping.pages.length,pages:mapping.pages.pages}};
         }
         if (request.kind === "mappingSync") {
           const result = javaSyncFd(mapping.fd), source = mapping.file.content.source;

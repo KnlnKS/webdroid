@@ -91,6 +91,8 @@ describe("file-descriptor", () => {
       expect((await call({kind:"mappingWrite",fd:b,offset:0,bytes:Uint8Array.of(7)})).result).toBe(-E.ACCES);
       expect((await clients[0].fileDescriptor({kind:"mappingRead",fd:a,offset:0,length:1})).result).toBe(-E.BADF);
       await call({kind:"mappingRelease",fd:a});
+      expect(Atomics.load(new Int32Array(pagesA.state),0)).toBe(0);
+      expect(Atomics.load(new Int32Array(pagesB.state),0)).toBe(1);
       expect(file.references).toBe(1);
       vfs.writeAt(file.content,1,Uint8Array.of(10));
       expect(page[1]).toBe(10);
