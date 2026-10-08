@@ -2,7 +2,7 @@
 
 import { rt } from "../jvm/runtime";
 import { curThread, threadSwitch, after } from "../jvm/natives/jentry";
-import { type JBuffer, isLiveBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, writeBufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
+import { type JBuffer, isLiveBuffer, readRemainingBytes, readBufferBytes, writeRemainingBytes, checkedRemainingOffset, writeBufferBytes, position, limit, elementShift } from "../jvm/natives/jnio";
 import { bitmapOf, ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16 } from "./bitmap";
 import { gles1String } from "../native/gles1";
 import { gles3Extensions } from "../native/gles3";
@@ -93,8 +93,10 @@ function afterGL<A,R>(value: A | Promise<A>, use: (value: A) => R): R | Promise<
     finally { gl = previous; T = previousTable; }
   });
 }
-function bytesFrom<R>(buf: JBuffer | null, use: (bytes: Uint8Array<ArrayBuffer> | null) => R): R | Promise<R> {
-  return afterGL(buf ? readRemainingBytes(buf) : null, bytes => use(bytes as Uint8Array<ArrayBuffer> | null));
+function bytesFrom<R>(buf: JBuffer | null, use: (bytes: Uint8Array<ArrayBuffer> | null) => R, size?: number): R | Promise<R> {
+  const remaining = buf ? (limit(buf) - position(buf)) * 2 ** elementShift(buf) : 0;
+  const n = size === undefined ? remaining : Math.max(0,Math.min(remaining,size < 0 ? remaining + size : size));
+  return afterGL(buf ? readRemainingBytes(buf,n) : null, bytes => use(bytes as Uint8Array<ArrayBuffer> | null));
 }
 
 /** glGenX into an int[] or an IntBuffer; glDeleteX drops each slot (see glDeleteShader) */
@@ -103,6 +105,7 @@ function genInto<O extends object>(tbl: (O | null)[], make: () => O | null | und
 }
 function genIntoBuffer<O extends object>(tbl: (O | null)[], make: () => O | null | undefined, n: number, buf: JBuffer) {
   if (n <= 0) return;
+  checkedRemainingOffset(buf,n * 4);
   const out = new Int32Array(n);
   genInto(tbl,make,n,out);
   return writeRemainingBytes(buf,new Uint8Array(out.buffer));
@@ -232,12 +235,12 @@ rt.registerJnis("android/opengl/GLES20", bindings({
   "glGenBuffers(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => genIntoBuffer(T.buffers, () => gl?.createBuffer(), n, buf),
   "glBindBuffer(II)V": (target: number, b: number) => gl?.bindBuffer(target, b ? T.buffers[b]! : null),
   "glBufferData(IILjava/nio/Buffer;I)V": (target: number, size: number, data: JBuffer | null, usage: number) => bytesFrom(data,b => {
-    if (b) gl?.bufferData(target, b.subarray(0, size), usage);
+    if (b) gl?.bufferData(target, b, usage);
     else gl?.bufferData(target, size, usage);
-  }),
+  },size),
   "glBufferSubData(IIILjava/nio/Buffer;)V": (target: number, off: number, size: number, data: JBuffer) => bytesFrom(data,b => {
-    if (b) gl?.bufferSubData(target, off, b.subarray(0, size));
-  }),
+    if (b) gl?.bufferSubData(target, off, b);
+  },size),
   "glDeleteBuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.buffers, (o) => gl?.deleteBuffer(o), n, arr, off),
   "glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.textures, () => gl?.createTexture(), n, out, off),
   "glGenTextures(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => genIntoBuffer(T.textures, () => gl?.createTexture(), n, buf),
@@ -261,8 +264,9 @@ rt.registerJnis("android/opengl/GLES20", bindings({
     if (!gl) return;
     const start = position(data) * 2 ** elementShift(data), bytes = pixelByteSize(format,type);
     const rows = pixelRows(w,h,bytes,pixelParam(gl,0x0d05),pixelParam(gl,0x0d02) || w,pixelParam(gl,0x0d03),pixelParam(gl,0x0d04));
-    const remote = isLiveBuffer(data), read = remote
-      ? new Uint8Array((limit(data) - position(data)) * 2 ** elementShift(data)) : readRemainingBytes(data);
+    const remote = isLiveBuffer(data), remaining = (limit(data) - position(data)) * 2 ** elementShift(data);
+    const extent = bytes && w > 0 && h > 0 && Number.isSafeInteger(rows.extent) && rows.extent >= 0 ? rows.extent : 0;
+    const read = remote ? new Uint8Array(Math.min(remaining,extent)) : readRemainingBytes(data);
     return afterGL(read,b => {
       if (!gl) return;
       const C = pixelArray(type), aligned = b.byteOffset % C.BYTES_PER_ELEMENT === 0;

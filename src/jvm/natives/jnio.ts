@@ -94,14 +94,19 @@ export function remainingBytes(b: JBuffer): Uint8Array<ArrayBuffer> {
   const shift = elementShift(b);
   return bufferBytes(b).subarray(position(b) << shift, limit(b) << shift);
 }
-export function readRemainingBytes(b: JBuffer): Uint8Array | Promise<Uint8Array> {
-  const scale = 2 ** elementShift(b);
-  return readBufferBytes(b,position(b) * scale,(limit(b) - position(b)) * scale);
+export function readRemainingBytes(b: JBuffer, n?: number): Uint8Array | Promise<Uint8Array> {
+  const scale = 2 ** elementShift(b), remaining = (limit(b) - position(b)) * scale;
+  return readBufferBytes(b,position(b) * scale,n === undefined ? remaining : Math.min(n,remaining));
+}
+/** Validate a destination before an operation starts, including its current limit. */
+export function checkedRemainingOffset(b: JBuffer, n: number): number {
+  const scale = 2 ** elementShift(b), at = position(b) * scale;
+  if (n > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
+  checkedByteLength(b,at,n);
+  return at;
 }
 export function writeRemainingBytes(b: JBuffer, bytes: Uint8Array): void | Promise<void> {
-  const scale = 2 ** elementShift(b);
-  if (bytes.length > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
-  return writeBufferBytes(b,bytes,position(b) * scale);
+  return writeBufferBytes(b,bytes,checkedRemainingOffset(b,bytes.length));
 }
 /** GetDirectBufferAddress: 0 for a heap buffer or a host array; an external mapping moves into guest memory */
 export function directAddress(b: JBuffer): number | bigint | Promise<number | bigint> {
