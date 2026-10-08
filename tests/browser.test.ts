@@ -38,7 +38,17 @@ async function probe<K extends keyof Probes>(name: K): Promise<Awaited<ReturnTyp
   page.on("pageerror", (error) => errors.push(error.message));
   try {
     await page.goto(server.url.href);
-    const result: unknown = await page.evaluate(([url, name]) => import(url).then((module) => module[name]()), ["/index.js", name]);
+    const result: unknown = await page.evaluate(async ([url, name]) => {
+      try { return await (await import(url))[name](); }
+      catch (error) {
+        const causes: string[] = [], seen = new Set();
+        for (let cause: any = error; cause && !seen.has(cause); cause = cause.cause) {
+          seen.add(cause);
+          causes.push(`${cause.constructor?.$i?.name ?? cause.name ?? "Error"}: ${cause.msg ?? cause.message ?? String(cause)}\n${cause.jsStack ?? cause.stack ?? ""}`);
+        }
+        throw new Error(causes.join("\nCaused by: "));
+      }
+    }, ["/index.js", name]);
     expect(errors).toEqual([]);
     return result as Awaited<ReturnType<Probes[K]>>;
   } finally { await page.close(); }
