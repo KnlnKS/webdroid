@@ -20,10 +20,11 @@ import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath, changeFileAttributes } from "../shell/file-path";
-import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd } from "../native/process-fd";
+import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd";
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { type JBuffer, bufferBytes, isBuffer, resident } from "../jvm/natives/jnio";
+import { type JBuffer, bufferBytes, isBuffer, resident, addressOf as bufferAddress, capacity, elementShift } from "../jvm/natives/jnio";
+import { isExternal, isLive, mapLive, memoryAt, writeAt, unmapExternal } from "../jvm/natives/jmemory";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
@@ -190,10 +191,12 @@ export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => 
   return fd;
 }
 rt.registerJnis("android/os/SharedMemory", {
-  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => mkFd(ashmemFd(new Uint8Array(size))),
-  "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => { const fd = fdInt(d); return regionOf(fd) ? javaFdStat(fd)!.size : -1; },
+  "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => after(processAshmemCreate(size) ?? ashmemFd(new Uint8Array(size)),fd => { sys("ashmem_create_region",fd); return mkFd(fd); }),
+  "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => { const fd = fdInt(d); return processAshmemSize(fd) ?? (regionOf(fd) ? javaFdStat(fd)!.size : -1); },
   "nSetProt(Ljava/io/FileDescriptor;I)I": (d: JObj | null, prot: number) => {
-    const region = regionOf(fdInt(d));
+    const fd = fdInt(d), pending = processAshmemProtect(fd,prot);
+    if (pending) return pending.then(n => -n);
+    const region = regionOf(fd);
     if (!region) return E.NOTTY;
     if (prot & ~region.prot) return E.INVAL;
     region.prot = prot;
@@ -337,6 +340,12 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         throw errno("mmap", E.INVAL);
       if (flags & 0x10) throw errno("mmap", E.NOTSUP);
       const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : fdInt(d);
+      if (!anonymous && (isRemoteFd(fd) || ashmemProt(fd) !== undefined && descriptorTransport.importCalls && descriptorTransport.stageLocal)) {
+        if (!(flags & 1)) throw errno("mmap",E.NOTSUP);
+        const mapping = yield* awaited(processMapping(fd,Number(offset),size,prot));
+        if (typeof mapping === "number") throw errno("mmap",-mapping);
+        return mapLive(mapping);
+      }
       const source = anonymous ? null : javaFdSource(fd);
       if (!anonymous && !source) throw errno("mmap", E.BADF);
       if (source && prot === 0) throw errno("mmap", E.NOTSUP);
@@ -359,6 +368,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
     "munmap(JJ)V": (address: bigint, count: bigint) => {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
+      if (isExternal(address)) return unmapExternal(address,size);
       syncShared(address, size, true);
       if (!mem.unmapVa(address, size)) throw errno("munmap", E.INVAL);
     },
@@ -448,11 +458,20 @@ function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
 }
 /** the bytes to write, once a mapped direct buffer's pages are in */
 export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): T | Promise<T> {
+  if (isBuffer(buffer) && isLive(bufferAddress(buffer))) {
+    checkFromIndexSize(offset,count,capacity(buffer) << elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
+    return after(memoryAt(bufferAddress(buffer) + BigInt(offset),count),write);
+  }
   return after(isBuffer(buffer) ? resident(buffer) : null, () => write(ioRegion(buffer, offset, count)));
 }
 /** A direct buffer may live in guest memory, which can move while a read waits: it takes the
  *  bytes once they have arrived. */
 export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
+  if (isBuffer(buffer) && isLive(bufferAddress(buffer))) {
+    checkFromIndexSize(offset,count,capacity(buffer) << elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
+    const scratch = new Uint8Array(count);
+    return after(read(scratch),n => n > 0 ? after(writeAt(bufferAddress(buffer) + BigInt(offset),scratch.subarray(0,n)),() => ioResult(fn,n)) : ioResult(fn,n));
+  }
   const target = ioRegion(buffer, offset, count);
   if (!isBuffer(buffer)) return after(read(target), (n) => ioResult(fn, n));
   const scratch = new Uint8Array(count);

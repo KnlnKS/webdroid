@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { mkPfd, pfdBackingBytes, fdContents, ashmemFd } from "../src/android/os";
+import { mkPfd, pfdBackingBytes, fdContents, ashmemFd, readBytes, writeBytes } from "../src/android/os";
 import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel, copyParcelable, unparcelledScoped } from "../src/android/binder";
 import { StoredParcel } from "../src/shell/stored-parcel";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel";
@@ -21,7 +21,9 @@ import { BytesFile } from "../src/shell/lazyfile";
 import { scall, loadLibcore } from "./java";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors";
 import { callProxy, serveCalls } from "../src/shell/process-port";
-import { descriptorTransport, isRemoteFd } from "../src/native/process-fd";
+import { descriptorTransport, isRemoteFd, stageBinderFd, takeBinderFd } from "../src/native/process-fd";
+import { type JBuffer, addressOf, directAddress, bufferBytes } from "../src/jvm/natives/jnio";
+import { memoryAt } from "../src/jvm/natives/jmemory";
 import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path";
 
 rt.linkNatives();
@@ -705,6 +707,63 @@ describe("rename", () => {
 });
 
 describe("shared-memory", () => {
+  test("Worker shared memory keeps Java views live across descriptor transfer and partial unmap", async () => {
+    const owner = new FileDescriptors(), ports = [1001,1002].map(pid => {
+      const channel = new MessageChannel(), stop = serveCalls(channel.port1,owner.session(pid,() => 0));
+      return {stop,proxy:callProxy<DescriptorCalls>(channel.port2,["fileDescriptor"])};
+    });
+    const previous = {...descriptorTransport};
+    let first: JObj | null = null, second: JObj | null = null, a: JBuffer | undefined, b: JBuffer | undefined;
+    try {
+      descriptorTransport.calls = () => ports[0].proxy.endpoint;
+      descriptorTransport.importCalls = descriptorTransport.calls;
+      first = await scall("android/os/SharedMemory","create","(Ljava/lang/String;I)Landroid/os/SharedMemory;","aliases",8192);
+      a = await vcall(first,"mapReadWrite","()Ljava/nio/ByteBuffer;") as JBuffer;
+      const fd = fdInt(await vcall(first,"getFileDescriptor","()Ljava/io/FileDescriptor;"));
+      const staged = await stageBinderFd(fd);
+      const token = await owner.receive(1001,staged!,1002);
+      descriptorTransport.calls = () => ports[1].proxy.endpoint;
+      descriptorTransport.importCalls = descriptorTransport.calls;
+      second = await newObj("android/os/SharedMemory","(Ljava/io/FileDescriptor;)V",await mkFd(await takeBinderFd(token)));
+      expect(await vcall(second,"getSize","()I")).toBe(8192);
+      expect(await vcall(second,"setProtect","(I)Z",1)).toBe(1);
+      expect(await vcall(first,"setProtect","(I)Z",3)).toBe(0);
+      b = await vcall(second,"map","(III)Ljava/nio/ByteBuffer;",1,4096,4096) as JBuffer;
+      await vcall(a,"putInt","(II)Ljava/nio/ByteBuffer;",4096,0x12345678);
+      expect(await vcall(b,"getInt","(I)I",0)).toBe(0x12345678);
+      const ints = await vcall(a,"asIntBuffer","()Ljava/nio/IntBuffer;");
+      await vcall(ints,"put","(II)Ljava/nio/IntBuffer;",1025,0x34567812);
+      expect(await vcall(b,"getInt","(I)I",4)).toBe(0x34567812);
+      await scall("libcore/io/Memory","pokeByteArray","(J[BII)V",addressOf(a) + 4104n,Int8Array.of(9,8,7),0,3);
+      expect([...(await memoryAt(addressOf(b) + 8n,3))]).toEqual([9,8,7]);
+      const unsafe = await scall("sun/misc/Unsafe","getUnsafe","()Lsun/misc/Unsafe;");
+      await vcall(unsafe,"putLong","(Ljava/lang/Object;JJ)V",null,addressOf(a) + 4112n,0x1122334455667788n);
+      expect(await vcall(unsafe,"getLong","(J)J",addressOf(b) + 16n)).toBe(0x1122334455667788n);
+      await readBytes("read",a,4120,3,async target => { await Promise.resolve(); target.set([4,5,6]); return 3; });
+      expect(await writeBytes(b,24,3,bytes => [...bytes])).toEqual([4,5,6]);
+      await vcall(a,"position","(I)Ljava/nio/Buffer;",4128);
+      const slice = await vcall(a,"slice","()Ljava/nio/ByteBuffer;");
+      await vcall(slice,"put","([B)Ljava/nio/ByteBuffer;",Int8Array.of(2,3));
+      expect([...(await memoryAt(addressOf(b) + 32n,2))]).toEqual([2,3]);
+      expect(await directAddress(a)).toBe(0);
+      expect(() => bufferBytes(a!)).toThrow();
+      await vcall(first,"close","()V"); await vcall(second,"close","()V");
+      await scall("android/system/Os","munmap","(JJ)V",addressOf(a),4096n);
+      const unmapped = addressOf(a);
+      await expect(Promise.resolve().then(() => memoryAt(unmapped,1))).rejects.toBeDefined();
+      expect(await vcall(b,"getInt","(I)I",0)).toBe(0x12345678);
+      await scall("android/system/Os","munmap","(JJ)V",addressOf(a) + 4096n,4096n); a = undefined;
+      await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",b); b = undefined;
+    } finally {
+      if (a) await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",a);
+      if (b) await scall("android/os/SharedMemory","unmap","(Ljava/nio/ByteBuffer;)V",b);
+      if (first) await vcall(first,"close","()V"); if (second) await vcall(second,"close","()V");
+      delete descriptorTransport.calls; delete descriptorTransport.importCalls; Object.assign(descriptorTransport,previous);
+      for (const {stop,proxy} of ports) { proxy.close(); stop(); }
+      owner.close(1001); owner.close(1002);
+    }
+  });
+
   test("shared memory maps and parcels its protected bytes", async () => {
     const shared = await scall("android/os/SharedMemory", "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "sample", 3);
     const writable = await vcall(shared, "mapReadWrite", "()Ljava/nio/ByteBuffer;");

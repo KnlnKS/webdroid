@@ -125,7 +125,15 @@ const UNSAFES = ["jdk/internal/misc/Unsafe", "sun/misc/Unsafe"];
 const def = (key: string, f: (cx: Compiler, c: Code) => void) => {
   // the newer names (Reference, compareAndSet) are the internal class's only, and its getObject and putObject are bytecode over them
   const only = /Reference|compareAndSet/.test(key) ? 0 : /^(get|put)Object/.test(key) ? 1 : -1;
-  UNSAFES.forEach((u, i) => { if (only < 0 || only === i) unsafeIntrinsics.set(`${u}.${key}`, (cx, m, c) => f(cx, c)); });
+  UNSAFES.forEach((u, i) => { if (only < 0 || only === i) unsafeIntrinsics.set(`${u}.${key}`, (cx, m, c) => {
+    if (key.includes("(Ljava/lang/Object;J")) {
+      // A null base is a raw address. The host owns external mappings and their suspension.
+      c.lget(1).refIsNull().if_();
+      const n = c.targets.length; cx.natives.call(cx,c,m); c.targets.length = n;
+      c.ret().end();
+    }
+    f(cx,c);
+  }); });
 };
 /** locals: 0 = this, 1 = object, 2 = offset (long), then the operation's values */
 const OBJ = 1, OFF = 2;

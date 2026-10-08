@@ -11,7 +11,7 @@ import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
 import { handle, deref, release } from "../../android/handles";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes } from "./jmemory";
+import { isExternal, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes } from "./jmemory";
 import { BytesFile, type FileSource } from "../../shell/lazyfile";
 export { isExternal };
 
@@ -105,9 +105,9 @@ export function allocateDirectNow(n: number): JBuffer {
 /** JNI's NewDirectByteBuffer: a buffer over memory it does not own */
 export const newDirectBuffer = (address: number | bigint, cap: number): JBuffer | Promise<JBuffer> =>
   newObj("java/nio/DirectByteBuffer", "(JI)V", BigInt(address), cap);
-const unmappers = new FinalizationRegistry<() => void>((unmap) => unmap());
+const unmappers = new FinalizationRegistry<() => void | Promise<void>>((unmap) => { const pending = unmap(); if (pending) void pending.catch(console.error); });
 /** a MappedByteBuffer over a mapping at `address`, which `unmap` releases once no buffer shares it */
-function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void): JBuffer | Promise<JBuffer> {
+function mappedBuffer(address: number | bigint, size: number, fd: JObj | null, readOnly: boolean, unmap: () => void | Promise<void>): JBuffer | Promise<JBuffer> {
   return after(newObj("java/nio/DirectByteBuffer", "(IJLjava/io/FileDescriptor;Ljava/lang/Runnable;Z)V", size, BigInt(address), fd, null, +readOnly), (b) => {
     unmappers.register((b as Fields)[declaredField("java/nio/DirectByteBuffer", "memoryRef")], unmap);
     return b;
@@ -139,7 +139,7 @@ rt.registerJnis("java/nio/MappedByteBuffer", {
   "isLoaded0(JJJ)Z": function (address: bigint, length: bigint) { return +(!isExternal(address) || isResident(address, Number(length))); },
   "load0(JJ)V": function (address: bigint, length: bigint) { return isExternal(address) ? pagesIn(address, Number(length)) : undefined; },
   // msync: a shared file mapping's stores reach the file
-  "force0(Ljava/io/FileDescriptor;JJ)V": function (_fd: unknown, address: bigint, length: bigint) { if (!isExternal(address)) syncShared(address, Number(length), false); },
+  "force0(Ljava/io/FileDescriptor;JJ)V": function (_fd: unknown, address: bigint, length: bigint) { if (isExternal(address)) return forceExternal(address); syncShared(address, Number(length), false); },
 });
 
 // ── charsets: NativeConverter (libcore_bridge's JNI over ICU's ucnv) over charset.ts's converters

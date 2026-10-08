@@ -103,7 +103,7 @@ export function systemToken(): JObj | Promise<JObj> {
 class JFileWriter extends JObj { fd = -1; }
 function* exportObject(o: unknown, descriptors = false): Gen<BinderHandle | FileHandle | DescriptorHandle | null> {
   if (!(o instanceof OwnedFd)) return exportBinder(o);
-  if (descriptors && ashmemProt(o.fd) === undefined) {
+  if (descriptors) {
     const token = yield* awaited(stageBinderFd(o.fd));
     if (token !== null) {
       if (token < 0) throw rt.mkThrowable("android/os/BadParcelableException", "Cannot stage Binder descriptor: " + token);
@@ -199,7 +199,6 @@ export const parcelledWithRights = driven(function* parcelledWithRights(o:JObj, 
     const native=nativeParcel(parcel);data.bytes=native.buf.slice(0,native.size);
     for (const [at,object] of native.objects) {
       if (!(object instanceof OwnedFd)) {data.objects.push([at,exportBinder(object)]);continue;}
-      if (ashmemProt(object.fd) !== undefined) throw rt.mkThrowable("android/os/BadParcelableException","Shared ashmem rights are not supported by this transport");
       const token=yield* awaited(rights.stage(object.fd));
       if (token === null || token < 0) throw rt.mkThrowable("android/os/BadParcelableException","Cannot retain descriptor right");
       data.objects.push([at,{descriptor:token}]);

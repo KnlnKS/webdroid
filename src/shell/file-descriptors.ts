@@ -1,10 +1,12 @@
 import { E } from "../native/abi";
 import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
-  detachFdScope, type OpenFile } from "../native/fs";
+  detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
 
-export type DescriptorRequest = { kind: "open"; path: string; flags: number }
+export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
+  | { kind: "ashmemProtect"; fd: number; prot: number }
+  | { kind: "open"; path: string; flags: number }
   | { kind: "read"; fd: number; length: number }
   | { kind: "pread"; fd: number; length: number; offset: number }
   | { kind: "write"; fd: number; bytes: Uint8Array }
@@ -19,8 +21,9 @@ export type DescriptorRequest = { kind: "open"; path: string; flags: number }
   | { kind: "mappingRead"; fd: number; offset: number; length: number }
   | { kind: "mappingWrite"; fd: number; offset: number; bytes: Uint8Array }
   | { kind: "mappingRelease"; fd: number }
+  | { kind: "mappingSync"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
-export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>;
+export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
   mapping?: { region: number; offset: number; length: number; prot: number } };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
@@ -34,7 +37,7 @@ export type RetainedDescriptor = { readonly fd:number; readonly file:OpenFile; c
 export class FileDescriptors {
   private next = 1;
   private sessions = new Map<number, Session>();
-  private queues = new WeakMap<OpenFile, Promise<void>>();
+  private queues = new WeakMap<VfsFile, Promise<void>>();
   private regions = new WeakMap<VfsFile, number>();
   private nextRegion = 1;
 
@@ -86,14 +89,21 @@ export class FileDescriptors {
   }
 
   private ordered<T>(file: OpenFile, operation: () => T | Promise<T>): Promise<T> {
-    const pending = (this.queues.get(file) ?? Promise.resolve()).then(operation);
-    this.queues.set(file, pending.then(() => {}, () => {}));
+    const pending = (this.queues.get(file.content) ?? Promise.resolve()).then(operation);
+    this.queues.set(file.content, pending.then(() => {}, () => {}));
     return pending;
   }
 
   private async dispatch(session: Session, request: DescriptorRequest): Promise<DescriptorReply> {
     if (session.dead) return {result:-E.BADF};
-    if (request.kind === "mappingRead" || request.kind === "mappingWrite" || request.kind === "mappingRelease") {
+    if (request.kind === "ashmemCreate") {
+      if (!Number.isSafeInteger(request.size) || request.size <= 0 || request.size > 0x7fffffff) return {result:-E.INVAL};
+      const file = {...fdBase(""),write:true,statusFlags:2};
+      try { file.content = {path:null,data:new Uint8Array(request.size),len:request.size,ashmem:{prot:7}}; }
+      catch { return {result:-E.NOMEM}; }
+      return {result:this.put(session,installFile(file,true))};
+    }
+    if (request.kind === "mappingRead" || request.kind === "mappingWrite" || request.kind === "mappingRelease" || request.kind === "mappingSync") {
       const mapping = session.mappings.get(request.fd);
       if (!mapping) return {result:-E.BADF};
       if (request.kind === "mappingRelease") session.mappings.delete(request.fd);
@@ -101,6 +111,7 @@ export class FileDescriptors {
       return this.ordered(mapping.file, async () => {
         if (request.kind === "mappingRelease") return {result:javaCloseFd(mapping.fd)};
         if (session.dead) return {result:-E.BADF};
+        if (request.kind === "mappingSync") { const result = javaSyncFd(mapping.fd); if (!result) await vfs.flush(); return {result}; }
         const length = request.kind === "mappingRead" ? request.length : bytes!.length;
         if (!Number.isSafeInteger(request.offset) || request.offset < 0 || !Number.isSafeInteger(length) || length < 0 || request.offset > mapping.length - length) return {result:-E.INVAL};
         if (!(mapping.prot & (request.kind === "mappingRead" ? 1 : 2))) return {result:-E.ACCES};
@@ -139,6 +150,12 @@ export class FileDescriptors {
       if (session.dead) return {result:-E.BADF};
       let reply: DescriptorReply;
       switch (operation.kind) {
+        case "ashmemProtect": {
+          const region = descriptor.file.content.ashmem;
+          if (!region) return {result:-E.NOTTY};
+          if (!Number.isInteger(operation.prot) || operation.prot < 0 || operation.prot & ~region.prot) return {result:-E.INVAL};
+          region.prot = operation.prot; reply = {result:0}; break;
+        }
         case "mappingAcquire": {
           const {offset,length,prot} = operation, file = descriptor.file, mode = file.statusFlags & O_ACCMODE;
           if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0 || !Number.isSafeInteger(offset + length) || !Number.isInteger(prot) || prot < 0 || prot > 7) return {result:-E.INVAL};
@@ -169,7 +186,7 @@ export class FileDescriptors {
           if (result === 0) await vfs.flush();
           reply = {result}; break;
         }
-        case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat} : {result:-E.BADF}; break; }
+        case "stat": { const stat = javaFdStat(fd); reply = stat ? {result:0,stat,ashmemProt:descriptor.file.content.ashmem?.prot} : {result:-E.BADF}; break; }
         case "dup": reply = {result:this.put(session, operation.cloexec ? javaFcntlFd(fd,0x406,0) : javaDupFd(fd))}; break;
         case "stage": {
           const token = this.put(session,javaDupFd(fd));

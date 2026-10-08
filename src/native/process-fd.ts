@@ -119,3 +119,50 @@ export function processIoctlIntFd(fd: number, command: number): number | Promise
   if (command !== 0x541b) return -E.NOTTY;
   return Promise.all([processFdStat(fd),processSeekFd(fd,0,1)]).then(([stat,position]) => !stat || position < 0 ? -E.BADF : Math.max(0,stat.size-position));
 }
+
+/** A live owner lease; a mapping outlives the descriptor that acquired it. */
+export type ProcessMapping = { size: number; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; force(): Promise<void>; close(): Promise<void> };
+export async function processMapping(fd: number, offset: number, length: number, prot: number): Promise<ProcessMapping | number> {
+  const remote = openFd(fd)?.remote, calls = remote?.calls ?? descriptorTransport.importCalls;
+  if (!calls) return -E.NOTSUP;
+  const token = remote?.token ?? descriptorTransport.stageLocal?.(fd);
+  if (token === undefined) return -E.NOTSUP;
+  let reply: DescriptorReply;
+  try { reply = await calls().fileDescriptor({kind:"mappingAcquire",fd:token,offset,length,prot}); }
+  finally { if (!remote) await unstageBinderFd(token); }
+  if (reply.result < 0) return reply.result;
+  const lease = reply.result;
+  return {
+    size:length,
+    async read(offset,length) {
+      const reply = await calls().fileDescriptor({kind:"mappingRead",fd:lease,offset,length});
+      if (reply.result < 0) throw new Error(`shared mapping read: ${-reply.result}`);
+      if (reply.result !== length || reply.bytes?.length !== length) throw new Error("short shared mapping read");
+      return reply.bytes;
+    },
+    async write(offset,bytes) {
+      const reply = await calls().fileDescriptor({kind:"mappingWrite",fd:lease,offset,bytes:bytes.slice()});
+      if (reply.result !== bytes.length) throw new Error(`shared mapping write: ${reply.result}`);
+    },
+    async force() {
+      const reply = await calls().fileDescriptor({kind:"mappingSync",fd:lease});
+      if (reply.result < 0) throw new Error(`shared mapping sync: ${-reply.result}`);
+    },
+    async close() {
+      const reply = await calls().fileDescriptor({kind:"mappingRelease",fd:lease});
+      if (reply.result < 0 && reply.result !== -E.BADF) throw new Error(`shared mapping release: ${-reply.result}`);
+    },
+  };
+}
+export function processAshmemCreate(size: number): Promise<number> | null {
+  const calls = descriptorTransport.calls;
+  return calls ? calls().fileDescriptor({kind:"ashmemCreate",size}).then(reply => reply.result < 0 ? reply.result : installRemote(reply.result,calls,"",2,true)) : null;
+}
+export function processAshmemProtect(fd: number, prot: number): Promise<number> | null {
+  const remote = openFd(fd)?.remote;
+  return remote ? result(remote,{kind:"ashmemProtect",prot}) : null;
+}
+export function processAshmemSize(fd: number): Promise<number> | null {
+  const remote = openFd(fd)?.remote;
+  return remote ? request(remote,{kind:"stat"}).then(reply => reply.result < 0 || reply.ashmemProt === undefined ? -1 : reply.stat!.size) : null;
+}

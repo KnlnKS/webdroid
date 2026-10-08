@@ -2,14 +2,20 @@ import { rt, JObj, driven, type Gen, type NativeSpec } from "../runtime";
 import { PRIM_ARRAYS, type PrimElem, floatToIntBits, intBitsToFloat, doubleToLongBits, longBitsToDouble } from "../abi";
 import { classDesc, type JClass } from "./jlang";
 import { mem } from "../../native/mem";
-import { physical } from "./jmemory";
+import { physical, isExternal, externalRead, externalWrite, writeAt } from "./jmemory";
 import { addressSize } from "./jvmruntime";
 
-// Java threads share one cooperative realm, so these non-suspending Unsafe operations
-// need no host synchronization.
+// Java fields and arrays share a cooperative realm. External memory accesses may suspend.
 class JUnsafe extends JObj {}
 const unsafe = new JUnsafe();
-const sunMethods: NativeSpec["methods"] = {
+function rawRead<T>(a: bigint, width: number, get: (view: DataView, at: number) => T): T | Promise<T> {
+  return isExternal(a) ? externalRead(a,width,get) : get(new DataView(mem.u8.buffer),physical(a));
+}
+function rawWrite<T>(a: bigint, width: number, value: T, put: (view: DataView, at: number, value: T) => void): void | Promise<void> {
+  if (isExternal(a)) return externalWrite(a,width,value,put);
+  const bytes = new Uint8Array(width); put(new DataView(bytes.buffer),0,value); mem.write(physical(a),bytes);
+}
+const sunMethods: NonNullable<NativeSpec["methods"]> = {
   "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
   // raw memory is the process's native heap (sun.nio.fs passes paths through it)
   "allocateMemory(J)J": (size: bigint) => {
@@ -19,24 +25,24 @@ const sunMethods: NativeSpec["methods"] = {
     return BigInt(mem.va(p));
   },
   "freeMemory(J)V": (address: bigint) => mem.free(physical(address)),
-  "putByte(JB)V": (address: bigint, value: number) => mem.st8(physical(address), value),
-  "setMemory(JJB)V": (address: bigint, bytes: bigint, value: number) => mem.memset(physical(address), value, Number(bytes)),
+  "putByte(JB)V": (address: bigint, value: number) => isExternal(address) ? externalWrite(address,1,value,(v,i,x) => v.setInt8(i,x)) : mem.st8(physical(address),value),
+  "setMemory(JJB)V": (address: bigint, bytes: bigint, value: number) => isExternal(address) ? writeAt(address,new Uint8Array(Number(bytes)).fill(value)) : mem.memset(physical(address),value,Number(bytes)),
   // NativeObject's struct accessors (sun.nio.ch's iovecs), with pointers as wide as the guest's
   "addressSize()I": addressSize,
   "pageSize()I": () => 4096,
-  "getByte(J)B": (a: bigint) => mem.ld8s(physical(a)),
-  "getShort(J)S": (a: bigint) => mem.ld16s(physical(a)),
-  "getChar(J)C": (a: bigint) => mem.ld16u(physical(a)),
-  "getInt(J)I": (a: bigint) => mem.ld32(physical(a)),
-  "getLong(J)J": (a: bigint) => mem.ld64(physical(a)),
-  "getFloat(J)F": (a: bigint) => mem.ldf32(physical(a)),
-  "getDouble(J)D": (a: bigint) => mem.ldf64(physical(a)),
-  "putShort(JS)V": (a: bigint, v: number) => mem.st16(physical(a), v),
-  "putChar(JC)V": (a: bigint, v: number) => mem.st16(physical(a), v),
-  "putInt(JI)V": (a: bigint, v: number) => mem.st32(physical(a), v),
-  "putLong(JJ)V": (a: bigint, v: bigint) => mem.st64(physical(a), v),
-  "putFloat(JF)V": (a: bigint, v: number) => mem.stf32(physical(a), v),
-  "putDouble(JD)V": (a: bigint, v: number) => mem.stf64(physical(a), v),
+  "getByte(J)B": (a: bigint) => isExternal(a) ? externalRead(a,1,(v,i) => v.getInt8(i)) : mem.ld8s(physical(a)),
+  "getShort(J)S": (a: bigint) => isExternal(a) ? externalRead(a,2,(v,i) => v.getInt16(i, true)) : mem.ld16s(physical(a)),
+  "getChar(J)C": (a: bigint) => isExternal(a) ? externalRead(a,2,(v,i) => v.getUint16(i, true)) : mem.ld16u(physical(a)),
+  "getInt(J)I": (a: bigint) => isExternal(a) ? externalRead(a,4,(v,i) => v.getInt32(i, true)) : mem.ld32(physical(a)),
+  "getLong(J)J": (a: bigint) => isExternal(a) ? externalRead(a,8,(v,i) => v.getBigInt64(i, true)) : mem.ld64(physical(a)),
+  "getFloat(J)F": (a: bigint) => isExternal(a) ? externalRead(a,4,(v,i) => v.getFloat32(i, true)) : mem.ldf32(physical(a)),
+  "getDouble(J)D": (a: bigint) => isExternal(a) ? externalRead(a,8,(v,i) => v.getFloat64(i, true)) : mem.ldf64(physical(a)),
+  "putShort(JS)V": (a: bigint, v: number) => isExternal(a) ? externalWrite(a,2,v,(d,i,x) => d.setInt16(i,x, true)) : mem.st16(physical(a),v),
+  "putChar(JC)V": (a: bigint, v: number) => isExternal(a) ? externalWrite(a,2,v,(d,i,x) => d.setInt16(i,x, true)) : mem.st16(physical(a),v),
+  "putInt(JI)V": (a: bigint, v: number) => isExternal(a) ? externalWrite(a,4,v,(d,i,x) => d.setInt32(i,x, true)) : mem.st32(physical(a),v),
+  "putLong(JJ)V": (a: bigint, v: bigint) => isExternal(a) ? externalWrite(a,8,v,(d,i,x) => d.setBigInt64(i,x, true)) : mem.st64(physical(a),v),
+  "putFloat(JF)V": (a: bigint, v: number) => isExternal(a) ? externalWrite(a,4,v,(d,i,x) => d.setFloat32(i,x, true)) : mem.stf32(physical(a),v),
+  "putDouble(JD)V": (a: bigint, v: number) => isExternal(a) ? externalWrite(a,8,v,(d,i,x) => d.setFloat64(i,x, true)) : mem.stf64(physical(a),v),
   "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
     const info = cls.ci!;
     const p = rt.initClass(info); if (p) yield p;
@@ -58,15 +64,15 @@ const sunMethods: NativeSpec["methods"] = {
   "getLong(Ljava/lang/Object;J)J": uGetLong,
   "putLong(Ljava/lang/Object;JJ)V": uPutLong,
   ...Object.fromEntries(([
-    ["Boolean", "Z", (v: DataView, at: number) => (v.getUint8(at) ? 1 : 0), (v: DataView, at: number, x: number) => v.setUint8(at, x ? 1 : 0)],
-    ["Byte", "B", (v: DataView, at: number) => v.getInt8(at), (v: DataView, at: number, x: number) => v.setInt8(at, x)],
-    ["Char", "C", (v: DataView, at: number) => v.getUint16(at, true), (v: DataView, at: number, x: number) => v.setUint16(at, x, true)],
-    ["Short", "S", (v: DataView, at: number) => v.getInt16(at, true), (v: DataView, at: number, x: number) => v.setInt16(at, x, true)],
-    ["Float", "F", (v: DataView, at: number) => v.getFloat32(at, true), (v: DataView, at: number, x: number) => v.setFloat32(at, x, true)],
-    ["Double", "D", (v: DataView, at: number) => v.getFloat64(at, true), (v: DataView, at: number, x: number) => v.setFloat64(at, x, true)],
-  ] as const).flatMap(([n, d, get, put]) => [
-    [`get${n}(Ljava/lang/Object;J)${d}`, (o: any, off: bigint) => { const view = uView(o); if (view) return get(view, Number(off)); const v = uGet(o, off); return d === "Z" ? (v ? 1 : 0) : v ?? 0; }],
-    [`put${n}(Ljava/lang/Object;J${d})V`, (o: any, off: bigint, v: number) => { const view = uView(o); if (view) put(view, Number(off), v); else uPut(o, off, v); }],
+    ["Boolean", "Z", 1, (v: DataView, at: number) => (v.getUint8(at) ? 1 : 0), (v: DataView, at: number, x: number) => v.setUint8(at, x ? 1 : 0)],
+    ["Byte", "B", 1, (v: DataView, at: number) => v.getInt8(at), (v: DataView, at: number, x: number) => v.setInt8(at, x)],
+    ["Char", "C", 2, (v: DataView, at: number) => v.getUint16(at, true), (v: DataView, at: number, x: number) => v.setUint16(at, x, true)],
+    ["Short", "S", 2, (v: DataView, at: number) => v.getInt16(at, true), (v: DataView, at: number, x: number) => v.setInt16(at, x, true)],
+    ["Float", "F", 4, (v: DataView, at: number) => v.getFloat32(at, true), (v: DataView, at: number, x: number) => v.setFloat32(at, x, true)],
+    ["Double", "D", 8, (v: DataView, at: number) => v.getFloat64(at, true), (v: DataView, at: number, x: number) => v.setFloat64(at, x, true)],
+  ] as const).flatMap(([n, d, width, get, put]) => [
+    [`get${n}(Ljava/lang/Object;J)${d}`, (o: any, off: bigint) => { const view = uView(o); if (o === null) return rawRead(off,width,get); if (view) return get(view, Number(off)); const v = uGet(o, off); return d === "Z" ? (v ? 1 : 0) : v ?? 0; }],
+    [`put${n}(Ljava/lang/Object;J${d})V`, (o: any, off: bigint, v: number) => { const view = uView(o); if (o === null) return rawWrite(off,width,v,put); if (view) put(view, Number(off), v); else uPut(o, off, v); }],
   ])),
   "getLongVolatile(Ljava/lang/Object;J)J": uGetLong,
   "getIntVolatile(Ljava/lang/Object;J)I": uGetInt,
@@ -153,13 +159,16 @@ getLong(o){return ${db ? `D2L(${at}??0)` : `${at}??0n`}},putLong(o,v){${at}=${db
 const offWord = new BigInt64Array(1), offLow = new Int32Array(offWord.buffer);
 const low32 = (off: bigint) => { offWord[0] = off; return offLow[0]; };
 const uField = (off: bigint) => unsafeFields[low32(off) >> 3];
+const unsupportedRaw = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", "raw reference or atomic Unsafe access is unsupported"); };
 /** a reference: an object array's element (4 bytes each), or a field */
 function uGet(o: any, off: bigint): unknown {
+  if (o === null) return unsupportedRaw();
   if (Array.isArray(o)) return o[low32(off) >> 2] ?? null;
   if (ArrayBuffer.isView(o)) return (o as any)[Number(off)] ?? null;
   return uField(off).get(o) ?? null;
 }
 function uPut(o: any, off: bigint, v: unknown): void {
+  if (o === null) return unsupportedRaw();
   if (Array.isArray(o)) o[low32(off) >> 2] = v;
   else if (ArrayBuffer.isView(o)) (o as any)[Number(off)] = v;
   else uField(off).put(o, v);
@@ -183,40 +192,53 @@ function viewPutInt(o: ArrayBufferView, off: bigint, value: number): void {
   if (offset + 4 <= view.byteLength || offset < 0 || offset >= view.byteLength) { view.setInt32(offset, value, true); return; }
   for (let i = 0; offset + i < view.byteLength; i++) view.setUint8(offset + i, value >>> (i * 8));
 }
-function uGetInt(o: any, off: bigint): number { return ArrayBuffer.isView(o) ? viewGetInt(o, off) : uField(off).getInt(o); }
-function uPutInt(o: any, off: bigint, value: number): void {
+function uGetInt(o: any, off: bigint): number | Promise<number> {
+  if (o === null) return isExternal(off) ? externalRead(off,4,(v,i) => v.getInt32(i,true)) : mem.ld32(physical(off));
+  return ArrayBuffer.isView(o) ? viewGetInt(o, off) : uField(off).getInt(o);
+}
+function uPutInt(o: any, off: bigint, value: number): void | Promise<void> {
+  if (o === null) return isExternal(off) ? externalWrite(off,4,value,(v,i,x) => v.setInt32(i,x,true)) : mem.st32(physical(off),value);
   if (ArrayBuffer.isView(o)) viewPutInt(o, off, value); else uField(off).putInt(o, value);
 }
-function uGetLong(o: any, off: bigint): bigint { return ArrayBuffer.isView(o) ? uView(o)!.getBigInt64(Number(off), true) : uField(off).getLong(o); }
-function uPutLong(o: any, off: bigint, value: bigint): void {
+function uGetLong(o: any, off: bigint): bigint | Promise<bigint> {
+  if (o === null) return isExternal(off) ? externalRead(off,8,(v,i) => v.getBigInt64(i,true)) : mem.ld64(physical(off));
+  return ArrayBuffer.isView(o) ? uView(o)!.getBigInt64(Number(off), true) : uField(off).getLong(o);
+}
+function uPutLong(o: any, off: bigint, value: bigint): void | Promise<void> {
+  if (o === null) return isExternal(off) ? externalWrite(off,8,value,(v,i,x) => v.setBigInt64(i,x,true)) : mem.st64(physical(off),value);
   if (ArrayBuffer.isView(o)) uView(o)!.setBigInt64(Number(off), value, true); else uField(off).putLong(o, value);
 }
 /** an int read-modify-write returning the old value */
 function intRmw(op: (cur: number, x: number) => number) { return (o: any, off: bigint, x: number) => {
+  if (o === null) return unsupportedRaw();
   if (ArrayBuffer.isView(o)) { const old = viewGetInt(o, off); viewPutInt(o, off, op(old, x)); return old; }
   const f = uField(off), old = f.getInt(o);
   f.putInt(o, op(old, x));
   return old;
 }; }
 function longRmw(op: (cur: bigint, x: bigint) => bigint) { return (o: any, off: bigint, x: bigint) => {
+  if (o === null) return unsupportedRaw();
   if (ArrayBuffer.isView(o)) { const view = uView(o)!, at = Number(off), old = view.getBigInt64(at, true); view.setBigInt64(at, op(old, x), true); return old; }
   const f = uField(off), old = f.getLong(o);
   f.putLong(o, op(old, x));
   return old;
 }; }
 function casInt(o: any, off: bigint, exp: number, val: number): number {
+  if (o === null) return unsupportedRaw();
   if (ArrayBuffer.isView(o)) { if (viewGetInt(o, off) !== exp) return 0; viewPutInt(o, off, val); return 1; }
   const f = uField(off);
   if (f.getInt(o) !== exp) return 0;
   f.putInt(o, val); return 1;
 }
 function casLong(o: any, off: bigint, exp: bigint, val: bigint): number {
+  if (o === null) return unsupportedRaw();
   if (ArrayBuffer.isView(o)) { const view = uView(o)!, at = Number(off); if (view.getBigInt64(at, true) !== exp) return 0; view.setBigInt64(at, val, true); return 1; }
   const f = uField(off);
   if (f.getLong(o) !== exp) return 0;
   f.putLong(o, val); return 1;
 }
 function casRef(o: any, off: bigint, exp: unknown, val: unknown): number {
+  if (o === null) return unsupportedRaw();
   if (Array.isArray(o)) {
     const i = low32(off) >> 2, cur = o[i];
     if (cur !== exp && !(cur === undefined && exp === null)) return 0;
@@ -227,6 +249,7 @@ function casRef(o: any, off: bigint, exp: unknown, val: unknown): number {
   f.put(o, val); return 1;
 }
 function getAndSetRef(o: any, off: bigint, v: unknown): unknown {
+  if (o === null) return unsupportedRaw();
   if (Array.isArray(o)) { const i = low32(off) >> 2, old = o[i] ?? null; o[i] = v; return old; }
   const f = uField(off), old = f.get(o) ?? null;
   f.put(o, v); return old;

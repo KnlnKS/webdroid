@@ -20,6 +20,7 @@ export const MAY_SUSPEND = new Set<string>([
   "libcore/io/Linux.getpwuid(I)Landroid/system/StructPasswd;",
   "libcore/io/Linux.poll([Landroid/system/StructPollfd;I)I",
   "java/io/FileDescriptor.sync()V",
+  "libcore/icu/ICU.getIcuVersion()Ljava/lang/String;",
   "sun/nio/ch/FileDispatcherImpl.force0(Ljava/io/FileDescriptor;Z)I",
   "sun/nio/ch/FileChannelImpl.map0(IJJ)J",
   "java/net/HttpURLConnection$$host.getInputStream()Ljava/io/InputStream;",
@@ -34,10 +35,43 @@ export const MAY_SUSPEND = new Set<string>([
   "libcore/io/Linux.connect(Ljava/io/FileDescriptor;Ljava/net/InetAddress;I)V",
   "libcore/io/Linux.recvfromBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;IIILjava/net/InetSocketAddress;)I",
 ]);
+// Owner-backed Java mappings retain the local synchronous fast path but may await RPC.
+for (const owner of ["libcore/io/Memory","com/android/i18n/timezone/internal/Memory"])
+  for (const [peek,poke] of [["peekByte(J)B","pokeByte(JB)V"],["peekShortNative(J)S","pokeShortNative(JS)V"],
+    ["peekIntNative(J)I","pokeIntNative(JI)V"],["peekLongNative(J)J","pokeLongNative(JJ)V"]])
+    for (const method of [peek,poke]) MAY_SUSPEND.add(`${owner}.${method}`);
+for (const owner of ["sun/misc/Unsafe","jdk/internal/misc/Unsafe"])
+  for (const [type,desc] of [["Boolean","Z"],["Byte","B"],["Char","C"],["Short","S"],["Int","I"],["Long","J"],["Float","F"],["Double","D"]]) {
+    const jdk = owner === "jdk/internal/misc/Unsafe", wide = type === "Int" || type === "Long";
+    const gets = wide ? jdk ? ["","Volatile","Acquire","Opaque"] : ["","Volatile"] : [""];
+    const puts = wide ? jdk ? ["","Volatile","Release","Opaque"] : ["","Volatile"] : [""];
+    for (const suffix of gets)
+      MAY_SUSPEND.add(`${owner}.get${type}${suffix}(Ljava/lang/Object;J)${desc}`);
+    for (const suffix of puts)
+      MAY_SUSPEND.add(`${owner}.put${type}${suffix}(Ljava/lang/Object;J${desc})V`);
+    if (type === "Long" || jdk && type === "Int") MAY_SUSPEND.add(`${owner}.putOrdered${type}(Ljava/lang/Object;J${desc})V`);
+    if (jdk ? type === "Byte" : type !== "Boolean") {
+      MAY_SUSPEND.add(`${owner}.get${type}(J)${desc}`);
+      MAY_SUSPEND.add(`${owner}.put${type}(J${desc})V`);
+    }
+  }
+for (const id of ["sun/misc/Unsafe.setMemory(JJB)V","android/os/SharedMemory.nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;",
+  "android/os/SharedMemory.nGetSize(Ljava/io/FileDescriptor;)I","android/os/SharedMemory.nSetProt(Ljava/io/FileDescriptor;I)I",
+  "java/io/FileDescriptor.getAppend(I)Z","libcore/io/Linux.dup(Ljava/io/FileDescriptor;)Ljava/io/FileDescriptor;",
+  "sun/nio/ch/FileDispatcherImpl.size0(Ljava/io/FileDescriptor;)J","sun/nio/ch/FileDispatcherImpl.truncate0(Ljava/io/FileDescriptor;J)I",
+  "sun/nio/ch/FileDispatcherImpl.close0(Ljava/io/FileDescriptor;)V","sun/nio/ch/FileDispatcherImpl.closeIntFD(I)V",
+  "sun/nio/ch/FileChannelImpl.position0(Ljava/io/FileDescriptor;J)J","libcore/io/Linux.close(Ljava/io/FileDescriptor;)V",
+  "libcore/io/Linux.munmap(JJ)V","libcore/io/Linux.writeBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;II)I",
+  "libcore/io/Linux.pwriteBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;IIJ)I",
+  "libcore/io/Memory.memmove(Ljava/lang/Object;ILjava/lang/Object;IJ)V",
+  "sun/nio/ch/FileDispatcherImpl.read0(Ljava/io/FileDescriptor;JI)I","sun/nio/ch/FileDispatcherImpl.pread0(Ljava/io/FileDescriptor;JIJ)I",
+  "sun/nio/ch/FileDispatcherImpl.write0(Ljava/io/FileDescriptor;JI)I","sun/nio/ch/FileDispatcherImpl.pwrite0(Ljava/io/FileDescriptor;JIJ)I",
+  "sun/nio/ch/FileChannelImpl.unmap0(JJ)I","java/nio/MappedByteBuffer.force0(Ljava/io/FileDescriptor;JJ)V"])
+  MAY_SUSPEND.add(id);
 /** what a native that can answer a Promise has in its body: it waits for something (`await`, a Promise, `after`, `awaited`), reads memory that pages in (`external`, `pagesIn`, `memoryAt`,
  *  `guestAddress`), or hands on the result of a call into Java, which is a Promise when that call waits. The build lists the natives this holds for (`waitingNatives`), as the page
  *  cannot read it from minified code. A native with arrays needs it: it cannot be settled where it was called (natives.ts `parkable`). */
-const WAITS = /\b(after|awaited|pagesIn|external|memoryAt|guestAddress|Promise|await)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
+const WAITS = /\b(after|awaited|pagesIn|external|externalRead|externalWrite|writeAt|memoryAt|guestAddress|Promise|await)\b|\breturn\s+(vcall|scall|newObj|callOn)\b|=>\s*(vcall|scall|newObj|callOn)\(/;
 export const mayWait = (fn: HostFn): boolean => (fn as Native).$g !== undefined || fn.constructor === AsyncFunction || WAITS.test(Function.prototype.toString.call(fn));
 /** the natives the platform build was made for as Suspending, when the page has it */
 let declared: Set<string> | null = null;
