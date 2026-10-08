@@ -18,7 +18,8 @@ export const LOADER_OF_CLASS = 100;
 
 interface State {
   byObject: WeakMap<object, Loader>;
-  cookies: Map<string, { loader: Loader; dexes: DexFile[] }>;
+  cookies: WeakMap<object, { loader: Loader; dexes: DexFile[] }>;
+  nextDexHandle: bigint;
   parentOf: (loader: object) => object | null;
   libraries: WeakMap<object, [Loader[], Loader[]]>;
   copies: WeakMap<object, Map<DexFile, DexFile>>;
@@ -28,7 +29,7 @@ interface State {
 const states = new WeakMap<World, State>();
 function stateOf(w: World): State {
   let s = states.get(w);
-  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new Map(), parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null });
+  if (!s) states.set(w, s = { byObject: new WeakMap(), cookies: new WeakMap(), nextDexHandle: 1n, parentOf: w.fieldReader<object | null>("java/lang/ClassLoader", "parent", "Ljava/lang/ClassLoader;"), libraries: new WeakMap(), copies: new WeakMap(), appLoader: null });
   return s;
 }
 
@@ -103,8 +104,7 @@ export function nativeClassLookup(w: World, loader: Loader, name: string): strin
         const file = element && w.fieldReader<object | null>("dalvik/system/DexPathList$Element", "dexFile", "Ldalvik/system/DexFile;")(element);
         const cookie = file && w.fieldReader<object | null>("dalvik/system/DexFile", "mCookie", "Ljava/lang/Object;")(file);
         if (!cookie) continue;
-        if (w.classNameOf(cookie) !== "java/lang/String") return false;
-        const opened = s.cookies.get(w.hostString(cookie) as string);
+        const opened = s.cookies.get(cookie);
         if (!current || opened?.loader !== current) return false;
         for (const dex of opened.dexes) {
           if (dex.findClassDef(descriptor) === undefined) continue;
@@ -140,7 +140,7 @@ function librariesOf(w: World, object: object): [Loader[], Loader[]] {
 export function classByName(w: World, name: string, scope: unknown, mode: Lookup): number | Promise<object> {
   const n = name.replace(/\./g, "/");
   if (n === "" || n.includes("@")) return 0;
-  const prog = w.prog, s = stateOf(w), cookie = mode === Lookup.Cookie ? s.cookies.get(w.hostString(scope) as string) : undefined;
+  const prog = w.prog, s = stateOf(w), cookie = mode === Lookup.Cookie ? s.cookies.get(scope as object) : undefined;
   const loader = mode === Lookup.Cookie ? cookie?.loader : loaderFor(w, scope as object | null);
   if (!loader) return 0;
   const find = (cls: string): string | undefined => {
@@ -167,7 +167,7 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
 
 /** host.dexOpen(path, loader): the cookie of the dex files at `path`, whose classes are defined in the namespace of the ClassLoader object `loader` */
 export function dexOpen(w: World, path: unknown, loaderObject: object | null): object | Promise<object> {
-  const s = stateOf(w), file = w.hostString(path) as string;
+  const file = w.hostString(path) as string;
   if (!w.opts.dexes) {
     w.onGap(w.gapId("DexFile.openDexFileNative: the host has no dex files to open"));
     throw w.exception(w.makeThrowable("java/lang/UnsatisfiedLinkError", "dalvik.system.DexFile.openDexFileNative"));
@@ -176,33 +176,69 @@ export function dexOpen(w: World, path: unknown, loaderObject: object | null): o
   return dexes instanceof Promise ? dexes.then(open) : open(dexes);
   function open(dexes: DexFile[] | undefined): object {
     if (!dexes) throw w.exception(w.makeThrowable("java/io/IOException", `Unable to open DEX file '${file}'`));
-    // dex files the Program holds already stay in their namespace, and a loader that opens only those is that namespace
-    let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
-    if (!loader) {
-      const ownApp = !s.appLoader && dexes.some(d => w.prog.loaderOfDex(d) === w.prog.root);
-      loader = ownApp ? w.prog.root : newLoader(w, s.parentOf(loaderObject!), loaderObject!);
-      s.byObject.set(loaderObject!, loader);
-    }
-    if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
-    if (loaderObject) {
-      const [before, after] = librariesOf(w, loaderObject);
-      w.bindLibraries(loader, before, after);
-      dexes = dexes.map(d => {
-        const owner = w.prog.loaderOfDex(d);
-        if (!owner || owner === loader) return d;
-        let copies = s.copies.get(loaderObject);
-        if (!copies) s.copies.set(loaderObject, copies = new Map());
-        let copy = copies.get(d);
-        if (!copy) { copy = dexesIn(d.bytes, d.name).find(candidate => candidate.id === d.id)!; copies.set(d, copy); }
-        return copy;
-      });
-    }
-    const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
-    if (fresh.length) w.addDexes(fresh, loader);
-    const id = `dex:${s.cookies.size}`;
-    s.cookies.set(id, { loader, dexes });
-    return w.javaString(id) as object;
+    return openDexes(w, dexes, loaderObject);
   }
+}
+
+function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): object {
+  const s = stateOf(w);
+  // dex files the Program holds already stay in their namespace, and a loader that opens only those is that namespace
+  let loader = loaderObject ? s.byObject.get(loaderObject) : w.prog.root;
+  if (!loader) {
+    const ownApp = !s.appLoader && dexes.some(d => w.prog.loaderOfDex(d) === w.prog.root);
+    loader = ownApp ? w.prog.root : newLoader(w, s.parentOf(loaderObject!), loaderObject!);
+    s.byObject.set(loaderObject!, loader);
+  }
+  if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
+  if (loaderObject) {
+    const [before, after] = librariesOf(w, loaderObject);
+    w.bindLibraries(loader, before, after);
+    dexes = dexes.map(d => {
+      const owner = w.prog.loaderOfDex(d);
+      if (!owner || owner === loader) return d;
+      let copies = s.copies.get(loaderObject);
+      if (!copies) s.copies.set(loaderObject, copies = new Map());
+      let copy = copies.get(d);
+      if (!copy) { copy = dexesIn(d.bytes, d.name).find(candidate => candidate.id === d.id)!; copies.set(d, copy); }
+      return copy;
+    });
+  }
+  const fresh = dexes.filter((d) => !w.prog.loaderOfDex(d));
+  if (fresh.length) w.addDexes(fresh, loader);
+  const mark = w.bridge.begin();
+  try {
+    // ART's long[] starts with the OAT handle; this VM uses opaque DEX handles.
+    const cookie = w.bridge.toJava(BigInt64Array.from([0n, ...dexes.map(() => s.nextDexHandle++)]), "[J") as object;
+    s.cookies.set(cookie, { loader, dexes });
+    return cookie;
+  } finally { w.bridge.end(mark); }
+}
+
+export function dexOpenMemory(w: World, buffers: object, arrays: object, starts: object, ends: object, loader: object | null): object | Promise<object> {
+  const mark = w.bridge.begin(), bytes: (Uint8Array | Promise<Uint8Array>)[] = [];
+  try {
+    const from = w.bridge.toHost(starts, "[I") as Int32Array, to = w.bridge.toHost(ends, "[I") as Int32Array;
+    for (let i = 0; i < w.bridge.arrayLength(buffers); i++) {
+      const start = from[i], n = to[i] - start, array = w.bridge.element(arrays, i) as object | null;
+      if (n <= 0) throw w.exception(w.makeThrowable("java/io/IOException", "Bad range"));
+      if (array) {
+        if (start < 0 || start > w.bridge.arrayLength(array) - n) throw w.exception(w.makeThrowable("java/lang/ArrayIndexOutOfBoundsException", "DEX buffer range"));
+        const view = w.bridge.toHost(array, "[B", [start, n]) as Int8Array;
+        bytes.push(new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice());
+      } else {
+        const buffer = w.bridge.element(buffers, i) as object | null;
+        if (!buffer) throw w.exception(w.makeThrowable("java/io/IOException", "dexFileBuffer not direct"));
+        bytes.push(w.bridge.readBuffer(buffer, start, n));
+      }
+    }
+  } finally { w.bridge.end(mark); }
+  const open = (copies: Uint8Array[]) => {
+    let dexes: DexFile[];
+    try { dexes = copies.flatMap((bytes, i) => dexesIn(bytes, `memory:${i}`)); }
+    catch (e) { throw w.exception(w.makeThrowable("java/io/IOException", String(e))); }
+    return openDexes(w, dexes, loader);
+  };
+  return bytes.some(bytes => bytes instanceof Promise) ? Promise.all(bytes).then(open) : open(bytes as Uint8Array[]);
 }
 
 /** host.obj(LOADER_OF_CLASS, id): the ClassLoader object of the loader that defines class `id`, or null for the boot loader and the platform's classes */
@@ -218,6 +254,16 @@ def("dalvik/system/DexFile.openDexFileNative(Ljava/lang/String;Ljava/lang/String
   const wait = cx.global("rt", "wait", T.i32, true);
   emitRestored(cx, c, [], [T.anyref], () => {
     c.lget(0); cx.str.toHost(c); c.lget(3).externConvertAny(); c.call(cx.imp.dexOpen);
+    c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
+    c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
+    c.end().anyConvertExtern();
+  });
+});
+def("dalvik/system/DexFile.openInMemoryDexFilesNative([Ljava/nio/ByteBuffer;[[B[I[ILjava/lang/ClassLoader;[Ldalvik/system/DexPathList$Element;)Ljava/lang/Object;", (cx, c) => {
+  const wait = cx.global("rt", "wait", T.i32, true);
+  emitRestored(cx, c, [], [T.anyref], () => {
+    for (let i = 0; i < 5; i++) c.lget(i).externConvertAny();
+    c.call(cx.imp.dexOpenMemory);
     c.gget(wait).ifType(cx.mb.addFuncType([T.externref], [T.externref]));
     c.drop().i32(0).gset(wait).call(cx.imp.annotationWait);
     c.end().anyConvertExtern();

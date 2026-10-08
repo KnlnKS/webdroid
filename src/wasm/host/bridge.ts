@@ -17,6 +17,7 @@ import type { HostBridge, HostSpec, NativeSource } from "../link/hostapi";
 import { VIEWS, SIZE, copyFn } from "../compiler/copy";
 import { handleViews } from "../../android/handles";
 import { count } from "./stats";
+import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio";
 
 type Fn = (...a: any[]) => any;
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
@@ -327,6 +328,21 @@ export class Bridge implements HostBridge {
   }
   arrayLength(a: object): number { return this.op.alen(a); }
   element(a: object, i: number): unknown { return this.op.aget(a, i); }
+  readBuffer(b: object, at: number, n: number): Uint8Array | Promise<Uint8Array> {
+    const fail = (e: unknown): never => {
+      const t = this.src?.thrown(e);
+      if (!t) throw e;
+      const java = t.java ?? this.w.makeThrowable(t.cls, t.msg);
+      if (t.obj && !t.java) this.scoped(() => this.copyFields(t.obj as Record<string, unknown>, java, t.cls));
+      throw this.w.exception(java);
+    };
+    try {
+      return this.scoped(() => {
+        const bytes = readBufferBytes(this.toHost(b) as JBuffer, at, n);
+        return bytes instanceof Promise ? bytes.then(bytes => bytes.slice(), fail) : bytes.slice();
+      });
+    } catch (e) { return fail(e); }
+  }
   setElement(a: object, i: number, v: unknown): void { this.op.aset(a, i, v); }
   newArray(name: string, n: number): object { return this.newArrayOf(name)(n); }
 

@@ -45,7 +45,7 @@ export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { initSignatures: number; initSignaturesWait: number; fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; catchBlock: number; catchBlockWait: number; catchSync: number; dexOpen: number; galloc: number; hot: number; long: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; annotation: number; annotationWait: number; watch: number; intern: number; claim: number; sync: number; block: number };
+  imp: { initSignatures: number; initSignaturesWait: number; fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; catchBlock: number; catchBlockWait: number; catchSync: number; dexOpen: number; dexOpenMemory: number; galloc: number; hot: number; long: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; annotation: number; annotationWait: number; watch: number; intern: number; claim: number; sync: number; block: number };
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
@@ -98,7 +98,7 @@ export class Compiler implements Base {
     this.imp = { initSignatures: f("initSignatures", [T.i32], []), initSignaturesWait: f("initSignaturesWait", [T.i32], []), catchBlock: f("catchBlock", [T.i32, T.i32, T.i32, T.externref], [T.i32]), catchBlockWait: f("catchBlockWait", [T.i32, T.i32, T.i32, T.externref], [T.i32]), catchSync: f("catchSync", [], [T.i32]), fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
       heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
       stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), galloc: f("galloc", [T.externref, T.i32], [T.i64]), hot: f("hot", [T.i32], []), long: f("long", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
+      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), dexOpenMemory: f("dexOpenMemory", [T.externref, T.externref, T.externref, T.externref, T.externref], [T.externref]), galloc: f("galloc", [T.externref, T.i32], [T.i64]), hot: f("hot", [T.i32], []), long: f("long", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
       proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), annotation: f("annotation", [T.i32, T.i32, T.i32, T.externref], [T.externref]), annotationWait: f("annotationWait", [], [T.externref]), watch: f("watch", [T.externref, T.externref], []), claim: f("claim", [T.externref, T.i64], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
       sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
     if (deopt) {
@@ -107,7 +107,7 @@ export class Compiler implements Base {
     }
     this.str.importBuiltins();
     // the imports that cannot run Java code
-    const { initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block, catchBlock, catchBlockWait } = this.imp, runsJava = new Set([initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, classByName, net, sync, block, catchBlock, catchBlockWait]);
+    const { initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, dexOpenMemory, classByName, net, sync, block, catchBlock, catchBlockWait } = this.imp, runsJava = new Set([initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, dexOpenMemory, classByName, net, sync, block, catchBlock, catchBlockWait]);
     this.hostSafe = new Set(Array.from({ length: mb.nImportedFuncs }, (_, i) => i).filter((i) => !runsJava.has(i)));
   }
   private hostSafe: Set<number>;

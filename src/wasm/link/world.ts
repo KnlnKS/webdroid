@@ -30,7 +30,7 @@ import { hostText } from "./members";
 import { ASYNC } from "./inet";
 import { generateProxy } from "./proxy";
 import { hostObject } from "./annotations";
-import { classByName, dexOpen, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
+import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
 import { definitionReady, initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
@@ -242,6 +242,11 @@ export class World {
       },
       dexOpen: (path: unknown, loader: object | null) => {
         const value = dexOpen(this, path, loader);
+        if (!(value instanceof Promise)) return value;
+        this.sched.parkNative(value); return null;
+      },
+      dexOpenMemory: (buffers: object, arrays: object, starts: object, ends: object, loader: object | null) => {
+        const value = dexOpenMemory(this, buffers, arrays, starts, ends, loader);
         if (!(value instanceof Promise)) return value;
         this.sched.parkNative(value); return null;
       },

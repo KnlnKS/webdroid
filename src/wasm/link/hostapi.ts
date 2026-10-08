@@ -63,6 +63,7 @@ export interface HostBridge {
   toJava(v: unknown, desc: string): unknown;
   arrayLength(a: object): number;
   element(a: object, i: number): unknown;
+  readBuffer(b: object, at: number, n: number): Uint8Array | Promise<Uint8Array>;
   copyFields(o: Record<string, unknown>, j: object, cls: string): void;
   /** sets the scope of the call in progress aside while its strand waits, and answers the function that takes it up again */
   hold(): () => void;
