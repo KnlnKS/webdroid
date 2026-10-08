@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Binary emission allocation checkpoint (2026-10-08)
+
+ASCII names avoid temporary UTF-8 buffers, and metadata encodes into section-level arrays. A fixed-work comparison of 737 captured modules preserves all bytes and offsets and reduces emission time by 46% in Node and 69% in Chrome; this is not app latency or FPS acceptance. Typecheck, all 19 Wasm sections, the 1,212-test unit repeat, cold/OSR/framework checks and FitNotes smoke pass. Fresh source `3a53e47b973bd396…` serves ordinary `541489dd5a52ef90`/guarded `d65378005f63f872`, with all 4,324 AOT files unchanged. Full FitNotes passes all 39 checkpoints with 117 responding process diagnostics and identical UI trees. Warm latency still fails: Calculator M's rendered-state timeout reproduces on the starting source; a separate FitNotes candidate repeat takes 300 ms to open the exercise list versus 309 ms on the baseline. An earlier candidate startup StackOverflowError remains unexplained. History records controls, initial failures and limits; the full performance/application gates remain open.
+
 ### Shared callee-planning checkpoint (2026-10-08)
 
 Direct and guarded callee planning share one traversal while preserving group/guard order and readiness semantics. Private exact comparisons reduce loader lookups and CHA queries without changing 184 plans; this is work-count evidence, not a timing claim. Typecheck, all 19 Wasm sections, 1,212 unit tests, cold/OSR/framework checks and APK smoke pass. Fresh source `07fc417ecaa1…` serves ordinary `04bf9aec9e749c91`/guarded `0d4efaaa09b9655f`, with all 4,324 AOT files unchanged. The frozen full FitNotes flow passes 39 actions with 117 responding process diagnostics, identical UI trees and only three text-caret PNG differences. Exact evidence and limits are in the history. Other application failures, Worker and performance gates remain open; JavaScript stays default.

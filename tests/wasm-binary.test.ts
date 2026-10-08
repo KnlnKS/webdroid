@@ -5,7 +5,7 @@ import { Code, OP } from "../src/wasm/compiler/code";
 test("Wasm imports retain Unicode and long module names across repeated builds", () => {
   const mb = new ModuleBuilder(), signature = mb.addFuncType([], []), expected: WebAssembly.ModuleImportDescriptor[] = [];
   const utf8 = (s: string) => new TextDecoder().decode(new TextEncoder().encode(s));
-  for (const mod of ["host", "共有😀", "x".repeat(130), "\ud800", ""]) {
+  for (const mod of ["host", "共有😀", "prefix共有😀", "x".repeat(130), "prefix\ud800", ""]) {
     for (const name of ["call", "λ", "\udc00"]) {
       mb.importFunc(mod, name, signature);
       expected.push({ module: utf8(mod), name: utf8(name), kind: "function" });

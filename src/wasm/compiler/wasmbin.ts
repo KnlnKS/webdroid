@@ -28,9 +28,19 @@ export function sleb(n: number | bigint, out: number[]): void {
 }
 const enc = new TextEncoder();
 export function name(s: string, out: number[]): void {
-  const b = enc.encode(s);
-  uleb(b.length, out);
-  for (let i = 0; i < b.length; i++) out.push(b[i]);
+  const start = out.length;
+  uleb(s.length, out);
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0x80) {
+      out.length = start;
+      const b = enc.encode(s);
+      uleb(b.length, out);
+      for (let j = 0; j < b.length; j++) out.push(b[j]);
+      return;
+    }
+    out.push(c);
+  }
 }
 
 /** A value type: number for plain types, or {ref: idx, nullable} */
@@ -143,9 +153,9 @@ export class ModuleBuilder {
     let imports = this.imports, imported = this.nImportedFuncs;
     let index = (f: number) => f;
     // Raw bodies or global initializers can contain untracked function references.
-    if (compactImports && !this.globals.length && [...this.bodies, ...this.elems].every(b => b.functionRefs)) {
+    if (compactImports && !this.globals.length && this.bodies.every(b => b.functionRefs) && this.elems.every(b => b.functionRefs)) {
       const used = new Set<number>();
-      for (const b of [...this.bodies, ...this.elems]) for (const at of b.functionRefs!) { const f = readIndex(b, at); if (f < this.nImportedFuncs) used.add(f); }
+      for (const group of [this.bodies, this.elems]) for (const b of group) for (const at of b.functionRefs!) { const f = readIndex(b, at); if (f < this.nImportedFuncs) used.add(f); }
       for (const e of this.exports) if (e.kind === 0) used.add(e.idx);
       if (this.start >= 0) used.add(this.start);
       const indices = new Map<number, number>();
@@ -170,7 +180,7 @@ export class ModuleBuilder {
       }
       return bytes;
     };
-    const parts: ArrayLike<number>[] = [Uint8Array.of(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0)];
+    const parts: ArrayLike<number>[] = [[0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]];
     let size = 8;
     const put = (a: ArrayLike<number>) => { parts.push(a); size += a.length; };
     /** a section: its id, the length of its parts, then the parts */
@@ -182,32 +192,40 @@ export class ModuleBuilder {
     };
     const count = (n: number): number[] => { const c: number[] = []; uleb(n, c); return c; };
     const vec = (id: number, items: ArrayLike<number>[]) => section(id, [count(items.length), ...items]);
-    // types
-    { const entries: number[][] = []; let i = 0;
-      while (i < this.types.length) {
-        let j = i; while (j < this.types.length && this.types[j].group === this.types[i].group) j++;
-        const e: number[] = [];
-        if (j - i > 1) { e.push(0x4e); uleb(j - i, e); }
-        for (let k = i; k < j; k++) this.encodeTypeDef(this.types[k].def, e);
-        entries.push(e); i = j;
+    {
+      let groups = 0;
+      for (let i = 0; i < this.types.length; i++) if (!i || this.types[i].group !== this.types[i - 1].group) groups++;
+      const entries = count(groups);
+      for (let i = 0; i < this.types.length;) {
+        let j = i + 1; while (j < this.types.length && this.types[j].group === this.types[i].group) j++;
+        if (j - i > 1) { entries.push(0x4e); uleb(j - i, entries); }
+        for (; i < j; i++) this.encodeTypeDef(this.types[i].def, entries);
       }
-      vec(1, entries); }
+      section(1, [entries]);
+    }
     if (imports.length) {
-      const modules = new Map<string, number[]>();
-      vec(2, imports.map(im => {
+      const modules = new Map<string, number[]>(), entries = count(imports.length);
+      for (const im of imports) {
         let prefix = modules.get(im.mod);
         if (!prefix) { prefix = []; name(im.mod, prefix); modules.set(im.mod, prefix); }
-        const e = prefix.slice(); name(im.name, e);
-        for (const x of im.desc) e.push(x);
-        return e;
-      }));
+        for (const x of prefix) entries.push(x);
+        name(im.name, entries);
+        for (const x of im.desc) entries.push(x);
+      }
+      section(2, [entries]);
     }
-    vec(3, this.funcTypes.map((t) => { const e: number[] = []; uleb(t, e); return e; }));
+    const functions = count(this.funcTypes.length);
+    for (const t of this.funcTypes) uleb(t, functions);
+    section(3, [functions]);
     if (this.tables.length) vec(4, this.tables);
     if (this.memories.length) vec(5, this.memories);
     if (this.tags.length) vec(13, this.tags);
     if (this.globals.length) vec(6, this.globals);
-    if (this.exports.length) vec(7, this.exports.map((x) => { const e: number[] = []; name(x.name, e); e.push(x.kind); uleb(x.kind === 0 ? index(x.idx) : x.idx, e); return e; }));
+    if (this.exports.length) {
+      const entries = count(this.exports.length);
+      for (const x of this.exports) { name(x.name, entries); entries.push(x.kind); uleb(x.kind === 0 ? index(x.idx) : x.idx, entries); }
+      section(7, [entries]);
+    }
     if (this.start >= 0) section(8, [count(index(this.start))]);
     if (this.elems.length) vec(9, this.elems.map(relocate));
     // the data count section precedes the code
@@ -224,16 +242,17 @@ export class ModuleBuilder {
     }
     if (this.datas.length) vec(11, this.datas);
     // name section for function names (helps stack traces)
-    const named = this.funcNames.map((n, i) => [i + imported, n] as const).filter(([, n]) => n);
-    if (named.length) {
-      const sub: number[] = []; uleb(named.length, sub);
-      for (const [i, n] of named) { uleb(i, sub); name(n, sub); }
+    let named = 0;
+    for (const n of this.funcNames) if (n) named++;
+    if (named) {
+      const sub = count(named);
+      for (let i = 0; i < this.funcNames.length; i++) if (this.funcNames[i]) { uleb(i + imported, sub); name(this.funcNames[i], sub); }
       const c: number[] = []; name("name", c); c.push(1); uleb(sub.length, c);
       section(0, [c, sub]);
     }
     const out = new Uint8Array(size);
     let at = 0;
-    for (const p of parts) { out.set(p as ArrayLike<number> as Uint8Array, at); at += p.length; }
+    for (const p of parts) { out.set(p, at); at += p.length; }
     return out;
   }
 }
