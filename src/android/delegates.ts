@@ -29,7 +29,7 @@ import { hasProperty, propertyValue as propValue } from "../shell/properties";
 import { NativePath, PathMeasure, VerbIterator, approximate, pathIsConvex, pathOp, pathAt } from "./path";
 import { NativeRegion, nativeRegionOf } from "./region";
 import { Recorder, recordOrRun, replay, replayFor, type DisplayList } from "./recording";
-import { type JBuffer, resident, readOnlyBuffer, addressOf, isExternal, bufferBytes } from "../jvm/natives/jnio";
+import { type JBuffer, readOnlyBuffer, addressOf, isExternal, readBufferBytes, writeBufferBytes } from "../jvm/natives/jnio";
 import {
   type Axis, NativeFont, NativeFamily, NativeTypeface, availableFonts, addFontCollections, warmUpCache, isPlatformFont,
   resolveDefault, setDefaultTypeface, preloadFonts, withFonts, writeTypefaces, readTypefaces,
@@ -199,11 +199,10 @@ delegate("android/graphics/Typeface", {
   "nativeWarmUpCache(Ljava/lang/String;)V": (path: string) => warmUpCache(path),
   // the font map the system server serializes for applications (Typeface.serializeFontMap)
   "nativeReadTypefaces(Ljava/nio/ByteBuffer;I)[J": (b: JBuffer, at: number) =>
-    after(resident(b), () => BigInt64Array.from(readTypefaces(bufferBytes(b).subarray(at)), handle)),
+    after(readBufferBytes(b, at), bytes => BigInt64Array.from(readTypefaces(bytes), handle)),
   "nativeWriteTypefaces(Ljava/nio/ByteBuffer;I[J)I": (b: JBuffer | null, at: number, typefaces: BigInt64Array) => {
     const bytes = writeTypefaces(Array.from(typefaces, (h) => deref<NativeTypeface>(h)));
-    if (b) bufferBytes(b).set(bytes, at);
-    return bytes.length;
+    return b ? after(writeBufferBytes(b, bytes, at), () => bytes.length) : bytes.length;
   },
 });
 
@@ -215,7 +214,7 @@ function directBytes<T>(b: JBuffer | null, then: (bytes: Uint8Array) => T): T | 
   if (!b) rt.npe();
   const address = addressOf(b!);
   if (!address) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a direct buffer");
-  return after(resident(b!), () => then(isExternal(address) ? bufferBytes(b!) : bufferBytes(b!).slice()));
+  return after(readBufferBytes(b!), bytes => then(isExternal(address) ? bytes : bytes.slice()));
 }
 const PACKED_ITALIC = 1 << 16;
 delegate("android/graphics/fonts/Font$Builder", {
