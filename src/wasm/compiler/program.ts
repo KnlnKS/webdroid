@@ -62,8 +62,12 @@ class DexClass implements JClass {
   private members_?: { fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private methodInfos?: Map<number, MethodInfo>;
   constructor(readonly name: string, readonly dex: DexFile, readonly idx: number) {}
-  refreshTypes(resolve: (desc: string) => string): void {
-    this.header_ = undefined;
+  refreshTypes(resolve: (desc: string) => string, changedType?: string): void {
+    if (!changedType) this.header_ = undefined;
+    else if (this.header_) {
+      const h = this.dex.classHeader(this.idx);
+      if (h.superIdx !== 0xffffffff && this.dex.rawType(h.superIdx) === changedType || h.interfaces.some(i => this.dex.rawType(i) === changedType)) this.header_ = undefined;
+    }
     const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
     for (const m of this.members_?.methods ?? this.methodInfos?.values() ?? []) {
       if (m.dex !== this.dex || m.methodIdx < 0) continue;
@@ -259,11 +263,11 @@ export class Program {
     let loaded = this.initiated.get(loader);
     if (!loaded) this.initiated.set(loader, loaded = new Map());
     loaded.set(name, key);
-    return visible === key ? [] : this.refreshResolution(loader);
+    return visible === key ? [] : this.refreshResolution(loader, name);
   }
   forgetInitiated(loader: Loader, name: string): string[] {
     this.initiated.get(loader)?.delete(name);
-    return this.refreshResolution(loader);
+    return this.refreshResolution(loader, name);
   }
   private dependentLoaders(loader: Loader): Set<Loader> {
     const depends = (view: Loader, seen = new Set<Loader>()): boolean => {
@@ -278,12 +282,12 @@ export class Program {
     const affected = this.dependentLoaders(loader);
     return new Set([...this.classes.values()].filter(c => c instanceof DexClass && affected.has(this.loaderOfDex(c.dex)!)).map(c => c.name));
   }
-  private refreshResolution(loader: Loader): string[] {
-    const affected = this.dependentLoaders(loader), names: string[] = [];
+  private refreshResolution(loader: Loader, binding?: string): string[] {
+    const affected = this.dependentLoaders(loader), names: string[] = [], changedType = binding && `L${binding};`;
     for (const [dex, owner] of this.dexLoader) if (affected.has(owner)) dex.resolveType = d => this.rewrite(owner, d);
     for (const c of this.classes.values()) if (c instanceof DexClass) {
       const owner = this.loaderOfDex(c.dex)!;
-      if (affected.has(owner)) { c.refreshTypes(d => this.rewrite(owner, d)); names.push(c.name); }
+      if (affected.has(owner)) { c.refreshTypes(d => this.rewrite(owner, d), changedType); names.push(c.name); }
     }
     this.ancestorMemo.clear(); this.implMemo.clear();
     return names;
