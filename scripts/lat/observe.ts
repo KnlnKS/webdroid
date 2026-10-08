@@ -28,17 +28,19 @@ export function installLatencyObserver(counters: string[]) {
       if (parentStyle.display === "none" || parentStyle.visibility !== "visible" || +parentStyle.opacity === 0 || !frameRect.width || !frameRect.height) return false;
     }
   };
-  if (window === root) host.__wdLatObserver = { firstApp: null, onFrame: null, snapshot };
+  if (window === root) host.__wdLatObserver = { firstApp: null, lastApp: null, onFrame: null, snapshot };
   const original = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
   ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bitmap: ImageBitmap | null) {
     const canvas = this.canvas as HTMLCanvasElement, observer = host.__wdLatObserver;
     const copy = bitmap && observer?.onFrame && canvas.id === "screen" && local.wd?.app() ? createImageBitmap(bitmap) : null;
-    const result = original.call(this, bitmap);
+    let result;
+    try { result = original.call(this, bitmap); }
+    catch (error) { if (copy) void copy.then(image => image.close(), () => {}); throw error; }
     const at = performance.timeOrigin + performance.now() - root.performance.timeOrigin;
     if (bitmap && canvas.id === "screen" && observer && local.wd?.app()) {
       const receipt = { at, url: location.href, pid: new URLSearchParams(location.search).get("pid"),
         pkg: local.wd.app().pkg, tier: local.wd.tier, visible: shown(canvas), processes: snapshot() };
-      if (receipt.visible && !observer.firstApp) observer.firstApp = receipt;
+      if (receipt.visible) { observer.lastApp = receipt; observer.firstApp ??= receipt; }
       observer.onFrame?.(receipt, copy);
     }
     return result;
