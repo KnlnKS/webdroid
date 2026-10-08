@@ -36,12 +36,14 @@ let capture: Capture | undefined, result: unknown, failure: string | undefined;
 const epoch = { sourceKey: sourceKey(), aot: await Bun.file(join(AOT_ROOT, "current.json")).json(),
   git: Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
   harnessSHA256: createHash("sha256").update(await Bun.file(import.meta.path).text()).digest("hex"),
-  profilerSHA256: createHash("sha256").update(await Bun.file(join(import.meta.dir,"boundary-capture.ts")).text()).digest("hex") };
+  profilerSHA256: createHash("sha256").update(await Bun.file(join(import.meta.dir,"boundary-capture.ts")).text()).digest("hex"),
+  wireMapperSHA256: createHash("sha256").update(await Bun.file(join(import.meta.dir,"wire-map.ts")).text()).digest("hex") };
 const saveResult = async (id: string, r: Awaited<ReturnType<typeof runStep>>) => {
   if (r.png) await Bun.write(join(values.out!, `${id}.png`), Buffer.from(r.png, 'base64'));
   const { png: _png, frames: _frames, ...record } = r;
   await Bun.write(join(values.out!, `${id}.json`), JSON.stringify(record, null, 2));
-  if (r.error || r.hang || r.wedged || r.semanticHit === false || r.newErrors.length || r.newMissing.length)
+  if (r.error || r.hang || r.wedged || r.semanticHit === false || r.newErrors.length || r.newMissing.length ||
+    r.settled.how === "timeout" || r.nativeRequired.length || r.newPlaceholders.length || r.perf.drawErrors || !r.png)
     throw new Error(`${id}: incomplete action or guest failure; inspect step JSON`);
   return record;
 };
@@ -61,14 +63,20 @@ try {
 finally {
   for (let i = 0; i < (capture?.profiles.length ?? 0); i++) {
     await Bun.write(join(values.out, `target-${i}.cpuprofile`), JSON.stringify(capture!.profiles[i].profile));
-    for(const source of capture!.profiles[i].sources)
-      await Bun.write(join(values.out, `target-${i}-script-${source.scriptId}.js`),source.source);
+    for (const source of capture!.profiles[i].sources) {
+      if (source.bytecode) {
+        await Bun.write(join(values.out, `target-${i}-script-${source.scriptId}.wasm`), Buffer.from(source.bytecode, "base64"));
+        await Bun.write(join(values.out, `target-${i}-script-${source.scriptId}-wire.json`), JSON.stringify({ sha256: source.sha256, metadata: source.metadata, ...source.wire }, null, 2));
+      } else if (source.source !== undefined) await Bun.write(join(values.out, `target-${i}-script-${source.scriptId}.js`), source.source);
+    }
   }
+  const sourceStable = epoch.sourceKey === sourceKey() && epoch.aot.source === epoch.sourceKey;
   await Bun.write(join(values.out, 'capture.json'), JSON.stringify({ accepted: false,
-    sharedLoad: true, ...epoch, chrome: browser.version(),
+    sharedLoad: true, sourceStable, ...epoch, chrome: browser.version(),
     clock: 'canonical full-flow date pin; real timers, no testClock override',
     window: 'one canonical full step, including action, settle, liveness, pixels and telemetry; not pure input dispatch',
     flow: flow.app, after: values.after, tap: values.tap, setup, result, capture, browserErrors, failure }, null, 2));
   await drv.close();
+  if (!sourceStable) process.exitCode = 1;
 }
-if (failure || browserErrors.length || (capture && (!capture.completeCoverage || !capture.window?.valid))) process.exitCode = 1;
+if (failure || browserErrors.length || !capture?.completeCoverage || !capture.window?.valid) process.exitCode = 1;
