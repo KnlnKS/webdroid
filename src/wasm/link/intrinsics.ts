@@ -45,13 +45,6 @@ function emitFrames(cx: Compiler, c: Code, state: number): void {
 }
 // Throwable.nativeGetStackTrace(state): the frames the host recorded for the state, as StackTraceElement(class, method, file, line)
 def("java/lang/Throwable.nativeGetStackTrace(Ljava/lang/Object;)[Ljava/lang/StackTraceElement;", (cx, m, c) => { emitFrames(cx, c, 0); });
-// VMStack.getThreadStackTrace(thread): the running thread's frames from here (another thread's stack is not on this one: none, as for a thread not running)
-def("dalvik/system/VMStack.getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;", (cx, m, c) => {
-  const state = c.newLocal(T.anyref);
-  cx.emitNew(c, "java/lang/Object"); c.lset(state).lget(state).externConvertAny().call(cx.imp.capture);
-  c.lget(0).refCast(cx.tObj, true); cx.callRt(c, "curThread"); c.refCast(cx.tObj, true).refEq().raw(OP.i32_eqz).if_().anyNull().lset(state).end();
-  emitFrames(cx, c, state);
-});
 // VMStack.getThreadStackTrace(thread): the running thread's frames, taken as a new Throwable takes them; another thread's stack is not on this one (an empty trace)
 def("dalvik/system/VMStack.getThreadStackTrace(Ljava/lang/Thread;)[Ljava/lang/StackTraceElement;", (cx, m, c) => {
   const THR = "java/lang/Throwable", ctor = cx.prog.resolve(THR, "<init>", "()V"), trace = cx.prog.resolve(THR, "getStackTrace", "()[Ljava/lang/StackTraceElement;"), e = c.newLocal(T.anyref);
