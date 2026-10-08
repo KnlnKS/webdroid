@@ -11,7 +11,7 @@ import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
 import { handle, deref, release } from "../../android/handles";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes, memoryAt, writeAt } from "./jmemory";
+import { isExternal, isLive, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes, memoryAt, writeAt } from "./jmemory";
 import { BytesFile, type FileSource } from "../../shell/lazyfile";
 export { isExternal };
 
@@ -65,6 +65,13 @@ function checkedByteLength(b: JBuffer, at: number, n?: number): number {
   if (!Number.isSafeInteger(at) || !Number.isSafeInteger(length) || at < 0 || length < 0 || at > size - length)
     throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "invalid buffer byte range");
   return length;
+}
+/** A view of a shared owner mapping, whose writes commit asynchronously. */
+export function isLiveBuffer(b: JBuffer): boolean {
+  const address = addressOf(b);
+  if (address) return isLive(address);
+  const layout = layoutOf(b), o = b as Fields;
+  return !!(layout.bb && !(layout.hb && o[layout.hb]) && isLiveBuffer(o[layout.bb]));
 }
 /** A host operation reads owner-backed memory once; it does not receive a live byte view. */
 export function readBufferBytes(b: JBuffer, at = 0, n?: number): Uint8Array | Promise<Uint8Array> {
