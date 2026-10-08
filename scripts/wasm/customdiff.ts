@@ -31,8 +31,8 @@ function handClasses(): Record<string, Uint8Array> {
     const self = pool.cls(name), parent = pool.cls(sup), interfaces = ifaces.map((i) => pool.cls(i));
     out[name] = Uint8Array.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61, ...u2(pool.count), ...pool.bytes, ...u2(access), ...u2(self), ...u2(parent), ...u2(interfaces.length), ...interfaces.flatMap(u2), ...u2(fields.length), ...fields.flat(), ...u2(methods.length), ...methods.flat(), ...u2(attrs.length), ...attrs.flat()]);
   };
-  const method = (pool: Pool, access: number, name: string, desc: string, code: number[] | null, locals = 3) => {
-    const body = code && [...u2(4), ...u2(locals), ...u4(code.length), ...code, ...u2(0), ...u2(0)];
+  const method = (pool: Pool, access: number, name: string, desc: string, code: number[] | null, locals = 3, stack = 4) => {
+    const body = code && [...u2(stack), ...u2(locals), ...u4(code.length), ...code, ...u2(0), ...u2(0)];
     return [...u2(access), ...u2(pool.utf8(name)), ...u2(pool.utf8(desc)), ...u2(body ? 1 : 0), ...(body ? [...u2(pool.utf8("Code")), ...u4(body.length), ...body] : [])];
   };
   // interface Ig { String name(); }
@@ -135,6 +135,10 @@ function handClasses(): Record<string, Uint8Array> {
     for (const [kind, name] of ["failure", "error", "nullSite", "wrong"].entries()) site(name, "failure", "I", [p.int(kind)]);
     site("race", "race", "");
     site("raceFailure", "raceFailure", "");
+    const nullable = bootstraps.length, nullableDesc = "([IIIIII)V";
+    bootstraps.push([...u2(p.methodHandle(6, p.member(10, "Bootstrap", "nullableRange", prefix + ")Ljava/lang/invoke/CallSite;"))), ...u2(0)]);
+    methods.push(method(p, 9, "nullableRange", "([IIIIII)I", [0x2a, 0x1b, 0x1c, 0x1d, 0x15, 4, 0x15, 5,
+      0xba, ...u2(p.invokeDynamic(nullable, "nullableRange", nullableDesc)), 0, 0, 0x2a, 0xbe, 0xac], 6, 6));
     const body = [...u2(bootstraps.length), ...bootstraps.flat()];
     build("Dyn", 0x21, "java/lang/Object", [], p, [], methods, [[...u2(p.utf8("BootstrapMethods")), ...u4(body.length), ...body]]);
   }
@@ -166,6 +170,8 @@ const virtualSite = constantSite("hVirtual"), typeSite = constantSite("loaderTyp
 if (handleMemberOwner(virtualSite.method, virtualSite.index) !== "Mh"
   || JSON.stringify(handleSignatureTypes(virtualSite.method, virtualSite.index)) !== JSON.stringify([{ owner: "Mc", descriptor: "I" }, { owner: "Mc", descriptor: "I" }])
   || methodTypeSignatureTypes(typeSite.method, typeSite.index).some(t => t.owner !== "Mc" || t.descriptor !== "LMh$Signature;")) throw new Error("executed signature metadata contract changed");
+const nullableRange = w.prog.require("Dyn").methods.find(m => m.name === "nullableRange")!;
+if (!decodeInstructions(nullableRange.dex.code(nullableRange.codeOff).insns).some(i => i.name === "invoke-custom/range")) throw new Error("nullable call-site fixture lost its range invoke");
 const dyn = w.prog.require("Dyn").methods.find(m => m.name === "constants")!;
 const customIndex = decodeInstructions(dyn.dex.code(dyn.codeOff).insns).find(i => i.name.startsWith("invoke-custom"))!.b;
 if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,methodType,class,methodType,handle") throw new Error("bootstrap reference ordering changed");
@@ -189,7 +195,7 @@ processState(w);
 w.onGap = (id) => hit.push(w.gapList[id]);
 const methods = ["Rec", "Mh", "Vh", "Px", "Pt", "Bootstrap"].flatMap((c) => w.prog.require(c).methods.filter((m) => m.isStatic && m.codeOff && (c !== "Bootstrap" || m.name.startsWith("tCustom")) && m.flags & ACC.PUBLIC && m.name !== "tConstWait" && m.name !== "tTransformWait" && m.name !== "tTransformConcurrent" && m.name !== "tCustomRace" && m.name !== "tCustomRetry" && m.name !== "tInvokerConcurrent"));
 const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
-  ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
+  ...Object.fromEntries(methods.filter((m) => m.cls === "Mh" || m.cls === "Vh" || m.cls === "Px" || m.cls === "Pt" || m.cls === "Bootstrap").map((m) => [m.name, mh])), tCustomFailure: [0], tCustomRangeNull: [0, 3], empty: [0], eqNaN: [0, 1, 2], eqOther: [0, 1, 2, 3, 4], nullRecv: [0, 1, 7], ts: [0, 1, 2, 3, 4, 5, 6, 7, 30], hc: [0, 1, 2, 3, 7, 12, 40], nested: [0, 3, 4] };
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");

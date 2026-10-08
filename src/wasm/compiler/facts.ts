@@ -5,6 +5,7 @@
 // access reads it instead of casting again: baseline code does not remove repeated casts. Handler entries start empty: a throw can come from anywhere in the try range.
 import { endsBlock, branchTargets, type PreparedInstruction as Ins } from "../../jvm/prepared";
 import { R as KR } from "./infer";
+import { isInstanceInvoke } from "./opinfo";
 import type { MC } from "./method";
 
 /** `typed` holds "web:struct" for a web whose shadow local for that struct type currently holds the web's value */
@@ -25,7 +26,7 @@ function checkedReg(ins: Ins): number {
   if (n.startsWith("iget") || n.startsWith("iput") || n.startsWith("aget") || n.startsWith("aput")) return ins.b;
   if (n === "array-length") return ins.b;
   if (n === "monitor-enter" || n === "monitor-exit" || n === "throw" || n === "fill-array-data") return ins.a;
-  if (n.startsWith("invoke") && !n.startsWith("invoke-static") && n !== "invoke-custom" && !n.startsWith("invoke-polymorphic") && ins.regs.length) return ins.regs[0];
+  if (isInstanceInvoke(ins.op) && !n.startsWith("invoke-polymorphic") && ins.regs.length) return ins.regs[0];
   return -1;
 }
 

@@ -77,6 +77,14 @@ public class Bootstrap {
     first.start(); second.start(); first.join(); second.join();
     return results[0] + results[1] == 9 && Dyn.raceFailure(0) == 2 && racingFailure == 2 ? 1 : -1;
   }
+  public static void ignoreArray(int[] values, int a, int b, int c, int d, int e) {}
+  public static CallSite nullableRange(MethodHandles.Lookup l, String n, MethodType t) throws Exception {
+    return new ConstantCallSite(l.findStatic(Bootstrap.class, "ignoreArray", t));
+  }
+  public static int tCustomRangeNull(int a) {
+    try { return Dyn.nullableRange(a == 0 ? null : new int[a], 1, 2, 3, 4, 5); }
+    catch (NullPointerException e) { return -7; }
+  }
   public static int tCustomFixed(int a) { int x = Dyn.fixed(a), y = Dyn.fixed(a); return x + y + links; }
   public static int tCustomCollected(int a) { return Dyn.collected(a); }
   public static int tCustomConstants(int a) { return Dyn.constants(a); }
