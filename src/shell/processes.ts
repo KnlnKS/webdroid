@@ -1,3 +1,4 @@
+import type { ProcessLifeCalls } from "./process-life";
 // The broker: system_server's part across process realms, kept in the page's top realm, which
 // outlives them all. It registers each process and its frame, routes binder transactions, service,
 // provider and broadcast requests and process deaths between them, and holds the stores every
@@ -77,6 +78,7 @@ export type ActivityRequest = { kind: "launch"; id: number; component: string; i
   | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
 const BIND_NOT_FOREGROUND = 4, BIND_WAIVE_PRIORITY = 0x20;
 export type ProcessEndpoint = {
+  processDied: (token: number) => Promise<void>;
   activity: (request: ActivityRequest) => Promise<void>;
   transact: (request: Transaction, caller: Caller) => Promise<TransactionReply>;
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
@@ -96,7 +98,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
+export type BrokerCalls = ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
   alarmCancel: (id: number) => Promise<void>;
@@ -117,7 +119,7 @@ export type BrokerCalls = WebStorageCalls & LocationCalls & ServiceStartCalls & 
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -409,7 +411,21 @@ export class ProcessBroker {
         throw rt.mkThrowable("java/lang/SecurityException", "Service start state belongs to another process");
       return this.serviceStarts(pid);
     };
+    const watches = new Map<number, () => void>();
     const stop = serveCalls<BrokerCalls>(port1, {
+      processAlive: async target => { this.entry(pid); return target === 0 || this.alive(target); },
+      processSignal: async (target, signal) => this.signal(pid, target, signal),
+      processWatch: async (target, token) => {
+        this.entry(pid);
+        watches.get(token)?.(); watches.delete(token);
+        if (target === 0) return;
+        const entry = this.entry(target);
+        watches.set(token, this.watch(entry.pid, () => {
+          watches.delete(token);
+          if (this.alive(pid)) unawaited(this.request(this.entry(pid), endpoint => endpoint.processDied(token)));
+        }));
+      },
+      processUnwatch: async token => { this.entry(pid); watches.get(token)?.(); watches.delete(token); },
       locationAvailable: async () => { this.entry(pid); return this.location.available; },
       locationEnabled: async () => { this.entry(pid); return this.location.enabled; },
       locationLast: async () => { await requireLocation(); return this.location.last; },
@@ -540,7 +556,7 @@ export class ProcessBroker {
       service: (pkg, process, request) => this.service(pid, pkg, process, request),
       contentProvider: (pkg, process, authority) => this.contentProvider(pid, pkg, process, authority),
       broadcast: (data, manifest, permissions, ordered, initial) => this.broadcast(pid, data, manifest, permissions, ordered, initial),
-    }, () => { owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); }, async (method,value) => {
+    }, () => { for (const cancel of watches.values()) cancel(); watches.clear(); owned.delete(stop); if (!owned.size) this.callerPorts.delete(pid); }, async (method,value) => {
       if (method === "transact") await this.discardDescriptors(pid,(value as TransactionReply).data,false);
       if (method === "clipboardGet" && value) await this.discardDescriptors(pid,value as ParcelData,false);
     });

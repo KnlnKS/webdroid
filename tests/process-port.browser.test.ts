@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
   if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -48,7 +48,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
           serveProcess(data.endpoint, {
             activity: async()=>{}, service: async()=>null, serviceConnected: async()=>{}, contentProvider:async()=>null,
             broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
-            locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;},
+            processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;},
             transact:async(request,caller)=>{
               if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data,cached};}
               if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
@@ -65,7 +65,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const empty = { bytes: new Uint8Array(0), objects: [] };
       const stopCallbacks = serveProcess(callbacks.port1, {
         activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
-        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
+        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
         transact: async () => {
           await proxy.endpoint.clipboardChanged();
           return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };
@@ -104,6 +104,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       return endpointOwnership();
     });
     expect(ownership).toEqual({ repeatedReady: true, reverseCaller: {pid:8002,id:1}, killed: true, alive: false, pendingCause: "fixture kill delivered", otherAlive: true, removed: true,
+      lifecycle:{read:{pid:3,id:1},dead:{pid:1,id:0},signalOwn:true,signalForeign:true,watcherCleaned:true},
       fileDescriptors:{opened:true,foreign:-13,written:55,read:{pid:66,id:1},binder:{pid:77,id:1},survivor:{pid:77,id:1}} });
     const cookies = await page.evaluate(async () => {
       const { cookieOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");

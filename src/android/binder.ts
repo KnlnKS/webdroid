@@ -31,8 +31,8 @@ export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
 export const binderTransport: {
   transact: (request: Transaction) => Promise<TransactionReply>;
-  alive: (pid: number) => boolean;
-  watch: (pid: number, died: () => void) => () => void;
+  alive: (pid: number) => boolean | Promise<boolean>;
+  watch: (pid: number, died: () => void) => (() => void) | Promise<() => void>;
 } = {
   transact: async () => { throw rt.mkThrowable("android/os/DeadObjectException", "Process unavailable"); },
   alive: () => false,
@@ -431,7 +431,7 @@ rt.register({ name: "webdroid/FileWriter", ctor: JFileWriter, sup: "android/os/B
 
 const proxyOf = (proxy: JObj) => proxyData.get(proxy)!;
 const pidAlive = (pid: number) => pid === PROCESS_PID || binderTransport.alive(pid);
-const proxyAlive = function (this: JObj) { return +pidAlive(proxyOf(this).handle.pid); };
+const proxyAlive = function (this: JObj) { return after(pidAlive(proxyOf(this).handle.pid), alive => +alive); };
 /** a transaction or reply the target's buffer cannot take fails, as signalExceptionForError reports
  *  FAILED_TRANSACTION for the data parcel's size */
 function checkBuffer(p: NativeParcel, oneway: boolean, dataSize: number): void {
@@ -495,16 +495,26 @@ rt.registerJnis("android/os/BinderProxy", {
     yield transact(proxyOf(this).handle, INTERFACE_TRANSACTION, new NativeParcel(), reply, 0);
     return readString(reply);
   }),
-  "linkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JObj, recipient: unknown) {
+  "linkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)V": driven(function* (this: JObj, recipient: unknown): Gen<void> {
     const { handle: target, deaths } = proxyOf(this);
-    if (!pidAlive(target.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
-    if (!deaths.has(recipient)) deaths.set(recipient, binderTransport.watch(target.pid, () => {
-      deaths.delete(recipient);
-      // binderDied arrives on a binder thread
-      detached(() => withCallingIdentity(SYSTEM_CALLER, () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this)),
-        binderEscape("*** Uncaught exception returned from death notification!"));
-    }));
-  },
+    if (!(yield pidAlive(target.pid))) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
+    if (deaths.has(recipient)) return;
+    let cancel = () => {}, received = false;
+    const unlink = () => { received = true; cancel(); };
+    deaths.set(recipient, unlink);
+    try {
+      cancel = yield binderTransport.watch(target.pid, () => {
+        if (received || deaths.get(recipient) !== unlink) return;
+        received = true;
+        deaths.delete(recipient);
+        // binderDied arrives on a binder thread
+        detached(() => withCallingIdentity(SYSTEM_CALLER, () => scall("android/os/BinderProxy", "sendDeathNotice", "(Landroid/os/IBinder$DeathRecipient;Landroid/os/IBinder;)V", recipient, this)),
+          binderEscape("*** Uncaught exception returned from death notification!"));
+      });
+    }
+    catch (error) { if (deaths.get(recipient) === unlink) deaths.delete(recipient); throw error; }
+    if (received) cancel();
+  }),
   "unlinkToDeathNative(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JObj, recipient: unknown) {
     const { deaths } = proxyOf(this), cancel = deaths.get(recipient);
     if (!cancel) return 0;

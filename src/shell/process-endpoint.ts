@@ -2,6 +2,7 @@ import { webStorageTransport } from "../android/webstorage";
 // A process realm's side of the broker: the transports its system services reach other processes
 // and the broker's stores through, and the endpoint the broker's requests to it land on.
 import { remoteLocation } from "./location-access";
+import { remoteProcessLife } from "./process-life";
 import { filePathTransport } from "./file-path";
 import { descriptorTransport } from "../native/process-fd";
 import { useAccountStore, useAccountAccess, accountsChanged } from "../android/accounts";
@@ -40,6 +41,7 @@ const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerM
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
 const workerLocation = remoteLocation(brokerCalls);
+const workerLife = remoteProcessLife(brokerCalls, logUncaught);
 function connectCommandTransports(): void {
   Object.assign(locationTransport,workerLocation.access);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => brokerCalls().pendingCreate(pkg, kind, code, flags, intent, intents);
@@ -93,6 +95,9 @@ function connectCommandTransports(): void {
     notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
     useSettingsAccess(remoteSettings(brokerCalls));
     if (typeof window === "undefined") {
+      processTransport.signal = workerLife.signal;
+      binderTransport.alive = workerLife.alive;
+      binderTransport.watch = workerLife.watch;
       filePathTransport.calls = brokerCalls;
       descriptorTransport.calls = brokerCalls;
       vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
@@ -119,6 +124,7 @@ function connectCommandTransports(): void {
 export function closeProcessBrokerPort(): void {
   calls?.close();
   workerLocation.close();
+  workerLife.close();
   workerActivityResults.clear();
 }
 const workerActivityResults = new Map<number, ResultDelivery["deliver"]>();
@@ -239,6 +245,7 @@ export function connectProcess(): ProcessEndpoint {
 /** JVM callbacks are local to this realm; constructing the endpoint needs no live broker. */
 export function createProcessEndpoint(requests = workerActivityResults): ProcessEndpoint {
   return {
+    processDied: async token => workerLife.died(token),
     locationChanged: async (id,token,event) => workerLocation.changed(id,token,event),
     accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),

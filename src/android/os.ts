@@ -70,13 +70,13 @@ function threadTid(t: JThread): number {
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
 /** the other processes of the page, through the broker: kill(2) for a pid this one may signal */
-export const processTransport = { signal: (_pid: number, _signal: number): void => {} };
+export const processTransport = { signal: (_pid: number, _signal: number): void | Promise<void> => {} };
 // Runtime.exit runs the shutdown hooks from bytecode first; halt does not. Neither returns.
 rt.registerJni("java/lang/Runtime", "nativeExit(I)V", (code: number) => { exitProcess({ code: code & 0xff }); return never(); });
 const SIGNAL_KILL = 9;
 /** Process.sendSignal: SIGKILL ends this process, as killProcess(myPid()) does; another
  *  process's pid goes to the broker */
-function sendSignal(pid: number, signal: number): void | Promise<never> {
+function sendSignal(pid: number, signal: number): void | Promise<void> {
   if (pid !== PROCESS_PID) return processTransport.signal(pid, signal);
   if (signal !== SIGNAL_KILL) return;
   exitProcess({ signal });

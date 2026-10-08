@@ -233,11 +233,15 @@ describe("remotecallbacklist", () => {
   const register = (list: unknown, cb: unknown, cookie: unknown = null) => vcall(list, "register", "(Landroid/os/IInterface;Ljava/lang/Object;)Z", cb, cookie);
   const count = (list: unknown) => vcall(list, "getRegisteredCallbackCount", "()I");
 
-  test("RemoteCallbackList removes dead remote Binders and unlinks replacement registrations", async () => {
+  test.each([false, true])("RemoteCallbackList removes dead Binders and unlinks replacements (async=%s)", async (remote) => {
     const saved = { ...binderTransport }, watches = new Set<() => void>();
     let alive = true;
-    binderTransport.alive = () => alive;
-    binderTransport.watch = (_pid, died) => { watches.add(died); return () => { watches.delete(died); }; };
+    binderTransport.alive = () => remote ? Promise.resolve(alive) : alive;
+    binderTransport.watch = (_pid, died) => {
+      watches.add(died);
+      const cancel = () => { watches.delete(died); };
+      return remote ? Promise.resolve(cancel) : cancel;
+    };
     try {
       const list = await newObj("android/os/RemoteCallbackList"), cb = callback(await importBinder({ pid: 987654, id: 1 }));
       expect(await register(list, cb)).toBe(1);
