@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### G1 bootstrap ownership checkpoint (2026-10-08)
+
+Ordinary G1 incorrectly flattened platform and app DEX into the application loader; production and the installed scenario use a bootstrap platform beneath the app. Both scenarios now share that construction, and reports identify the layout. An actual World audit finds all 54,727 platform definitions bootstrap-owned and the workload app-owned. Typecheck and the full short 74-workload Node/Chrome comparison pass (592 calls). Private matched controls change timings in both directions, including worse linkedList execution. Earlier flattened G1 runs remain evidence of that harness, not production-layout acceptance. The runtime/AOT source is unchanged; full corrected performance gates remain open.
+
 ### Bounded polymorphic guards checkpoint (2026-10-08)
 
 The hot planner now retains its highest-ranked two eligible implementations when more qualify, preserving virtual dispatch for all others. Five-run Node and Chrome controls improve steady HashMap timing with matching answers. The full frozen G1 run validates all 149,480 calls but fails: primary-ten steady means reach 1.557× Node and 1.353× Chrome, while ArrayList loses in both engines, Node sort and Chrome linkedList exceed the 10% regression limit, and all ten Chrome first calls regress. CPU sampling retains 14 negative-delta errors and desktop activity, so idle-host acceptance is also unproved. All 19 Wasm sections, 1,212 unit cases, typecheck, OSR/cold/framework checks and default eight-jar AOT pass. Source `8296c7ccc8bd…` identifies ordinary `0b51dc814a97fd73` and guarded `b0e4ab64daa0b929`; platform module files remain byte-identical to b4d0. The previous diagnostic cut now observes Doodle's mutual thread wait directly, but still fails the gameplay flow. History contains exact measurements and source guards.

@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import type { AotStore } from "../../src/wasm/link/aot";
 import { FetchStore } from "../../src/wasm/link/aotstore";
 import { compileBytes } from "../../src/wasm/link/module";
-import { loadDexes, program, world } from "./lib";
+import { loadDexes, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { externs } from "../../src/wasm/link/intrinsics";
 import { prepareApp } from "../../src/wasm/host/appcode";
@@ -58,18 +58,23 @@ const collectedHeap = () => {
   return heapUsed();
 };
 
+function workloadProgram(cfg: G1Config) {
+  const platform = new Program(PLATFORM_JARS.flatMap((j) => loadDexes(`${cfg.root}/vendor/aosp/${j}`))); platform.addExterns(externs);
+  const dexes = loadDexes(cfg.dex);
+  return { dexes, prog: new Program(dexes, platform) };
+}
+
 /** a launch of the installed app as the page makes one (host/boot.ts, host/appcode.ts): the app's Program over the platform's, the saved build found and its modules compiled
  *  before the World is made, the host's classes, and in a page the compile worker that takes the second tier */
 async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: () => Promise<void> }> {
-  const platform = new Program(PLATFORM_JARS.flatMap((j) => loadDexes(`${cfg.root}/vendor/aosp/${j}`))); platform.addExterns(externs);
-  const dexes = loadDexes(cfg.dex), key = basename(aotDir!), persist = new Persist(memoryBackend());
+  const { dexes, prog } = workloadProgram(cfg), key = basename(aotDir!), persist = new Persist(memoryBackend());
   await persist.save(await appKey(dexes, key), [...appFiles!].filter(([n]) => n !== "startup.json"));
   const code = await prepareApp({ dexes, aot: { base: `/aot/${key}/`, key } as unknown as FetchStore, persist, roots: { launch: [] },
     spawn: () => { if (!inPage) throw new Error("no compile worker in node"); return new Worker("/wasm-compile-worker.js", { type: "module" }) as never; } });
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;
-  const w = world(new Program(dexes, platform), { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.options.app, ...(worker && { compiler: code.compiler }) });
+  const w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.options.app, ...(worker && { compiler: code.compiler }) });
   if (!w.appAttached) throw new Error("the installed app's build does not attach");
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
   let startWorker: (() => Promise<void>) | undefined;
@@ -96,7 +101,7 @@ export async function g1run(cfg: G1Config): Promise<G1Result> {
   const setupAt = performance.now();
   if (cfg.mode === "wasm" && appFiles) { const code = await installed(cfg); w = code.world; startWorker = code.startWorker; }
   else if (cfg.mode === "wasm") {
-    const prog = program([cfg.dex, ...PLATFORM_JARS.map((j) => `${cfg.root}/vendor/aosp/${j}`)]);
+    const { prog } = workloadProgram(cfg);
     // the World takes the heap at its construction as the base of its limit, so the program model it is built over is on that side
     heapBase = heapUsed();
     w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold!==undefined&&{cold:cfg.cold}) });

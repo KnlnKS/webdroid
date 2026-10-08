@@ -123,6 +123,7 @@ const startSource = sourceKey();
 const report: Record<string, unknown> = { installed: installedDir || null, inline: inlineTier, source:startSource, dexSha256:createHash("sha256").update(readFileSync(dex)).digest("hex"), cores: cpus().length, reps, runs, loadStart: loadavg()[0], cold:process.argv.includes("--cold"), aot:process.env.WEBDROID_AOT??null, accepted:false, engines: {} };
 const artifact = (dir: string, name: string) => ({ path: join(dir, name), sha256: createHash("sha256").update(readFileSync(join(dir, name))).digest("hex") });
 report.scenario = installedDir ? "installed-measured-demand-preload" : "ordinary-on-demand";
+report.classPathLayout = "bootstrap-platform/application";
 report.startup = installedDir ? artifact(installedDir, "startup.json") : process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "startup.json") : null;
 report.appIndex = installedDir ? artifact(installedDir, "index.json") : null;
 report.platformIndex = process.env.WEBDROID_AOT ? artifact(process.env.WEBDROID_AOT, "index.json") : null;
