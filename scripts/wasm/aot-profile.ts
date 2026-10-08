@@ -45,12 +45,18 @@ for (const apk of apks.length ? apks : ["FitNotes.apk", "calculatorm.apk", "miho
       if (!url.searchParams.has("screen")) url.searchParams.set("screen", "1080x2160@480");
       const deadline = Date.now() + 90_000;
       await page.goto(url.href);
-      await page.waitForFunction(async () => {
-        const wd = globalThis.wd;
-        if (!wd) return false;
-        const foreground = await wd.foregroundWorkerSnapshot?.();
-        return (foreground?.snapshot.perf ?? wd.perf).presentations > 0;
-      }, undefined, { timeout: 90_000, polling: 200 });
+      await page.evaluate(async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([(async () => {
+            for (;;) {
+              const wd = globalThis.wd, foreground = await wd?.foregroundWorkerSnapshot?.();
+              if (wd && (foreground?.snapshot.perf ?? wd.perf).presentations > 0) return;
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
+          })(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("First presentation timed out")), 90_000); })]);
+        } finally { clearTimeout(timer); }
+      });
       await page.waitForTimeout(SETTLE_MS);
       const {processes,profiles} = await collectLaunch(page, deadline, errors);
       console.log(`${apk} ${launch}: ${processes.length} healthy process diagnostics, ${url.href}`);

@@ -1,7 +1,7 @@
-// Tap latency proxy: pointerup to the first changed quantized screen bitmap. A release or ripple
-// can change it before the intended content responds; semantic response needs a separate check.
+// Intended response: scenario UI state followed by an app-owned bitmap matching its response
+// region. UI probing and bitmap observation make this a conservative latency upper bound.
 //
-//   bun run lat [scenario ...] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -12,13 +12,15 @@
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
 //     | {"swipe":[x1,y1,x2,y2,ms]} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo)
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
-// reports navigation to its first frame and to idle, ungated. --cpuprofile writes
+// reports root frame proxies and actual app presentation separately. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
 // scripts/lat/profsum.ts can window the profile to one tap.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { chromium } from "playwright";
+import { chromium, webkit, type BrowserContext } from "playwright";
+import { installLatencyObserver } from "./observe";
+import { matchesState, compileDeltas, type Expectation } from "./expect";
 import { consume } from "../args";
 
 const LIMIT_MS = 150;
@@ -28,7 +30,8 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
-const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile");
+const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), engine = option("--engine") ?? "chrome";
+if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "js");
 if (!launchQuery.has("processMode")) launchQuery.set("processMode", "iframe");
@@ -39,17 +42,18 @@ const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWi
 const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resParseMs", "methodsReached", "methodsCold", "coldCalls", "drawMs", "frameMs", "presentations", "presentLagMs",
   // populated under ?jvmProfile=1 only
   // the Wasm tier
-  "wasmMethods", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
+  "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
-type Tap = { m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
+type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compile?: ReturnType<typeof compileDeltas>; m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
-type Launch = { firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
+type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
   idle: number; perf: Record<string, number>; marks: string[] };
 type Capture = { launch?: Launch; taps: Tap[]; processesBefore?: unknown; processesAfter?: unknown;
+  presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
-const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean) {
+const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) {
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
   const realms = () => [window, ...[...document.querySelectorAll("iframe")].flatMap(f => {
@@ -101,13 +105,63 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     for (let i = 0; i < d.length; i += 4) h = (Math.imul(h, 31) + (d[i] >> 3) * 1024 + (d[i + 1] >> 3) * 32 + (d[i + 2] >> 3)) | 0;
     return h;
   };
-  let frames: { t: number; bmp: Promise<ImageBitmap>; perf: Record<string, number> }[] | null = null;
-  const raw = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
-  ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bmp: ImageBitmap | null) {
-    if (bmp && frames && (this.canvas as HTMLCanvasElement).id === "screen")
-      frames.push({ t: performance.now(), bmp: createImageBitmap(bmp, { resizeWidth: 54, resizeHeight: 108, resizeQuality: "pixelated" }), perf: snapshot() });
-    return raw.call(this, bmp);
+  type Frame = { t: number; hash: number; pixels: { hash: number; nonUniform: boolean; rgb: number[] }[]; receipt: any; perf: Record<string, number> };
+  let frames: Frame[] = [], active = expectedLaunch, frameError: string | null = null;
+  const observer = w.__wdLatObserver;
+  if (!observer) throw new Error("All-realm presentation observer unavailable");
+  const regionInfo = (source: CanvasImageSource, region: number[]) => {
+    const canvas = new OffscreenCanvas(64, 64), ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    const [left, top, right, bottom] = region;
+    ctx.drawImage(source, left, top, right - left, bottom - top, 0, 0, 64, 64);
+    const data = ctx.getImageData(0, 0, 64, 64).data, rgb = [0, 0, 0];
+    let hash = 0, variation = 0;
+    for (let i = 0; i < data.length; i += 4) for (let k = 0; k < 3; k++) {
+      hash = (Math.imul(hash, 31) + (data[i + k] >> 3)) | 0;
+      rgb[k] += data[i + k]; variation = Math.max(variation, Math.abs(data[i + k] - data[k]));
+    }
+    return { hash, nonUniform: variation > 8, rgb: rgb.map(v => v / 4096) };
   };
+  const collect = () => observer.onFrame = async (receipt: any, bitmap: Promise<ImageBitmap>) => {
+    const expectation = active, batch = frames;
+    let bmp: ImageBitmap | undefined;
+    try {
+      const image = await bitmap;
+      bmp = image;
+      if (!receipt.visible || receipt.pkg !== w.wd?.app()?.pkg || receipt.tier !== w.wd?.tier) return;
+      batch.push({ t: receipt.at, hash: sig(image), pixels: expectation.pixels.map(p => regionInfo(image, p.region)), receipt,
+        perf: receipt.processes.find((p: any) => p.url === location.href)?.perf ?? snapshot() });
+    } catch (e) { frameError = String(e); }
+    finally { bmp?.close(); }
+  };
+  const state = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([w.wd.uiTree(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("UI-state observation timed out")), 1000); })]); }
+    finally { clearTimeout(timer); }
+  };
+  const intended = async (expectation: Expectation, start: number, baseline: ReturnType<typeof regionInfo>[]) => {
+    const end = performance.now() + 8000;
+    let stateAt: number | null = null, nodes: unknown, error: string | null = null;
+    while (performance.now() < end) {
+      if (frameError) { error = frameError; break; }
+      if (stateAt !== null) {
+        const frame = frames.find(f => f.t >= start && f.t >= stateAt! && expectation.pixels.every((p, i) => {
+          const pixel = f.pixels[i];
+          return (!p.changed || baseline[i]?.hash !== pixel.hash) && (!p.nonUniform || pixel.nonUniform) &&
+            (!p.rgb || p.rgb.some(rgb => rgb.every((v, k) => Math.abs(pixel.rgb[k] - v) <= 1)));
+        }));
+        if (frame) return { at: frame.t, stateAt, nodes, receipt: frame.receipt, error };
+      }
+      try {
+        if (w.wd) {
+          nodes = await state();
+          if (w.__wdLatMatches(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
+        }
+      } catch (e) { error = String(e); break; }
+      await sleep(10);
+    }
+    return { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable" };
+  };
+  collect();
   const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd?.perf[k] ?? 0]));
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   while (!(w.wd && w.wd.perf.draws > 0)) await sleep(5);
@@ -127,6 +181,11 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     if (performance.now() > until) throw new Error("First app presentation unavailable (Worker launches require a separate presentation protocol)");
     await sleep(50);
   }
+  result.presentation = { firstApp: observer.firstApp };
+  const renderedApp = await intended(expectedLaunch, 0, []);
+  result.presentation.renderedApp = renderedApp;
+  observer.onFrame = null;
+  if (renderedApp.at === null) throw new Error("Rendered app launch unavailable: " + renderedApp.error);
   await idle();
   // the launch timeline: the marks (src/perf.ts) of this realm and of the frames in it, in ms since this navigation
   const marksOf = (win: Window, realm: string) => win.performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:"))
@@ -135,7 +194,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const appPresentationMarks = appRealms().flatMap(win => win.performance.getEntriesByName("wd:firstPresented").map(e => ({ url: win.location.href,
     pkg: (win as any).wd.app().pkg, tier: (win as any).wd.tier, at: Math.round(win.performance.timeOrigin + e.startTime - performance.timeOrigin),
     visible: !win.frameElement || !!win.frameElement.getBoundingClientRect().height })));
-  result.launch = { firstFrame, appPresentationMarks,
+  result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.receipt.processes, appPresentationMarks,
     idle: Math.round(performance.now()), perf: launchPerf, marks };
   result.processesBefore = await diagnostics();
   if (replay) {
@@ -178,44 +237,53 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       ({ x, y } = at);
     }
     const processesBefore = s.m ? await diagnostics() : undefined;
-    const base = sig(screen());
-    if (s.m) frames = [];
+    const base = sig(w.wd.displayCanvas());
+    const baseline = s.m ? s.expect.pixels.map((p: any) => regionInfo(w.wd.displayCanvas(), p.region)) : [];
+    if (s.m) { frames = []; active = s.expect; collect(); }
     const t0 = performance.now();
     ev("pointerdown", x, y);
     await sleep(s.hold ?? 60);
     if (s.m && w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
-    const tu = performance.now(), before = snapshot();
+    const tu = performance.now(), before = snapshot(), compileBefore = observer.snapshot();
     ev("pointerup", x, y);
     if (!s.m) { await sleep(300); await idle(); continue; }
+    const semantic = intended(s.expect, tu, baseline);
     for (let last = performance.now(); performance.now() - last < 800 && performance.now() - t0 < 8000;) {
       await sleep(20);
       const f = frames!.at(-1);
       if (f) last = Math.max(last, f.t);
     }
-    const got = frames!; frames = null;
+    observer.onFrame = null;
+    const response = await semantic, got = frames.slice().sort((a, b) => a.t - b.t);
     const changes: typeof got = [];
     let prev = base;
-    for (const f of got) { const sg = sig(await f.bmp); if (sg !== prev) changes.push(f); prev = sg; }
+    for (const f of got) { const sg = f.hash; if (sg !== prev) changes.push(f); prev = sg; }
     // the breakdown is the work done from pointerup until the frame that answered it
     const au = changes.find((f) => f.t >= tu), after = au?.perf ?? snapshot();
-    const tap: Tap = { m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
+    const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.receipt?.processes ?? observer.snapshot(), m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
       settled: changes.length ? Math.round(changes.at(-1)!.t - t0) : null, frames: got.length,
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
     out.push(tap);
     await idle();
     tap.processesAfter = await diagnostics();
+    if (frameError || !w.__wdLatMatches(await state(), s.expect)) { tap.intended = null; tap.semantic = { ...response, error: frameError ?? "intended state did not persist through tap completion" }; }
   }
   result.processesAfter = await diagnostics();
   if (save) result.codeReadiness = { phase: "saved", realms: await Promise.all(appRealms().map(win => readiness(win, true))) };
   document.title = "DONE";
-}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}).catch(async e => {
+}})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
   try { result.processesAfter = await globalThis.__wdLatRead(); } catch (error) { result.diagnosticError = String(error); }
   document.title = "DONE";
 });`;
 
 /** one headless Chrome over raw CDP, with its own profile directory */
-async function openBrowser(profile: string) {
+type BrowserDriver = { context?: BrowserContext; send?: (method: string, params?: object, sessionId?: string) => Promise<any>; version: string; close(): void | Promise<void> };
+async function openBrowser(profile: string): Promise<BrowserDriver> {
+  if (engine === "webkit") {
+    const context = await webkit.launchPersistentContext(profile, { headless: true, viewport: { width: 1400, height: 1500 }, colorScheme: "light" });
+    return { context, version: context.browser()!.version(), close: () => context.close() };
+  }
   const proc = Bun.spawn([chromium.executablePath(), "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     "--site-per-process", "--force-device-scale-factor=1", "--hide-scrollbars", "--autoplay-policy=no-user-gesture-required",
     "--window-size=1400,1500", "--no-first-run", "--no-default-browser-check",
@@ -237,17 +305,28 @@ async function openBrowser(profile: string) {
     pending.set(id, (m) => m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result));
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
-  return { send, close: () => { ws.close(); proc.kill(); } };
+  return { send, version: (await send("Browser.getVersion")).product, close: () => { ws.close(); proc.kill(); } };
 }
 
-async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk: string, steps: unknown, profile?: string, save = false, replay = false): Promise<Capture> {
+async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false): Promise<Capture> {
+  const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
+  const url = new URL("/", BASE);
+  url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
+  if (browser.context) {
+    const page = await browser.context.newPage();
+    try {
+      await page.addInitScript(injection); await page.goto(url.href, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.title === "DONE", null, { timeout: 600_000 });
+      return await page.evaluate(() => Reflect.get(globalThis, "__wdLat"));
+    } catch (e) { return { ...await page.evaluate(() => Reflect.get(globalThis, "__wdLat") ?? { taps: [] }), error: String(e) }; }
+    finally { await page.close(); }
+  }
+  const send = browser.send!;
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay)} });` }, sessionId);
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
   if (profile) { await send("Profiler.enable", {}, sessionId); await send("Profiler.setSamplingInterval", { interval: 200 }, sessionId); await send("Profiler.start", {}, sessionId); }
-  const url = new URL("/", BASE);
-  url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
   await send("Page.navigate", { url: url.href }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
@@ -264,7 +343,14 @@ async function launch(send: Awaited<ReturnType<typeof openBrowser>>["send"], apk
 }
 
 /** wipe app data (installs, preferences, databases, files) and keep everything else */
-async function resetData(send: Awaited<ReturnType<typeof openBrowser>>["send"]): Promise<void> {
+async function resetData(browser: BrowserDriver): Promise<void> {
+  if (browser.context) {
+    const page = await browser.context.newPage();
+    try { await page.goto(`${BASE}/?screen=${encodeURIComponent(SCREEN)}`); await page.waitForFunction(() => !!globalThis.wd); await page.evaluate(() => globalThis.wd.reset()); }
+    finally { await page.close(); }
+    return;
+  }
+  const send = browser.send!;
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
@@ -279,28 +365,34 @@ async function resetData(send: Awaited<ReturnType<typeof openBrowser>>["send"]):
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-type Report = Capture & { scenario: string; apk?: string; tier: string; processMode: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
-  responseProxy: string; launchProxy: string };
+type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; tier: string; processMode: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
+  accepted: false; intendedObservation: string; instrumentation: string; responseProxy: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const row: Report = { scenario: name, tier: launchQuery.get("tier")!, processMode: launchQuery.get("processMode")!, warm, query: launchQuery.toString(), taps: [],
+  const row: Report = { scenario: name, engine, tier: launchQuery.get("tier")!, processMode: launchQuery.get("processMode")!, warm, query: launchQuery.toString(), taps: [],
+    accepted: false, intendedObservation: "conservative upper bound: UI predicate receipt, then a visible app-owned immutable bitmap matching scenario response regions, followed by persistent UI-state confirmation",
+    instrumentation: engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture; immutable bitmap copies and UI probes during capture" : "Playwright WebKit instrumentation; immutable bitmap copies and UI probes during capture",
     responseProxy: "pointerup to first changed quantized screen bitmap; release/ripple may precede intended content",
-    launchProxy: "firstFrame/perf are root draw observations; appPresentationMarks identify realm bitmap transfers, with visibility observed later at startup snapshot" };
+    launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };
   report.push(row);
   let profile: string | undefined, browser: Awaited<ReturnType<typeof openBrowser>> | undefined;
   try {
-    const { apk, steps } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
+    const { apk, steps: scenarioSteps, launch: expectedLaunch, responses } = JSON.parse(readFileSync(join(SCENARIOS, name + ".json"), "utf8"));
+    const steps = scenarioSteps.map((step: any) => step.m ? { ...step, expect: responses?.[step.expect ?? step.m] } : step);
+    const validExpectation = (e: Expectation | undefined) => !!e?.nodes?.length && !!e.pixels?.length;
+    if (!validExpectation(expectedLaunch) || steps.some((step: any) => step.m && !validExpectation(step.expect))) throw new Error("scenario intended-state expectations missing");
+    if (engine === "webkit" && cpuProfile) throw new Error("WebKit CPU profiling requires a separate protocol");
     row.apk = apk; row.expectedTaps = steps.flatMap((step: { m?: string }) => step.m ? [step.m] : []);
     if (row.processMode === "worker") throw new Error("Worker app presentation and persisted-code readiness need a separate capture protocol");
     profile = mkdtempSync(join(tmpdir(), "wdlat-"));
-    browser = await openBrowser(profile);
+    browser = await openBrowser(profile); row.browser = browser.version;
     if (warm) {
-      row.preparation = await launch(browser.send, apk, steps, undefined, true);
+      row.preparation = await launch(browser, apk, steps, expectedLaunch, undefined, true);
       if (row.preparation.error) throw new Error("warm preparation: " + row.preparation.error);
-      await resetData(browser.send);
+      await resetData(browser);
     }
-    Object.assign(row, await launch(browser.send, apk, steps, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`, false, warm));
+    Object.assign(row, await launch(browser, apk, steps, expectedLaunch, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`, false, warm));
     if (row.error) throw new Error(row.error);
     const { launch: started, taps } = row;
     if (!started || taps.length !== row.expectedTaps!.length || taps.some((tap, i) => tap.m !== row.expectedTaps![i])) throw new Error("incomplete scenario capture");
@@ -308,20 +400,21 @@ for (const name of names) {
     console.log(`     ${name.padEnd(12)} ${"launch".padEnd(14)} ${String(started.firstFrame).padStart(5)} ms  idle=${started.idle} ${counters}`);
     if (timeline) for (const [realm, name, ms] of started.marks.map((m) => m.split(":")).sort((a, b) => +a[2] - +b[2])) console.log(`       ${ms.padStart(6)} ms  ${realm.padEnd(7)} ${name}`);
     for (const t of taps) {
-      const over = t.afterUp === null || t.afterUp > LIMIT_MS;
+      t.compile = compileDeltas(t.compileBefore, t.compileAfter);
+      const over = t.intended === null || t.intended > LIMIT_MS || !t.compile.mainRealmCoverage;
       failed ||= over;
       const detail = Object.entries(t.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");
-      console.log(`${over ? "FAIL" : "ok  "} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.afterUp ?? "none").padStart(5)} ms  ${detail}`);
+      console.log(`${over ? "FAIL" : "ok  "} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.intended === null ? "none" : Math.round(t.intended)).padStart(5)} ms  ${detail}`);
     }
   } catch (e) {
     failed = true;
     row.error = e instanceof Error ? e.message : String(e);
     console.log(`FAIL ${name}: ${row.error}`);
   } finally {
-    browser?.close();
+    await browser?.close();
     if (profile) rmSync(profile, { recursive: true, force: true });
   }
 }
 if (jsonOut) await Bun.write(jsonOut, JSON.stringify(report, null, 1));
-console.log(failed ? `latency gate FAILED: a scenario failed, or a gated tap exceeded ${LIMIT_MS} ms or never responded` : `latency proxy passed: every gated tap within ${LIMIT_MS} ms`);
+console.log(failed ? `latency gate FAILED: a scenario failed, or a gated tap exceeded ${LIMIT_MS} ms or never responded` : `intended-response observations passed: every gated tap within ${LIMIT_MS} ms`);
 process.exit(failed ? 1 : 0);
