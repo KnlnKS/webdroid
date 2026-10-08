@@ -25,7 +25,7 @@ function localBytes(a: number, n: number): Uint8Array { checkAddr(a, n); return 
 /** Notify after a host writes directly into a guest-provided buffer. */
 export function wrote(a: number, n: number): void {
   if (n <= 0) return;
-  const end = ((a >>> 0) + n - 1) >>> PAGE_SHIFT;
+  const end = Math.min((a >>> 0) + n - 1, 0xffffffff) >>> PAGE_SHIFT;
   for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & 1) { core.code_write(a >>> 0, n); return; }
 }
 function badAddr(a: number): never {
