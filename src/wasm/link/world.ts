@@ -1397,7 +1397,7 @@ export class World {
       if (!out[i].codeOff || this.intrinsic(out[i])) continue;
       if (i) this.noteAllocations(out[i]);
       // the callees that have run often, busiest first: code the first tier saw run a few times is not worth compiling into the unit
-      const callees = this.smallCallees(out[i]).concat(this.guarded(out[i])).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) >= COPY_MIN);
+      const callees = this.callees(out[i]).filter((t) => !out.some((o) => mid(o) === mid(t)) && this.slotAt(this.slotOf(t))?.k === "method" && this.ran(t) >= COPY_MIN);
       callees.sort((a, b) => this.ran(b) - this.ran(a));
       for (const t of callees) {
         if (out.length >= MAX_GROUP) break;
@@ -1440,39 +1440,28 @@ export class World {
   }
   /** calls and loop iterations counted so far for the method in `slot` */
   count(slot: number): number { return slot < COUNT_SLOTS ? new Int32Array(this.mem.buffer, COUNT_BASE + 4 * slot, 1)[0] : 0; }
-  /** methods `m` calls directly (static, direct including constructors, or a virtual call CHA resolves to one target) that are worth compiling beside it */
-  private smallCallees(m: MethodInfo): MethodInfo[] {
-    const out: MethodInfo[] = [];
-    const dex = m.dex;
+  /** Direct callees followed by guarded implementations, preserving their planning order. */
+  private callees(m: MethodInfo): MethodInfo[] {
+    const direct: MethodInfo[] = [], guarded: MethodInfo[] = [], dex = m.dex;
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
       if (needsSymbolicSite(this, m, ins)) continue;
       const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
       if (decl[0] === "[" || kind === "invoke-super") continue;
-      const t = kind === "invoke-static" || kind === "invoke-direct" ? this.prog.resolve(decl, mr.name, desc)
-        : (() => { const only = this.cha.targets(decl, mr.name, desc); return only.length === 1 ? only[0] : undefined; })();
-      if (t && t !== m && this.inlinable(t) && !out.includes(t)) out.push(t);
+      const targets = kind === "invoke-static" || kind === "invoke-direct" ? undefined : this.cha.targets(decl, mr.name, desc);
+      const t = targets ? targets.length === 1 ? targets[0] : undefined : this.prog.resolve(decl, mr.name, desc);
+      if (t && t !== m && this.inlinable(t) && !direct.includes(t)) direct.push(t);
+      if (!targets) continue;
+      const key = `${decl}.${mr.name}${desc}`;
+      let choices = this.plan.get(key);
+      if (!choices) this.plan.set(key, choices = targets.length > 1 ? this.likely(decl, mr.name, desc) : []);
+      for (const choice of choices) if (!guarded.includes(choice)) guarded.push(choice);
     }
-    return out;
+    return direct.concat(guarded);
   }
   /** the classes `m` allocates join the allocated set before its virtual calls are planned: it is about to run */
   private noteAllocations(m: MethodInfo): void {
     for (const name of this.planning(m).allocations) if (this.prog.get(name)) this.allocated.add(name);
-  }
-  /** the implementations of `m`'s virtual calls that are worth a guarded direct call, recorded in `plan` for the emitter */
-  private guarded(m: MethodInfo): MethodInfo[] {
-    const out: MethodInfo[] = [], dex = m.dex;
-    for (const ins of this.planning(m).calls) {
-      const op = ins.op;
-      if (op !== 0x6e && op !== 0x72 && op !== 0x74 && op !== 0x78) continue;
-      if (needsSymbolicSite(this, m, ins)) continue;
-      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), key = `${decl}.${mr.name}${desc}`;
-      if (decl[0] === "[") continue;
-      let t = this.plan.get(key);
-      if (!t) this.plan.set(key, t = this.cha.targets(decl, mr.name, desc).length > 1 ? this.likely(decl, mr.name, desc) : []);
-      for (const x of t) if (!out.includes(x)) out.push(x);
-    }
-    return out;
   }
   /** the busiest small implementations, bounded by the number of guards emitted */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {

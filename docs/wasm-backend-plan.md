@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Shared callee-planning checkpoint (2026-10-08)
+
+Direct and guarded callee planning share one traversal while preserving group/guard order and readiness semantics. Private exact comparisons reduce loader lookups and CHA queries without changing 184 plans; this is work-count evidence, not a timing claim. Typecheck, all 19 Wasm sections, 1,212 unit tests, cold/OSR/framework checks and APK smoke pass. Fresh source `07fc417ecaa1…` serves ordinary `04bf9aec9e749c91`/guarded `0d4efaaa09b9655f`, with all 4,324 AOT files unchanged. The frozen full FitNotes flow passes 39 actions with 117 responding process diagnostics, identical UI trees and only three text-caret PNG differences. Exact evidence and limits are in the history. Other application failures, Worker and performance gates remain open; JavaScript stays default.
+
 ### Shared lazy-link admission checkpoint (2026-10-08)
 
 Lazy stubs share one per-World Wasm admission helper while preserving their Java signatures, suspension/exception restoration and table dispatch. Fixed-work FitNotes class construction emits 43% fewer bytes with unchanged metadata; fresh platform class modules shrink about 46%, while all code modules and indexes stay byte-identical. Typecheck, all 19 Wasm sections, the 1,212-test candidate repeat, cold/OSR/framework checks and APK smoke pass. An initial browser fixture parse failure remains unexplained after matching passing baseline/candidate repeats. Source `b215919a74b0…` serves ordinary `a8808f2e56edaa6c`/guarded `d59212cdb4215b87`. The frozen full FitNotes flow passes all 39 actions with 117 responding process diagnostics and unchanged UI trees; goldens remain unchanged. The history retains measurements and evidence limits. This is not complete application or performance acceptance; JavaScript stays default.
