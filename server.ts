@@ -173,7 +173,12 @@ const server: Bun.Server<SocketData> = Bun.serve({
     "/vendor/microg/:file": (req) => {
       const file = req.params.file;
       const headers: Record<string, string> = { "cache-control": file.endsWith(".json") ? "no-cache" : IMMUTABLE };
-      if (file.endsWith(".gz") && !new URL(req.url).searchParams.has("raw")) headers["content-encoding"] = "gzip";
+      if (file.endsWith(".gz") && !new URL(req.url).searchParams.has("raw")) {
+        headers["content-encoding"] = "gzip";
+        headers["content-type"] = "application/octet-stream";
+        // A .gz download filename makes WebKit retain the compressed transport body.
+        headers["content-disposition"] = "inline";
+      }
       return serveFile("vendor/microg", file, headers);
     },
     "/apks": async () => {

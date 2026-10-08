@@ -96,6 +96,8 @@ export default {
       if (!asset.ok) return asset;
       const headers = new Headers(asset.headers);
       headers.set("content-encoding", "gzip");
+      headers.set("content-type", "application/octet-stream");
+      headers.set("content-disposition", "inline");
       headers.delete("content-length");
       return new Response(asset.body, { status: asset.status, headers, encodeBody: "manual" });
     }
