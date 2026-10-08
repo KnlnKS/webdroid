@@ -348,7 +348,7 @@ export class MC {
       d.lget(0).lget(fuel).structSet(this.stateType, this.chunkFuel);
       d.lget(status).i32(1).raw(OP.i32_ne).if_().lget(status).ret().end();
       d.lget(count).i32(1).raw(OP.i32_add).ltee(count).i32(64).raw(OP.i32_lt_u).brIf(0).end();
-      const slot = this.cx.counting ? this.cx.w.slotOf(this.m) : COUNT_SLOTS;
+      const slot = this.cx.counting || this.resume ? this.cx.w.slotOf(this.m) : COUNT_SLOTS;
       if (slot < COUNT_SLOTS) d.i32(slot).call(this.cx.imp.long);
       d.i32(1).ret();
       ch.dispatch = this.cx.mb.addFunc(this.cx.mb.addFuncType([ref(this.stateType)], [T.i32]), d.finish(), "$dispatch:" + name);
