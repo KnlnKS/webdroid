@@ -18,6 +18,7 @@ import { rootsOf } from "./roots";
 import { fetchPlatformJars, loadPlatformJar } from "../android/framework";
 
 /** `launch`: the classes a launch instantiates first (the Application, the launcher Activity) */
+export type CompileResponse = [string, string][] | { type: "loaded" };
 export type CompileRequest = { dexes: [name: string, bytes: Uint8Array][]; profile?: Uint8Array; manifest: Uint8Array; launch: string[] };
 
 /** a chunk goes to the page after this much emission, bounding the page's finalization task */
@@ -88,4 +89,5 @@ onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
     postCompilerReceipt(); throw error;
   }
 };
+postMessage({ type: "loaded" } satisfies CompileResponse);
 postCompilerReceipt();

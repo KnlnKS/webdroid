@@ -3,7 +3,7 @@ import { spawnCompilerWorker } from "../shell/compiler-workers";
 // worker (compileworker.ts) emits the methods the app is likely to run, and the page offers each
 // chunk of bodies to the methods that reach them. A body persists only once a method uses it.
 import { adoptBody, codeStats, hasBody, literalParts, noteChunk, type Factory } from "./codecache";
-import type { CompileRequest } from "./compileworker";
+import type { CompileRequest, CompileResponse } from "./compileworker";
 import { jvmCoverage } from "./coverage";
 import { jvmProfiler } from "./profile";
 import { inputSettled } from "./yield";
@@ -14,12 +14,19 @@ export function compileAhead(request: CompileRequest): void {
   if (typeof Worker === "undefined" || typeof document === "undefined" || jvmProfiler.enabled || jvmCoverage.enabled ||
     jvmProfiler.tier === "cold" || codeStats().loaded) return;
   const worker = spawnCompilerWorker(`/compile-worker.js${location.search}`, "js-ahead");
-  worker.onmessage = ({ data }: MessageEvent<[string, string][]>) => offerCode(data);
   // copies, transferred: an entry of a stored archive is a view of the whole archive's buffer
   const dexes = request.dexes.map(([name, bytes]) => [name, bytes.slice()] as [string, Uint8Array]);
   const profile = request.profile?.slice(), manifest = request.manifest.slice();
-  worker.postMessage({ dexes, profile, manifest, launch: request.launch } satisfies CompileRequest,
-    [...dexes.map(([, bytes]) => bytes.buffer), manifest.buffer, ...profile ? [profile.buffer] : []]);
+  const captured: CompileRequest = { dexes, profile, manifest, launch: request.launch.slice() };
+  // Native module imports await startup; the worker must install its listener before this transfer.
+  let sent = false;
+  worker.onmessage = ({ data }: MessageEvent<CompileResponse>) => {
+    if (Array.isArray(data)) offerCode(data);
+    else if (data.type === "loaded" && !sent) {
+      sent = true;
+      worker.postMessage(captured, [...dexes.map(([, bytes]) => bytes.buffer), manifest.buffer, ...profile ? [profile.buffer] : []]);
+    }
+  };
 }
 
 /** bodies the worker emitted this launch and no method has used yet, with the chunk holding each */
