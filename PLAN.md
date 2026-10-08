@@ -4,7 +4,7 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
-- Symbolic descriptor fallback now uses indexed DEX lookup and preserves canonical method identity. A matched lookup control eliminates whole-class key scans; no APK latency percentage is claimed. Typecheck, all 19 Wasm sections, cold/OSR/framework checks, Resy smoke and byte-identical fresh AOT pass. The final 1,212-test unit check passes after an initial six-parser-failure run; that failure remains unexplained. Full application and performance acceptance remain open.
+- Symbolic descriptor fallback now uses indexed DEX lookup and preserves canonical method identity. A matched lookup control eliminates whole-class key scans; no APK latency percentage is claimed. Typecheck, all 19 Wasm sections, cold/OSR/framework checks, Resy smoke and byte-identical fresh AOT pass. The final 1,212-test unit check passes after an initial six-parser-failure run; that failure remains unexplained. The full production Resy repeat reaches populated listings without OOM, but still fails nine completion/liveness/input checks; all 60 process diagnostics answer cleanly. Full application and performance acceptance remain open.
 
 - Loader rebinding now restricts dispatch and assumption checks to changed declarations and dependent ancestors/interfaces. Typecheck, all 1,212 unit tests, 19 Wasm sections, cold/OSR/framework checks, zero-failure Resy smoke and byte-identical fresh AOT pass. The full production Resy flow still fails: it reaches the venue list, then reports Java heap exhaustion during RecyclerView layout; all 60 process diagnostic snapshots answer. No application or performance gate is closed.
 
