@@ -1,4 +1,4 @@
-import { compilerJob, compilerInput, postCompilerReceipt } from "../../shell/compiler-workers";
+import { compilerJob, compilerInput, postCompilerReceipt, invalidateCompilerReceipt } from "../../shell/compiler-workers";
 import { beginCompile, endCompile, measureCompile, compilerReceiptsEnabled } from "../../jvm/compiler-observer";
 // The compile worker's side of the protocol (compile-worker.ts runs it in a page, the persist suite over a MessageChannel): a World over a copy of the app's dex files that compiles
 // for the World on the page, which sends it jobs. It does two kinds of work with the code the page's compiler would make: the second-tier units of hot methods (link/unit.ts), and, once
@@ -145,15 +145,17 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     try {
       if (req.type === "init" && req.oneShot && !req.build) throw new Error("one-shot compilation requires build roots");
       if (compilerReceiptsEnabled) {
-        const inputs: Containers = "dexes" in req ? [...req.dexes] : [];
-        const metadata = req.type === "init" ? { ...req, dexes: undefined, build: req.build && { ...req.build, profile: undefined, manifest: undefined } }
-          : req.type === "add" ? { type: req.type } : req;
-        if (req.type === "init") {
-          if (req.build?.profile) inputs.push(["profile", req.build.profile]);
-          if (req.build?.manifest) inputs.push(["manifest", req.build.manifest]);
-        }
-        inputs.push(["request", new TextEncoder().encode(JSON.stringify(metadata))]);
-        compilerJob(req.type, id, "inputs", await compilerInput(inputs), job.ordinal);
+        try {
+          const inputs: Containers = "dexes" in req ? [...req.dexes] : [];
+          const metadata = req.type === "init" ? { ...req, dexes: undefined, build: req.build && { ...req.build, profile: undefined, manifest: undefined } }
+            : req.type === "add" ? { type: req.type } : req;
+          if (req.type === "init") {
+            if (req.build?.profile) inputs.push(["profile", req.build.profile]);
+            if (req.build?.manifest) inputs.push(["manifest", req.build.manifest]);
+          }
+          inputs.push(["request", new TextEncoder().encode(JSON.stringify(metadata))]);
+          compilerJob(req.type, id, "inputs", await compilerInput(inputs), job.ordinal);
+        } catch { invalidateCompilerReceipt(); compilerJob(req.type, id, "inputs", null, job.ordinal); }
       }
       if (req.type === "init") {
         const ms = await init(req, job);

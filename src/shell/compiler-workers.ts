@@ -72,11 +72,14 @@ export function compilerJob(type: string, id: number | undefined, state: "begin"
   jobs.push({ sequence, ordinal, type, id: id ?? null, at: performance.timeOrigin + performance.now(), state, ...inputs === undefined ? {} : { inputs } });
   return ordinal;
 }
+export function invalidateCompilerReceipt(): void { if (compilerReceiptsEnabled) jobDropped++; }
 export async function compilerInput(dexes: [string, Uint8Array][]) {
   if (!compilerReceiptsEnabled) return undefined;
   if (dexes.length > 128 || dexes.some(([name]) => name.length > 2048)) { jobDropped++; return null; }
-  return Promise.all(dexes.map(async ([name, bytes]) => ({ name, bytes: bytes.length,
-    sha256: new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>)).toHex() })));
+  try {
+    return await Promise.all(dexes.map(async ([name, bytes]) => ({ name, bytes: bytes.length,
+      sha256: new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>)).toHex() })));
+  } catch { invalidateCompilerReceipt(); return null; }
 }
 export function postCompilerReceipt(id?: string, terminal = false): void {
   if (!compilerReceiptsEnabled || typeof window !== "undefined") return;
