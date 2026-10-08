@@ -67,7 +67,9 @@ class DexClass implements JClass {
     const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
     for (const m of this.members_?.methods ?? this.methodInfos?.values() ?? []) {
       if (m.dex !== this.dex || m.methodIdx < 0) continue;
-      const old = m.key, desc = this.dex.methodDesc(m.methodIdx), parsed = parseMethodDesc(desc);
+      const desc = this.dex.methodDesc(m.methodIdx);
+      if (desc === m.desc) continue;
+      const old = m.key, parsed = parseMethodDesc(desc);
       m.desc = desc; m.params = parsed.params; m.ret = parsed.ret; m.key = mkey(m.name, desc);
       this.members_?.byKey.delete(old); this.members_?.byKey.set(m.key, m);
     }
