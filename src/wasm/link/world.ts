@@ -1471,24 +1471,25 @@ export class World {
   /** the busiest small implementations, bounded by the number of guards emitted */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {
     // an implementation whose class is not linked has not run (and asking would link it)
-    const ran = [...this.implementations(decl, name, desc).keys()].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) >= COPY_MIN && this.inlinable(t));
+    const ran = [...this.implementations(decl, name, desc)].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) >= COPY_MIN && this.inlinable(t));
     return ran.sort((a, b) => this.ran(b) - this.ran(a)).slice(0, MAX_GUARDS);
   }
-  private implemented = new Map<string, { seen: number; count: Map<MethodInfo, number> }>();
-  /** the implementations of decl.name+desc among the allocated subclasses, with how many of those classes use each. The allocated classes only grow, so each is looked at once */
-  private implementations(decl: string, name: string, desc: string): Map<MethodInfo, number> {
+  private implemented = new Map<string, { seen: number; targets: Set<MethodInfo> }>();
+  /** Allocated classes only grow; hierarchy changes clear this cache. */
+  private implementations(decl: string, name: string, desc: string): Set<MethodInfo> {
     const key = `${decl}.${name}${desc}`;
     let memo = this.implemented.get(key);
-    if (!memo) this.implemented.set(key, memo = { seen: 0, count: new Map() });
+    if (!memo) this.implemented.set(key, memo = { seen: 0, targets: new Set() });
+    if (memo.seen === this.allocated.size) return memo.targets;
     const declared = this.prog.resolve(decl, name, desc);
     let i = 0;
     for (const cls of this.allocated) {
       if (i++ < memo.seen || cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
       const t = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED)) ? symbolicOverride(this.prog, cls, declared) : this.prog.implFor(cls, name, desc);
-      if (t) memo.count.set(t, (memo.count.get(t) ?? 0) + 1);
+      if (t) memo.targets.add(t);
     }
     memo.seen = i;
-    return memo.count;
+    return memo.targets;
   }
   /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
   private inlinable(t: MethodInfo): boolean {
