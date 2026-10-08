@@ -24,10 +24,10 @@ if (tier !== "wasm") throw new Error("run with WEBDROID_TIER=wasm");
 const recorded = JSON.parse(readFileSync(process.env.WASM_ENTRY_OUT!, "utf8")) as { js: string[]; settled: [string, unknown][] };
 for (const [key, value] of recorded.settled) settled.set(key, value);
 await loadTier();
-// every jar of the boot class path is on the device; the classes of the three the fixture needs are loaded
+// every jar of the boot class path is on the device; the classes of the four the fixture needs are loaded
 PLATFORM_JARS.forEach((jar, i) => {
   const bytes = new Uint8Array(readFileSync(join(AOSP, jar)));
-  if ([0, 1, 12].includes(i)) loadPlatformJar(bytes, i); else vfs.mount(BOOT_JAR_PATHS[i], new BytesFile(bytes));
+  if ([0, 1, 5, 12].includes(i)) loadPlatformJar(bytes, i); else vfs.mount(BOOT_JAR_PATHS[i], new BytesFile(bytes));
 });
 for (const d of dexesIn(new Uint8Array(readFileSync(entryDex())), "E")) loadDex(rt, d);
 const got = await entryCases();
@@ -39,8 +39,6 @@ console.log(failed ? `${failed} failures` : `${got.length} entry calls answer as
 process.exit(failed ? 1 : 0);
 
 async function inMemoryControl(): Promise<void> {
-  const framework = PLATFORM_JARS.indexOf("framework.jar");
-  loadPlatformJar(new Uint8Array(readFileSync(join(AOSP, PLATFORM_JARS[framework]))), framework);
   const bytes = new Uint8Array(readFileSync(entryDex())), padded = new Int8Array(bytes.length + 16);
   padded.set(bytes, 8);
   const heap = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);

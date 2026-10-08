@@ -6,6 +6,7 @@ import { getDeclared, setDeclared } from "../../src/jvm/runtime";
 import { JThrowable } from "../../src/jvm/natives/jthrowable";
 import { boxDesc, unbox } from "../../src/jvm/natives/jbox";
 import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
+import { javaInterface } from "../../src/android/webjavabridge";
 import { JAVA } from "./paths";
 import { dexAndroid, shellIn } from "./tools";
 
@@ -39,6 +40,10 @@ async function caught(f: () => unknown): Promise<unknown> {
 
 export async function entryCases(): Promise<string[]> {
   const out: string[] = [], line = async (name: string, f: () => unknown) => { out.push(`${name}: ${await run(f)}`); };
+  await line("WebView bridge", async () => {
+    const api = await javaInterface(await newObj("E$WebApi"), new JThread());
+    return [Object.keys(api), await api.ping(41)];
+  });
   await line("add", () => scall(E, "add", "(II)I", 40, 2));
   await line("mul", () => scall(E, "mul", "(JJ)J", 1n << 33n, 3n));
   await line("half", () => scall(E, "half", "(F)F", 3.5));

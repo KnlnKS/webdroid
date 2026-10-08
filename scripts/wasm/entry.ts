@@ -13,7 +13,7 @@ import { AOSP } from "./paths";
 import { settled } from "../../src/wasm/host/nativesource";
 import { entryCases, entryDex } from "./entrycases";
 
-const dex = entryDex(), jars = [0, 1, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
+const dex = entryDex(), jars = [0, 1, 5, 12].map((i) => join(AOSP, PLATFORM_JARS[i]));
 await jsTier(loadDexes(dex));
 useEntry(jsEntry);
 const js = await entryCases();

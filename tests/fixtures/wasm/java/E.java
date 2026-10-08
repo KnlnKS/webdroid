@@ -9,6 +9,11 @@ public class E {
     public static String NAME = "entry";
     public static E INSTANCE = new E(11);
 
+    public static class WebApi {
+        @android.webkit.JavascriptInterface public int ping(int n) throws InterruptedException { Thread.sleep(1); return n + 1; }
+        public int hidden() { return 99; }
+    }
+
     public static class Owner {
         public final Thread thread = Thread.currentThread();
         public final boolean held;

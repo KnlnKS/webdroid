@@ -430,7 +430,7 @@ rt.register({
       // AwContents draws its container: a ViewGroup otherwise skips onDraw
       yield vcall(this.view, "setWillNotDraw", "(Z)V", 0);
       for (const e of interfaces ? yield* awaited(toJsArray(yield vcall(interfaces, "entrySet", "()Ljava/util/Set;"))) : [])
-        this.ifaces[yield vcall(e, "getKey", "()Ljava/lang/Object;")] = javaInterface(yield vcall(e, "getValue", "()Ljava/lang/Object;"), this.bridgeThread);
+        this.ifaces[yield vcall(e, "getKey", "()Ljava/lang/Object;")] = yield javaInterface(yield vcall(e, "getValue", "()Ljava/lang/Object;"), this.bridgeThread);
     }),
     "getViewDelegate()Landroid/webkit/WebViewProvider$ViewDelegate;": function (this: P) { return this; },
     "getScrollDelegate()Landroid/webkit/WebViewProvider$ScrollDelegate;": function (this: P) { return this; },
@@ -472,7 +472,7 @@ rt.register({
     "evaluateJavaScript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V": function (this: P, js: string, cb: unknown) {
       void Promise.resolve(this.evalJs(js)).then((r) => cb && onMain(() => vcall(cb, "onReceiveValue", "(Ljava/lang/Object;)V", r)));
     },
-    "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": function (this: P, o: JObj, name: string) { this.ifaces[name] = javaInterface(o, this.bridgeThread); },
+    "addJavascriptInterface(Ljava/lang/Object;Ljava/lang/String;)V": driven(function* (this: P, o: JObj, name: string): Gen { this.ifaces[name] = yield javaInterface(o, this.bridgeThread); }),
     "removeJavascriptInterface(Ljava/lang/String;)V": function (this: P, name: string) { delete this.ifaces[name]; },
     "getContentHeight()I": function (this: P) { return this.remoteHeight; },
     "getContentWidth()I": function (this: P) { return this.remoteWidth; },
