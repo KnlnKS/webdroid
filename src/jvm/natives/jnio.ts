@@ -96,11 +96,6 @@ export function writeRemainingBytes(b: JBuffer, bytes: Uint8Array): void | Promi
   if (bytes.length > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
   return writeBufferBytes(b,bytes,position(b) * scale);
 }
-/** Populate an immutable mapping's pages; live mappings remain at their owner. */
-export function resident(b: JBuffer): Promise<void> | null {
-  const address = addressOf(b);
-  return address && isExternal(address) ? pagesIn(address, capacity(b) << elementShift(b)) : null;
-}
 /** GetDirectBufferAddress: 0 for a heap buffer or a host array; an external mapping moves into guest memory */
 export function directAddress(b: JBuffer): number | bigint | Promise<number | bigint> {
   const address = addressOf(b);

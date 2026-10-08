@@ -23,8 +23,8 @@ import { remoteFilePath, changeFileAttributes } from "../shell/file-path";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd";
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
-import { type JBuffer, bufferBytes, isBuffer, resident, addressOf as bufferAddress, capacity, elementShift } from "../jvm/natives/jnio";
-import { isExternal, isLive, mapLive, memoryAt, writeAt, unmapExternal } from "../jvm/natives/jmemory";
+import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio";
+import { isExternal, mapLive, unmapExternal } from "../jvm/natives/jmemory";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
@@ -450,35 +450,24 @@ export const ioResult = (fn: string, result: number): number => { sys(fn, result
 const SENDFILE_CHUNK = 1 << 20;
 /** the Object readBytes and its kin take: a byte[], or a direct ByteBuffer addressed from its start */
 export type IoBuffer = Int8Array | JBuffer | null;
-function ioRegion(buffer: IoBuffer, offset: number, count: number): Uint8Array {
+function ioRegion(buffer: Int8Array | null, offset: number, count: number): Uint8Array {
   if (buffer === null) return rt.npe();
-  const view = isBuffer(buffer) ? bufferBytes(buffer) : buffer;
-  checkFromIndexSize(offset, count, view.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
-  return new Uint8Array(view.buffer, view.byteOffset + offset, count);
+  checkFromIndexSize(offset, count, buffer.byteLength, "java/lang/ArrayIndexOutOfBoundsException");
+  return new Uint8Array(buffer.buffer, buffer.byteOffset + offset, count);
 }
-/** the bytes to write, once a mapped direct buffer's pages are in */
+/** Read a buffer's bytes through its canonical owner before writing them. */
 export function writeBytes<T>(buffer: IoBuffer, offset: number, count: number, write: (bytes: Uint8Array) => T): T | Promise<T> {
-  if (isBuffer(buffer) && isLive(bufferAddress(buffer))) {
-    checkFromIndexSize(offset,count,capacity(buffer) << elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
-    return after(memoryAt(bufferAddress(buffer) + BigInt(offset),count),write);
-  }
-  return after(isBuffer(buffer) ? resident(buffer) : null, () => write(ioRegion(buffer, offset, count)));
+  if (!isBuffer(buffer)) return write(ioRegion(buffer, offset, count));
+  checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
+  return after(readBufferBytes(buffer,offset,count),write);
 }
 /** A direct buffer may live in guest memory, which can move while a read waits: it takes the
  *  bytes once they have arrived. */
 export function readBytes(fn: string, buffer: IoBuffer, offset: number, count: number, read: (target: Uint8Array) => number | Promise<number>) {
-  if (isBuffer(buffer) && isLive(bufferAddress(buffer))) {
-    checkFromIndexSize(offset,count,capacity(buffer) << elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
-    const scratch = new Uint8Array(count);
-    return after(read(scratch),n => n > 0 ? after(writeAt(bufferAddress(buffer) + BigInt(offset),scratch.subarray(0,n)),() => ioResult(fn,n)) : ioResult(fn,n));
-  }
-  const target = ioRegion(buffer, offset, count);
-  if (!isBuffer(buffer)) return after(read(target), (n) => ioResult(fn, n));
+  if (!isBuffer(buffer)) return after(read(ioRegion(buffer, offset, count)), (n) => ioResult(fn, n));
+  checkFromIndexSize(offset,count,capacity(buffer) * 2 ** elementShift(buffer),"java/lang/ArrayIndexOutOfBoundsException");
   const scratch = new Uint8Array(count);
-  return after(read(scratch), (n) => {
-    if (n > 0) ioRegion(buffer, offset, n).set(scratch.subarray(0, n));
-    return ioResult(fn, n);
-  });
+  return after(read(scratch),n => n > 0 ? after(writeBufferBytes(buffer,scratch.subarray(0,n),offset),() => ioResult(fn,n)) : ioResult(fn,n));
 }
 rt.registerJnis("libcore/io/Linux", linux);
 // System.getenv(): the environment as alternating name and value bytes
