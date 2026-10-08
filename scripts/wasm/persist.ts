@@ -92,6 +92,28 @@ if (combinedAt >= 0) {
 }
 
 const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsics, externs, heapUsed, fetchBytes: async (url) => new Uint8Array(readFileSync(join(AOT, url.slice(BASE.length)))) };
+// A one-shot Builder and a refine-capable worker must produce the same numbered code.
+{
+  const run = async (oneShot: boolean, refine = false, build = true) => {
+    const responses: import("../../src/wasm/host/compile-serve").CompileResponse[] = [];
+    const port: import("../../src/wasm/host/compile-serve").Port = { onmessage: null, postMessage: m => responses.push(m as typeof responses[number]) };
+    serveCompile(port, env);
+    await port.onmessage!({ data: { type: "init", dexes: [["classes.dex", new Uint8Array(readFileSync(join(out, "classes.dex")))]],
+      aot: { base: BASE }, ...(build && { build: { launch: ["Pst"], limit: 500 } }), ...(oneShot && { oneShot: true }) } } as MessageEvent);
+    if (refine) await port.onmessage!({ data: { type: "refine", demand: { methods: [], classes: [], infos: [] } } } as MessageEvent);
+    return responses;
+  };
+  const initial = await run(false, true), once = await run(true), bad = await run(true, false, false);
+  const builds = initial.filter((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
+  const one = once.find((r): r is Extract<typeof r, { type: "built" }> => r.type === "built");
+  const equalBuild = (a: typeof one, b: typeof one) => !!a && !!b && a.methods === b.methods && JSON.stringify(a.build.index) === JSON.stringify(b.build.index)
+    && a.build.files.length === b.build.files.length && a.build.files.every(([name, bytes], i) => name === b.build.files[i][0] && Buffer.compare(bytes, b.build.files[i][1]) === 0);
+  check("one-shot build equals refine-capable payload", equalBuild(builds[0], one), true);
+  check("refine-capable worker remains usable", builds.length, 2);
+  check("refine-capable init retains ready", initial.filter(r => r.type === "ready").length, 1);
+  check("one-shot init finishes at built", once.map(r => r.type).join(","), "loaded,built");
+  check("one-shot without roots fails", bad.map(r => r.type).join(","), "loaded,failed");
+}
 const ports: WorkerPort[] = [];
 const stopped = new WeakSet<WorkerPort>();
 /** a compile worker over a MessageChannel in this thread */

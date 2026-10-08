@@ -31,7 +31,7 @@ export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launc
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; build?: BuildRoots; demand?: Demand }
+  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
   | { type: "add"; dexes: Containers }
   /** the app build again, with more built on demand since (the World of a worker that was asked for a build serves it once more) */
   | { type: "refine"; demand: Demand }
@@ -64,18 +64,21 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     // an app build numbers from where a World starts, before the page's numbering is followed
     roots = req.build;
-    if (roots) build(req.demand ?? { methods: [], classes: [], infos: [] });
+    if (roots) {
+      build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot);
+      if (req.oneShot) return performance.now() - t0;
+    }
     units = new UnitCompiler(w);
     if (req.sync && !units.sync(req.sync, true)) throw new Error("the page's numbering is not the worker's at the start");
     req.initialized?.forEach((c) => w!.preInitialized.add(c));
     return performance.now() - t0;
   }
 
-  /** the app build, sent to the page; the World is back where it started when it returns */
-  function build(demand: Demand): void {
+  /** Refine-capable builds restore numbering; a one-shot build retires after built. */
+  function build(demand: Demand, oneShot = false): void {
     const t0 = performance.now(), methods = select(roots!, demand), built = buildApp(w!, methods, demand);
     send({ type: "built", build: built, methods: methods.length, ms: performance.now() - t0 }, built.files.map(([, bytes]) => bytes.buffer as ArrayBuffer));
-    w!.rollback(built.index.base);
+    if (!oneShot) w!.rollback(built.index.base);
   }
 
   /** the methods an app build compiles, in the order the app is likely to want them: those a launch compiled on demand first, then the likely ones */
@@ -118,7 +121,11 @@ export function serveCompile(port: Port, env: CompileEnv): void {
   port.onmessage = async ({ data: req }: MessageEvent<CompileRequest>) => {
     const id = "id" in req ? req.id : undefined, t0 = performance.now();
     try {
-      if (req.type === "init") send({ type: "ready", ms: await init(req) });
+      if (req.type === "init") {
+        if (req.oneShot && !req.build) throw new Error("one-shot compilation requires build roots");
+        const ms = await init(req);
+        if (!req.oneShot) send({ type: "ready", ms });
+      }
       else if (!w || !units) throw new Error("not initialized");
       else if (req.type === "add") w.addDexes(open(req.dexes));
       else if (req.type === "refine") build(req.demand);

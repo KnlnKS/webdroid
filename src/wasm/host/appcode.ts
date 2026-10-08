@@ -180,7 +180,7 @@ class Builder {
         const list = containers(this.req.dexes);
         port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
           if (this.closed || this.port !== port) return;
-          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand }, list.map(([, b]) => b.buffer as ArrayBuffer));
+          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand, oneShot: true }, list.map(([, b]) => b.buffer as ArrayBuffer));
           if (data.type === "failed") this.close(new Error(data.message), false);
           if (data.type !== "built") return;
           const pending = this.waiting;
