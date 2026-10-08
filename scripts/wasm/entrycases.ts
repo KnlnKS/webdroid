@@ -7,6 +7,7 @@ import { JThrowable } from "../../src/jvm/natives/jthrowable";
 import { boxDesc, unbox } from "../../src/jvm/natives/jbox";
 import { JThread, callOn, classNameOf, iof, linkClass, newObj, scall, staticField, vcall } from "../../src/jvm/natives/jentry";
 import { javaInterface } from "../../src/android/webjavabridge";
+import { processFailure } from "../../src/shell/process-port";
 import { JAVA } from "./paths";
 import { dexAndroid, shellIn } from "./tools";
 
@@ -98,6 +99,10 @@ export async function entryCases(): Promise<string[]> {
   await line("parseInt", () => scall("java/lang/Integer", "parseInt", `(${STR})I`, "42"));
   await line("string receiver", () => vcall("abc", "length", "()I"));
   await line("boom", () => scall(E, "boom", "(I)I", -3));
+  await line("process exception", async () => {
+    const error = processFailure(await caught(() => scall(E, "boom", "(I)I", -3)));
+    return [error.javaClass, error.message];
+  });
   await line("boom ok", () => scall(E, "boom", "(I)I", 3));
   await line("npe", () => caught(() => scall(E, "npe", "(Ljava/lang/Object;)I", null)).then((t) => [classNameOf(t), iof(t, "java/lang/RuntimeException")]));
   await line("parseInt fails", () => scall("java/lang/Integer", "parseInt", `(${STR})I`, "x"));

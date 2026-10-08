@@ -34,7 +34,7 @@ import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import { locationTransport } from "../android/locationmanager";
 import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
 
-import { callProxy, processError } from "./process-port";
+import { callProxy, processError, processFailure } from "./process-port";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
 const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited"],
@@ -163,13 +163,8 @@ const broadcastResult = (data: BroadcastData): BroadcastResult | Promise<Broadca
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 function setVisible(visible: boolean): void { processPresentation.visible = visible; processPresentation.changed(visible); }
 function remoteError(error: unknown): never {
-  if (error && typeof error === "object") {
-    const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
-    if (info && typeof info === "object" && "name" in info && typeof info.name === "string") {
-      const message: unknown = Reflect.get(error, "msg");
-      throw rt.mkThrowable(info.name, typeof message === "string" ? message : null);
-    }
-  }
+  const failure = processFailure(error);
+  if (failure.javaClass) throw rt.mkThrowable(failure.javaClass, failure.message);
   throw error;
 }
 async function remote<T>(pending: Promise<T>): Promise<T> {

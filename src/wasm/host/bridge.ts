@@ -9,7 +9,7 @@ import { demangle, mangleField } from "../../jvm/abi";
 import { rt, JObj } from "../../jvm/runtime";
 import { JThrowable } from "../../jvm/natives/jthrowable";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
-import { kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
+import { javaName, kindOf, type FieldInfo, type Kind, type MethodInfo } from "../compiler/program";
 import type { Compiler } from "../compiler/j2w";
 import type { World } from "../link/world";
 import type { Strand } from "../link/sched";
@@ -165,6 +165,7 @@ export class Bridge implements HostBridge {
     const proxy = new Proxy(Object.create(throwable ? JThrowable.prototype : JObj.prototype), {
       get(t, p) {
         if (p === REF) return o;
+        if (p === "$javaClass" && throwable) return javaName(name);
         if (p === "jframes" && throwable) return bridge.frames(o);
         const f = typeof p === "string" ? fields.get(throwable && THROWABLE_ALIAS[p] || p) : undefined;
         if (!f) {

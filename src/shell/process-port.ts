@@ -11,8 +11,9 @@ export type ProcessFailure = { javaClass: string | null; name: string; message: 
 /** Java exceptions cross as class/message data, never as objects belonging to another VM. */
 export function processFailure(error: unknown): ProcessFailure {
   if (error && typeof error === "object") {
+    const explicit: unknown = Reflect.get(error, "$javaClass");
     const ctor: unknown = Reflect.get(error, "constructor"), info: unknown = typeof ctor === "function" ? Reflect.get(ctor, "$i") : null;
-    const javaClass: unknown = info && typeof info === "object" ? Reflect.get(info, "name") : Reflect.get(error, "$javaClass");
+    const javaClass: unknown = typeof explicit === "string" ? explicit : info && typeof info === "object" ? Reflect.get(info, "name") : undefined;
     const name: unknown = Reflect.get(error, "name"), message: unknown =
       (typeof javaClass === "string" ? Reflect.get(error, "msg") : undefined) ?? Reflect.get(error, "message");
     const stack = typeof javaClass === "string" ? undefined : Reflect.get(error, "stack");
