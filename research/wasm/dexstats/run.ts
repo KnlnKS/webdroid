@@ -10,7 +10,8 @@ import { isInvoke, isInstanceInvoke } from "../../../src/wasm/compiler/opinfo";
 import { buildCfg } from "../../../src/wasm/compiler/cfg";
 import { FAMILY } from "./families";
 import { isReducible } from "./reducible";
-import { inferMethod, parseDesc, retOf, KIND_NAMES } from "./infer";
+import { parseMethodDesc } from "../../../src/jvm/abi";
+import { inferMethod, retOf, KIND_NAMES } from "./infer";
 import { Universe, ACC_FINAL, ACC_INTERFACE } from "./cha";
 
 const args = process.argv.slice(2);
@@ -114,7 +115,7 @@ async function analyze(label: string): Promise<void> {
       if (x.op === 0x2c) S.switches.sparse.push(code.insns[x.pc + x.b + 1]);
     }
     for (const f of seenFam) bump(S.familyMethods, f);
-    const sig = parseDesc(m.desc);
+    const sig = parseMethodDesc(m.desc);
     const wideSig = sig.params.some((p) => p === "J" || p === "D") || sig.ret === "J" || sig.ret === "D";
     const leaf = invokes === 0;
     info.set(m.key, { units: code.insns.length, leaf });

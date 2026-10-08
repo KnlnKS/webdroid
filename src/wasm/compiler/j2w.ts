@@ -250,10 +250,9 @@ export class Compiler implements Base {
     const c = this.prog.get(cls);
     if (!c || c.isInterface) { this.classStruct.set(cls, this.tObj); return this.tObj; }
     const sup = this.structFor(c.sup ?? "java/lang/Object");
-    const own = this.prog.layout(cls);
     // a class with no own fields shares its super's struct type
-    if (own.length === (c.sup ? this.prog.layout(c.sup).length : 0)) { this.classStruct.set(cls, sup); return sup; }
-    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...own.map((f) => ({ t: this.vtOf(f.kind), mut: true }))];
+    if (!c.fields.some(f => !f.isStatic)) { this.classStruct.set(cls, sup); return sup; }
+    const fields = [{ t: ref(this.tVT) as VT, mut: false }, { t: T.i64 as VT, mut: true }, ...this.prog.layout(cls).map((f) => ({ t: this.vtOf(f.kind), mut: true }))];
     t = this.mb.addType({ k: "struct", fields, sup, final: false });
     this.classStruct.set(cls, t); return t;
   }

@@ -6,6 +6,7 @@
 // link kinds without merging live ranges. A web whose mask ends at 0 is a true conflict; a web
 // whose mask keeps several bits (a constant never constrained by a use) is "underdetermined".
 // Kinds: I = int-like (boolean/byte/short/char/int), F float, R reference (or null), J long, D double.
+import { parseMethodDesc } from "../../jvm/abi";
 import type { CodeItem, DexFile } from "../../jvm/dex";
 import { decodeInstructions, type PreparedInstruction } from "../../jvm/prepared";
 import { buildCfg } from "./cfg";
@@ -52,7 +53,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
   if (cfg.n * R_ > 30_000_000 || n * R_ > 150_000_000) return "too-large";
 
   // ---- per-instruction effects
-  const sig = parseDesc(desc);
+  const sig = parseMethodDesc(desc);
   const retMask = kc(sig.ret[0]);
   const effs: Eff[] = new Array(n);
   for (let i = 0; i < n; i++) effs[i] = effect(dex, ins[i], i ? ins[i - 1] : null, retMask);
@@ -281,19 +282,6 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
   };
 }
 
-function parseDesc(desc: string): { params: string[]; ret: string } {
-  const params: string[] = [];
-  let i = 1;
-  while (desc[i] !== ")") {
-    const s = i;
-    while (desc[i] === "[") i++;
-    if (desc[i] === "L") while (desc[i] !== ";") i++;
-    i++;
-    params.push(desc.slice(s, i));
-  }
-  return { params, ret: desc.slice(i + 1) };
-}
-
 function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction | null, retMask: number): Eff {
   const { op, a, b, c } = x;
   const E = (u: number[], d = -1, dm = 0, extra: Partial<Eff> = {}): Eff => ({ u, d, dm, link: 0, zero: false, fconst: false, ...extra });
@@ -394,4 +382,4 @@ function retOf(dex: DexFile, x: PreparedInstruction): string | null {
     return dex.type(dex.proto(dex.method(x.b).proto).ret);
   } catch { return null; }
 }
-export { retOf, parseDesc };
+export { retOf };

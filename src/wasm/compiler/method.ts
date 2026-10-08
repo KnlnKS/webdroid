@@ -25,10 +25,6 @@ const MAX_SITES = 2;
 const CHUNK = 1024;
 import { inferTyping, F as KF, R as KR, J as KJ, D as KD, type Typing } from "./infer";
 
-/** G1: floats and doubles live in f32/f64 locals, 30% faster than bits behind a reinterpret in TurboFan's steady state and equal in
- *  Liftoff (floatbench.ts); fields, arrays, calls and results keep the bits ABI. false puts them back in i32/i64 locals. */
-const FLOAT_LOCALS = true;
-
 export function compileMethod(cx: Compiler, m: MethodInfo): Code {
   const nparams = (m.isStatic ? 0 : 1) + m.params.length;
   const leaf = (c: Code) => { if (!cx.runsJava(c)) cx.bound.set(mid(m), 4 + nparams + c.localTypes.length); return c; };
@@ -107,7 +103,7 @@ export class MC {
   }
 
   // ---------- registers: webs with disjoint intervals share storage of the same Wasm type
-  storage(k: number): VT { return k === KR ? T.anyref : k === KJ || (k === KD && !FLOAT_LOCALS) ? T.i64 : k === KD ? T.f64 : k === KF && FLOAT_LOCALS ? T.f32 : T.i32; }
+  storage(k: number): VT { return k === KR ? T.anyref : k === KJ ? T.i64 : k === KD ? T.f64 : k === KF ? T.f32 : T.i32; }
   local(web: number): number {
     let l = this.webLocal[web];
     if (l === undefined) this.webLocal[web] = l = this.code.newLocal(this.storage(this.typing.kind[web]));
@@ -150,7 +146,7 @@ export class MC {
   get(kind: Kind, reg: number): void {
     const k = this.load(reg), c = this.code;
     if (kind !== (k === KR ? "L" : k === KJ || k === KD ? "J" : "I")) throw new Error(`v${reg} holds a ${k} where ${kind} is read at ${this.cur.pc}`);
-    if (FLOAT_LOCALS) { if (k === KF) c.raw(OP.i32_reinterpret_f32); else if (k === KD) c.raw(OP.i64_reinterpret_f64); }
+    if (k === KF) c.raw(OP.i32_reinterpret_f32); else if (k === KD) c.raw(OP.i64_reinterpret_f64);
   }
   /** pop a value in the bits ABI of `kind` into what `ins` (default: the current one) defines */
   set(kind: Kind, ins = this.cur): void {
@@ -158,16 +154,16 @@ export class MC {
     if (w >= 0) {
       const k = this.typing.kind[w];
       if (kind !== (k === KR ? "L" : k === KJ || k === KD ? "J" : "I")) throw new Error(`a ${kind} is defined as a ${k} at ${ins.pc}`);
-      if (FLOAT_LOCALS) { if (k === KF) c.raw(OP.f32_reinterpret_i32); else if (k === KD) c.raw(OP.f64_reinterpret_i64); }
+      if (k === KF) c.raw(OP.f32_reinterpret_i32); else if (k === KD) c.raw(OP.f64_reinterpret_i64);
     }
     this.store(ins);
   }
   /** push a float or double operand as f32/f64 */
-  f32(reg: number) { if (this.load(reg) !== KF) throw new Error(`v${reg} is not a float at ${this.cur.pc}`); if (!FLOAT_LOCALS) this.code.raw(OP.f32_reinterpret_i32); }
-  f64(reg: number) { if (this.load(reg) !== KD) throw new Error(`v${reg} is not a double at ${this.cur.pc}`); if (!FLOAT_LOCALS) this.code.raw(OP.f64_reinterpret_i64); }
+  f32(reg: number) { if (this.load(reg) !== KF) throw new Error(`v${reg} is not a float at ${this.cur.pc}`); }
+  f64(reg: number) { if (this.load(reg) !== KD) throw new Error(`v${reg} is not a double at ${this.cur.pc}`); }
   /** pop an f32/f64 into what the current instruction defines */
-  setF32() { if (!FLOAT_LOCALS && this.typing.def(this.cur.pc) >= 0) this.code.raw(OP.i32_reinterpret_f32); this.store(this.cur); }
-  setF64() { if (!FLOAT_LOCALS && this.typing.def(this.cur.pc) >= 0) this.code.raw(OP.i64_reinterpret_f64); this.store(this.cur); }
+  setF32() { this.store(this.cur); }
+  setF64() { this.store(this.cur); }
 
   run(): Code {
     let span = beginCompile("wasm.prepare");
@@ -212,11 +208,11 @@ export class MC {
     lap("facts", "wasm.emit");
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
-    // a parameter's web uses the parameter's local, unless floats live in float locals: then it is copied in once
+    // Floating parameters arrive as bits and are copied into typed locals once.
     const param = (wide: boolean) => {
       const w = this.typing.param(reg);
       if (w >= 0) {
-        const k = this.typing.kind[w], native = FLOAT_LOCALS && (k === KF || k === KD);
+        const k = this.typing.kind[w], native = k === KF || k === KD;
         if (native) { if (!this.resume) c.lget(pi).raw(k === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64).lset(this.local(w)); }
         else this.webLocal[w] = pi;
       }
@@ -239,7 +235,7 @@ export class MC {
           else {
             c.call(this.resume!.bits);
             if (kind !== KJ && kind !== KD) c.raw(OP.i32_wrap_i64);
-            if (FLOAT_LOCALS && (kind === KF || kind === KD)) c.raw(kind === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64);
+            if (kind === KF || kind === KD) c.raw(kind === KF ? OP.f32_reinterpret_i32 : OP.f64_reinterpret_i64);
           }
           c.lset(local);
         });
@@ -975,14 +971,14 @@ export class MC {
     if (w < 0) return;
     const k = this.typing.kind[w];
     if (k === KR) { if (v) throw new Error(`reference constant ${v} at ${this.cur.pc}`); c.anyNull(); }
-    else if (k === KF && FLOAT_LOCALS) c.f32const(v);
+    else if (k === KF) c.f32const(v);
     else c.i32(v);
     this.store(this.cur);
   }
   constWide(v: bigint) {
     const w = this.typing.def(this.cur.pc);
     if (w < 0) return;
-    this.typing.kind[w] === KD && FLOAT_LOCALS ? this.code.f64const(v) : this.code.i64(v);
+    this.typing.kind[w] === KD ? this.code.f64const(v) : this.code.i64(v);
     this.store(this.cur);
   }
   arrayLength(reg: number) {
@@ -1126,9 +1122,8 @@ export class MC {
   }
   finishResult(ins: Ins, kind: Kind | "V") {
     // fold a following move-result into the producer
-    const c = this.code, insts = this.prepared.instructions;
-    const idx = insts.indexOf(ins); const nx = insts[idx + 1];
     if (kind === "V") return;
+    const c = this.code, insts = this.prepared.instructions, nx = insts[insts.indexOf(ins) + 1];
     if (nx && nx.name.startsWith("move-result")) { this.consumed.add(nx.pc); this.set(kind, nx); }
     else c.drop();
   }

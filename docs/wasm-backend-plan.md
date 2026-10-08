@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Compiler cleanup checkpoint (2026-10-08)
+
+Canonical descriptor parsing, void-result handling, opcode predicates and float-local emission lose redundant work without changing generated code. The default 291,144-body sweep is byte-identical; all 4,324 files inside fresh ordinary/guarded production builds also match the preceding build. Source `549677716dc4…` now identifies ordinary `b05d9363f111d0bd` and guarded `d98efc6ee340c4f1`. Typecheck, all 19 Wasm sections, 241 cold-operation checks, 41 OSR checks, 31 framework exercises and the standard 1,211-test unit run pass. No tests or dependencies are added. Measured work reductions and exact receipts are in the history; the application and performance gates below remain open.
+
 ### Current application checkpoint (2026-10-08, production `b020e09f`)
 
 The source-stable ordinary-Wasm full matrix completes all 208 steps across 14 flows and exits 1 for Doodle, Resy, Reddit, TikTok, YouTube and ChatGPT. All 722 observed process snapshots answer diagnostics, including 77 unbooted realms; reachable diagnostics do not prove app liveness. Lichess additionally fails visual review: all 15 screenshots are black despite its non-wedged smoke result, with a Flutter preferences-channel startup error. The five scored flows average 18.79% content difference; no visual-parity or idle-performance acceptance follows. Goldens and production/AOT/APK/native inputs remain unchanged throughout the capture.
