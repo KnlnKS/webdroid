@@ -76,7 +76,7 @@ export function nativeClassLookup(w: World, loader: Loader, name: string): strin
   if (!key) return;
   const owner = w.prog.loaderOf(key), dex = w.prog.get(key)?.dex;
   // Mutable ancestor paths cannot prove the absence of an earlier definition.
-  if (owner !== w.prog.boot && owner.parent !== w.prog.boot) return;
+  if (owner !== w.prog.boot && (owner.parent ?? w.prog.boot) !== w.prog.boot) return;
   let inPath = owner === w.prog.boot;
   let object = objectOfLoader(w, loader);
   const seen = new Set<object>();

@@ -918,9 +918,11 @@ async function abstractDefaultControl(): Promise<void> {
 }
 
 async function nativePathControl(): Promise<void> {
+  const appPath = "/data/local/tmp/native-path-app.dex";
+  vfs.mount(appPath, new BytesFile(new Uint8Array(readFileSync(app))));
   for (const cold of [false, true]) {
     const base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
-    const p = new Program(loadDexes(app), base), target = world(p, { natives, cold, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+    const appDexes = loadDexes(app), p = new Program(appDexes, base), target = world(p, { natives, cold, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => path === appPath ? appDexes : files.has(path) ? loadDexes(files.get(path)!) : undefined });
     useEntry(wasmEntry(target)); rt.mkThrowable = hostThrowable;
     let managed = 0;
     const callFn = target.callFn;
@@ -939,6 +941,13 @@ async function nativePathControl(): Promise<void> {
     const set = (obj: object, cls: string, field: string, desc: string, value: object | null) => target.hostFn("native-path:set:" + cls + field, ["L", "L"], "V", (cx, c) => {
       const st = cx.structFor(cls); c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(cls, {owner:cls, name:field, desc}));
     })(obj, value);
+    const appPeer = await construct("dalvik/system/DexClassLoader", appPath), appLoader = definingLoader(target, appPeer);
+    if (appLoader !== p.root || nativeClassLookup(target, appLoader, "Ldr$MemberLoader") !== "Ldr$MemberLoader") throw new Error("root app path was not recognized");
+    managed = 0; const appStrand = target.sched.strand();
+    try {
+      const key = target.resolveClass(appLoader, "Ldr$MemberLoader", appStrand);
+      if (key !== "Ldr$MemberLoader" || managed) throw new Error("root app resolution entered managed loadClass");
+    } finally { appStrand.end(); }
     const peer = await construct(), loader = definingLoader(target, peer);
     const expected = p.definedBy(loader, "Shared")!;
     if (nativeClassLookup(target, loader, "Shared") !== expected) throw new Error("native path lookup not exercised");
@@ -981,5 +990,5 @@ async function nativePathControl(): Promise<void> {
     set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", target.bridge.toJava([], "[Ljava/lang/ClassLoader;") as object);
     if (nativeClassLookup(target, sharingLoader, "Shared")) throw new Error("shared array accepted natively");
   }
-  console.log("native loader paths: compiled/cold direct, parent and boot identities; removed/reordered paths, custom and shared graph bypass is rejected");
+  console.log("native loader paths: compiled/cold app-root, direct, parent and boot identities; removed/reordered paths, custom and shared graph bypass is rejected");
 }
