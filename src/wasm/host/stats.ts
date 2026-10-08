@@ -1,5 +1,7 @@
 // The Wasm tier's counters live in `perf` (src/perf.ts), which is what a page reports as run.json's counters.
 import { perf } from "../../perf";
+import type { ThreadState } from "../../jvm/tier";
+import type { Strand, ThreadRec } from "../link/sched";
 import type { World } from "../link/world";
 
 export const count = (name: "wasmEntries" | "wasmFacadeMisses" | "wasmGaps" | "wasmNativeSuspended" | "wasmSuspendErrors"): void => { perf[name]++; };
@@ -30,4 +32,20 @@ export function bindWorld(w: World): void {
     let base = 0;
     Object.defineProperty(perf, name, { get: () => read() - base, set: (v: number) => { base = v === 0 ? read() : read() - v; }, enumerable: true, configurable: true });
   }
+}
+
+/** Inspect host records only: reading Java Thread.name would compile and run Java while diagnosing a hang.
+ * Other threads are labeled by a live strand, not by their Java names. */
+export function wasmThreadStates(w: World): ThreadState[] {
+  const threads = new Map<ThreadRec, Strand[]>();
+  for (const s of w.sched.strands) if (s?.thread.alive) {
+    const live = threads.get(s.thread);
+    if (live) live.push(s); else threads.set(s.thread, [s]);
+  }
+  const name = (s: Strand): string => s.thread === w.sched.mainRec ? "main" : `wasm:${threads.get(s.thread)?.[0].id ?? s.id}`;
+  return [...threads].map(([t, live]) => ({
+    name: name(live[0]), state: t.blocked ? "BLOCKED" : t.waiting === 3 ? "WAITING" : t.waiting === 4 ? "TIMED_WAITING" : "RUNNABLE",
+    strands: live.map(s => s.id),
+    owner: [...new Set(live.flatMap(s => s.waitsOn ? [name(s.waitsOn)] : []))].join(", ") || undefined,
+  }));
 }

@@ -17,7 +17,7 @@ import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
 import { mark, perf, perfReset } from "./perf";
-import { loadTier, tier } from "./jvm/tier";
+import { loadTier, tier, wasmThreads } from "./jvm/tier";
 import { configureJvm, jvmProfiler, parseJvmTier, DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "./jvm/profile";
 import { configureJvmCoverage } from "./jvm/coverage";
 import { onMain } from "./android/mainloop";
@@ -296,7 +296,7 @@ const wd = {
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + ((await ((systemWindows && hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
-  threads: threadStates,
+  threads: tier === "wasm" ? wasmThreads : threadStates,
   redraw,
   testFrame: async () => {
     await local.testFrame();

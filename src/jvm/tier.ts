@@ -16,8 +16,10 @@ export function parseTier(value: string | null | undefined): Tier {
 export const tier: Tier = parseTier(typeof location !== "undefined" ? new URLSearchParams(location.search).get("tier")
   : typeof process !== "undefined" ? process.env.WEBDROID_TIER : undefined);
 
+export interface ThreadState { name: string; state: string; blocker?: string; owner?: string; strands?: number[] }
 /** what the Wasm tier's host provides the places that load code */
 export interface TierBackend {
+  threads(): ThreadState[];
   loadDex(dex: DexFile, platform: boolean): void;
   /** the app's dex files are all loaded: prepare its compiled code (a build an earlier launch saved) before Java first runs */
   appCode?(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void>;
@@ -25,6 +27,7 @@ export interface TierBackend {
   launched?(): void;
 }
 let backend: TierBackend | undefined;
+export const wasmThreads = (): ThreadState[] => backend?.threads() ?? [];
 let loading: Promise<void> | undefined;
 /** loads the Wasm tier's host; only under `tier === "wasm"`. A page asks as soon as it runs, so that the tier's build is opened while the rest starts. */
 export function loadTier(): Promise<void> {

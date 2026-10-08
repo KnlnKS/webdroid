@@ -26,7 +26,7 @@ import { wasmJni } from "./jni";
 import { useJniVm } from "../../native/jnivm";
 import { hostObject, hostThrowable, fieldNamesOf, wasmEntry } from "./entry";
 import { natives, nativeSource } from "./nativesource";
-import { bindWorld, count, heapUsed } from "./stats";
+import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
 import { prepareApp, type AppCode, type Built } from "./appcode";
 import { prefetchInWorker } from "./aotload";
@@ -82,6 +82,7 @@ export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): W
  *  harnesses under node) there is no build to fetch: the World is made when the first dex arrives and takes the platform's dex files as they are loaded. */
 export async function bootWasmTier(): Promise<TierBackend> {
   let world: World | undefined, code: AppCode | undefined, platform: Program | undefined, store: FetchStore | undefined;
+  const threads = () => world ? wasmThreadStates(world) : [];
   let usage: (() => ReturnType<World["usage"]>) | undefined;
   const lifetime = new AbortController();
   const close = () => {
@@ -105,7 +106,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   };
   if (typeof location === "undefined") {
     const start = (made: World) => { useEntry(wasmEntry(install(made))); useJniVm(wasmJni(made)); fieldNames.find = fieldNamesOf(made); };
-    return { loadDex(dex, isPlatform) {
+    return { threads, loadDex(dex, isPlatform) {
       if (world) world.addDexes([dex], isPlatform ? world.prog.boot : world.prog.root);
       else {
         const p = new Program([]);
@@ -136,6 +137,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   platform = platformProgram(() => jars.flatMap((jar, i) => jarDexes(jar, PLATFORM_JARS[i])));
   mark("platformReady");
   return {
+    threads,
     loadDex(dex, isPlatform) {
       if (isPlatform) return;
       appDexes.push(dex);
