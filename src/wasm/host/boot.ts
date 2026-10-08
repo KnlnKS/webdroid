@@ -103,7 +103,14 @@ export async function bootWasmTier(): Promise<TierBackend> {
   };
   if (typeof location === "undefined") {
     const start = (made: World) => { useEntry(wasmEntry(install(made))); useJniVm(wasmJni(made)); fieldNames.find = fieldNamesOf(made); };
-    return { loadDex(dex) { if (world) world.addDexes([dex]); else { const p = new Program([dex]); p.addExterns(externs); start(createWorld(p, { dexes })); } } };
+    return { loadDex(dex, isPlatform) {
+      if (world) world.addDexes([dex], isPlatform ? world.prog.boot : world.prog.root);
+      else {
+        const p = new Program([]);
+        p.add([dex], isPlatform ? p.boot : p.root); p.addExterns(externs);
+        start(createWorld(p, { dexes }));
+      }
+    } };
   }
   // The hooks come first and the build is fetched after them: Java is not run before the tier is ready (the zygote waits for the app's code), and the page fetches the build while it
   // downloads the package

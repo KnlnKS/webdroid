@@ -169,6 +169,7 @@ export class Program {
   private loaders: Loader[] = [this.root];
   private dexLoader = new Map<DexFile, Loader>();
   private sealed = false;
+  private bootPath = false;
   /** analyses of the classes that outlive a World (cha.ts keeps the platform's class hierarchy here, so the frames of a page build it once) */
   readonly shared = new Map<string, unknown>();
   /** `base` is the platform's Program, which is immutable from now on and may be shared by the Programs of several processes: this one adds the app's dexes and the classes
@@ -181,6 +182,7 @@ export class Program {
   /** load more dexes (open world) into `loader`'s namespace; returns the keys of the classes they define. A name the loader or its ancestors define already keeps its first definition. */
   add(dexes: DexFile[], loader: Loader = this.root): string[] {
     if (this.sealed) throw new Error("this Program is the base of another and cannot change");
+    if (loader === this.boot) this.bootPath = true;
     const added: string[] = [];
     this.ancestorMemo.clear(); this.implMemo.clear();
     for (const dex of dexes) {
@@ -294,7 +296,7 @@ export class Program {
   /** Synthetic classes have an explicit defining loader; lacking a dex does not imply bootstrap ownership. */
   private inBoot(name: string): boolean {
     const loader = this.syntheticLoaders.get(name);
-    return loader ? loader === this.boot : this.base ? this.base.inBoot(name) : this.has(name);
+    return loader ? loader === this.boot : this.base ? this.base.inBoot(name) : !this.bootPath && this.has(name);
   }
   has(name: string): boolean { return this.classes.has(name) || !!this.base?.has(name); }
   /** every class, the base's first */
