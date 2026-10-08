@@ -13,7 +13,13 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
-### Current recovery checkpoint (2026-10-07, production `9e208dd2`)
+### Current recovery checkpoint (2026-10-07, production `7ebf4b7e`)
+
+JavaScript and Wasm caller recovery now recognize actual WebKit frames while preserving defining-loader identity and truthful unknown positions. The engine-only probe has a neutral shared owner. Optional early/terminal compiler counters use a common root clock; disabled telemetry avoids browser-only access in Node. Current typecheck, all 1,211 unit tests/79,635 assertions, 23 cold-initialization controls and parent Chrome 153/WebKit 26.5 caller/recursive/suspended controls pass. The preceding full unit invocation retains three explained integration failures: the frame-owner import crossed the linker boundary, and disabled telemetry evaluated location in two Node tests. Fresh production AOT and application startup repeats remain required; served assets still belong to d239.
+
+Complete uninstrumented six-input Doodle controls on d239 and the authentic starting c6 source reproduce healthy JavaScript and wedged Wasm gameplay at both commits. Their different Play images do not establish an identical internal cause; G2 remains open. Worker native MAP_SHARED/atomics/futex ownership and complete compiler-worker accounting are being implemented. The remaining conformance/application/Worker matrix and idle G1/G3/G4/G5 acceptance remain required. JavaScript remains default and visual goldens are unchanged.
+
+### Preceding recovery checkpoint (2026-10-07, production `9e208dd2`)
 
 Ordered defining-loader lookup, explicit bootstrap ownership and ART-shaped in-memory DEX cookies are integrated. Host I/O, font, codec, bitmap, cipher and GL buffer operations use canonical owner transfers; GL retains context, output bounds and error state across waits. Fresh eight-jar ordinary `374364963ebf1fba` and guarded `1b5a32493017dd51` assets match source `d2399bc5…`. Typecheck, all 19 broad Wasm sections, 31 framework exercises, 241 cold-slow, 41 OSR and 23 initialization checks pass with stable source. The first unit invocation retains one browser ZIP startup failure; an unchanged focused check and full 1,211-test/79,633-assertion repeat pass. A matching starting-commit unit control passes; the transient failure's cause remains unproved.
 
