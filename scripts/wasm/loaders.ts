@@ -299,15 +299,14 @@ if (!process.argv.includes("--hierarchy")) {
     const method = w.prog.require(key).byKey.get("symbolic()I")!;
     const ins = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic).instructions.find(ins => ins.name === "invoke-static")!;
     const before = { ...w.stats }, symbols = w.symbolicImports([["accounting:probe", key, method.index, ins.pc, [], "I"]]);
-    if (w.stats.units !== before.units + 1 || w.stats.bytes <= before.bytes || w.stats.compileMs <= before.compileMs || !w.traces.has("$accounting:probe")) throw new Error("symbolic stub compilation unaccounted");
+    if (w.stats.units !== before.units + 1 || w.stats.bytes <= before.bytes || w.stats.compileMs <= before.compileMs) throw new Error("symbolic stub compilation unaccounted");
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
     const stub = { ...w.stats };
     if (table.get(slot)!() !== 42) throw new Error("accounted symbolic operation failed");
-    const trace = w.traces.get(`$symbolic:${key}:${method.index}:${ins.pc}`);
-    if (w.stats.units !== stub.units + 1 || w.stats.bytes <= stub.bytes || w.stats.compileMs <= stub.compileMs || !trace) throw new Error("symbolic operation compilation unaccounted");
+    if (w.stats.units !== stub.units + 1 || w.stats.bytes <= stub.bytes || w.stats.compileMs <= stub.compileMs) throw new Error("symbolic operation compilation unaccounted");
     const warm = { ...w.stats };
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) throw new Error("warm symbolic operation compiled again");
-    console.log("symbolic accounting: stub and operation each recorded one unit, bytes and traces; warm execution unchanged");
+    console.log("symbolic accounting: stub and operation each recorded one unit and bytes; warm execution unchanged");
     const later = "fixture/HelperLater", helperBody = (cx: Compiler, c: Code) => {
       const failure = typeFailure(cx.w.prog, `L${later};`);
       if (failure) cx.linkError(c, failure); else c.i32(42);
@@ -333,14 +332,14 @@ if (!process.argv.includes("--hierarchy")) {
     console.log("helper accounting: two owned absence slots recover cached sync/strand functions after class arrival; warm calls unchanged");
     const accountingWorld = world(w.prog, { natives }), initial = { ...accountingWorld.stats };
     const throwable = accountingWorld.makeThrowable("java/lang/IllegalStateException", "accounted helper");
-    if (accountingWorld.stats.units <= initial.units || accountingWorld.stats.bytes <= initial.bytes || accountingWorld.stats.compileMs <= initial.compileMs || !accountingWorld.traces.has("$mk:java/lang/IllegalStateException")) throw new Error("throwable helper compilation unaccounted");
+    if (accountingWorld.stats.units <= initial.units || accountingWorld.stats.bytes <= initial.bytes || accountingWorld.stats.compileMs <= initial.compileMs) throw new Error("throwable helper compilation unaccounted");
     const beforeReader = { ...accountingWorld.stats }, reader = accountingWorld.fieldReader<object | null>("java/lang/Throwable", "detailMessage", "Ljava/lang/String;");
-    if (accountingWorld.stats.units !== beforeReader.units + 1 || accountingWorld.stats.bytes <= beforeReader.bytes || accountingWorld.stats.compileMs <= beforeReader.compileMs || !accountingWorld.traces.has("$get:java/lang/Throwable.detailMessage:Ljava/lang/String;")) throw new Error("field reader compilation unaccounted");
+    if (accountingWorld.stats.units !== beforeReader.units + 1 || accountingWorld.stats.bytes <= beforeReader.bytes || accountingWorld.stats.compileMs <= beforeReader.compileMs) throw new Error("field reader compilation unaccounted");
     if (accountingWorld.hostString(reader(throwable)!) !== "accounted helper") throw new Error("accounted throwable detail changed");
     const warmHelpers = { ...accountingWorld.stats };
     const again = accountingWorld.makeThrowable("java/lang/IllegalStateException", null);
     if (reader(again) !== null || accountingWorld.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;") !== reader || accountingWorld.stats.units !== warmHelpers.units || accountingWorld.stats.bytes !== warmHelpers.bytes || accountingWorld.stats.compileMs !== warmHelpers.compileMs) throw new Error("warm throwable or reader helper compiled again");
-    console.log("helper accounting: throwable and field reader record units, bytes and traces; warm calls unchanged");
+    console.log("helper accounting: throwable and field reader record units and bytes; warm calls unchanged");
     if (process.argv.includes("--memory")) {
       const stubs: WeakRef<object>[] = [], analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [], seen = new WeakSet<object>();
       let probeOps: ColdSlowOps | undefined;

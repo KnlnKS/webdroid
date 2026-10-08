@@ -1246,7 +1246,7 @@ export class World {
     this.stats.compileMs += performance.now() - clock.start - (this.stats.compileMs - clock.accounted);
   }
   private recordUnit(cx: Pick<Compiler, "assumptions" | "absent">, traces: FnTrace[], slot?: number): void {
-    for (const t of traces) this.traces.set(t.name, t);
+    for (const t of traces) if (t.m) this.traces.set(t.name, t);
     for (const [decl, name, desc, target, owner] of cx.assumptions) {
       const at = owner ? this.slotOf(owner) : slot;
       if (at === undefined) throw new Error("compiled assumption has no invalidation owner");
