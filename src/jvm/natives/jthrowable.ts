@@ -4,7 +4,7 @@
 
 import { awaited, rt, JObj, type ClassInfo, type NativeSpec, driven, type Gen, type Runtime } from "../runtime";
 import { mangleMethod, mangleField, demangle, frameOf, jarray, dotName } from "../abi";
-import { coldStack, COLD_SOURCE, type ColdAt } from "../cold";
+import { coldStack, COLD_SOURCE, COLD_FRAME, type ColdAt } from "../cold";
 import { frameOwner } from "../frames";
 import { frameSource, type FrameAt } from "../stacklines";
 import { Strand } from "../suspend";
@@ -54,14 +54,15 @@ function javaFrames(js: string | undefined, cold: readonly ColdAt[]): JavaFrame[
   const out: JavaFrame[] = [];
   let k = cold.length;
   for (const line of (js ?? "").split("\n")) {
-    const at = /^\s*at (?:(.*) \()?(.*?)(?::(\d+):\d+)?\)?$/.exec(line);
+    const at = /^\s*at (?:(.*) \()?(.*?)(?::(\d+):\d+)?\)?$/.exec(line)
+      ?? /^(.*?)@(.*?)(?::(\d+):\d+)?$/.exec(line);
     if (!at) continue;
     const [, fn = "", url, row] = at, compiled = frameOf(fn);
     if (compiled) {
       const owner = frameOwner(fn);
       out.push([compiled[0], compiled[1], { url, line: Number(row), methodIdx: compiled[2], owner }, owner]);
     }
-    else if (url === COLD_SOURCE) {
+    else if (url === COLD_SOURCE || fn === COLD_FRAME) {
       const c = cold[--k];
       if (c) {
         const name = c.method.name, dot = name.indexOf(".");

@@ -37,6 +37,7 @@ const handlers = new Map<string, Handler>();
 /** Cold methods share their handlers, so a stack names a running cold frame only by a handler
  *  frame from this source: the frames in `coldStack`, innermost last, map to those in order. */
 export const COLD_SOURCE = "wd/.cold.js";
+export const COLD_FRAME = "wdColdHandler";
 export const coldStack: ColdFrame[] = [];
 /** where a cold frame is: its method and next instruction */
 export type ColdAt = Readonly<Pick<ColdFrame, "method" | "next">>;
@@ -46,7 +47,7 @@ export function coldOp(body: string, constants: unknown[], next: number): ColdOp
   let run = handlers.get(body);
   if (!run) {
     // Parenthesized: V8 compiles it eagerly instead of preparsing it and reparsing on first call.
-    run = new Function(`return (function(F,K){const R=F.R,D=F.D,S=F.S;${body}})\n//# sourceURL=${COLD_SOURCE}`)() as Handler;
+    run = new Function(`return (function ${COLD_FRAME}(F,K){const R=F.R,D=F.D,S=F.S;${body}})\n//# sourceURL=${COLD_SOURCE}`)() as Handler;
     handlers.set(body, run); perf.coldHandlers++;
   }
   return { run, constants, next };

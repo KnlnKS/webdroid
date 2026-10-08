@@ -488,6 +488,15 @@ describe("invocation-target", () => {
     expect(rt.iof(target, "java/lang/NumberFormatException")).toBe(1);
     expect(await vcallAsync(e, "getCause", "()Ljava/lang/Throwable;") === target).toBe(true);
     expect(await stackTraceText(e)).toContain("\nCaused by: java.lang.NumberFormatException: For input string: \"x\"");
+    const thrown = target as import("../src/jvm/natives/jthrowable").JThrowable, trace = await stackTraceText(thrown);
+    thrown.jsErr!.stack = thrown.jsStack!.split("\n").flatMap(line => {
+      const frame = /^\s*at (?:(.*) \()?(.*?)(?::(\d+):(\d+))?\)?$/.exec(line);
+      if (!frame) return [];
+      const [, fn = "", url, row, col] = frame;
+      return [fn + "@" + (fn === "wdColdHandler" ? "" : url + (row ? `:${row}:${col}` : ""))];
+    }).join("\n");
+    thrown.trace = null;
+    expect(await stackTraceText(thrown)).toBe(trace);
   });
 });
 

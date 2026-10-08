@@ -4,13 +4,14 @@ import type { Runtime, ClassInfo } from "./runtime";
 import type { LazyMethod } from "./compiler";
 import type { PreparedMethod } from "./prepared";
 import { runCold, type ColdFrame, type ColdMethod } from "./cold";
-import { bodyScript, codeKey, persistedBody, recordBody, recordUse, type Factory } from "./codecache";
+import { bodyScript, codeKey, persistedBody, recordBody, recordUse, bindFactory, type Factory } from "./codecache";
 import { claimOffered } from "./aot";
 import { jvmProfiler } from "./profile";
 import { jvmCoverage } from "./coverage";
 import { perf } from "../perf";
 import { setJava, setPublic, xname } from "./suspend";
 import { frameName, parseMethodDesc } from "./abi";
+import { frameCode } from "./frames";
 
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 export type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
@@ -96,7 +97,8 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   const label = `${info.name}.${rec.name}`, profileName = label + rec.desc;
   const persist = !jvmProfiler.enabled && !jvmCoverage.enabled;
   const entryKey = codeKey(dex.id, rec.m.methodIdx, "e"), resumeKey = codeKey(dex.id, rec.m.methodIdx, "r");
-  const bind = (factory: Factory, $R?: unknown) => factory(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
+  const name = frameName(info.name, rec.name, rec.m.methodIdx);
+  const bind = (factory: Factory, $R?: unknown) => bindFactory(R, factory, name)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, $R);
   let owner = R;
   while (owner.parent) owner = owner.parent;
   const entrySource = () => emit.entry(emit.prepare(), false), resumeSource = () => emit.resume(emit.prepare());
@@ -110,7 +112,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     const body = make();
     if (persist) recordBody(resumeKey, body, "r");
     if (owner.hotSourceBytes + body.length > limit) return undefined;
-    const fn = bodyScript(resumeKey, `${label}.resume`, PARAMS, "return " + body)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
+    const fn = bodyScript(resumeKey, `${label}.resume`, PARAMS, "return " + frameCode(R, body, name))(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
     owner.hotSourceBytes += body.length;
     return resumable = R.frameMethod(fn, frameName(info.name, rec.name, rec.m.methodIdx));
   }
@@ -122,7 +124,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   };
   const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
-    bodyScript(entryKey, label, ENTRY_PARAMS, src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
+    bodyScript(entryKey, label, ENTRY_PARAMS, frameCode(R, src, name))(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
     if (persist) recordBody(entryKey, src, "e");
     return installed();

@@ -6,4 +6,5 @@ public class CallerFrames {
   private static Class<?> suspended() { park(); return reflected(); }
   public static Class<?> suspendedCaller() { return suspended(); }
   public static Class<?> nativeCaller() { return nativeFrame(); }
+  public static String literal() { return "function wd_fake( /* function wd_fake( */"; }
 }

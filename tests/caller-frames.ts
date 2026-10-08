@@ -45,6 +45,7 @@ try {
       stage = `${mode}:init`;
       try { await owner.initClass(info); } finally { setLazyMethods(true); }
       const own = owner.classFor("CallerFrames"); expected.push(own);
+      assert.equal(await callOn(mainThread, () => info.ctor[mangleMethod("literal", "()Ljava/lang/String;")]()), "function wd_fake( /* function wd_fake( */"); checks++;
       const invoke = (name: string) => callOn(mainThread, () => info.ctor[mangleMethod(name, "()Ljava/lang/Class;")]());
       stage = `${mode}:caller`;
       assert.ok(await invoke("caller") === own, `${mode}: caller defining identity`); checks++;

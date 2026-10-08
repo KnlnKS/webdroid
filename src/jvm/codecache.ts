@@ -5,9 +5,26 @@
 
 import { BYTECODE } from "./provenance";
 import { once } from "./suspend";
+import { frameCode, lexicalFrames } from "./frames";
+import type { Runtime } from "./runtime";
 
 /** installs an entry body into C/C.prototype, or returns a resumable body */
 export type Factory = (C: unknown, D: unknown, R: unknown, S: unknown, P: unknown, $R?: unknown) => unknown;
+const bindings = new WeakMap<Factory, WeakMap<Runtime, Factory>>();
+/** Generated cache factories close over their parameters alone; arbitrary wrappers stay intact. */
+export function bindFactory(owner: Runtime, factory: Factory, name: string): Factory {
+  if (!lexicalFrames) return factory;
+  let bound = bindings.get(factory);
+  if (!bound) bindings.set(factory, bound = new WeakMap());
+  let fn = bound.get(owner);
+  if (!fn) {
+    const source = factory.toString();
+    const code = /^\(C,\s*D,\s*R,\s*S,\s*P(?:,\s*\$R)?\)\s*=>/.test(source) ? frameCode(owner, source, name) : source;
+    fn = code === source ? factory : new Function("return (" + code + ")")() as Factory;
+    bound.set(owner, fn);
+  }
+  return fn;
+}
 
 const CACHE = "wd-code";
 /** loads with more chunks than this rewrite them as one */

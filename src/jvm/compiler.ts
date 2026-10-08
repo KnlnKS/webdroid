@@ -8,6 +8,7 @@ import { mangleMethod, directName, frameName, parseMethodDesc, isWide, descToNam
 import { ACC, JObj, TYPE_MARK, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, type ColdMethod } from "./cold";
+import { frameCode } from "./frames";
 import { jvmProfiler } from "./profile";
 import { coverageProbeSource } from "./coverage";
 import { codeKey, type Form } from "./codecache";
@@ -54,7 +55,7 @@ export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): s
 }
 
 export function compileClass(R: Runtime, dex: DexFile, info: ClassInfo): void {
-  const src = classSource(R, dex, info, lazyMethods);
+  const src = classSource(R, dex, info, lazyMethods, true);
   if (!src) return;
   try {
     const started = jvmProfiler.enabled ? performance.now() : 0;
@@ -67,7 +68,7 @@ export function compileClass(R: Runtime, dex: DexFile, info: ClassInfo): void {
   }
 }
 
-function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): string {
+function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean, bind = false): string {
   const def = info.def!;
   const out: string[] = [];
   info.lazy = lazy ? [] : undefined;
@@ -75,9 +76,12 @@ function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): 
     for (const m of list) {
       if (m.codeOff) {
         if (info.lazy) installLazy(R, dex, info, m);
-        else out.push(emitEagerMethod(R, dex, info, m));
+        else out.push(emitEagerMethod(R, dex, info, m, bind));
       }
-      else if (m.flags & ACC.NATIVE) out.push(emitNativeStub(dex, info, m));
+      else if (m.flags & ACC.NATIVE) {
+        const source = emitNativeStub(dex, info, m);
+        out.push(bind ? frameCode(R, source, frameName(info.name, methodKey(dex, m.methodIdx).name, m.methodIdx)) : source);
+      }
     }
   }
   return out.join("\n");
@@ -204,7 +208,7 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
   const target = holder((m.flags & ACC.STATIC) !== 0);
   const cls = JSON.stringify(info.name), v = `$n${m.methodIdx}`;
   const ps = paramList(desc), arity = parseMethodDesc(desc).params.length;
-  return `let ${v};${target}.${mangled}=R.frameMethod(function(${ps}){` +
+  return `let ${v};${target}.${mangled}=R.frameMethod(function ${frameName(info.name, name, m.methodIdx)}(${ps}){` +
     `if(!${v}&&!(${v}=R.jniFn(${cls},${JSON.stringify(name + desc)})))` +
     `throw R.ulink(${cls},${JSON.stringify(name)},${JSON.stringify(desc)});` +
     `return ${v}.call(this${ps ? "," + ps : ""})},${JSON.stringify(frameName(info.name, name, m.methodIdx))});${target}.${xname(mangled)}=R.jf(${target}.${mangled},${arity});`;
@@ -240,12 +244,13 @@ function resumableSource(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMe
   return `(()=>{const $ic=[];const $m=(${body}),$R=()=>$m;return $m;})()`;
 }
 
-function emitEagerMethod(R: Runtime, dex: DexFile, info: ClassInfo, method: EncodedMethod): string {
+function emitEagerMethod(R: Runtime, dex: DexFile, info: ClassInfo, method: EncodedMethod, bind: boolean): string {
   const { name, desc } = methodKey(dex, method.methodIdx);
   try {
     const prepared = prepareDexMethod(dex, dex.code(method.codeOff), desc, (method.flags & ACC.STATIC) !== 0, `${info.name}.${name}${desc}`);
-    const entry = emitMethod(R, dex, info, method, prepared);
-    return prepared.sync ? entry : `{let $rb;const $R=()=>$rb??=${resumableSource(R, dex, info, method, prepared)};${entry}}`;
+    const bindBody = (source: string) => bind ? frameCode(R, source, frameName(info.name, name, method.methodIdx)) : source;
+    const entry = bindBody(emitMethod(R, dex, info, method, prepared));
+    return prepared.sync ? entry : `{let $rb;const $R=()=>$rb??=${bindBody(resumableSource(R, dex, info, method, prepared))};${entry}}`;
   } catch (error) { return unimplementedMethod(info, method, dex, error); }
 }
 
