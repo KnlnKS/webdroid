@@ -1,6 +1,6 @@
 import { javaName, type Kind, type Loader } from "../compiler/program";
 import { idOfClass } from "./classes";
-import { definingLoader, objectOfLoader } from "./loaders";
+import { definingLoader, nativeClassLookup, objectOfLoader } from "./loaders";
 import { T } from "../compiler/wasmbin";
 import type { Strand } from "./sched";
 import type { World } from "./world";
@@ -230,9 +230,14 @@ export function resolveClass(w: World, loader: Loader, name: string, owner: Stra
     w.initiateClass(loader, name, key);
     return key;
   }
+  const native = nativeClassLookup(w, loader, name);
+  if (native) {
+    w.initiateClass(loader, name, native);
+    return prepareDefinition(w, native, owner);
+  }
   const method = w.prog.implFor(w.classNameOf(object), "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
   if (!method) throw w.exception(w.makeThrowable("java/lang/AbstractMethodError", "ClassLoader.loadClass"));
-  // Java owns loader locking, recursive delegation and denial. Do not deduplicate pending calls in JS.
+  // Java owns custom delegation and denial. Do not deduplicate pending calls in JS.
   const body: Parameters<World["callFn"]>[3] = (cx, c, arg) => {
     arg(0); arg(1); cx.callMethod(c, method);
   };

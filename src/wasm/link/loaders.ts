@@ -66,6 +66,57 @@ export function objectOfLoader(w: World, loader: Loader): object | null {
   return loader.object ?? (loader === w.prog.root ? states.get(w)?.appLoader ?? null : null);
 }
 
+const PATH_LOADERS = new Set(["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "dalvik/system/InMemoryDexClassLoader"]);
+
+/** ART searches exact platform loader chains natively before invoking Java loadClass. */
+export function nativeClassLookup(w: World, loader: Loader, name: string): string | undefined {
+  const s = states.get(w);
+  if (!s) return;
+  const key = w.prog.lookup(loader, name);
+  if (!key) return;
+  const owner = w.prog.loaderOf(key), dex = w.prog.get(key)?.dex;
+  // Mutable ancestor paths cannot prove the absence of an earlier definition.
+  if (owner !== w.prog.boot && owner.parent !== w.prog.boot) return;
+  let inPath = owner === w.prog.boot;
+  let object = objectOfLoader(w, loader);
+  const seen = new Set<object>();
+  while (object) {
+    if (seen.has(object)) return;
+    seen.add(object);
+    const cls = w.classNameOf(object);
+    if (w.prog.loaderOf(cls) !== w.prog.boot) return;
+    if (cls === "java/lang/BootClassLoader") break;
+    if (!PATH_LOADERS.has(cls)) return;
+    const current = s.byObject.get(object);
+    if (!current || current.before?.length || current.after?.length) return;
+    if (current === owner && dex) {
+      const path = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(object);
+      const elements = path && w.fieldReader<object | null>("dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;")(path);
+      for (let i = 0; elements && i < w.bridge.arrayLength(elements); i++) {
+        const element = w.bridge.element(elements, i) as object | null;
+        const file = element && w.fieldReader<object | null>("dalvik/system/DexPathList$Element", "dexFile", "Ldalvik/system/DexFile;")(element);
+        const cookie = file && w.fieldReader<object | null>("dalvik/system/DexFile", "mCookie", "Ljava/lang/Object;")(file);
+        if (!cookie) continue;
+        if (w.classNameOf(cookie) !== "java/lang/String") return;
+        const opened = s.cookies.get(w.hostString(cookie) as string);
+        // Only the first live DEX can prove precedence without searching other definitions.
+        if (opened?.loader !== current || opened.dexes[0] !== dex) return;
+        inPath = true; break;
+      }
+    }
+    // Shared and custom loader graphs retain the managed search and its overrides.
+    for (const field of ["sharedLibraryLoaders", "sharedLibraryLoadersAfter"]) {
+      const libraries = w.fieldReader<object | null>("dalvik/system/BaseDexClassLoader", field, "[Ljava/lang/ClassLoader;")(object);
+      if (libraries) return;
+    }
+    const parent = s.parentOf(object);
+    const parentLoader = parent && w.classNameOf(parent) !== "java/lang/BootClassLoader" ? s.byObject.get(parent) : w.prog.boot;
+    if (!parentLoader || (current.parent ?? w.prog.boot) !== parentLoader) return;
+    object = parent;
+  }
+  return inPath ? key : undefined;
+}
+
 function librariesOf(w: World, object: object): [Loader[], Loader[]] {
   const s = stateOf(w), prior = s.libraries.get(object);
   if (prior) return prior;

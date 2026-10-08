@@ -22,10 +22,11 @@ import { Cpu, setA64 } from "../../src/native/cpu";
 import { mem } from "../../src/native/mem";
 import { ldp, PTR } from "../../src/native/host";
 import { mainThread } from "../../src/jvm/natives/jentry";
-import { definingLoader } from "../../src/wasm/link/loaders";
+import { definingLoader, nativeClassLookup } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
 import { Pool, u2, u4 } from "./classfile";
 import { Compiler } from "../../src/wasm/compiler/j2w";
+import { T } from "../../src/wasm/compiler/wasmbin";
 import { UnitCompiler } from "../../src/wasm/link/unit";
 import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler";
 import type { CompileRequest, CompileResponse } from "../../src/wasm/host/compile-serve";
@@ -596,6 +597,7 @@ for (const asynchronous of [false, true]) {
   } finally { mem.free(name); mem.free(environment); useJniVm(previous); }
 }
 await interfaceSuperControl();
+await nativePathControl();
 console.log(failed ? `${failed} failures` : "loaders: all pass");
 process.exit(failed ? 1 : 0);
 
@@ -913,4 +915,71 @@ async function abstractDefaultControl(): Promise<void> {
     }
   } finally { jvmProfiler.tier = previous; }
   if (failures.length) throw new Error("abstract-dominance mismatch: " + failures.join(", "));
+}
+
+async function nativePathControl(): Promise<void> {
+  for (const cold of [false, true]) {
+    const base = program([...PLATFORM_JARS.map(j => join(AOSP, j)), common]);
+    const p = new Program(loadDexes(app), base), target = world(p, { natives, cold, loop: { due: () => false, yield: () => Promise.resolve(), after: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, dexes: path => files.has(path) ? loadDexes(files.get(path)!) : undefined });
+    useEntry(wasmEntry(target)); rt.mkThrowable = hostThrowable;
+    let managed = 0;
+    const callFn = target.callFn;
+    target.callFn = function (name, ...args) { if (name.startsWith("resolve:load:")) managed++; return callFn.call(this, name, ...args); };
+    const construct = async (cls = "dalvik/system/DexClassLoader", path = paths[0], parent: object | null = null) => {
+      const desc = cls.includes("$") ? "(Ljava/lang/String;Ljava/lang/ClassLoader;)V" : "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V";
+      const ctor = p.resolve(cls, "<init>", desc)!;
+      const make = target.callFn("native-path:" + cls, ["L", "L"], "L", (cx, c, arg) => {
+        cx.emitEnsure(c, cls); cx.emitNew(c, cls); const o = c.newLocal(T.anyref); c.ltee(o); arg(0);
+        if (!cls.includes("$")) c.anyNull().anyNull(); arg(1);
+        cx.callMethod(c, ctor); c.lget(o);
+      });
+      const strand = target.sched.strand();
+      try { return await make(strand, target.javaString(path), parent) as object; } finally { strand.end(); }
+    };
+    const set = (obj: object, cls: string, field: string, desc: string, value: object | null) => target.hostFn("native-path:set:" + cls + field, ["L", "L"], "V", (cx, c) => {
+      const st = cx.structFor(cls); c.lget(0).refCast(st).lget(1).structSet(st, cx.fieldIndex(cls, {owner:cls, name:field, desc}));
+    })(obj, value);
+    const peer = await construct(), loader = definingLoader(target, peer);
+    const expected = p.definedBy(loader, "Shared")!;
+    if (nativeClassLookup(target, loader, "Shared") !== expected) throw new Error("native path lookup not exercised");
+    managed = 0;
+    const strand = target.sched.strand();
+    let resolved;
+    try { resolved = target.resolveClass(loader, "Shared", strand); if (resolved instanceof Promise) throw new Error("ordinary native definition unexpectedly waited"); } finally { strand.end(); }
+    if (resolved !== expected || managed) throw new Error("native resolution entered managed loadClass");
+    const child = await construct("dalvik/system/DexClassLoader", paths[1], peer), childLoader = definingLoader(target, child);
+    if (nativeClassLookup(target, childLoader, "Sub")) throw new Error("nested path precedence was inferred from metadata");
+    if (nativeClassLookup(target, childLoader, "Shared") !== expected) throw new Error("parent native identity lost");
+    const boot = p.definedBy(p.boot, "java/util/BitSet");
+    if (nativeClassLookup(target, childLoader, "java/util/BitSet") !== boot) throw new Error("boot native identity lost");
+    managed = 0; const inherited = target.sched.strand();
+    try { if (await target.resolveClass(childLoader, "Shared", inherited) !== expected || await target.resolveClass(childLoader, "java/util/BitSet", inherited) !== boot) throw new Error("native ancestor resolution changed"); } finally { inherited.end(); }
+    if (managed) throw new Error("native ancestor lookup entered Java");
+    const inactive = await construct(), inactiveLoader = definingLoader(target, inactive);
+    const path = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(inactive);
+    set(path, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava([], "[Ldalvik/system/DexPathList$Element;") as object);
+    if (nativeClassLookup(target, inactiveLoader, "Shared")) throw new Error("metadata-only class bypassed the live path");
+    managed = 0;
+    const blocked = target.sched.strand();
+    try { await target.resolveClass(inactiveLoader, "Shared", blocked); throw new Error("empty live path resolved Shared"); }
+    catch (e) { const t = target.throwable(e); if (!t || target.classNameOf(t) !== "java/lang/ClassNotFoundException") throw e; }
+    finally { blocked.end(); }
+    if (!managed) throw new Error("empty path skipped canonical loader failure");
+    const reordered = await construct("dalvik/system/DexClassLoader", paths.join(":")), reorderedLoader = definingLoader(target, reordered);
+    const reorderedPath = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(reordered);
+    const elements = target.fieldReader<object>("dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;")(reorderedPath);
+    const reversed = [];
+    for (let i = target.bridge.arrayLength(elements) - 1; i >= 0; i--) reversed.push(target.bridge.toHost(target.bridge.element(elements, i)));
+    set(reorderedPath, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava(reversed, "[Ldalvik/system/DexPathList$Element;") as object);
+    if (nativeClassLookup(target, reorderedLoader, "Shared")) throw new Error("reordered path accepted stale metadata winner");
+    managed = 0; const reorderedStrand = target.sched.strand();
+    try { await target.resolveClass(reorderedLoader, "Shared", reorderedStrand); } finally { reorderedStrand.end(); }
+    if (!managed) throw new Error("reordered path skipped managed lookup");
+    const custom = await construct("Ldr$MemberLoader");
+    if (nativeClassLookup(target, definingLoader(target, custom), "Shared")) throw new Error("custom subclass accepted natively");
+    const sharing = await construct(), sharingLoader = definingLoader(target, sharing);
+    set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", target.bridge.toJava([], "[Ljava/lang/ClassLoader;") as object);
+    if (nativeClassLookup(target, sharingLoader, "Shared")) throw new Error("shared array accepted natively");
+  }
+  console.log("native loader paths: compiled/cold direct, parent and boot identities; removed/reordered paths, custom and shared graph bypass is rejected");
 }
