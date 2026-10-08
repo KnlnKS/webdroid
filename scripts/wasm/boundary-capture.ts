@@ -156,10 +156,20 @@ export async function startBoundaryProfiles(browser: Browser, readProcessDiagnos
           seen.add(id); const parent = targets.get(id)?.target; if (!parent) break;
           parents.push(parent); id = parent.parentId;
         }
-        const parentProcesses = parents.flatMap(t => matchProcesses(t.url));
+        const parentMatches = parents.map(t => matchProcesses(t.url));
+        const parentProcesses = parentMatches.flat(), nearestParentProcesses = parentMatches.find(rows => rows.length) ?? [];
+        const url = URL.canParse(target.url) ? new URL(target.url) : null;
+        const compilerWorker = url?.pathname === "/wasm-compile-worker.js";
+        const declaredOwner = compilerWorker ? url.searchParams.get("owner") : null;
+        const declaredUrl = declaredOwner && URL.canParse(declaredOwner) ? new URL(declaredOwner) : null;
+        const declaredProcesses = declaredUrl && url && declaredUrl.origin === url.origin ? matchProcesses(declaredUrl.href) : [];
+        const ownerClaimError = !compilerWorker ? null : !declaredProcesses.length ? "canonical spawn owner URL missing, invalid or absent from process diagnostics"
+          : nearestParentProcesses.length && !nearestParentProcesses.some(p => p.url === declaredUrl?.href || p.url.startsWith(`worker:${declaredUrl?.href}#pid=`))
+            ? "canonical spawn owner conflicts with observed CDP parent processes" : null;
         return { directProcesses: direct, parentTargetId: target.parentId ?? null, parentFrameId: target.parentFrameId ?? null,
-          parentTargets: parents, parentProcesses, compilerWorker: target.url.includes("/wasm-compile-worker.js"),
-          evidence: direct.length ? "canonical process URL/diagnostics" : parentProcesses.length ? "CDP parent chain and canonical process URL/diagnostics" : "no observed Java owner association" };
+          parentTargets: parents, parentProcesses, compilerWorker, declaredOwner, declaredProcesses, ownerClaimError,
+          evidence: direct.length ? "canonical process URL/diagnostics" : parentProcesses.length ? "CDP parent chain and canonical process URL/diagnostics"
+            : declaredProcesses.length ? "canonical spawn owner URL and process diagnostics; metadata does not prove CDP parentage" : "no observed Java owner association" };
       };
       const profiles = [], lifetimes = [], uncovered = [];
       for (const target of targets.values()) {

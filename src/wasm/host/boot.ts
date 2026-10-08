@@ -139,7 +139,9 @@ export async function bootWasmTier(): Promise<TierBackend> {
       // prefetched platform modules before AOT.ready can mark a module missed.
       if (!appDexes.length) { await store.ready; return; }
       try {
-        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker("/wasm-compile-worker.js", { type: "module" }) as unknown as WorkerPort, roots, signal: lifetime.signal });
+        const workerUrl = new URL("/wasm-compile-worker.js", location.href);
+        workerUrl.searchParams.set("owner", location.href);
+        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker(workerUrl, { type: "module" }) as unknown as WorkerPort, roots, signal: lifetime.signal });
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       mark(code.hit ? "appCodeSaved" : "appCode");

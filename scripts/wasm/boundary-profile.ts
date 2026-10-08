@@ -72,7 +72,9 @@ if (import.meta.main) {
         unknownTailUs += data.unsampledTailUs ?? 0;
         for (const category of categories) totals[category] += data.selfSampleUs[category];
         targets.push({ index: i, target: target.target, lifetime: target.lifetime, ownerPath: ownerPath ?? null, ...data });
-        if (target.lifetime?.owner.compilerWorker && !target.lifetime.owner.directProcesses.length && !target.lifetime.owner.parentProcesses.length) failures.push(`target-${i}: compiler-worker Java owner association unresolved`);
+        const owner = target.lifetime?.owner;
+        if (owner?.compilerWorker && (owner.ownerClaimError || !owner.directProcesses.length && !owner.parentProcesses.length && !owner.declaredProcesses?.length))
+          failures.push(`target-${i}: ${owner.ownerClaimError ?? "compiler-worker Java owner association unresolved"}`);
       } catch (e) { failures.push(`target-${i}: ${String(e)}`); targets.push({ index: i, target: target.target, error: String(e) }); }
     }
     const active = categories.filter(k => k !== "idle" && k !== "harness").reduce((n, k) => n + totals[k], 0);
