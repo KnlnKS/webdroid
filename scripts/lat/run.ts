@@ -35,6 +35,7 @@ if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be 
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "js");
 if (!launchQuery.has("processMode")) launchQuery.set("processMode", "iframe");
+if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
 if (!["js", "wasm"].includes(launchQuery.get("tier")!)) throw new Error("lat tier must be js or wasm");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
 
@@ -45,7 +46,7 @@ const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resPar
   "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
-type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
+type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
 type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
   idle: number; perf: Record<string, number>; marks: string[] };
@@ -264,7 +265,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     for (const f of got) { const sg = f.hash; if (sg !== prev) changes.push(f); prev = sg; }
     // the breakdown is the work done from pointerup until the frame that answered it
     const au = changes.find((f) => f.t >= tu), after = au?.perf ?? snapshot();
-    const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { up: tu, end: response.compileAt }, m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
+    const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: response.compileAt }, m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
       settled: changes.length ? Math.round(changes.at(-1)!.t - t0) : null, frames: got.length,
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
     out.push(tap);
@@ -408,7 +409,7 @@ for (const name of names) {
     console.log(`     ${name.padEnd(12)} ${"launch".padEnd(14)} ${String(started.firstFrame).padStart(5)} ms  idle=${started.idle} ${counters}`);
     if (timeline) for (const [realm, name, ms] of started.marks.map((m) => m.split(":")).sort((a, b) => +a[2] - +b[2])) console.log(`       ${ms.padStart(6)} ms  ${realm.padEnd(7)} ${name}`);
     for (const t of taps) {
-      t.compile = compileDeltas(t.compileBefore, t.compileAfter);
+      t.compile = compileDeltas(t.compileBefore, t.compileAfter, t.compileWindow);
       const over = t.intended === null || t.intended > LIMIT_MS || !t.compile.mainRealmCoverage;
       failed ||= over;
       const detail = Object.entries(t.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");

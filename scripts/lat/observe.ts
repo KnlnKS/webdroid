@@ -5,16 +5,30 @@ export function installLatencyObserver(counters: string[]) {
   let root: Window = window;
   try { while (root.parent !== root && root.parent.location.origin === location.origin) root = root.parent; } catch { return; }
   const host = root as any;
-  const snapshot = () => [root, ...Array.from(root.document.querySelectorAll("iframe")).flatMap(f => {
-    try { return f.contentWindow?.location.pathname === "/process" ? [f.contentWindow] : []; } catch { return []; }
-  })].map(win => {
-    const wd = (win as any).wd;
-    return { url: win.location.href, pid: new URLSearchParams(win.location.search).get("pid"), pkg: wd?.app()?.pkg ?? null,
-      tier: wd?.tier ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
-      perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
-      compilerWorker: win.__wdCold?.worker ? { ...win.__wdCold.worker } : null,
-      appBuilds: win.__wdCold?.appBuilds?.map(build => ({ ...build })) ?? [] };
-  });
+  const snapshot = () => {
+    const rows = [root, ...Array.from(root.document.querySelectorAll("iframe")).flatMap(f => {
+      try { return f.contentWindow?.location.pathname === "/process" ? [f.contentWindow] : []; } catch { return []; }
+    })].map(win => {
+      const wd = (win as any).wd;
+      return { url: win.location.href, pid: new URLSearchParams(win.location.search).get("pid"), pkg: wd?.app()?.pkg ?? null,
+        tier: wd?.tier ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
+        perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
+        compilerWorker: win.__wdCold?.worker ? { ...win.__wdCold.worker } : null,
+        appBuilds: win.__wdCold?.appBuilds?.map(build => ({ ...build })) ?? [] };
+    });
+    if (new URLSearchParams(root.location.search).get("perfProbe") !== "1") return rows;
+    const registry = host.wd?.counterReceipts?.();
+    const found = new Map(rows.map(row => [row.url, row]));
+    return [...(registry?.rows ?? []).map((record: any) => {
+      const row = found.get(record.owner.url); found.delete(record.owner.url);
+      const receipt = record.receipt;
+      return { ...row, url: record.owner.url, pid: String(record.owner.pid), pkg: record.owner.pkg, runtimePkg: row?.pkg ?? null,
+        tier: row?.tier ?? new URL(record.owner.url).searchParams.get("tier") ?? "js", available: !!receipt,
+        perf: receipt ? { ...row?.perf, ...receipt.counters } : row?.perf ?? null, receiptProbe: true,
+        proof: { schema: registry.schema, source: registry.source, sequence: registry.sequence, dropped: registry.dropped, events: registry.events,
+          owner: record.owner, dead: record.dead, processDead: record.processDead, error: record.error, receipt } };
+    }), ...[...found.values()].map(row => ({ ...row, receiptProbe: true, proof: null }))];
+  };
   const shown = (canvas: HTMLCanvasElement) => {
     if (root.document.visibilityState !== "visible" || host.wd?.displayCanvas?.() !== canvas) return false;
     for (let win: Window = window;; win = win.parent) {

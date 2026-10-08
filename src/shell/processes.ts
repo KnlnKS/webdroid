@@ -1,4 +1,5 @@
 import type { ProcessLifeCalls } from "./process-life";
+import { readCounterReceipt, type CounterReceipt } from "./perf-receipts";
 // The broker: system_server's part across process realms, kept in the page's top realm, which
 // outlives them all. It registers each process and its frame, routes binder transactions, service,
 // provider and broadcast requests and process deaths between them, and holds the stores every
@@ -135,6 +136,32 @@ export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiag
   /** what hears how it ended */
   watchers: Set<(death: Death) => void>; pending: Set<(error: unknown) => void> };
 export class ProcessBroker {
+  private counterEvents: { sequence: number; kind: "created" | "retired"; at: number; pid: number; pkg: string; process: string; url: string }[] = [];
+  private counterSequence = 0;
+  private counterDropped = 0;
+  private counterTerminals = new Map<number, { receipt: Readonly<CounterReceipt> | null; error: string | null; url: string }>();
+  private counterEvent(entry: Entry, kind: "created" | "retired", url: string): void {
+    if (!window.__wdCounterReceipt) return;
+    const sequence = ++this.counterSequence;
+    if (this.counterEvents.length === 128) { this.counterDropped++; return; }
+    this.counterEvents.push({ sequence, kind, at: performance.timeOrigin + performance.now(), pid: entry.pid, pkg: entry.pkg, process: entry.process, url });
+  }
+  counterReceipts() {
+    if (!window.__wdCounterReceipt) return null;
+    const rows = [];
+    for (const entry of this.entries.values()) {
+      if (rows.length === 128) break;
+      const terminal = this.counterTerminals.get(entry.pid), rootRealm = entry.pid === PROCESS_PID, win = entry.frame?.contentWindow ?? (rootRealm ? window : null);
+      const url = terminal?.url ?? entry.frame?.src ?? entry.worker?.url ?? entry.workerDiagnostic?.url ?? location.href;
+      let receipt = terminal?.receipt ?? null, error = terminal?.error ?? null;
+      if ((!entry.dead || rootRealm) && win) try { receipt = readCounterReceipt(win); } catch (e) { error = String(e); }
+      if (!win && !entry.dead) error ??= "Process Worker counters require a separate protocol";
+      rows.push(Object.freeze({ owner: Object.freeze({ pid: entry.pid, pkg: entry.pkg, process: entry.process, url }),
+        dead: entry.dead && !rootRealm, processDead: entry.dead, receipt, error }));
+    }
+    return Object.freeze({ schema: 1, source: import.meta.url, at: performance.timeOrigin + performance.now(), sequence: this.counterSequence,
+      dropped: this.counterDropped + Math.max(0, this.entries.size - rows.length), events: Object.freeze(this.counterEvents.map(e => Object.freeze({ ...e }))), rows: Object.freeze(rows) });
+  }
   readonly files = new PrivateFiles();
   readonly accounts = new AccountStore();
   readonly intents = new PendingIntents(intentCodec, async (operation, fill, alarmCount) => {
@@ -291,12 +318,13 @@ export class ProcessBroker {
       frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
       frame.src = "/process?pid=" + entry.pid + `&screen=${formatScreen(device)}&statusBarDp=${device.statusBarDp}&hz=${device.refreshRate}`;
       const params = new URLSearchParams(location.search);
-      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock", "tier", "cold", "processMode"]) {
+      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock", "tier", "cold", "processMode", "perfProbe"]) {
         const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
       }
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed", NOT_CRASHED));
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
+    this.counterEvent(entry, "created", entry.frame?.src ?? entry.worker?.url ?? location.href);
     this.services.processStarted(pkg, process);
     return entry;
   }
@@ -601,6 +629,15 @@ export class ProcessBroker {
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
+    if (window.__wdCounterReceipt) {
+      const win = entry.frame?.contentWindow ?? (entry.pid === PROCESS_PID ? window : null), url = entry.frame?.src ?? entry.worker?.url ?? location.href;
+      let receipt: Readonly<CounterReceipt> | null = null, error: string | null = null;
+      try { if (win) receipt = readCounterReceipt(win); } catch (e) { error = String(e); }
+      if (pid !== PROCESS_PID) {
+        if (this.counterTerminals.size < 128) this.counterTerminals.set(pid, { receipt, error, url }); else this.counterDropped++;
+      }
+      this.counterEvent(entry, "retired", url);
+    }
     console.warn(`[process] ${entry.process} (pid ${pid}): ${message}`);
     const error = rt.mkThrowable("android/os/DeadObjectException", message);
     if (entry.worker || entry.workerDiagnostic) entry.workerDiagnostic = {

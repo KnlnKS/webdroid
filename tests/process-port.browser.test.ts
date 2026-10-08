@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/perf.ts", import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
   if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -15,6 +15,21 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     const page = await browser.newPage(), errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(server.url.href);
+    const counterReceipt = await page.evaluate(async () => {
+      const previous = location.href, absent = window.__wdCounterReceipt === undefined;
+      history.replaceState(null, "", "?perfProbe=1&pid=17");
+      const { perf, perfReset } = await import(location.origin + "/perf.js") as typeof import("../src/perf");
+      const first = window.__wdCounterReceipt!();
+      perf.compileMs = 7;
+      const second = window.__wdCounterReceipt!();
+      perfReset();
+      const reset = window.__wdCounterReceipt!();
+      const readonly = !Reflect.set(window, "__wdCounterReceipt", () => null) && Object.isFrozen(first) && Object.isFrozen(first.counters) && Object.isFrozen(first.initial);
+      history.replaceState(null, "", previous);
+      return { absent, readonly, pid: first.pid, initial: first.initial.compileMs, first: first.counters.compileMs, second: second.counters.compileMs,
+        resets: [first.resets, second.resets, reset.resets], reset: reset.counters.compileMs, ordered: first.bornAt <= first.at && first.at <= second.at && first.sequence < second.sequence };
+    });
+    expect(counterReceipt).toEqual({ absent: true, readonly: true, pid: 17, initial: 0, first: 0, second: 7, resets: [0, 0, 1], reset: 0, ordered: true });
     const profileOwnership = await page.evaluate(async () => {
       const source = `import {existingAotProfile} from ${JSON.stringify(location.origin+"/aot-profile.js")};
         import {pageShared,peekPageShared} from ${JSON.stringify(location.origin+"/pageshared.js")};

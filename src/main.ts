@@ -217,6 +217,7 @@ const wd = {
   scall: (cls: string, name: string, desc: string, ...args: unknown[]) => onMain(() => scall(cls, name, desc, ...args)),
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),
+  counterReceipts: () => processBroker().counterReceipts(),
   workerAotProfiles: () => processBroker().workerAotProfiles(),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
