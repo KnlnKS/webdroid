@@ -1,3 +1,4 @@
+import { beginCompile, endCompile } from "./compiler-observer";
 import type { Runtime } from "./runtime";
 import { perf } from "../perf";
 import { descToName } from "./abi";
@@ -47,7 +48,9 @@ export function coldOp(body: string, constants: unknown[], next: number): ColdOp
   let run = handlers.get(body);
   if (!run) {
     // Parenthesized: V8 compiles it eagerly instead of preparsing it and reparsing on first call.
-    run = new Function(`return (function ${COLD_FRAME}(F,K){const R=F.R,D=F.D,S=F.S;${body}})\n//# sourceURL=${COLD_SOURCE}`)() as Handler;
+    const span = beginCompile("js.parseBind");
+    try { run = new Function(`return (function ${COLD_FRAME}(F,K){const R=F.R,D=F.D,S=F.S;${body}})\n//# sourceURL=${COLD_SOURCE}`)() as Handler;
+    } finally { endCompile(span); }
     handlers.set(body, run); perf.coldHandlers++;
   }
   return { run, constants, next };

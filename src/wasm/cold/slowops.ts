@@ -1,3 +1,4 @@
+import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // Canonical compiler adapters for the shared cold opcode loop.
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared";
@@ -128,9 +129,13 @@ export class ColdSlowOps {
   }
 
   private prepareAnalysis(m: MethodInfo): Analysis {
-    const start = performance.now(), item = m.dex.code(m.codeOff), prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
+    const start = performance.now(), item = m.dex.code(m.codeOff), prepareSpan = beginCompile("wasm.prepare");
+    let prepared: ReturnType<typeof prepareMethod>;
+    try { prepared = prepareMethod(m.dex, item, m.desc, m.isStatic); } finally { endCompile(prepareSpan); }
     this.w.stats.phase.prepare += performance.now() - start;
-    const infer = performance.now(), typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions);
+    const infer = performance.now(), inferSpan = beginCompile("wasm.infer");
+    let typing: ReturnType<typeof inferTyping>;
+    try { typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions); } finally { endCompile(inferSpan); }
     this.w.stats.phase.infer += performance.now() - infer;
     return { prepared, typing, instructions: new Map(prepared.instructions.map(ins => [ins.pc, ins])) };
   }

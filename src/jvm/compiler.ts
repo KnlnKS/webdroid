@@ -1,3 +1,4 @@
+import { beginCompile, endCompile } from "./compiler-observer";
 // DEX bytecode → shared cold handlers and specialized hot methods.
 // Control flow: `for(;;) switch(pc)` over basic blocks; DEX try ranges → JS catch with
 // pc-range dispatch. Every method runs synchronously: a call returns its value, or its callee
@@ -55,17 +56,22 @@ export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): s
 }
 
 export function compileClass(R: Runtime, dex: DexFile, info: ClassInfo): void {
+  const span = beginCompile("residual.jsClass");
+  try {
   const src = classSource(R, dex, info, lazyMethods, true);
   if (!src) return;
   try {
     const started = jvmProfiler.enabled ? performance.now() : 0;
-    new Function("C", "D", "R", "S", "P", src + `\n//# sourceURL=wd/${info.name}.js`)(
+    const linkSpan = beginCompile("js.classLink");
+    try { new Function("C", "D", "R", "S", "P", src + `\n//# sourceURL=wd/${info.name}.js`)(
       info.ctor, R.dexLink(dex), R, info.superInfo?.ctor ?? JObj, jvmProfiler);
+    } finally { endCompile(linkSpan); }
     if (jvmProfiler.enabled) jvmProfiler.addAggregate("classLink", performance.now() - started);
   } catch (e) {
     console.error("compile failed for", info.name, e, src.slice(0, 2000));
     throw e;
   }
+  } finally { endCompile(span); }
 }
 
 function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean, bind = false): string {
@@ -137,6 +143,8 @@ export function unsafeFallthrough(R: Runtime, info: ClassInfo, fn: unknown): boo
 }
 
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
+  const span = beginCompile("residual.jsClass");
+  try {
   const info = C.$i, rec = info.lazy![i], dex = rec.dex;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype, arity = parseMethodDesc(rec.desc).params.length;
@@ -170,6 +178,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     cold: (prepared) => Object.assign(new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold", rec.m.methodIdx)
       .compileCold(prepared, coldInstructions(code, prepared)), { codeOff: rec.m.codeOff }),
   });
+  } finally { endCompile(span); }
 }
 
 /** a lazy method's body as `form` emits it, each instruction's first line marked with its pc */
@@ -324,6 +333,8 @@ class MethodEmitter {
     const name = `${this.info.name}.${this.mname}${this.desc}`;
     const ops: ColdMethod["ops"] = new Array(this.code.insns.length);
     const build = (pc: number) => {
+      const span = beginCompile("js.coldBuild");
+      try {
       const started = jvmProfiler.enabled ? performance.now() : 0;
       const ins = instructionAt(pc), out: string[] = [];
       this.constants = [];
@@ -332,6 +343,7 @@ class MethodEmitter {
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
       if (jvmProfiler.enabled) jvmProfiler.add(name, "coldBuild", performance.now() - started);
       return op;
+      } finally { endCompile(span); }
     };
     return { name, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
       regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
@@ -348,6 +360,8 @@ class MethodEmitter {
    * suspended call. Frames therefore pay for asynchrony only when something actually waits.
    */
   compile(prepared: PreparedMethod, count: boolean, form: HotForm): string {
+    const span = beginCompile("js.hotEmit");
+    try {
     this.resuming = form === "resumable";
     this.prepared = prepared;
     this.sync = prepared.sync;
@@ -439,6 +453,7 @@ ${profileEnd}
 }`;
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "hotEmit", performance.now() - started);
     return `R.frameMethod(${source})`;
+    } finally { endCompile(span); }
   }
 
   /** One save point per method: a helper's suspension sets `$r` (0 for a back-edge yield) and `pc`

@@ -1,3 +1,4 @@
+import { beginCompile, endCompile } from "./compiler-observer";
 // Executable method tiers: installation, promotion and idle preparation belong to each linked
 // method instance. The code cache independently deduplicates persisted source by DEX identity.
 import type { Runtime, ClassInfo } from "./runtime";
@@ -112,7 +113,10 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     const body = make();
     if (persist) recordBody(resumeKey, body, "r");
     if (owner.hotSourceBytes + body.length > limit) return undefined;
-    const fn = bodyScript(resumeKey, `${label}.resume`, PARAMS, "return " + frameCode(R, body, name))(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
+    let fn: ResumeBody;
+    const span = beginCompile("js.parseBind");
+    try { fn = bodyScript(resumeKey, `${label}.resume`, PARAMS, "return " + frameCode(R, body, name))(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler) as ResumeBody;
+    } finally { endCompile(span); }
     owner.hotSourceBytes += body.length;
     return resumable = R.frameMethod(fn, frameName(info.name, rec.name, rec.m.methodIdx));
   }
@@ -124,7 +128,9 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
   };
   const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
-    bodyScript(entryKey, label, ENTRY_PARAMS, frameCode(R, src, name))(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
+    const span = beginCompile("js.parseBind");
+    try { bodyScript(entryKey, label, ENTRY_PARAMS, frameCode(R, src, name))(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler, resume);
+    } finally { endCompile(span); }
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
     if (persist) recordBody(entryKey, src, "e");
     return installed();
@@ -155,6 +161,8 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     if (hot) return hot;
     const offered = persist ? stored(entryKey) : undefined;
     if (offered) { bind(offered, resume); return settle(installed()); }
+    const span = beginCompile("residual.jsClass");
+    try {
     const start = performance.now(), src = make();
     if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
     if (owner.hotSourceBytes + src.length > limit) {
@@ -167,6 +175,7 @@ export function compileTieredMethod(R: Runtime, C: CompiledCtor, rec: LazyMethod
     owner.hotSourceBytes += src.length;
     perf.compileMs += performance.now() - start;
     return settle(fn);
+    } finally { endCompile(span); }
   };
   const idle: IdleJob = (demand) => {
     if (entryPending || demand) {

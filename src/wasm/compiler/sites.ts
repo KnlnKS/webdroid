@@ -1,3 +1,4 @@
+import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared";
 import { kindOf, type Kind, type MethodInfo } from "./program";
 import { inferTyping, R, J, D, type Typing } from "./infer";
@@ -56,9 +57,13 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
     if (!m.codeOff || cx.intrinsic(m) || cx.prog.loaderOf(m.cls) === cx.prog.boot) continue;
     const phase = cx.w.stats.phase, item = m.dex.code(m.codeOff);
     let t = performance.now();
-    const prepared = prepareMethod(m.dex, item, m.desc, m.isStatic);
+    const prepareSpan = beginCompile("wasm.prepare");
+    let prepared: ReturnType<typeof prepareMethod>;
+    try { prepared = prepareMethod(m.dex, item, m.desc, m.isStatic); } finally { endCompile(prepareSpan); }
     phase.prepare += performance.now() - t; t = performance.now();
-    const typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions);
+    const inferSpan = beginCompile("wasm.infer");
+    let typing: Typing;
+    try { typing = inferTyping(m.dex, item, m.desc, m.isStatic, prepared.instructions); } finally { endCompile(inferSpan); }
     phase.infer += performance.now() - t;
     cx.methodAnalyses.set(m, { prepared, typing });
     for (const ins of prepared.instructions) {

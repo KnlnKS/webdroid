@@ -1,3 +1,4 @@
+import { spawnCompilerWorker } from "../shell/compiler-workers";
 // Compile-ahead on a launch without persisted code (docs/bytecode-first-plan.md §4.4): a compile
 // worker (compileworker.ts) emits the methods the app is likely to run, and the page offers each
 // chunk of bodies to the methods that reach them. A body persists only once a method uses it.
@@ -12,7 +13,7 @@ import { inputSettled } from "./yield";
 export function compileAhead(request: CompileRequest): void {
   if (typeof Worker === "undefined" || typeof document === "undefined" || jvmProfiler.enabled || jvmCoverage.enabled ||
     jvmProfiler.tier === "cold" || codeStats().loaded) return;
-  const worker = new Worker(`/compile-worker.js${location.search}`, { type: "module" });
+  const worker = spawnCompilerWorker(`/compile-worker.js${location.search}`, "js-ahead");
   worker.onmessage = ({ data }: MessageEvent<[string, string][]>) => offerCode(data);
   // copies, transferred: an entry of a stored archive is a view of the whole archive's buffer
   const dexes = request.dexes.map(([name, bytes]) => [name, bytes.slice()] as [string, Uint8Array]);

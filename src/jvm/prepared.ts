@@ -1,3 +1,4 @@
+import { beginPreparation, endCompile } from "./compiler-observer";
 import { isWide, parseMethodDesc } from "./abi";
 import type { CodeItem, DexFile } from "./dex";
 import { FMT_LEN, OPS, insnLen, type Fmt } from "./opcodes";
@@ -459,45 +460,50 @@ export function prepareMethod(
   isStatic: boolean,
   observe?: PreparationObserver,
 ): PreparedMethod {
-  let started = observe ? performance.now() : 0;
-  const instructions = decodeInstructions(code.insns);
-  if (observe) observe("decode", performance.now() - started);
+  let span = beginPreparation("decode");
+  try {
+    let started = observe ? performance.now() : 0;
+    const instructions = decodeInstructions(code.insns);
+    if (observe) observe("decode", performance.now() - started);
 
-  started = observe ? performance.now() : 0;
-  const leaders = new Uint8Array(code.insns.length + 1);
-  leaders[0] = 1;
-  let end = 0;
-  for (const instruction of instructions) {
-    // nothing falls into code after payload data (the alignment nop before a payload follows a goto or throw)
-    if (instruction.pc !== end) leaders[instruction.pc] = 1;
-    end = instruction.pc + instruction.len;
-    const targets = branchTargets(code, instruction);
-    for (const target of targets) leaders[target] = 1;
-    if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
-  }
-  for (const region of code.tries) {
-    leaders[region.start] = 1;
-    leaders[region.end] = 1;
-    for (const [, address] of region.handlers) leaders[address] = 1;
-    if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
-  }
-  if (observe) observe("cfg", performance.now() - started);
+    started = observe ? performance.now() : 0;
+    endCompile(span); span = beginPreparation("cfg");
+    const leaders = new Uint8Array(code.insns.length + 1);
+    leaders[0] = 1;
+    let end = 0;
+    for (const instruction of instructions) {
+      // nothing falls into code after payload data (the alignment nop before a payload follows a goto or throw)
+      if (instruction.pc !== end) leaders[instruction.pc] = 1;
+      end = instruction.pc + instruction.len;
+      const targets = branchTargets(code, instruction);
+      for (const target of targets) leaders[target] = 1;
+      if (targets.length || endsBlock(instruction.op)) leaders[instruction.pc + instruction.len] = 1;
+    }
+    for (const region of code.tries) {
+      leaders[region.start] = 1;
+      leaders[region.end] = 1;
+      for (const [, address] of region.handlers) leaders[address] = 1;
+      if (region.catchAllAddr >= 0) leaders[region.catchAllAddr] = 1;
+    }
+    if (observe) observe("cfg", performance.now() - started);
 
-  started = observe ? performance.now() : 0;
-  const signature = parseMethodDesc(desc);
-  const carriers = constantCarriers(instructions);
-  annotateConstants(dex, code, signature, isStatic, instructions, leaders, carriers);
-  markSignOnly(dex, code, instructions);
-  if (observe) observe("type", performance.now() - started);
+    started = observe ? performance.now() : 0;
+    endCompile(span); span = beginPreparation("type");
+    const signature = parseMethodDesc(desc);
+    const carriers = constantCarriers(instructions);
+    annotateConstants(dex, code, signature, isStatic, instructions, leaders, carriers);
+    markSignOnly(dex, code, instructions);
+    if (observe) observe("type", performance.now() - started);
 
-  return {
-    instructions,
-    leaders,
-    params: signature.params,
-    widths: signature.params.map((param) => isWide(param) ? 2 : 1),
-    sync: instructions.every((instruction) => !maySuspend(instruction.op)),
-    nullable: carriers ?? NO_CARRIERS,
-  };
+    return {
+      instructions,
+      leaders,
+      params: signature.params,
+      widths: signature.params.map((param) => isWide(param) ? 2 : 1),
+      sync: instructions.every((instruction) => !maySuspend(instruction.op)),
+      nullable: carriers ?? NO_CARRIERS,
+    };
+  } finally { endCompile(span); }
 }
 
 /** The cold tier's view of a preparation: it keeps only the instructions the analysis annotated

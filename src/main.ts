@@ -1,3 +1,5 @@
+import { compilerReceipt } from "./jvm/compiler-observer";
+import { compilerWorkerReceipts, compilerWorkerBarrier } from "./shell/compiler-workers";
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import "./natives";
 import { PROCESS_PID } from "./android/os";
@@ -218,6 +220,7 @@ const wd = {
   boot, back,
   workerProcesses: () => processBroker().workerSnapshots(),
   counterReceipts: () => processBroker().counterReceipts(),
+  compilerReceipts: () => ({ main: compilerReceipt(), workers: compilerWorkerReceipts() }), compilerBarrier: compilerWorkerBarrier,
   workerAotProfiles: () => processBroker().workerAotProfiles(),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),

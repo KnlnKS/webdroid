@@ -1,3 +1,5 @@
+import { spawnCompilerWorker } from "../../shell/compiler-workers";
+import { measureCompile } from "../../jvm/compiler-observer";
 // The Wasm tier's entry (src/jvm/tier.ts loads it under ?tier=wasm). Each realm (the page, every process frame) has a World over the tab's one platform build
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark } from "../../perf";
@@ -64,7 +66,7 @@ function browserCold(): boolean {
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
-  const w = new World(prog, { cold: browserCold(), holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra });
+  const w = measureCompile("residual.wasmSetup", () => new World(prog, { cold: browserCold(), holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
   bindWorld(w);
   if (typeof window !== "undefined") window.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
@@ -148,7 +150,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       try {
         const workerUrl = new URL("/wasm-compile-worker.js", location.href);
         workerUrl.searchParams.set("owner", location.href);
-        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: () => new Worker(workerUrl, { type: "module" }) as unknown as WorkerPort, roots, signal: lifetime.signal });
+        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: role => spawnCompilerWorker(workerUrl, `wasm-${role ?? "unknown"}`) as unknown as WorkerPort, roots, signal: lifetime.signal });
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       mark(code.hit ? "appCodeSaved" : "appCode");

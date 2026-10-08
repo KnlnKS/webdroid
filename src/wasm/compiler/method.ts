@@ -1,3 +1,4 @@
+import { beginCompile, endCompile, type CompilePhase } from "../../jvm/compiler-observer";
 import { emitSymbolicSite } from "./sites";
 import { Code, OP } from "./code";
 import { T, ref, refNull, type VT } from "./wasmbin";
@@ -169,9 +170,13 @@ export class MC {
   setF64() { if (!FLOAT_LOCALS && this.typing.def(this.cur.pc) >= 0) this.code.raw(OP.i64_reinterpret_f64); this.store(this.cur); }
 
   run(): Code {
+    let span = beginCompile("wasm.prepare");
+    try {
     const { m, item, cx } = this, phase = cx.w.stats.phase;
     let t = performance.now();
-    const lap = (name: keyof typeof phase) => { const n = performance.now(); phase[name] += n - t; t = n; };
+    const lap = (name: keyof typeof phase, next: CompilePhase) => {
+      const n = performance.now(); phase[name] += n - t; t = n; endCompile(span); span = beginCompile(next);
+    };
     const analysis = cx.methodAnalyses.get(m);
     let prepared = analysis?.prepared ?? prepareMethod(this.dex, item, m.desc, m.isStatic);
     if (this.resume) {
@@ -182,7 +187,7 @@ export class MC {
       prepared = { ...prepared, leaders };
     }
     this.prepared = prepared;
-    lap("prepare");
+    lap("prepare", "wasm.flow");
     let flow: Flow;
     try {
       if (this.resume) {
@@ -194,17 +199,17 @@ export class MC {
       } else flow = structureAny(prepared, item, Infinity);
     } catch (e) { throw new Error(`unstructured: ${(e as Error).message}`); }
     this.flow = flow;
-    lap("flow");
+    lap("flow", "wasm.infer");
     this.typing = !this.resume && analysis ? analysis.typing
       : inferTyping(this.dex, item, m.desc, m.isStatic, prepared.instructions, this.resume?.pc);
-    lap("infer");
+    lap("infer", "wasm.facts");
     // blocks
     let cur = -1;
     for (const ins of prepared.instructions) { if (prepared.leaders[ins.pc]) cur = flow.blockAt[ins.pc]; (this.blockIns[cur] ??= []).push(ins); }
     if (!this.resume) this.findShadows();
     this.findWaiting();
     this.entryFacts = analyze(this);
-    lap("facts");
+    lap("facts", "wasm.emit");
     const c = this.code;
     let reg = item.regs - item.ins, pi = 0;
     // a parameter's web uses the parameter's local, unless floats live in float locals: then it is copied in once
@@ -304,6 +309,7 @@ export class MC {
     this.pop(); c.end();                            // $disp loop
     c.unreachable();
     return c;
+    } finally { endCompile(span); }
   }
   /** the local holding the depth before this method's frame, if it counts one */
   resumeRegisters: { register: number; kind: number }[] = [];

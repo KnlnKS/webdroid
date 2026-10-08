@@ -1,3 +1,4 @@
+import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
 import { ModuleBuilder, T, ref, refNull, uleb, type VT } from "./wasmbin";
 import { Code, OP } from "./code";
@@ -624,6 +625,8 @@ export class Compiler implements Base {
    *  unit is the second tier: its methods do not count. With `install` the module puts its functions in the table itself, when it is instantiated,
    *  instead of exporting them (a precompiled module, aot.ts). */
   buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install = false): { bytes: Uint8Array; traces: FnTrace[] } {
+    const span = beginCompile("wasm.emit");
+    try {
     const { mb, w } = this, all = methods.concat(copies);
     this.counting = !hot;
     this.natives.declare(this, all);
@@ -648,8 +651,11 @@ export class Compiler implements Base {
       mb.addElemActive(0, at[i][0], at.slice(i, j).map((x) => x[1]));
     }
     return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
+    } finally { endCompile(span); }
   }
   buildResume(m: MethodInfo, pc: number) {
+    const span = beginCompile("wasm.emit");
+    try {
     if (this.fn.size || this.codes.size) throw new Error("resume needs a fresh compiler");
     if (!m.codeOff || this.intrinsic(m)) throw new Error("resume needs a bytecode body");
     this.natives.declare(this, [m]);
@@ -664,23 +670,32 @@ export class Compiler implements Base {
     const code = mc.weigh(); this.mb.setBody(f, code.finish()); this.mb.export("resume", "func", f);
     const built = this.finishModule([{ name, f, code, m }]);
     return { ...built, registers: mc.resumeRegisters };
+    } finally { endCompile(span); }
   }
   buildSyntheticGroup(bodies: { name: string; params: Kind[]; ret: Kind | "V"; body: (c: Code) => void }[]) {
+    const span = beginCompile("wasm.emit");
+    try {
     const parts = bodies.map(body => ({ ...body, f: this.mb.reserveFunc(this.sig(body.params, body.ret), "$" + body.name), code: new Code(body.params.length) }));
     for (const part of parts) { part.body(part.code); this.mb.setBody(part.f, part.code.finish()); this.mb.export(part.name, "func", part.f); }
     return this.finishModule(parts.map(part => ({ name: "$" + part.name, f: part.f, code: part.code })));
+    } finally { endCompile(span); }
   }
   /** a body made of generated code (the implicit-exception throwers, field readers); `ret` is its result kind */
   buildSynthetic(name: string, params: Kind[], body: (c: Code) => void, ret: Kind | "V" = "V", exportName = "m", abiParams?: VT[]): { bytes: Uint8Array; traces: FnTrace[] } {
+    const span = beginCompile("wasm.emit");
+    try {
     const f = this.mb.reserveFunc(abiParams ? this.mb.addFuncType(abiParams, ret === "V" ? [] : [this.vtOf(ret)]) : this.sig(params, ret), "$" + name), c = new Code(params.length);
     body(c);
     this.mb.setBody(f, c.finish());
     this.mb.export(exportName, "func", f);
     return this.finishModule([{ name: "$" + name, f, code: c }]);
+    } finally { endCompile(span); }
   }
   /** one module of several synthetic functions, each put in its table slot when the module is instantiated (a build's, link/apps.ts). A function whose code relies on a class-hierarchy
    *  decision or on a class being absent is left out: nothing here could undo it. */
   buildSynthetics(fns: { name: string; slot: number; d: Synth }[]): { bytes: Uint8Array; traces: FnTrace[]; kept: string[] } {
+    const span = beginCompile("wasm.emit");
+    try {
     const mb = this.mb, parts: { name: string; slot: number; f: number; code: Code }[] = [];
     for (const { name, slot, d } of fns) {
       const f = mb.reserveFunc(this.sig(d.params, d.ret), "$" + name), code = new Code(d.params.length), assumed = this.assumptions.length, absent = this.absent.length;
@@ -695,6 +710,7 @@ export class Compiler implements Base {
       mb.addElemActive(0, parts[i].slot, parts.slice(i, j).map((p) => p.f));
     }
     return { ...this.finishModule(parts.map((p) => ({ name: "$" + p.name, f: p.f, code: p.code }))), kept: parts.map((p) => p.name) };
+    } finally { endCompile(span); }
   }
   outlines: { name: string; f: number; code: Code; m?: MethodInfo }[] = [];
   private finishModule(fns: { name: string; f: number; code: Code; m?: MethodInfo }[]): { bytes: Uint8Array; traces: FnTrace[] } {
@@ -703,7 +719,9 @@ export class Compiler implements Base {
     // V8 13.6 gives a module without a start function a quarter of the inlining budget, which halves a recursive method's speed (fib(32): 9.7 ms
     // against 5.4 ms); an empty start function restores it
     this.mb.start = this.mb.addFunc(this.mb.addFuncType([], []), [0, 0x0b], "$start");
-    const t0 = performance.now(), bytes = this.mb.build();
+    const t0 = performance.now(), span = beginCompile("wasm.encode");
+    let bytes: Uint8Array;
+    try { bytes = this.mb.build(); } finally { endCompile(span); }
     this.w.stats.phase.encode += performance.now() - t0;
     const traces = fns.map(({ name, f, code, m }) => {
       const start = this.mb.bodyOffsets[f - this.mb.nImportedFuncs] + code.prefixLen;

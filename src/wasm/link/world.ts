@@ -1,3 +1,4 @@
+import { beginCompile, endCompile, measureCompile } from "../../jvm/compiler-observer";
 // The linker: classes and methods become Wasm modules when first needed, all sharing one funcref table.
 //
 //  - A class module (one per class, built the first time any code names the class) defines the class's vtable, init flag and static
@@ -602,15 +603,21 @@ export class World {
 
   // ---------- runtime and class modules
   compile(bytes: Uint8Array): WebAssembly.Module {
-    const t0 = performance.now(), mod = compileModule(bytes);
-    this.stats.moduleMs += performance.now() - t0; this.stats.bytes += bytes.length;
-    return mod;
+    const span = beginCompile("wasm.module");
+    try {
+      const t0 = performance.now(), mod = compileModule(bytes);
+      this.stats.moduleMs += performance.now() - t0; this.stats.bytes += bytes.length;
+      return mod;
+    } finally { endCompile(span); }
   }
   instantiate(mod: Uint8Array | WebAssembly.Module, imports: Record<string, Record<string, unknown>>): WebAssembly.Instance {
     const m = ArrayBuffer.isView(mod) ? this.compile(mod as Uint8Array) : mod as WebAssembly.Module, t0 = performance.now();
-    const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
-    this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
-    return inst;
+    const span = beginCompile("wasm.instantiate");
+    try {
+      const inst = new WebAssembly.Instance(m, imports as WebAssembly.Imports); // the lib's import values omit tags
+      this.stats.instantiateMs += performance.now() - t0; this.stats.instances++;
+      return inst;
+    } finally { endCompile(span); }
   }
   /** a lazy-link stub for method `m` in `slot`, to put back where precompiled code was removed */
   restoreStub(slot: number, m: MethodInfo): Function {
@@ -707,51 +714,54 @@ export class World {
   /** The bytes of a module that defines classes `rts`: what a build-time mode stores beside the unit modules of Compiler.buildUnit, and instantiates
    *  in the same order (importing the same table), instead of this linker doing both on demand. */
   classModule(rts: ClassRt[]): Uint8Array {
-    const mb = new ModuleBuilder(), b = declareBase(mb);
-    mb.importTable("rt", "table", T.funcref, 0);
-    const links = this.linkImports(mb);
-    const sid = mb.importGlobal("rt", "sid", T.i32, true), iw = mb.importGlobal("rt", "iw", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
-    // the String constants of the static values are imported before the module defines a global of its own
-    const consts = new Map<string, number>();
-    let fromChars = -1;
-    for (const { name } of rts) {
-      const jc = this.prog.get(name);
-      if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
-        if (typeof v !== "string" || consts.has(v)) continue;
-        // a constant with a lone surrogate cannot be an import name: its units come from a data segment
-        if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(-17), false));
-        else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(-17)]));
+    const span = beginCompile("wasm.classBuild");
+    try {
+      const mb = new ModuleBuilder(), b = declareBase(mb);
+      mb.importTable("rt", "table", T.funcref, 0);
+      const links = this.linkImports(mb);
+      const sid = mb.importGlobal("rt", "sid", T.i32, true), iw = mb.importGlobal("rt", "iw", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
+      // the String constants of the static values are imported before the module defines a global of its own
+      const consts = new Map<string, number>();
+      let fromChars = -1;
+      for (const { name } of rts) {
+        const jc = this.prog.get(name);
+        if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
+          if (typeof v !== "string" || consts.has(v)) continue;
+          // a constant with a lone surrogate cannot be an import name: its units come from a data segment
+          if (v.isWellFormed()) consts.set(v, mb.importGlobal("#", v, ref(-17), false));
+          else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(-17)]));
+        }
       }
-    }
-    const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
-    const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
-    const vts: number[][] = [];
-    for (const rt of rts) {
-      const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [];
-      const vtG = name[0] === "[" || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
-      if (vtG >= 0) mb.export(id + ":vt", "global", vtG);
-      // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
-      const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
-      mb.export(id + ":init", "global", initG);
-      const statics = new Map<string, number>();
-      for (const f of jc?.fields ?? []) if (f.isStatic) {
-        const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name + ":" + f.desc, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
+      const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
+      const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
+      const vts: number[][] = [];
+      for (const rt of rts) {
+        const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [];
+        const vtG = name[0] === "[" || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
+        if (vtG >= 0) mb.export(id + ":vt", "global", vtG);
+        // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
+        const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
+        mb.export(id + ":init", "global", initG);
+        const statics = new Map<string, number>();
+        for (const f of jc?.fields ?? []) if (f.isStatic) {
+          const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name + ":" + f.desc, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
+        }
+        const stubs = methods.map((m, i) => {
+          const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
+          const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
+          return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, links));
+        });
+        if (initialize) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc!, initG, statics, consts, fromChars, rt, sid, iw, tag)));
+        else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
+        if (vtG >= 0) {
+          const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
+          vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).b);
+        }
+        if (stubs.length) mb.addElemActive(0, slotBase, stubs);
       }
-      const stubs = methods.map((m, i) => {
-        const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
-        const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-        return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, links));
-      });
-      if (initialize) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc!, initG, statics, consts, fromChars, rt, sid, iw, tag)));
-      else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
-      if (vtG >= 0) {
-        const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
-        vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).b);
-      }
-      if (stubs.length) mb.addElemActive(0, slotBase, stubs);
-    }
-    if (vts.length) mb.start = mb.addFunc(mb.addFuncType([], []), [0, ...vts.flat(), 0x0b], "$vt");
-    return mb.build();
+      if (vts.length) mb.start = mb.addFunc(mb.addFuncType([], []), [0, ...vts.flat(), 0x0b], "$vt");
+      return mb.build();
+    } finally { endCompile(span); }
   }
   /** ensure(): class initialization (JLS 12.4.2). The init word says who is initializing the class: a request from that thread returns at
    *  once (re-entry and cycles see the half-initialized class), one from another waits in initWait (the scheduler's hook). Superclass and
@@ -1118,7 +1128,7 @@ export class World {
       indices.forEach((index, i) => addResolved(key, descToName(cls.dex!.rawType(index)), targets[i]));
     };
     for (const method of [...installed, ...copies]) if (method.codeOff && !this.intrinsic(method)) {
-      const start = performance.now(), prepared = prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic);
+      const start = performance.now(), prepared = measureCompile("wasm.prepare", () => prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic));
       this.stats.phase.prepare += performance.now() - start;
       for (const ins of prepared.instructions) {
         const owner = initiatedInstruction(this, method, ins);

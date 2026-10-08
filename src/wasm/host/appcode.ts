@@ -19,7 +19,7 @@ export interface AppCodeRequest {
   /** the platform build the code is made against */
   aot: FetchStore;
   persist?: Persist;
-  spawn(): WorkerPort;
+  spawn(role?: "build" | "upgrade"): WorkerPort;
   /** where an app build starts, for a launch without a saved one */
   roots: BuildRoots;
   signal?: AbortSignal;
@@ -67,7 +67,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const persisted = saved && source === "persist" ? Promise.resolve(true)
     : saved && files && req.persist ? req.persist.save(key, [...files]).catch(() => false) : Promise.resolve(false);
   req.signal?.throwIfAborted();
-  const compiler = new CompileClient(() => req.spawn()), builder = new Builder(req, key);
+  const compiler = new CompileClient(() => req.spawn("upgrade")), builder = new Builder(req, key);
   let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
     if (closed) return;
@@ -174,7 +174,7 @@ class Builder {
     const start = () => {
       if (this.waiting !== pending || this.closed) return result.catch(() => {});
       try {
-        const port = this.req.spawn();
+        const port = this.req.spawn("build");
         if (this.closed) { port.terminate(); return result.catch(() => {}); }
         this.port = port;
         const list = containers(this.req.dexes);

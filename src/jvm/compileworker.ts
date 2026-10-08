@@ -1,3 +1,5 @@
+import { measureCompile, compilerReceiptsEnabled } from "./compiler-observer";
+import { compilerJob, compilerInput, installCompilerWorkerProbe, postCompilerReceipt } from "../shell/compiler-workers";
 // A first launch's compile worker (docs/bytecode-first-plan.md §4.4). It holds its own runtime over
 // the app's dex and the platform jars and emits the hot entries of the app's methods as chunks the
 // page imports: the APK's baseline profile first, then the launch components' methods, then what
@@ -24,9 +26,18 @@ const CHUNK_MS = 15;
  *  one in six is called (Mihon, TikTok), so the closure stops here. */
 const CLOSURE_LIMIT = 20_000;
 
+installCompilerWorkerProbe();
 onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
+  const ordinal = compilerJob("compileAhead", undefined, "begin");
+  try {
+  const inputs = compilerReceiptsEnabled ? await compilerInput([...data.dexes, ["launch", new TextEncoder().encode(JSON.stringify(data.launch))], ["manifest", data.manifest], ...data.profile ? [["profile", data.profile] as [string, Uint8Array]] : []]) : undefined;
+  compilerJob("compileAhead", undefined, "inputs", inputs, ordinal);
   // the page's precedence: the boot class path ahead of the app
-  (await fetchPlatformJars()).forEach(loadPlatformJar);
+  const jars = await fetchPlatformJars();
+  const inputJars = compilerReceiptsEnabled ? await compilerInput(jars.map((bytes, i) => ["platform:" + i, bytes])) : undefined;
+  compilerJob("compileAhead", undefined, "inputs", inputJars, ordinal);
+  measureCompile("residual.jsWorker", () => {
+  jars.forEach(loadPlatformJar);
   const program = new Program(), appDexes: DexFile[] = [];
   for (const [name, bytes] of data.dexes) for (const d of dexesIn(bytes, name)) { rt.loadDex(d); program.add(d); appDexes.push(d); }
   rt.linkNatives();
@@ -68,5 +79,13 @@ onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
     for (const { cls, dex, methodIdx } of called) emit(cls, dex, methodIdx);
   }
   post();
+  });
+  compilerJob("compileAhead", undefined, "end", undefined, ordinal);
+  postCompilerReceipt(undefined, true);
   close();
+  } catch (error) {
+    compilerJob("compileAhead", undefined, "failed", String(error).slice(0, 2048), ordinal);
+    postCompilerReceipt(); throw error;
+  }
 };
+postCompilerReceipt();
