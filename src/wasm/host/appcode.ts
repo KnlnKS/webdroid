@@ -27,6 +27,8 @@ export interface AppCodeRequest {
 export interface AppCode {
   /** whether a saved build was found and its modules compiled */
   hit: boolean;
+  source: "persist" | "bundle" | "none";
+  persisted: Promise<boolean>;
   options: Pick<WorldOptions, "app" | "compiler">;
   /** the worker for second-tier units; give it the World once it exists */
   start(world: World): void;
@@ -54,12 +56,16 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   // a store that fails is a store without the build
   const key = await appKey(req.dexes, req.aot.key);
   let files = await req.persist?.load(key).catch(() => undefined);
+  let source: AppCode["source"] = files ? "persist" : "none";
   if (!files) {
     // the platform build may ship a build for this app; this device keeps it for the launches after
     files = await fetchBundle(req.aot.base, key);
-    if (files) void req.persist?.save(key, [...files]).catch(() => {});
+    if (files) source = "bundle";
   }
   const saved = files && await SavedBuild.open(files);
+  if (!saved) source = "none";
+  const persisted = saved && source === "persist" ? Promise.resolve(true)
+    : saved && files && req.persist ? req.persist.save(key, [...files]).catch(() => false) : Promise.resolve(false);
   req.signal?.throwIfAborted();
   const compiler = new CompileClient(() => req.spawn()), builder = new Builder(req, key);
   let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,7 +89,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   let coveredVerdicts = verdictMap(initial?.verdicts ?? []), verdicts: Verdict[] = [], verdictChanges = 0;
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
   const builds: Built[] = [];
-  const code: AppCode = { hit: !!saved, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
+  const code: AppCode = { hit: !!saved, source, persisted, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
     refine, watch: (world) => { if (!closed && !watching && req.persist) { watching = true; watch(world); } }, settle, builds, close };
   if (!saved && !closed) {
     code.made = builder.build({ methods: [], classes: [], infos: [] });

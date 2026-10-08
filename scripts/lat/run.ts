@@ -65,6 +65,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       placeholderAt: Object.fromEntries([...wd.rt.placeholderAt].map(([name, frames]) => [name, frames.slice()])), native: wd.nativeRequirements(), logs: wd.logs?.slice() ?? null,
       perf: { ...wd.perf }, queue: { ...wd.mainDbg }, coverage: wd.jvmCoverage?.snapshot?.() ?? null,
       code: wd.code?.() ?? null, wasm: cold ? { enabled: cold.enabled, appSaved: cold.appSaved ?? null, appAttached: cold.appAttached ?? null,
+        appSource: cold.appSource ?? null,
         aotKey: cold.aotKey ?? null, appBuilds: cold.appBuilds?.map(b => ({ ...b })) ?? [], worker: cold.worker ? { ...cold.worker } : null } : null };
   };
   const diagnostics = w.__wdLatRead = async () => {
@@ -80,8 +81,8 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       if (save) {
         if (!cold?.appSettle) throw new Error("Wasm app save hook unavailable: " + win.location.href);
         await cold.appSettle();
-        if (!cold.appBuilds?.some(b => b.kept) && !cold.appSaved) throw new Error("Wasm app build was not saved: " + win.location.href);
-      } else if (!cold?.appSaved || !cold.appAttached) throw new Error("Wasm warm replay did not attach saved app code: " + win.location.href);
+        if (!cold.appBuilds?.some(b => b.kept) && !await cold.appPersisted?.()) throw new Error("Wasm app build was not saved: " + win.location.href);
+      } else if (!cold?.appSaved || cold.appSource !== "persist" || !cold.appAttached) throw new Error("Wasm warm replay did not attach persisted app code: " + win.location.href);
       return readRealm(win);
     }
     if (save) await wd.codeSettle();

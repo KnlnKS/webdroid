@@ -351,10 +351,13 @@ if (saved) {
   try {
     const first = await prepareApp(request);
     check("a first launch finds the build the platform build ships", first.hit, true);
+    check("the first build came from the bundle", first.source, "bundle");
     check("discovery reads the catalog before app files", requests[0], `${request.aot.base}apps.json`);
+    check("the shipped build save completes", await first.persisted, true);
     check("and keeps it for the next", (await persist.load(key))?.size, files.size);
     const next = await prepareApp(request), before = requests.length;
     check("the next launch reuses the saved shipped build", next.hit, true);
+    check("the next build came from persistence", next.source, "persist");
     const none = await prepareApp({ ...request, dexes: late, persist: new Persist(memoryBackend()) });
     check("an app it ships none for has none", none.hit, false);
     check("an unlisted app makes no file probes", requests.length, before);
