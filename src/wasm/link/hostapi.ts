@@ -48,6 +48,10 @@ export interface NativeSource {
 /** the native core's linear memory, where direct buffers live and native code reads them: a block is addressed by the 64-bit address the guest knows it by */
 export interface GuestMemory {
   readonly memory: WebAssembly.Memory;
+  /** Per-page flags in the native core: bit 0 marks executed code. */
+  readonly flags: number;
+  readonly pageShift: number;
+  wrote(address: number, length: number): void;
   /** zeroed memory of `n` bytes, or 0n */
   alloc(n: number): bigint;
   free(address: bigint): void;

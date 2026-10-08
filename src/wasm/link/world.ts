@@ -233,6 +233,7 @@ export class World {
         this.sched.parkNative(value.then(v => this.javaValue(v))); return null;
       },
       galloc: (owner: object, n: number) => this.allocGuest(owner, n),
+      gwrote: (address: number, length: number) => opts.guest!.wrote(address, length),
       intern: (js: string, s: object) => { let o = this.interned.get(js); if (!o) this.interned.set(js, o = s); return o; },
       claim: (owner: object, handle: bigint) => opts.claim?.(owner, handle),
       watch: (referent: unknown, cleaner: object) => { if (typeof referent === "object" && referent !== null) this.cleaners.register(referent, cleaner); },
@@ -677,7 +678,7 @@ export class World {
     this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory }; }
+  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {
