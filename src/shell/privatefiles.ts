@@ -16,6 +16,7 @@ export class PrivateFiles {
   private values = new Map<string, FileValue>();
   private views = new Map<number, typeof vfs>();
   private shared = new Map<string, SharedFile>();
+  private snapshots = new WeakMap<SharedFile, number>();
   private loaded = new Map<string, Promise<void>>();
   private pending = new Map<string, FileValue | null>();
   private database: Promise<IDBDatabase> | null = null;
@@ -64,9 +65,10 @@ export class PrivateFiles {
     if (bytes && streamed && bytes.length >= SPILL_BYTES) {
       const disk = this.disk.create();
       disk.write(0, bytes.slice());
-      if (source instanceof SharedFile) source.replaceBacking(disk);
+      if (source instanceof SharedFile) { source.replaceBacking(disk); this.snapshots.set(source,source.epoch); }
       return { kind: "disk", id: disk.id, size: disk.size, mtime,attributes };
     }
+    if (source instanceof SharedFile) this.snapshots.set(source,source.epoch);
     if (bytes) return { kind: "file", bytes, mtime,attributes };
     if (backing instanceof DiskFile) return { kind: "disk", id: backing.id, size: backing.size, mtime,attributes };
     return view.dirs.has(path) ? { kind: "directory", mtime,attributes } : null;
@@ -174,7 +176,7 @@ export class PrivateFiles {
   flush(): Promise<void> {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     for (const [path, source] of this.shared) {
-      if (!source.pinned) continue;
+      if (!source.pinned && this.snapshots.get(source) === source.epoch) continue;
       const view = [...this.views.values()].find(view=>view.lazyFiles.get(path) === source);
       if (!view) continue;
       const value = this.valueOf(view,path,false);

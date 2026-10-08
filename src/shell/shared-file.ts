@@ -38,6 +38,7 @@ export class SharedFile implements WritableSource {
   get size(): number { return Number(Atomics.load(this.length, 0)); }
   set size(size: number) { Atomics.store(this.length, 0, BigInt(size)); }
   get pinned(): boolean { return this.pages.size !== 0; }
+  get epoch(): number { return this.revision; }
 
   memoryBytes(): Uint8Array | null {
     return this.backing instanceof MemoryFile ? this.overlay(0, this.backing.read(0, this.size).slice()) : null;
