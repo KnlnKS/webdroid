@@ -13,9 +13,13 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Eligible-guard checkpoint (2026-10-08)
+
+The hot-call planner now applies its existing minimum execution count and inlinability check before counting candidates against the two-guard limit. Low-traffic startup iterators no longer suppress the workload's eligible iterator. Focused five-run Node/Chrome comparisons improve steady iteration timing with matching answers; first-call regressions and the full primary-ten gate remain open. Typecheck, 1,212 unit tests, all 19 broad Wasm suites, cold/OSR/framework checks and matching eight-jar AOT pass. Current source `489037c219da…` identifies ordinary `e5fd4a029d6a191e` and guarded `54db3ad38b83a3a5`. The history records measurements and limits; final application, conformance, Worker and idle timing remain required.
+
 ### Synchronous allocation checkpoint (2026-10-08)
 
-Heap-pressure handling now checks whether its caller can suspend before yielding for finalizers. A host byte-array conversion previously raised an engine `SuspendError`; it now raises Java's actual `OutOfMemoryError`. The previous compiler reproduces the focused failure; typecheck, 134 threading checks, lazy allocation/exception checks and 241 cold-operation checks pass. Matching AOT and application verification follow. The post-import-compaction YouTube capture shows lower instantiation-attributed heap samples and the intended video, but still ends with memory exhaustion; differing live paths prevent an APK-wide causal percentage. The history records raw receipts and limits.
+Heap-pressure handling now checks whether its caller can suspend before yielding for finalizers. A host byte-array conversion previously raised an engine `SuspendError`; it now raises Java's actual `OutOfMemoryError`. The previous compiler reproduces the focused failure; typecheck, 134 threading checks, lazy allocation/exception checks and 241 cold-operation checks pass. Matching AOT passed; application verification remains required. The post-import-compaction YouTube capture shows lower instantiation-attributed heap samples and the intended video, but still ends with memory exhaustion; differing live paths prevent an APK-wide causal percentage. The history records raw receipts and limits.
 
 ### Import compaction checkpoint (2026-10-08)
 
