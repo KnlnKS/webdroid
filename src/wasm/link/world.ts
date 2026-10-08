@@ -45,7 +45,7 @@ import type { UnitResult, UpgradeJob } from "./unit";
 import { HotUnits } from "./hotunits";
 import { lexicalFrames } from "../../jvm/stack-format";
 
-type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
+type BridgeStack = { stack?: Error; prior?: BridgeStack; done: boolean };
 type LinkImports = { link: number; due: number; wait: number; sync: number; state: [number, number, number] };
 type CompiledActivation = Pick<ColdSnapshot, "item" | "method" | "owner" | "sync" | "depth" | "executedPc" | "edges">;
 let lexicalEnter: ((raw: Function | undefined, get: () => Function) => (s: Strand, ...args: unknown[]) => Promise<unknown>) | undefined;
@@ -1781,7 +1781,7 @@ export class World {
     };
     const parts = [local(stack)];
     for (let caller = this.bridgeStacks.get(this.sched.current()); caller; caller = caller.prior)
-      parts.push(local(caller.stack.stack ?? ""));
+      if (caller.stack) parts.push(local(caller.stack.stack ?? ""));
     return javaFrames(parts.join("\n"), this.frameTraces, count, lines);
   }
   /** the innermost `count` Java frames, including callers suspended at host bridges */
@@ -1917,8 +1917,9 @@ export class World {
     let token = 0;
     this.callFns.set(name, f = (s, ...args) => {
       token = token % 0x3fffffff + 1;
-      const stack = this.bridgeCaller ?? new Error();
-      if (!this.bridgeCaller) this.stats.bridgeCallerCaptures++;
+      // A host-only entry has no physical Java caller frames to preserve.
+      const stack = this.bridgeCaller ?? (!this.sched.current().root || this.inSynchronousJava() ? new Error() : undefined);
+      if (stack && !this.bridgeCaller) this.stats.bridgeCallerCaptures++;
       this.bridgeCaller = undefined;
       const caller: BridgeStack = { stack, prior: this.bridgeStacks.get(s), done: false };
       this.bridgeStacks.set(s, caller);
