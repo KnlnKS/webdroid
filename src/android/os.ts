@@ -21,7 +21,7 @@ import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs, type FileAttributes } from "../shell/vfs";
 import { remoteFilePath, changeFileAttributes } from "../shell/file-path";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd } from "../native/process-fd";
-import { javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
+import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, bufferBytes, isBuffer, resident } from "../jvm/natives/jnio";
 import { uptimeMillis, wallMillis } from "../guest-clock";
@@ -179,27 +179,24 @@ export function fdOverBytes(bytes: Uint8Array, sink: ((b: Uint8Array) => unknown
   });
   return fd;
 }
-// SharedMemory's ashmem regions: volatile files here, by path, with the protection a region keeps,
-// which only narrows (ashmem_set_prot_region); one crossing processes arrives as a region too
-const ashmem = new Map<string, number>();
-const regionOf = (fd: number): string | undefined => { const path = javaFdStat(fd)?.path; return path && ashmem.has(path) ? path : undefined; };
+// The region belongs to the open backing, including dup'd descriptors and retained mappings.
+const regionOf = (fd: number) => openFd(fd)?.content.ashmem;
 /** an ashmem region's protection, undefined for a descriptor on anything else */
-export const ashmemProt = (fd: number): number | undefined => ashmem.get(regionOf(fd) ?? "");
+export const ashmemProt = (fd: number): number | undefined => regionOf(fd)?.prot;
 /** a descriptor on a new region holding `bytes`, which hands them to `sink` once the last descriptor closes */
 export function ashmemFd(bytes: Uint8Array, prot = 7, sink: ((b: Uint8Array) => unknown) | null = null): number {
-  let path = "";
-  const fd = fdOverBytes(bytes, (b) => { ashmem.delete(path); return sink?.(b); });
-  ashmem.set(path = javaFdStat(fd)!.path!, prot);
+  const fd = fdOverBytes(bytes, sink ?? (() => {}));
+  openFd(fd)!.content.ashmem = { prot };
   return fd;
 }
 rt.registerJnis("android/os/SharedMemory", {
   "nCreate(Ljava/lang/String;I)Ljava/io/FileDescriptor;": (_name: string | null, size: number) => mkFd(ashmemFd(new Uint8Array(size))),
   "nGetSize(Ljava/io/FileDescriptor;)I": (d: JObj | null) => { const fd = fdInt(d); return regionOf(fd) ? javaFdStat(fd)!.size : -1; },
   "nSetProt(Ljava/io/FileDescriptor;I)I": (d: JObj | null, prot: number) => {
-    const path = regionOf(fdInt(d));
-    if (!path) return E.NOTTY;
-    if (prot & ~ashmem.get(path)!) return E.INVAL;
-    ashmem.set(path, prot);
+    const region = regionOf(fdInt(d));
+    if (!region) return E.NOTTY;
+    if (prot & ~region.prot) return E.INVAL;
+    region.prot = prot;
     return 0;
   },
 });

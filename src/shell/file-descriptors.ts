@@ -2,7 +2,7 @@ import { E } from "../native/abi";
 import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadFd, javaPwriteFd,
   javaReadFd, javaSeekFd, javaSyncFd, javaTruncateFd, javaWriteFd, openFd, O_ACCMODE, O_CREAT, O_TRUNC,
   detachFdScope, type OpenFile } from "../native/fs";
-import { vfs } from "./vfs";
+import { vfs, type VfsFile } from "./vfs";
 
 export type DescriptorRequest = { kind: "open"; path: string; flags: number }
   | { kind: "read"; fd: number; length: number }
@@ -15,11 +15,17 @@ export type DescriptorRequest = { kind: "open"; path: string; flags: number }
   | { kind: "dup"; fd: number; cloexec: boolean }
   | { kind: "stage" | "unstage"; fd: number }
   | { kind: "take"; fd: number }
+  | { kind: "mappingAcquire"; fd: number; offset: number; length: number; prot: number }
+  | { kind: "mappingRead"; fd: number; offset: number; length: number }
+  | { kind: "mappingWrite"; fd: number; offset: number; bytes: Uint8Array }
+  | { kind: "mappingRelease"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
-export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>> };
+export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>;
+  mapping?: { region: number; offset: number; length: number; prot: number } };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
-type Session = { dead: boolean; descriptors: Map<number, Descriptor>; authorize(path: string, write: boolean): number; uid?: number };
+type Mapping = { fd: number; file: OpenFile; offset: number; length: number; prot: number };
+type Session = { dead: boolean; descriptors: Map<number, Descriptor>; mappings: Map<number, Mapping>; authorize(path: string, write: boolean): number; uid?: number };
 export type RetainedDescriptor = { readonly fd:number; readonly file:OpenFile; closed:boolean; closing?:Promise<void> };
 
 /** The page's kernel owns open files; process tokens never expose its descriptor numbers.
@@ -29,6 +35,8 @@ export class FileDescriptors {
   private next = 1;
   private sessions = new Map<number, Session>();
   private queues = new WeakMap<OpenFile, Promise<void>>();
+  private regions = new WeakMap<VfsFile, number>();
+  private nextRegion = 1;
 
   /** A stored Parcel owns this reference independently of the originating PID. */
   async retain(pid:number,token:number): Promise<RetainedDescriptor | null> {
@@ -58,7 +66,7 @@ export class FileDescriptors {
 
   session(pid: number, authorize: Session["authorize"], uid?: number): DescriptorCalls {
     let session = this.sessions.get(pid);
-    if (!session) this.sessions.set(pid, session = {dead:false, descriptors:new Map(), authorize,uid});
+    if (!session) this.sessions.set(pid, session = {dead:false, descriptors:new Map(), mappings:new Map(), authorize,uid});
     else { session.authorize = authorize;session.uid = uid; }
     const owner = session;
     return {fileDescriptor: request => this.dispatch(owner, request)};
@@ -85,6 +93,25 @@ export class FileDescriptors {
 
   private async dispatch(session: Session, request: DescriptorRequest): Promise<DescriptorReply> {
     if (session.dead) return {result:-E.BADF};
+    if (request.kind === "mappingRead" || request.kind === "mappingWrite" || request.kind === "mappingRelease") {
+      const mapping = session.mappings.get(request.fd);
+      if (!mapping) return {result:-E.BADF};
+      if (request.kind === "mappingRelease") session.mappings.delete(request.fd);
+      const bytes = request.kind === "mappingWrite" ? request.bytes.slice() : undefined;
+      return this.ordered(mapping.file, async () => {
+        if (request.kind === "mappingRelease") return {result:javaCloseFd(mapping.fd)};
+        if (session.dead) return {result:-E.BADF};
+        const length = request.kind === "mappingRead" ? request.length : bytes!.length;
+        if (!Number.isSafeInteger(request.offset) || request.offset < 0 || !Number.isSafeInteger(length) || length < 0 || request.offset > mapping.length - length) return {result:-E.INVAL};
+        if (!(mapping.prot & (request.kind === "mappingRead" ? 1 : 2))) return {result:-E.ACCES};
+        // This is a live file-range lease, not a guest mmap bridge. EOF/page-cache
+        // tails and raw cross-process loads need the separate shared-memory design.
+        if (mapping.offset + request.offset + length > mapping.file.content.len) return {result:-E.NOTSUP};
+        if (request.kind === "mappingWrite") return {result:javaPwriteFd(mapping.fd,bytes!,mapping.offset + request.offset)};
+        const target = new Uint8Array(length), result = await javaPreadFd(mapping.fd,target,mapping.offset + request.offset);
+        return session.dead ? {result:-E.BADF} : {result,...(result >= 0 ? {bytes:target.slice(0,result)} : {})};
+      });
+    }
     if (request.kind === "open") {
       const path = vfs.norm(request.path);
       const denied = session.authorize(path, !!(request.flags & (O_ACCMODE | O_CREAT | O_TRUNC)));
@@ -112,6 +139,21 @@ export class FileDescriptors {
       if (session.dead) return {result:-E.BADF};
       let reply: DescriptorReply;
       switch (operation.kind) {
+        case "mappingAcquire": {
+          const {offset,length,prot} = operation, file = descriptor.file, mode = file.statusFlags & O_ACCMODE;
+          if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0 || !Number.isSafeInteger(offset + length) || !Number.isInteger(prot) || prot < 0 || prot > 7) return {result:-E.INVAL};
+          if (mode === 1 || prot & 2 && mode !== 2) return {result:-E.ACCES};
+          if (prot & ~(file.content.ashmem?.prot ?? 7)) return {result:-E.PERM};
+          if (offset + length > file.content.len) return {result:-E.NOTSUP};
+          const retained = javaFcntlFd(fd,0x406,0);
+          if (retained < 0) return {result:retained};
+          detachFdScope(retained);
+          const token = this.next++;
+          session.mappings.set(token,{fd:retained,file,offset,length,prot});
+          let region = this.regions.get(file.content);
+          if (region === undefined) this.regions.set(file.content,region = this.nextRegion++);
+          reply = {result:token,mapping:{region,offset,length,prot}}; break;
+        }
         case "read": case "pread": {
           if (!Number.isSafeInteger(operation.length) || operation.length < 0) return {result:-E.INVAL};
           const target = new Uint8Array(operation.length);
@@ -188,8 +230,10 @@ export class FileDescriptors {
     const session = this.sessions.get(pid);
     if (!session) return;
     this.sessions.delete(pid); session.dead = true;
-    for (const descriptor of session.descriptors.values())
-      void this.ordered(descriptor.file, () => javaCloseFd(descriptor.fd)).catch(error => console.error("[descriptor cleanup]",error));
-    session.descriptors.clear();
+    for (const table of [session.descriptors,session.mappings]) {
+      for (const resource of table.values())
+        void this.ordered(resource.file, () => javaCloseFd(resource.fd)).catch(error => console.error("[descriptor cleanup]",error));
+      table.clear();
+    }
   }
 }

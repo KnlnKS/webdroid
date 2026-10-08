@@ -14,7 +14,7 @@ export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk
  *  `sharedMaps` are MAP_SHARED copies of its pages (Java and native), told of every
  *  write and flushed before a read */
 export type FileAttributes = { uid: number; gid: number; mode: number };
-export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes }
+export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; sharedMaps?: SharedMaps; attributes?: FileAttributes; ashmem?: { prot: number } }
 export const EMPTY = new Uint8Array(0);
 /** room for `size` bytes, doubling so appends stay linear */
 function reserve(file: VfsFile, size: number) {

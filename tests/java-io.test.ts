@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import "../src/natives";
-import { mkPfd, pfdBackingBytes, fdContents } from "../src/android/os";
+import { mkPfd, pfdBackingBytes, fdContents, ashmemFd } from "../src/android/os";
 import { parcelled, parcelledWithRights, unparcelled, exportBinderParcel, importParcel, copyParcelable, unparcelledScoped } from "../src/android/binder";
 import { StoredParcel } from "../src/shell/stored-parcel";
 import { nativeParcel, freeData, OwnedFd } from "../src/android/parcel";
@@ -55,6 +55,44 @@ describe("android-pfd", () => {
 
 describe("file-descriptor", () => {
   const FD = "()Ljava/io/FileDescriptor;";
+
+  test("canonical mapping leases retain live ashmem aliases, protection and independent FD lifetime", async () => {
+    const kernel = new FileDescriptors(), clients = [1001,1002].map(pid => kernel.session(pid,() => 0));
+    const fd = ashmemFd(new Uint8Array(4096)), file = openFd(fd)!;
+    const shared = await newObj("android/os/SharedMemory", "(Ljava/io/FileDescriptor;)V", await mkFd(fd));
+    const call = clients[1].fileDescriptor;
+    try {
+      javaSeekFd(fd,23,0);
+      const token = await kernel.receive(1001,kernel.stageLocal(1001,fd),1002);
+      expect((await call({kind:"take",fd:token})).result).toBe(0);
+      const acquired = await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3}), a = acquired.result;
+      expect(a).toBeGreaterThan(0);
+      expect(await vcall(shared,"setProtect","(I)Z",1)).toBe(1);
+      expect((await call({kind:"mappingAcquire",fd:token,offset:0,length:4096,prot:3})).result).toBe(-E.PERM);
+      const duplicate = (await call({kind:"dup",fd:token,cloexec:true})).result;
+      const alias = await call({kind:"mappingAcquire",fd:duplicate,offset:1,length:4095,prot:1}), b = alias.result;
+      expect(alias.mapping).toEqual({...acquired.mapping!,offset:1,length:4095,prot:1});
+      await vcall(shared,"close","()V");
+      await call({kind:"close",fd:token});
+      await call({kind:"close",fd:duplicate});
+      expect(file.references).toBe(2);
+      expect((await call({kind:"mappingWrite",fd:a,offset:0,bytes:Uint8Array.of(8)})).result).toBe(1);
+      vfs.writeAt(file.content,1,Uint8Array.of(9));
+      expect([...(await call({kind:"mappingRead",fd:a,offset:0,length:2})).bytes!]).toEqual([8,9]);
+      expect([...(await call({kind:"mappingRead",fd:b,offset:0,length:1})).bytes!]).toEqual([9]);
+      expect(file.pos).toBe(23);
+      expect((await call({kind:"mappingWrite",fd:b,offset:0,bytes:Uint8Array.of(7)})).result).toBe(-E.ACCES);
+      expect((await clients[0].fileDescriptor({kind:"mappingRead",fd:a,offset:0,length:1})).result).toBe(-E.BADF);
+      await call({kind:"mappingRelease",fd:a});
+      expect(file.references).toBe(1);
+      kernel.close(1002);
+      await new Promise(resolve => setTimeout(resolve,0));
+      expect(file.references).toBe(0);
+      expect((await call({kind:"mappingRead",fd:b,offset:0,length:1})).result).toBe(-E.BADF);
+    } finally {
+      await vcall(shared,"close","()V"); kernel.close(1001); kernel.close(1002);
+    }
+  });
 
   test("Java Parcel owner release closes only its descriptor side table", async () => {
     const path = "/data/data/test/fd/parcel-owner.bin";
