@@ -13,6 +13,12 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Linker retention and full conformance checkpoint (2026-10-08)
+
+The frozen `b4d0be2d` cut completes all nine conformance suites with zero regressions/unexplained differences and validates 6,227,619 method bodies across all 33 top-level APK/XAPK files with zero failures. Existing divergence pins and 134 baseline tests absent from both tiers remain explicit coverage limits. Matched Doodle still wedges after Play on Wasm while JavaScript reaches gameplay. Full YouTube still wedges; its differing live JS control cannot establish matched playback. These are correctness runs under concurrent load, not idle performance acceptance.
+
+The linker now releases replaced symbolic resolver functions and consumed AOT headers. Matched collection probes establish both retention fixes; existing loaders and AOT checks pass. A private browser prefix retains the intended home card but still wedges at launch. The rejected batching experiment is not integrated. Fresh source-matched assets and application follow-through remain required; the history records exact receipts and limits.
+
 ### Eligible-guard checkpoint (2026-10-08)
 
 The hot-call planner now applies its existing minimum execution count and inlinability check before counting candidates against the two-guard limit. Low-traffic startup iterators no longer suppress the workload's eligible iterator. Focused five-run Node/Chrome comparisons improve steady iteration timing with matching answers; first-call regressions and the full primary-ten gate remain open. Typecheck, 1,212 unit tests, all 19 broad Wasm suites, cold/OSR/framework checks and matching eight-jar AOT pass. Current source `489037c219da…` identifies ordinary `e5fd4a029d6a191e` and guarded `54db3ad38b83a3a5`. The history records measurements and limits; final application, conformance, Worker and idle timing remain required.

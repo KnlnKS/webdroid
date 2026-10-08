@@ -342,7 +342,7 @@ if (!process.argv.includes("--hierarchy")) {
     if (reader(again) !== null || accountingWorld.fieldReader("java/lang/Throwable", "detailMessage", "Ljava/lang/String;") !== reader || accountingWorld.stats.units !== warmHelpers.units || accountingWorld.stats.bytes !== warmHelpers.bytes || accountingWorld.stats.compileMs !== warmHelpers.compileMs) throw new Error("warm throwable or reader helper compiled again");
     console.log("helper accounting: throwable and field reader record units, bytes and traces; warm calls unchanged");
     if (process.argv.includes("--memory")) {
-      const analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [], seen = new WeakSet<object>();
+      const stubs: WeakRef<object>[] = [], analyses: WeakRef<object>[] = [], compilers: WeakRef<object>[] = [], seen = new WeakSet<object>();
       let probeOps: ColdSlowOps | undefined;
       const prepare = ColdSlowOps.prototype.prepareSite, emit = Compiler.prototype.buildSynthetic, group = Compiler.prototype.buildSyntheticGroup;
       ColdSlowOps.prototype.prepareSite = function (...args: Parameters<typeof prepare>) { const site = prepare.apply(this, args); probeOps = this; if (!seen.has(site.analysis)) { seen.add(site.analysis); analyses.push(new WeakRef(site.analysis)); } return site; };
@@ -354,6 +354,7 @@ if (!process.argv.includes("--hierarchy")) {
         if (w.stats.symbolicTypingMethods !== before) throw new Error("stub declaration inferred full method IR again");
         for (let i = 0; i < 32; i++) {
           const slot = (bindings[`memory:${i}`] as WebAssembly.Global).value as number;
+          stubs.push(new WeakRef((bindings.table as WebAssembly.Table).get(slot)!));
           if ((bindings.table as WebAssembly.Table).get(slot)!() !== 42) throw new Error("memory probe operation failed");
         }
         if (w.stats.symbolicTypingMethods - before > 1) throw new Error("ordinary analysis repeated per site");
@@ -378,6 +379,9 @@ if (!process.argv.includes("--hierarchy")) {
       console.log(`symbolic analysis work: 32 distinct PCs use one full inference and 31 cache hits; peak entries=${w.stats.symbolicAnalysisPeakEntries}, peak cells=${w.stats.symbolicAnalysisPeakCells}, hits=${w.stats.symbolicAnalysisHits}, oversize=${w.stats.symbolicAnalysisOversize}`);
       const heapBefore = process.memoryUsage().heapUsed;
       for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
+      const retainedStubs = stubs.filter(ref => ref.deref()).length;
+      console.log(`symbolic stubs: replaced=${stubs.length}, retained=${retainedStubs}`);
+      if (stubs.length !== 32 || retainedStubs) throw new Error("replaced symbolic stubs retained");
       const retained = analyses.filter(ref => ref.deref()).length, retainedCompilers = compilers.filter(ref => ref.deref()).length;
       console.log(`symbolic lifetime: analyses=${analyses.length}, retained=${retained}; compilers=${compilers.length}, retained=${retainedCompilers}; heap before GC=${heapBefore}, after GC=${process.memoryUsage().heapUsed}`);
       if (retained > SYMBOLIC_ANALYSIS_METHODS || analyses[0].deref() || retainedCompilers || w.prog.require(key).byKey.get("symbolic()I") !== method || table.get(slot)!() !== 42) throw new Error("symbolic IR retained by live Program or compiled operation");

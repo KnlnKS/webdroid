@@ -1293,7 +1293,7 @@ export class World {
   symbolicResolutions = 0;
   private symbolicOps?: ColdSlowOps;
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
-  private symbolicSites = new Map<string, { slot: WebAssembly.Global; stub: Function; ready?: boolean }>();
+  private symbolicSites = new Map<string, { slot: WebAssembly.Global; ready?: boolean }>();
   symbolicStubModules = 0;
   symbolicImports(sites: SymbolicSite[], analyses?: Compiler["methodAnalyses"]): Record<string, unknown> {
     const out: Record<string, unknown> = { table: this.symbolicTable };
@@ -1328,9 +1328,8 @@ export class World {
       const exports = this.instantiateUnit(cx, imports, built, this.slotOf(pending[0].method), clock);
       this.symbolicStubModules++;
       for (const { name, slot } of pending) {
-        const stub = exports[name] as Function;
-        this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot), stub });
-        this.symbolicTable.set(slot, stub);
+        this.symbolicSites.set(name, { slot: new WebAssembly.Global({ value: "i32" }, slot) });
+        this.symbolicTable.set(slot, exports[name] as Function);
       }
     }
     for (const [name] of sites) out[name] = this.symbolicSites.get(name)!.slot;

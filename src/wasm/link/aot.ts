@@ -192,7 +192,6 @@ export class AotRuntime {
   /** the overridden slots by the code module that holds them, made from `overridden` when it has grown */
   private overriddenBy = new Map<number, number[]>();
   private overriddenSeen = 0;
-  private cHeader: (CHeader | undefined)[] = [];
   private cModule: (WebAssembly.Module | undefined)[] = [];
   /** where each function's trace starts in the section of a loaded code module, by slot */
   private cTraces = new Map<number, { bytes: Uint8Array; starts: Map<number, number> }>();
@@ -286,7 +285,7 @@ export class AotRuntime {
     for (const l of index.linkMessages) w.linkMessages.push(l);
     a.dOf = unrle(index.dOf); a.cOf = unrle(index.cOf);
     a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
-    a.cState.length = a.cHeader.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
+    a.cState.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.rest = rest;
     if (rest.length) w.noteLate(rest);
     // a method this World replaces by an intrinsic that the build did not, or the reverse, is not the build's
@@ -318,7 +317,7 @@ export class AotRuntime {
     this.appFrom = this.cState.length;
     for (const [block, module] of app.cOf) cOf[block] = this.appFrom + module;
     this.cOf = cOf;
-    this.cState.length = this.cHeader.length = this.appFrom + app.modules;
+    this.cState.length = this.appFrom + app.modules;
     for (const [module, over] of app.patches) (this.patchesOver.get(over) ?? this.patchesOver.set(over, []).get(over)!).push(this.appFrom + module);
     app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, module)));
     for (const [block, module] of app.dOf) this.appDOf.set(block, module);
@@ -521,7 +520,7 @@ export class AotRuntime {
         if (stub) this.originalStubs.set(slot, stub);
       }
     }
-    this.cState[c] = LIVE; this.cHeader[c] = head; this.cModule[c] = mod; this.cAbsent[c] = absent;
+    this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
     const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };
