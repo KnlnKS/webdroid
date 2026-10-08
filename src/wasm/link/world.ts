@@ -43,10 +43,12 @@ import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
 import { HotUnits } from "./hotunits";
+import { lexicalFrames } from "../../jvm/frames";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
 type LinkImports = { link: number; due: number; wait: number; sync: number; state: [number, number, number] };
 type CompiledActivation = Pick<ColdSnapshot, "item" | "method" | "owner" | "sync" | "depth" | "executedPc" | "edges">;
+let lexicalEnter: ((raw: Function | undefined, get: () => Function) => (s: Strand, ...args: unknown[]) => Promise<unknown>) | undefined;
 
 export interface WorldOptions {
   intrinsics: Map<string, Intrinsic>;
@@ -1774,7 +1776,7 @@ export class World {
     // then append its suspended callers; parse once so recursive cold PCs retain
     // their activation order. The marker's name is explicit, even in minified builds.
     const local = (text: string) => {
-      const rows = text.split("\n"), boundary = rows.findIndex(row => row.includes("at webdroid:callFn ("));
+      const rows = text.split("\n"), boundary = rows.findIndex(row => row.includes("at webdroid:callFn (") || row.startsWith("wdWasmCallFn@"));
       return (boundary < 0 ? rows : rows.slice(0, boundary)).filter(row => row.includes("wasm-function[")).join("\n");
     };
     const parts = [local(stack)];
@@ -1908,7 +1910,8 @@ export class World {
     let f = this.callFns.get(name);
     if (f) return f;
     const { get, raw, d, v, thr } = this.buildCallFn(name, params, ret, body, prepare);
-    const enter = raw ? (s: Strand, ...args: unknown[]) => s.call(raw, ...args)
+    const enter = lexicalFrames ? (lexicalEnter ??= new Function("raw", "get", "return function wdWasmCallFn(s,...args){return s.call(raw || get(),...args)}") as NonNullable<typeof lexicalEnter>)(raw, get)
+      : raw ? (s: Strand, ...args: unknown[]) => s.call(raw, ...args)
       : (s: Strand, ...args: unknown[]) => s.call(get(), ...args);
     Object.defineProperty(enter, "name", { value: "webdroid:callFn" });
     let token = 0;

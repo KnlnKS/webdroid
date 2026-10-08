@@ -122,15 +122,17 @@ export function throwerBody(cx: Compiler, c: Code, name: Thrower): void {
 export interface JavaFrame { cls: string; method: string; line: number; pc: number }
 /** a Wasm frame: a module made from bytes is wasm://wasm/<hash>, one compiled from a streamed response is named by the response's URL */
 const FRAME = /at (?:(.+?) \()?(?:wasm:\/\/wasm\/[0-9a-f]+|\S+?):wasm-function\[\d+\]:0x([0-9a-f]+)\)?\s*$/;
-/** the names of the Wasm functions on a V8 `Error.stack`, innermost first */
-export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = FRAME.exec(line)?.[1]; return name ? [name] : []; });
-/** The Java frames of a V8 `Error.stack`, innermost first (the first `count` of them, with their line numbers unless `lines` is false): wasm frames are named by method id and carry a module offset */
+const WEBKIT_FRAME = /^(.*?)@wasm-function\[\d+\]$/;
+const wasmFrame = (line: string) => FRAME.exec(line) ?? WEBKIT_FRAME.exec(line);
+/** the names of the Wasm functions on an engine stack, innermost first */
+export const wasmFrameNames = (stack: string): string[] => stack.split("\n").flatMap((line) => { const name = wasmFrame(line)?.[1]; return name ? [name] : []; });
+/** Java frames, innermost first. WebKit names functions but does not report module offsets. */
 export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = Infinity, lines = true): JavaFrame[] {
   const out: JavaFrame[] = [], occurrences = new Map<string, number>(), captures = new Map<string, number>();
   let chunk: string | undefined;
   for (const line of stack.split("\n")) {
     if (out.length >= count) break;
-    const m = FRAME.exec(line);
+    const m = wasmFrame(line);
     const name = m?.[1], exact = name ? traces.get(name) : undefined;
     const loop = exact ? -1 : name?.lastIndexOf("#loop") ?? -1;
     const t = exact ?? (name && loop >= 0 ? traces.get(name.slice(0, loop)) : undefined);
@@ -139,23 +141,23 @@ export function javaFrames(stack: string, traces: Map<string, FnTrace>, count = 
     // An outlined loop and its callers are one Java activation; keep the innermost PC.
     if (chunk === id) { chunk = loop >= 0 ? id : undefined; continue; }
     chunk = loop >= 0 ? id : undefined;
-    const off = parseInt(m![2], 16);
+    const off = m![2] === undefined ? undefined : parseInt(m![2], 16);
     let lo = 0, hi = t.offsets.length - 1, at = -1;       // last mark at or before the frame's offset
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (off !== undefined) while (lo <= hi) { const mid = (lo + hi) >> 1; if (t.offsets[mid] <= off) { at = mid; lo = mid + 1; } else hi = mid - 1; }
     const occurrence = occurrences.get(t.name) ?? 0; occurrences.set(t.name, occurrence + 1);
-    const marked = at < 0 ? 0 : t.pcs[at];
+    const marked = off === undefined ? -1 : at < 0 ? 0 : t.pcs[at];
     let pc = t.currentPcs?.()[occurrence] ?? marked;
-    if (marked === -2) {
+    if (marked === -2 || pc === -1) {
       const capture = captures.get(id) ?? 0; captures.set(id, capture + 1);
-      pc = t.capturePcs?.()[capture] ?? 0;
+      pc = t.capturePcs?.()[capture] ?? (marked === -2 ? 0 : -1);
     }
-    out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
+    out.push({ cls: dotted(t.m.cls), method: t.m.name, pc, line: lines && t.m.codeOff && pc >= 0 ? t.m.dex.lineAt(t.m.codeOff, pc) : -1 });
   }
   return out;
 }
 
 let named: boolean | undefined;
-/** whether the engine's `Error.stack` has a line for each Wasm frame (V8's does; JavaScriptCore's frames carry no name or offset) */
+/** whether the engine's `Error.stack` identifies Wasm frames */
 export function namesWasmFrames(): boolean {
   if (named === undefined) {
     const mb = new ModuleBuilder(), f = mb.importFunc("h", "f", mb.addFuncType([], [])), g = mb.addFunc(mb.addFuncType([], []), new Code(0).call(f).finish(), "probe");
