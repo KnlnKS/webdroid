@@ -42,6 +42,7 @@ import type { DexFile } from "../../jvm/dex";
 import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
+import { HotUnits } from "./hotunits";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
 type LinkImports = { link: number; due: number; wait: number; sync: number; state: [number, number, number] };
@@ -180,6 +181,9 @@ export class World {
   private touching: Set<string> | null = null;
   private imtCache = new Map<number, Map<number, number>>();
   private compiled = new Map<MethodInfo, string[]>();
+  private hotUnits = new HotUnits();
+  private refreshing = false;
+  hotRefreshes = 0;
 
   constructor(prog: Program, public opts: WorldOptions) {
     this.prog = prog;
@@ -981,6 +985,7 @@ export class World {
   }
   /** host.hot: the method in `slot` has used up its budget; compile it again with its small callees copied in and guarded calls */
   private upgrade(slot: number): void {
+    this.refreshHotUnits();
     const s = this.slotAt(slot);
     if (s?.k !== "method" || !s.done || s.hot) return;
     this.requested.add(slot);
@@ -1000,7 +1005,7 @@ export class World {
     const t0 = performance.now(), clock = this.unitClock();
     this.hotSince ??= t0;
     const wait = () => { this.refused.set(slot, (this.refused.get(slot) ?? 0) + 1); reset(); };
-    if (this.upgradeMs + UPGRADE_MS > UPGRADE_SHARE * (t0 - this.hotSince)) { wait(); return; }
+    if (!this.upgradeAllowed(t0)) { wait(); return; }
     let pick = this.outermostWaiting() ?? slot;
     if (pick === slot) for (const [w, n] of this.refused) {
       if (!this.waits(w)) { this.refused.delete(w); continue; }
@@ -1013,6 +1018,45 @@ export class World {
     this.stats.units++; this.stats.methods += installed.length + copies.length; this.stats.upgrades++;
     this.install(installed.map((m) => this.slotOf(m)), true, cx, this.unitImports(cx), built, pick, clock);
     this.upgradeMs += performance.now() - t0;
+  }
+  private upgradeAllowed(now: number): boolean {
+    this.hotSince ??= now;
+    return this.upgradeMs + UPGRADE_MS <= UPGRADE_SHARE * (now - this.hotSince);
+  }
+  /** Coalesce executed-site readiness at an existing Java entry or promotion boundary. */
+  private refreshHotUnits(): void {
+    if (!this.hotUnits.hasPending() || this.refreshing || this.opts.build || this.opts.compileOnly || this.opts.holdUpgrades?.()) return;
+    for (const unit of this.hotUnits.pending()) {
+      const slot = unit.slots[0], s = this.peek(slot);
+      if (!this.hotUnits.live(unit, this.table) || s?.k !== "method" || !s.done || !s.hot) { this.hotUnits.forget(slot); continue; }
+      if (s.pending) continue;
+      this.refreshing = true;
+      let start: number | undefined;
+      let clock: { start: number; accounted: number } | undefined;
+      try {
+        if (this.opts.compiler?.submit(this, slot)) { s.pending = true; return; }
+        start = performance.now();
+        if (!this.upgradeAllowed(start)) return;
+        const epoch = this.epoch;
+        clock = this.unitClock();
+        const cx = new Compiler(this);
+        const members = unit.slots.map(at => (this.peek(at) as { m: MethodInfo }).m);
+        const { installed, copies } = this.group(s.m, members);
+        const built = cx.buildUnit(installed, copies, true);
+        this.stats.units++; this.stats.methods += installed.length + copies.length;
+        const imports = this.unitImports(cx);
+        if (epoch !== this.epoch || !this.hotUnits.live(unit, this.table)) return;
+        // A refresh must consume readiness, rather than recompile the same adapter forever.
+        if (![...unit.ready].some(name => !cx.symbolicImports.has(name))) { this.hotUnits.forget(slot); return; }
+        this.install(installed.map(m => this.slotOf(m)), true, cx, imports, built, slot, clock);
+        this.stats.upgrades++; this.hotRefreshes++;
+      } finally {
+        if (clock) this.accountCompilation(clock);
+        if (start !== undefined) this.upgradeMs += performance.now() - start;
+        this.refreshing = false;
+      }
+      return;
+    }
   }
   /** the outermost Java frame of the running stack whose method waits for the second tier (V8 names Wasm frames by function, which are named by method id) */
   private outermostWaiting(): number | undefined {
@@ -1042,8 +1086,10 @@ export class World {
   /** the second-tier compile of the method in `slot` as a job for a compile worker: what it needs from this World's state, which only this World has */
   upgradeJob(slot: number): UpgradeJob | undefined {
     const s = this.slotAt(slot);
-    if (s?.k !== "method" || !s.done || s.hot) return undefined;
-    const clock = this.unitClock(), { installed, copies } = this.group(s.m);
+    const refresh = this.hotUnits.get(slot);
+    if (s?.k !== "method" || !s.done || (s.hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.table)))) return undefined;
+    const clock = this.unitClock(), members = s.hot ? refresh!.slots.map(at => (this.peek(at) as { m: MethodInfo }).m) : undefined;
+    const { installed, copies } = this.group(s.m, members);
     const resolved: [string, string, string][] = [], prepared: [string, string | null, string[]][] = [];
     const seen = new Map<string, Set<string>>(), hierarchies = new Set<string>();
     let ready = true;
@@ -1074,7 +1120,7 @@ export class World {
     }
     this.accountCompilation(clock);
     if (!ready) return undefined;
-    return { resolved, prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+    return { refresh: s.hot ? refresh!.generation : undefined, resolved, prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
@@ -1100,12 +1146,36 @@ export class World {
   }
   /** the second-tier compile of the method in `slot` will not come: it may ask for it again, or be compiled inline */
   release(slot: number): void { const s = this.slotAt(slot); if (s?.k === "method") s.pending = false; }
+  /** A failed optional refresh keeps its hot code and stops tracking that generation. */
+  failedRefresh(slot: number, generation: number): void {
+    const unit = this.hotUnits.get(slot);
+    if (!unit || unit.generation !== generation || !this.hotUnits.live(unit, this.table)) return;
+    this.hotUnits.forget(slot);
+  }
   /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here: nothing was added to the Program since `epoch`, and the numbering its code relies on
    *  is this World's (it was numbered from `result.numbering.from`) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
     const s = this.slotAt(slot), head = result.header, clock = this.unitClock();
     this.release(slot);
-    if (head.version !== VERSION || (head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || s.hot || !head.natives.every((id) => this.nativeBound(id))) return false;
+    const refresh = this.hotUnits.get(slot);
+    if (head.version !== VERSION || (head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || !head.natives.every((id) => this.nativeBound(id))) return false;
+    if (job.refresh === undefined ? s.hot : !s.hot || refresh?.generation !== job.refresh || !this.hotUnits.live(refresh, this.table)) return false;
+    if (job.refresh !== undefined && ![...refresh!.ready].some(name => !(head.symbols ?? []).some(([site]) => site === name))) { this.hotUnits.forget(slot); return false; }
+    if (job.refresh !== undefined) {
+      const installed = new Set(job.installed);
+      if (refresh!.slots.some(at => !installed.has(mid((this.peek(at) as { m: MethodInfo }).m)))) return false;
+      for (const id of job.installed) {
+        const method = methodOf(this.prog, id);
+        if (!method) return false;
+        const at = this.slotOf(method);
+        if (!refresh!.slots.includes(at) && (this.peek(at) as { done?: boolean } | undefined)?.done) return false;
+      }
+      for (const [referrer, name, key] of job.resolved ?? []) if (this.prog.initiatedBy(this.prog.loaderOf(referrer), name) !== key || !definitionReady(this, key)) return false;
+      for (const [key, sup, ifaces] of job.prepared ?? []) {
+        const cls = this.prog.get(key);
+        if (!cls || !definitionReady(this, key) || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return false;
+      }
+    }
     const n = result.numbering;
     if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
     for (const id of head.touch) this.link(this.names[id]);
@@ -1114,19 +1184,20 @@ export class World {
     const target = (cls: string, key: string) => (cls ? this.prog.get(cls)?.byKey.get(key) : undefined);
     const owner = (at: number) => (this.slotAt(at) as { m: MethodInfo }).m;
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
-      absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]) };
+      absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
     const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []), deopt: this.deoptImports };
     this.classImports(mod, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
     this.stats.methods += job.installed.length + job.copies.length; this.stats.upgrades++;
     this.install(job.installed.map((id) => this.slotOf(method(id)!)), true, unit, imports, { bytes: mod, traces }, slot, clock);
+    if (job.refresh !== undefined) this.hotRefreshes++;
     return true;
   }
   private hotSince?: number;
   private upgradeMs = 0;
   /** instantiates a built unit and puts its functions (`group`, by slot) in the table; a slot already compiled keeps its original stub */
-  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent">, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): void {
+  private install(group: number[], hot: boolean, cx: Pick<Compiler, "assumptions" | "absent"> & { symbols?: SymbolicSite[] }, imports: Record<string, any>, built: { bytes: Uint8Array | WebAssembly.Module; traces: FnTrace[] }, slot: number, clock: { start: number; accounted: number }): void {
     const s = this.slotAt(slot)!;
     let exports: Record<string, any>;
     try { exports = this.instantiateUnit(cx, imports, built, slot, clock); } catch (e) { throw new Error(`linking ${s.k === "method" ? mid(s.m) : (s as { name: string }).name}: ${(e as Error).message}`); }
@@ -1138,6 +1209,11 @@ export class World {
     };
     if (s.k === "method") {
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) new Int32Array(this.mem.buffer, COUNT_BASE + 4 * x, 1)[0] = 0; }
+      if (hot) {
+        const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
+        const unit = this.hotUnits.publish(group, names, this.table);
+        for (const name of unit?.sites ?? []) if (this.symbolicSites.get(name)?.ready) this.hotUnits.resolved(name);
+      } else group.forEach(at => this.hotUnits.forget(at));
     } else set(slot, "m");
   }
   private unitClock(): { start: number; accounted: number } { return { start: performance.now(), accounted: this.stats.compileMs }; }
@@ -1199,7 +1275,7 @@ export class World {
   symbolicResolutions = 0;
   private symbolicOps?: ColdSlowOps;
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
-  private symbolicSites = new Map<string, { slot: WebAssembly.Global; stub: Function }>();
+  private symbolicSites = new Map<string, { slot: WebAssembly.Global; stub: Function; ready?: boolean }>();
   symbolicStubModules = 0;
   symbolicImports(sites: SymbolicSite[], analyses?: Compiler["methodAnalyses"]): Record<string, unknown> {
     const out: Record<string, unknown> = { table: this.symbolicTable };
@@ -1255,6 +1331,11 @@ export class World {
         this.stats.units++;
         const exports = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock);
         this.symbolicTable.set(slot, exports.m as Function);
+        if (initiatedInstruction(this, method, site.ins)) {
+          const binding = this.symbolicSites.get(`${method.cls}:${method.index}:${pc}`);
+          if (binding) binding.ready = true;
+          this.hotUnits.resolved(`${method.cls}:${method.index}:${pc}`);
+        }
       };
       const ready = resolveInstruction(this, method, site.ins, owner);
       return ready instanceof Promise ? ready.then(install) : install();
@@ -1284,8 +1365,8 @@ export class World {
   }
   /** `m` and the small methods it calls directly, up to MAX_GROUP: V8 can inline calls inside a module but not through the table. One that is
    *  compiled already is copied into the unit and used only by the unit's own calls (`copies`). */
-  private group(m: MethodInfo): { installed: MethodInfo[]; copies: MethodInfo[] } {
-    const out = [m], installed = [m], copies: MethodInfo[] = [];
+  private group(m: MethodInfo, members: MethodInfo[] = [m]): { installed: MethodInfo[]; copies: MethodInfo[] } {
+    const out = [...members], installed = [...members], copies: MethodInfo[] = [];
     this.plan = new Map();
     if (!m.codeOff || this.intrinsic(m)) return { installed, copies };
     this.noteAllocations(m);
@@ -1617,6 +1698,7 @@ export class World {
   }
   /** puts the lazy-link stub back for `slot` and for the methods compiled beside it, which call it directly */
   invalidate(slot: number): void {
+    this.hotUnits.forget(slot);
     this.deoptEpoch.value = Number(this.deoptEpoch.value) + 1;
     const helper = this.helperInvalidations.get(slot);
     if (helper) { helper(); this.stats.invalidated++; return; }
@@ -1638,6 +1720,7 @@ export class World {
     if (!m) throw new Error(`entry ${cls}.${name}${desc} not found`);
     const slot = this.slotOf(m);
     return (...args) => this.synchronous(() => {
+      this.refreshHotUnits();
       // an exception leaves the frames it unwound counted
       const depth = this.rt.depth.value;
       try {
@@ -1724,6 +1807,7 @@ export class World {
     try { return run(); } finally { this.synchronousEntries--; }
   }
   private freshStack<T>(run: () => T): T {
+    this.refreshHotUnits();
     const prior = this.synchronousEntries; this.synchronousEntries = 0;
     try { return run(); } finally { this.synchronousEntries = prior; }
   }

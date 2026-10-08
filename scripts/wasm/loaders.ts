@@ -10,9 +10,9 @@ import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
 import { PackedArchive, packedArchives, sha256 } from "../../src/shell/packedarchive";
 import { loadDexes, program, world } from "./lib";
-import { Program, ACC, javaName, type JClass } from "../../src/wasm/compiler/program";
+import { Program, ACC, javaName, declaredMethods, declaredMethod, type JClass } from "../../src/wasm/compiler/program";
 import { COUNT_BASE, HOT_BUDGET } from "../../src/wasm/link/exc";
-import { mid } from "../../src/wasm/compiler/ids";
+import { mid, methodOf } from "../../src/wasm/compiler/ids";
 import { appArchives } from "../../src/jvm/natives/jdex";
 import { openDexes } from "../../src/wasm/host/boot";
 import { wasmJni } from "../../src/wasm/host/jni";
@@ -26,6 +26,9 @@ import { definingLoader } from "../../src/wasm/link/loaders";
 import { prepareMethod } from "../../src/jvm/prepared";
 import { Pool, u2, u4 } from "./classfile";
 import { Compiler } from "../../src/wasm/compiler/j2w";
+import { UnitCompiler } from "../../src/wasm/link/unit";
+import { CompileClient, type WorkerPort } from "../../src/wasm/host/compiler";
+import type { CompileRequest, CompileResponse } from "../../src/wasm/host/compile-serve";
 import { typeFailure, symbolicImplFor } from "../../src/wasm/compiler/linkage";
 import type { Code } from "../../src/wasm/compiler/code";
 import { ColdSlowOps, SYMBOLIC_ANALYSIS_METHODS, SYMBOLIC_ANALYSIS_CELLS } from "../../src/wasm/cold/slowops";
@@ -64,6 +67,7 @@ const build = (dir: string, sources: string[], classpath?: string) => {
   return join(out, dir, "classes.dex");
 };
 if (process.argv.includes("--abstract-default")) { await abstractDefaultControl(); process.exit(0); }
+if (process.argv.includes("--hot-refresh")) { await hotRefreshControl(); process.exit(0); }
 if (process.argv.includes("--super")) { await interfaceSuperControl(); await abstractDefaultControl(); process.exit(0); }
 const app = build("app", ["Ldr.java", "Tag.java", "MemorySites.java"]);
 const common = build("common", ["Tag.java"]), layeredApp = build("layeredapp", ["Ldr.java"], join(out, "app"));
@@ -664,6 +668,197 @@ async function interfaceSuperControl(): Promise<void> {
   } finally { jvmProfiler.tier = previous; }
   console.log(`JS interface-super/default: ${jsChecks} root/two-fork compiled and two-fork cold cases match JDK; Class identities stay distinct`);
 
+}
+
+async function hotRefreshControl(): Promise<void> {
+  const dex = build("refresh", ["HotRefresh.java"]), late = build("refresh-late", ["HotRefreshLate.java"], join(out, "refresh"));
+  const expected = sh(["java", "-cp", [join(out, "refresh"), join(out, "refresh-late")].join(":"), "HotRefresh"]).trim().split("\n").map(Number);
+  if (expected.join(",") !== "896,1536,2048") throw new Error("hot refresh JDK control changed");
+  const base = program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)));
+  let checks = 0;
+  const check = (name: string, got: unknown, want: unknown) => { if (got !== want) throw new Error(`${name}: ${got} != ${want}`); checks++; };
+  for (const cold of [false, true]) for (const custom of [false, true]) {
+    const p = new Program(custom ? [] : loadDexes(dex), base), w = world(p, { natives, cold, holdUpgrades: () => true });
+    const loader = custom ? p.newLoader(p.boot, null) : p.root;
+    if (custom) w.addDexes(loadDexes(dex), loader);
+    const suffix = custom ? "@" + loader.id : "", cls = "HotRefresh" + suffix;
+    const run = w.entryAsync(cls, "run", "(Z)I"), root = p.resolve(cls, "run", "(Z)I")!, slot = w.slotOf(root);
+    check("seed before later reference", await run(0), expected[0]);
+    const job = w.upgradeJob(slot)!;
+    if (!job || !job.copies.some(id => id.startsWith(cls + ".helper"))) throw new Error("hot refresh did not copy the executed callee");
+    const cx = new Compiler(w), method = (id: string) => methodOf(p, id)!;
+    const built = cx.buildUnit(job.installed.map(id => method(id)!), job.copies.map(id => method(id)!), true);
+    if (!cx.symbolicImports.size) throw new Error("hot refresh seed lost the unused later reference");
+    // Install the actual compiled unit with the same canonical publication path as inline promotion.
+    const owner = w as unknown as { unitImports(cx: Compiler): Record<string, unknown>; unitClock(): { start: number; accounted: number };
+      install(group: number[], hot: boolean, cx: Compiler, imports: Record<string, unknown>, built: ReturnType<Compiler["buildUnit"]>, slot: number, clock: { start: number; accounted: number }): void };
+    owner.install(job.installed.map(id => w.slotOf(method(id)!)), true, cx, owner.unitImports(cx), built, slot, owner.unitClock());
+    const before = w.table.get(slot), deopts = w.stats.invalidated;
+    check("copied callee resolves later reference", await run(1), expected[1]);
+    check("hold preserves hot unit", w.table.get(slot), before);
+    check("hold defers refresh", w.hotRefreshes, 0);
+    w.opts.holdUpgrades = () => false;
+    for (let i = 0; i < 100 && !w.hotRefreshes; i++) { await new Promise(r => setTimeout(r, 1)); check("refresh result", await run(1), expected[1]); }
+    check("ready sites coalesce into one refresh", w.hotRefreshes, 1);
+    check("refresh replaces live export", w.table.get(slot) !== before, true);
+    check("refresh is not deoptimization", w.stats.invalidated, deopts);
+    const refreshed = w.table.get(slot), units = w.stats.units;
+    check("repeat result", await run(1), expected[1]);
+    check("repeat does not refresh", w.hotRefreshes, 1);
+    check("repeat does not compile", w.stats.units, units);
+    check("repeat keeps live export", w.table.get(slot), refreshed);
+    w.addDexes(loadDexes(late), loader);
+    check("late override invalidates guarded unit", w.stats.invalidated > deopts, true);
+    const ownMethod = (key: string, name: string) => {
+      const owner = p.require(key), [signature] = declaredMethods(owner).find(([signature]) => signature.startsWith(name + "("))!;
+      return declaredMethod(owner, signature)!;
+    };
+    const make = ownMethod("HotRefreshLate" + suffix, "make"), choose = ownMethod(cls, "choose");
+    const value = await w.entryAsync(make.cls, make.name, make.desc)();
+    await w.entryAsync(choose.cls, choose.name, choose.desc)(value);
+    check("late override dispatch", await run(1), expected[2]);
+  }
+  // The worker's snapshot precedes successful resolution in the executing World.
+  const files = [dex, ...PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j))];
+  const page = world(files, { natives, holdUpgrades: () => true }), worker = world(files, { compileOnly: true }), uc = new UnitCompiler(worker);
+  const run = page.entryAsync("HotRefresh", "run", "(Z)I"), slot = page.slotOf(page.prog.resolve("HotRefresh", "run", "(Z)I")!);
+  check("worker seed", await run(0), expected[0]);
+  const job = page.upgradeJob(slot)!, marks = page.numbering(), epoch = page.epoch;
+  check("worker numbering sync", uc.sync(page.since(page.base), true), true);
+  const result = uc.upgrade(job);
+  if (typeof result === "string") throw new Error(result);
+  check("resolve before worker publication", await run(1), expected[1]);
+  check("publish after readiness", page.adoptUnit(slot, job, result, epoch), true);
+  const n = result.numbering, keep = !!(n.names.length + n.tail.length + n.selectors.length + n.gaps.length + n.links.length);
+  const syncFrom = keep ? page.numbering() : marks;
+  const refresh = page.upgradeJob(slot)!;
+  if (refresh?.refresh === undefined) throw new Error("worker publication missed prior readiness");
+  check("refresh worker numbering sync", uc.sync(page.since(syncFrom), keep), true);
+  const refreshed = uc.upgrade(refresh);
+  if (typeof refreshed === "string") throw new Error(refreshed);
+  check("worker refresh adopted", page.adoptUnit(slot, refresh, refreshed, page.epoch), true);
+  check("worker refresh result", await run(1), expected[1]);
+  check("worker refresh coalesced", page.hotRefreshes, 1);
+  await hotRefreshPendingControl(files, late);
+  console.log(`hot refresh: ${checks} JDK-matched checks; compiled/cold root/custom, hold, late override and worker publication/generation`);
+}
+
+async function hotRefreshPendingControl(files: string[], late: string): Promise<void> {
+  let checks = 0;
+  const check = (name: string, got: unknown, want: unknown) => { if (got !== want) throw new Error(`${name}: ${got} != ${want}`); checks++; };
+  const seed = async () => {
+    const w = world(files, { natives, holdUpgrades: () => true });
+    const run = w.entryAsync("HotRefresh", "run", "(Z)I"), m = w.prog.resolve("HotRefresh", "run", "(Z)I")!, slot = w.slotOf(m);
+    check("pending seed result", await run(0), 896);
+    return { w, run, slot };
+  };
+  const build = (w: ReturnType<typeof world>, slot: number) => {
+    const owner = w as unknown as { unitImports(cx: Compiler): Record<string, unknown>; unitClock(): { start: number; accounted: number };
+      install(group: number[], hot: boolean, cx: Compiler, imports: Record<string, unknown>, built: ReturnType<Compiler["buildUnit"]>, slot: number, clock: { start: number; accounted: number }): void };
+    const clock = owner.unitClock(), job = w.upgradeJob(slot);
+    if (!job) throw new Error("pending control has no real compilation job");
+    const cx = new Compiler(w), methods = job.installed.map(id => methodOf(w.prog, id)!);
+    const built = cx.buildUnit(methods, job.copies.map(id => methodOf(w.prog, id)!), true);
+    return () => owner.install(methods.map(m => w.slotOf(m)), true, cx, owner.unitImports(cx), built, slot, clock);
+  };
+  const state = (w: ReturnType<typeof world>, slot: number) => w.peek(slot) as { pending?: boolean; hot?: boolean };
+  const connect = (w: ReturnType<typeof world>) => {
+    const requests: CompileRequest[] = [];
+    const port: WorkerPort = { onmessage: null, onerror: null, postMessage(message) { requests.push(structuredClone(message) as CompileRequest); }, terminate() {} };
+    const client = new CompileClient(port);
+    client.start(w, undefined, undefined);
+    const reply = (data: CompileResponse) => port.onmessage!({ data } as MessageEvent<CompileResponse>);
+    reply({ type: "loaded" }); w.opts.compiler = client;
+    const request = () => {
+      const message = requests.find((m): m is Extract<CompileRequest, { type: "upgrade" }> => m.type === "upgrade");
+      if (!message) throw new Error("pending control did not submit an actual upgrade request");
+      return message;
+    };
+    const compile = () => {
+      const init = requests.find((m): m is Extract<CompileRequest, { type: "init" }> => m.type === "init");
+      if (!init?.sync) throw new Error("pending control has no actual initialization numbering");
+      const worker = world(files, { compileOnly: true }), units = new UnitCompiler(worker), job = request();
+      if (!units.sync(init.sync, true)) throw new Error("pending worker initialization mismatch");
+      init.initialized?.forEach(key => worker.preInitialized.add(key));
+      if (!units.sync(job.sync, job.keep)) throw new Error("pending worker job numbering mismatch");
+      const result = units.upgrade(job.job);
+      if (typeof result === "string") throw new Error(result);
+      return { type: "unit" as const, id: job.id, result, ms: 0 };
+    };
+    return { client, reply, requests, request, compile };
+  };
+  // Actual host.hot queues while the client starts; publication makes the queued job obsolete.
+  {
+    const { w, run, slot } = await seed(), publish = build(w, slot), c = connect(w);
+    try {
+      w.host.hot(slot);
+      check("queued promotion pending", state(w, slot).pending, true);
+      check("starting worker has no upgrade request", c.requests.filter(m => m.type === "upgrade").length, 0);
+      publish(); const saved = w.table.get(slot);
+      c.reply({ type: "ready", ms: 0 });
+      check("queued rejection releases pending", state(w, slot).pending, false);
+      check("queued rejection submits no job", c.client.stats.jobs, 0);
+      check("queued rejection keeps hot export", w.table.get(slot), saved);
+      check("queued rejection executes", await run(0), 896);
+      check("ready synchronous submit accepts queue", c.client.submit(w, slot), true);
+      check("synchronous rejection leaves pending false", state(w, slot).pending, false);
+      w.host.hot(slot);
+      check("actual hot caller skips obsolete promotion", state(w, slot).pending, false);
+      check("actual hot caller sends no job", c.client.stats.jobs, 0);
+    } finally { c.client.close(); }
+  }
+  for (const outcome of ["adopt", "stale", "failed", "failed-superseded", "failed-invalidated"] as const) {
+    const { w, run, slot } = await seed(); build(w, slot)();
+    check("actual later resolution", await run(1), 1536);
+    const c = connect(w);
+    try {
+      c.reply({ type: "ready", ms: 0 }); w.opts.holdUpgrades = () => false;
+      const saved = w.table.get(slot);
+      check("ready refresh guest result", await run(1), 1536);
+      if (c.request().job.refresh === undefined) throw new Error("actual entry did not submit a refresh generation");
+      check("actual refresh reserves pending", state(w, slot).pending, true);
+      if (outcome === "adopt") {
+        c.reply(c.compile());
+        check("actual refresh adopted", c.client.stats.adopted, 1);
+        check("actual refresh releases pending", state(w, slot).pending, false);
+        check("actual refresh replaces export", w.table.get(slot) !== saved, true);
+        check("actual refresh increments count", w.hotRefreshes, 1);
+      } else if (outcome === "stale") {
+        const response = c.compile();
+        build(w, slot)(); const replacement = w.table.get(slot);
+        c.reply(response);
+        check("superseded real generation rejected", c.client.stats.stale, 1);
+        check("stale reply releases pending", state(w, slot).pending, false);
+        check("stale reply preserves replacement", w.table.get(slot), replacement);
+      } else if (outcome === "failed-superseded" || outcome === "failed-invalidated") {
+        if (outcome === "failed-superseded") build(w, slot)();
+        else {
+          const epoch = w.epoch, invalidated = w.stats.invalidated;
+          w.addDexes(loadDexes(late));
+          check("busy refresh advances actual DEX epoch", w.epoch > epoch, true);
+          check("late implementation invalidates actual guarded code", w.stats.invalidated > invalidated, true);
+          const invalidatedState = w.peek(slot);
+          check("invalidated root requires relink", invalidatedState?.k === "method" && !invalidatedState.done, true);
+        }
+        const replacement = w.table.get(slot);
+        check("old request still owns pending before failure", state(w, slot).pending, true);
+        c.reply({ type: "failed", id: c.request().id, message: "controlled old refresh compile failure" });
+        check("old refresh failure recorded", c.client.stats.failed, 1);
+        check("old refresh failure releases its reservation", state(w, slot).pending, false);
+        check("old refresh failure preserves replacement", w.table.get(slot), replacement);
+        check("old refresh failure starts no extra job", c.client.stats.jobs, 1);
+      } else {
+        c.reply({ type: "failed", id: c.request().id, message: "controlled refresh compile failure" });
+        check("failed refresh recorded", c.client.stats.failed, 1);
+        check("failed refresh releases pending", state(w, slot).pending, false);
+        check("failed refresh keeps valid export", w.table.get(slot), saved);
+        check("failed refresh drops only tracking", w.upgradeJob(slot), undefined);
+      }
+      check("settled transition executes", await run(1), 1536);
+      if (outcome === "failed") check("failed refresh does not retry", c.client.stats.jobs, 1);
+    } finally { c.client.close(); }
+  }
+  console.log(`hot refresh pending: ${checks} checks; queued rejection, ready adoption, natural supersession and failed-generation cleanup`);
 }
 
 async function abstractDefaultControl(): Promise<void> {

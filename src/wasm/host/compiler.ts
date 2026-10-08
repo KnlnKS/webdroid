@@ -109,6 +109,10 @@ export class CompileClient implements CompileService {
     if (!busy || m.id !== busy.id) return;
     this.busy = undefined;
     if (m.type === "failed") {
+      if (busy.job.refresh !== undefined) {
+        if (!this.queue.includes(busy.slot)) w.release(busy.slot);
+        w.failedRefresh(busy.slot, busy.job.refresh);
+      }
       // the method stays on its first-tier code and does not ask again; a worker that keeps failing has lost track of the numbering
       if (++this.stats.failed > MAX_FAILURES) this.retire(m.message); else this.pump();
       return;

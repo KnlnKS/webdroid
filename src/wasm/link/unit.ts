@@ -12,6 +12,8 @@ import type { World } from "./world";
 export interface UpgradeJob {
   /** the number its unit's function names carry */
   unit: number;
+  /** A refresh may replace only this live hot-unit generation in the source World. */
+  refresh?: number;
   cold?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
   installed: string[]; copies: string[];
