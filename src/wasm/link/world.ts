@@ -1509,26 +1509,35 @@ export class World {
     const priorBefore = loader.before ?? [], priorAfter = loader.after ?? [];
     const same = (a: Loader[], b: Loader[]) => a.length === b.length && a.every((l, i) => l === b[i]);
     if (same(priorBefore, before) && same(priorAfter, after)) return;
-    this.rebindResolution(() => this.prog.libraries(loader, before, after), () => this.prog.libraries(loader, priorBefore, priorAfter), "Class loader libraries");
+    this.rebindResolution(loader, () => this.prog.libraries(loader, before, after), () => this.prog.libraries(loader, priorBefore, priorAfter), "Class loader libraries");
   }
   initiateClass(loader: Loader, name: string, key: string): void {
     const prior = this.prog.initiatedBy(loader, name);
     if (prior === key) return;
     if (prior) throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
     if (this.prog.lookup(loader, name) === key) { this.prog.initiate(loader, name, key); return; }
-    this.rebindResolution(() => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation");
+    this.rebindResolution(loader, () => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation");
   }
   resolveClass(loader: Loader, name: string, owner: Strand): string | Promise<string> {
     return resolveClass(this, loader, name, owner);
   }
-  private rebindResolution(change: () => string[], undo: () => string[], reason: string): void {
+  private rebindResolution(loader: Loader, change: () => string[], undo: () => string[], reason: string): void {
     const targets = new Map<Assumption, { target: MethodInfo; declared: MethodInfo }>();
     for (const a of this.assumptions.values()) {
       const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
       const declared = this.prog.resolve(a.decl, a.name, a.desc);
       if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
     }
-    const dispatch = [...this.classes.keys()].map(name => ({ name, methods: this.vslots(name).map(key => {
+    // Inherited dispatch also depends on interfaces that have not themselves been linked.
+    const changing = this.prog.resolutionClasses(loader), affected = new Map<string, boolean>();
+    const depends = (name: string): boolean => {
+      if (changing.has(name)) return true;
+      const hit = affected.get(name); if (hit !== undefined) return hit;
+      affected.set(name, true);
+      const c = this.prog.get(name), result = !!c && (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(depends);
+      affected.set(name, result); return result;
+    };
+    const dispatch = [...this.classes.keys()].filter(depends).map(name => ({ name, methods: this.vslots(name).map(key => {
       return symbolicDispatchFor(this.prog, name, key);
     }) }));
     const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
@@ -1572,6 +1581,7 @@ export class World {
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();
     this.refreshLate();
+    const changedSubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {
       for (const slot of a.slots) {
         const state = this.peek(slot);
@@ -1582,7 +1592,9 @@ export class World {
       const saved = targets.get(a), declared = this.prog.resolve(a.decl, a.name, a.desc);
       const sameTarget = saved && saved.target === this.prog.get(a.tc)?.byKey.get(a.tk) && saved.target.key === a.tk && saved.target.desc === a.desc;
       const samePrototype = declared && declared === saved?.declared && !declared.isStatic && declared.desc === a.desc;
-      if (sameTarget && samePrototype && this.holds(a, this.late.get(a.decl) ?? [])) {
+      let by = changedSubtypes.get(a.decl);
+      if (!by) changedSubtypes.set(a.decl, by = (this.late.get(a.decl) ?? []).filter(depends));
+      if (sameTarget && samePrototype && this.holds(a, by)) {
         delete a.stands;
         continue;
       }

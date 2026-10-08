@@ -606,6 +606,18 @@ process.exit(failed ? 1 : 0);
 
 async function interfaceSuperControl(): Promise<void> {
   const dex = build("interfaceSuper", ["InterfaceSuper.java"]);
+  {
+    const p = new Program(loadDexes(dex), program(PLATFORM_JARS.slice(0, 2).map(j => join(AOSP, j)))), target = world(p), loader = p.newLoader(p.root, null);
+    target.addDexes(loadDexes(dex), loader);
+    const face = p.definedBy(loader, "InterfaceSuper$C")!, replacement = p.definedBy(loader, "InterfaceSuper$B")!;
+    p.addClass({ name: "Outside", sup: "java/lang/Object", ifaces: [face], flags: ACC.PUBLIC, isInterface: false, fields: [], methods: [], byKey: new Map(), dex: null, def: null }, p.root);
+    target.link("Outside");
+    if ((target as any).classes.has(face)) throw Error("dependency control interface already linked");
+    try { target.initiateClass(loader, "InterfaceSuper$B", replacement); throw Error("changed inherited default accepted"); }
+    catch (error) { const t = target.throwable(error); if (!t || target.classNameOf(t) !== "java/lang/LinkageError" || p.lookup(loader, "InterfaceSuper$B") !== "InterfaceSuper$B") throw error; }
+    console.log("scoped rebinding retains outside-loader dispatch guard through an unlinked interface");
+  }
+
   const names = ["selected", "reversed", "declared", "inherited", "classSuper", "virtualDefault", "interfaceDefault", "unusedAbstract"];
   const jdk = sh(["java", "-cp", join(out, "interfaceSuper"), "InterfaceSuper"]).trim().split("\n").map(Number);
   if (jdk.slice(0, names.length).join(",") !== "22,22,33,11,44,22,22,55") throw new Error("interface-super JDK control changed");

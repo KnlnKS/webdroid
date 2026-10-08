@@ -260,14 +260,21 @@ export class Program {
     this.initiated.get(loader)?.delete(name);
     return this.refreshResolution(loader);
   }
-  private refreshResolution(loader: Loader): string[] {
+  private dependentLoaders(loader: Loader): Set<Loader> {
     const depends = (view: Loader, seen = new Set<Loader>()): boolean => {
       if (view === loader) return true;
       if (view === this.boot || seen.has(view)) return false;
       seen.add(view);
       return [view.parent, ...view.before ?? [], ...view.after ?? []].some(l => !!l && depends(l, seen));
     };
-    const affected = new Set(this.loaders.filter(l => depends(l))), names: string[] = [];
+    return new Set(this.loaders.filter(l => depends(l)));
+  }
+  resolutionClasses(loader: Loader): Set<string> {
+    const affected = this.dependentLoaders(loader);
+    return new Set([...this.classes.values()].filter(c => c instanceof DexClass && affected.has(this.loaderOfDex(c.dex)!)).map(c => c.name));
+  }
+  private refreshResolution(loader: Loader): string[] {
+    const affected = this.dependentLoaders(loader), names: string[] = [];
     for (const [dex, owner] of this.dexLoader) if (affected.has(owner)) dex.resolveType = d => this.rewrite(owner, d);
     for (const c of this.classes.values()) if (c instanceof DexClass) {
       const owner = this.loaderOfDex(c.dex)!;
