@@ -996,9 +996,11 @@ async function nativePathControl(): Promise<void> {
     const customChild = await construct("dalvik/system/DexClassLoader", paths[1], custom);
     if (nativeClassLookup(target, definingLoader(target, customChild), "Sub")) throw new Error("custom parent delegation bypassed");
     const sharing = await construct(), sharingLoader = definingLoader(target, sharing);
-    const libraries = (peers: object[]) => target.bridge.toJava(peers.map(peer => target.bridge.toHost(peer)), "[Ljava/lang/ClassLoader;") as object;
+    const libraries = (peers: (object | null)[]) => target.bridge.toJava(peers.map(peer => peer && target.bridge.toHost(peer)), "[Ljava/lang/ClassLoader;") as object;
     set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([]));
     if (nativeClassLookup(target, sharingLoader, "Shared") !== p.definedBy(sharingLoader, "Shared")) throw new Error("empty shared graph blocked its own path");
+    set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([null]));
+    if (nativeClassLookup(target, sharingLoader, "Shared") !== p.definedBy(sharingLoader, "Shared")) throw new Error("null shared loader boot miss blocked its own path");
     set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([custom]));
     if (nativeClassLookup(target, sharingLoader, "Shared")) throw new Error("custom shared delegation bypassed");
     set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([peer]));
