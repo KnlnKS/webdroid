@@ -1516,12 +1516,12 @@ export class World {
     if (prior === key) return;
     if (prior) throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
     if (this.prog.lookup(loader, name) === key) { this.prog.initiate(loader, name, key); return; }
-    this.rebindResolution(loader, () => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation");
+    this.rebindResolution(loader, () => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation", name);
   }
   resolveClass(loader: Loader, name: string, owner: Strand): string | Promise<string> {
     return resolveClass(this, loader, name, owner);
   }
-  private rebindResolution(loader: Loader, change: () => string[], undo: () => string[], reason: string): void {
+  private rebindResolution(loader: Loader, change: () => string[], undo: () => string[], reason: string, binding?: string): void {
     const targets = new Map<Assumption, { target: MethodInfo; declared: MethodInfo }>();
     for (const a of this.assumptions.values()) {
       const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
@@ -1529,15 +1529,27 @@ export class World {
       if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
     }
     // Inherited dispatch also depends on interfaces that have not themselves been linked.
-    const changing = this.prog.resolutionClasses(loader), affected = new Map<string, boolean>();
-    const depends = (name: string): boolean => {
-      if (changing.has(name)) return true;
-      const hit = affected.get(name); if (hit !== undefined) return hit;
-      affected.set(name, true);
-      const c = this.prog.get(name), result = !!c && (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(depends);
-      affected.set(name, result); return result;
+    const changing = this.prog.resolutionClasses(loader);
+    const dependentOn = (changed: Set<string>) => {
+      const affected = new Map<string, boolean>();
+      const depends = (name: string): boolean => {
+        if (changed.has(name)) return true;
+        const hit = affected.get(name); if (hit !== undefined) return hit;
+        affected.set(name, true);
+        const c = this.prog.get(name), result = !!c && (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(depends);
+        affected.set(name, result); return result;
+      };
+      return depends;
     };
-    const dispatch = [...this.classes.keys()].filter(depends).map(name => ({ name, methods: this.vslots(name).map(key => {
+    if (binding && (binding.startsWith("[") || binding.includes("@"))) binding = undefined;
+    const mentions = (descriptor: string) => !binding || javaName(descriptor).includes(`L${binding};`);
+    const depends = dependentOn(changing);
+    // One initiating identity affects dispatch through matching signatures or inherited types, including unlinked interfaces.
+    const hierarchy = binding ? dependentOn(new Set([...changing].filter(name => {
+      const c = this.prog.get(name)!;
+      return (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(parent => javaName(parent) === binding);
+    }))) : depends;
+    const dispatch = [...this.classes.keys()].filter(name => depends(name) && (hierarchy(name) || this.vslots(name).some(mentions))).map(name => ({ name, methods: this.vslots(name).map(key => {
       return symbolicDispatchFor(this.prog, name, key);
     }) }));
     const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
@@ -1581,7 +1593,7 @@ export class World {
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();
     this.refreshLate();
-    const changedSubtypes = new Map<string, string[]>();
+    const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {
       for (const slot of a.slots) {
         const state = this.peek(slot);
@@ -1592,8 +1604,9 @@ export class World {
       const saved = targets.get(a), declared = this.prog.resolve(a.decl, a.name, a.desc);
       const sameTarget = saved && saved.target === this.prog.get(a.tc)?.byKey.get(a.tk) && saved.target.key === a.tk && saved.target.desc === a.desc;
       const samePrototype = declared && declared === saved?.declared && !declared.isStatic && declared.desc === a.desc;
-      let by = changedSubtypes.get(a.decl);
-      if (!by) changedSubtypes.set(a.decl, by = (this.late.get(a.decl) ?? []).filter(depends));
+      const narrow = !mentions(a.desc), cache = narrow ? hierarchySubtypes : changedSubtypes;
+      let by = cache.get(a.decl);
+      if (!by) cache.set(a.decl, by = (this.late.get(a.decl) ?? []).filter(narrow ? hierarchy : depends));
       if (sameTarget && samePrototype && this.holds(a, by)) {
         delete a.stands;
         continue;
