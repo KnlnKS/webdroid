@@ -6,9 +6,10 @@ import { pathOf } from "./jio";
 import { dexesIn } from "../dex";
 import { loadDex } from "../tier";
 import { JClassLoader } from "./jlang";
+import { after } from "./jentry";
 import { vfs } from "../../shell/vfs";
 import { packedArchives } from "../../shell/packedarchive";
-import { remainingBytes, resident, type JBuffer } from "./jnio";
+import { readRemainingBytes, type JBuffer } from "./jnio";
 
 function initRuntime(loader: JClassLoader, parent: JClassLoader | null): void {
   loader.parent = parent;
@@ -122,22 +123,21 @@ rt.register({
 function initMemory(this: JClassLoader, buffers: JBuffer[], parent: JClassLoader | null): void | Promise<void> {
   if (!buffers) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffers");
   for (const buffer of buffers) if (!buffer) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffer");
-  const load = () => {
+  const reads = buffers.map(buffer => after(readRemainingBytes(buffer),bytes => bytes.slice()));
+  const load = (sources: Uint8Array[]) => {
     initRuntime(this, parent);
-    for (const [index, buffer] of buffers.entries()) {
-      const bytes = remainingBytes(buffer).slice();
+    for (const [index, bytes] of sources.entries()) {
       for (const dex of dexesIn(bytes, `memory:${index}`)) loadDex(this.runtime, dex);
     }
   };
-  const waits = buffers.map(resident).filter((wait) => wait !== null);
-  return waits.length ? Promise.all(waits).then(load) : load();
+  return reads.some(bytes => bytes instanceof Promise) ? Promise.all(reads).then(load) : load(reads as Uint8Array[]);
 }
 rt.register({
   name: "dalvik/system/InMemoryDexClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
-    "<init>(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, buffer: JBuffer, parent: JClassLoader | null) { initMemory.call(this, [buffer], parent); },
+    "<init>(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, buffer: JBuffer, parent: JClassLoader | null) { return initMemory.call(this, [buffer], parent); },
     "<init>([Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V": initMemory,
-    "<init>([Ljava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, buffers: JBuffer[], _libraries: string | null, parent: JClassLoader | null) { initMemory.call(this, buffers, parent); },
+    "<init>([Ljava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, buffers: JBuffer[], _libraries: string | null, parent: JClassLoader | null) { return initMemory.call(this, buffers, parent); },
   },
 });
 rt.register({

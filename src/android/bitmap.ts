@@ -15,7 +15,7 @@ import { awaited, rt, JObj, declaredField, driven, type Gen } from "../jvm/runti
 import { handle, deref, FINALIZER } from "./handles";
 import { newObj, scall, vcall, after } from "../jvm/natives/jentry";
 import { writeThrough } from "../jvm/natives/jio";
-import { type JBuffer, remainingBytes, resident } from "../jvm/natives/jnio";
+import { type JBuffer, readBufferBytes, writeRemainingBytes, position, elementShift } from "../jvm/natives/jnio";
 import { u8 } from "../jvm/abi";
 import { paintAt } from "./paint";
 import { nativeParcel, createByteArray, outOfLine, readInt, writeByteArray, writeInt } from "./parcel";
@@ -429,14 +429,11 @@ rt.registerJnis(BITMAP, {
   },
   "nativeSetPixels(J[IIIIIII)V": (h: bigint, colors: Int32Array, off: number, stride: number, x: number, y: number, w: number, ht: number) =>
     setPixels(bitmapAt(h), colors, off, stride, x, y, w, ht),
-  "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
-    const memory = memoryOf(bitmapAt(h));
-    remainingBytes(buffer).set(memory);
-  }),
-  "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => after(resident(buffer), () => {
+  "nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => writeRemainingBytes(buffer,memoryOf(bitmapAt(h))),
+  "nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V": (h: bigint, buffer: JBuffer) => {
     const b = bitmapAt(h);
-    setMemory(b, remainingBytes(buffer).slice(0, byteSize(b)));
-  }),
+    return after(readBufferBytes(buffer,position(buffer) << elementShift(buffer),byteSize(b)),bytes => setMemory(b,bytes.slice()));
+  },
   "nativeGenerationId(J)I": (h: bigint) => bitmapAt(h).genId,
   // Bitmap's own wire format, which only its CREATOR reads: the flags, geometry, density and memory
   "nativeWriteToParcel(JILandroid/os/Parcel;)Z": (h: bigint, density: number, parcel: JObj) => {

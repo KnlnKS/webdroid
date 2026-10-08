@@ -41,6 +41,13 @@ export const MAY_SUSPEND = new Set<string>([
   "android/graphics/ImageDecoder.nCreate(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
   "android/media/AudioTrack.native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I",
   "android/media/MediaExtractor.readSampleData(Ljava/nio/ByteBuffer;I)I",
+  "android/graphics/Bitmap.nativeCopyPixelsToBuffer(JLjava/nio/Buffer;)V",
+  "android/graphics/Bitmap.nativeCopyPixelsFromBuffer(JLjava/nio/Buffer;)V",
+  "dalvik/system/InMemoryDexClassLoader.<init>(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V",
+  "dalvik/system/InMemoryDexClassLoader.<init>([Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V",
+  "dalvik/system/InMemoryDexClassLoader.<init>([Ljava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+  "com/android/org/conscrypt/NativeCrypto.EVP_AEAD_CTX_seal_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I",
+  "com/android/org/conscrypt/NativeCrypto.EVP_AEAD_CTX_open_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I",
 ]);
 // Owner-backed Java mappings retain the local synchronous fast path but may await RPC.
 for (const owner of ["libcore/io/Memory","com/android/i18n/timezone/internal/Memory"])

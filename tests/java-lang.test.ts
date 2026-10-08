@@ -759,6 +759,11 @@ describe("dex-class-loaders", () => {
     expect(await vcall(second, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).not.toBe(cls);
     expect(await vcall(cls, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
     expect([await vcall(buffer, "position", "()I"), await vcall(buffer, "limit", "()I")]).toEqual([8, 8 + bytes.length]);
+    const { readOnlyBuffer } = await import("../src/jvm/natives/jnio");
+    const mapped = await readOnlyBuffer(bytes);
+    const paged = await newObj("dalvik/system/InMemoryDexClassLoader", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V", mapped, null);
+    const loaded = await vcall(paged,"loadClass","(Ljava/lang/String;)Ljava/lang/Class;","JvmTierProbe");
+    expect(await vcall(loaded,"getClassLoader","()Ljava/lang/ClassLoader;")).toBe(paged);
   });
 });
 

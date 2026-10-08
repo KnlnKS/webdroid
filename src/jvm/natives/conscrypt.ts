@@ -8,7 +8,7 @@ import { rt, declaredField, type JObj } from "../runtime";
 import { handle, ownedHandle, weakHandle, deref, release } from "../../android/handles";
 import { DIGESTS, Hmac, deferred, type Deferred, type Hash } from "./digest";
 import { aes, des, ctr, Rc4, AesGcm, ChaCha20Poly1305, chacha20, type BlockCipher, type Aead } from "./ciphers";
-import { type JBuffer, remainingBytes, resident, addressOf, limit, position, directAddress } from "./jnio";
+import { type JBuffer, readRemainingBytes, writeRemainingBytes, addressOf, limit, position, directAddress } from "./jnio";
 import { memoryAt } from "./jmemory";
 import { randomBytes } from "../../native/libc";
 import { after, scall } from "./jentry";
@@ -326,13 +326,12 @@ nc("EVP_AEAD_CTX_open(J[BI[BI[B[BII[B)I", (h: bigint, key: Int8Array, tagLen: nu
 function aeadBuf(seal: boolean, h: bigint, key: Int8Array, tagLen: number, out: JBuffer | null, nonce: Int8Array, input: JBuffer | null, aad: Int8Array | null) {
   if (!out || !input) throw rt.mkThrowable("java/lang/NullPointerException", null);
   if (!addressOf(out) || !addressOf(input)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Non-direct ByteBuffer");
-  return after(resident(input), () => {
-    const a = aeadFor(h, key, tagLen = tagOr16(tagLen), nonce), data = remainingBytes(input).slice();
+  return after(readRemainingBytes(input), bytes => {
+    const a = aeadFor(h, key, tagLen = tagOr16(tagLen), nonce), data = bytes.slice();
     const r = seal ? a.seal(u8(nonce), data, aad ? u8(aad) : new Uint8Array(0), tagLen) : a.open(u8(nonce), data, aad ? u8(aad) : new Uint8Array(0), tagLen);
     if (!r) throw badDecrypt("javax/crypto/AEADBadTagException");
     if (r.length > limit(out) - position(out)) throw sslError("javax/crypto/ShortBufferException", CIPHER, 103, "BUFFER_TOO_SMALL");
-    remainingBytes(out).set(r);
-    return r.length;
+    return after(writeRemainingBytes(out,r), () => r.length);
   });
 }
 nc("EVP_AEAD_CTX_seal_buf(J[BILjava/nio/ByteBuffer;[BLjava/nio/ByteBuffer;[B)I", (h: bigint, key: Int8Array, tagLen: number, out: JBuffer, nonce: Int8Array, input: JBuffer, aad: Int8Array | null) =>

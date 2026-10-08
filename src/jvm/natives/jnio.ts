@@ -51,8 +51,7 @@ function layoutOf(b: JBuffer): Layout {
   layouts.set(b.constructor, layout);
   return layout;
 }
-/** the bytes of a buffer's elements [0, capacity) where its memory holds them; an external
- *  mapping's must be `resident` first */
+/** A synchronous byte view: immutable mappings must be resident, live owner mappings cannot provide one. */
 export function bufferBytes(b: JBuffer): Uint8Array<ArrayBuffer> {
   const o = b as Fields, shift = elementShift(b), n = capacity(b) << shift, address = addressOf(b);
   if (address) return (isExternal(address) ? externalBytes(address, n) : mem.bytes(physical(address), n)) as Uint8Array<ArrayBuffer>;
@@ -88,8 +87,16 @@ export function remainingBytes(b: JBuffer): Uint8Array<ArrayBuffer> {
   const shift = elementShift(b);
   return bufferBytes(b).subarray(position(b) << shift, limit(b) << shift);
 }
-/** null when TS code can read a buffer's bytes, else a Promise that settles once it can: an
- *  external mapping loads the pages the buffer spans */
+export function readRemainingBytes(b: JBuffer): Uint8Array | Promise<Uint8Array> {
+  const scale = 2 ** elementShift(b);
+  return readBufferBytes(b,position(b) * scale,(limit(b) - position(b)) * scale);
+}
+export function writeRemainingBytes(b: JBuffer, bytes: Uint8Array): void | Promise<void> {
+  const scale = 2 ** elementShift(b);
+  if (bytes.length > (limit(b) - position(b)) * scale) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "buffer limit exceeded");
+  return writeBufferBytes(b,bytes,position(b) * scale);
+}
+/** Populate an immutable mapping's pages; live mappings remain at their owner. */
 export function resident(b: JBuffer): Promise<void> | null {
   const address = addressOf(b);
   return address && isExternal(address) ? pagesIn(address, capacity(b) << elementShift(b)) : null;
