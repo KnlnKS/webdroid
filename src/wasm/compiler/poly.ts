@@ -1,11 +1,11 @@
 // invoke-polymorphic on VarHandle access modes (AtomicInteger, AtomicReference, ForkJoinPool, ConcurrentLinkedQueue, ...).
 // Guarded accessor types and null reference operands use storage operations; other conversions and views use the Java bridge.
 import { OP } from "./code";
-import { T, refNull, type VT } from "./wasmbin";
+import { T, ref, refNull, type VT } from "./wasmbin";
 import { ACC, kindOf, type Kind } from "./program";
 import { elemKindOf } from "./consts";
 import { descToName, isWide, varHandleValues } from "../../jvm/abi";
-import { emitStoreCheck, classMethod, constClass, typeName, Info } from "../link/classes";
+import { emitStoreCheck, classMethod, typeName, Info } from "../link/classes";
 import { UInfo } from "../link/unsafe";
 import type { PreparedInstruction as Ins } from "../../jvm/prepared";
 import type { Compiler } from "./j2w";
@@ -78,12 +78,19 @@ function emitExactAccess(mc: MC, ins: Ins, mode: string): boolean {
   if (!storage || (family(variable) === "F" || family(variable) === "D") && op.startsWith("getAndBitwise")) return false;
   const regs: number[] = []; for (let ri = 1, i = 0; i < params.length; ri += isWide(params[i++]) ? 2 : 1) regs.push(ins.regs[ri]);
   const handle = c.newLocal(T.anyref), match = c.newLocal(T.i32), vt = cx.structFor(VH), clsDesc = "Ljava/lang/Class;";
+  const classes = c.newLocal(ref(cx.tData.ref)), expected = c.newLocal(T.anyref);
   mc.nonNull(ins.regs[0]); c.lset(handle);
+  c.gget(cx.ctab()).refAsNonNull().lset(classes);
   c.lget(handle).refTest(cx.structFor(storage));
   const sameClass = (field: string, desc?: string) => {
     c.lget(handle).refCast(vt).structGet(vt, cx.fieldIndex(VH, { owner: VH, name: field, desc: clsDesc }));
-    if (desc) constClass(cx, c, typeName(desc)); else c.anyNull();
-    c.call(cx.helper("acmp")).raw(OP.i32_and);
+    if (desc) {
+      const id = cx.idOf(typeName(desc));
+      // An uncached expected mirror cannot match a live handle.
+      c.i32(id).lget(classes).arrayLen().raw(OP.i32_lt_u).if_(T.anyref).lget(classes).i32(id).arrayGet(cx.tData.ref).else_().anyNull().end();
+      c.ltee(expected).call(cx.helper("acmp")).lget(expected).refIsNull().raw(OP.i32_eqz, OP.i32_and);
+    } else c.refIsNull();
+    c.raw(OP.i32_and);
   };
   sameClass("varType", variable); sameClass("coordinateType0", coords[0]); sameClass("coordinateType1", coords[1]);
   // Unequal reference descriptors can share storage only when the converted argument is actually null.
