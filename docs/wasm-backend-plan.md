@@ -13,7 +13,13 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
-### Current recovery checkpoint (2026-10-07, production `7ebf4b7e`)
+### Current recovery checkpoint (2026-10-07, production `e3b51392`)
+
+Host-only Wasm entries skip unnecessary Error allocation while preserving explicit cold/synchronous callers and logical ancestry. Canonical descriptor-owned shared pages retain independent leases and refresh persistence snapshots after direct page mutation; raw native shared mappings remain unsupported until checked core access, atomic publication/reservations and futex ownership are coherent. Failed A64 exclusive stores preserve memory when no reservation exists, and checked JS JNI writes invalidate executed code. One-shot app builders skip unused refinement setup. Optional bounded compiler spans and Worker journals now retain disjoint elapsed work and ownership, but total compilation accounting remains incomplete.
+
+The combined parent passes typecheck, all 1,211 unit tests/79,749 assertions, 47 owning native/layer checks and persistence. Parent Chrome/WebKit caller controls pass after the host-entry change; actual explicit-JS WebKit FitNotes startup renders its intended welcome UI with advancing ticks and no observed process errors. The earlier unexplained browser SyntaxError remains recorded alongside passing unchanged and starting-commit controls. Four of nine conformance suites pass on the frozen preceding 7eb source with no regressions or unexplained differences. Fresh matching AOT, the remaining conformance/application/Worker matrix and idle G1/G3/G4/G5 acceptance remain required. The JS compile worker's initial-request readiness race is under repair. JavaScript remains default and visual goldens are unchanged.
+
+### Preceding recovery checkpoint (2026-10-07, production `7ebf4b7e`)
 
 JavaScript and Wasm caller recovery now recognize actual WebKit frames while preserving defining-loader identity and truthful unknown positions. The engine-only probe has a neutral shared owner. Optional early/terminal compiler counters use a common root clock; disabled telemetry avoids browser-only access in Node. Current typecheck, all 1,211 unit tests/79,635 assertions, 23 cold-initialization controls and parent Chrome 153/WebKit 26.5 caller/recursive/suspended controls pass. The preceding full unit invocation retains three explained integration failures: the frame-owner import crossed the linker boundary, and disabled telemetry evaluated location in two Node tests. Fresh production AOT and application startup repeats remain required; served assets still belong to d239.
 
