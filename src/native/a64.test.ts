@@ -275,6 +275,7 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
       0x885f7d21,   // ldxr w1, [x9]
       0x11000421,   // add w1, w1, #1
       0x88027d21,   // stxr w2, w1, [x9]
+      0x52800c61,   // mov w1, #99
       0x88037d21,   // stxr w3, w1, [x9]       (no monitor: fails)
       0xb940012a,   // ldr w10, [x9]
       0x9100212c,   // add x12, x9, #8
@@ -283,9 +284,11 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
       0xa900398d,   // stp x13, x14, [x12]
       0xc87f9584,   // ldaxp x4, x5, [x12]
       0xc8269185,   // stlxp w6, x5, x4, [x12]
+      0xc833b98d,   // stlxp w19, x13, x14, [x12] (no monitor: fails)
       0xa940418f,   // ldp x15, x16, [x12]
       0x885ffd21,   // ldaxr w1, [x9]
       0xd5033f5f,   // clrex
+      0x528009a1,   // mov w1, #77
       0x8807fd21,   // stlxr w7, w1, [x9]      (cleared: fails)
       0x88dffd31,   // ldar w17, [x9]
       0x889ffd2e,   // stlr w14, [x9]
@@ -295,6 +298,7 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
     expect([c.w[8], c.w[10], c.w[12], c.w[30], c.w[32]]).toEqual([1, 2, 0, 2, 1]);
     expect([c.w[14], c.w[34], c.w[36]]).toEqual([1, 11, 2]);
     expect(c.excl).toBe(0);
+    expect(c.w[38]).toBe(1);
   });
 
   test("rev, rev16, rev32, rbit and cls, both widths, rd may be rn", () => {

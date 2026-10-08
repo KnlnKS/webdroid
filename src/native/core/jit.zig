@@ -1005,6 +1005,8 @@ pub fn Emit(comptime wide: bool) type {
                             b.emit(.{ get(L_A), mo(LD[size][0], step) });
                             e.setX(o.ra);
                         } else {
+                            b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL) });
+                            e.ifv();
                             e.storeCheck(0, 2 * step);
                             b.get(L_A);
                             e.getX(o.rd);
@@ -1012,6 +1014,7 @@ pub fn Emit(comptime wide: bool) type {
                             b.get(L_A);
                             e.getX(o.ra);
                             b.memop(ST[size], step);
+                            e.endif();
                             b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor });
                             e.setW(o.rm);
                             b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });
@@ -1034,11 +1037,16 @@ pub fn Emit(comptime wide: bool) type {
                         b.emit(.{ get(L_A), mo(LD[size][0], 0) });
                         e.setX(o.rd);
                     } else {
+                        if (!o2) {
+                            b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL) });
+                            e.ifv();
+                        }
                         e.storeCheck(0, @as(u32, 1) << size);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
                         if (!o2) {
+                            e.endif();
                             b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor });
                             e.setW(o.rm);
                             b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });

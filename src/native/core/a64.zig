@@ -718,7 +718,7 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
             if (!o2) c.excl = 1;
             setX(c, o.rd, ldSized(a, size));
         } else {
-            if (!stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
+            if ((o2 or c.excl != 0) and !stSized(c, a, size, zr(c, o.rd))) return badAddr(c, pc);
             if (!o2) {
                 setW(c, o.rm, c.excl ^ 1);
                 c.excl = 0;
@@ -731,7 +731,7 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
             setX(c, o.rd, ldSized(a, size));
             setX(c, o.ra, ldSized(a + step, size));
         } else {
-            if (!stSized(c, a, size, zr(c, o.rd)) or !stSized(c, a + step, size, zr(c, o.ra))) return badAddr(c, pc);
+            if (c.excl != 0 and (!stSized(c, a, size, zr(c, o.rd)) or !stSized(c, a + step, size, zr(c, o.ra)))) return badAddr(c, pc);
             setW(c, o.rm, c.excl ^ 1);
             c.excl = 0;
         }
