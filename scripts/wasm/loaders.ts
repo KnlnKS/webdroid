@@ -946,6 +946,12 @@ async function nativePathControl(): Promise<void> {
     })(obj, value);
     const appPeer = await construct("dalvik/system/DexClassLoader", appPath), appLoader = definingLoader(target, appPeer);
     if (appLoader !== p.root || nativeClassLookup(target, appLoader, "Ldr$MemberLoader") !== "Ldr$MemberLoader") throw new Error("root app path was not recognized");
+    const jni = wasmJni(target), classLoader = jni.find("java/lang/ClassLoader", null)!;
+    for (const name of ["java/io/PrintStream", "java/io/ByteArrayOutputStream"]) {
+      if (p.initiatedBy(appLoader, name)) throw new Error("JNI loader fixture class was already initiated");
+      const mirror = await jni.invoke(classLoader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", false, appPeer, [jni.string(name)], false);
+      if (jni.classOf(mirror)?.name !== name || p.initiatedBy(appLoader, name) !== name) throw new Error("JNI loadClass lost the native platform lookup");
+    }
     managed = 0; const appStrand = target.sched.strand();
     try {
       const key = target.resolveClass(appLoader, "Ldr$MemberLoader", appStrand);

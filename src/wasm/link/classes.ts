@@ -337,7 +337,7 @@ def("java/lang/Class.classForName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Lja
   c.lget(id); cx.callRt(c, "classOf");
 });
 
-// VMClassLoader.findLoadedClass(loader, name): the class `loader` itself defines under that name, its ancestors' not included (loaders.ts)
+// ART's findLoadedClass also searches recognized platform loader paths (loaders.ts).
 def("java/lang/VMClassLoader.findLoadedClass(Ljava/lang/ClassLoader;Ljava/lang/String;)Ljava/lang/Class;", (cx, c) => {
   const id = c.newLocal(T.i32);
   c.lget(1).refIsNull().if_(); cx.callThrower(c, "npe"); c.end();

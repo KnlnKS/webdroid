@@ -4,6 +4,7 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
+- Wasm now uses ART's standard path-loader lookup from `findLoadedClass`, fixing Lichess plugin registration. Full loader/Wasm checks pass, but the app still stays black after a subsequent keystore failure; boxed-value handling is under investigation. The full JS control renders through all 15 actions.
 - World installation now releases helper trace records that do not represent Java frames. A live-World compiled/cold control preserves frames and releases all 1,334 observed unused records after GC. Current typecheck, full unit/Wasm/cold/OSR/framework checks and byte-identical fresh AOT pass. This is a retention cleanup, not an application or performance gate closure.
 
 - The Wasm planner reuses unchanged implementation sets and drops unused subclass counts. Real-World replay preserves target identity/order while eliminating 90% of traversals in the repeated-query control. Typecheck, all 19 Wasm sections, cold/OSR/framework checks and the final 1,212-test unit run pass; fresh ordinary/guarded AOT is byte-identical to its predecessor. Two browser parser failures are now traced to corrupted fixture HTTP bodies; the fixture materializes bundle text before serving. The underlying transport trigger and earlier uncaptured failures remain open. No application or performance gate is closed by these changes.

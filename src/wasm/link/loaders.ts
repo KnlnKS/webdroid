@@ -141,11 +141,12 @@ export function classByName(w: World, name: string, scope: unknown, mode: Lookup
   const n = name.replace(/\./g, "/");
   if (n === "" || n.includes("@")) return 0;
   const prog = w.prog, s = stateOf(w), cookie = mode === Lookup.Cookie ? s.cookies.get(scope as object) : undefined;
-  const loader = mode === Lookup.Cookie ? cookie?.loader : loaderFor(w, scope as object | null);
+  const object = scope as object | null;
+  const loader = mode === Lookup.Cookie ? cookie?.loader : mode === Lookup.Defined ? definingLoader(w, object) : loaderFor(w, object);
   if (!loader) return 0;
   const find = (cls: string): string | undefined => {
-    if (mode === Lookup.Defined) return prog.initiatedBy(loader, cls);
-    const key = mode === Lookup.Visible ? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
+    const key = mode === Lookup.Defined ? prog.initiatedBy(loader, cls) ?? (object ? nativeClassLookup(w, loader, cls) : undefined)
+      : mode === Lookup.Visible ? prog.lookup(loader, cls) : prog.definedBy(loader, cls);
     if (key === undefined || cookie && !cookie.dexes.includes(prog.get(key)!.dex!)) return undefined;
     w.initiateClass(loader, cls, key);
     return key;
