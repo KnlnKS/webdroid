@@ -109,11 +109,11 @@ class DexClass implements JClass {
     return [...def.directMethods, ...def.virtualMethods].map((m) => [this.dex.methodKey(m.methodIdx), m.flags]);
   }
   /** Implementation checks often miss: they look the method up in the dex's ids rather than build the class's members. */
-  method(key: string): MethodInfo | undefined {
-    if (this.members_) return this.members_.byKey.get(key);
-    const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at));
+  method(key: string, raw = false): MethodInfo | undefined {
+    if (this.members_ && !raw) return this.members_.byKey.get(key);
+    const at = key.indexOf("("), i = this.dex.findMethod(this.dex.classDef2Type(this.idx), key.slice(0, at), key.slice(at), raw);
     const m = i < 0 ? undefined : this.dex.declaredAt(this.idx, i);
-    return m && this.methodInfo(m, m.index);
+    return m && (this.members_?.methods[m.index] ?? this.methodInfo(m, m.index));
   }
   /** the method at `index` (direct methods first, then virtual), without building the others */
   methodAt(index: number): MethodInfo | undefined {
@@ -153,7 +153,10 @@ export const methodCount = (c: JClass): number => (c instanceof DexClass ? c.nMe
 /** the method a class declares at `index` (its table slot's offset), without materializing the others */
 export const methodAt = (c: JClass, index: number): MethodInfo | undefined => (c instanceof DexClass ? c.methodAt(index) : c.methods[index]);
 /** One declared method without materializing unrelated members. */
-export const declaredMethod = (c: JClass | undefined, key: string): MethodInfo | undefined => (c instanceof DexClass ? c.method(key) : c?.byKey.get(key));
+export function declaredMethod(c: JClass | undefined, key: string, raw = false): MethodInfo | undefined {
+  if (c instanceof DexClass) return c.method(key, raw);
+  return raw ? c?.methods.find(m => javaName(m.key) === key) : c?.byKey.get(key);
+}
 /** the class_def of a class in its dex, or -1 for a class no dex defines */
 export const classDefIdx = (c: JClass): number => (c instanceof DexClass ? c.idx : -1);
 /** the keys and access flags of the methods a class declares */

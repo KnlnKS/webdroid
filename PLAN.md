@@ -4,6 +4,8 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
+- Symbolic descriptor fallback now uses indexed DEX lookup and preserves canonical method identity. A matched lookup control eliminates whole-class key scans; no APK latency percentage is claimed. Typecheck, all 19 Wasm sections, cold/OSR/framework checks, Resy smoke and byte-identical fresh AOT pass. The final 1,212-test unit check passes after an initial six-parser-failure run; that failure remains unexplained. Full application and performance acceptance remain open.
+
 - Loader rebinding now restricts dispatch and assumption checks to changed declarations and dependent ancestors/interfaces. Typecheck, all 1,212 unit tests, 19 Wasm sections, cold/OSR/framework checks, zero-failure Resy smoke and byte-identical fresh AOT pass. The full production Resy flow still fails: it reaches the venue list, then reports Java heap exhaustion during RecyclerView layout; all 60 process diagnostic snapshots answer. No application or performance gate is closed.
 
 - The frozen Wasm fast matrix at `57c27d99` passes 8/14 flows; Doodle, Resy, Reddit, TikTok, YouTube and ChatGPT still fail. Resy's profile is dominated by loader rebinding. WebView interface discovery now uses Java reflection across tiers, and process errors preserve Wasm throwable classes; 67 host-entry comparisons, typecheck and all 1,212 unit tests pass. All 19 Wasm suites, 31 framework exercises and fresh ordinary/guarded AOT pass. Actual WebView provider invocation returns the annotated callback result; Resy still wedges during map startup. JNI tracing now formats opaque references without coercing them. Broader application verification remains open.

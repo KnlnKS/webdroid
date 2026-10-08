@@ -343,7 +343,7 @@ export class DexFile {
     return undefined;
   }
   /** the method_id of class `typeIdx` named `name` with descriptor `desc`, or -1. method_ids sort by class, then name, then proto */
-  findMethod(typeIdx: number, name: string, desc: string): number {
+  findMethod(typeIdx: number, name: string, desc: string, raw = false): number {
     const n = this.findString(name);
     if (n < 0) return -1;
     const v = this.view, at = (i: number) => this.methodIdsOff + i * 8;
@@ -353,7 +353,9 @@ export class DexFile {
       if (c < typeIdx || c === typeIdx && s < n) lo = mid + 1; else hi = mid;
     }
     for (let i = lo; i < this.methodCount && v.getUint16(at(i), true) === typeIdx && v.getUint32(at(i) + 4, true) === n; i++) {
-      if (this.protoDesc(v.getUint16(at(i) + 2, true)) === desc) return i;
+      const pi = v.getUint16(at(i) + 2, true), p = raw ? this.proto(pi) : undefined;
+      const candidate = p ? "(" + p.params.map(t => this.rawType(t)).join("") + ")" + this.rawType(p.ret) : this.protoDesc(pi);
+      if (candidate === desc) return i;
     }
     return -1;
   }

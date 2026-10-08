@@ -3,7 +3,7 @@
 // not gaps: the program asks for something the loaded classes lack, and the error is what it gets.
 import type { DexFile } from "../../jvm/dex";
 import { descToName } from "../../jvm/abi";
-import { ACC, declaredMethod, declaredMethods, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
+import { ACC, declaredMethod, javaName, sameRuntimePackage, selectDefault, type DispatchTarget, type FieldInfo, type JClass, type MethodInfo, type Program } from "./program";
 import type { Thrower } from "../link/exc";
 
 export interface LinkFailure {
@@ -38,10 +38,7 @@ const invokeType = (m: MethodInfo, prog: Program) => (m.isStatic ? "static" : m.
 const prettyMethod = (m: MethodInfo) => `${prettyType(m.ret)} ${dotted(m.cls)}.${m.name}(${m.params.map(prettyType).join(", ")})`;
 
 export function symbolicMethod(c: JClass, name: string, desc: string): MethodInfo | undefined {
-  const exact = declaredMethod(c, name + desc);
-  if (exact) return exact;
-  const raw = name + javaName(desc), key = declaredMethods(c).find(([key]) => javaName(key) === raw)?.[0];
-  return key === undefined ? undefined : declaredMethod(c, key);
+  return declaredMethod(c, name + desc) ?? declaredMethod(c, name + javaName(desc), true);
 }
 
 /** DEX member resolution compares descriptors, not the referring loader's already-resolved types. */
