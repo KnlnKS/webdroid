@@ -43,7 +43,7 @@ import { compileModule, hasJspi, suspending } from "./module";
 import { AotRuntime, VERSION, DEOPT_ABI, sameMarks, type AotBuild, type AotStore, type AppIndex, type Marks, type Numbering, type Tail } from "./aot";
 import type { UnitResult, UpgradeJob } from "./unit";
 import { HotUnits } from "./hotunits";
-import { lexicalFrames } from "../../jvm/frames";
+import { lexicalFrames } from "../../jvm/stack-format";
 
 type BridgeStack = { stack: Error; prior?: BridgeStack; done: boolean };
 type LinkImports = { link: number; due: number; wait: number; sync: number; state: [number, number, number] };

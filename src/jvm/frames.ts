@@ -1,14 +1,11 @@
+import { lexicalFrames } from "./stack-format";
+export { lexicalFrames } from "./stack-format";
 import type { Runtime } from "./runtime";
 
 const ids = new WeakMap<Runtime, number>(), owners = new Map<number, WeakRef<Runtime>>();
 const released = new FinalizationRegistry<number>(id => owners.delete(id));
 let next = 0;
 
-export const lexicalFrames = (() => {
-  const fn = function frameProbe() { return new Error().stack; };
-  Object.defineProperty(fn, "name", { value: "frameRenamed" });
-  return !fn()?.includes("frameRenamed");
-})();
 function ownerId(owner: Runtime): number {
   let id = ids.get(owner);
   if (id === undefined) {
