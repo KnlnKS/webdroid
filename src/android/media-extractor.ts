@@ -1,7 +1,8 @@
 import type { Sample } from "mp4box";
 import { rt, type JObj } from "../jvm/runtime";
+import { after } from "../jvm/natives/jentry";
 import { NativeFormat, TYPE_BYTE_BUFFER, TYPE_INTEGER, TYPE_LONG, TYPE_STRING, formatToJava } from "./media-format";
-import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition } from "../jvm/natives/jnio";
+import { type JBuffer, allocateDirectNow, bufferBytes, capacity, directReady, setLimit, setPosition, writeBufferBytes } from "../jvm/natives/jnio";
 import { fdInt } from "../jvm/natives/jio";
 import { vfs } from "../shell/vfs";
 import { readFully, type FileSource } from "../shell/lazyfile";
@@ -158,9 +159,10 @@ rt.registerJnis("android/media/MediaExtractor", {
     return p.extractor.read(p.source).then((data) => {
       if (!data) return -1;
       if (offset < 0 || offset + data.length > capacity(buffer)) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-      bufferBytes(buffer).set(data, offset);
-      setLimit(buffer, offset + data.length); setPosition(buffer, offset);
-      return data.length;
+      return after(writeBufferBytes(buffer,data,offset), () => {
+        setLimit(buffer,offset + data.length); setPosition(buffer,offset);
+        return data.length;
+      });
     });
   }),
   "getSampleTrackIndex()I": E((p) => p.extractor.current()?.index ?? -1),

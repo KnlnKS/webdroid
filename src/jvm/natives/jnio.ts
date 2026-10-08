@@ -11,7 +11,7 @@ import { syncShared } from "../../native/mappings";
 import { jarray, mangleField, mangleMethod } from "../abi";
 import { handle, deref, release } from "../../android/handles";
 import { CHARSETS, Converter, charsetNamed, covers, encodeString, U_BUFFER_OVERFLOW_ERROR, U_TRUNCATED_CHAR_FOUND, U_INVALID_CHAR_FOUND, U_ILLEGAL_CHAR_FOUND } from "../charset";
-import { isExternal, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes } from "./jmemory";
+import { isExternal, forceExternal, pagesIn, externalBytes, guestAddress, setBufferAddress, isResident, mapExternal, unmapExternal, physical, hostBytes, memoryAt, writeAt } from "./jmemory";
 import { BytesFile, type FileSource } from "../../shell/lazyfile";
 export { isExternal };
 
@@ -60,6 +60,28 @@ export function bufferBytes(b: JBuffer): Uint8Array<ArrayBuffer> {
   if (hb) return new Uint8Array(hb.buffer, hb.byteOffset + (o[layout.offset!] << shift), n);
   if (layout.bb) { const at = o[layout.byteOffset!]; return bufferBytes(o[layout.bb]).subarray(at, at + n); }
   throw rt.mkThrowable("java/lang/UnsupportedOperationException", "a buffer over a CharSequence has no memory");
+}
+function checkedByteLength(b: JBuffer, at: number, n?: number): number {
+  const size = capacity(b) * 2 ** elementShift(b), length = n ?? size - at;
+  if (!Number.isSafeInteger(at) || !Number.isSafeInteger(length) || at < 0 || length < 0 || at > size - length)
+    throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "invalid buffer byte range");
+  return length;
+}
+/** A host operation reads owner-backed memory once; it does not receive a live byte view. */
+export function readBufferBytes(b: JBuffer, at = 0, n?: number): Uint8Array | Promise<Uint8Array> {
+  const length = checkedByteLength(b,at,n), address = addressOf(b);
+  if (address) return memoryAt(address + BigInt(at),length);
+  const layout = layoutOf(b), o = b as Fields;
+  if (layout.bb && !(layout.hb && o[layout.hb])) return readBufferBytes(o[layout.bb],o[layout.byteOffset!] + at,length);
+  return bufferBytes(b).subarray(at,at + length);
+}
+export function writeBufferBytes(b: JBuffer, bytes: Uint8Array, at = 0): void | Promise<void> {
+  checkedByteLength(b,at,bytes.length);
+  const address = addressOf(b);
+  if (address) return writeAt(address + BigInt(at),bytes);
+  const layout = layoutOf(b), o = b as Fields;
+  if (layout.bb && !(layout.hb && o[layout.hb])) return writeBufferBytes(o[layout.bb],bytes,o[layout.byteOffset!] + at);
+  bufferBytes(b).set(bytes,at);
 }
 /** the bytes of [position, limit) */
 export function remainingBytes(b: JBuffer): Uint8Array<ArrayBuffer> {

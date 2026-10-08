@@ -9,7 +9,7 @@
 import { awaited, rt, declaredField, driven, type Gen } from "../jvm/runtime";
 import { handle, ownedHandle, deref, release } from "./handles";
 import { vcall, scall, newObj, after, iof } from "../jvm/natives/jentry";
-import { type JBuffer, bufferBytes, resident, elementShift } from "../jvm/natives/jnio";
+import { type JBuffer, readBufferBytes, elementShift } from "../jvm/natives/jnio";
 import { fdInt, readStreamFully } from "../jvm/natives/jio";
 import { u8, concat, unshared } from "../jvm/abi";
 import { javaFdBytes, javaSeekFd } from "../native/fs";
@@ -454,7 +454,7 @@ rt.registerJnis(DECODER, {
     createDecoder(() => assetBytes(asset), source),
   "nCreate(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;":
     (buffer: JBuffer, position: number, limit: number, _animation: number, source: unknown) =>
-      createDecoder(() => after(resident(buffer), () => bufferBytes(buffer).slice(position << elementShift(buffer), limit << elementShift(buffer))), source),
+      createDecoder(() => after(readBufferBytes(buffer,position << elementShift(buffer),(limit - position) << elementShift(buffer)), bytes => bytes.slice()), source),
   "nCreate([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (bytes: Int8Array, off: number, len: number, _animation: number, source: unknown) =>
     createDecoder(() => u8(bytes, off, len).slice(), source),
   "nCreate(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;": (stream: unknown, _storage: Int8Array, _animation: number, source: unknown) =>

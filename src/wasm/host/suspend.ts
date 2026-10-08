@@ -34,6 +34,9 @@ export const MAY_SUSPEND = new Set<string>([
   "java/net/SocketInputStream.socketRead0(Ljava/io/FileDescriptor;[BIII)I",
   "libcore/io/Linux.connect(Ljava/io/FileDescriptor;Ljava/net/InetAddress;I)V",
   "libcore/io/Linux.recvfromBytes(Ljava/io/FileDescriptor;Ljava/lang/Object;IIILjava/net/InetSocketAddress;)I",
+  "android/graphics/ImageDecoder.nCreate(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
+  "android/media/AudioTrack.native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I",
+  "android/media/MediaExtractor.readSampleData(Ljava/nio/ByteBuffer;I)I",
 ]);
 // Owner-backed Java mappings retain the local synchronous fast path but may await RPC.
 for (const owner of ["libcore/io/Memory","com/android/i18n/timezone/internal/Memory"])

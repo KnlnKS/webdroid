@@ -3,7 +3,7 @@
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
 import { rt, type JObj } from "../jvm/runtime";
 import { after } from "../jvm/natives/jentry";
-import { type JBuffer, bufferBytes } from "../jvm/natives/jnio";
+import { type JBuffer, readBufferBytes } from "../jvm/natives/jnio";
 import { uptimeMillis } from "../guest-clock";
 import { PCM_BYTES, PcmOutput, type PcmConfig, audioContext, minFrames, newAudioSessionId, outputSampleRate } from "./audio-output";
 import { nativePeer, postNativeEvent } from "./media-native";
@@ -80,8 +80,7 @@ rt.registerJnis(AT, {
   "native_write_short([SIIIZ)I": function (this: JObj, d: Int16Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
   "native_write_float([FIIIZ)I": function (this: JObj, d: Float32Array, off: number, n: number, f: number, b: number) { return writeSamples(this, d, off, n, f, b); },
   "native_write_native_bytes(Ljava/nio/ByteBuffer;IIIZ)I": function (this: JObj, buffer: JBuffer, pos: number, n: number, f: number, b: number) {
-    const bytes = bufferBytes(buffer);
-    return writeSamples(this, new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length), pos, n, f, b);
+    return after(readBufferBytes(buffer,pos,n), bytes => writeSamples(this,new Int8Array(bytes.buffer,bytes.byteOffset,bytes.length),0,n,f,b));
   },
   "native_get_position()I": T((tr) => tr.position() | 0),
   "native_get_timestamp([J)I": T((tr, out: BigInt64Array) => {

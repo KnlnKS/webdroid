@@ -22,7 +22,7 @@ import { scall, loadLibcore } from "./java";
 import { FileDescriptors, type DescriptorCalls } from "../src/shell/file-descriptors";
 import { callProxy, serveCalls } from "../src/shell/process-port";
 import { descriptorTransport, isRemoteFd, stageBinderFd, takeBinderFd } from "../src/native/process-fd";
-import { type JBuffer, addressOf, directAddress, bufferBytes } from "../src/jvm/natives/jnio";
+import { type JBuffer, addressOf, directAddress, bufferBytes, readBufferBytes, writeBufferBytes } from "../src/jvm/natives/jnio";
 import { memoryAt } from "../src/jvm/natives/jmemory";
 import { canonicalFilePaths, filePathTransport } from "../src/shell/file-path";
 
@@ -736,6 +736,9 @@ describe("shared-memory", () => {
       expect(await vcall(b,"getInt","(I)I",4)).toBe(0x34567812);
       await scall("libcore/io/Memory","pokeByteArray","(J[BII)V",addressOf(a) + 4104n,Int8Array.of(9,8,7),0,3);
       expect([...(await memoryAt(addressOf(b) + 8n,3))]).toEqual([9,8,7]);
+      expect([...(await readBufferBytes(ints,4104,3))]).toEqual([9,8,7]);
+      await writeBufferBytes(ints,Uint8Array.of(6,5,4),4104);
+      expect([...(await readBufferBytes(b,8,3))]).toEqual([6,5,4]);
       const unsafe = await scall("sun/misc/Unsafe","getUnsafe","()Lsun/misc/Unsafe;");
       await vcall(unsafe,"putLong","(Ljava/lang/Object;JJ)V",null,addressOf(a) + 4112n,0x1122334455667788n);
       expect(await vcall(unsafe,"getLong","(J)J",addressOf(b) + 16n)).toBe(0x1122334455667788n);
