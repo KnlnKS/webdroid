@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Current full application checkpoint (2026-10-08, production `1763b497`)
+
+Selective metadata/header refresh preserves loader semantics in matched controls and passes the integrated compiler/unit/framework/cold/OSR checks with byte-identical fresh AOT. The frozen `582ca82d` full matrix captures all 208 screenshots in 14 flows, but fails Doodle, Resy, Reddit, TikTok, YouTube and ChatGPT. All 709 observed process diagnostics respond; Doodle still has opposing thread waits, TikTok records an OOM, and rendered Resy/YouTube/ChatGPT screens do not establish the requested venue/playback/response. Five scored flows average 18.70% content difference. Source `67a3c407835365…` and ordinary `d4e184dbdd4fef0e`/guarded `0a4fa6880383d20c` assets remain frozen throughout. The history records per-flow evidence and limitations. Final application/conformance/Worker/corpus and performance acceptance remain open; JavaScript stays default.
+
 ### G1 bootstrap ownership checkpoint (2026-10-08)
 
 Ordinary G1 incorrectly flattened platform and app DEX into the application loader; production and the installed scenario use a bootstrap platform beneath the app. Both scenarios now share that construction, and reports identify the layout. An actual World audit finds all 54,727 platform definitions bootstrap-owned and the workload app-owned. Typecheck and the full short 74-workload Node/Chrome comparison pass (592 calls). Private matched controls change timings in both directions, including worse linkedList execution. Earlier flattened G1 runs remain evidence of that harness, not production-layout acceptance. The runtime/AOT source is unchanged; full corrected performance gates remain open.

@@ -5762,3 +5762,25 @@ The frozen `1763b497` canonical fast matrix (`WEBDROID_TIER=wasm`, `--live --job
 All 662 process snapshots answer diagnostics on Wasm URLs, including 122 with no package initialized. Reachable diagnostics do not establish app liveness. No observed process reports a missing API, native requirement, draw error or GL error. Error-level logs comprise 28 distinct TikTok native initialization/optimization messages and eight Komikku messages covered by its existing expected-errors policy; none of these captured messages identifies a Java exception. These observations cover only the exercised paths.
 
 Doodle renders its title then completes no frames at its final four wedged checkpoints. Resy's canonical input now contains “Car”, and its venue checkpoint contains “Carneval Brooklyn”; its five failures are startup/list deadlines and liveness, with no private readiness wait or observed OOM. Reddit's launch screenshot is black and differs from its retained reference by 95.18% against the unchanged 4% limit. YouTube receives the query but never finds the required video title, so subsequent playback controls are unavailable. TikTok has six wedged checkpoints but later rendering resumes; ChatGPT retains response/navigation target failures. This is not application, visual-parity or idle performance acceptance, and differing live inputs prevent causal timing percentages. The full screenshot, final conformance/Worker/corpus and performance gates remain open; JavaScript stays default.
+
+
+### Frozen full Wasm application matrix after header retention (2026-10-08)
+
+The canonical `WEBDROID_TIER=wasm bun run e2e --full --jobs 1` run on `582ca82d` captures all 208 steps/screenshots across 14 flows in 3,031.5 seconds and exits 1. Source `67a3c407835365…`, ordinary AOT `d4e184dbdd4fef0e`, guarded AOT `0a4fa6880383d20c`, HEAD, selected APKs, the entire harness, goldens, native blobs and the wrapper remain unchanged. The receipt, copied captures/report, per-process analysis and PNG/UI analysis are `/tmp/webdroid-rebind-headers/matrix-full/`. These are application observations, not idle performance acceptance or a matched causal comparison.
+
+All 709 process snapshots answer diagnostics on Wasm URLs; 66 have no initialized package. No observed process reports a required native library or draw/GL error. TikTok records one missing native, 30 distinct error-level native initialization/optimization messages and two distinct uncaught errors. Komikku retains eight SQLiteLog messages covered by its existing expected-errors policy. Responding diagnostics and earlier frame production do not establish continued liveness.
+
+| Failed flow | Wedged checkpoints | Completion deadlines |
+|---|---:|---:|
+| Doodle Jump | 4 | 1 |
+| Resy | 2 | 2 |
+| Reddit | 0 | 1 |
+| TikTok | 10 | 0 |
+| YouTube | 4 | 6 |
+| ChatGPT | 2 | 4 |
+
+Doodle's title snapshot already contains opposing main/`wasm:3183` monitor owners despite 85 GL frames earlier in that interval. Play through Back remains on the title screen. These snapshots identify a thread cycle, not its lock objects. Resy renders its map/list but never enters the requested search or venue; the preceding fast run's venue result does not replace this failure. Reddit renders its welcome screen in the full capture but exceeds launch completion, while the earlier fast launch is black. YouTube remains on search results at video-open, with another upload visible and the requested title absent; playback is unproved. ChatGPT's response screenshot has an empty conversation area.
+
+TikTok's age/consent images are white. Its missing `HardwareRenderer.nDumpProfileInfo` is reached from `LaunchCrashGuard`/`uncaughtException` after startup has already stalled. At swipe, Java raises `OutOfMemoryError` in StringBuilder/Handler diagnostic formatting, followed by `DeadObjectException`. The earlier crash-handler throwable is not identified; the later OOM cannot be retroactively assigned to it. The reported 8 MiB is an allocation-check window, not the size of an identified allocation. No no-op profile delegate or heap-limit override is introduced. Its launch records 52,144 method-compilation counter increments; that counter includes generated entries/recompilation, and compiler/engine timers overlap, so neither unique Java method counts nor additive wall-time attribution follow.
+
+The other eight flows have no recorded action/liveness failures. Representative images confirm FitNotes's entered weights/repetitions, Lichess's e4/Nf3/Ne5 moves with Stockfish replies and Calculator's 7+7=14 result. Calculator's post-Back screenshot remains black; no launcher parity is claimed. The five scored flows average 18.70% content difference: FitNotes 7.43%, Mihon onboarding 16.73%, Mihon app 38.18%, Harmonic 17.74% and Calculator 13.41%. All 208 PNGs exist; coarse blankness checks supplement representative visual review. This does not close visual parity, G2/S4/S5/S6, final conformance/Worker/corpus coverage or the performance gates. JavaScript remains default.
