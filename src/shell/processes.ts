@@ -140,14 +140,14 @@ export class ProcessBroker {
   private counterSequence = 0;
   private counterDropped = 0;
   private counterTerminals = new Map<number, { receipt: Readonly<CounterReceipt> | null; error: string | null; url: string }>();
-  private counterEvent(entry: Entry, kind: "created" | "retired", url: string): void {
-    if (!window.__wdCounterReceipt) return;
+  private counterEvent(entry: Entry, kind: "created" | "retired", url?: string): void {
+    if (typeof window === "undefined" || !window.__wdCounterReceipt) return;
     const sequence = ++this.counterSequence;
     if (this.counterEvents.length === 128) { this.counterDropped++; return; }
-    this.counterEvents.push({ sequence, kind, at: performance.timeOrigin + performance.now(), pid: entry.pid, pkg: entry.pkg, process: entry.process, url });
+    this.counterEvents.push({ sequence, kind, at: performance.timeOrigin + performance.now(), pid: entry.pid, pkg: entry.pkg, process: entry.process, url: url ?? entry.frame?.src ?? entry.worker?.url ?? location.href });
   }
   counterReceipts() {
-    if (!window.__wdCounterReceipt) return null;
+    if (typeof window === "undefined" || !window.__wdCounterReceipt) return null;
     const rows = [];
     for (const entry of this.entries.values()) {
       if (rows.length === 128) break;
@@ -324,7 +324,7 @@ export class ProcessBroker {
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed", NOT_CRASHED));
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
-    this.counterEvent(entry, "created", entry.frame?.src ?? entry.worker?.url ?? location.href);
+    this.counterEvent(entry, "created");
     this.services.processStarted(pkg, process);
     return entry;
   }
@@ -629,7 +629,7 @@ export class ProcessBroker {
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
-    if (window.__wdCounterReceipt) {
+    if (typeof window !== "undefined" && window.__wdCounterReceipt) {
       const win = entry.frame?.contentWindow ?? (entry.pid === PROCESS_PID ? window : null), url = entry.frame?.src ?? entry.worker?.url ?? location.href;
       let receipt: Readonly<CounterReceipt> | null = null, error: string | null = null;
       try { if (win) receipt = readCounterReceipt(win); } catch (e) { error = String(e); }

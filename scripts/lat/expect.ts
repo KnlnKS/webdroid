@@ -39,6 +39,8 @@ export function compileDeltas(before: any[], after: any[], window?: { origin: nu
   if (probe && (!Number.isFinite(start) || !Number.isFinite(end) || end < start)) failures.push("absolute counter window unavailable");
   if (new Set(after.map(row => row.url)).size !== after.length || byUrl.size !== before.length) failures.push("duplicate process realm snapshots");
   if (probe) {
+    const root = after.filter(row => { try { return new URL(row.url).pathname === "/"; } catch { return false; } });
+    if (root.length !== 1 || after.some(row => row.proof?.receipt && row.proof.receipt.clockUrl !== root[0]?.url)) failures.push("canonical root counter clock unavailable or changed");
     const missing = new Set<string>();
     for (const row of after) for (const event of row.proof?.events ?? []) {
       if (!after.some(owner => owner.url === event.url && String(owner.pid) === String(event.pid) && owner.pkg === event.pkg)) missing.add(event.url);
