@@ -957,13 +957,20 @@ async function nativePathControl(): Promise<void> {
     try { resolved = target.resolveClass(loader, "Shared", strand); if (resolved instanceof Promise) throw new Error("ordinary native definition unexpectedly waited"); } finally { strand.end(); }
     if (resolved !== expected || managed) throw new Error("native resolution entered managed loadClass");
     const child = await construct("dalvik/system/DexClassLoader", paths[1], peer), childLoader = definingLoader(target, child);
-    if (nativeClassLookup(target, childLoader, "Sub")) throw new Error("nested path precedence was inferred from metadata");
+    const childSub = p.definedBy(childLoader, "Sub");
+    if (nativeClassLookup(target, childLoader, "Sub") !== childSub) throw new Error("nested live path lost its definition");
     if (nativeClassLookup(target, childLoader, "Shared") !== expected) throw new Error("parent native identity lost");
     const boot = p.definedBy(p.boot, "java/util/BitSet");
     if (nativeClassLookup(target, childLoader, "java/util/BitSet") !== boot) throw new Error("boot native identity lost");
     managed = 0; const inherited = target.sched.strand();
-    try { if (await target.resolveClass(childLoader, "Shared", inherited) !== expected || await target.resolveClass(childLoader, "java/util/BitSet", inherited) !== boot) throw new Error("native ancestor resolution changed"); } finally { inherited.end(); }
+    try { if (await target.resolveClass(childLoader, "Sub", inherited) !== childSub || await target.resolveClass(childLoader, "Shared", inherited) !== expected || await target.resolveClass(childLoader, "java/util/BitSet", inherited) !== boot) throw new Error("native ancestor resolution changed"); } finally { inherited.end(); }
     if (managed) throw new Error("native ancestor lookup entered Java");
+    const multi = await construct("dalvik/system/DexClassLoader", paths.join(":")), multiLoader = definingLoader(target, multi);
+    const multiSub = p.definedBy(multiLoader, "Sub");
+    if (nativeClassLookup(target, multiLoader, "Sub") !== multiSub) throw new Error("later live DEX lookup failed");
+    managed = 0; const later = target.sched.strand();
+    try { if (await target.resolveClass(multiLoader, "Sub", later) !== multiSub || managed) throw new Error("later DEX resolution entered Java"); }
+    finally { later.end(); }
     const inactive = await construct(), inactiveLoader = definingLoader(target, inactive);
     const path = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(inactive);
     set(path, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava([], "[Ldalvik/system/DexPathList$Element;") as object);
@@ -986,9 +993,28 @@ async function nativePathControl(): Promise<void> {
     if (!managed) throw new Error("reordered path skipped managed lookup");
     const custom = await construct("Ldr$MemberLoader");
     if (nativeClassLookup(target, definingLoader(target, custom), "Shared")) throw new Error("custom subclass accepted natively");
+    const customChild = await construct("dalvik/system/DexClassLoader", paths[1], custom);
+    if (nativeClassLookup(target, definingLoader(target, customChild), "Sub")) throw new Error("custom parent delegation bypassed");
     const sharing = await construct(), sharingLoader = definingLoader(target, sharing);
-    set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", target.bridge.toJava([], "[Ljava/lang/ClassLoader;") as object);
-    if (nativeClassLookup(target, sharingLoader, "Shared")) throw new Error("shared array accepted natively");
+    const libraries = (peers: object[]) => target.bridge.toJava(peers.map(peer => target.bridge.toHost(peer)), "[Ljava/lang/ClassLoader;") as object;
+    set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([]));
+    if (nativeClassLookup(target, sharingLoader, "Shared") !== p.definedBy(sharingLoader, "Shared")) throw new Error("empty shared graph blocked its own path");
+    set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([custom]));
+    if (nativeClassLookup(target, sharingLoader, "Shared")) throw new Error("custom shared delegation bypassed");
+    set(sharing, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoaders", "[Ljava/lang/ClassLoader;", libraries([peer]));
+    if (nativeClassLookup(target, sharingLoader, "Shared") !== expected) throw new Error("live shared-before precedence lost");
+    managed = 0; const shared = target.sched.strand();
+    try { if (await target.resolveClass(sharingLoader, "Shared", shared) !== expected || managed) throw new Error("shared-before resolution entered Java"); }
+    finally { shared.end(); }
+    const afterPeer = await construct(), afterLoader = definingLoader(target, afterPeer);
+    const afterPath = target.fieldReader<object>("dalvik/system/BaseDexClassLoader", "pathList", "Ldalvik/system/DexPathList;")(afterPeer);
+    set(afterPath, "dalvik/system/DexPathList", "dexElements", "[Ldalvik/system/DexPathList$Element;", target.bridge.toJava([], "[Ldalvik/system/DexPathList$Element;") as object);
+    set(afterPeer, "dalvik/system/BaseDexClassLoader", "sharedLibraryLoadersAfter", "[Ljava/lang/ClassLoader;", libraries([peer]));
+    if (nativeClassLookup(target, afterLoader, "Shared") !== expected) throw new Error("live shared-after path lost");
+    managed = 0; const after = target.sched.strand();
+    try { if (await target.resolveClass(afterLoader, "Shared", after) !== expected || managed) throw new Error("shared-after resolution entered Java"); }
+    finally { after.end(); }
+
   }
-  console.log("native loader paths: compiled/cold app-root, direct, parent and boot identities; removed/reordered paths, custom and shared graph bypass is rejected");
+  console.log("native loader paths: compiled/cold app-root, multi-DEX, parent, boot and live shared-before/after identities; removed/reordered paths and custom graphs retain Java lookup");
 }

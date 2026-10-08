@@ -105,6 +105,7 @@ export class DexFile {
 
   private stringCache: (string | undefined)[];
   private typeCache: (string | undefined)[];
+  private classDefCache?: Map<string, number>;
   private protoCache: (ProtoRef | undefined)[];
   private fieldCache: PagedCache<FieldRef>;
   private methodCache: PagedCache<MethodRef>;
@@ -273,6 +274,15 @@ export class DexFile {
   /** type idx of class_def i without parsing the whole def */
   classDef2Type(i: number): number {
     return this.view.getUint32(this.classDefsOff + i * 32, true);
+  }
+
+  /** Class definitions follow dependency order rather than descriptor order. */
+  findClassDef(descriptor: string): number | undefined {
+    if (!this.classDefCache) {
+      this.classDefCache = new Map();
+      for (let i = 0; i < this.classDefCount; i++) this.classDefCache.set(this.rawType(this.classDef2Type(i)), i);
+    }
+    return this.classDefCache.get(descriptor);
   }
 
   private descCache: (string | undefined)[] = [];
