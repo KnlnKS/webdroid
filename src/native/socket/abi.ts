@@ -51,15 +51,15 @@ export function readEndpoint(family: number, sockaddr: number, length: number, s
   const given = sockaddr && length >= 2 ? mem.ld16u(sockaddr) : -1;
   if (length < (given === AF_INET ? 16 : given === AF_INET6 ? 24 : 2)) return -E.INVAL;
   if (given !== family && !(send && family === AF_INET6 && given === AF_INET)) return -E.AFNOSUPPORT;
-  const port = (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3];
-  return given === AF_INET ? { port, address: Array.from(mem.bytes(sockaddr + 4, 4)) }
-    : endpointOf(mem.bytes(sockaddr + 8, 16), port, length >= 28 ? mem.ld32(sockaddr + 24) : 0);
+  const port = (mem.ld8u(sockaddr + 2) << 8) | mem.ld8u(sockaddr + 3);
+  return given === AF_INET ? { port, address: Array.from(mem.readBytes(sockaddr + 4, 4)) }
+    : endpointOf(mem.readBytes(sockaddr + 8, 16), port, length >= 28 ? mem.ld32(sockaddr + 24) : 0);
 }
 /** the sockaddr a call names for a socket of `family`, or -errno */
 export function readSockaddr(family: number, sockaddr: number, length: number, send = false): SocketAddress | number {
   if (family === AF_UNIX) {
     if (!sockaddr || length < 2 || mem.ld16u(sockaddr) !== AF_UNIX) return -E.INVAL;
-    return unixAddress(sunPath(mem.bytes(sockaddr + 2, length - 2)));
+    return unixAddress(sunPath(mem.readBytes(sockaddr + 2, length - 2)));
   }
   const ep = readEndpoint(family, sockaddr, length, send);
   return typeof ep === "number" ? ep : { family: family as typeof AF_INET | typeof AF_INET6, ep };
@@ -80,7 +80,7 @@ export const iovecs = (iov: number, count: number): GuestBuffer[] =>
 /** an iovec array's bytes as one buffer: what one datagram carries */
 export function gather(iov: number, count: number): Uint8Array {
   const parts: Uint8Array[] = [];
-  for (let i = 0; i < count; i++) { const entry = iov + i * 2 * PTR; parts.push(mem.bytes(ldp(entry), mem.ld32(entry + PTR) >>> 0)); }
+  for (let i = 0; i < count; i++) { const entry = iov + i * 2 * PTR; parts.push(mem.readBytes(ldp(entry), mem.ld32(entry + PTR) >>> 0)); }
   return concat(parts);
 }
 
@@ -103,7 +103,7 @@ export function readCmsgs(control: number, length: number): Cmsg[] | number {
   for (let off = 0; off + header <= length;) {
     const at = control + off, len = ldLong(at);
     if (len < header || off + len > length) return -E.INVAL;
-    out.push({ level: mem.ld32(at + PTR), type: mem.ld32(at + PTR + 4), data: mem.bytes(at + header, len - header).slice() });
+    out.push({ level: mem.ld32(at + PTR), type: mem.ld32(at + PTR + 4), data: mem.readBytes(at + header, len - header).slice() });
     off += cmsgAlign(len);
   }
   return out;

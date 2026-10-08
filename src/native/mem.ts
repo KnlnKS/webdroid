@@ -21,6 +21,7 @@ function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
   if (planes && !core.commit_phys(a >>> 0, n)) throw new BadAddress(BigInt(mem.va(a >>> 0)), `[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
 }
+function localBytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); }
 /** Notify after a host writes directly into a guest-provided buffer. */
 export function wrote(a: number, n: number): void {
   if (n <= 0) return;
@@ -199,7 +200,9 @@ export const mem = {
     while (e < u8.length && u8[e] !== 0) e++;
     return e - (a >>> 0);
   },
-  bytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); },
+  bytes: localBytes,
+  /** A readable span; unlike a mutable byte view, shared backing may return a snapshot. */
+  readBytes: localBytes,
   write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); wrote(a, src.length); },
   memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); wrote(d, n); },
   memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); wrote(d, n); },

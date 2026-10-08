@@ -4,6 +4,7 @@ import { mem } from "./mem";
 import { finish, RET, run } from "./a64.testkit";
 import { JIT_HEAT, jitEvict, jitStats } from "./core";
 import { LOW, RET_SENTINEL } from "./abi";
+import { jsVm } from "./jnijs";
 
 const movW0 = (v: number) => 0x52800000 | (v << 5);
 
@@ -52,8 +53,9 @@ describe("the decode cache", () => {
       (a, b) => mem.stf64(a, new DataView(b.buffer).getFloat64(0, true)),
       (a, b) => mem.write(a, b),
       (a, b) => { const src = mem.malloc(b.length); mem.write(src, b); mem.memmove(a, src, b.length); mem.free(src); },
+      (a, b) => jsVm.toGuest(b,"B",0,b.length,a),
     ];
-    const sizes = [2, 4, 4, 8, 8, 8, 8];
+    const sizes = [2, 4, 4, 8, 8, 8, 8, 8];
     const c = run([RET]);
     const execute = (at: number) => { c.setPc(at); finish(c); return c.w[0]; };
     for (const hot of [false, true]) for (const offset of [0, 4]) for (const [i, write] of writes.entries()) {

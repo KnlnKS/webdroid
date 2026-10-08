@@ -128,8 +128,8 @@ export const jsVm: JniVm = {
   newObjectArray: (n, c, init) => jarray(new Array(n).fill(init), c ? (c.name[0] === "[" ? c.name : "L" + c.name + ";") : "Ljava/lang/Object;"),
   element: (a, i) => (a as unknown[])[i],
   setElement(a, i, v) { (a as unknown[])[i] = v; },
-  toGuest(array, type, start, n, p) { mem.u8.set(u8(array as never, start * elemSize[type], n * elemSize[type]), p); },
-  fromGuest(array, type, start, n, p) { u8(array as never, start * elemSize[type], n * elemSize[type]).set(mem.u8.subarray(p, p + n * elemSize[type])); },
+  toGuest(array, type, start, n, p) { mem.write(p,u8(array as never, start * elemSize[type], n * elemSize[type])); },
+  fromGuest(array, type, start, n, p) { u8(array as never, start * elemSize[type], n * elemSize[type]).set(mem.readBytes(p,n * elemSize[type])); },
 
   throwable: (cls, msg) => rt.mkThrowable(cls, msg),
   noClass: (name) => rt.ncdfe(name),
