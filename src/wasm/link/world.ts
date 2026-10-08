@@ -1204,7 +1204,7 @@ export class World {
     const unit = { assumptions: head.assumptions.map(([decl, name, desc, tc, tk, at]) => [decl, name, desc, target(tc, tk), owner(at)] as Compiler["assumptions"][number]),
       absent: head.missing.map(([name, at]) => [name, owner(at)] as [string, MethodInfo]), symbols: head.symbols ?? [] };
     const mod = result.module, imports: Record<string, any> = { rt: this.rtImports(), host: this.host, n: this.nativeImports(head.natives), symbolic: this.symbolicImports(head.symbols ?? []), deopt: this.deoptImports };
-    this.classImports(mod, imports);
+    this.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
     this.stats.methods += job.installed.length + job.copies.length; this.stats.upgrades++;
@@ -1262,11 +1262,11 @@ export class World {
       slots.add(at);
     }
   }
-  /** the class globals module `mod` imports from modules the caller has not named: each comes from the module of the class whose id starts its name (code made by another World,
+  /** the class globals compiled code imports from modules the caller has not named: each comes from the module of the class whose id starts its name (code made by another World,
    *  an app build's or a worker's, names classes only by id) */
-  classImports(mod: WebAssembly.Module, imports: Record<string, Record<string, unknown>>): void {
+  classImports(required: Iterable<readonly [string, string]>, imports: Record<string, Record<string, unknown>>): void {
     const given = new Set(Object.keys(imports));
-    for (const { module, name } of WebAssembly.Module.imports(mod)) {
+    for (const [module, name] of required) {
       if (given.has(module)) continue;
       (imports[module] ??= {})[name] = this.link(this.names[+name.slice(0, name.indexOf(":"))]).exports[name];
     }

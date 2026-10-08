@@ -266,6 +266,9 @@ export class Compiler implements Base {
   }
 
   // ---------- links to other modules
+  classImports(): [module: string, name: string][] {
+    return this.mb.imports.filter(im => im.kind === "global" && this.deps.has(im.mod)).map(im => [im.mod, im.name]);
+  }
   global(mod: string, name: string, t: VT, mut: boolean): number {
     const key = mod + "." + name;
     let g = this.globalImports.get(key);

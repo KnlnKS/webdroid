@@ -17,7 +17,7 @@ import { hostNatives } from "../../src/wasm/host/hostnatives";
 import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
 import { waitingNatives } from "../../src/wasm/host/nativesource";
 import { Compiler } from "../../src/wasm/compiler/j2w";
-import { DEOPT_ABI, packModule, type CHeader, type DHeader } from "../../src/wasm/link/aot";
+import { DEOPT_ABI, packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import { compileModule } from "../../src/wasm/link/module";
 import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
@@ -143,13 +143,7 @@ cGroups.forEach((blocks, k) => {
   const { bytes, traces } = built;
   for (const k of Object.keys(deoptWork) as (keyof typeof deoptWork)[]) deoptWork[k] = k === "maxCarrierValues" ? Math.max(deoptWork[k], cx.deoptWork[k]) : deoptWork[k] + cx.deoptWork[k];
   nMethods += methods.length;
-  const seen = new Set<string>(), assumptions: CHeader["assumptions"] = [];
-  for (const [decl, name, desc, target, owner] of cx.assumptions) {
-    const slot = w.slotOf(owner!), key = `${decl}.${name}${desc}@${slot}`;
-    if (!seen.has(key)) { seen.add(key); assumptions.push([decl, name, desc, target?.cls ?? "", target?.key ?? "", slot]); }
-  }
-  const header: CHeader = { deopt, classes: blocks, touch: idsOf(touch), synth: synthOf(touch), natives: [...cx.nativeImports.keys()], symbols: [...cx.symbolicImports.values()].map(v => v.site), mods: [...cx.deps.keys()],
-    assumptions, allocs: [...cx.allocs], gaps: [...new Set(cx.gaps)].map((g) => w.gapId(g)), missing: cx.absent.map(([name, owner]) => [name, w.slotOf(owner!)] as [string, number]),
+  const header: CHeader = { ...unitHeader(w, cx, touch), classes: blocks, mods: [...cx.deps.keys()],
     absent: blocks.flatMap((b) => prog.get(w.blockClass[b])!.methods.filter((m) => !aotCompiles(m)).map((m) => w.blockBase[b] + m.index)) };
   const plain = packModule(header, bytes), file = packModule(header, bytes, traces.map((t) => ({ slot: w.slotOf(t.m!), offsets: t.offsets, pcs: t.pcs })));
   writeFileSync(join(out, `c${k}.wasm`), file); sized(`c${k}.wasm`, file.length);
