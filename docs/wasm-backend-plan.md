@@ -13,7 +13,13 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
-### Current recovery checkpoint (2026-10-07, production `e3b51392`)
+### Current recovery checkpoint (2026-10-07, production `269719d3`)
+
+Custom range invocations no longer establish a false non-null argument fact. Unit format 11 carries compiler-owned class-import metadata, removing WebKit's failing GC import reflection and consolidating platform header construction. Fresh matching ordinary `beac2b720f1b8642` and guarded `07bd5183b198b168` assets compile all 290,828 methods per policy with five existing binding gaps. Typecheck, all 19 broad Wasm sections and the unchanged full 1,211-test/79,749-assertion unit repeat pass. Nine initial browser parser failures remain unexplained. Actual ordinary-Wasm FitNotes startup/render/liveness passes in WebKit and Chromium with complete observed-realm diagnostics; guarded Chromium passes, while guarded WebKit fails with a JSPI RestoreFrameMode stack-scan error before app initialization.
+
+The completed source-stable `5f45a4ea` primary G1 repeat validates 149,480 calls across all 74 workloads in both engines. It still fails: primary-ten steady means are 1.319x Node and 1.299x Chrome, individual losses exceed 10%, and all ten Chrome first calls regress (mean 0.231x). G4 default numerical rows pass; guarded irreducible execution still misses the 100 ms threshold, and engine-tier correlation remains incomplete. The CPU sampler records ten negative-delta errors and competing desktop load, so these are not accepted idle-host results. Doodle gameplay, native Worker shared mappings, complete compiler accounting and final conformance/application/performance gates remain open. The compile-Worker readiness handshake and checked guest-copy invalidation are integrated. JavaScript remains default and goldens are unchanged.
+
+### Preceding recovery checkpoint (2026-10-07, production `e3b51392`)
 
 Host-only Wasm entries skip unnecessary Error allocation while preserving explicit cold/synchronous callers and logical ancestry. Canonical descriptor-owned shared pages retain independent leases and refresh persistence snapshots after direct page mutation; raw native shared mappings remain unsupported until checked core access, atomic publication/reservations and futex ownership are coherent. Failed A64 exclusive stores preserve memory when no reservation exists, and checked JS JNI writes invalidate executed code. One-shot app builders skip unused refinement setup. Optional bounded compiler spans and Worker journals now retain disjoint elapsed work and ownership, but total compilation accounting remains incomplete.
 
