@@ -300,10 +300,10 @@ if (!process.argv.includes("--hierarchy")) {
     const table = symbols.table as WebAssembly.Table, slot = (symbols["accounting:probe"] as WebAssembly.Global).value as number;
     const stub = { ...w.stats };
     if (table.get(slot)!() !== 42) throw new Error("accounted symbolic operation failed");
-    if (w.stats.units !== stub.units + 1 || w.stats.bytes <= stub.bytes || w.stats.compileMs <= stub.compileMs) throw new Error("symbolic operation compilation unaccounted");
+    if (w.stats.units !== stub.units || w.stats.bytes !== stub.bytes || w.stats.compileMs <= stub.compileMs) throw new Error("shared symbolic operation rebuilt code or lost resolution accounting");
     const warm = { ...w.stats };
     if (table.get(slot)!() !== 42 || w.stats.units !== warm.units || w.stats.bytes !== warm.bytes || w.stats.compileMs !== warm.compileMs) throw new Error("warm symbolic operation compiled again");
-    console.log("symbolic accounting: stub and operation each recorded one unit and bytes; warm execution unchanged");
+    console.log("symbolic accounting: new stub recorded; resolved operation shared without compilation; warm execution unchanged");
     const later = "fixture/HelperLater", helperBody = (cx: Compiler, c: Code) => {
       const failure = typeFailure(cx.w.prog, `L${later};`);
       if (failure) cx.linkError(c, failure); else c.i32(42);
@@ -355,7 +355,7 @@ if (!process.argv.includes("--hierarchy")) {
         Compiler.prototype.buildSynthetic = emit; Compiler.prototype.buildSyntheticGroup = group;
       }
       const collect = (globalThis as typeof globalThis & { gc?: () => void }).gc;
-      if (!collect || compilers.length !== 33) throw new Error(`symbolic lifetime probe missing emitters or GC: compilers=${compilers.length}, gc=${!!collect}`);
+      if (!collect || compilers.length !== 1) throw new Error(`symbolic lifetime probe rebuilt shared operations or lacks GC: compilers=${compilers.length}, gc=${!!collect}`);
       const heapBefore = process.memoryUsage().heapUsed;
       for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 0)); collect(); }
       const retainedStubs = stubs.filter(ref => ref.deref()).length;

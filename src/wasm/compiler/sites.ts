@@ -11,6 +11,18 @@ import type { World } from "../link/world";
 export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
 export interface SiteOperands { inputs: { reg: number; kind: Kind }[]; output: Kind | "V"; producer: boolean }
 
+export function symbolicOperationKey(m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: SymbolicSite[5]): string {
+  const roles = new Map<number, number>();
+  for (const reg of registersOf(ins)) if (!roles.has(reg)) roles.set(reg, roles.size);
+  const a = roles.get(ins.a), b = roles.get(ins.b);
+  const operands = ins.fmt === "22c" ? [a, b, ins.c]
+    : ins.fmt === "35c" || ins.fmt === "3rc" ? [ins.a, ins.b, ins.regs.map(r => roles.get(r))]
+    : [a, ins.b, ins.c];
+  // The defining caller fixes the DEX references, loader and access context;
+  // normalized register roles preserve aliases and the caller's input order.
+  return JSON.stringify([m.cls, ins.op, operands, output, inputs.map(([reg, kind]) => [roles.get(reg), kind])]);
+}
+
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
   const n = ins.name, dex = m.dex;
   if (n === "new-instance" && dex.rawType(ins.b) === "Ljava/lang/String;") return false;

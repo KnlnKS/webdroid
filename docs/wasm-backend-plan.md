@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Resolved-operation reuse checkpoint (2026-10-09)
+
+A per-World 2,048-entry cache reuses successful symbolic-operation functions before compiler/module construction, preserving each site's lazy resolution, caller/loader identity, ABI/aliasing, initialization guards and live dispatch. Core accounting/lifetime checks, all 19 Wasm sections, unit/cold/framework checks and zero-failure Calculator/FitNotes smokes pass; all 4,324 rebuilt AOT payloads are unchanged. Matched warm controls reduce Calculator's first-digit modules by 27% and renderer post-GC heap by 9.6–10.7 MiB; FitNotes saves about 2.3 MiB. Latency is mixed and Calculator still fails the 150 ms gate. Both-source full app captures render all 64 checkpoints with clean diagnostics; the history records cursor, tiny pixel, empty-face and variable-scroll differences. No FPS gain or broad acceptance is claimed. Next: address shared-thread background validation with a certified Worker readiness/compiler protocol and matched isolation controls.
+
 ### Calculator compilation attribution (2026-10-09)
 
 With the bounded response observer, warm profiles locate Calculator's first-use delay in foreground symbolic-operation compilation and secondary-process hierarchy validation on the shared page thread. A private secondary-Worker probe is not a valid warm performance control because its readiness/lifecycle protocol is incomplete. A separate 2,048-entry operation-identity simulation finds byte-and-import-identical repeats for 27% of Calculator operations and 29% of FitNotes operations. Differing imports are removed initialization guards; retain lazy resolution, caller/loader identity, ABI/aliasing, dynamic dispatch and failure/invalidation semantics in any reuse design. Next: implement a bounded pre-emission prototype, check core semantics, then measure matched response latency and retained memory. No runtime change or speedup is claimed. The [history](implementation-history.md) records counts, profile limits and private evidence.

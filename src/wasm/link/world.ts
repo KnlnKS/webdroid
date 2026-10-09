@@ -10,7 +10,7 @@ import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
 import { decodeInstruction, type PreparedInstruction } from "../../jvm/prepared";
 import { ColdInterpreter } from "../cold/interpreter";
-import { needsSymbolicSite, type SymbolicSite } from "../compiler/sites";
+import { needsSymbolicSite, symbolicOperationKey, type SymbolicSite } from "../compiler/sites";
 import { ColdSlowOps } from "../cold/slowops";
 import { resumeUnit, type ResumeState } from "../compiler/resume";
 import type { ColdSnapshot } from "../cold/state";
@@ -1306,6 +1306,7 @@ export class World {
   }
   symbolicResolutions = 0;
   private symbolicOps?: ColdSlowOps;
+  private symbolicOperations = new Map<string, Function>();
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
   private symbolicSites = new Map<string, { slot: WebAssembly.Global; ready?: boolean }>();
   symbolicStubModules = 0;
@@ -1354,11 +1355,31 @@ export class World {
       this.accountCompilation(clock);
       const install = () => {
         const clock = this.unitClock();
-        const { cx, built } = ops.compileSite(method, ins, inputs, output);
-        this.stats.units++;
-        const exports = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock);
-        this.symbolicTable.set(slot, exports.m as Function);
-        if (initiatedInstruction(this, method, ins)) {
+        const initiated = initiatedInstruction(this, method, ins);
+        let key = initiated ? symbolicOperationKey(method, ins, inputs, output) : undefined;
+        let operation = key === undefined ? undefined : this.symbolicOperations.get(key);
+        if (operation) {
+          this.symbolicOperations.delete(key!);
+          this.accountCompilation(clock);
+        }
+        else {
+          const { cx, built } = ops.compileSite(method, ins, inputs, output);
+          this.stats.units++;
+          operation = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock).m as Function;
+          const mb = cx.mb;
+          if (cx.assumptions.length || cx.absent.length || cx.gaps.length || cx.linkErrors.length || cx.nativeImports.size
+            || built.traces.some(t => t.m) || mb.globals.length || mb.tables.length || mb.memories.length || mb.tags.length || mb.elems.length || mb.datas.length) {
+            key = undefined;
+          }
+        }
+        if (key !== undefined) {
+          // An older initialization guard remains valid: class initialization
+          // never reverses, and calls still use the live method table.
+          this.symbolicOperations.set(key, operation);
+          if (this.symbolicOperations.size > 2048) this.symbolicOperations.delete(this.symbolicOperations.keys().next().value!);
+        }
+        this.symbolicTable.set(slot, operation);
+        if (initiated) {
           const binding = this.symbolicSites.get(`${method.cls}:${method.index}:${pc}`);
           if (binding) binding.ready = true;
           this.hotUnits.resolved(`${method.cls}:${method.index}:${pc}`);
