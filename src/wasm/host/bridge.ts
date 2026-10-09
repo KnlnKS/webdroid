@@ -20,6 +20,7 @@ import { count } from "./stats";
 import { readBufferBytes, type JBuffer } from "../../jvm/natives/jnio";
 
 type Fn = (...a: any[]) => any;
+type Caller = { cls: string; key: string; call: Fn; rk: Kind | "V" };
 const KINDS: ElemKind[] = ["i32", "ref", "i8", "i16", "i64"];
 const REF = Symbol("java reference");
 const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer), f64 = new Float64Array(1), i64 = new BigInt64Array(f64.buffer);
@@ -250,15 +251,23 @@ export class Bridge implements HostBridge {
     if (impl && failed(impl)) return () => this.w.hostFn("b:conflict:" + cls + "." + mangled, [], "V", (cx, c) => cx.linkError(c, impl))();
     return impl ? (...args: unknown[]) => this.invoke(impl, o, args) : undefined;
   }
-  /** the generated function that calls `m`, over Java values */
-  private caller(m: MethodInfo) {
+  private callers = new WeakMap<MethodInfo, Caller>();
+  private strandCallers = new WeakMap<MethodInfo, Caller>();
+  /** Cache the World wrapper, which retains its lazy-link invalidation, rather than a raw Wasm export. */
+  private caller(m: MethodInfo, suspend = false) {
+    const cache = suspend ? this.strandCallers : this.callers;
+    let entry = cache.get(m);
+    if (entry?.cls === m.cls && entry.key === m.key) return entry;
     const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
-    const call = this.w.hostFn(`b:call:${m.cls}.${m.key}`, kinds, rk, (cx, c) => {
+    const body = (cx: Compiler, c: import("../compiler/code").Code, arg: (i: number) => void) => {
       if (m.isStatic) cx.emitEnsure(c, m.cls);
-      kinds.forEach((_, i) => c.lget(i));
+      kinds.forEach((_, i) => arg(i));
       cx.callMethod(c, m);
-    });
-    return { call, rk };
+    };
+    const call = suspend ? this.w.callFn(`c:${m.cls}.${m.key}`, kinds, rk, body)
+      : this.w.hostFn(`b:call:${m.cls}.${m.key}`, kinds, rk, (cx, c) => body(cx, c, i => { c.lget(i); }));
+    cache.set(m, entry = { cls: m.cls, key: m.key, call, rk });
+    return entry;
   }
   /** Java method `m` (a static one, or on the Java object `recv`) with host arguments, answering a host value: the way a native calls into Java. A static
    *  method's class is initialized first. A primitive array passed is copied for the call, and what the method wrote to it is read back. */
@@ -276,12 +285,7 @@ export class Bridge implements HostBridge {
   /** `invoke` on strand `s`, whose stack can wait: the host value, or a Promise of it when the call waited. The call itself has no scope: the natives it reaches open their own,
    *  and one scope that outlived them would hand a native the copy of an array an earlier native reached */
   invokeOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
-    const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
-    const call = this.w.callFn(`c:${m.cls}.${m.key}`, kinds, rk, (cx, c, arg) => {
-      if (m.isStatic) cx.emitEnsure(c, m.cls);
-      kinds.forEach((_, i) => arg(i));
-      cx.callMethod(c, m);
-    });
+    const { call, rk } = this.caller(m, true);
     const given = this.scoped(() => args.map((a, i) => kindOf(m.params[i]) === "L" ? this.toJava(a, m.params[i]) : toBits(a, m.params[i])));
     const finish = (r: unknown) => this.scoped(() => {
       args.forEach((a, i) => { if (ArrayBuffer.isView(a) && given[i] && !this.owners.has(a)) this.readBack(given[i] as object, a); });
@@ -301,12 +305,7 @@ export class Bridge implements HostBridge {
   }
   /** `call` on strand `s`, whose stack can wait: the Java value, or a Promise of it when the call waited */
   callOn(s: Strand, m: MethodInfo, recv: object | null, args: unknown[]): unknown {
-    const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
-    const call = this.w.callFn(`c:${m.cls}.${m.key}`, kinds, rk, (cx, c, arg) => {
-      if (m.isStatic) cx.emitEnsure(c, m.cls);
-      kinds.forEach((_, i) => arg(i));
-      cx.callMethod(c, m);
-    });
+    const { call, rk } = this.caller(m, true);
     const given = args.map((a, i) => kindOf(m.params[i]) === "L" ? a : toBits(a, m.params[i]));
     const finish = (r: unknown) => rk === "V" ? undefined : rk === "L" ? r : fromBits(r as number | bigint, m.ret);
     const r = call(s, ...(m.isStatic ? [] : [recv]), ...given);

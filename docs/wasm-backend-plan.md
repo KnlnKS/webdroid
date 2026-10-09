@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Host-call preparation checkpoint (2026-10-08)
+
+Bridge caches method caller preparation behind qualified-identity checks and preserves the World's invalidatable wrappers. Eight paired small-call controls reduce Chrome call time by 12–40%; they do not establish application latency or FPS. Typecheck, all 19 Wasm sections, 1,212 unit tests, cold/OSR/framework/smoke checks and all 39 full FitNotes checkpoints pass, with all 4,324 rebuilt AOT files unchanged. Source `6c3b162e0adc…` serves ordinary `ba16499ff1f57098`/guarded `265a2e9cbc65050e`. A fresh unprofiled warm pair still fails the exercise-list response gate at 317.1/314.7 ms with unequal compilation work. The history records measurements, setup failures and limits; broader gates remain open.
+
 ### Indexed virtual-slot construction checkpoint (2026-10-08)
 
 Signature-indexed candidate selection preserves package-private declarations, access checks and dispatch-slot order. A fixed-work comparison preserves all 1,516,790 slot entries and reduces construction time 51%; it does not establish an allocation, latency or FPS gain. Typecheck, all 19 Wasm suites, 1,212 unit tests, framework/smoke checks and all 39 full FitNotes checkpoints pass. Source `54af9a587a5b9c25…` serves ordinary `3cb221716a2f01fd`/guarded `0340214ae84f9344`; all 4,324 build files remain byte-identical. Warm exercise-list response still fails at 314 ms (starting-source profile 312 ms), with differing compilation work and substantial observer cost. History records exact evidence and limits; the broader gates remain open.
