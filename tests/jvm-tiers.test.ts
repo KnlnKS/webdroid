@@ -11,13 +11,15 @@ import { configureJvm, jvmProfiler } from "../src/jvm/profile";
 const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
 test("DEX method references preserve class boundaries and refresh after loading", () => {
   const dex = new DexFile(bytes), R = new Runtime();
-  const expected = new Map<string, Map<string, string>>();
+  const expected = new Map<string, Map<string, string>>(), named = new Map<string, number[]>();
   for (let i = 0; i < dex.methodCount; i++) {
     const method = dex.method(i), owner = descToName(dex.type(method.cls)), desc = dex.methodDesc(i);
     let refs = expected.get(owner);
     if (!refs) expected.set(owner, refs = new Map());
     refs.set(method.name + desc, desc);
+    const ids = named.get(method.name) ?? []; ids.push(i); named.set(method.name, ids);
   }
+  for (const [name, ids] of named) expect([...dex.methodsNamed(dex.findString(name))]).toEqual(ids);
   expect(R.methodRefs("JvmTierProbe").size).toBe(0);
   R.loadDex(new DexFile(bytes));
   for (const [owner, refs] of expected) expect(R.methodRefs(owner)).toEqual(refs);

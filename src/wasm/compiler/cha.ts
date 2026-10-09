@@ -1,6 +1,6 @@
 import { failed, symbolicOverride } from "./linkage";
 import type { DexFile } from "../../jvm/dex";
-import { ACC, classDefIdx, declaredMethod, declaredMethods, mkey, type JClass, type MethodInfo, type Program } from "./program";
+import { ACC, classDefIdx, declaredMethod, mkey, type JClass, type MethodInfo, type Program } from "./program";
 
 /** The direct subtypes of a set of classes, and which of them have a concrete method of a name and descriptor. Built from class headers and method declarations alone, so the
  *  classes' members are not built for it. */
@@ -9,21 +9,17 @@ class Index {
   private classes: JClass[] = [];
   /** the classes by dex and type id; classes no dex defines (stubs, host and proxy classes) under null */
   private byType?: Map<DexFile | null, Map<number, JClass>>;
-  /** every method that can be an implementation (not static, not abstract), by name+descriptor: the classes that declare one */
-  private implementors?: Map<string, string | string[]>;
-  /** the full index decodes every method of every class (about 200 ms for the platform); until MAX_SCANS keys were asked for, a key is answered from the dexes' ids instead */
-  private scans = 0;
+  private implementors = new Map<string, string[]>();
   add(c: JClass): void {
     this.classes.push(c);
     if (this.byType) this.note(c);
     for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
-    if (this.implementors) this.declare(c);
+    this.implementors.clear();
   }
   declaring(key: string): Iterable<string> {
-    if (!this.implementors && this.scans++ < MAX_SCANS) return this.scan(key);
-    if (!this.implementors) { this.implementors = new Map(); for (const c of this.classes) this.declare(c); }
-    const l = this.implementors.get(key);
-    return l === undefined ? [] : typeof l === "string" ? [l] : l;
+    let found = this.implementors.get(key);
+    if (!found) this.implementors.set(key, found = [...this.scan(key)]);
+    return found;
   }
   private note(c: JClass): void {
     const i = classDefIdx(c), dex = i < 0 ? null : c.dex!;
@@ -48,13 +44,6 @@ class Index {
         const m = dex.declaredAt(classDefIdx(c), i);
         if (m && !(m.flags & (ACC.STATIC | ACC.ABSTRACT))) yield c.name;
       }
-    }
-  }
-  private declare(c: JClass): void {
-    for (const [key, flags] of declaredMethods(c)) if (!(flags & (ACC.STATIC | ACC.ABSTRACT))) {
-      // most keys have one declaring class: no array for them
-      const l = this.implementors!.get(key);
-      if (l === undefined) this.implementors!.set(key, c.name); else if (typeof l === "string") this.implementors!.set(key, [l, c.name]); else l.push(c.name);
     }
   }
 }
@@ -150,7 +139,7 @@ export class Cha {
     return reachesAny;
   }
 }
-const WALK = 64, MAX_SCANS = 128;
+const WALK = 64;
 
 const sharedIndex = (p: Program): Index => {
   let x = p.shared.get("cha") as Index | undefined;

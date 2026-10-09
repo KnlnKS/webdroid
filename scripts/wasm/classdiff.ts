@@ -36,9 +36,11 @@ const resolved = prog.resolve("C", "classIdent", "(I)I")!;
 if (resolved !== prog.resolve("C", "classIdent", "(I)I") || resolved !== prog.require("C").methods[resolved.index]) throw new Error("method identity changed when class members were materialized");
 const registered = { ...resolved, cls: "RegisteredMethod", name: "registered", key: "registered(I)I", flags: ACC.PUBLIC | ACC.NATIVE, isStatic: false, dex: null!, codeOff: 0 };
 const synthetic = { name: registered.cls, dex: null, def: null, sup: "C", flags: ACC.PUBLIC, isInterface: false, ifaces: [], methods: [registered], fields: [], byKey: new Map([[resolved.key, resolved]]) };
-prog.addClass(synthetic);
+const cha = new Cha(prog);
+if (cha.targets("java/lang/Object", registered.name, registered.desc).length) throw new Error("runtime declaration exists before registration");
+prog.addClass(synthetic); cha.index([synthetic.name]);
 if (declaredMethod(synthetic, registered.key) !== registered || synthetic.byKey.get(resolved.key) !== resolved) throw new Error("runtime class lost declared methods or inherited aliases");
-if (new Cha(prog).targets("java/lang/Object", registered.name, registered.desc)[0] !== registered) throw new Error("large hierarchy lost runtime declaration");
+if (cha.targets("java/lang/Object", registered.name, registered.desc)[0] !== registered) throw new Error("large hierarchy lost runtime declaration");
 {
   const w = world(prog, { natives }), cls = "C$K", fields = prog.require(cls).fields, id = w.idOf(cls);
   fieldCookie(w, id << 12 | fields.findIndex(f => f.name === "b"));

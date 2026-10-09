@@ -187,11 +187,20 @@ export class DexFile {
     }
     return -1;
   }
-  /** the method_ids whose name is string `nameIdx` */
-  methodsNamed(nameIdx: number): number[] {
-    const out: number[] = [], v = this.view, at = this.methodIdsOff + 4;
-    for (let i = 0, n = this.methodCount; i < n; i++) if (v.getUint32(at + i * 8, true) === nameIdx) out.push(i);
-    return out;
+  private methodNames?: { heads: Uint32Array; next: Uint32Array };
+  /** The method_ids whose name is string `nameIdx`, in DEX order. */
+  *methodsNamed(nameIdx: number): Iterable<number> {
+    if (!this.methodNames) {
+      const heads = new Uint32Array(this.stringCount), next = new Uint32Array(this.methodCount);
+      // One-based links reserve zero for the end, without decoding names or signatures.
+      for (let i = this.methodCount - 1; i >= 0; i--) {
+        const name = this.view.getUint32(this.methodIdsOff + i * 8 + 4, true);
+        next[i] = heads[name]; heads[name] = i + 1;
+      }
+      this.methodNames = { heads, next };
+    }
+    const { heads, next } = this.methodNames;
+    for (let i = heads[nameIdx]; i; i = next[i - 1]) yield i - 1;
   }
 
   private typeResolver?: (descriptor: string) => string;
