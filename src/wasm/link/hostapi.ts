@@ -1,7 +1,7 @@
 // What the VM needs from the host layer, as interfaces, so that nothing below host/ imports it: the registered natives, the bridge that
 // marshals Java objects for them, and the network resolver. host/ provides the implementations.
 import type { Compiler, Intrinsic } from "../compiler/j2w";
-import type { MethodInfo } from "../compiler/program";
+import type { Loader, MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import type { ProxyDefinition } from "./proxy";
 import type { World } from "./world";
@@ -122,7 +122,8 @@ export interface HostNet {
 export interface CompileService {
   /** takes the second-tier compile of the method in `slot` (`World.upgradeJob` describes it); false if it cannot */
   submit(w: World, slot: number): boolean;
-  /** dex files were added to the Program's default namespace, or (null) something the service cannot follow was: it stops serving */
-  added(dexes: DexFile[] | null): void;
+  /** dex files were added to a defining namespace, or (null) something the service cannot follow was: it stops serving */
+  added(dexes: DexFile[] | null, loader?: Loader): void;
+  namespaces(): void;
   proxy(definition: ProxyDefinition): void;
 }

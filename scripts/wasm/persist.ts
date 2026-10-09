@@ -274,15 +274,42 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   client.close();
 }
 {
-  // something the worker cannot follow stops it, and the page compiles inline from then on
-  const beforeSpawn = ports.length, client = new CompileClient(spawn), w = hosted(app, { compiler: client });
+  const initializing = Promise.withResolvers<void>(), received: string[] = [];
+  const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return platformDexes; } }, received));
+  const w = hosted(app, { compiler: client, holdUpgrades: () => true });
+  const first = w.prog.newLoader(w.prog.root, null), second = w.prog.newLoader(w.prog.boot, null);
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")), first);
+  w.bindLibraries(second, [w.prog.root], []);
   client.start(w, BASE, undefined);
-  w.addDexes(loadDexes(join(out, "out2/classes.dex")), w.prog.newLoader(w.prog.root, null));
-  check("a loader of its own retires the worker", client.ready, false);
-  check("an incompatible loader needs no worker allocation", ports.length, beforeSpawn);
-  const call = w.entry("Pst", "hot", "(I)I");
-  for (let i = 0; i < 4000 && !w.stats.upgrades; i++) call(4000);
-  check("and the hot method is compiled inline", w.stats.upgrades > 0, true);
+  const key = (id: number) => `Pst2@${id}`;
+  check("initial namespaced DEX executes", await w.entryAsync(key(first.id), "sub", "()I")(), 500);
+  client.submit(w, w.slotOf(w.prog.resolve(key(first.id), "sub", "()I")!));
+  await until("namespaced worker receives initialization", () => received.includes("init"));
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")), second);
+  await until("namespaced DEX reaches the initializing worker", () => received.includes("add"));
+  initializing.resolve();
+  await until("namespaced worker starts", () => client.ready || !!client.retired);
+  const third = w.prog.newLoader(w.prog.boot, null);
+  w.bindLibraries(third, [], [w.prog.root]);
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")), third);
+  for (const loader of [second, third]) {
+    const call = w.entryAsync(key(loader.id), "sub", "()I");
+    check("namespaced source result", await call(), 500);
+    if (loader === second) {
+      w.bindLibraries(second, [], [w.prog.root]);
+      await until("a linked namespace change reaches the worker", () => received.includes("namespaces"));
+      check("source result after library rebinding", await call(), 500);
+    }
+    const slot = w.slotOf(w.prog.resolve(key(loader.id), "sub", "()I")!), before = w.table.get(slot);
+    check("namespaced worker accepts the method", client.submit(w, slot), true);
+    await until("namespaced code is adopted", () => w.table.get(slot) !== before || !!client.retired);
+    check("namespaced code replaces the source body", w.table.get(slot) !== before, true);
+    check("namespaced worker result", await call(), 500);
+  }
+  check("same DEX has distinct defining identities", w.idOf(key(second.id)) !== w.idOf(key(third.id)), true);
+  check("namespaces keep the worker ready", client.ready, true);
+  check("namespaced jobs have no failures", client.stats.failed, 0);
+  client.close();
 }
 
 {

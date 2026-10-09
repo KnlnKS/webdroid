@@ -8,7 +8,11 @@ with its suites in `scripts/wasm/` (`bun run wasm <suite>`) and its Java fixture
 (its `mid` is `compiler/ids.ts`). `floatbench.ts`, `lazybench.ts` and the j2w `dis.ts` were deleted.
 This is a report plus a staged plan for a different coding agent to execute.
 
-## Recovery status (2026-10-08)
+## Recovery status (2026-10-09)
+
+### Dynamic DEX compiler synchronization checkpoint (2026-10-09)
+
+The compiler protocol now preserves DEX defining namespaces, parent/library search order and established initiating identities, both in the lazy startup snapshot and in subsequent changes. Java loaders remain in their owning realm and existing epoch/adoption checks reject obsolete units. Mihon's compiler Worker now remains ready through scrolling and adopts additional units with no job failures. Typecheck, all 19 Wasm sections, repeated unit tests, framework/smoke, four/eight-jar persistence and 153 guarded OSR checks pass; rebuilt AOT remains identical and full FitNotes/Mihon captures pass 39/17 checkpoints. Isolated measurements and remaining latency/FPS limits are recorded in the history. Broad application/performance acceptance remains open.
 
 ### Runtime Proxy compiler synchronization checkpoint (2026-10-08)
 

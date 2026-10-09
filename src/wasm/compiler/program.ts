@@ -32,7 +32,13 @@ export interface JClass {
 }
 export const mkey = (name: string, desc: string) => name + desc;
 
-export type LoaderParent = number | "boot" | null;
+export type LoaderId = number | "boot";
+export type LoaderParent = LoaderId | null;
+export interface LoaderSnapshot {
+  parents: LoaderParent[];
+  libraries: [LoaderId, LoaderId[], LoaderId[]][];
+  initiated: [LoaderId, string, string][];
+}
 /** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
 export interface Loader {
   readonly id: number;
@@ -219,11 +225,15 @@ export class Program {
     this.loaders.push(loader);
     return loader;
   }
-  loaderAt(id: number): Loader { const loader = this.loaders[id]; if (!loader) throw new Error(`unknown loader ${id}`); return loader; }
+  loadedDexes(): IterableIterator<[DexFile, Loader]> { return this.dexLoader.entries(); }
+  loaderId(loader: Loader): LoaderId { return loader === this.boot ? "boot" : loader.id; }
+  loaderAt(id: LoaderId): Loader { const loader = id === "boot" ? this.boot : this.loaders[id]; if (!loader) throw new Error(`unknown loader ${id}`); return loader; }
   /** Compiler mirrors carry namespace identity, never the source's Java loader objects. */
-  loaderParents(): LoaderParent[] | undefined {
-    if (this.loaders.some(l => l.before?.length || l.after?.length)) return;
-    return this.loaders.map(l => l.parent === this.boot ? "boot" : l.parent?.id ?? null);
+  loaderSnapshot(): LoaderSnapshot {
+    const id = (l: Loader) => this.loaderId(l);
+    return { parents: this.loaders.map(l => l.parent ? id(l.parent) : null),
+      libraries: [this.boot, ...this.loaders].map(l => [id(l), (l.before ?? []).map(id), (l.after ?? []).map(id)]),
+      initiated: [this.boot, ...this.loaders].flatMap(l => [...this.initiated.get(l) ?? []].map(([name, key]): [LoaderId, string, string] => [id(l), name, key])) };
   }
   followLoaderParents(parents: LoaderParent[]): void {
     if (parents.length < this.loaders.length || parents[0] !== null) throw new Error("incompatible compiler loader graph");

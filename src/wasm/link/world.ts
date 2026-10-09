@@ -1595,7 +1595,7 @@ export class World {
       }
     }
     this.epoch++;
-    this.opts.compiler?.added(null);
+    this.opts.compiler?.namespaces();
     this.cha = new Cha(this.prog); this.implemented.clear();
     this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
@@ -1635,7 +1635,7 @@ export class World {
   addDexes(dexes: DexFile[], loader: Loader = this.prog.root): string[] {
     const added = this.prog.add(dexes, loader);
     this.epoch++;
-    this.opts.compiler?.added(loader === this.prog.root ? dexes : null);
+    this.opts.compiler?.added(dexes, loader);
     this.loaded(added);
     return added;
   }
