@@ -3,6 +3,7 @@
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
+import type { ProxyDefinition } from "./proxy";
 import type { World } from "./world";
 import type { DexFile } from "../../jvm/dex";
 import type { Sched, Strand } from "./sched";
@@ -123,4 +124,5 @@ export interface CompileService {
   submit(w: World, slot: number): boolean;
   /** dex files were added to the Program's default namespace, or (null) something the service cannot follow was: it stops serving */
   added(dexes: DexFile[] | null): void;
+  proxy(definition: ProxyDefinition): void;
 }

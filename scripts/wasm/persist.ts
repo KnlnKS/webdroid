@@ -1,6 +1,8 @@
 // The compile worker and the persisted app build: the protocol (compile-serve.ts over a MessageChannel, so the numbering handshake runs as it does with a Worker), second-tier units
 // compiled elsewhere and adopted only while the numbering they rely on is the World's, an app build attached on top of the platform build and kept sound as dexes arrive, and the
 // bounded store (persist.ts). Needs javac, d8 and a platform build in WEBDROID_AOT (`bun run wasm persist` makes a small one). The Chrome page runs the same over a real Worker and OPFS: boot-probe.
+import { vfs } from "../../src/shell/vfs";
+import { BytesFile } from "../../src/shell/lazyfile";
 import { guestMemory } from "../../src/wasm/host/guest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,9 +119,11 @@ const env: CompileEnv = { platform: async () => platformDexes, natives, intrinsi
 const ports: WorkerPort[] = [];
 const stopped = new WeakSet<WorkerPort>();
 /** a compile worker over a MessageChannel in this thread */
-function spawn(): WorkerPort {
+function spawn(): WorkerPort { return spawnWithEnv(env); }
+function spawnWithEnv(workerEnv: CompileEnv, received?: string[]): WorkerPort {
   const { port1, port2 } = new MessageChannel();
-  serveCompile(port2 as never, env);
+  if (received) port2.addEventListener("message", ({ data }) => received.push(data.type));
+  serveCompile(port2 as never, workerEnv);
   const port: WorkerPort = { postMessage: (m, t) => port1.postMessage(m, t as never), set onmessage(f) { port1.onmessage = f as never; }, get onmessage() { return port1.onmessage as never; },
     onerror: null, terminate: () => { stopped.add(port); port1.close(); port2.close(); } };
   ports.push(port);
@@ -238,6 +242,35 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   for (let i = 0; i < 400 && client.stats.jobs === before; i++) { hot(4000); await new Promise((r) => setTimeout(r, 1)); }
   check("the worker went on serving", client.ready, true);
   console.log(`  second tier: ${client.stats.jobs} jobs, ${client.stats.adopted} adopted, ${client.stats.stale} stale, worker ${client.stats.workerMs.toFixed(1)} ms for them, started in ${client.stats.startMs.toFixed(0)} ms`);
+  client.close();
+}
+{
+  const initializing = Promise.withResolvers<void>(), received: string[] = [];
+  const client = new CompileClient(() => spawnWithEnv({ ...env, platform: async () => { await initializing.promise; return platformDexes; } }, received));
+  const path = "/data/local/tmp/persist-proxy.dex";
+  vfs.mount(path, new BytesFile(new Uint8Array(readFileSync(join(out, "classes.dex")))));
+  const w = hosted(app, { compiler: client, holdUpgrades: () => true, dexes: name => name === path ? app : undefined });
+  await w.entryAsync("Pst", "setupLoader", "(Ljava/lang/String;)V")(path);
+  const make = w.entryAsync("Pst", "makeProxy", "(I)I");
+  check("bootstrap Proxy before worker startup executes", await make(3), 1);
+  check("BootClassLoader Proxy before worker startup executes", await make(0), 2);
+  client.start(w, BASE, undefined);
+  w.entry("Pst", "hot", "(I)I")(10);
+  client.submit(w, w.slotOf(w.prog.resolve("Pst", "hot", "(I)I")!));
+  await until("the worker receives initialization", () => received.includes("init"));
+  check("app Proxy while worker initializes executes", await make(1), 12);
+  await until("the worker receives a Proxy during initialization", () => received.includes("proxy"));
+  initializing.resolve();
+  await until("the worker with initial Proxies starts", () => client.ready || !!client.retired);
+  check("a new Proxy after worker startup executes", await make(2), 12);
+  check("Proxy definitions keep the worker ready", client.ready, true);
+  const proxyClass = [...w.prog.own()].filter(c => c.sup === "java/lang/reflect/Proxy").at(-1)!;
+  const method = proxyClass.byKey.get("apply(I)I")!;
+  const slot = w.slotOf(method), before = w.table.get(slot);
+  check("the worker accepts a Proxy body", client.submit(w, slot), true);
+  await until("a Proxy body is adopted", () => w.table.get(slot) !== before);
+  check("worker Proxy code reads the page's pinned Method", await w.entryAsync("Pst", "callProxy", "(I)I")(20), 27);
+  check("Proxy jobs have no failures", client.stats.failed, 0);
   client.close();
 }
 {

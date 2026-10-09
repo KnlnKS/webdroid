@@ -3,7 +3,8 @@ import { beginCompile, endCompile, measureCompile, compilerReceiptsEnabled } fro
 // The compile worker's side of the protocol (compile-worker.ts runs it in a page, the persist suite over a MessageChannel): a World over a copy of the app's dex files that compiles
 // for the World on the page, which sends it jobs. It does two kinds of work with the code the page's compiler would make: the second-tier units of hot methods (link/unit.ts), and, once
 // per app and platform build, the app build the page persists (link/apps.ts), which compiles the methods the app is likely to run (src/jvm/compileworker.ts picks them the same way).
-import { Program, type MethodInfo } from "../compiler/program";
+import { Program, type MethodInfo, type LoaderParent } from "../compiler/program";
+import { defineProxy, type ProxyDefinition } from "../link/proxy";
 import { World } from "../link/world";
 import { buildApp, type AppBuild } from "../link/apps";
 import { UnitCompiler, type UnitResult, type UpgradeJob } from "../link/unit";
@@ -33,8 +34,9 @@ export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launc
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
+  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; loaders?: LoaderParent[]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
   | { type: "add"; dexes: Containers }
+  | { type: "proxy"; definition: ProxyDefinition; loaders: LoaderParent[] }
   /** the app build again, with more built on demand since (the World of a worker that was asked for a build serves it once more) */
   | { type: "refine"; demand: Demand }
   | { type: "upgrade"; id: number; keep: boolean; sync: Numbering; job: UpgradeJob };
@@ -75,6 +77,8 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       ...index && { aot: { get: (file) => (file === "index.json" ? index : undefined) }, ...req.aot!.app && { app: { index: req.aot!.app, store: { get: () => undefined } } } } });
     // Initial app builds precede hostClasses arriving. Apply overlays from the start, as the page does.
     for (const spec of env.natives.source?.hostSpecs?.() ?? []) w.addHostClass(spec);
+    w.prog.followLoaderParents(req.loaders ?? [null]);
+    for (const definition of req.proxies ?? []) defineProxy(w, definition);
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     } finally { endCompile(setup); }
     // an app build numbers from where a World starts, before the page's numbering is followed
@@ -139,7 +143,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     return [...out];
   }
 
-  port.onmessage = async ({ data: req }: MessageEvent<CompileRequest>) => {
+  const receive = async (req: CompileRequest) => {
     const id = "id" in req ? req.id : undefined, t0 = performance.now();
     const job: Job = { type: req.type, id, ordinal: compilerJob(req.type, id, "begin"), oneShot: req.type === "init" && !!req.oneShot, ended: false };
     try {
@@ -166,6 +170,11 @@ export function serveCompile(port: Port, env: CompileEnv): void {
         measureCompile("residual.wasmSetup", () => w!.addDexes(open(req.dexes)));
         compilerJob(req.type, id, "end", undefined, job.ordinal); job.ended = true; postCompilerReceipt();
       }
+      else if (req.type === "proxy") {
+        w.prog.followLoaderParents(req.loaders);
+        defineProxy(w, req.definition);
+        compilerJob(req.type, undefined, "end", undefined, job.ordinal); job.ended = true; postCompilerReceipt();
+      }
       else if (req.type === "refine") build(req.demand, false, job);
       else if (req.type === "upgrade") {
         const result = measureCompile("residual.wasmUpgrade", () => {
@@ -177,5 +186,8 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       }
     } catch (e) { send({ type: "failed", id, message: String((e as Error)?.stack ?? e) }, [], job); }
   };
+  // Initialization awaits platform bytes; later definitions and jobs must follow its snapshot.
+  let pending = Promise.resolve();
+  port.onmessage = ({ data }: MessageEvent<CompileRequest>) => { pending = pending.then(() => receive(data)); };
   send({ type: "loaded" });
 }

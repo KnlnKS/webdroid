@@ -29,7 +29,7 @@ import { HostClasses } from "./hostclass";
 import { mhInvoke } from "./mhandles";
 import { hostText } from "./members";
 import { ASYNC } from "./inet";
-import { generateProxy } from "./proxy";
+import { generateProxy, type ProxyDefinition } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
 import { definitionReady, initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
@@ -1674,13 +1674,16 @@ export class World {
   /** the classes this World made without a dex (the host's, their hidden halves, proxies): a compile worker applies the same specs and must end with the same ones */
   hostClassNames(): string[] { return [...this.prog.own()].filter((c) => !c.dex).map((c) => c.name).sort(); }
   private settlingHosts = false;
+  readonly proxies = new Map<string, ProxyDefinition>();
   /** adds a class that no dex defines, with the body of each of its methods */
-  addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root): void {
+  addClass(jc: JClass, bodies: Map<MethodInfo, Intrinsic>, loader = this.prog.root, proxy?: ProxyDefinition): void {
     for (const [m, body] of bodies) this.madeUp.set(mid(m), body);
     this.prog.addClass(jc, loader);
     this.epoch++;
     // the host classes a dex arriving defines are defined by the worker's own settling of the same dex
-    if (!this.settlingHosts) this.opts.compiler?.added(null);
+    if (proxy) {
+      this.proxies.set(jc.name, proxy); this.opts.compiler?.proxy(proxy);
+    } else if (!this.settlingHosts) this.opts.compiler?.added(null);
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {

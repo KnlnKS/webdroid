@@ -6,9 +6,9 @@
 // UndeclaredThrowableException.
 import { OP } from "../compiler/code";
 import { T, refNull } from "../compiler/wasmbin";
-import { ACC, type JClass, type MethodInfo } from "../compiler/program";
+import { ACC, type JClass, type MethodInfo, type Loader } from "../compiler/program";
 import { BOX } from "./reflect";
-import { descToName } from "../../jvm/abi";
+import { descToName, parseMethodDesc } from "../../jvm/abi";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { Code } from "../compiler/code";
 import type { World } from "./world";
@@ -41,26 +41,38 @@ export function generateProxy(w: World, name: string, interfaces: object, object
   const r = readersOf(w), binary = name.replace(/\./g, "/"), loader = definingLoader(w, object), internal = loader === w.prog.boot || loader.id ? `${binary}@${loader.id}` : binary;
   // ART's CreateProxyClass requires InsertClass to find no existing definition; public Proxy caching happens in Java.
   if (w.prog.definedBy(loader, binary)) throw w.exception(w.makeThrowable("java/lang/LinkageError", `duplicate proxy definition: ${binary}`));
-  const jc: JClass = {
-    name: internal, dex: null, def: null, sup: PROXY, flags: ACC.PUBLIC | ACC.FINAL | PROXY_FLAG, isInterface: false, fields: [], methods: [], byKey: new Map(),
-    ifaces: Array.from({ length: r.alen(interfaces) }, (_, i) => w.nameOf(r.classId(r.aget(interfaces, i)))),
-  };
-  const bodies = new Map<MethodInfo, Intrinsic>();
-  const add = (m: MethodInfo, body: Intrinsic) => { jc.methods.push(m); jc.byKey.set(m.key, m); bodies.set(m, body); };
-  const made = (src: Pick<MethodInfo, "name" | "desc" | "key" | "params" | "ret">, flags: number): MethodInfo =>
-    ({ cls: internal, name: src.name, desc: src.desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: src.key, isStatic: false, isCtor: src.name === "<init>", params: src.params, ret: src.ret, index: jc.methods.length });
-  add(made({ name: "<init>", desc: `(L${HANDLER};)V`, key: `<init>(L${HANDLER};)V`, params: [`L${HANDLER};`], ret: "V" }, ACC.PUBLIC), (cx, m, c) => {
-    c.lget(0).lget(1); cx.callMethod(c, cx.prog.resolve(PROXY, "<init>", `(L${HANDLER};)V`)!);
-  });
+  const entries = new Map<string, ProxyDefinition["methods"][number]>();
   for (let i = 0; i < r.alen(methods); i++) {
     const method = r.aget(methods, i), cookie = r.art(method), src = w.prog.get(w.nameOf(Number(cookie >> 16n)))!.methods[Number(cookie & 0xffffn)];
-    if (jc.byKey.has(src.key)) continue;
-    const handle = w.pin(method), declared = w.pin(r.aget(exceptions, i));
-    add(made(src, ACC.PUBLIC | ACC.FINAL), (cx, m, c) => proxyBody(cx, c, m, handle, declared));
+    if (!entries.has(src.key)) entries.set(src.key, { name: src.name, desc: src.desc, method: w.pin(method), exceptions: w.pin(r.aget(exceptions, i)) });
   }
-  w.addClass(jc, bodies, loader);
+  defineProxy(w, { name: internal, loader: loader === w.prog.boot ? "boot" : loader.id,
+    ifaces: Array.from({ length: r.alen(interfaces) }, (_, i) => w.nameOf(r.classId(r.aget(interfaces, i)))), methods: [...entries.values()] }, loader);
   recordDefinedClass(w, loader, binary, internal);
   return r.classOf(w.idOf(internal));
+}
+
+/** Handles name the source World's pinned objects; compiling the bodies never reads those objects. */
+export interface ProxyDefinition {
+  name: string; loader: number | "boot"; ifaces: string[];
+  methods: { name: string; desc: string; method: number; exceptions: number }[];
+}
+
+export function defineProxy(w: World, definition: ProxyDefinition, loader: Loader = definition.loader === "boot" ? w.prog.boot : w.prog.loaderAt(definition.loader)): void {
+  const jc: JClass = { name: definition.name, dex: null, def: null, sup: PROXY, flags: ACC.PUBLIC | ACC.FINAL | PROXY_FLAG,
+    isInterface: false, fields: [], methods: [], byKey: new Map(), ifaces: definition.ifaces };
+  const bodies = new Map<MethodInfo, Intrinsic>();
+  const add = (name: string, desc: string, flags: number, body: Intrinsic) => {
+    const { params, ret } = parseMethodDesc(desc);
+    const m: MethodInfo = { cls: jc.name, name, desc, flags, dex: null!, methodIdx: -1, codeOff: 0, key: name + desc,
+      isStatic: false, isCtor: name === "<init>", params, ret, index: jc.methods.length };
+    jc.methods.push(m); jc.byKey.set(m.key, m); bodies.set(m, body);
+  };
+  add("<init>", `(L${HANDLER};)V`, ACC.PUBLIC, (cx, _m, c) => {
+    c.lget(0).lget(1); cx.callMethod(c, cx.prog.resolve(PROXY, "<init>", `(L${HANDLER};)V`)!);
+  });
+  for (const { name, desc, method, exceptions } of definition.methods) add(name, desc, ACC.PUBLIC | ACC.FINAL, (cx, m, c) => proxyBody(cx, c, m, method, exceptions));
+  w.addClass(jc, bodies, loader, definition);
 }
 
 /** the body of a proxy method: params (proxy, arguments...) */

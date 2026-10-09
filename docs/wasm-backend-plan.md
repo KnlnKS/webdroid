@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-08)
 
+### Runtime Proxy compiler synchronization checkpoint (2026-10-08)
+
+Generated Java Proxies now reach the compiler Worker as method/interface metadata, source-realm pin indices and defining-loader parent identities. Initialization and subsequent definitions are processed in order; Java objects remain in their owning realm. The core protocol regression, all 19 Wasm sections, typecheck and repeated unit suite pass, and all 4,324 rebuilt AOT files remain identical. Full Wasm FitNotes/Mihon captures pass 39/17 checkpoints. Real Mihon execution gets past annotation Proxy creation, but subsequently loading DEX into another namespace still retires the Worker before scrolling. Dynamic DEX namespace synchronization is the next architectural blocker; no latency/FPS acceptance is claimed. The history records controls and evidence limits.
+
 ### Shared subtype planning checkpoint (2026-10-08)
 
 Hot-call signatures share incremental allocated-subtype filtering while preserving target identity/order and hierarchy invalidation. A same-World control reduces scroll-window traversal 83% and planner time from 201 to 78 ms; paired app measurements do not establish reliable latency/FPS improvement. Core/compiler checks, identical rebuilt AOT and full FitNotes/Mihon captures pass. Runtime annotation Proxy creation retires the compiler Worker, leaving later hot compilation on the main thread. The next architectural task is sound synchronization of runtime-generated classes; the history records measurements, transport limits and remaining acceptance.

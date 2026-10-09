@@ -32,6 +32,7 @@ export interface JClass {
 }
 export const mkey = (name: string, desc: string) => name + desc;
 
+export type LoaderParent = number | "boot" | null;
 /** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
 export interface Loader {
   readonly id: number;
@@ -217,6 +218,22 @@ export class Program {
     const loader: Loader = { id: this.loaders.length, parent, object, defined: new Map() };
     this.loaders.push(loader);
     return loader;
+  }
+  loaderAt(id: number): Loader { const loader = this.loaders[id]; if (!loader) throw new Error(`unknown loader ${id}`); return loader; }
+  /** Compiler mirrors carry namespace identity, never the source's Java loader objects. */
+  loaderParents(): LoaderParent[] | undefined {
+    if (this.loaders.some(l => l.before?.length || l.after?.length)) return;
+    return this.loaders.map(l => l.parent === this.boot ? "boot" : l.parent?.id ?? null);
+  }
+  followLoaderParents(parents: LoaderParent[]): void {
+    if (parents.length < this.loaders.length || parents[0] !== null) throw new Error("incompatible compiler loader graph");
+    for (let i = 1; i < parents.length; i++) {
+      const ref = parents[i];
+      if (ref !== "boot" && (typeof ref !== "number" || !Number.isInteger(ref) || ref < 0 || ref >= i)) throw new Error(`invalid parent of loader ${i}`);
+      const parent = ref === "boot" ? this.boot : this.loaderAt(ref), prior = this.loaders[i];
+      if (prior && prior.parent !== parent) throw new Error(`changed parent of loader ${i}`);
+      if (!prior) this.newLoader(parent, null);
+    }
   }
   /** the loader that defines the class with this key */
   loaderOf(key: string): Loader {

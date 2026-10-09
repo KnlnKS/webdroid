@@ -4,6 +4,7 @@
 import type { CompileService } from "../link/hostapi";
 import type { AppIndex, Marks } from "../link/aot";
 import type { UpgradeJob } from "../link/unit";
+import type { ProxyDefinition } from "../link/proxy";
 import type { World } from "../link/world";
 import type { DexFile } from "../../jvm/dex";
 import type { CompileRequest, CompileResponse, Containers, Port } from "./compile-serve";
@@ -48,7 +49,7 @@ export class CompileClient implements CompileService {
   /** starts the worker over `w`'s Program as it is now: `aotBase` is where the platform build's files are fetched from, and `w` has `app` attached if it says so */
   start(w: World, aotBase: string | undefined, app: AppIndex | undefined): void {
     if (this.state === "retired") return;
-    for (const c of w.prog.own()) if (c.name.includes("@")) return this.retire("a class loader of its own");
+    for (const c of w.prog.own()) if (c.name.includes("@") && !w.proxies.has(c.name)) return this.retire("a class loader of its own");
     this.w = w; this.setup = { aotBase, app };
     if (!this.port) return;
     this.initialize();
@@ -56,12 +57,14 @@ export class CompileClient implements CompileService {
   // Capture current numbering and DEX only when real work arrives; an unused service owns no compiler World.
   private initialize(): void {
     const w = this.w!, { aotBase, app } = this.setup!;
+    const loaders = w.prog.loaderParents();
+    if (!loaders) return this.retire("class loader libraries the worker cannot follow");
     const dexes = new Set<DexFile>();
-    for (const c of w.prog.own()) { if (c.name.includes("@")) return this.retire("a class loader of its own"); if (c.dex) dexes.add(c.dex); }
+    for (const c of w.prog.own()) { if (c.name.includes("@") && !w.proxies.has(c.name)) return this.retire("a class loader of its own"); if (c.dex) dexes.add(c.dex); }
     this.state = "starting";
     const t0 = performance.now(), sync = w.since(w.base), list = containers(dexes);
     this.marks = w.numbering();
-    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, initialized: w.newlyInitialized(), hostClasses: w.hostClassNames() }, list.map(([, b]) => b.buffer as ArrayBuffer));
+    this.post({ type: "init", dexes: list, aot: aotBase === undefined ? undefined : { base: aotBase, app: w.appAttached ? app : undefined }, sync, initialized: w.newlyInitialized(), hostClasses: w.hostClassNames(), loaders, proxies: [...w.proxies.values()] }, list.map(([, b]) => b.buffer as ArrayBuffer));
     this.stats.startMs = t0;
   }
   private loaded = false;
@@ -84,6 +87,12 @@ export class CompileClient implements CompileService {
     if (this.state === "idle") return;
     const list = containers(dexes);
     this.post({ type: "add", dexes: list }, list.map(([, b]) => b.buffer as ArrayBuffer));
+  }
+  proxy(definition: ProxyDefinition): void {
+    if (this.state !== "ready" && this.state !== "starting") return;
+    const loaders = this.w!.prog.loaderParents();
+    if (!loaders) return this.retire("class loader libraries the worker cannot follow");
+    this.post({ type: "proxy", definition, loaders });
   }
   private pump(): void {
     if (this.state !== "ready") return;

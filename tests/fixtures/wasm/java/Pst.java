@@ -17,6 +17,27 @@ public class Pst {
     for (int i = 0; i < n; i++) s = ops[i % 3].apply(s) & 0xffff;
     return s;
   }
+  static ClassLoader proxyLoader;
+  public static void setupLoader(String path) throws Exception {
+    proxyLoader = (ClassLoader) Class.forName("dalvik.system.DexClassLoader").getConstructor(String.class, String.class, String.class, ClassLoader.class)
+      .newInstance(path, "/data/local/tmp", null, null);
+  }
+  static Op proxy;
+  static int proxyRuns;
+  public static int makeProxy(int kind) {
+    boolean runnable = kind == 0 || kind == 3;
+    Class<?>[] types = runnable ? new Class<?>[] { Runnable.class } : kind == 1 ? new Class<?>[] { Op.class } : new Class<?>[] { Op.class, Runnable.class };
+    Object made = java.lang.reflect.Proxy.newProxyInstance(kind == 0 ? Runnable.class.getClassLoader() : kind == 3 ? null : proxyLoader, types, new java.lang.reflect.InvocationHandler() {
+      public Object invoke(Object receiver, java.lang.reflect.Method method, Object[] args) {
+        if (method.getName().equals("run")) { proxyRuns++; return null; }
+        return ((Integer) args[0]) + 7;
+      }
+    });
+    if (runnable) { ((Runnable) made).run(); return proxyRuns; }
+    proxy = (Op) made;
+    return callProxy(5);
+  }
+  public static int callProxy(int value) { return proxy.apply(value); }
   public static int sum(int[] a) { int s = 0; for (int v : a) s += v; return s; }
   public static int fill(int n) { int[] a = new int[n]; for (int i = 0; i < n; i++) a[i] = i ^ (i >> 3); return sum(a); }
   public static int guarded(int x) {
