@@ -1414,11 +1414,10 @@ export class World {
   }
   /** calls and loop iterations counted for `t` so far: methods compiled by the second tier count as busy, the Wasm-written intrinsics always run */
   private ran(t: MethodInfo): number {
-    const sl = this.slotAt(this.slotOf(t)) as { done: boolean; hot?: boolean };
-    if (this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    const slot = this.slotOf(t), sl = this.slotAt(slot) as { done: boolean; hot?: boolean };
     // a method that has asked for the second tier has used up a budget, whatever its count since
-    if (sl.hot || this.requested.has(this.slotOf(t))) return HOT_BUDGET;
-    return sl.done ? this.count(this.slotOf(t)) : 0;
+    if (sl.hot || this.requested.has(slot) || this.opts.intrinsics.has(mid(t))) return HOT_BUDGET;
+    return sl.done ? this.count(slot) : 0;
   }
   /** the methods (ids) whose first-tier code ran a loop for 64 chunks in one entry: their second tier keeps loops in chunks, so a long activation of it is not held in the engine's baseline code */
   longLoops = new Set<string>();
@@ -1471,9 +1470,19 @@ export class World {
   }
   /** the busiest small implementations, bounded by the number of guards emitted */
   private likely(decl: string, name: string, desc: string): MethodInfo[] {
-    // an implementation whose class is not linked has not run (and asking would link it)
-    const ran = [...this.implementations(decl, name, desc)].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) >= COPY_MIN && this.inlinable(t));
-    return ran.sort((a, b) => this.ran(b) - this.ran(a)).slice(0, MAX_GUARDS);
+    const chosen: MethodInfo[] = [], scores: number[] = [];
+    for (const t of this.implementations(decl, name, desc)) {
+      // Asking for a count would link a class that has not run.
+      if (!this.classes.has(t.cls) && !this.aot?.hasLoaded(t.cls)) continue;
+      const score = this.ran(t);
+      if (score < COPY_MIN || !this.inlinable(t)) continue;
+      let at = chosen.length;
+      while (at > 0 && scores[at - 1] < score) at--;
+      if (at >= MAX_GUARDS) continue;
+      for (let i = Math.min(chosen.length, MAX_GUARDS - 1); i > at; i--) { chosen[i] = chosen[i - 1]; scores[i] = scores[i - 1]; }
+      chosen[at] = t; scores[at] = score;
+    }
+    return chosen;
   }
   private implemented = new Map<string, Map<string, { seen: number; targets: Set<MethodInfo> }>>();
   private allocatedIndex?: { seen: number; cursor: SetIterator<string>; types: Map<string, string | string[]> };

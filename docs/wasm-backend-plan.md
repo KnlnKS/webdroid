@@ -10,9 +10,11 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
-### Compiler-job allocation checkpoint (2026-10-09)
+### Compiler and hot-planner allocation checkpoint (2026-10-09)
 
 Worker jobs reuse decoded reference names, preserving fresh initiating-loader/readiness checks and polymorphic prototype boundaries; native cleanup avoids empty-map clearing. A paired renderer profile estimates about 21% less allocation during scrolling, while the reference cache retains more metadata. Unprofiled controls reduce compiler time and input-to-next-presentation proxies, with overlapping FPS and unequal work in the final baseline. Typecheck, all 19 Wasm sections, unit/framework/OSR/smoke checks, targeted hot-refresh/promotion controls, byte-identical AOT and full action/diagnostic captures pass. The intended-response gate, black Mihon launch checkpoint and broader acceptance remain open. See the implementation history for scope and receipts.
+
+Hot-target selection now retains only the bounded winners, reads each candidate score once and skips method-name construction for hot/requested methods. Dual comparisons preserve all target identities/order and reduce scroll-window selection from 36–39 to 27–28 ms. Separate allocation samples fall 232→216 MiB; serial controls show a small frame-pacing improvement with overlapping p95 and mixed input latency. Existing linker/loader/persistence/framework/OSR checks, unchanged rebuilt AOT and full action/diagnostic captures pass. An initial unit run fails ZIP reads and delayed ordering; baseline and unchanged candidate repeats pass, leaving that first failure unexplained. No new tests or retained caches. The history records measurements and limits; broader acceptance remains open.
 
 ### Allocated subtype index checkpoint (2026-10-09)
 
