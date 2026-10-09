@@ -1,4 +1,4 @@
-import { beginCompile, endCompile, measureCompile } from "../../jvm/compiler-observer";
+import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // The linker: classes and methods become Wasm modules when first needed, all sharing one funcref table.
 //
 //  - A class module (one per class, built the first time any code names the class) defines the class's vtable, init flag and static
@@ -8,7 +8,7 @@ import { beginCompile, endCompile, measureCompile } from "../../jvm/compiler-obs
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
-import { decodeInstruction, prepareMethod, type PreparedInstruction } from "../../jvm/prepared";
+import { decodeInstruction, type PreparedInstruction } from "../../jvm/prepared";
 import { ColdInterpreter } from "../cold/interpreter";
 import { needsSymbolicSite, type SymbolicSite } from "../compiler/sites";
 import { ColdSlowOps } from "../cold/slowops";
@@ -32,7 +32,7 @@ import { ASYNC } from "./inet";
 import { generateProxy, type ProxyDefinition } from "./proxy";
 import { hostObject } from "./annotations";
 import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
-import { definitionReady, initiatedInstruction, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
+import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
@@ -1145,10 +1145,8 @@ export class World {
       indices.forEach((index, i) => addResolved(key, descToName(cls.dex!.rawType(index)), targets[i]));
     };
     for (const method of [...installed, ...copies]) if (method.codeOff && !this.intrinsic(method)) {
-      const start = performance.now(), prepared = measureCompile("wasm.prepare", () => prepareMethod(method.dex, method.dex.code(method.codeOff), method.desc, method.isStatic));
-      this.stats.phase.prepare += performance.now() - start;
-      for (const ins of prepared.instructions) {
-        const owner = initiatedInstruction(this, method, ins);
+      for (const name of this.planning(method).references) {
+        const owner = initiatedType(this, method.cls, name);
         if (owner) addResolved(method.cls, owner.name, owner.key);
       }
     }
@@ -1429,18 +1427,20 @@ export class World {
   /** per virtual call (declaring class, name, descriptor): the small implementations, among the allocated classes', its unit tests for first */
   plan = new Map<string, MethodInfo[]>();
   groupOf = new Map<number, number[]>();
-  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[] }>();
+  private planningSites = new Map<MethodInfo, { calls: PreparedInstruction[]; allocations: string[]; references: string[] }>();
   private planning(m: MethodInfo) {
     let sites = this.planningSites.get(m);
     if (!sites) {
-      const seen = new Set<string>(), allocations = new Set<string>(), calls: PreparedInstruction[] = [];
+      const seen = new Set<string>(), allocations = new Set<string>(), references = new Set<string>(), calls: PreparedInstruction[] = [];
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
+        const name = !ins.name.startsWith("invoke-polymorphic") && instructionClass(m, ins);
+        if (name) references.add(name);
         if (ins.op === 0x22) allocations.add(descToName(m.dex.type(ins.b)));
         if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
         const key = `${ins.op}:${ins.b}`;
         if (!seen.has(key)) { seen.add(key); calls.push(ins); }
       }
-      this.planningSites.set(m, sites = { calls, allocations: [...allocations] });
+      this.planningSites.set(m, sites = { calls, allocations: [...allocations], references: [...references] });
     }
     return sites;
   }

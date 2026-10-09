@@ -70,9 +70,12 @@ export function initiatedInstruction(w: World, method: MethodInfo, ins: Prepared
   // An initiated MH/VH owner does not establish resolution of the separate call-site prototype.
   if (ins.name.startsWith("invoke-polymorphic")) return;
   const symbolic = instructionClass(method, ins);
-  if (!symbolic) return;
+  return symbolic ? initiatedType(w, method.cls, symbolic) : undefined;
+}
+
+export function initiatedType(w: World, referrer: string, symbolic: string): { name: string; key: string } | undefined {
   const component = symbolic.replace(/^\[+/, ""), name = symbolic[0] === "[" && component[0] === "L" ? component.slice(1, -1) : symbolic;
-  const key = w.prog.initiatedBy(w.prog.loaderOf(method.cls), name);
+  const key = w.prog.initiatedBy(w.prog.loaderOf(referrer), name);
   return key && definitionReady(w, key) ? { name, key } : undefined;
 }
 

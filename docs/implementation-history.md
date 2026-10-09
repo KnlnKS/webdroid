@@ -6212,3 +6212,29 @@ Full selected captures complete 39/17 actions and all 167 process snapshots resp
 ### Performance-driver environment defaults (2026-10-09)
 
 The standalone performance driver now uses the shared `webdroidUrl()` helper for its default URL, honoring `WEBDROID_TIER` and `WEBDROID_BYTECODE` like the other browser harnesses. An explicit `--url` still takes precedence. TypeScript passes; a browser check using only `WEBDROID_URL` and `WEBDROID_TIER=wasm` confirms the actual Wasm URL, 14,591 Wasm crossings, advancing ticks, one completed gesture and three responding processes without errors. Its one-second window verifies configuration only and is not FPS evidence. Receipt: `/tmp/webdroid-scroll-next/default-tier.json`.
+
+
+### Compiler-job and native-scope allocation churn (2026-10-09)
+
+A fresh 15-second Mihon Reader profile on `4574aa88` combines CPU sampling with 32 KiB heap-allocation sampling, including objects collected by minor/major GC. It estimates 291.3 MiB allocated in the renderer isolate, including 77.6 MiB under `upgradeJob` and 11.2 MiB self in Bridge cleanup. The profiler adds substantial overhead: its 53.4 presentations/s and sampled GC time are attribution only. All 29 gestures complete, ticks advance, the app stays visible and all three processes respond without runtime/native/draw diagnostics.
+
+Native cleanup now clears its temporary array-identity map only when nonempty. Array copy-back, reverse undo order, nested scopes, exception cleanup and suspended-scope ownership remain unchanged. Separately, worker-job preparation reuses unique immutable reference names from the existing decoded planning-site cache instead of preparing the entire method's control flow and constant types merely to enumerate its referenced classes. Current initiating-loader identity and definition readiness are still queried for every job through the canonical resolution helper; no resolved class identity is cached. Polymorphic-call owner names still cannot stand in for call-site prototype resolution.
+
+A private control compares cached reference identity and order with the previous full-analysis path in the explicit hot-refresh and promotion-copy fixtures: 21 real jobs, 68 method visits and 66 resolved references agree. The promotion case excludes an unresolved helper, then includes the actual initiating-loader winner on a later job. Hot refresh retains all 77 JDK-matched and 61 pending-publication checks. Initial default-loader probe runs exercised zero jobs and are not used as evidence; the explicit modes fix that coverage mistake. No new repository test is added.
+
+With the same allocation-sampling settings and scroll workload, the candidate estimates 230.4 MiB allocated (about 21% less), including 48.2 MiB under job preparation and 0.13 MiB in Bridge cleanup. The two captures execute 359,562/365,660 Wasm crossings, compile 2,660/2,669 methods and perform 186/190 upgrades. Sampling is approximate and work differs slightly; these are allocation estimates, not retained-heap savings or exact additive attribution. The remaining large sources include ranking, iteration, native boundaries and first-tier compilation.
+
+Four unprofiled controls run in baseline/candidate/candidate/baseline order using isolated committed `4574aa88`, matching AOT, fresh Chromium 151.0.7922.34/SwiftShader profiles, 720×1280@320 geometry, three seconds of warmup and 15 seconds of alternating 400 ms swipes every 500 ms. No owned verification competes. The buffered proxy exposes only World state; no screenshot readback occurs in the window. All 29 gestures complete in every run, all three processes respond, ticks advance, and the compiler Worker stays ready with no new stale/failed jobs.
+
+| Run | Presentations/s | Presentation interval p95 ms | Input-to-next-presentation median/p95 ms | Compiler ms | Methods/upgrades | Post-GC heap MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Baseline 1 | 56.00 | 20.5 | 13.8 / 32.1 | 260.6 | 2,687 / 190 | 812.91 |
+| Candidate 1 | 55.99 | 20.6 | 7.7 / 21.6 | 225.3 | 2,671 / 189 | 813.30 |
+| Candidate 2 | 55.93 | 20.3 | 9.3 / 28.1 | 218.6 | 2,661 / 190 | 813.63 |
+| Baseline 2 | 54.66 | 25.6 | 16.3 / 33.9 | 279.9 | 2,921 / 210 | 812.64 |
+
+The input proxy improves in these repeats but does not prove that the next presentation answers the gesture. FPS overlaps the first baseline, and the second baseline does more compilation work. The reference cache retains additional metadata (about 5,700 names across 1,500 planned methods); retained heap is slightly higher, not reduced. Backing storage varies 438–469 MiB. The 150 ms intended-response gate is not rerun here and remains open, as does broad application/FPS acceptance. Raw-CDP controls inspect page errors and process diagnostics, while full captures also check console errors.
+
+Typecheck, all 19 Wasm sections, 1,212 unit tests/79,777 assertions, 153 ordinary/guarded OSR checks and 31 framework exercises pass. FitNotes/Mihon JS smoke compilation has zero method failures. Fresh ordinary `f32480857175e0dc` and guarded `3f285d9579e83faa` match source `b05580b9e44486606fae599538698317c8083eae52b32e54872c34e305b1aa3d`; all 4,324 rebuilt platform files remain byte-identical to the baseline.
+
+Full captures complete 39 FitNotes and 17 Mihon actions with 167 responding process snapshots and no observed new missing/native/runtime/draw/GL/SuspendError or browser errors. FitNotes retains every UI tree and 36/39 PNGs, with three 450-pixel cursor differences. Mihon retains 11/17 PNGs/trees; tree differences are 2 px More and 4 px Reader scroll offsets and the final empty-state face/associated bounds. Its initial black launch PNG is unchanged. Goldens remain unchanged, and these captures overlap correctness work, providing no timing evidence. Receipts and comparison artifacts: `/tmp/webdroid-allocation-profile/`.

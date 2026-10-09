@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Compiler-job allocation checkpoint (2026-10-09)
+
+Worker jobs reuse decoded reference names, preserving fresh initiating-loader/readiness checks and polymorphic prototype boundaries; native cleanup avoids empty-map clearing. A paired renderer profile estimates about 21% less allocation during scrolling, while the reference cache retains more metadata. Unprofiled controls reduce compiler time and input-to-next-presentation proxies, with overlapping FPS and unequal work in the final baseline. Typecheck, all 19 Wasm sections, unit/framework/OSR/smoke checks, targeted hot-refresh/promotion controls, byte-identical AOT and full action/diagnostic captures pass. The intended-response gate, black Mihon launch checkpoint and broader acceptance remain open. See the implementation history for scope and receipts.
+
 ### Allocated subtype index checkpoint (2026-10-09)
 
 Hot planning indexes each allocation under its canonical supertypes once, preserving target order and clearing on hierarchy/namespace changes. Compact singleton storage avoids an array per indexed type. Dual controls preserve all targets and reduce scroll-window lookup from 70 to 3 ms. Production ABBA controls improve presentation p95 from 25–26 to 20–21 ms and presentation rate from 54.2–55.1 to 55.9–56.2/s, while retaining more metadata; input latency ranges overlap. Typecheck, all 19 Wasm sections, unit/framework/OSR/smoke checks, byte-identical eight-jar AOT and full action/diagnostic captures pass. Mihon's black launch checkpoint and broader latency/FPS acceptance remain open. See the implementation history for scope and measurements.
