@@ -1,6 +1,6 @@
 import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
-import { ModuleBuilder, T, ref, refNull, uleb, type VT } from "./wasmbin";
+import { ModuleBuilder, T, ref, refNull, uleb, type VT, type FunctionType } from "./wasmbin";
 import { Code, OP } from "./code";
 import { Program, kindOf, type Kind, type MethodInfo } from "./program";
 import { mid } from "./ids";
@@ -42,11 +42,50 @@ export function declareBase(mb: ModuleBuilder): Base {
 /** every reference slot is an anyref: a Java object is a struct subtype of $Obj, a String the JS string behind any.convert_extern (strings.ts) */
 export const kindVT = (_tObj: number, k: Kind): VT => (k === "I" ? T.i32 : k === "J" ? T.i64 : T.anyref);
 
+const HOST_IMPORTS = {
+  initSignatures: { params: [T.i32], results: [] },
+  initSignaturesWait: { params: [T.i32], results: [] },
+  catchBlock: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.i32] },
+  catchBlockWait: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.i32] },
+  catchSync: { params: [], results: [T.i32] },
+  fmod: { params: [T.f64, T.f64], results: [T.f64] },
+  gap: { params: [T.i32], results: [] },
+  imtMiss: { params: [T.i32, T.i32], results: [T.i32] },
+  heapCheck: { params: [], results: [T.i32] },
+  excMessage: { params: [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], results: [T.externref] },
+  capture: { params: [T.externref], results: [] },
+  stFrames: { params: [T.externref], results: [T.i32] },
+  stString: { params: [T.i32, T.i32], results: [T.externref] },
+  stLine: { params: [T.i32], results: [T.i32] },
+  info: { params: [T.i32, T.i32, T.i32], results: [T.i32] },
+  stackClass: { params: [T.i32], results: [T.i32] },
+  classByName: { params: [T.externref, T.externref, T.i32], results: [T.i32] },
+  dexOpen: { params: [T.externref, T.externref], results: [T.externref] },
+  dexOpenMemory: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },
+  galloc: { params: [T.externref, T.i32], results: [T.i64] },
+  gwrote: { params: [T.i32, T.i32], results: [] },
+  hot: { params: [T.i32], results: [] },
+  long: { params: [T.i32], results: [] },
+  mhInvoke: { params: [T.externref, T.externref, T.externref, T.i32], results: [T.externref] },
+  text: { params: [T.i32, T.i32], results: [T.externref] },
+  net: { params: [T.i32, T.externref, T.i32, T.i32], results: [T.i32] },
+  proxy: { params: [T.externref, T.externref, T.externref, T.externref, T.externref], results: [T.externref] },
+  obj: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.externref] },
+  annotation: { params: [T.i32, T.i32, T.i32, T.externref], results: [T.externref] },
+  annotationWait: { params: [], results: [T.externref] },
+  watch: { params: [T.externref, T.externref], results: [] },
+  claim: { params: [T.externref, T.i64], results: [] },
+  intern: { params: [T.externref, T.externref], results: [T.externref] },
+  sync: { params: [T.i32, T.externref, T.f64], results: [T.i32] },
+  block: { params: [T.i32, T.externref, T.f64, T.i32], results: [T.i32] },
+} satisfies Record<string, FunctionType>;
+const HOST_IMPORT_NAMES = Object.keys(HOST_IMPORTS) as (keyof typeof HOST_IMPORTS)[];
+
 export class Compiler implements Base {
   mb = new ModuleBuilder();
   tVT!: number; tObj!: number; tStr!: number; tTagFn!: number; tData!: Record<ElemKind, number>; tArr!: Record<ElemKind, number>;
   tag: number;
-  imp: { initSignatures: number; initSignaturesWait: number; fmod: number; gap: number; imtMiss: number; heapCheck: number; excMessage: number; capture: number; stFrames: number; info: number; stackClass: number; stString: number; stLine: number; classByName: number; catchBlock: number; catchBlockWait: number; catchSync: number; dexOpen: number; dexOpenMemory: number; galloc: number; gwrote: number; hot: number; long: number; mhInvoke: number; text: number; net: number; proxy: number; obj: number; annotation: number; annotationWait: number; watch: number; intern: number; claim: number; sync: number; block: number };
+  imp: Record<keyof typeof HOST_IMPORTS, number>;
   /** gaps this module's code ran into */
   gaps: string[] = [];
   /** methods this module defines, by id: calls between them are direct, every other call goes through the table (all of them do in a precompiled module,
@@ -95,21 +134,17 @@ export class Compiler implements Base {
     this.str = new StructStrings(this);
     this.classStruct.set("java/lang/String", this.tStr);
     this.tag = mb.importTag("rt", "tag", this.tTagFn);
-    const f = (name: string, p: VT[], r: VT[]) => mb.importFunc("host", name, mb.addFuncType(p, r));
-    this.imp = { initSignatures: f("initSignatures", [T.i32], []), initSignaturesWait: f("initSignaturesWait", [T.i32], []), catchBlock: f("catchBlock", [T.i32, T.i32, T.i32, T.externref], [T.i32]), catchBlockWait: f("catchBlockWait", [T.i32, T.i32, T.i32, T.externref], [T.i32]), catchSync: f("catchSync", [], [T.i32]), fmod: f("fmod", [T.f64, T.f64], [T.f64]), gap: f("gap", [T.i32], []), imtMiss: f("imtMiss", [T.i32, T.i32], [T.i32]),
-      heapCheck: f("heapCheck", [], [T.i32]), excMessage: f("excMessage", [T.i32, T.i32, T.i32, T.i32, T.i32, T.i32], [T.externref]), capture: f("capture", [T.externref], []),
-      stFrames: f("stFrames", [T.externref], [T.i32]), stString: f("stString", [T.i32, T.i32], [T.externref]), stLine: f("stLine", [T.i32], [T.i32]),
-      info: f("info", [T.i32, T.i32, T.i32], [T.i32]), stackClass: f("stackClass", [T.i32], [T.i32]), classByName: f("classByName", [T.externref, T.externref, T.i32], [T.i32]), dexOpen: f("dexOpen", [T.externref, T.externref], [T.externref]), dexOpenMemory: f("dexOpenMemory", [T.externref, T.externref, T.externref, T.externref, T.externref], [T.externref]), galloc: f("galloc", [T.externref, T.i32], [T.i64]), gwrote: f("gwrote", [T.i32, T.i32], []), hot: f("hot", [T.i32], []), long: f("long", [T.i32], []), mhInvoke: f("mhInvoke", [T.externref, T.externref, T.externref, T.i32], [T.externref]), text: f("text", [T.i32, T.i32], [T.externref]), net: f("net", [T.i32, T.externref, T.i32, T.i32], [T.i32]),
-      proxy: f("proxy", [T.externref, T.externref, T.externref, T.externref, T.externref], [T.externref]), obj: f("obj", [T.i32, T.i32, T.i32, T.externref], [T.externref]), annotation: f("annotation", [T.i32, T.i32, T.i32, T.externref], [T.externref]), annotationWait: f("annotationWait", [], [T.externref]), watch: f("watch", [T.externref, T.externref], []), claim: f("claim", [T.externref, T.i64], []), intern: f("intern", [T.externref, T.externref], [T.externref]),
-      sync: f("sync", [T.i32, T.externref, T.f64], [T.i32]), block: f("block", [T.i32, T.externref, T.f64, T.i32], [T.i32]) };
+    this.imp = {} as Record<keyof typeof HOST_IMPORTS, number>;
+    for (const name of HOST_IMPORT_NAMES) this.imp[name] = mb.importFunc("host", name, HOST_IMPORTS[name]);
     if (deopt) {
-      const imp = (name: string, params: VT[], results: VT[]) => mb.importFunc("deopt", name, mb.addFuncType(params, results));
+      const imp = (name: string, params: VT[], results: VT[]) => mb.importFunc("deopt", name, { params, results });
       this.deopt = { make: imp("make", [T.i32, T.i32], [T.externref]), version: imp("version", [T.externref], [T.i32]), last: imp("last", [T.externref], [T.i32]), blocked: imp("blocked", [T.externref], [T.i32]), allocation: imp("allocation", [T.externref, T.i32], []), monitor: imp("monitor", [T.externref, T.externref, T.i32], []), capture: imp("capture", [T.externref, T.i32, T.i32, T.i32, T.externref, T.externref, T.externref], [T.externref]), captureIndexed: imp("captureIndexed", [T.externref, T.i32, T.i32, T.i32, T.externref, T.externref, T.externref], [T.externref]), beginCapture: imp("beginCapture", [T.externref, T.i32], []), endCapture: imp("endCapture", [T.externref], []), target: imp("target", [T.externref], [T.funcref]), epoch: this.global("rt", "deoptEpoch", T.i32, true), enabled: this.global("rt", "deoptEnabled", T.i32, false) };
     }
     this.str.importBuiltins();
     // the imports that cannot run Java code
     const { initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, dexOpenMemory, classByName, net, sync, block, catchBlock, catchBlockWait } = this.imp, runsJava = new Set([initSignatures, initSignaturesWait, mhInvoke, proxy, obj, dexOpen, dexOpenMemory, classByName, net, sync, block, catchBlock, catchBlockWait]);
-    this.hostSafe = new Set(Array.from({ length: mb.nImportedFuncs }, (_, i) => i).filter((i) => !runsJava.has(i)));
+    this.hostSafe = new Set();
+    for (let i = 0; i < mb.nImportedFuncs; i++) if (!runsJava.has(i)) this.hostSafe.add(i);
   }
   private hostSafe: Set<number>;
   /** whether the body `c` can run Java code beyond itself: it calls through a table, an import that may, or a method of this unit */

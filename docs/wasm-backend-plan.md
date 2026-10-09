@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Deferred import signatures checkpoint (2026-10-09)
+
+Compiler instances share host signature metadata; binary emission interns deferred signatures only after unused-import pruning, without changing reserved function indices or persistent builder state. The checked helper probe reduces emitted bytes 40% and construction/instantiation time from 46–53 to 28–34 ms. Typecheck, all 19 Wasm sections, 1,212 unit tests, cold/OSR/framework checks, APK sweeps and fresh eight-jar AOT pass. Full FitNotes/Mihon action and process diagnostics pass with the existing Mihon black launch limitation. Matched warm app results overlap and still exceed 150 ms; neither app latency nor FPS acceptance is claimed. See the implementation history for controls and remaining observation work.
+
 ### Symbolic operand metadata checkpoint (2026-10-09)
 
 Lazy symbolic operations now decode one instruction and read its compiled register/ABI mapping directly. Whole-method reanalysis, the bounded analysis cache and redundant parameter locals are removed; canonical resolution, emission and frame restoration remain shared. Unit/app formats are 12/13. Typecheck, all 19 Wasm suites, 1,212 unit tests, cold/OSR/framework checks, zero-failure APK sweeps and fresh ordinary/guarded eight-jar builds pass. Two serial warm controls reduce FitNotes exercise-list response from 216–239 to 193–194 ms, while calendar taps remain mixed and the 150 ms gate still fails. FitNotes full UI trees match. Mihon's action/diagnostic checks pass, but its presentation-count launch checkpoint captures black before the library; a separate no-input idle probe confirms eventual library rendering on both sources. Visual launch parity, FPS and broader acceptance remain open. See the implementation history for the measurements and evidence limits.

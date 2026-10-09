@@ -82,9 +82,9 @@ export class StructStrings implements StringRepr {
 
   importBuiltins(): void {
     const { mb, tData } = this.cx, E = T.externref, I = T.i32, A = refNull(tData.i16);
-    this.b.length = mb.importFunc("wasm:js-string", "length", mb.addFuncType([E], [I]));
-    this.b.fromCharCodeArray = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([A, I, I], [ref(HT.extern)]));
-    this.b.intoCharCodeArray = mb.importFunc("wasm:js-string", "intoCharCodeArray", mb.addFuncType([E, A, I], [I]));
+    this.b.length = mb.importFunc("wasm:js-string", "length", { params: [E], results: [I] });
+    this.b.fromCharCodeArray = mb.importFunc("wasm:js-string", "fromCharCodeArray", { params: [A, I, I], results: [ref(HT.extern)] });
+    this.b.intoCharCodeArray = mb.importFunc("wasm:js-string", "intoCharCodeArray", { params: [E, A, I], results: [I] });
   }
 
   // ---------- functions of the module

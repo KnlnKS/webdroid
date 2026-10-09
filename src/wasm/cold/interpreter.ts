@@ -127,7 +127,7 @@ export class ColdInterpreter {
     const frame = mb.addType({ k: "struct", fields: [ref(words), ref(bits), ref(refs), T.i32, T.i32, T.i64, T.anyref, ref(words), T.i32].map((t) => ({ t, mut: true })) });
 
     const equal = mb.importFunc("host", "equal", mb.addFuncType([T.externref, T.externref], [T.i32]));
-    const functions = new Map<string, { index: number; params: VT[]; results: VT[] }>();
+    const functions = new Map<string, { index: number; params: readonly VT[]; results: readonly VT[] }>();
     const fn = (name: string, params: Parameters<ModuleBuilder["addFuncType"]>[0], results: Parameters<ModuleBuilder["addFuncType"]>[0], emit: (c: Code) => void) => {
       const c = new Code(params.length); emit(c);
       const index = mb.addFunc(mb.addFuncType(params, results), c.finish(), "$cold:" + name);

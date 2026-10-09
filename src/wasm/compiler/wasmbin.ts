@@ -54,8 +54,10 @@ export function vt(t: VT, out: number[]): void {
 }
 type StorageT = VT;
 interface FieldT { t: StorageT; mut: boolean }
+export interface FunctionType { params: readonly VT[]; results: readonly VT[] }
+const functionKey = (params: readonly VT[], results: readonly VT[]) => params.map(vtKey).join() + ">" + results.map(vtKey).join();
 type TypeDef =
-  | { k: "func"; params: VT[]; results: VT[]; sup?: number; final?: boolean }
+  | FunctionType & { k: "func"; sup?: number; final?: boolean }
   | { k: "struct"; fields: FieldT[]; sup?: number; final?: boolean }
   | { k: "array"; elem: FieldT; sup?: number; final?: boolean };
 
@@ -74,7 +76,7 @@ export class ModuleBuilder {
   /** type entries; consecutive entries with the same group id form a rec group */
   types: { def: TypeDef; group: number }[] = [];
   private groups = 0;
-  imports: { mod: string; name: string; kind: "func" | "memory" | "table" | "global" | "tag"; desc: number[] }[] = [];
+  imports: { mod: string; name: string; kind: "func" | "memory" | "table" | "global" | "tag"; desc: number[]; signature?: FunctionType }[] = [];
   funcTypes: number[] = [];       // type idx per defined function
   bodies: FuncBytes[] = [];        // encoded bodies
   funcNames: string[] = [];
@@ -90,17 +92,18 @@ export class ModuleBuilder {
   newGroup(): number { return ++this.groups; }
   /** add a type in the current (or given) rec group; returns its index */
   addType(def: TypeDef, group = ++this.groups): number { this.types.push({ def, group }); return this.types.length - 1; }
-  addFuncType(params: VT[], results: VT[]): number {
-    const key = params.map(vtKey).join() + ">" + results.map(vtKey).join();
+  addFuncType(params: readonly VT[], results: readonly VT[]): number {
+    const key = functionKey(params, results);
     let i = this.fnTypeCache.get(key);
     if (i === undefined) { i = this.addType({ k: "func", params, results, final: true }); this.fnTypeCache.set(key, i); }
     return i;
   }
   private fnTypeCache = new Map<string, number>();
 
-  importFunc(mod: string, nm: string, type: number): number {
-    const d: number[] = [0x00]; uleb(type, d);
-    this.imports.push({ mod, name: nm, kind: "func", desc: d });
+  importFunc(mod: string, nm: string, type: number | FunctionType): number {
+    const d: number[] = [];
+    if (typeof type === "number") { d.push(0x00); uleb(type, d); }
+    this.imports.push({ mod, name: nm, kind: "func", desc: d, signature: typeof type === "number" ? undefined : type });
     return this.nImportedFuncs++;
   }
   importMemory(mod: string, nm: string, min: number, max?: number, shared = false): void {
@@ -169,6 +172,19 @@ export class ModuleBuilder {
       const removed = this.nImportedFuncs - imported;
       index = f => f < this.nImportedFuncs ? indices.get(f)! : f - removed;
     }
+    // Deferred import signatures never enter the module's type section unless the import survives.
+    let types = this.types, nextGroup = this.groups;
+    const signatures = new Map<FunctionType, number>(), added = new Map<string, number>();
+    for (const im of imports) if (im.signature && !signatures.has(im.signature)) {
+      const signature = im.signature, key = functionKey(signature.params, signature.results);
+      let type = this.fnTypeCache.get(key) ?? added.get(key);
+      if (type === undefined) {
+        if (types === this.types) types = types.slice();
+        type = types.length; added.set(key, type);
+        types.push({ def: { k: "func", ...signature, final: true }, group: ++nextGroup });
+      }
+      signatures.set(signature, type);
+    }
     const relocate = (body: FuncBytes): ArrayLike<number> => {
       if (imported === this.nImportedFuncs || !body.functionRefs?.length) return body;
       const bytes = Uint8Array.from(body);
@@ -194,12 +210,12 @@ export class ModuleBuilder {
     const vec = (id: number, items: ArrayLike<number>[]) => section(id, [count(items.length), ...items]);
     {
       let groups = 0;
-      for (let i = 0; i < this.types.length; i++) if (!i || this.types[i].group !== this.types[i - 1].group) groups++;
+      for (let i = 0; i < types.length; i++) if (!i || types[i].group !== types[i - 1].group) groups++;
       const entries = count(groups);
-      for (let i = 0; i < this.types.length;) {
-        let j = i + 1; while (j < this.types.length && this.types[j].group === this.types[i].group) j++;
+      for (let i = 0; i < types.length;) {
+        let j = i + 1; while (j < types.length && types[j].group === types[i].group) j++;
         if (j - i > 1) { entries.push(0x4e); uleb(j - i, entries); }
-        for (; i < j; i++) this.encodeTypeDef(this.types[i].def, entries);
+        for (; i < j; i++) this.encodeTypeDef(types[i].def, entries);
       }
       section(1, [entries]);
     }
@@ -210,7 +226,8 @@ export class ModuleBuilder {
         if (!prefix) { prefix = []; name(im.mod, prefix); modules.set(im.mod, prefix); }
         for (const x of prefix) entries.push(x);
         name(im.name, entries);
-        for (const x of im.desc) entries.push(x);
+        if (im.signature) { entries.push(0x00); uleb(signatures.get(im.signature)!, entries); }
+        else for (const x of im.desc) entries.push(x);
       }
       section(2, [entries]);
     }

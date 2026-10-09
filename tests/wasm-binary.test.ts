@@ -21,7 +21,8 @@ test("Wasm imports retain Unicode and long module names across repeated builds",
 
 test("Wasm import compaction preserves calls, table entries and function references", () => {
   const mb = new ModuleBuilder(), type = mb.addFuncType([], [T.i32]);
-  for (let i = 0; i < 200; i++) mb.importFunc("host", "f" + i, type);
+  for (let i = 0; i < 200; i++) mb.importFunc("host", "f" + i,
+    i === 95 ? { params: [], results: [T.i64] } : i === 149 ? { params: [T.f64], results: [] } : type);
   const entry = mb.reserveFunc(type, "entry"), target = mb.addFunc(type, new Code(0).i32(3).finish(), "target");
   mb.addTable(T.funcref, 1); mb.addElemActive(0, 0, [target]); mb.addElemDeclare([target]);
   const c = new Code(0);
@@ -30,15 +31,17 @@ test("Wasm import compaction preserves calls, table entries and function referen
   c.pc = 13; c.i32(0).callIndirect(type).raw(OP.i32_add).refFunc(target).callRef(type).raw(OP.i32_add);
   mb.setBody(entry, c.finish()); mb.export("entry", "func", entry); mb.export("imported", "func", 95);
   mb.start = mb.addFunc(mb.addFuncType([], []), new Code(0).call(42).drop().finish(), "start");
-  const invoked: number[] = [], imports = { host: Object.fromEntries(Array.from({ length: 200 }, (_, i) => ["f" + i, () => { invoked.push(i); return i; }])) };
+  const invoked: number[] = [], imports = { host: Object.fromEntries(Array.from({ length: 200 }, (_, i) => ["f" + i, () => { invoked.push(i); return i === 95 ? BigInt(i) : i; }])) };
+  const declaredTypes = mb.types.length;
   const original = mb.build(), compact = mb.build(true), module = new WebAssembly.Module(compact as BufferSource);
   expect(WebAssembly.Module.imports(module).map(i => i.name)).toEqual(["f42", "f95", "f150", "f199"]);
-  const functions = new WebAssembly.Instance(module, imports).exports as { entry: () => number; imported: () => number };
+  const functions = new WebAssembly.Instance(module, imports).exports as { entry: () => number; imported: () => bigint };
   expect(functions.entry()).toBe(355);
-  expect(functions.imported()).toBe(95);
+  expect(functions.imported()).toBe(95n);
   expect(invoked).toEqual([42, 150, 199, 95]);
   expect(mb.build()).toEqual(original);
   expect(mb.build(true)).toEqual(compact);
+  expect(mb.types).toHaveLength(declaredTypes);
   for (let i = 0; i < c.marks.length; i += 2) expect(compact[mb.bodyOffsets[0] + c.prefixLen + c.marks[i]]).toBe(i === 4 ? 0x11 : 0x10);
   // An untracked body must keep the original index space.
   mb.addFunc(type, [0, 0x10, 0xc7, 1, 0x0b]);
