@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Rejected immediate native results (2026-10-09)
+
+A prototype kept generator natives and their ABI wrappers synchronous until an actual Promise, preserving private arrays/bridge scopes and forcing stack-quota release for immediate values and exceptions. Core and app checks passed, but a diagnostic replay reduced Promise-returning imports only from 6,582 to 6,556 of roughly 6,850 calls. FPS overlapped and the warm exercise-list response remained 196 ms versus 188–195 ms on the starting source. Production and test changes are reverted; matching `a3c05807` AOT is restored. The history records controls and limitations. The next boundary investigation must identify the remaining Promise producers before changing scheduling; broad performance acceptance remains open.
+
 ### Virtual-vsync pacing checkpoint (2026-10-09)
 
 The shared display pacer rounds browser callbacks to virtual display periods and skips missed periods without catch-up frames. A core regression reproduces 559/600 delivered frames before and 600/600 after, with refresh-rate and pause/duplicate controls. Serial production scroll comparisons deliver every observed browser callback as a vsync, raise presentation rate from 55.1–55.3 to 56.5–56.7/s and reduce intervals over 25 ms from 27–39 to 11–14. Input latency remains mixed; this does not close the 150 ms or broader application/performance gates. The implementation history records checks, assets and capture limits.

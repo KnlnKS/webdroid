@@ -4,6 +4,8 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
+- An immediate-result native-driver prototype is rejected: removing unconditional async wrappers barely changes Promise-returning imports (6,582→6,556 in a diagnostic scroll replay), with overlapping FPS and no improvement to the slow exercise-list response. Production source and AOT remain at the vsync checkpoint. Trace the remaining wait origins before redesigning the callback boundary; see the [history](docs/implementation-history.md).
+
 - Virtual vsync now rounds host callbacks to the nearest configured display period and drops missed periods without catch-up bursts. Matched scroll controls deliver every observed browser frame instead of skipping 16–24 per 15 seconds; presentation rate rises from 55.1–55.3 to 56.5–56.7/s and intervals over 25 ms fall from 27–39 to 11–14. Input latency remains mixed and the broader performance gates stay open. The [history](docs/implementation-history.md) records verification and scope.
 
 - AOT polling snapshot removal remains rejected: fewer allocations did not improve frame pacing across eight controls. Exploratory input-aware cache admission and background upgrade planning do not establish a repeatable gain and are not integrated. Their frame traces led to the vsync repair above; automatic six-second cache rebuilds during scrolling remain an investigation target.
