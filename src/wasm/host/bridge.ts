@@ -84,7 +84,7 @@ export class Bridge implements HostBridge {
     try { if (this.undo.length > mark) for (const u of this.undo.splice(mark).reverse()) u(); } finally {
       const sp = this.saved.pop()!, top = this.tops.pop()!;
       if (sp >= 0 && (this.w.sp.value as number) <= top) this.w.sp.value = sp;
-      if (!this.saved.length) this.live.clear();
+      if (!this.saved.length && this.live.size) this.live.clear();
     }
   }
   /** the scope of the call in progress is the strand's while it waits: it is set aside, and the returned function takes it up again */
