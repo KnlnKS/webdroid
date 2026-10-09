@@ -1845,15 +1845,23 @@ export class World {
     return frames.slice(skip);
   }
   private synchronousEntries = 0;
+  private nativeCaller: Error | null | undefined;
+  /** Java caller frames stay fixed during one import's synchronous work. */
+  nativeScope<A extends unknown[], R>(run: (...args: A) => R, args: A): R {
+    const prior = this.nativeCaller; this.nativeCaller = null;
+    try { return run(...args); } finally { this.nativeCaller = prior; }
+  }
   inSynchronousJava(): boolean { return this.synchronousEntries > 0; }
   synchronous<T>(run: () => T): T {
+    const prior = this.nativeCaller; this.nativeCaller = undefined;
     this.synchronousEntries++;
-    try { return run(); } finally { this.synchronousEntries--; }
+    try { return run(); } finally { this.synchronousEntries--; this.nativeCaller = prior; }
   }
   private freshStack<T>(run: () => T): T {
     this.refreshHotUnits();
+    const caller = this.nativeCaller; this.nativeCaller = undefined;
     const prior = this.synchronousEntries; this.synchronousEntries = 0;
-    try { return run(); } finally { this.synchronousEntries = prior; }
+    try { return run(); } finally { this.synchronousEntries = prior; this.nativeCaller = caller; }
   }
   private hostFns = new Map<string, Function>();
   // Private helper owners do not consume method-table numbering shared with compile workers.
@@ -1956,8 +1964,14 @@ export class World {
     this.callFns.set(name, f = (s, ...args) => {
       token = token % 0x3fffffff + 1;
       // A host-only entry has no physical Java caller frames to preserve.
-      const stack = this.bridgeCaller ?? (!this.sched.current().root || this.inSynchronousJava() ? new Error() : undefined);
-      if (stack && !this.bridgeCaller) this.stats.bridgeCallerCaptures++;
+      let stack = this.bridgeCaller;
+      if (!stack && (!this.sched.current().root || this.inSynchronousJava())) {
+        stack = this.nativeCaller ?? undefined;
+        if (!stack) {
+          stack = new Error(); this.stats.bridgeCallerCaptures++;
+          if (this.nativeCaller !== undefined) this.nativeCaller = stack;
+        }
+      }
       this.bridgeCaller = undefined;
       const caller: BridgeStack = { stack, prior: this.bridgeStacks.get(s), done: false };
       this.bridgeStacks.set(s, caller);

@@ -322,7 +322,7 @@ export class Sched {
       this.suspensions++;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
-      try { r = fn(...a); }
+      try { r = this.w.nativeScope(fn, a); }
       catch (e) {
         // No stack switch occurred: Wasm may catch the import's throw on this strand.
         this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth;

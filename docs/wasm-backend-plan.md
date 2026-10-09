@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Native caller capture reuse checkpoint (2026-10-08)
+
+Callbacks within a Suspending import's synchronous work now share a lazy physical caller capture; fresh/synchronous Java entries isolate nested scopes and explicit cold callers retain priority. Matched warm controls reduce caller Error allocations from about 21,290 to 4,410, largely in accessibility observation. Exercise-list latency remains 201–212 ms versus 208–222 ms before, so no reliable latency/FPS gain or G3 acceptance is claimed. Core/compiler/unit/framework/OSR/caller checks pass; all 4,324 rebuilt assets are identical under source `46f51a800e9d…`, ordinary `8e9dfc0e4928aa4a`/guarded `3a575716900794bd`. Full FitNotes has 39 identical screenshots/UI trees; quick gate passes 6/7 with Doodle's existing monitor cycle. The history records pre-existing outer-stack ancestry loss exposed by a private native-callback probe. Runtime/frame attribution, the unchanged latency gate and broader acceptance remain open.
+
 ### Guarded-AOT handoff coverage checkpoint (2026-10-08)
 
 The shipping fixture now explicitly invalidates the active AOT root after loading the late class; its symbolic dispatch has no speculative hierarchy assumption. All 153 canonical `cold-osr --aot` checks pass with the existing expected results, while the ordinary hot-code case retains actual late-subclass invalidation coverage. This closes the fixture-trigger gap without changing production code or AOT assets. Application, 150 ms latency and FPS acceptance remain open; details are in the history.
