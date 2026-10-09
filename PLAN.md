@@ -1,10 +1,10 @@
-# Webdroid status — 2026-10-08
+# Webdroid status — 2026-10-09
 
 The current code runs unchanged APK and bundled library bytecode in the browser. This file tracks open work and the latest relevant gates. [Implementation history](docs/implementation-history.md) records failure mechanisms, measurements and evidence limits; [AGENTS.md](AGENTS.md) defines working and verification rules. Historical branch plans and intermediate runs remain in Git history.
 
 ## Latest integrated evidence
 
-- Wasm hot-call planning now shares allocated-subtype filtering across signatures. A same-World comparison preserves 884 planner results and cuts scroll-window traversal 83%; paired compiler measurements improve, but input latency/FPS do not consistently improve. Core checks, identical AOT and full FitNotes/Mihon captures pass. Annotation Proxy creation retires the compiler Worker and returns hot compilation to the main thread; supporting runtime-generated classes in that protocol is next. See the [history](docs/implementation-history.md) for private-proxy limits and open acceptance.
+- Wasm Unsafe field accesses now cache validated accessor slots inside the runtime. Matched scroll controls reduce repeated host lookups from roughly 375,000–407,000 to one per 15 seconds, avoiding per-access descriptor construction. Core/compiler/unit/framework checks and full FitNotes/Mihon captures pass. Continuous-scroll presentation rates overlap and latency remains mixed, so no app-level latency/FPS gain is claimed. Main-thread first-tier compilation/planning and the broader performance gates remain open; see the [history](docs/implementation-history.md).
 
 - Wasm callbacks share a lazily captured physical caller stack within one native invocation's synchronous work. Matched warm controls reduce caller Error allocations about 79%, mostly in accessibility observation, but exercise-list responses still exceed 150 ms and no reliable latency/FPS gain is established. Core checks, caller controls, byte-identical AOT and all 39 full FitNotes checkpoints pass; the quick gate passes 6/7 with Doodle's known monitor cycle. A private probe exposes pre-existing lost outer ancestry across native callbacks/waits. See the [history](docs/implementation-history.md) for scope and remaining performance work.
 

@@ -162,7 +162,7 @@ export class World {
   /** the classes the host implements (hostclass.ts) */
   hosts = new HostClasses(this);
   host: Record<string, Function>;
-  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void };
+  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; unsafeSlots: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void };
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
   private synth = new Map<string, number>();
@@ -317,6 +317,7 @@ export class World {
   }
   /** forgets what was numbered after `m` (a compile worker drops the numbering of a unit its caller did not take) */
   rollback(m: Marks): void {
+    this.rt.unsafeSlots.value = null;
     for (let i = this.names.length - 1; i >= m.names; i--) { this.ids.delete(this.names[i]); this.classes.delete(this.names[i]); }
     this.names.length = m.names;
     for (let i = this.selKeys.length - 1; i >= m.selectors; i--) this.selectors.delete(this.selKeys[i]);
@@ -674,6 +675,7 @@ export class World {
     mb.export("hash", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     // the Class objects by class id (grown by classOf) and the id of the running Java thread, which init words record
     mb.export("ctab", "global", mb.addGlobal(refNull(b.tData.ref), true, [...i32Init(256), 0xfb, 7, ...uleb2(b.tData.ref)]));
+    mb.export("unsafeSlots", "global", mb.addGlobal(refNull(b.tVT), true, new Code(0).refNull(b.tVT).b));
     const sid = mb.addGlobal(T.i32, true, i32Init(ROOT)), thr = mb.addGlobal(T.anyref, true, [0xd0, 0x6e]), depth = mb.addGlobal(T.i32, true, i32Init(0));
     mb.export("sid", "global", sid); mb.export("thr", "global", thr); mb.export("depth", "global", depth);
     const link = this.addLinker(mb, [sid, thr, depth]);
@@ -689,10 +691,10 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId, link: x.link };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId, link: x.link };
   }
 
-  rtImports() { const { tag, alloc, hash, ctab, sid, thr, depth, iw, wait, link } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, sid, thr, depth, iw, wait, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
+  rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
 
   /** the class module of `name`, built on first use */
   link(name: string): ClassRt {

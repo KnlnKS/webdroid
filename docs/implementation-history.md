@@ -6096,3 +6096,31 @@ Four fresh-profile, unprofiled controls run before/after/after/before with no co
 | Before 2 | retired | 0 | 845.2 | 2,840 | 28.8 | 47.53 |
 
 Candidate Worker adoptions equal all observed hot-unit upgrades in each window, with zero new stale units or failed jobs. Worker compilation takes 433.2/417.4 ms off-thread and main-thread adoption takes 26.5 ms in each candidate. Main-thread compiler cost is substantially lower, but these are not fixed-count compiler workloads and input/presentation measurements do not establish reliable latency/FPS improvement. All runs complete 14 inputs, stay visible with advancing ticks, and read all three processes without observed missing/native/runtime/draw/GL/gap/SuspendError diagnostics. The second candidate and final baseline each learn two native parking imports; the other windows learn none. The driver collects DOM errors and process logs, not console-error events; direct-server captures supply the browser-error gate. Presentation rates include static intervals between swipes. First-tier compilation and main-thread planning remain, and the unchanged 150 ms gate, broad application/Worker matrix and FPS acceptance remain open. JavaScript stays default. Evidence is in `/tmp/webdroid-dex-worker/`.
+
+
+### Keep repeated Unsafe field lookup inside Wasm (2026-10-09)
+
+A Mihon Reader-settings scroll profile at `d2e1af25` samples 112 ms inclusive in `hostUnsafe` and 67 ms self in `synthSlot`; these overlap and are not additive. Every Unsafe field get/put/CAS rebuilds a descriptor, parameter array, key and body closure before finding the already-linked accessor. A separate 15-second diagnostic counts 405,263 host lookups. Main-thread hot-call planning and first-tier linking remain other measured costs.
+
+The runtime now keeps validated table slots in a lazily grown Wasm i32 array, indexed by field cookie, operation and storage kind. Hits stay inside Wasm; misses use the canonical host accessor builder and retain eager linking before an atomic operation. Invalid offsets, mismatched types and zero results are not cached. Array operations are unchanged. Numbering rollback clears the cache, and a miss rereads its owner after linking so it cannot restore a discarded array. The existing core VarHandle suite adds one cache check covering all nine operation/storage combinations, growth, invalid cookies and actual slot reuse after rollback. No APK changes, application-specific paths or dependencies.
+
+Typecheck, all 19 Wasm sections, 1,212 unit tests, 31 framework exercises, ordinary/153 guarded OSR checks and four/eight-jar persistence pass. FitNotes/Mihon JS smoke has zero method failures; the Wasm sweep validates all 95,799 Mihon bodies with zero failures, alongside the standard platform/FitNotes sweep. Fresh ordinary/guarded eight-jar AOT builds each compile 290,828 methods with the five existing gaps. Source `e2469ddc9878bc5bafeeb4dee20673257d2f489776ad122a8a85650e6a44e264` serves ordinary `822408113d2e93a8` and guarded `d7298bec07104b97`.
+
+Direct-server full captures pass 39 FitNotes and 17 Mihon checkpoints. All 167 process snapshots respond, ticks/presentations advance and observed missing/native/runtime/browser/draw/GL diagnostics are empty. FitNotes preserves every UI tree and 37/39 PNGs; each changed image differs at 450 cursor pixels only. Device-reference content differences remain 7.42%/38.66%; goldens are unchanged. These captures overlap correctness work and provide no timing evidence.
+
+Two serialized four-run comparisons use uncached/cached/cached/uncached order, fresh Chrome profiles, unchanged startup, the same source/AOT, buffered HTTP/WebSocket proxy and 720×1280@320 geometry, with no competing owned verification. The private raw-CDP driver retains canonical setup, three-second warmup and 15-second windows. The uncached control replaces only the accessor helper with a direct host query immediately before measurement and verifies its table identity afterward. It retains the new helper call boundary, so this isolates caching rather than reproducing the complete starting source. A second cadence reduces idle intervals by issuing the same 400 ms swipes every 500 ms.
+
+| Cadence / run | Host lookups in window | Median input-to-next-presentation proxy ms | Presentations/s |
+| --- | ---: | ---: | ---: |
+| 1,000 ms / uncached 1 | 406,527 | 30.00 | 47.66 |
+| 1,000 ms / cached 1 | 1 | 26.70 | 45.32 |
+| 1,000 ms / cached 2 | 1 | 30.60 | 45.93 |
+| 1,000 ms / uncached 2 | 405,451 | 28.95 | 46.53 |
+| 500 ms / uncached 1 | 374,334 | 14.60 | 55.66 |
+| 500 ms / cached 1 | 1 | 15.10 | 55.26 |
+| 500 ms / cached 2 | 1 | 13.20 | 55.33 |
+| 500 ms / uncached 2 | 375,466 | 9.10 | 55.06 |
+
+A separate fixed-work Chrome probe compares the original inline host-query shape with the new cached helper in the same live World. Each run performs 500,000 lookups of one valid int field and checks the summed slot result after a 20,000-lookup warmup. Alternating samples take 85.7/66.7/70.7 ms uncached and 1.9/1.1/1.1 ms cached. This isolates accessor lookup, including the new helper call boundary, but does not read/update fields or measure app speed. The probe executes before the harness's nominal one-millisecond window; that window has zero ticks/presentations and is explicitly invalid as app timing evidence. Only the checked fixed-work kernel times are used.
+
+All runs complete their 14/29 gestures, remain visible/alive, advance ticks and read all three processes without observed runtime/draw/GL/gap/SuspendError diagnostics. The compiler Worker remains ready, with no new stale or failed jobs during measurement. The driver reads DOM errors and process diagnostics, not console-error events; direct captures supply that gate. Host lookup and descriptor-construction work is removed, but compiler work and native parking vary, latency remains mixed, and the initial presentation-rate reduction is not reproduced consistently at the more continuous cadence. Neither latency nor FPS improvement is established. Aggregate presentation rates still do not identify dropped animation frames. The unchanged 150 ms gate and broader application/Worker/performance acceptance remain open; JavaScript stays default. Evidence: `/tmp/webdroid-main-profile/`.

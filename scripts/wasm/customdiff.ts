@@ -15,7 +15,7 @@ import { handleThunk, handleMemberOwner, handleSignatureTypes, methodTypeSignatu
 import { bootstrapReferences } from "../../src/wasm/link/callsites";
 import { hostBytes, hostAddress, mapExternal, unmapExternal } from "../../src/jvm/natives/jmemory";
 import { defaultLoop } from "../../src/wasm/link/sched";
-import { UInfo } from "../../src/wasm/link/unsafe";
+import { UInfo, fieldCookie } from "../../src/wasm/link/unsafe";
 import { decodeInstructions } from "../../src/jvm/prepared";
 import { BytesFile } from "../../src/shell/lazyfile";
 import { vfs } from "../../src/shell/vfs";
@@ -175,6 +175,31 @@ if (!decodeInstructions(nullableRange.dex.code(nullableRange.codeOff).insns).som
 const dyn = w.prog.require("Dyn").methods.find(m => m.name === "constants")!;
 const customIndex = decodeInstructions(dyn.dex.code(dyn.codeOff).insns).find(i => i.name.startsWith("invoke-custom"))!.b;
 if (bootstrapReferences(dyn, customIndex).map(r => r.kind).join() !== "handle,methodType,class,methodType,handle") throw new Error("bootstrap reference ordering changed");
+{
+  const probe = world([dex, ...jars], { natives }), fields = probe.prog.require("Vh").fields, id = probe.idOf("Vh");
+  const info = probe.host.info;
+  let calls = 0;
+  probe.host.info = (...args: [number, number, number]) => { calls++; return info(...args); };
+  const lookup = probe.hostFn("unsafe:cache", ["I", "I", "I"], "I", (cx, c) => { c.lget(0).lget(1).lget(2); cx.callRt(c, "ufield"); });
+  probe.host.link(probe.synthSlotOf("ufield")!);
+  const mark = probe.numbering();
+  let first = 0, cookie = 0;
+  for (const [kind, name] of ["i", "l", "s"].entries()) {
+    const offset = fieldCookie(probe, (id << 12) | fields.findIndex(f => f.name === name));
+    if (!cookie) cookie = offset;
+    for (let op = 0; op < 3; op++) {
+      const expected = info(UInfo.ObjGet + op, offset, kind), before = calls;
+      if (!expected || lookup(offset, op, kind) !== expected || lookup(offset, op, kind) !== expected || calls !== before + 1) throw new Error("Unsafe cache lost an accessor or repeated its host lookup");
+      first ||= expected;
+    }
+  }
+  for (const offset of [0, -8, cookie + 1, 0x7ffffff8]) if (lookup(offset, 0, 0) !== 0) throw new Error("invalid Unsafe cookie hit the cache");
+  if (lookup(cookie, 0, 1) !== 0) throw new Error("Unsafe cache accepted a mismatched field kind");
+  probe.rollback(mark);
+  const reused = probe.synthSlot("unsafe:reused", { params: ["L"], ret: "I", body: (_cx, c) => { c.i32(12345); } });
+  if (reused !== first || lookup(cookie, 0, 0) === first || lookup(cookie, 0, 0) !== info(UInfo.ObjGet, cookie, 0)) throw new Error("Unsafe cache retained a rolled-back slot");
+  console.log("Unsafe accessor cache: all operations/storage kinds, growth, invalid cookies and slot reuse");
+}
 // Pure accessors must already be installed when their host lookup returns, even when lazy admission is due.
 const assertEagerFieldAccessors = (tier: typeof w) => {
   const info = tier.host.info;

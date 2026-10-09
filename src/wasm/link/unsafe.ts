@@ -73,6 +73,27 @@ export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number 
   } });
 }
 
+// Nine slots per field cookie: get/put/CAS for int/long/reference. Numbering rollback clears the cache.
+rt("ufield", ["I", "I", "I"], "I", (cx, c) => {
+  const t = cx.tVT, g = cx.global("rt", "unsafeSlots", refNull(t), true);
+  const tab = c.newLocal(refNull(t)), index = c.newLocal(T.i32), n = c.newLocal(T.i32), slot = c.newLocal(T.i32);
+  const query = () => c.i32(UInfo.ObjGet).lget(1).raw(OP.i32_add).lget(0).lget(2).call(cx.imp.info);
+  c.lget(0).i32(7).raw(OP.i32_and).lget(0).i32(0).raw(OP.i32_le_s, OP.i32_or).if_(); query().ret(); c.end();
+  c.lget(0).i32(3).raw(OP.i32_shr_u).i32(1).raw(OP.i32_sub).i32(9).raw(OP.i32_mul).lget(1).i32(3).raw(OP.i32_mul, OP.i32_add).lget(2).raw(OP.i32_add).lset(index);
+  c.gget(g).ltee(tab).refIsNull().raw(OP.i32_eqz).if_();
+  c.lget(index).lget(tab).refAsNonNull().arrayLen().raw(OP.i32_lt_u).if_();
+  c.lget(tab).refAsNonNull().lget(index).arrayGet(t).ltee(slot).if_().lget(slot).ret().end().end().end();
+  query().ltee(slot).raw(OP.i32_eqz).if_().i32(0).ret().end();
+  // Linking a miss may roll back speculative slots; do not restore the old cache afterward.
+  c.gget(g).ltee(tab).refIsNull().raw(OP.i32_eqz).if_().lget(tab).refAsNonNull().arrayLen().lset(n).end();
+  c.lget(index).lget(n).raw(OP.i32_ge_u).if_();
+  c.lget(index).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl);
+  c.lget(index).i32(1).raw(OP.i32_add).lget(n).i32(1).raw(OP.i32_shl, OP.i32_gt_u).select().arrayNewDefault(t).lset(tab);
+  c.lget(n).if_().lget(tab).refAsNonNull().i32(0).gget(g).refAsNonNull().i32(0).lget(n).arrayCopy(t, t).end();
+  c.lget(tab).gset(g).end();
+  c.lget(tab).refAsNonNull().lget(index).lget(slot).arraySet(t).lget(slot);
+}, true);
+
 /** array elements by storage kind: bytes each */
 const SIZES = { i8: 1, i16: 2, i32: 4, i64: 8 } as const;
 /** the array element holding byte `at` of the array (local `at`), as an i64 in `value` and the bit offset of the byte within it in `shift` */
@@ -146,7 +167,7 @@ const index = (c: Code, t: Ty): number => {
 };
 const slotOf = (cx: Compiler, c: Code, kind: UInfo, k: Kind): number => {
   const slot = c.newLocal(T.i32);
-  cx.info(c, kind, () => c.lget(OFF).raw(OP.i32_wrap_i64), () => c.i32({ I: 0, J: 1, L: 2 }[k])); c.lset(slot);
+  c.lget(OFF).raw(OP.i32_wrap_i64).i32(kind - UInfo.ObjGet).i32({ I: 0, J: 1, L: 2 }[k]); cx.callRt(c, "ufield"); c.lset(slot);
   c.lget(slot).raw(OP.i32_eqz).if_(); cx.gap(c, "Unsafe: no accessor for this offset"); c.end();
   return slot;
 };

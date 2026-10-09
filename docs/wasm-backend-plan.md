@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Unsafe accessor cache checkpoint (2026-10-09)
+
+Validated field accessors now stay in a per-World Wasm array, keyed by field cookie, operation and storage kind; numbering rollback clears the cache. Hits avoid host lookup and descriptor construction while retaining eager linking and existing array/atomic behavior. Typecheck, all 19 Wasm sections, 1,212 unit tests, framework/smoke, four/eight-jar persistence and 153 guarded OSR checks pass; fresh AOT and full FitNotes/Mihon captures pass. Isolated scroll controls reduce host lookups from roughly 375,000–407,000 to one per 15 seconds, but continuous-scroll presentation rates overlap and latency remains mixed. The history records exact controls and limits. First-tier compilation/planning and broad application/performance acceptance remain open.
+
 ### Dynamic DEX compiler synchronization checkpoint (2026-10-09)
 
 The compiler protocol now preserves DEX defining namespaces, parent/library search order and established initiating identities, both in the lazy startup snapshot and in subsequent changes. Java loaders remain in their owning realm and existing epoch/adoption checks reject obsolete units. Mihon's compiler Worker now remains ready through scrolling and adopts additional units with no job failures. Typecheck, all 19 Wasm sections, repeated unit tests, framework/smoke, four/eight-jar persistence and 153 guarded OSR checks pass; rebuilt AOT remains identical and full FitNotes/Mihon captures pass 39/17 checkpoints. Isolated measurements and remaining latency/FPS limits are recorded in the history. Broad application/performance acceptance remains open.
