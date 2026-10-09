@@ -401,11 +401,10 @@ export class Program {
     }
     return s;
   }
-  isSubclass(a: string, b: string): boolean {
-    if (a === b) return true;
-    if (this.base?.has(a)) return this.base.isSubclass(a, b);
-    return this.ancestors(a).has(b);
+  supertypes(a: string): ReadonlySet<string> {
+    return this.base?.has(a) ? this.base.supertypes(a) : this.ancestors(a);
   }
+  isSubclass(a: string, b: string): boolean { return a === b || this.supertypes(a).has(b); }
   /** resolve a method declared in `cls` or inherited (superclasses, then interfaces) */
   resolve(cls: string, name: string, desc: string): MethodInfo | undefined {
     const key = mkey(name, desc);

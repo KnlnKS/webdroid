@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Allocated subtype index checkpoint (2026-10-09)
+
+Hot planning indexes each allocation under its canonical supertypes once, preserving target order and clearing on hierarchy/namespace changes. Compact singleton storage avoids an array per indexed type. Dual controls preserve all targets and reduce scroll-window lookup from 70 to 3 ms. Production ABBA controls improve presentation p95 from 25–26 to 20–21 ms and presentation rate from 54.2–55.1 to 55.9–56.2/s, while retaining more metadata; input latency ranges overlap. Typecheck, all 19 Wasm sections, unit/framework/OSR/smoke checks, byte-identical eight-jar AOT and full action/diagnostic captures pass. Mihon's black launch checkpoint and broader latency/FPS acceptance remain open. See the implementation history for scope and measurements.
+
 ### Deferred import signatures checkpoint (2026-10-09)
 
 Compiler instances share host signature metadata; binary emission interns deferred signatures only after unused-import pruning, without changing reserved function indices or persistent builder state. The checked helper probe reduces emitted bytes 40% and construction/instantiation time from 46–53 to 28–34 ms. Typecheck, all 19 Wasm sections, 1,212 unit tests, cold/OSR/framework checks, APK sweeps and fresh eight-jar AOT pass. Full FitNotes/Mihon action and process diagnostics pass with the existing Mihon black launch limitation. Matched warm app results overlap and still exceed 150 ms; neither app latency nor FPS acceptance is claimed. See the implementation history for controls and remaining observation work.

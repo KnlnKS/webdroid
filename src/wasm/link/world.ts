@@ -1475,31 +1475,42 @@ export class World {
     const ran = [...this.implementations(decl, name, desc)].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) >= COPY_MIN && this.inlinable(t));
     return ran.sort((a, b) => this.ran(b) - this.ran(a)).slice(0, MAX_GUARDS);
   }
-  private implemented = new Map<string, {
-    seen: number; cursor: SetIterator<string>; classes: string[];
-    methods: Map<string, { seen: number; targets: Set<MethodInfo> }>;
-  }>();
-  /** Share subtype filtering across signatures; hierarchy changes clear both caches. */
-  private implementations(decl: string, name: string, desc: string): Set<MethodInfo> {
-    let types = this.implemented.get(decl);
-    if (!types) this.implemented.set(decl, types = { seen: 0, cursor: this.allocated.values(), classes: [], methods: new Map() });
-    // Allocation is monotonic. Never exhaust the iterator: it must see later additions.
-    while (types.seen < this.allocated.size) {
-      const cls = types.cursor.next().value!;
-      types.seen++;
-      if (cls[0] !== "[" && this.prog.isSubclass(cls, decl)) types.classes.push(cls);
+  private implemented = new Map<string, Map<string, { seen: number; targets: Set<MethodInfo> }>>();
+  private allocatedIndex?: { seen: number; cursor: SetIterator<string>; types: Map<string, string | string[]> };
+  /** Index each allocation once across its supertypes, preserving allocation order. */
+  private allocatedSubtypes(decl: string): readonly string[] {
+    const index = this.allocatedIndex ??= { seen: 0, cursor: this.allocated.values(), types: new Map() };
+    // Never exhaust the iterator: later allocations must remain visible.
+    while (index.seen < this.allocated.size) {
+      const cls = index.cursor.next().value!;
+      index.seen++;
+      if (cls[0] === "[") continue;
+      for (const parent of this.prog.supertypes(cls)) {
+        const list = index.types.get(parent);
+        if (list === undefined) index.types.set(parent, cls);
+        else if (typeof list === "string") index.types.set(parent, [list, cls]);
+        else list.push(cls);
+      }
     }
+    let classes = index.types.get(decl);
+    if (typeof classes === "string") index.types.set(decl, classes = [classes]);
+    return classes ?? [];
+  }
+  private implementations(decl: string, name: string, desc: string): Set<MethodInfo> {
+    const classes = this.allocatedSubtypes(decl);
+    let methods = this.implemented.get(decl);
+    if (!methods) this.implemented.set(decl, methods = new Map());
     const key = name + desc;
-    let memo = types.methods.get(key);
-    if (!memo) types.methods.set(key, memo = { seen: 0, targets: new Set() });
-    if (memo.seen === types.classes.length) return memo.targets;
+    let memo = methods.get(key);
+    if (!memo) methods.set(key, memo = { seen: 0, targets: new Set() });
+    if (memo.seen === classes.length) return memo.targets;
     const declared = this.prog.resolve(decl, name, desc);
-    for (let i = memo.seen; i < types.classes.length; i++) {
-      const cls = types.classes[i];
+    for (let i = memo.seen; i < classes.length; i++) {
+      const cls = classes[i];
       const t = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED)) ? symbolicOverride(this.prog, cls, declared) : this.prog.implFor(cls, name, desc);
       if (t) memo.targets.add(t);
     }
-    memo.seen = types.classes.length;
+    memo.seen = classes.length;
     return memo.targets;
   }
   /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
@@ -1594,7 +1605,7 @@ export class World {
     }
     this.epoch++;
     this.opts.compiler?.namespaces();
-    this.cha = new Cha(this.prog); this.implemented.clear();
+    this.cha = new Cha(this.prog); this.implemented.clear(); this.allocatedIndex = undefined;
     this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace. Platform code retains its defining boot namespace.
@@ -1685,7 +1696,7 @@ export class World {
     this.loaded([jc.name]);
   }
   private loaded(added: string[]): void {
-    this.coldResumes.clear(); this.implemented.clear();
+    this.coldResumes.clear(); this.implemented.clear(); this.allocatedIndex = undefined;
     this.cha.index(added);
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
     const now = this.noteLate(added);
