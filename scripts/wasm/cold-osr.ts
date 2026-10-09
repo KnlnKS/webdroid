@@ -142,6 +142,8 @@ if(process.argv.includes("--aot")) {
         await Promise.resolve();if(fail)throw page.exception(page.makeThrowable("java/lang/IllegalArgumentException","AOT native throw"));return value+1;
       }:key==="late(LOsr$I;)LOsr$I;"?Object.assign(async()=>{
         nativeCalls++;page.addDexes(loadDexes(join(out,"late/classes.dex")));
+        // Symbolic AOT dispatch has no hierarchy assumption; invalidate the active root to exercise its handoff.
+        page.invalidate(page.slotOf(page.prog.resolve("Osr","run","(I)I")!));
         return await page.entryAsync("Late","make","()LOsr$I;")();
       },{javaValues:true}):undefined,
       thrown:e=>{const t=page.throwable(e);return t?{cls:page.classNameOf(t),msg:null,obj:t}:undefined;},

@@ -5998,3 +5998,10 @@ Four fresh-profile, unprofiled Chromium 151 warm captures run before/after/after
 | Before 2 | 3,413.3 | 178.2 | 120.4 | 216.0 | 2 |
 
 The targeted calendar response improves about 31% and now passes the unchanged 150 ms gate in both candidates. Rendered-home and exercise-list times remain within the controls' range; launch compilation stays at 309 methods in every run. The exercise-list response still fails, so G3 is not accepted. Compiler-Worker/synchronous elapsed coverage remains incomplete, host idleness is not certified, and no FPS gain is measured. Guarded-AOT handoff coverage and broader application/performance gates remain open; JavaScript stays default. Probes, discarded prototypes, initial failures, repeat captures, controls and receipts are in `/tmp/webdroid-cha-index/`.
+
+
+### Exercise the guarded-AOT root handoff explicitly (2026-10-08)
+
+The shipping OSR fixture expected a late interface implementation to invalidate its active AOT root. Symbolic dispatch has no hierarchy assumption for that root, so the preceding starting-source diagnostic observed no invalidation and the fixture failed before exercising the asserted handoff. Its native callback now explicitly invalidates the active root after adding the late DEX, as other handoff cases already do. The ordinary hot-code case still verifies real late-subclass invalidation. Production code, Java fixtures and expected results are unchanged.
+
+The canonical `bun run wasm cold-osr --aot` now passes all 153 checks, including native return/throw, exactly-once effects, monitor release, activation depth, committed branch state, raw value bits, allocation budget and ABI rejection. Both disabled-runtime cases make no activation imports, guards or deoptimizations; both enabled cases record 20 activation creations, two guards and eight deoptimizations. This repairs the fixture's trigger and closes that specific coverage gap; it is not a production behavior or performance change. The preceding production verification and AOT assets still apply. Evidence is in `/tmp/webdroid-cha-index/cold-osr-aot-final.log`.

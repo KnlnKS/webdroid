@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Guarded-AOT handoff coverage checkpoint (2026-10-08)
+
+The shipping fixture now explicitly invalidates the active AOT root after loading the late class; its symbolic dispatch has no speculative hierarchy assumption. All 153 canonical `cold-osr --aot` checks pass with the existing expected results, while the ordinary hot-code case retains actual late-subclass invalidation coverage. This closes the fixture-trigger gap without changing production code or AOT assets. Application, 150 ms latency and FPS acceptance remain open; details are in the history.
+
 ### Queried hierarchy index checkpoint (2026-10-08)
 
 Signature queries now use a lazy cache and compact numeric DEX name chains instead of switching to a whole-program declaration map. Fixed-work probes preserve declaration results and reduce retained data by about 46 MB; this is not app-wide heap evidence. Typecheck, all 19 Wasm sections, 1,212 unit tests, framework/ordinary OSR/smoke and four/eight-jar AOT/persistence pass. All 4,324 rebuilt files remain identical; source `cb91b836fe7f…` serves ordinary `1b5670f294906181`/guarded `7f960edaa709944b`. Full FitNotes passes 39 checkpoints. The initial quick gate passes 5/7, retaining Doodle's monitor cycle and an unexplained Komikku launch throwable; canonical and diagnostic Komikku repeats pass. Matched warm controls bring the first previous-day response below 150 ms (175–178→121–123 ms), while exercise-list responses remain 206–222 ms. FPS and broader acceptance remain open. The history records exact evidence and limits; guarded-AOT handoff coverage is next.
