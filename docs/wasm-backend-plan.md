@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-08)
 
+### Shared subtype planning checkpoint (2026-10-08)
+
+Hot-call signatures share incremental allocated-subtype filtering while preserving target identity/order and hierarchy invalidation. A same-World control reduces scroll-window traversal 83% and planner time from 201 to 78 ms; paired app measurements do not establish reliable latency/FPS improvement. Core/compiler checks, identical rebuilt AOT and full FitNotes/Mihon captures pass. Runtime annotation Proxy creation retires the compiler Worker, leaving later hot compilation on the main thread. The next architectural task is sound synchronization of runtime-generated classes; the history records measurements, transport limits and remaining acceptance.
+
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 

@@ -1477,21 +1477,31 @@ export class World {
     const ran = [...this.implementations(decl, name, desc)].filter((t) => (this.classes.has(t.cls) || this.aot?.hasLoaded(t.cls)) && this.ran(t) >= COPY_MIN && this.inlinable(t));
     return ran.sort((a, b) => this.ran(b) - this.ran(a)).slice(0, MAX_GUARDS);
   }
-  private implemented = new Map<string, { seen: number; targets: Set<MethodInfo> }>();
-  /** Allocated classes only grow; hierarchy changes clear this cache. */
+  private implemented = new Map<string, {
+    seen: number; cursor: SetIterator<string>; classes: string[];
+    methods: Map<string, { seen: number; targets: Set<MethodInfo> }>;
+  }>();
+  /** Share subtype filtering across signatures; hierarchy changes clear both caches. */
   private implementations(decl: string, name: string, desc: string): Set<MethodInfo> {
-    const key = `${decl}.${name}${desc}`;
-    let memo = this.implemented.get(key);
-    if (!memo) this.implemented.set(key, memo = { seen: 0, targets: new Set() });
-    if (memo.seen === this.allocated.size) return memo.targets;
+    let types = this.implemented.get(decl);
+    if (!types) this.implemented.set(decl, types = { seen: 0, cursor: this.allocated.values(), classes: [], methods: new Map() });
+    // Allocation is monotonic. Never exhaust the iterator: it must see later additions.
+    while (types.seen < this.allocated.size) {
+      const cls = types.cursor.next().value!;
+      types.seen++;
+      if (cls[0] !== "[" && this.prog.isSubclass(cls, decl)) types.classes.push(cls);
+    }
+    const key = name + desc;
+    let memo = types.methods.get(key);
+    if (!memo) types.methods.set(key, memo = { seen: 0, targets: new Set() });
+    if (memo.seen === types.classes.length) return memo.targets;
     const declared = this.prog.resolve(decl, name, desc);
-    let i = 0;
-    for (const cls of this.allocated) {
-      if (i++ < memo.seen || cls[0] === "[" || !this.prog.isSubclass(cls, decl)) continue;
+    for (let i = memo.seen; i < types.classes.length; i++) {
+      const cls = types.classes[i];
       const t = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED)) ? symbolicOverride(this.prog, cls, declared) : this.prog.implFor(cls, name, desc);
       if (t) memo.targets.add(t);
     }
-    memo.seen = i;
+    memo.seen = types.classes.length;
     return memo.targets;
   }
   /** whether `t` is worth compiling into its callers' units: a short method, or one the compiler writes itself (the String methods over the js-string builtins) */
