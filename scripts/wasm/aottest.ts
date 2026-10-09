@@ -129,10 +129,11 @@ const modules = /^[cd]\d+\.wasm$/;
   const published = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => { requested.add(f); return f === withheld && !available ? undefined : fileOf(f); } } });
   check("preflight before publication", published.aot!.install(slot), false);
   const data = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(withheld)), "aot")[0]))) as DHeader;
-  const cls = published.link(published.names[data.classes[0]]), globals = cls.exports;
+  const cls = published.link(published.blockClass[data.classes[0]]), globals = cls.exports;
+  check("preflight fixture publishes fallback class data", published.aot!.hasLoaded(cls.name), false);
   available = true; requested.clear();
-  check("publication after preflight keeps C blocked", published.aot!.install(slot), false);
-  check("published fallback rejects before requesting more data", head.mods.every(m => !requested.has(`d${m.slice(1)}.wasm`)), true);
+  check("publication after preflight permits C over live globals", published.aot!.install(slot), true);
+  check("published fallback does not request retired data", requested.has(withheld), false);
   check("publication after preflight keeps globals", published.link(cls.name).exports, globals);
   check("publication after preflight Java result", published.entry("Aot", "plain", "()I")(), 0);
 }
@@ -142,12 +143,14 @@ const modules = /^[cd]\d+\.wasm$/;
   const producer = world(new Program(app, platform), { natives, compileOnly: true });
   const method = producer.prog.resolve("java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z")!;
   const built = buildApp(producer, [method], { methods: [], classes: [], infos: [] }), files = new Map(built.files);
+  const c = producer.aot!.platformModule(producer.blockOf(producer.slotOf(method)));
+  const incompatible = packModule({ version: VERSION + 1 }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
   let available = false;
   const page = world(new Program(app, platform), { natives, app: { index: built.index, store: { get: f => files.get(f) } },
-    aot: { get: f => /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
+    aot: { get: f => f === `c${c}.wasm` ? incompatible : /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
   const cls = page.link("java/util/ArrayList"), globals = cls.exports, slot = page.slotOf(page.prog.resolve(method.cls, method.name, method.desc)!);
   available = true;
-  check("patch loads after fallback data rejects platform code", page.aot!.install(slot), true);
+  check("patch loads after incompatible platform code", page.aot!.install(slot), true);
   const state = page.slotAt(slot);
   check("patch owns a later materialized slot", state?.k === "method" && state.done, true);
   const code = page.table.get(slot);
@@ -191,9 +194,16 @@ const modules = /^[cd]\d+\.wasm$/;
   const dataFile = `d${head.mods[0].slice(1)}.wasm`;
   delivered.delete(dataFile);
   const dh = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(dataFile)), "aot")[0]))) as DHeader;
-  const cls = published.link(published.names[dh.classes[0]]), globals = cls.exports;
+  const cls = published.link(published.blockClass[dh.classes[0]]), globals = cls.exports;
   check("published fallback does not prepare", published.aot!.prepare(slot), undefined);
   check("published fallback prepares no files", requests.length, 0);
+  const otherData = `d${head.mods.find(m => `d${m.slice(1)}.wasm` !== dataFile)!.slice(1)}.wasm`;
+  held.add(otherData); delivered.delete(otherData);
+  await published.aot!.prepare(slot);
+  check("mixed data preparation fetches only the missing live group", requests.flat().join(), otherData);
+  check("mixed data preparation permits cached code", published.aot!.install(slot), true);
+  held.delete(otherData);
+  requests.length = 0;
   delivered.set(dataFile, compileModule(fileOf(dataFile)));
   check("preparation cannot replace published globals", published.link(cls.name).exports, globals);
   delivered.set(cfile, compileModule(packModule({ deopt: head.deopt === DEOPT_ABI ? 0 : DEOPT_ABI }, Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0))));
@@ -232,7 +242,7 @@ const modules = /^[cd]\d+\.wasm$/;
   check("late completion does not start data delivery after deadline", requests.flat().join(), cfile);
   check("late completion publishes no globals", stalled.stats.classes, 0);
 }
-// Late code is reusable only against the original data globals; late data must never replace fallback globals.
+// Late code binds existing globals; late data must never replace them.
 {
   let available = false;
   const w = world([join(out, "classes.dex"), ...jars], { natives, aot: { get: f => /^c\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
@@ -256,10 +266,12 @@ const modules = /^[cd]\d+\.wasm$/;
   const cls = w.link("java/util/ArrayList"), globals = cls.exports;
   const m = w.prog.get("java/util/ArrayList")!.byKey.get("contains(Ljava/lang/Object;)Z")!, slot = w.slotOf(m);
   available = true;
-  check("late D cannot authorize C", w.aot!.install(slot), false);
+  check("late C binds published fallback globals", w.aot!.install(slot), true);
   check("late D retains published class", w.link("java/util/ArrayList"), cls);
   check("late D retains published globals", cls.exports, globals);
   check("late D fallback Java result", w.entry("Aot", "plain", "()I")(), 0);
+  w.addDexes(loadDexes(join(out, "out2/classes.dex")));
+  check("fallback-bound platform code invalidates for subclass", w.entry("Aot2", "sub", "()I")(), 1);
 }
 {
   let available = false, rejected = false;
@@ -287,7 +299,7 @@ const modules = /^[cd]\d+\.wasm$/;
   replaceLegacy = true;
   const c = oldData.aot!.platformModule(oldData.blockOf(oldSlot)), ch = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(`c${c}.wasm`)), "aot")[0]))) as CHeader;
   const dh = JSON.parse(new TextDecoder().decode(new Uint8Array(WebAssembly.Module.customSections(compileModule(fileOf(`d${ch.mods[0].slice(1)}.wasm`)), "aot")[0]))) as DHeader;
-  const name = oldData.names[dh.classes.at(-1)!];
+  const name = oldData.blockClass[dh.classes.at(-1)!];
   oldData.link(name);
   check("late format replacement cannot install rejected original globals", oldData.aot!.hasLoaded(name), false);
   const foreign = new TextEncoder().encode(JSON.stringify({ ...index, dexes: index.dexes.map(() => "foreign-platform") }));

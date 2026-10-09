@@ -462,8 +462,13 @@ export class AotRuntime {
     // Byte stores are already local. Only asynchronously compiled modules need a delivery wait.
     if (ArrayBuffer.isView(mod)) return [];
     const head = header<CHeader>(mod);
-    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt || !head.natives.every(id => this.w.nativeBound(id)) || head.mods.some(m => this.fallbackD.has(+m.slice(1)))) return [];
-    return head.mods.map(m => `d${m.slice(1)}.wasm`).filter(f => !this.store!.get(f));
+    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt || !head.natives.every(id => this.w.nativeBound(id))) return [];
+    const files: string[] = [];
+    for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1))) {
+      const file = `d${m.slice(1)}.wasm`;
+      if (!this.store!.get(file)) files.push(file);
+    }
+    return files;
   }
   needsPreparation(slot: number): boolean {
     const c = this.preparationModule(slot);
@@ -500,7 +505,7 @@ export class AotRuntime {
     const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
     if (!(c >= 0)) return false;
     let loaded = this.loadC(c);
-    // App patches bind the live class globals, including fallback data that rejected the platform unit.
+    // App patches can remain valid when their platform unit is rejected.
     if (!loaded && this.cState[c] === DEAD) for (const p of this.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
     return loaded;
   }
@@ -510,15 +515,12 @@ export class AotRuntime {
     if (!mod) { if (app) this.cState[c] = DEAD; return false; }
     const head = header<CHeader>(mod);
     if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    // a module imports the natives it calls, and the globals of the D modules it was made against: without them (a World with other natives than the build's, or
-    // a store that lacks a D module) its methods are compiled on demand
     if (!head.natives.every((id) => w.nativeBound(id))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
-    if (head.mods.some(m => this.fallbackD.has(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     // Request the whole dependency set now: stopping at the first miss delays delivery of the remaining original globals.
     let dataReady = true;
-    for (const m of head.mods) if (!this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
+    for (const m of head.mods) if (!this.fallbackD.has(+m.slice(1)) && !this.ready(`d${m.slice(1)}.wasm`)) dataReady = false;
     if (!dataReady) return false;
-    if (!head.mods.every(m => !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
+    if (!head.mods.every(m => this.fallbackD.has(+m.slice(1)) || !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     const absent = new Set(head.absent);
     // D installed these lazy stubs; retain them before C overwrites the table, without materializing method metadata.
     for (const b of head.classes) {
@@ -535,8 +537,10 @@ export class AotRuntime {
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
     const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };
-    for (const m of head.mods) imports[m] = this.dExports[+m.slice(1)];
-    if (app) w.classImports(head.classImports, imports);
+    // Retired data groups bind each class's published globals instead of creating another owner.
+    let bindClasses = app;
+    for (const m of head.mods) { const ex = this.dExports[+m.slice(1)]; if (ex) imports[m] = ex; else bindClasses = true; }
+    if (bindClasses) w.classImports(head.classImports, imports);
     w.instantiate(mod, imports);
     w.stats.aot.c++;
     const t2 = performance.now();
