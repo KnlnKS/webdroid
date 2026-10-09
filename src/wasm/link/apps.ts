@@ -92,7 +92,8 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
   // the classes a code module names are all linked when it is loaded, so their modules are wanted as soon as it is
   for (const name of new Set([...demand.classes, ...touched])) {
     const jc = name[0] === "!" ? undefined : w.prog.get(name);
-    if (!jc?.dex || w.idOf(name) <= aot.nSeeded) continue;
+    // The platform also owns data for uncompiled classes reserved in its tail.
+    if (!jc?.dex || aot.reservedBase(name) !== undefined) continue;
     const bytes = D_BYTES_PER_CLASS + methodCount(jc) * D_BYTES_PER_METHOD + jc.fields.length * D_BYTES_PER_FIELD;
     if (size && size + bytes > D_MODULE_BYTES) flush();
     group.push(name); size += bytes;

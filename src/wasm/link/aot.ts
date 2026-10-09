@@ -97,7 +97,7 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 11;
+export const APP_VERSION = 12;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[]; verdicts?: Verdict[] }
 /** whether a decision of the platform build (`decl.name+desc` resolves to `tc`'s `tk`) stands over the app's classes, as a launch found it */

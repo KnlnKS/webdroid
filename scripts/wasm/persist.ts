@@ -132,6 +132,19 @@ const answers = (w: World) => {
 const expected = answers(world(app));
 check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 
+// App data must not reinstall the platform's reserved, uncompiled classes.
+{
+  const producer = world(app, { compileOnly: true });
+  const name = producer.blockClass.find(n => producer.idOf(n) > producer.aot!.nSeeded && producer.prog.get(n)?.dex && producer.aot!.reservedBase(n) !== undefined);
+  if (name) {
+    const built = buildApp(producer, [], { classes: [name, "Pst$Base"], methods: [], infos: [] }), files = new Map(built.files);
+    const page = world(app, { app: { index: built.index, store: { get: f => files.get(f) } } });
+    const owner = page.link(name), slot = owner.slotBase + owner.nMethods, initialize = page.table.get(slot);
+    page.link("Pst$Base");
+    check("app data preserves the platform's class initializer", page.table.get(slot), initialize);
+  }
+}
+
 // A partial final group can discover dependencies that discover another group.
 {
   const w = world(app, { compileOnly: true });

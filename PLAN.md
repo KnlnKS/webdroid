@@ -4,6 +4,8 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
+- App builds now preserve platform ownership of reserved class data. This fixes a reproduced warm-cache stub recursion/StackOverflowError and avoids duplicate class modules; cache version 12 rejects older app builds. Persistence/AOT/typecheck/smoke checks and 39 full FitNotes checkpoints pass. Two warm replays complete without the crash, but exercise-list responses still fail at 450/288 ms. No latency or FPS gain is claimed. See the [history](docs/implementation-history.md).
+
 - Wasm host/JNI callbacks reuse caller preparation while preserving loader rebinding and wrapper invalidation. Small-call Chrome controls improve 12–40%; all current compiler/unit/framework checks and 39 full FitNotes checkpoints pass with byte-identical AOT. A matching warm latency pair still fails at 317/315 ms, so no application-latency or FPS gain is established. See the [history](docs/implementation-history.md).
 
 - Wasm virtual-slot construction now indexes binary signatures while preserving package-private dispatch and slot order. A fixed-work platform/FitNotes comparison preserves 1,516,790 slots and halves construction time (1,047→508 ms); this is not app-latency or FPS evidence. Typecheck, all 19 Wasm suites, 1,212 unit tests, framework/smoke checks and the 39-step full FitNotes flow pass, with byte-identical rebuilt AOT. Warm exercise-list latency still fails at 314 ms versus a 312 ms starting-source profile; unequal compilation work and substantial frame-observation cost preclude a causal end-to-end claim. See the [history](docs/implementation-history.md).

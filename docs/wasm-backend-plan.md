@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### App data ownership checkpoint (2026-10-08)
+
+App builds exclude all class data owned by the platform, including reserved classes whose methods are compiled later. This prevents a cached data module from replacing live methods with stubs; app cache version 12 rejects older layouts. A core ownership regression, four/eight-jar persistence, 101 AOT checks, typecheck, FitNotes smoke and all 39 full FitNotes checkpoints pass. Platform assets remain byte-identical under source `7ece376decb25…`, ordinary `003c57ed11e5184b`/guarded `7473ecaf75e27010`. Two fresh canonical warm replays complete without the reproduced startup overflow, but exercise-list latency still fails at 450.2/288.5 ms with varying compilation work. Observer prototypes remain private, and broader latency/FPS/application gates remain open. Details and evidence limits are in the implementation history.
+
 ### Host-call preparation checkpoint (2026-10-08)
 
 Bridge caches method caller preparation behind qualified-identity checks and preserves the World's invalidatable wrappers. Eight paired small-call controls reduce Chrome call time by 12–40%; they do not establish application latency or FPS. Typecheck, all 19 Wasm sections, 1,212 unit tests, cold/OSR/framework/smoke checks and all 39 full FitNotes checkpoints pass, with all 4,324 rebuilt AOT files unchanged. Source `6c3b162e0adc…` serves ordinary `ba16499ff1f57098`/guarded `265a2e9cbc65050e`. A fresh unprofiled warm pair still fails the exercise-list response gate at 317.1/314.7 ms with unequal compilation work. The history records measurements, setup failures and limits; broader gates remain open.
