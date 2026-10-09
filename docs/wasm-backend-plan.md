@@ -10,9 +10,13 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Virtual-vsync pacing checkpoint (2026-10-09)
+
+The shared display pacer rounds browser callbacks to virtual display periods and skips missed periods without catch-up frames. A core regression reproduces 559/600 delivered frames before and 600/600 after, with refresh-rate and pause/duplicate controls. Serial production scroll comparisons deliver every observed browser callback as a vsync, raise presentation rate from 55.1–55.3 to 56.5–56.7/s and reduce intervals over 25 ms from 27–39 to 11–14. Input latency remains mixed; this does not close the 150 ms or broader application/performance gates. The implementation history records checks, assets and capture limits.
+
 ### App-cache scheduling investigation (2026-10-09)
 
-An allocation-free AOT-decision comparison prototype is reverted after eight app controls: it removes about 11 MiB of polling allocations, but candidate frame pacing is usually worse and the cause is unresolved. Production remains at the bounded-ranking checkpoint. All controls complete a roughly six-second automatic cache rebuild during active scrolling. The next experiment should distinguish unchanged compiler demand from actual input inactivity using the existing responsiveness owner, while preserving explicit persistence and shutdown semantics. See the implementation history for full measurements and the rejected patch location; no latency/FPS acceptance is claimed.
+An allocation-free AOT-decision comparison prototype is reverted after eight app controls: it removes about 11 MiB of polling allocations, but candidate frame pacing is usually worse and the cause is unresolved. The Wasm compiler remains at the bounded-ranking checkpoint. All controls complete a roughly six-second automatic cache rebuild during active scrolling. Exploratory cache admission using the existing input window and background upgrade planning are not integrated: their timing results do not establish a repeatable improvement. Those probes expose virtual-vsync rejection under ordinary browser timestamp jitter, repaired above; general input ownership and persistence scheduling remain open. See the implementation history for full measurements and the rejected patch location; no latency/FPS acceptance is claimed.
 
 ### Compiler and hot-planner allocation checkpoint (2026-10-09)
 

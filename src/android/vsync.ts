@@ -51,10 +51,12 @@ const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get
 
 /** a host display frame: true when it is a virtual vsync, delivered now to every receiver that asked */
 export function recordVsync(time: number): boolean {
-  // Allow sub-millisecond rAF jitter without skipping a virtual display frame.
-  if (nextVsync && time + 0.75 < nextVsync) return false;
   const interval = vsyncIntervalMs();
-  nextVsync = !nextVsync || time > nextVsync + interval ? time + interval : nextVsync + interval;
+  if (!nextVsync) nextVsync = time;
+  // Round to the nearest virtual period, dropping missed periods without catch-up frames.
+  const elapsed = time + interval / 2 - nextVsync;
+  if (elapsed < 0) return false;
+  nextVsync += (Math.floor(elapsed / interval) + 1) * interval;
   deliverVsync();
   return true;
 }
