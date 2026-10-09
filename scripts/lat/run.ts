@@ -46,7 +46,7 @@ const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resPar
   "wasmMethods", "wasmClassBuildMs", "wasmCompileMs", "wasmModules", "wasmModuleMs", "wasmBytes", "wasmAotLoaded", "wasmAotMissed", "wasmAotMs", "wasmClasses", "wasmSuspensions", "wasmCrossings", "wasmEntries",
   "jvmDecodeMs", "jvmCfgMs", "jvmTypeMs", "jvmColdBuildMs", "jvmHotEmitMs", "jvmJsCompileMs", "jvmClassLinkMs", "jvmColdRunMs", "jvmHotRunMs"];
 
-type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; afterUp: number | null; first: number | null; settled: number | null; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
+type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
 type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
   idle: number; perf: Record<string, number>; marks: string[] };
@@ -98,16 +98,8 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       throw new Error("JS app code is not " + (save ? "saved" : "loaded") + ": " + win.location.href);
     return { ...readRealm(win), savedPaths: paths.sort() };
   };
-  const small = new OffscreenCanvas(54, 108), sctx = small.getContext("2d", { willReadFrequently: true })!;
-  const sig = (src: CanvasImageSource) => {
-    sctx.drawImage(src, 0, 0, 54, 108);
-    const d = sctx.getImageData(0, 0, 54, 108).data;
-    let h = 0;
-    for (let i = 0; i < d.length; i += 4) h = (Math.imul(h, 31) + (d[i] >> 3) * 1024 + (d[i + 1] >> 3) * 32 + (d[i + 2] >> 3)) | 0;
-    return h;
-  };
-  type Frame = { t: number; hash: number; pixels: { hash: number; nonUniform: boolean; rgb: number[] }[]; receipt: any; perf: Record<string, number> };
-  let frames: Frame[] = [], active = expectedLaunch, frameError: string | null = null;
+  type Frame = { t: number; image: ImageBitmap; pixels?: ReturnType<typeof regionInfo>[]; receipt: any };
+  let latest: Frame | null = null, frameCount = 0, generation = 0, frameError: string | null = null;
   const observer = w.__wdLatObserver;
   if (!observer) throw new Error("All-realm presentation observer unavailable");
   const regionCanvas = new OffscreenCanvas(64, 64), regionContext = regionCanvas.getContext("2d", { willReadFrequently: true })!;
@@ -122,17 +114,27 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     }
     return { hash, nonUniform: variation > 8, rgb: rgb.map(v => v / 4096) };
   };
-  const collect = () => observer.onFrame = async (receipt: any, bitmap: Promise<ImageBitmap>) => {
-    const expectation = active, batch = frames;
-    let bmp: ImageBitmap | undefined;
-    try {
-      const image = await bitmap;
-      bmp = image;
-      if (!receipt.visible || receipt.pkg !== w.wd?.app()?.pkg || receipt.tier !== w.wd?.tier) return;
-      batch.push({ t: receipt.at, hash: sig(image), pixels: expectation.pixels.map(p => regionInfo(image, p.region)), receipt,
-        perf: receipt.processes.find((p: any) => p.url === location.href)?.perf ?? snapshot() });
-    } catch (e) { frameError = String(e); }
-    finally { bmp?.close(); }
+  const stop = () => {
+    observer.onFrame = null;
+    generation++;
+    latest?.image.close(); latest = null;
+  };
+  const collect = () => {
+    stop(); frameCount = 0;
+    const epoch = generation;
+    observer.onFrame = async (receipt: any, bitmap: Promise<ImageBitmap>) => {
+      let image: ImageBitmap | undefined;
+      try {
+        image = await bitmap;
+        if (epoch !== generation || !receipt.visible || receipt.pkg !== w.wd?.app()?.pkg || receipt.tier !== w.wd?.tier) return;
+        frameCount++;
+        if (latest && latest.t > receipt.at) return;
+        latest?.image.close();
+        latest = { t: receipt.at, image, receipt };
+        image = undefined;
+      } catch (e) { if (epoch === generation) frameError = String(e); }
+      finally { image?.close(); }
+    };
   };
   const probes: { start: number; end: number }[] = [];
   const state = async () => {
@@ -151,12 +153,16 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     let stateAt: number | null = null, nodes: unknown, error: string | null = null;
     while (performance.now() < end) {
       if (frameError) { error = frameError; break; }
-      if (stateAt !== null) {
-        const frame = frames.find(f => f.t >= start && f.t === observer.lastApp?.at && f.receipt.url === observer.lastApp.url && pixelsMatch(expectation, f.pixels, baseline));
-        if (frame) return { at: Math.max(frame.t, stateAt), frameAt: frame.t, stateAt, nodes, receipt: frame.receipt, error,
-          probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
-      }
       try {
+        // Readback can stall the app while it is still building the response.
+        if (stateAt !== null) {
+          const frame = latest;
+          if (frame && frame.t >= start && frame.t === observer.lastApp?.at && frame.receipt.url === observer.lastApp.url) {
+            const pixels = frame.pixels ??= expectation.pixels.map(p => regionInfo(frame.image, p.region));
+            if (pixelsMatch(expectation, pixels, baseline)) return { at: Math.max(frame.t, stateAt), frameAt: frame.t, stateAt, nodes, pixels, receipt: frame.receipt, error,
+              probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
+          }
+        }
         if (w.wd) {
           nodes = await state();
           if (w.__wdLatMatches(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
@@ -189,7 +195,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   result.presentation = { firstApp: observer.firstApp };
   const renderedApp = await intended(expectedLaunch, 0, []);
   result.presentation.renderedApp = renderedApp;
-  observer.onFrame = null;
+  stop();
   if (renderedApp.at === null) throw new Error("Rendered app launch unavailable: " + renderedApp.error);
   await idle();
   // the launch timeline: the marks (src/perf.ts) of this realm and of the frames in it, in ms since this navigation
@@ -242,9 +248,8 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       ({ x, y } = at);
     }
     const processesBefore = s.m ? await diagnostics() : undefined;
-    const base = sig(w.wd.displayCanvas());
     const baseline = s.m ? s.expect.pixels.map((p: any) => regionInfo(w.wd.displayCanvas(), p.region)) : [];
-    if (s.m) { frames = []; active = s.expect; collect(); }
+    if (s.m) collect();
     const t0 = performance.now();
     ev("pointerdown", x, y);
     await sleep(s.hold ?? 60);
@@ -255,18 +260,13 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     const semantic = intended(s.expect, tu, baseline);
     for (let last = performance.now(); performance.now() - last < 800 && performance.now() - t0 < 8000;) {
       await sleep(20);
-      const f = frames!.at(-1);
+      const f = latest as Frame | null;
       if (f) last = Math.max(last, f.t);
     }
-    observer.onFrame = null;
-    const response = await semantic, got = frames.slice().sort((a, b) => a.t - b.t);
-    const changes: typeof got = [];
-    let prev = base;
-    for (const f of got) { const sg = f.hash; if (sg !== prev) changes.push(f); prev = sg; }
-    // the breakdown is the work done from pointerup until the frame that answered it
-    const au = changes.find((f) => f.t >= tu), after = au?.perf ?? snapshot();
-    const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: response.compileAt }, m: s.m, afterUp: au === undefined ? null : Math.round(au.t - tu), first: changes.length ? Math.round(changes[0].t - t0) : null,
-      settled: changes.length ? Math.round(changes.at(-1)!.t - t0) : null, frames: got.length,
+    const response = await semantic;
+    stop();
+    const after = response.compileAfter.find((p: any) => p.url === location.href)?.perf ?? snapshot();
+    const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: response.compileAt }, m: s.m, frames: frameCount,
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
     out.push(tap);
     await idle();
@@ -375,14 +375,13 @@ async function resetData(browser: BrowserDriver): Promise<void> {
 }
 
 type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; tier: string; processMode: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
-  accepted: false; intendedObservation: string; instrumentation: string; responseProxy: string; launchProxy: string };
+  accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
   const row: Report = { scenario: name, engine, tier: launchQuery.get("tier")!, processMode: launchQuery.get("processMode")!, warm, query: launchQuery.toString(), taps: [],
     accepted: false, intendedObservation: "conservative upper bound: max(UI predicate receipt, latest visible app-owned immutable bitmap matching scenario response regions), followed by persistent UI/pixel confirmation",
-    instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; immutable bitmap copies and UI probes during capture; probe intervals include queue waits and guest execution, not isolated probe CPU; compile counters end after joined response observation",
-    responseProxy: "pointerup to first changed quantized screen bitmap; release/ripple may precede intended content",
+    instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; latest immutable bitmap retained, response pixels read after matching UI state; probe intervals include queue waits and guest execution, not isolated probe CPU; compile counters end after joined response observation",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };
   report.push(row);
   let profile: string | undefined, browser: Awaited<ReturnType<typeof openBrowser>> | undefined;

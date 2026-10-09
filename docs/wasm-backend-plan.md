@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Response observation checkpoint (2026-10-09)
+
+Latency capture retains only the latest completed immutable bitmap and reads its response regions after semantic readiness. Current-frame ownership/timestamps, pixel predicates, persistent-state confirmation and the 150 ms limit remain intact. Obsolete first-change metrics are removed; tap counters now end at the joined response. Sixteen protocol checks pass in Chromium and WebKit, and an accepted-bitmap capture confirms the complete FitNotes dialog. Repeated warm FitNotes observations pass at 133–136 ms versus 239–255 ms with eager readback, using identical runtime/AOT. This removes measurement interference rather than improving runtime execution. Wasm Calculator still fails four taps and Mihon retains slow theme/navigation responses; its unchanged first Dark tap fails with either observer. JS FitNotes/Calculator pass their new-observer tap controls. Use this observer consistently for the next runtime comparisons; previous timing results keep their original conditions. The history records failure details and evidence limits. Broad latency/FPS and application acceptance remain open.
+
 ### Virtual-vsync phase recovery (2026-10-09)
 
 The shared pacer now re-anchors after missed periods instead of retaining a startup phase that host timestamp jitter can repeatedly cross. An actual callback replay improves 853/872 to 872/872 accepted ticks; the existing core test gains a phase-shift case reproducing 300/600 before and 600/600 after. Configured rate, duplicate and pause controls pass. Production scrolling comparisons avoid the intermittent baseline tick deficit, but the healthy baseline matches candidate FPS. Warm exercise-list responses improve from 203–204 to 189–192 ms in four controls and remain above 150 ms; calendar responses are mixed. Typecheck, unit/framework checks, zero-failure APK smokes, byte-identical rebuilt AOT and Wasm/JS app captures pass. The history records visual comparisons and evidence limits; broader latency/FPS acceptance remains open.
