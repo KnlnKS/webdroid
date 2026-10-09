@@ -193,6 +193,7 @@ export class AotRuntime {
   private overriddenBy = new Map<number, number[]>();
   private overriddenSeen = 0;
   private cModule: (WebAssembly.Module | undefined)[] = [];
+  private cClasses: number[][] = [];
   /** where each function's trace starts in the section of a loaded code module, by slot */
   private cTraces = new Map<number, { bytes: Uint8Array; starts: Map<number, number> }>();
   /** slots reserved by the build after the platform classes, by class */
@@ -441,8 +442,13 @@ export class AotRuntime {
     const base = this.reservedBase(m.cls) ?? this.w.preassigned.get(m.cls);
     if (base !== undefined) this.overridden.add(base + m.index);
   }
-  /** whether platform method `m` of block `b` was installed by a loaded code module */
-  installed(b: number, m: MethodInfo): boolean { const c = this.cOf[b]; return c >= 0 && this.cState[c] === LIVE && this.has(c, this.w.blockBase[b] + m.index); }
+  /** whether method `m` of block `b` was installed by a loaded code module or app patch */
+  installed(b: number, m: MethodInfo): boolean {
+    const c = this.cOf[b], slot = this.w.blockBase[b] + m.index;
+    if (c >= 0 && this.cState[c] === LIVE && this.has(c, slot)) return true;
+    for (const p of this.patchesOver.get(c) ?? []) if (this.cState[p] === LIVE && this.cClasses[p].includes(b) && this.has(p, slot)) return true;
+    return false;
+  }
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
   private preparation = new Map<number, Promise<void>>();
   private prepared = new Set<number>();
@@ -492,7 +498,11 @@ export class AotRuntime {
   /** the first call of a method the build compiled: loads its code module. Whether the method is installed afterwards is in its slot. */
   install(slot: number): boolean {
     const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
-    return c >= 0 && this.loadC(c);
+    if (!(c >= 0)) return false;
+    let loaded = this.loadC(c);
+    // App patches bind the live class globals, including fallback data that rejected the platform unit.
+    if (!loaded && this.cState[c] === DEAD) for (const p of this.patchesOver.get(c) ?? []) loaded = this.loadC(p) || loaded;
+    return loaded;
   }
   private loadC(c: number): boolean {
     if (this.cState[c]) return this.cState[c] === LIVE;
@@ -521,6 +531,7 @@ export class AotRuntime {
       }
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
+    if (app) this.cClasses[c] = head.classes;
     for (const id of head.touch) this.touch(id);
     for (const s of head.synth) w.ensureSynth(s);
     const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };

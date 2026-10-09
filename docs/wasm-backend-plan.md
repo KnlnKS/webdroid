@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Rejected-platform patch reuse checkpoint (2026-10-08)
+
+The linker now loads valid app patches after permanent platform code rejection and preserves their lazy slot invalidation ownership. A fallback-global/subclass regression fails on the starting code and passes with the change. Four/eight-jar AOT (107 checks each), eight-jar persistence, loaders, 41 OSR checks, typecheck, FitNotes smoke and all 39 full FitNotes checkpoints pass. All 4,324 platform files remain unchanged under source `a9e02fa27e89…`, ordinary `0f60422daaae0d6d`/guarded `2f9e6fcdd4866f71`. Alternating warm controls reduce launch-checkpoint method compilations from 8,161/8,142 to 5,974/5,998. Exercise-list responses remain variable: before 346.6/297.1 ms, after 263.9/352.1 ms, all above 150 ms. This is cache-reuse progress, not latency/FPS acceptance. The history records controls and remaining class-data fallback work; broader gates remain open.
+
 ### App data ownership checkpoint (2026-10-08)
 
 App builds exclude all class data owned by the platform, including reserved classes whose methods are compiled later. This prevents a cached data module from replacing live methods with stubs; app cache version 12 rejects older layouts. A core ownership regression, four/eight-jar persistence, 101 AOT checks, typecheck, FitNotes smoke and all 39 full FitNotes checkpoints pass. Platform assets remain byte-identical under source `7ece376decb25…`, ordinary `003c57ed11e5184b`/guarded `7473ecaf75e27010`. Two fresh canonical warm replays complete without the reproduced startup overflow, but exercise-list latency still fails at 450.2/288.5 ms with varying compilation work. Observer prototypes remain private, and broader latency/FPS/application gates remain open. Details and evidence limits are in the implementation history.

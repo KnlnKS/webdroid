@@ -136,6 +136,27 @@ const modules = /^[cd]\d+\.wasm$/;
   check("publication after preflight keeps globals", published.link(cls.name).exports, globals);
   check("publication after preflight Java result", published.entry("Aot", "plain", "()I")(), 0);
 }
+// Cached patches bind fallback globals and retain their invalidation owners even when the platform unit cannot load.
+{
+  const app = loadDexes(join(out, "classes.dex")), platform = program(jars);
+  const producer = world(new Program(app, platform), { natives, compileOnly: true });
+  const method = producer.prog.resolve("java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z")!;
+  const built = buildApp(producer, [method], { methods: [], classes: [], infos: [] }), files = new Map(built.files);
+  let available = false;
+  const page = world(new Program(app, platform), { natives, app: { index: built.index, store: { get: f => files.get(f) } },
+    aot: { get: f => /^d\d+\.wasm$/.test(f) && !available ? undefined : fileOf(f) } });
+  const cls = page.link("java/util/ArrayList"), globals = cls.exports, slot = page.slotOf(page.prog.resolve(method.cls, method.name, method.desc)!);
+  available = true;
+  check("patch loads after fallback data rejects platform code", page.aot!.install(slot), true);
+  const state = page.slotAt(slot);
+  check("patch owns a later materialized slot", state?.k === "method" && state.done, true);
+  const code = page.table.get(slot);
+  check("fallback patch Java result", page.entry("Aot", "plain", "()I")(), 0);
+  check("fallback patch retains published globals", page.link(cls.name).exports, globals);
+  check("fallback patch executes without recompilation", page.table.get(slot), code);
+  page.addDexes(loadDexes(join(out, "out2/classes.dex")));
+  check("fallback patch invalidates for a later subclass", page.entry("Aot2", "sub", "()I")(), 1);
+}
 // Demand preparation fetches code then its original data, but publishes nothing and has a finite fallback path.
 {
   const held = new Set<string>(), delivered = new Map<string, WebAssembly.Module>();
