@@ -14,6 +14,13 @@ test("virtual vsync tolerates host jitter, caps refresh rates and drops missed p
     }
     expect(accepted).toBe(600);
     expect(delivered).toBe(600);
+    start += 20_000;
+    expect(recordVsync(start)).toBe(true);
+    accepted = 0;
+    for (let i = 1; i <= 600; i++) {
+      accepted += +recordVsync(start + i * 1000 / 60 + 9 - (i % 2 ? 0 : 1.8));
+    }
+    expect(accepted).toBe(600);
     for (const rate of [30, 60, 90, 120]) for (const host of [30, 60, 90, 120, 144, 240]) {
       device.refreshRate = rate;
       start += 20_000;

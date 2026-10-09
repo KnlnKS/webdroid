@@ -10,9 +10,13 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Virtual-vsync phase recovery (2026-10-09)
+
+The shared pacer now re-anchors after missed periods instead of retaining a startup phase that host timestamp jitter can repeatedly cross. An actual callback replay improves 853/872 to 872/872 accepted ticks; the existing core test gains a phase-shift case reproducing 300/600 before and 600/600 after. Configured rate, duplicate and pause controls pass. Production scrolling comparisons avoid the intermittent baseline tick deficit, but the healthy baseline matches candidate FPS. Warm exercise-list responses improve from 203–204 to 189–192 ms in four controls and remain above 150 ms; calendar responses are mixed. Typecheck, unit/framework checks, zero-failure APK smokes, byte-identical rebuilt AOT and Wasm/JS app captures pass. The history records visual comparisons and evidence limits; broader latency/FPS acceptance remains open.
+
 ### Canonical looper polling checkpoint (2026-10-09)
 
-Wasm no longer overrides `MessageQueue.nativePollOnce` with an always-async forwarding function. It uses the canonical native and existing conditional settlement ABI. The shared looper consumes a pending wake synchronously when there are no callbacks, retaining real parks and callback ordering. Final scroll controls reduce suspension-import entries by about 53%, with comparable native crossings and fewer empty callback-array allocations by construction. App latency remains mixed: the exercise list still takes 187–197 ms in candidate runs. Typecheck, 1,214 unit tests, 134 thread checks, 31 framework exercises, zero-failure APK smokes, fresh AOT and Wasm/JS app captures pass. The history records performance/visual limits and a newly observed virtual-tick deficit requiring separate pacing diagnosis.
+Wasm no longer overrides `MessageQueue.nativePollOnce` with an always-async forwarding function. It uses the canonical native and existing conditional settlement ABI. The shared looper consumes a pending wake synchronously when there are no callbacks, retaining real parks and callback ordering. Final scroll controls reduce suspension-import entries by about 53%, with comparable native crossings and fewer empty callback-array allocations by construction. App latency remains mixed: the exercise list still takes 187–197 ms in candidate runs. Typecheck, 1,214 unit tests, 134 thread checks, 31 framework exercises, zero-failure APK smokes, fresh AOT and Wasm/JS app captures pass. The history records performance/visual limits and the virtual-tick deficit subsequently diagnosed and repaired above.
 
 ### Rejected immediate native results (2026-10-09)
 

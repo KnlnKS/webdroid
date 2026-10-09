@@ -53,10 +53,10 @@ const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get
 export function recordVsync(time: number): boolean {
   const interval = vsyncIntervalMs();
   if (!nextVsync) nextVsync = time;
-  // Round to the nearest virtual period, dropping missed periods without catch-up frames.
+  // Re-anchor missed periods so host jitter cannot straddle a stale phase boundary.
   const elapsed = time + interval / 2 - nextVsync;
   if (elapsed < 0) return false;
-  nextVsync += (Math.floor(elapsed / interval) + 1) * interval;
+  nextVsync = elapsed < interval ? nextVsync + interval : time + interval;
   deliverVsync();
   return true;
 }

@@ -4,7 +4,9 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
-- Wasm now uses the canonical MessageQueue poll implementation, and an already-pending wake with no callbacks returns immediately. This removes the redundant async override and avoids empty callback-array allocation on that path. Matched scrolling controls reduce suspension-import entries from 6,504–6,667 to 3,032–3,172; latency remains mixed and above the 150 ms gate. Core/framework checks and both-tier app captures pass. Virtual-tick deficits remain a separate pacing investigation; see the [history](docs/implementation-history.md).
+- Virtual vsync now re-anchors after missed periods, preventing startup phase and host jitter from repeatedly discarding usable callbacks. A core regression improves 300/600 to 600/600 frames; production controls accept all observed callbacks and avoid the intermittent slow baseline state, without a uniform FPS gain. Warm exercise-list latency is 189–192 ms versus 203–204 ms, still above the 150 ms gate. See the [history](docs/implementation-history.md) for checks and limits.
+
+- Wasm now uses the canonical MessageQueue poll implementation, and an already-pending wake with no callbacks returns immediately. This removes the redundant async override and avoids empty callback-array allocation on that path. Matched scrolling controls reduce suspension-import entries from 6,504–6,667 to 3,032–3,172; latency remains mixed and above the 150 ms gate. Core/framework checks and both-tier app captures pass. The virtual-tick deficit is addressed by phase recovery above; see the [history](docs/implementation-history.md).
 
 - An immediate-result native-driver prototype is rejected: removing unconditional async wrappers barely changes Promise-returning imports (6,582→6,556 in a diagnostic scroll replay), with overlapping FPS and no improvement to the slow exercise-list response. Production source and AOT remain at the vsync checkpoint. Trace the remaining wait origins before redesigning the callback boundary; see the [history](docs/implementation-history.md).
 
