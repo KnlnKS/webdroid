@@ -38,7 +38,10 @@ export class NativeLooper {
    *  main thread (a device runs them on other cores); the main looper's own yield goes ahead of
    *  theirs, as its core would keep it going. */
   pollOnce(timeout: number): void | Promise<void> {
-    if (!this.callbacks.length && !this.woken && timeout === 0 && this === mainLooper && turnElapsed() <= SLICE_MS) return;
+    if (!this.callbacks.length) {
+      if (this.woken) { this.woken = false; return; }
+      if (timeout === 0 && this === mainLooper && turnElapsed() <= SLICE_MS) return;
+    }
     return this.poll(timeout);
   }
   private async poll(timeout: number): Promise<void> {

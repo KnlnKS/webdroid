@@ -4,7 +4,7 @@ import { TV } from "../src/android/axml";
 import { vcall, newObj, scall, linkInit, JThread, curThread, setCurThread } from "../src/jvm/natives/jentry";
 import { rt, JObj, getDeclared } from "../src/jvm/runtime";
 import { loadFrameworkJar, loadLibcore, bootApp, packageRecord } from "./java";
-import { onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
+import { NativeLooper, onMain, fnRunnable, postRunnable, postTo } from "../src/android/mainloop";
 import { BridgeCalls } from "../src/shell/bridgecalls";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { UNAME } from "../src/shell/device-properties";
@@ -71,6 +71,18 @@ describe("bridgecalls", () => {
 });
 
 describe("looper", () => {
+  test("a consumed wake returns immediately without preventing the next park", async () => {
+    const looper = new NativeLooper(curThread);
+    looper.wake();
+    expect(looper.pollOnce(-1)).toBeUndefined();
+    expect(looper.polling).toBe(false);
+    const parked = looper.pollOnce(-1);
+    expect(parked).toBeInstanceOf(Promise);
+    expect(looper.polling).toBe(true);
+    looper.wake(); await parked;
+    expect(looper.polling).toBe(false);
+  });
+
   test("the main looper runs posts in order, a delayed one after its delay, and host jobs between them", async () => {
     await loadLibcore(); await loadFrameworkJar(); rt.linkNatives();
     const events: string[] = [];

@@ -7,8 +7,6 @@ import { fdInt } from "../../jvm/natives/jio";
 import { fdFile, javaPreadFd, javaReadFd, javaSeekFd } from "../../native/fs";
 import { handle } from "../../android/handles";
 import { BytesFile } from "../../shell/lazyfile";
-import { deref } from "../../android/handles";
-import type { NativeLooper } from "../../android/mainloop";
 import { vcall } from "../../jvm/natives/jentry";
 import { awaited, driven, type Gen } from "../../jvm/runtime";
 import type { HostFn } from "../link/hostapi";
@@ -42,8 +40,6 @@ export const hostNatives = new Map<string, HostFn>([
   // no class loader context to report to the runtime, which BaseDexClassLoader.reportClassLoaderChain takes as nothing to do
   ["dalvik/system/BaseDexClassLoader.computeClassLoaderContextsNative()[Ljava/lang/String;", () => jarray([], "Ljava/lang/String;")],
   ["java/lang/Class.getPublicFieldRecursive(Ljava/lang/String;)Ljava/lang/reflect/Field;", driven(function* (this: object, name: string): Gen<object | null> { return yield* publicField(this, name); })],
-  // Looper.loop waits here: the main thread's strand is suspended until a message, a callback or the timeout, which is a Suspending import
-  ["android/os/MessageQueue.nativePollOnce(JI)V", async (ptr: bigint, timeout: number) => { await deref<NativeLooper>(ptr).pollOnce(timeout); }],
   // the address of a Java array that is not a direct buffer's: the handle of the array itself, which `deref` gives natives as a view that is stored back (bridge.ts)
   ["dalvik/system/VMRuntime.addressOf(Ljava/lang/Object;)J", Object.assign((array: object) => handle(array), { javaValues: true })],
   // the archives of the boot class path, which BootClassLoader looks resources up in

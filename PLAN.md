@@ -4,6 +4,8 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
+- Wasm now uses the canonical MessageQueue poll implementation, and an already-pending wake with no callbacks returns immediately. This removes the redundant async override and avoids empty callback-array allocation on that path. Matched scrolling controls reduce suspension-import entries from 6,504–6,667 to 3,032–3,172; latency remains mixed and above the 150 ms gate. Core/framework checks and both-tier app captures pass. Virtual-tick deficits remain a separate pacing investigation; see the [history](docs/implementation-history.md).
+
 - An immediate-result native-driver prototype is rejected: removing unconditional async wrappers barely changes Promise-returning imports (6,582→6,556 in a diagnostic scroll replay), with overlapping FPS and no improvement to the slow exercise-list response. Production source and AOT remain at the vsync checkpoint. Trace the remaining wait origins before redesigning the callback boundary; see the [history](docs/implementation-history.md).
 
 - Virtual vsync now rounds host callbacks to the nearest configured display period and drops missed periods without catch-up bursts. Matched scroll controls deliver every observed browser frame instead of skipping 16–24 per 15 seconds; presentation rate rises from 55.1–55.3 to 56.5–56.7/s and intervals over 25 ms fall from 27–39 to 11–14. Input latency remains mixed and the broader performance gates stay open. The [history](docs/implementation-history.md) records verification and scope.

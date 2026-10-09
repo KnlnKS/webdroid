@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Canonical looper polling checkpoint (2026-10-09)
+
+Wasm no longer overrides `MessageQueue.nativePollOnce` with an always-async forwarding function. It uses the canonical native and existing conditional settlement ABI. The shared looper consumes a pending wake synchronously when there are no callbacks, retaining real parks and callback ordering. Final scroll controls reduce suspension-import entries by about 53%, with comparable native crossings and fewer empty callback-array allocations by construction. App latency remains mixed: the exercise list still takes 187–197 ms in candidate runs. Typecheck, 1,214 unit tests, 134 thread checks, 31 framework exercises, zero-failure APK smokes, fresh AOT and Wasm/JS app captures pass. The history records performance/visual limits and a newly observed virtual-tick deficit requiring separate pacing diagnosis.
+
 ### Rejected immediate native results (2026-10-09)
 
 A prototype kept generator natives and their ABI wrappers synchronous until an actual Promise, preserving private arrays/bridge scopes and forcing stack-quota release for immediate values and exceptions. Core and app checks passed, but a diagnostic replay reduced Promise-returning imports only from 6,582 to 6,556 of roughly 6,850 calls. FPS overlapped and the warm exercise-list response remained 196 ms versus 188–195 ms on the starting source. Production and test changes are reverted; matching `a3c05807` AOT is restored. The history records controls and limitations. The next boundary investigation must identify the remaining Promise producers before changing scheduling; broad performance acceptance remains open.
