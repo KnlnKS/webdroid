@@ -8,7 +8,7 @@ import { actOf, loadManifest, prefsStorage } from "../tests/e2e/capture-webdroid
 import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
 import { environmentScript, performAction } from "../tests/e2e/lib/actions";
 import { readProcesses } from "../tests/e2e/lib/processes";
-import { BASE_URL } from "../tests/e2e/lib/util";
+import { webdroidUrl } from "../tests/e2e/lib/util";
 import { DEFAULT_HOT_THRESHOLD, JVM_HOT_THRESHOLDS } from "../src/jvm/profile";
 import { probeScript } from "../tests/e2e/lib/probe";
 import { executionFlow, PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } from "../tests/e2e/types";
@@ -16,7 +16,7 @@ import { executionFlow, PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } 
 const { values } = parseArgs({ options: {
   flow: { type: "string" }, after: { type: "string" }, exercise: { type: "string" },
   "input-offsets": { type: "string" }, "start-exercise": { type: "string" }, "state-reader": { type: "string" }, "start-state": { type: "string" },
-  url: { type: "string", default: BASE_URL },
+  url: { type: "string", default: webdroidUrl().href },
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
