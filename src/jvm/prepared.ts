@@ -55,7 +55,7 @@ function rangeRegs(first: number, count: number): number[] {
   return out;
 }
 
-function decode(insns: Uint16Array, pc: number): MutableInstruction {
+export function decodeInstruction(insns: Uint16Array, pc: number): MutableInstruction {
   const first = insns[pc];
   const op = first & 0xff;
   const entry = OPS[op];
@@ -109,7 +109,7 @@ export function decodeInstructions(insns: Uint16Array): MutableInstruction[] {
   for (let pc = 0; pc < insns.length;) {
     const first = insns[pc];
     if ((first & 0xff) === 0 && (first >> 8) !== 0) { pc += insnLen(insns, pc); continue; }
-    const ins = decode(insns, pc);
+    const ins = decodeInstruction(insns, pc);
     instructions.push(ins);
     pc += ins.len;
   }
@@ -511,5 +511,5 @@ export function prepareMethod(
 export function coldInstructions(code: CodeItem, prepared: PreparedMethod): (pc: number) => PreparedInstruction {
   const annotated = new Map<number, PreparedInstruction>();
   for (const instruction of prepared.instructions) if (instruction.constKind || instruction.nullRecv) annotated.set(instruction.pc, instruction);
-  return (pc) => annotated.get(pc) ?? decode(code.insns, pc);
+  return (pc) => annotated.get(pc) ?? decodeInstruction(code.insns, pc);
 }

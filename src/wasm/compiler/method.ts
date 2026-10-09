@@ -864,11 +864,21 @@ export class MC {
 
   // ---------- instruction emission
   emit(ins: Ins) {
-    const n = ins.name, c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
+    const c = this.code;
     if (this.consumed.has(ins.pc)) return;
     this.cur = ins; c.pc = ins.pc;
     if (!this.typing.reached(ins.pc)) { c.unreachable(); return; }
     if (emitSymbolicSite(this, ins)) return;
+    this.emitOperation(ins);
+  }
+
+  protected copyReference(reg: number): void {
+    const def = this.typing.def(this.cur.pc);
+    if (def >= 0 && def !== this.useWeb(reg)) { this.get("L", reg); this.set("L"); }
+  }
+
+  protected emitOperation(ins: Ins): void {
+    const n = ins.name, c = this.code, cx = this.cx, dex = this.dex, a = ins.a, b = ins.b;
     switch (n) {
       case "nop": return;
       case "move": case "move/from16": case "move/16": case "move-wide": case "move-wide/from16": case "move-wide/16":
@@ -896,8 +906,7 @@ export class MC {
       case "check-cast": {
         if (this.unresolved(dex.type(b))) return;
         const name = descToName(dex.type(b));
-        // the cast value is a definition of its own: a web other than the operand's needs the reference copied in
-        if (name === "java/lang/Object") { if (this.typing.def(ins.pc) >= 0 && this.typing.def(ins.pc) !== this.useWeb(a)) { this.get("L", a); this.set("L"); } return; }
+        if (name === "java/lang/Object") { this.copyReference(a); return; }
         this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
       }
       case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); c.call(cx.instanceOfFn(descToName(dex.type(ins.c)))); this.set("I"); return;

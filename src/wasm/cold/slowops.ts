@@ -9,7 +9,7 @@ import { mid } from "../compiler/ids";
 import { declaredMethod, kindOf, type Kind, type MethodInfo } from "../compiler/program";
 import type { Code } from "../compiler/code";
 import { Compiler } from "../compiler/j2w";
-import { siteOperands } from "../compiler/sites";
+import type { SymbolicSite } from "../compiler/sites";
 import { T } from "../compiler/wasmbin";
 import { validateColdSnapshot, type ColdSnapshot } from "./state";
 import type { Strand } from "../link/sched";
@@ -23,7 +23,6 @@ type Adapter = { call: (strand: Strand, sync: boolean, depth: number, peer: unkn
 type SlowBody = (cx: Compiler, c: Code, arg: (i: number) => void) => number[];
 type Batch = { readonly sealed: boolean; entries: { body: SlowBody; ctor?: MethodInfo }[]; call: (strand: Strand, sync: boolean, selector: number, depth: number, peer: unknown, ...args: unknown[]) => unknown };
 const BATCH_SIZE = 16;
-export const SYMBOLIC_ANALYSIS_METHODS = 4, SYMBOLIC_ANALYSIS_CELLS = 65536;
 const abi = (kind: number): Kind => kind === R ? "L" : kind === J || kind === D ? "J" : "I";
 
 // Slow adapters contain no copied callees. Always resolve virtual calls through
@@ -33,6 +32,8 @@ class SlowMC extends MC {
   override callee(ins: PreparedInstruction): MethodInfo | "dynamic" | null {
     return /^invoke-(virtual|interface)/.test(ins.name) ? "dynamic" : super.callee(ins);
   }
+  override consumeResult(): void {}
+  protected override copyReference(reg: number): void { this.get("L", reg); this.set("L"); }
   outputLocal = -1;
   override set(_kind: Kind): void { this.code.lset(this.outputLocal); }
   override setF32(): void { this.code.raw(OP.i32_reinterpret_f32); this.set("I"); }
@@ -42,11 +43,25 @@ class SlowMC extends MC {
   }
 }
 
+// Symbolic inputs already have the caller's bits ABI; no method IR or local copies are needed.
+class SymbolicMC extends SlowMC {
+  constructor(cx: Compiler, m: MethodInfo, private inputs: SymbolicSite[4]) { super(cx, m); }
+  override useWeb(reg: number): number { return reg; }
+  override get(kind: Kind, reg: number): void {
+    for (let i = 0; i < this.inputs.length; i++) if (this.inputs[i][0] === reg && this.inputs[i][1] === kind) {
+      this.code.lget(i); return;
+    }
+    throw new Error(`invalid symbolic operand v${reg}:${kind} at ${this.cur.pc}`);
+  }
+  override emit(ins: PreparedInstruction): void {
+    this.cur = ins; this.code.pc = ins.pc;
+    this.emitOperation(ins);
+  }
+}
+
 /** Executes one supported slow opcode, committing its registers only on success. */
 export class ColdSlowOps {
   private analyses = new WeakMap<MethodInfo, Analysis>();
-  private recent = new Map<MethodInfo, { analysis: Analysis; cells: number; dex: MethodInfo["dex"]; codeOff: number }>();
-  private recentCells = 0;
   private adapters = new WeakMap<MethodInfo, Map<number, Adapter>>();
   private calls = new WeakMap<MethodInfo, Map<string, Adapter["call"]>>();
   private batches = new WeakMap<MethodInfo, Map<string, Batch[]>>();
@@ -58,64 +73,12 @@ export class ColdSlowOps {
     return /^(move-result|move-exception|invoke-|iget|sget|iput|sput|aget|aput|monitor-|fill-array-data|throw|const-string|const-class|const-method-|new-instance|new-array|filled-new-array|check-cast|array-length|instance-of|(?:div|rem)-(?:int|long|float|double))/.test(ins.name);
   }
 
-  private site(m: MethodInfo, pc: number, analysis: Analysis) {
-    const ins = analysis.instructions.get(pc);
-    if (!ins) throw new UnsupportedSlowOperation(`${mid(m)} at ${pc}`);
-    return { ins, ...siteOperands(m, ins, analysis.typing) };
-  }
-
-  prepareSite(m: MethodInfo, pc: number) {
-    let found = this.recent.get(m);
-    if (found && (found.dex !== m.dex || found.codeOff !== m.codeOff)) {
-      this.recent.delete(m); this.recentCells -= found.cells; found = undefined;
-    }
-    let analysis: Analysis;
-    if (found) {
-      analysis = found.analysis; this.recent.delete(m); this.recent.set(m, found);
-      this.w.stats.symbolicAnalysisHits++;
-    } else {
-      analysis = this.prepareAnalysis(m); this.w.stats.symbolicTypingMethods++;
-      this.retainAnalysis(m, analysis);
-    }
-    this.analysisStats();
-    return { ...this.site(m, pc, analysis), analysis };
-  }
-
-  /** Keep only the compiler's immutable method data, within the same executed-site budget. */
-  rememberAnalysis(m: MethodInfo, analysis: Pick<Analysis, "prepared" | "typing">): void {
-    this.retainAnalysis(m, analysis);
-    this.analysisStats();
-  }
-
-  private retainAnalysis(m: MethodInfo, analysis: Analysis | Pick<Analysis, "prepared" | "typing">): void {
-    const prior = this.recent.get(m);
-    if (prior) { this.recent.delete(m); this.recentCells -= prior.cells; }
-    const item = m.dex.code(m.codeOff), cells = item.insns.length + (analysis.prepared.instructions.length + 1) * (item.regs + 16);
-    if (cells > SYMBOLIC_ANALYSIS_CELLS) { this.w.stats.symbolicAnalysisOversize++; return; }
-    while (this.recent.size >= SYMBOLIC_ANALYSIS_METHODS || this.recentCells + cells > SYMBOLIC_ANALYSIS_CELLS) {
-      const oldest = this.recent.keys().next().value!;
-      this.recentCells -= this.recent.get(oldest)!.cells; this.recent.delete(oldest);
-    }
-    const complete = "instructions" in analysis ? analysis : { ...analysis, instructions: new Map(analysis.prepared.instructions.map(ins => [ins.pc, ins])) };
-    this.recent.set(m, { analysis: complete, cells, dex: m.dex, codeOff: m.codeOff }); this.recentCells += cells;
-  }
-
-  private analysisStats(): void {
-    this.w.stats.symbolicAnalysisEntries = this.recent.size; this.w.stats.symbolicAnalysisCells = this.recentCells;
-    this.w.stats.symbolicAnalysisPeakEntries = Math.max(this.w.stats.symbolicAnalysisPeakEntries, this.recent.size);
-    this.w.stats.symbolicAnalysisPeakCells = Math.max(this.w.stats.symbolicAnalysisPeakCells, this.recentCells);
-  }
-
-  compileSite(m: MethodInfo, pc: number, site = this.prepareSite(m, pc)) {
-    const { ins, inputs, output, analysis } = site, cx = new Compiler(this.w);
-    const emit = this.operation(m, ins, inputs, output, analysis);
+  compileSite(m: MethodInfo, ins: PreparedInstruction, inputs: SymbolicSite[4], output: Kind | "V") {
+    const cx = new Compiler(this.w);
     // These helpers have no Java frame; stable names let engines reuse identical module code.
-    const built = cx.buildSynthetic("symbolic:operation", inputs.map(i => i.kind), c => {
-      const weights = emit(cx, c, i => {
-        if (i < 2) c.gget(cx.global("rt", i ? "thr" : "depth", i ? T.anyref : T.i32, true));
-        else c.lget(i - 2);
-      });
-      for (const at of weights) c.patch(at, 4 + c.nparams + c.localTypes.length);
+    const built = cx.buildSynthetic("symbolic:operation", inputs.map(i => i[1]), c => {
+      const mc = new SymbolicMC(cx, m, inputs); mc.code = c;
+      for (const at of this.emitOperation(mc, ins, output)) c.patch(at, 4 + c.nparams + c.localTypes.length);
     }, output);
     return { cx, built };
   }
@@ -253,8 +216,6 @@ export class ColdSlowOps {
       arg(1); c.gset(cx.global("rt", "thr", T.anyref, true));
       const mc = new SlowMC(cx, m);
       mc.code = c; mc.prepared = prepared; mc.typing = typing; mc.cur = ins;
-      mc.tmpL = c.newLocal(T.anyref);
-      if (output !== "V") mc.outputLocal = c.newLocal(cx.vtOf(output));
       inputs.forEach((input, i) => {
         arg(i + 2);
         const storage = mc.storage(typing.kind[input.web]);
@@ -262,21 +223,25 @@ export class ColdSlowOps {
         else if (storage === T.f64) c.raw(OP.f64_reinterpret_i64);
         c.lset(mc.local(input.web));
       });
-      // Account for the bridge frame and restore depth on both normal and tagged
-      // exceptional exits, rather than mutating another strand's globals in JS.
-      const entry = c.newLocal(T.i32), thrown = c.newLocal(T.anyref);
-      const weights = cx.emitEnter(c, entry);
-      c.block().block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
-      mc.emit(ins);
-      if (this.stringConstructor(m, ins)) c.lget(mc.local(mc.useWeb(ins.regs[0]))).lset(mc.outputLocal);
-      if (ins.name === "check-cast" && descToName(m.dex.type(ins.b)) === "java/lang/Object") { mc.get("L", ins.a); c.lset(mc.outputLocal); }
-      cx.emitLeave(c, entry, false); c.br(2);
-      c.end().unreachable().end();
-      c.lset(thrown); cx.emitLeave(c, entry, false); c.lget(thrown).throw_(cx.tag);
-      c.end();
-      if (output !== "V") c.lget(mc.outputLocal);
-      return weights;
+      return this.emitOperation(mc, ins, output);
     };
+  }
+
+  private emitOperation(mc: SlowMC, ins: PreparedInstruction, output: Kind | "V"): number[] {
+    const { cx, code: c } = mc;
+    mc.tmpL = c.newLocal(T.anyref);
+    if (output !== "V") mc.outputLocal = c.newLocal(cx.vtOf(output));
+    // Restore frame depth on both normal and tagged exceptional exits.
+    const entry = c.newLocal(T.i32), thrown = c.newLocal(T.anyref), weights = cx.emitEnter(c, entry);
+    c.block().block(T.anyref).tryTable(null, [[0, cx.tag, 0]]);
+    mc.emit(ins);
+    if (this.stringConstructor(mc.m, ins)) c.lget(mc.local(mc.useWeb(ins.regs[0]))).lset(mc.outputLocal);
+    cx.emitLeave(c, entry, false); c.br(2);
+    c.end().unreachable().end();
+    c.lset(thrown); cx.emitLeave(c, entry, false); c.lget(thrown).throw_(cx.tag);
+    c.end();
+    if (output !== "V") c.lget(mc.outputLocal);
+    return weights;
   }
 
   private batch(name: string, params: Kind[], output: Kind | "V"): Batch {

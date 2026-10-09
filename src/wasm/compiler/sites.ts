@@ -8,8 +8,8 @@ import type { MC } from "./method";
 import { initiatedInstruction } from "../link/resolution";
 import type { World } from "../link/world";
 
-export type SymbolicSite = [name: string, cls: string, method: number, pc: number, params: Kind[], ret: Kind | "V"];
-export interface SiteOperands { inputs: { reg: number; kind: Kind; web: number }[]; output: Kind | "V"; producer: boolean }
+export type SymbolicSite = [name: string, cls: string, method: number, pc: number, inputs: [reg: number, kind: Kind][], ret: Kind | "V"];
+export interface SiteOperands { inputs: { reg: number; kind: Kind }[]; output: Kind | "V"; producer: boolean }
 
 export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): boolean {
   const n = ins.name, dex = m.dex;
@@ -29,7 +29,7 @@ export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Ty
     if (web < 0 || seen.has(web)) continue;
     seen.add(web);
     const k = typing.kind[web];
-    inputs.push({ reg, web, kind: k === R ? "L" : k === J || k === D ? "J" : "I" });
+    inputs.push({ reg, kind: k === R ? "L" : k === J || k === D ? "J" : "I" });
   }
   const output = /^invoke-/.test(n) ? dex.rawType(dex.proto(n.startsWith("invoke-polymorphic") ? ins.c : dex.method(ins.b).proto).ret)
     : /^(iget|sget)/.test(n) ? dex.rawType(dex.field(n.startsWith("iget") ? ins.c : ins.b).type)
@@ -73,7 +73,7 @@ export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void 
       cx.symbolicTable ??= cx.mb.importTable("symbolic", "table", T.funcref, 0);
       const slot = cx.mb.importGlobal("symbolic", name, T.i32, false);
       const operands = siteOperands(m, ins, typing);
-      cx.symbolicImports.set(name, { slot, site: [name, m.cls, m.index, ins.pc, operands.inputs.map(input => input.kind), operands.output] });
+      cx.symbolicImports.set(name, { slot, site: [name, m.cls, m.index, ins.pc, operands.inputs.map(input => [input.reg, input.kind]), operands.output] });
     }
   }
 }

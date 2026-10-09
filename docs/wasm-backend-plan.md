@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Symbolic operand metadata checkpoint (2026-10-09)
+
+Lazy symbolic operations now decode one instruction and read its compiled register/ABI mapping directly. Whole-method reanalysis, the bounded analysis cache and redundant parameter locals are removed; canonical resolution, emission and frame restoration remain shared. Unit/app formats are 12/13. Typecheck, all 19 Wasm suites, 1,212 unit tests, cold/OSR/framework checks, zero-failure APK sweeps and fresh ordinary/guarded eight-jar builds pass. Two serial warm controls reduce FitNotes exercise-list response from 216–239 to 193–194 ms, while calendar taps remain mixed and the 150 ms gate still fails. FitNotes full UI trees match. Mihon's action/diagnostic checks pass, but its presentation-count launch checkpoint captures black before the library; a separate no-input idle probe confirms eventual library rendering on both sources. Visual launch parity, FPS and broader acceptance remain open. See the implementation history for the measurements and evidence limits.
+
 ### Unsafe accessor cache checkpoint (2026-10-09)
 
 Validated field accessors now stay in a per-World Wasm array, keyed by field cookie, operation and storage kind; numbering rollback clears the cache. Hits avoid host lookup and descriptor construction while retaining eager linking and existing array/atomic behavior. Typecheck, all 19 Wasm sections, 1,212 unit tests, framework/smoke, four/eight-jar persistence and 153 guarded OSR checks pass; fresh AOT and full FitNotes/Mihon captures pass. Isolated scroll controls reduce host lookups from roughly 375,000–407,000 to one per 15 seconds, but continuous-scroll presentation rates overlap and latency remains mixed. The history records exact controls and limits. First-tier compilation/planning and broad application/performance acceptance remain open.

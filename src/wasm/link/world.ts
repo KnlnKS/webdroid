@@ -8,7 +8,7 @@ import { beginCompile, endCompile, measureCompile } from "../../jvm/compiler-obs
 //  - Vtables hold table slots. CHA decisions are recorded per slot and undone (the stub is put back) when a dex added later falsifies them.
 //
 // A build-time mode would call Compiler.buildUnit with a whole class group and install the exports without the stubs.
-import { prepareMethod, type PreparedInstruction } from "../../jvm/prepared";
+import { decodeInstruction, prepareMethod, type PreparedInstruction } from "../../jvm/prepared";
 import { ColdInterpreter } from "../cold/interpreter";
 import { needsSymbolicSite, type SymbolicSite } from "../compiler/sites";
 import { ColdSlowOps } from "../cold/slowops";
@@ -121,7 +121,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, symbolicTypingMethods: 0, symbolicAnalysisHits: 0, symbolicAnalysisOversize: 0, symbolicAnalysisEntries: 0, symbolicAnalysisCells: 0, symbolicAnalysisPeakEntries: 0, symbolicAnalysisPeakCells: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -1295,7 +1295,7 @@ export class World {
   }
   private unitImports(cx: Compiler): Record<string, any> {
     const imports: Record<string, any> = { rt: this.rtImports(), host: this.host,
-      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site), cx.methodAnalyses), deopt: this.deoptImports };
+      n: this.nativeImports(cx.nativeImports.keys()), symbolic: this.symbolicImports([...cx.symbolicImports.values()].map(v => v.site)), deopt: this.deoptImports };
     for (const [mod, rt] of cx.deps) imports[mod] = rt.exports;
     return imports;
   }
@@ -1311,7 +1311,7 @@ export class World {
   private symbolicTable = new WebAssembly.Table({ element: "anyfunc", initial: 0 });
   private symbolicSites = new Map<string, { slot: WebAssembly.Global; ready?: boolean }>();
   symbolicStubModules = 0;
-  symbolicImports(sites: SymbolicSite[], analyses?: Compiler["methodAnalyses"]): Record<string, unknown> {
+  symbolicImports(sites: SymbolicSite[]): Record<string, unknown> {
     const out: Record<string, unknown> = { table: this.symbolicTable };
     const fresh = sites.filter(([name]) => !this.symbolicSites.has(name));
     if (fresh.length) {
@@ -1320,19 +1320,15 @@ export class World {
       const sync = cx.mb.importFunc("symbolic", "sync", cx.sig([], "I"));
       const binding: Record<string, unknown> = { table: this.symbolicTable, sync: this.symbolicSync.bind(this) };
       this.symbolicOps ??= new ColdSlowOps(this);
-      const pending = fresh.map(([name, cls, index, pc, params, output]) => {
+      const pending = fresh.map(([name, cls, index, pc, inputs, output]) => {
         const method = methodAt(this.prog.require(cls), index);
         if (!method) throw new Error(`Missing symbolic site method ${name}`);
         const slot = this.symbolicTable.grow(1);
         const plain = cx.mb.importFunc("symbolic", name, cx.sig([], "V")), wait = cx.mb.importFunc("symbolic", name + "#s", cx.sig([], "V"));
-        const resolver = this.symbolicResolver(method, pc, slot);
+        const resolver = this.symbolicResolver(method, pc, slot, inputs, output), params = inputs.map(i => i[1]);
         binding[name] = resolver.plain; binding[name + "#s"] = resolver.wait;
         return { name, slot, params, output, plain, wait, method };
       });
-      if (analyses?.size) for (const method of new Set(pending.map(entry => entry.method))) {
-        const analysis = analyses.get(method);
-        if (analysis) this.symbolicOps.rememberAnalysis(method, analysis);
-      }
       const built = cx.buildSyntheticGroup(pending.map(({ name, slot, params, output, plain, wait }) => ({
         name, params, ret: output, body: (c: Code) => {
           emitRestored(cx, c, [], [], () => { c.call(sync).if_().call(plain).else_().call(wait).end(); });
@@ -1352,25 +1348,25 @@ export class World {
     return out;
   }
   private symbolicSync(): number { return +(this.inSynchronousJava() || this.sched.current().root); }
-  private symbolicResolver(method: MethodInfo, pc: number, slot: number) {
+  private symbolicResolver(method: MethodInfo, pc: number, slot: number, inputs: SymbolicSite[4], output: SymbolicSite[5]) {
     const ops = this.symbolicOps!;
     const run = () => {
       this.symbolicResolutions++;
-      const owner = this.sched.current(), clock = this.unitClock(), site = ops.prepareSite(method, pc);
+      const owner = this.sched.current(), clock = this.unitClock(), ins = decodeInstruction(method.dex.code(method.codeOff).insns, pc);
       this.accountCompilation(clock);
       const install = () => {
         const clock = this.unitClock();
-        const { cx, built } = ops.compileSite(method, pc, site);
+        const { cx, built } = ops.compileSite(method, ins, inputs, output);
         this.stats.units++;
         const exports = this.instantiateUnit(cx, this.unitImports(cx), built, this.slotOf(method), clock);
         this.symbolicTable.set(slot, exports.m as Function);
-        if (initiatedInstruction(this, method, site.ins)) {
+        if (initiatedInstruction(this, method, ins)) {
           const binding = this.symbolicSites.get(`${method.cls}:${method.index}:${pc}`);
           if (binding) binding.ready = true;
           this.hotUnits.resolved(`${method.cls}:${method.index}:${pc}`);
         }
       };
-      const ready = resolveInstruction(this, method, site.ins, owner);
+      const ready = resolveInstruction(this, method, ins, owner);
       return ready instanceof Promise ? ready.then(install) : install();
     };
     return { plain: () => this.synchronous(run), wait: this.sched.suspending(run) };
