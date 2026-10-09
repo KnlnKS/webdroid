@@ -13,6 +13,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 The user excludes Genshin Impact, Clash of Clans and Clash Royale from verification. The full
 E2E matrix contains 14 configured flows; excluded APKs are not acceptance blockers.
 
+### Indexed virtual-slot construction checkpoint (2026-10-08)
+
+Signature-indexed candidate selection preserves package-private declarations, access checks and dispatch-slot order. A fixed-work comparison preserves all 1,516,790 slot entries and reduces construction time 51%; it does not establish an allocation, latency or FPS gain. Typecheck, all 19 Wasm suites, 1,212 unit tests, framework/smoke checks and all 39 full FitNotes checkpoints pass. Source `54af9a587a5b9c25…` serves ordinary `3cb221716a2f01fd`/guarded `0340214ae84f9344`; all 4,324 build files remain byte-identical. Warm exercise-list response still fails at 314 ms (starting-source profile 312 ms), with differing compilation work and substantial observer cost. History records exact evidence and limits; the broader gates remain open.
+
 ### Binary emission allocation checkpoint (2026-10-08)
 
 ASCII names avoid temporary UTF-8 buffers, and metadata encodes into section-level arrays. A fixed-work comparison of 737 captured modules preserves all bytes and offsets and reduces emission time by 46% in Node and 69% in Chrome; this is not app latency or FPS acceptance. Typecheck, all 19 Wasm sections, the 1,212-test unit repeat, cold/OSR/framework checks and FitNotes smoke pass. Fresh source `3a53e47b973bd396…` serves ordinary `541489dd5a52ef90`/guarded `d65378005f63f872`, with all 4,324 AOT files unchanged. Full FitNotes passes all 39 checkpoints with 117 responding process diagnostics and identical UI trees. Warm latency still fails: Calculator M's rendered-state timeout reproduces on the starting source; a separate FitNotes candidate repeat takes 300 ms to open the exercise list versus 309 ms on the baseline. An earlier candidate startup StackOverflowError remains unexplained. History records controls, initial failures and limits; the full performance/application gates remain open.

@@ -438,18 +438,26 @@ export class World {
     const c = this.prog.get(n);
     s = n === "java/lang/Object" || !c ? [] : [...this.vslots(c.sup ?? "java/lang/Object")];
     if (c && !c.isInterface) {
+      const byMethod = new Map<string, string[]>();
+      const index = (key: string) => {
+        const raw = dispatchMethodKey(key), slots = byMethod.get(raw);
+        if (slots) slots.push(key); else byMethod.set(raw, [key]);
+      };
+      for (const key of s) index(key);
       for (const m of c.methods) if (!m.isStatic && !m.isCtor && !(m.flags & ACC.PRIVATE)) {
-        const overrides = s.some(key => {
-          if (dispatchMethodKey(key) !== javaName(m.key)) return false;
+        const overrides = byMethod.get(javaName(m.key))?.some(key => {
           const inherited = c.sup ? symbolicImplFor(this.prog, c.sup, key, true) : undefined;
           return inherited && overridesMethod(this.prog, n, inherited);
         });
-        if (!overrides) s.push(dispatchSlotKey(m));
+        if (!overrides) { const key = dispatchSlotKey(m); s.push(key); index(key); }
       }
       const addIface = (i: string) => {
         const ic = this.prog.get(i);
         if (!ic) return;
-        for (const m of ic.methods) if (!(m.flags & (ACC.STATIC | ACC.PRIVATE)) && !s!.some(key => dispatchMethodKey(key) === javaName(m.key) && !!((symbolicImplFor(this.prog, n, key, true)?.flags ?? 0) & ACC.PUBLIC))) s!.push(javaName(m.key));
+        for (const m of ic.methods) if (!(m.flags & (ACC.STATIC | ACC.PRIVATE))) {
+          const key = javaName(m.key);
+          if (!byMethod.get(key)?.some(slot => !!((symbolicImplFor(this.prog, n, slot, true)?.flags ?? 0) & ACC.PUBLIC))) { s!.push(key); index(key); }
+        }
         ic.ifaces.forEach(addIface);
       };
       for (let k: JClass | undefined = c; k; k = k.sup ? this.prog.get(k.sup) : undefined) k.ifaces.forEach(addIface);
