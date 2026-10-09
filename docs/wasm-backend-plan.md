@@ -10,6 +10,10 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### App-cache scheduling investigation (2026-10-09)
+
+An allocation-free AOT-decision comparison prototype is reverted after eight app controls: it removes about 11 MiB of polling allocations, but candidate frame pacing is usually worse and the cause is unresolved. Production remains at the bounded-ranking checkpoint. All controls complete a roughly six-second automatic cache rebuild during active scrolling. The next experiment should distinguish unchanged compiler demand from actual input inactivity using the existing responsiveness owner, while preserving explicit persistence and shutdown semantics. See the implementation history for full measurements and the rejected patch location; no latency/FPS acceptance is claimed.
+
 ### Compiler and hot-planner allocation checkpoint (2026-10-09)
 
 Worker jobs reuse decoded reference names, preserving fresh initiating-loader/readiness checks and polymorphic prototype boundaries; native cleanup avoids empty-map clearing. A paired renderer profile estimates about 21% less allocation during scrolling, while the reference cache retains more metadata. Unprofiled controls reduce compiler time and input-to-next-presentation proxies, with overlapping FPS and unequal work in the final baseline. Typecheck, all 19 Wasm sections, unit/framework/OSR/smoke checks, targeted hot-refresh/promotion controls, byte-identical AOT and full action/diagnostic captures pass. The intended-response gate, black Mihon launch checkpoint and broader acceptance remain open. See the implementation history for scope and receipts.

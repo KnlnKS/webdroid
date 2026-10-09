@@ -4,6 +4,8 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Latest integrated evidence
 
+- AOT polling snapshot removal was tested and reverted: lower local allocations did not improve app frame pacing across eight controls. Those controls also expose automatic six-second cache rebuilds during active scrolling. Investigate input-aware cache-build scheduling next, preserving explicit persistence and shutdown; the [history](docs/implementation-history.md) records the rejected experiment and evidence limits.
+
 - Compiler jobs reuse decoded references; hot planning retains only bounded winners and avoids repeated ranking/name construction. Matched selection probes preserve targets/order and cut scroll ranking from 36–39 to 27–28 ms; a separate allocation sample falls 232→216 MiB. App controls show a small frame-pacing improvement but mixed input latency, and broader acceptance remains open. Existing core checks, unchanged AOT and full action/diagnostic captures pass; the [history](docs/implementation-history.md) records an unexplained initial unit failure, successful repeats and visual limits.
 
 - Hot planning now indexes allocated classes by their canonical supertypes once. Same-World controls preserve every target/order and cut scroll-window lookup from 70 to 3 ms; serial production controls improve presentation p95 from 25–26 to 20–21 ms and reduce intervals over 25 ms from 39–48 to 19–20 per 15 seconds. The index retains more metadata, input latency still overlaps, and broad FPS/150 ms acceptance remains open. Compiler/unit/framework checks, byte-identical AOT and full action/diagnostic captures pass; see the [history](docs/implementation-history.md) for memory and visual limits.
