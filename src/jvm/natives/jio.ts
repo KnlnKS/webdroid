@@ -6,7 +6,7 @@ import { vcall, after, newObj } from "./jentry";
 import { E, ERRSTR } from "../../native/abi";
 import { readFully, writable } from "../../shell/lazyfile";
 import { vfs } from "../../shell/vfs";
-import { isExternal, mapLive, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory";
+import { isExternal, mapRemote, mapExternal, memoryAt, memorySync, unmapExternal, writeAt } from "./jmemory";
 import { addressSize } from "./jvmruntime";
 import { mem } from "../../native/mem";
 import { syncShared, trackSharedMap } from "../../native/mappings";
@@ -223,7 +223,7 @@ rt.registerJnis("sun/nio/ch/FileChannelImpl", {
     const file = fdFile(fd), source = file?.source ?? javaFdSource(fd), start = Number(position), n = Number(length);
     if (isRemoteFd(fd)) {
       if (prot === MAP_PV) return BigInt(lastError(-E.NOTSUP,"Map failed"));
-      return processMapping(fd,start,n,prot === MAP_RO ? 1 : 3).then(mapping => typeof mapping === "number" ? BigInt(lastError(mapping,"Map failed")) : mapLive(mapping));
+      return processMapping(fd,start,n,prot === MAP_RO ? 1 : 3).then(mapping => typeof mapping === "number" ? BigInt(lastError(mapping,"Map failed")) : mapRemote(mapping));
     }
     if (!source) return BigInt(lastError(-E.INVAL, "Map failed"));
     if (prot === MAP_RO && file?.source && !writable(file.source)) return mapExternal(file.source, start, n);

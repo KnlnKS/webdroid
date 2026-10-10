@@ -26,7 +26,7 @@ class Region {
   private readonly loading: Map<number, Promise<void>>;
   private readonly copies = new Map<string, Uint8Array>();
   guest = 0n;
-  constructor(private readonly source: FileSource, private readonly offset: number, readonly size: number) {
+  constructor(private readonly source: FileSource, private readonly offset: number, readonly size: number, readonly release?: () => Promise<void>) {
     const bySource = pageShared("__wdMappedPages", () => new WeakMap()), key = `${offset}+${size}`;
     let ranges = bySource.get(source), paged = ranges?.get(key);
     if (!ranges) bySource.set(source, ranges = new Map());
@@ -143,7 +143,10 @@ const regionNumber = (address: bigint): number => Math.floor((Number(address) - 
 export function mapExternal(source: FileSource, offset: number, size: number): bigint {
   return addRegion(new Region(source, offset, size))[1];
 }
-export const mapLive = (mapping: ProcessMapping): bigint => addRegion(new LiveRegion(mapping))[1];
+/** another process's file: an immutable one pages in like a local mapping, any other is read and written through its owner */
+export const mapRemote = (mapping: ProcessMapping): bigint => addRegion(mapping.immutable
+  ? new Region({ size: mapping.size, read: (offset, length) => mapping.read(offset, length) }, 0, mapping.size, () => mapping.close())
+  : new LiveRegion(mapping))[1];
 export const forceExternal = (address: bigint): void | Promise<void> => { const region = regionAt(address); if (region instanceof LiveRegion) return region.force(); };
 export const isLive = (address: bigint): boolean => isExternal(address) && regionAt(address) instanceof LiveRegion;
 export function unmapExternal(address: bigint, size?: number): void | Promise<void> {
@@ -155,6 +158,7 @@ export function unmapExternal(address: bigint, size?: number): void | Promise<vo
   }
   if (region instanceof Region && region.guest) mem.unmapVa(region.guest, region.size);
   regions[n] = undefined;
+  if (region instanceof Region) return region.release?.();
 }
 const hostAddresses = new WeakMap<Int8Array, bigint>();
 const hostFreed = new FinalizationRegistry<number>((n) => { regions[n] = undefined; });

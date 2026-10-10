@@ -4,6 +4,7 @@ import { javaCloseFd, javaDupFd, javaFcntlFd, javaFdStat, javaOpenFd, javaPreadF
   detachFdScope, fdBase, installFile, type OpenFile } from "../native/fs";
 import { vfs, type VfsFile } from "./vfs";
 import { SharedFile, type SharedFileLease } from "./shared-file";
+import { writable } from "./lazyfile";
 
 export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "ashmemProtect"; fd: number; prot: number }
@@ -26,7 +27,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "mappingPages"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
 export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
-  mapping?: { region: number; offset: number; length: number; prot: number };
+  mapping?: { region: number; offset: number; length: number; prot: number; immutable: boolean };
   pages?: Omit<SharedFileLease,"release"> };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
 type Descriptor = { fd: number; file: OpenFile; staged?: boolean; incoming?: boolean };
@@ -187,7 +188,9 @@ export class FileDescriptors {
           session.mappings.set(token,{fd:retained,file,offset,length,prot});
           let region = this.regions.get(file.content);
           if (region === undefined) this.regions.set(file.content,region = this.nextRegion++);
-          reply = {result:token,mapping:{region,offset,length,prot}}; break;
+          // what the file holds cannot change, so the process may page it in once (jmemory.ts Region)
+          const immutable = !(prot & 2) && !file.content.ashmem && !!file.content.source && !writable(file.content.source);
+          reply = {result:token,mapping:{region,offset,length,prot,immutable}}; break;
         }
         case "read": case "pread": {
           if (!Number.isSafeInteger(operation.length) || operation.length < 0) return {result:-E.INVAL};

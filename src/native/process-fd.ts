@@ -121,7 +121,7 @@ export function processIoctlIntFd(fd: number, command: number): number | Promise
 }
 
 /** A live owner lease; a mapping outlives the descriptor that acquired it. */
-export type ProcessMapping = { size: number; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; force(): Promise<void>; close(): Promise<void> };
+export type ProcessMapping = { size: number; immutable: boolean; read(offset: number, length: number): Promise<Uint8Array>; write(offset: number, bytes: Uint8Array): Promise<void>; force(): Promise<void>; close(): Promise<void> };
 export async function processMapping(fd: number, offset: number, length: number, prot: number): Promise<ProcessMapping | number> {
   const remote = openFd(fd)?.remote, calls = remote?.calls ?? descriptorTransport.importCalls;
   if (!calls) return -E.NOTSUP;
@@ -134,6 +134,7 @@ export async function processMapping(fd: number, offset: number, length: number,
   const lease = reply.result;
   return {
     size:length,
+    immutable:!!reply.mapping?.immutable,
     async read(offset,length) {
       const reply = await calls().fileDescriptor({kind:"mappingRead",fd:lease,offset,length});
       if (reply.result < 0) throw new Error(`shared mapping read: ${-reply.result}`);

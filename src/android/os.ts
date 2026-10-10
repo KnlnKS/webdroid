@@ -24,7 +24,7 @@ import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWr
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
 import { type JBuffer, isBuffer, readBufferBytes, writeBufferBytes, capacity, elementShift } from "../jvm/natives/jnio";
-import { isExternal, mapLive, unmapExternal } from "../jvm/natives/jmemory";
+import { isExternal, mapRemote, unmapExternal } from "../jvm/natives/jmemory";
 import { uptimeMillis, wallMillis } from "../guest-clock";
 
 // APerformanceHint as the reference AVD's power HAL answers it (dumpsys performance_hint: HAL
@@ -344,7 +344,7 @@ const linux: Record<string, (...args: never[]) => unknown> = {
         if (!(flags & 1)) throw errno("mmap",E.NOTSUP);
         const mapping = yield* awaited(processMapping(fd,Number(offset),size,prot));
         if (typeof mapping === "number") throw errno("mmap",-mapping);
-        return mapLive(mapping);
+        return mapRemote(mapping);
       }
       const source = anonymous ? null : javaFdSource(fd);
       if (!anonymous && !source) throw errno("mmap", E.BADF);
