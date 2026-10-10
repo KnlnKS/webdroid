@@ -362,6 +362,8 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
+  // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
+  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
   if (profile) { await send("Profiler.enable", {}, sessionId); await send("Profiler.setSamplingInterval", { interval: 200 }, sessionId); await send("Profiler.start", {}, sessionId); }
   await send("Page.navigate", { url: url.href }, sessionId);
@@ -391,6 +393,8 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   const { targetId } = await send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
+  // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
+  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: `addEventListener("DOMContentLoaded", async () => {
     while (!globalThis.wd) await new Promise((r) => setTimeout(r, 50));
     await globalThis.wd.reset(); document.title = "RESET"; });` }, sessionId);
