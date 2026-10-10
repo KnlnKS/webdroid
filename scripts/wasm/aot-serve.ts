@@ -20,7 +20,8 @@ function currentSource(): string {
 export function aotManifest(): Response {
   const path = join(AOT_ROOT, "current.json");
   const manifest = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as AotManifest : undefined;
-  if (!manifest || manifest.source !== currentSource()) return new Response("no platform build for these sources; run: bun run aot", { status: 404 });
+  // WEBDROID_AOT_STALE=1 serves the last build to sources whose edits leave it unchanged, such as diagnostics outside the compiler
+  if (!manifest || manifest.source !== currentSource() && !process.env.WEBDROID_AOT_STALE) return new Response("no platform build for these sources; run: bun run aot", { status: 404 });
   return Response.json(manifest, { headers: { "cache-control": "no-cache" } });
 }
 
