@@ -43,7 +43,6 @@ declare global { interface Window { __wdCold?: { enabled: boolean; stats: World[
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
 const START_MS = 15_000;
-if (starting) setTimeout(() => { starting = false; }, START_MS);
 
 /** timers and turns of the event loop for threads that wait: the shell's own, so a thread's wait is a timed park an idle observer ignores and a yield keeps the main looper's order */
 const hostLoop: HostLoop = {
@@ -118,6 +117,9 @@ export async function bootWasmTier(): Promise<TierBackend> {
   // The hooks come first and the build is fetched after them: Java is not run before the tier is ready (the zygote waits for the app's code), and the page fetches the build while it
   // downloads the package
   const opening = Promise.all([openAot(), fetchPlatformJars()]);
+  // a process that never presents a frame, such as a service's, is launched when the start window ends
+  const launched = () => { starting = false; if (world) code?.watch(world); };
+  setTimeout(launched, START_MS);
   // The World is made when Java is first needed, so that the app's dex files are in its Program from the start: only then can the app build a previous launch saved be attached
   const current = (): World => {
     if (!platform) throw new Error("the Wasm tier is not ready");
@@ -143,7 +145,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       appDexes.push(dex);
       world?.addDexes([dex]);
     },
-    launched() { starting = false; if (world) code?.watch(world); },
+    launched,
     async appCode(roots) {
       if (world || !store) return;
       // System realms have no app DEX, but their first Java entry still needs the

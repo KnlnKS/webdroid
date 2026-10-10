@@ -1562,7 +1562,9 @@ export class World {
     const same = (a: Loader[], b: Loader[]) => a.length === b.length && a.every((l, i) => l === b[i]);
     if (same(priorBefore, before) && same(priorAfter, after)) return;
     const changed = this.prog.libraryChanges(loader, before, after);
-    this.rebindResolution(loader, changed, () => this.prog.libraries(loader, before, after, changed), () => this.prog.libraries(loader, priorBefore, priorAfter, changed), "Class loader libraries");
+    // An app build attached before Java bound the libraries it was compiled under stays valid once they are.
+    this.rebindResolution(loader, changed, () => this.prog.libraries(loader, before, after, changed), () => this.prog.libraries(loader, priorBefore, priorAfter, changed), "Class loader libraries",
+      () => loader === this.prog.root && !!this.aot?.boundAsBuilt());
   }
   /** The app's loader resolves through Java (loaders.ts standardPath): code of the default namespace linked as the Program resolves is undone, and its references resolve as they run. */
   dynamicRoot(): void {
@@ -1587,7 +1589,7 @@ export class World {
     return resolveClass(this, loader, name, owner);
   }
   /** applies `change`, which resolves the `changed` names differently, unless that would change linked dispatch or hierarchy */
-  private rebindResolution(loader: Loader, changed: ReadonlySet<string>, change: () => string[], undo: () => string[], reason: string): void {
+  private rebindResolution(loader: Loader, changed: ReadonlySet<string>, change: () => string[], undo: () => string[], reason: string, keepApp = () => false): void {
     // The graph still changes what later definitions resolve to, in the compile worker too.
     if (!changed.size) { change(); this.opts.compiler?.namespaces(); return; }
     const targets = new Map<Assumption, { target: MethodInfo; declared: MethodInfo }>();
@@ -1659,7 +1661,7 @@ export class World {
     for (let b = 0; b < this.blockClass.length; b++) if (refreshed.has(this.blockClass[b])) {
       for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
     }
-    if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();
+    if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !keepApp()) this.aot?.unbindApp();
     this.refreshLate();
     const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {

@@ -57,7 +57,7 @@ test('quiet verdict-only changes persist once and obsolete verdicts are removed'
   const code = await prepareApp({dexes: [], aot: {base: 'https://appcode-verdict.invalid/', key: 'platform'} as FetchStore,
     persist, roots: {launch: []}, spawn: () => { const port = new CompilePort(); ports.push(port); return port; }});
   let verdicts: Verdict[] = [['java/lang/Object.hashCode()I', 'java/lang/Object', 'hashCode()I', true]];
-  const world = {demand: {methods: new Set(), classes: [], infos: []}, aot: {verdictList: () => verdicts}} as unknown as World;
+  const world = {demand: {methods: new Set(), classes: [], infos: []}, aot: {verdictList: () => verdicts}, prog: {root: {}}} as unknown as World;
   const timeout = spyOn(globalThis, 'setTimeout').mockImplementation(((f: () => void) => {
     timers.push(f); return timers.length;
   }) as typeof setTimeout);

@@ -15,7 +15,7 @@ import type { SymbolicSite } from "../compiler/sites";
 import type { ClassRt, World } from "./world";
 import type { InfoRecord } from "./classes";
 import type { DexFile } from "../../jvm/dex";
-import { methodCount, type MethodInfo } from "../compiler/program";
+import { methodCount, type Loader, type MethodInfo } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
 import { methodOf } from "../compiler/ids";
 
@@ -123,6 +123,8 @@ export interface AppIndex {
   dModules: number;
   /** what the build was asked to include beyond the app's likely methods: a build made later includes it too */
   demand: Demand;
+  /** the root namespace's library graph its code was compiled under (rootLibraries) */
+  libraries?: string;
 }
 /** the module of synthetic functions: what it relies on, and the functions it holds */
 export interface SHeader extends UnitHeader { names: string[] }
@@ -305,12 +307,27 @@ export class AotRuntime {
     return sigs;
   }
   get appClassCount(): number { return this.rest.length; }
+  /** the root namespace's libraries by loader number and dexes, and theirs */
+  rootLibraries(): string {
+    const prog = this.w.prog, dexes = new Map<Loader, string[]>(), seen = new Set<Loader>();
+    for (const [dex, owner] of prog.loadedDexes()) (dexes.get(owner) ?? dexes.set(owner, []).get(owner)!).push(dexSig(dex));
+    const graph = (l: Loader): string => {
+      if (seen.has(l)) return `${l.id}`;
+      seen.add(l);
+      return `${l.id}[${(dexes.get(l) ?? []).join(",")}](${(l.before ?? []).map(graph).join(" ")}|${(l.after ?? []).map(graph).join(" ")})`;
+    };
+    return `${(prog.root.before ?? []).map(graph).join(" ")}|${(prog.root.after ?? []).map(graph).join(" ")}`;
+  }
+  private appLibraries?: string;
+  /** whether the root's libraries are now those the attached app build was compiled under */
+  boundAsBuilt(): boolean { return this.appLibraries !== undefined && this.appLibraries === this.rootLibraries(); }
   /** adds the app build in `store` to the platform build: its numbering continues the World's, which must not have numbered anything since the platform build was attached, and its
    *  Program must start with the dexes it was made from; false (and nothing changed) otherwise */
   extend(app: AppIndex, store: AotStore): boolean {
     const w = this.w, sigs = this.appDexes(app.classes);
     if ((app.deopt ?? 0) !== this.deopt || w.opts.cold && app.deopt !== DEOPT_ABI || app.version !== APP_VERSION || this.rest.length < app.classes || !sameMarks(w.numbering(), app.base) || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) || !w.adopt(app.numbering)) return false;
     this.appClasses = new Set(this.rest.slice(0, app.classes));
+    this.appLibraries = app.libraries;
     // Verdicts cover the build's whole app, not an arbitrary prefix of this World's app.
     if (app.classes === this.rest.length) for (const [key, tc, tk, stands] of app.demand.verdicts ?? []) this.verdicts.set(key, [tc, tk, stands]);
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);

@@ -11,7 +11,8 @@ import type { FetchStore } from "../link/aotstore";
 import { buildFiles, appKey, SavedBuild, type Persist } from "./persist";
 import { fetchBundle } from "./bundle";
 import { CompileClient, containers, type WorkerPort } from "./compiler";
-import type { BuildRoots, CompileResponse } from "./compile-serve";
+import type { BuildRoots, CompileResponse, Containers } from "./compile-serve";
+import type { Loader, LoaderId, LoaderSnapshot } from "../compiler/program";
 
 export interface AppCodeRequest {
   /** the app's dex files */
@@ -119,7 +120,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   }
   async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
     if (closed || fresh(world) < Math.max(1, min)) return undefined;
-    const at = size(), decisions = verdicts, built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()], verdicts: decisions }, hostClasses);
+    const at = size(), decisions = verdicts, built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()], verdicts: decisions }, hostClasses, rootLibraries(world));
     builds.unshift(built);
     if (built.kept) { covered = at; coveredVerdicts = verdictMap(decisions); }
     return built;
@@ -155,6 +156,27 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   return code;
 }
 
+type RootLibraries = { loaders: LoaderSnapshot; scopes: [LoaderId, Containers][] };
+/** The libraries the app's loader searches, which code built for it resolves through: the loader numbering, their graph and their dexes. */
+function rootLibraries(world: World): RootLibraries | undefined {
+  const prog = world.prog, closure = new Set<Loader>();
+  const add = (l: Loader) => {
+    if (l === prog.boot || closure.has(l)) return;
+    closure.add(l);
+    for (const library of [...l.before ?? [], ...l.after ?? []]) add(library);
+  };
+  for (const library of [...prog.root.before ?? [], ...prog.root.after ?? []]) add(library);
+  if (!closure.size) return undefined;
+  const groups = new Map<LoaderId, DexFile[]>();
+  for (const [dex, loader] of prog.loadedDexes()) if (closure.has(loader)) {
+    const id = prog.loaderId(loader);
+    (groups.get(id) ?? groups.set(id, []).get(id)!).push(dex);
+  }
+  const ids = new Set<LoaderId>([0, ...[...closure].map(l => prog.loaderId(l))]), snapshot = prog.loaderSnapshot();
+  return { loaders: { ...snapshot, libraries: snapshot.libraries.filter(([id]) => ids.has(id)), initiated: snapshot.initiated.filter(([id]) => ids.has(id)) },
+    scopes: [...groups].map(([id, dexes]) => [id, containers(dexes)]) };
+}
+
 /** A build owns a fresh numbering context; its worker is retired after transferring the result. */
 class Builder {
   private closed = false;
@@ -164,7 +186,7 @@ class Builder {
   constructor(private req: AppCodeRequest, private key: string) {}
   get busy(): boolean { return !!this.waiting; }
   /** builds with `demand`; the worker checks that the host's classes it applies are the ones `hostClasses` names */
-  build(demand: Demand, hostClasses?: string[]): Promise<Built> {
+  build(demand: Demand, hostClasses?: string[], libraries?: RootLibraries): Promise<Built> {
     if (this.closed) return Promise.reject(new Error("App code closed"));
     if (this.waiting) return Promise.reject(new Error("An app build is already pending"));
     const result = new Promise<Built>((resolve, reject) => {
@@ -180,7 +202,8 @@ class Builder {
         const list = containers(this.req.dexes);
         port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
           if (this.closed || this.port !== port) return;
-          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand, oneShot: true }, list.map(([, b]) => b.buffer as ArrayBuffer));
+          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand, oneShot: true, ...libraries },
+            [list, ...libraries?.scopes.map(([, dexes]) => dexes) ?? []].flatMap(dexes => dexes.map(([, b]) => b.buffer as ArrayBuffer)));
           if (data.type === "failed") this.close(new Error(data.message), false);
           if (data.type !== "built") return;
           const pending = this.waiting;

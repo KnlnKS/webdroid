@@ -125,5 +125,5 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
     }
     at = end;
   }
-  return { index: { version: APP_VERSION, deopt: aot.deopt, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand }, files };
+  return { index: { version: APP_VERSION, deopt: aot.deopt, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand, libraries: aot.rootLibraries() }, files };
 }

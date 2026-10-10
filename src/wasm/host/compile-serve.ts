@@ -75,11 +75,14 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const setup = beginCompile("residual.wasmSetup");
     try {
     const program = new Program(appDexes, platform);
-    if (req.loaders) { program.followLoaderParents(req.loaders.parents); program.dynamicRoot = !!req.loaders.dynamicRoot; }
-    for (const [id, dexes] of req.scopes ?? []) program.add(open(dexes), program.loaderAt(id));
-    if (req.loaders) {
-      for (const [id, before, after] of req.loaders.libraries) program.libraries(program.loaderAt(id), before.map(id => program.loaderAt(id)), after.map(id => program.loaderAt(id)));
-      for (const [id, name, key] of req.loaders.initiated) program.initiate(program.loaderAt(id), name, key);
+    // an app build follows the loaders once its World has started, below
+    if (!req.build) {
+      if (req.loaders) { program.followLoaderParents(req.loaders.parents); program.dynamicRoot = !!req.loaders.dynamicRoot; }
+      for (const [id, dexes] of req.scopes ?? []) program.add(open(dexes), program.loaderAt(id));
+      if (req.loaders) {
+        for (const [id, before, after] of req.loaders.libraries) program.libraries(program.loaderAt(id), before.map(id => program.loaderAt(id)), after.map(id => program.loaderAt(id)));
+        for (const [id, name, key] of req.loaders.initiated) program.initiate(program.loaderAt(id), name, key);
+      }
     }
     w = new World(program, { intrinsics: env.intrinsics, natives: env.natives, heapUsed: env.heapUsed, hostWhole: env.hostWhole, compileOnly: true,
       ...index && { aot: { get: (file) => (file === "index.json" ? index : undefined) }, ...req.aot!.app && { app: { index: req.aot!.app, store: { get: () => undefined } } } } });
@@ -88,8 +91,13 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     for (const definition of req.proxies ?? []) defineProxy(w, definition);
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     } finally { endCompile(setup); }
-    // an app build numbers from where a World starts, before the page's numbering is followed
+    // an app build numbers from where a World starts, before the page's numbering is followed; its app's libraries are bound after, as the page's loader bound them
     roots = req.build;
+    if (roots && req.loaders) {
+      w.prog.followLoaderParents(req.loaders.parents);
+      for (const [id, dexes] of req.scopes ?? []) w.addDexes(open(dexes), w.prog.loaderAt(id));
+      followLoaders(w, req.loaders);
+    }
     if (roots) {
       build(req.demand ?? { methods: [], classes: [], infos: [] }, req.oneShot, job);
       if (req.oneShot) return performance.now() - t0;
