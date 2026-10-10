@@ -122,7 +122,7 @@ export function wasmEntry(w: World): Entry {
     return bridge.toJava(obj, OBJECT) as object;
   };
   const alloc = (cls: string) => call("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); }) as object | Promise<object>;
-  const init = (cls: string) => enter(() => call("e:init:" + cls, [], "V", (cx, c) => { cx.emitEnsure(c, cls); })) as void | Promise<void>;
+  const init = (cls: string) => w.needsInit(cls) ? enter(() => onStrand((s) => w.invoker([], "V", true)(s, w.ensureSlot(cls), -1))) as void | Promise<void> : undefined;
 
   /** the static field `name` (of type `desc`, when given) that `cls` declares or inherits */
   const staticOf = (cls: string, name: string, desc?: string): FieldInfo | undefined => {

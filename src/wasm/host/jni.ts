@@ -94,8 +94,8 @@ export function wasmJni(w: World): JniVm {
     assignable: (from, to) => isSub(from.name, to.name),
     isInstance: (o, c) => isSub(w.classNameOf(o as object), c.name),
     init(c) {
-      if (!prog.get(c.name)) return null;
-      const done = nest((s) => w.callFn("e:init:" + c.name, [], "V", (cx, code) => { cx.emitEnsure(code, c.name); })(s));
+      if (!prog.get(c.name) || !w.needsInit(c.name)) return null;
+      const done = nest((s) => w.invoker([], "V", true)(s, w.ensureSlot(c.name), -1));
       return done instanceof Promise ? done.then(() => {}) : null;
     },
 

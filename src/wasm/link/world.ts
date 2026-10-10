@@ -1977,6 +1977,17 @@ export class World {
     }
     return f as never;
   }
+  /** calls the method in table slot `slot`, first running the class initializer in slot `ensure` unless it is -1: one helper per signature serves every method of it */
+  invoker(params: Kind[], ret: Kind | "V", suspend: true): (s: Strand, slot: number, ensure: number, ...a: unknown[]) => unknown;
+  invoker(params: Kind[], ret: Kind | "V", suspend?: false): (slot: number, ensure: number, ...a: unknown[]) => unknown;
+  invoker(params: Kind[], ret: Kind | "V", suspend = false): (...a: any[]) => unknown {
+    const name = `inv${suspend ? "s" : ""}:${params.join("")}>${ret}`, all: Kind[] = ["I", "I", ...params];
+    const body = (cx: Compiler, c: Code, arg: (i: number) => void) => {
+      arg(1); c.i32(0).raw(OP.i32_ge_s).if_(); arg(1); c.callIndirect(cx.sig([], "V")).end();
+      params.forEach((_, i) => arg(i + 2)); arg(0); c.callIndirect(cx.sig(params, ret));
+    };
+    return suspend ? this.callFn(name, all, ret, body) : this.hostFn(name, all, ret, (cx, c) => body(cx, c, (i) => { c.lget(i); }));
+  }
   private callFns = new Map<string, (s: Strand, ...a: any[]) => unknown>();
   /** A cold activation keeps the same physical caller frames across its slow
    * operations. Its DEX PCs are resolved from the live activation when read. */

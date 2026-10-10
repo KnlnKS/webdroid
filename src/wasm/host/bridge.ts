@@ -259,13 +259,10 @@ export class Bridge implements HostBridge {
     let entry = cache.get(m);
     if (entry?.cls === m.cls && entry.key === m.key) return entry;
     const kinds: Kind[] = [...(m.isStatic ? [] : ["L" as Kind]), ...m.params.map(kindOf)], rk = m.ret === "V" ? "V" : kindOf(m.ret);
-    const body = (cx: Compiler, c: import("../compiler/code").Code, arg: (i: number) => void) => {
-      if (m.isStatic) cx.emitEnsure(c, m.cls);
-      kinds.forEach((_, i) => arg(i));
-      cx.callMethod(c, m);
-    };
-    const call = suspend ? this.w.callFn(`c:${m.cls}.${m.key}`, kinds, rk, body)
-      : this.w.hostFn(`b:call:${m.cls}.${m.key}`, kinds, rk, (cx, c) => body(cx, c, i => { c.lget(i); }));
+    const slot = this.w.slotOf(m), ensure = m.isStatic && this.w.needsInit(m.cls) ? this.w.ensureSlot(m.cls) : -1;
+    let call: Fn;
+    if (suspend) { const invoke = this.w.invoker(kinds, rk, true); call = (s: Strand, ...a: unknown[]) => invoke(s, slot, ensure, ...a); }
+    else { const invoke = this.w.invoker(kinds, rk); call = (...a: unknown[]) => invoke(slot, ensure, ...a); }
     cache.set(m, entry = { cls: m.cls, key: m.key, call, rk });
     return entry;
   }
