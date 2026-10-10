@@ -2,7 +2,7 @@ import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // One Compiler builds one Wasm module (a unit of methods, or a synthetic body) against a World; see link/world.ts for the linker.
 import { ModuleBuilder, T, ref, refNull, uleb, type VT, type FunctionType } from "./wasmbin";
 import { Code, OP } from "./code";
-import { Program, kindOf, type Kind, type MethodInfo } from "./program";
+import { ACC, Program, kindOf, type Kind, type MethodInfo } from "./program";
 import { mid } from "./ids";
 import { H, elemKindOf, type ElemKind } from "./consts";
 import { declareSymbolicSites, type SymbolicSite } from "./sites";
@@ -355,7 +355,9 @@ export class Compiler implements Base {
     if (!this.assumer) return "many";
     const t = this.w.cha.targets(decl, name, desc);
     if (t.length !== 1) return "many";
-    this.assumptions.push([decl, name, desc, t[0], this.assumer]);
+    // ART links no subclass of a final class and no override of a final method, so no later class can change these.
+    const d = this.prog.get(decl);
+    if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
     return t[0];
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */
