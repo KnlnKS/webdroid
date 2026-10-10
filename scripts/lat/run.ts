@@ -10,7 +10,8 @@
 // the compiled code the first launch persisted.
 // A scenario is scripts/lat/scenarios/<name>.json:
 //   { "apk": "FitNotes.apk", "steps": [{"tap":[x,y]} | {"text":"Save"} | {"m":"name","tap":[x,y] | "text":…} | {"wait":ms}
-//     | {"swipe":[x1,y1,x2,y2,ms]} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo)
+//     | {"swipe":[x1,y1,x2,y2,ms]} | {"fps":[x1,y1,x2,y2],"ms":8000,"name":"…"} | {"pick":"photo.jpg"}] }   (pick offers a synthetic photo;
+//     fps scrolls back and forth for ms and reports presentation intervals and page long tasks)
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
 // reports root frame proxies and actual app presentation separately. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
@@ -33,7 +34,7 @@ const { flag, option } = consume(args);
 const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), engine = option("--engine") ?? "chrome";
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 const launchQuery = new URLSearchParams(query);
-if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "js");
+if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "wasm");
 if (!launchQuery.has("processMode")) launchQuery.set("processMode", "iframe");
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
 if (!["js", "wasm"].includes(launchQuery.get("tier")!)) throw new Error("lat tier must be js or wasm");
@@ -50,7 +51,8 @@ type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; c
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
 type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
   idle: number; perf: Record<string, number>; marks: string[] };
-type Capture = { launch?: Launch; taps: Tap[]; processesBefore?: unknown; processesAfter?: unknown;
+type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number };
+type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: unknown; processesAfter?: unknown;
   presentation?: { firstApp: unknown; renderedApp?: unknown };
   codeReadiness?: { phase: "saved" | "attached"; realms: unknown[] }; error?: string };
 
@@ -168,7 +170,8 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
           if (w.__wdLatMatches(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
         }
       } catch (e) { error = String(e); break; }
-      await sleep(10);
+      // the next probe follows the next app frame: probing runs Java on the app's main looper
+      for (const seen = frameCount, until = performance.now() + 100; frameCount === seen && performance.now() < until;) await sleep(4);
     }
     return { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable", probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
   };
@@ -238,6 +241,26 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       for (let i = 1; i <= n; i++) { await sleep(ms / n); ev("pointermove", x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n); }
       ev("pointerup", x2, y2);
       await sleep(300); await idle();
+      continue;
+    }
+    if (s.fps) {
+      // continuous scrolling for s.ms: app presentation intervals and page long tasks, no readback in the window
+      const [x1, y1, x2, y2] = s.fps, long: number[] = [];
+      const lt = new PerformanceObserver(list => { for (const e of list.getEntries()) long.push(e.duration); });
+      try { lt.observe({ type: "longtask" }); } catch { /* not every engine reports long tasks */ }
+      const times: number[] = observer.times = [], end = performance.now() + (s.ms ?? 8000);
+      for (let flip = false; performance.now() < end; flip = !flip) {
+        const [ax, ay, bx, by] = flip ? [x2, y2, x1, y1] : [x1, y1, x2, y2], n = 30;
+        ev("pointerdown", ax, ay);
+        for (let i = 1; i <= n; i++) { await sleep(8); ev("pointermove", ax + (bx - ax) * i / n, ay + (by - ay) * i / n); }
+        ev("pointerup", bx, by);
+        await sleep(150);
+      }
+      observer.times = null; lt.disconnect();
+      const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b), q = (p: number) => gaps.length ? Math.round(gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))] * 10) / 10 : null;
+      (result.fps ??= []).push({ m: s.name ?? "scroll", ms: s.ms ?? 8000, presents: times.length, fps: Math.round(times.length / ((s.ms ?? 8000) / 1000) * 10) / 10,
+        p50: q(0.5), p95: q(0.95), p99: q(0.99), over25: gaps.filter(g => g > 25).length, longTasks: long.length, longTaskMs: Math.round(long.reduce((a, b) => a + b, 0)) });
+      await idle();
       continue;
     }
     let [x, y] = s.tap ?? [];
@@ -414,6 +437,7 @@ for (const name of names) {
       const detail = Object.entries(t.perf).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");
       console.log(`${over ? "FAIL" : "ok  "} ${name.padEnd(12)} ${t.m.padEnd(14)} ${String(t.intended === null ? "none" : Math.round(t.intended)).padStart(5)} ms  ${detail}`);
     }
+    for (const f of row.fps ?? []) console.log(`     ${name.padEnd(12)} ${f.m.padEnd(14)} ${String(f.fps).padStart(5)} fps p50=${f.p50} p95=${f.p95} p99=${f.p99} >25ms=${f.over25} longTasks=${f.longTasks}/${f.longTaskMs}ms`);
   } catch (e) {
     failed = true;
     row.error = e instanceof Error ? e.message : String(e);
