@@ -371,8 +371,8 @@ const makers = new Map<string, Maker>();
 /** one function per shape: a native runs under try/catch so a Java throwable it raises becomes a Wasm exception, and a native that
  *  suspends (answers a Promise) is reported, not mistaken for a value; array parameters become views, an array result is stored, and
  *  other references are turned into host values for the call and back into Java values after it (bridge.ts).
- *  A Suspending native is the same in an async function: it works on private copies of its arrays, and the Bridge scope it opened is set
- *  aside while it waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
+ *  A Suspending native works on private copies of its arrays; when it answers a Promise, the Bridge scope it opened is set aside while it
+ *  waits and taken up again when it resumes, since other strands open and close theirs meanwhile. */
 function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Parameters<Maker>[2], view: Parameters<Maker>[3], put: Parameters<Maker>[4], B: HostBridge, X: Aux, susp: boolean): HostFn {
   const parked = parkable(p), objects = p.args.map((d) => !p.raw && isRef(d) && d !== STRING && !isPrimArray(d)), // a native that takes a long may be handed the address of a Java array: it reaches the array by `deref` (a copy of its own), which is stored back when the native returns
   bridged = objects.some(Boolean) || p.retRef !== null || p.initializes !== null || (!p.raw && p.args.includes("J"));
