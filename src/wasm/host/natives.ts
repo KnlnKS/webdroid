@@ -398,10 +398,14 @@ function wrapper(p: Plan, f: HostFn, raise: Parameters<Maker>[1], suspended: Par
     const zero = p.ret === T.i64 ? "0n" : p.ret === T.externref ? "null" : p.ret === null ? "undefined" : "0", done = `try{r=v;${toJava}${result}}catch(e){return raise(e)}finally{${scope[1]}}`;
     const park = `if(r instanceof Promise){if(!X.canWait())return suspended();const back=${bridged ? "B.hold()" : "null"};X.park(r.then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}if(X.owes()){const back=${bridged ? "B.hold()" : "null"};X.yield(Promise.resolve(r).then((v)=>{back?.();${done}},(e)=>{back?.();${scope[1]};return raise(e)}));return ${zero}}`;
     const failure = lands(p) ? `try{return raise(e)}catch(error){return {own:${susp ? "own" : "[]"},result:null,value:${p.retArray ? "-1" : zero},error}}` : "return raise(e)";
-    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"};try{r=await r}catch(e){back?.();throw e}back?.()}` : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
-    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return ${susp ? "async " : ""}function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${arrayPre.join("")}${susp ? "X.release(own);" : ""}${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};${failure}}
-try{${wait}${toJava}}catch(e){${failure}}finally{${scope[1]}}
-${lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result}}`) as Maker;
+    const returned = lands(p) ? `return {own:${susp ? "own" : "[]"},result:${p.retArray ? "r" : "null"},value:${p.retArray ? "r===null?-1:r.length" : "r"}}` : result;
+    // a Suspending native answers a Promise only when it waits: a value answered at once leaves the strand on its stack
+    const wait = susp ? `if(r instanceof Promise){const back=${bridged ? "B.hold()" : "null"};return(async()=>{try{try{r=await r}catch(e){back?.();throw e}back?.();${toJava}}catch(e){${failure}}finally{${scope[1]}}
+${returned}})()}`
+      : parked ? park : "if(r instanceof Promise){r.catch(()=>{});return suspended();}";
+    make = new Function("f", "raise", "suspended", "view", "put", "B", "D", "RD", "CLS", "X", "S", "K", `"use strict";return function(${names.join(",")}){K.n++;${susp ? "const own=[];" : ""}${scope[0]};let r;try{${arrayPre.join("")}${susp ? "X.release(own);" : ""}${pre.join("")}r=${call}}catch(e){S(e);${scope[1]};${failure}}
+${susp ? wait : ""}try{${susp ? "" : wait}${toJava}}catch(e){${failure}}finally{${scope[1]}}
+${returned}}`) as Maker;
     makers.set(key, make);
   }
   return make(f, raise, suspended, view, put, B, p.args, p.retRef, p.initializes, X, reportSuspendError, crossings);
