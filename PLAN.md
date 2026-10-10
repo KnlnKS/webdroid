@@ -1,8 +1,10 @@
-# Webdroid status — 2026-10-09
+# Webdroid status — 2026-10-10
 
 The current code runs unchanged APK and bundled library bytecode in the browser. This file tracks open work and the latest relevant gates. [Implementation history](docs/implementation-history.md) records failure mechanisms, measurements and evidence limits; [AGENTS.md](AGENTS.md) defines working and verification rules. Historical branch plans and intermediate runs remain in Git history.
 
 ## Latest integrated evidence
+
+- Wasm warm launches now link the app's default namespace statically under a standard app loader. Rebinds touch only names whose library lookup changes, and background processes persist app builds compiled under their library graph. Warm Mihon instantiates 4,661 rather than 80,305 modules (first frame about 8.5 s rather than 11.2 s), and warm Calculator passes every gated tap. Mihon's "next" tap (206–227 ms) still fails, because microG processes share the page thread. Worker-mode isolation is blocked by native `MAP_SHARED` over remote fds. See the [history](docs/implementation-history.md).
 
 - Resolved symbolic operations now share a bounded per-World cache before compiler/module construction. Calculator's first-digit module count falls 27%; repeated post-GC renderer heap falls 9.6–10.7 MiB for Calculator and about 2.3 MiB for FitNotes. Tap latency remains mixed and the Calculator limit still fails. Core/unit/framework checks, all 19 Wasm sections, unchanged rebuilt AOT and full both-source app captures pass their action/diagnostic checks; visual limits are recorded in the [history](docs/implementation-history.md). Shared-thread background validation and certified Worker performance controls remain open.
 

@@ -10,6 +10,16 @@ This is a report plus a staged plan for a different coding agent to execute.
 
 ## Recovery status (2026-10-09)
 
+### Warm-launch linking checkpoint (2026-10-10)
+
+The app's default namespace links statically under a standard `PathClassLoader`. Library binds rebind only the names whose lookup moves. Final classes and methods record no CHA assumptions. Background processes such as microG services now refine and persist app builds compiled under their library graph. Warm Mihon instantiates 4,661 rather than 80,305 modules and launches in about 8.5 s rather than 11.2 s. Warm Calculator passes every gated tap. Mihon "next" (206–227 ms) still fails because microG work shares the page thread. Next steps:
+
+1. Keep app-build code valid across a matching library bind instead of invalidating refreshed classes.
+2. Make `lat --warm` settle every realm.
+3. Support native `MAP_SHARED` over remote fds so `processMode=worker` can isolate secondary processes.
+
+The [history](implementation-history.md) records measurements and limits.
+
 ### Resolved-operation reuse checkpoint (2026-10-09)
 
 A per-World 2,048-entry cache reuses successful symbolic-operation functions before compiler/module construction, preserving each site's lazy resolution, caller/loader identity, ABI/aliasing, initialization guards and live dispatch. Core accounting/lifetime checks, all 19 Wasm sections, unit/cold/framework checks and zero-failure Calculator/FitNotes smokes pass; all 4,324 rebuilt AOT payloads are unchanged. Matched warm controls reduce Calculator's first-digit modules by 27% and renderer post-GC heap by 9.6–10.7 MiB; FitNotes saves about 2.3 MiB. Latency is mixed and Calculator still fails the 150 ms gate. Both-source full app captures render all 64 checkpoints with clean diagnostics; the history records cursor, tiny pixel, empty-face and variable-scroll differences. No FPS gain or broad acceptance is claimed. Next: address shared-thread background validation with a certified Worker readiness/compiler protocol and matched isolation controls.
