@@ -248,17 +248,22 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       const [x1, y1, x2, y2] = s.fps, long: number[] = [];
       const lt = new PerformanceObserver(list => { for (const e of list.getEntries()) long.push(e.duration); });
       try { lt.observe({ type: "longtask" }); } catch { /* not every engine reports long tasks */ }
-      const times: number[] = observer.times = [], end = performance.now() + (s.ms ?? 8000);
+      // only intervals within a drag count: between drags the app has nothing to draw
+      const times: number[] = observer.times = [], drags: [number, number][] = [], end = performance.now() + (s.ms ?? 8000);
       for (let flip = false; performance.now() < end; flip = !flip) {
-        const [ax, ay, bx, by] = flip ? [x2, y2, x1, y1] : [x1, y1, x2, y2], n = 30;
+        const [ax, ay, bx, by] = flip ? [x2, y2, x1, y1] : [x1, y1, x2, y2], n = 30, from = performance.now();
         ev("pointerdown", ax, ay);
         for (let i = 1; i <= n; i++) { await sleep(8); ev("pointermove", ax + (bx - ax) * i / n, ay + (by - ay) * i / n); }
         ev("pointerup", bx, by);
+        drags.push([from, performance.now()]);
         await sleep(150);
       }
       observer.times = null; lt.disconnect();
-      const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b), q = (p: number) => gaps.length ? Math.round(gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))] * 10) / 10 : null;
-      (result.fps ??= []).push({ m: s.name ?? "scroll", ms: s.ms ?? 8000, presents: times.length, fps: Math.round(times.length / ((s.ms ?? 8000) / 1000) * 10) / 10,
+      const inDrag = (t: number) => drags.findIndex(([a, b]) => t >= a && t <= b);
+      const gaps = times.slice(1).flatMap((t, i) => inDrag(t) >= 0 && inDrag(t) === inDrag(times[i]) ? [t - times[i]] : []).sort((a, b) => a - b);
+      const q = (p: number) => gaps.length ? Math.round(gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))] * 10) / 10 : null;
+      const dragMs = drags.reduce((a, [from, to]) => a + to - from, 0), presents = times.filter(t => inDrag(t) >= 0).length;
+      (result.fps ??= []).push({ m: s.name ?? "scroll", ms: s.ms ?? 8000, presents, fps: Math.round(presents / (dragMs / 1000) * 10) / 10,
         p50: q(0.5), p95: q(0.95), p99: q(0.99), over25: gaps.filter(g => g > 25).length, longTasks: long.length, longTaskMs: Math.round(long.reduce((a, b) => a + b, 0)) });
       await idle();
       continue;
