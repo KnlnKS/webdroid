@@ -33,7 +33,10 @@ function proofError(row: any, pending = false): string | null {
   return null;
 }
 
-export function compileDeltas(before: any[], after: any[], window?: { origin: number; up: number; end: number | null }) {
+export function compileDeltas(allBefore: any[], allAfter: any[], window?: { origin: number; up: number; end: number | null }) {
+  // process Workers run off the page's thread: the main-realm accounting covers the page and its frames
+  const onPage = (row: any) => { try { return ["/", "/process"].includes(new URL(row.url).pathname); } catch { return true; } };
+  const before = allBefore.filter(onPage), after = allAfter.filter(onPage);
   const byUrl = new Map(before.map(row => [row.url, row])), failures: string[] = [];
   const counters = COMPILE_COUNTERS, probe = [...before, ...after].some(row => row.receiptProbe);
   const start = window ? window.origin + window.up : NaN, end = window?.end === null || !window ? NaN : window.origin + window.end;
@@ -44,7 +47,7 @@ export function compileDeltas(before: any[], after: any[], window?: { origin: nu
     if (root.length !== 1 || after.some(row => row.proof?.receipt && row.proof.receipt.clockUrl !== root[0]?.url)) failures.push("canonical root counter clock unavailable or changed");
     const missing = new Set<string>();
     for (const row of after) for (const event of row.proof?.events ?? []) {
-      if (!after.some(owner => owner.url === event.url && String(owner.pid) === String(event.pid) && owner.pkg === event.pkg)) missing.add(event.url);
+      if (onPage(event) && !after.some(owner => owner.url === event.url && String(owner.pid) === String(event.pid) && owner.pkg === event.pkg)) missing.add(event.url);
     }
     for (const url of missing) failures.push(`${url}: lifecycle owner missing from end snapshot`);
   }

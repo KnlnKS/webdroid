@@ -6462,3 +6462,41 @@ Open findings:
 - `processMode=worker` would remove that contention, but Mihon crashes there. Native `mmap(MAP_SHARED)` on a remote fd returns `NOTSUP` (`src/native/libc.ts`), and androidx.datastore's `NativeSharedCounter` hits it. The shell's `SharedFile` (`src/shell/shared-file.ts`) is the likely basis for a shared mapping.
 
 Verification: typecheck, 1,214 unit tests, and the Wasm `aottest` (113 checks), `persist`, `loaders`, `lazytest` and `linkdiff` suites pass. `aottest` gains shadowing and unchanged-verdict cases. `customdiff` fails "JDK array clone receiver changed", which is a pre-existing environment failure. Wasm suites need `PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH` on this host. The full e2e matrix and goldens were not re-run for these commits.
+
+### Wasm rearchitecture: suspensions, launch profiles and background Workers (2026-10-10)
+
+Measured with `bun run lat <scenario> --warm` (Wasm tier, headless Chromium/SwiftShader, one job) against the
+baseline in [wasm-baselines.md](wasm-baselines.md).
+
+- **Suspensions at their source.** Host calls capture Java caller frames only when they actually suspend
+  (inside `promising`, `Error.stack` already includes the parent frames until the first suspension). The main
+  thread no longer yields at fuel checks before its turn is due. Suspending natives return a Promise only when
+  they wait. Calculator's warm launch makes 1.3k Suspending import calls instead of 49.7k, its `clear` tap 11
+  instead of 12.8k, and FitNotes 1.4k instead of 93k. Launch time barely changed: those yields were cheap
+  where no turn was due.
+- **Launch profiles.** Each app records the platform C/D modules its launches loaded, keyed by app and AOT
+  key, and Workers fetch and compile them before the next launch starts. FitNotes goes from 2430 to
+  1875–1929 ms and Calculator from 2446 to 1923–1999 ms. Modules instantiated fall from 2988 to 1943.
+- **Background processes in Workers.** Processes started for a service, provider or broadcast run in process
+  Workers. Activity launches keep frames. Mihon goes from 8.3 s to 7.5–7.6 s. Calculator's gated taps all pass
+  (69–146 ms). FitNotes scrolls at 33.2 fps with p99 25.7 ms; `lat` now counts only intervals within a drag, so
+  this is not comparable with the baseline's 308 ms.
+  - Mihon's main thread now idles about 2 s while it waits on its synchronous
+    `com.google.android.gms.chimera` provider query. That GMS Worker boot costs about 2.8 s of Worker CPU,
+    mostly code delivery (`linkSlot`/`loadC` 0.94 s, plus Wasm compile and instantiation).
+  - Starting Play services at process registration rather than after the first frame left Mihon unchanged
+    (7.52–7.61 s against 7.55–7.60 s), because the GMS boot still waits on the page that serves its
+    bootstrap and binder calls. It cost Calculator up to about 70 ms, so it was reverted.
+
+Open findings:
+
+- Under SwiftShader, Chrome starves a Worker's WebGL work while a page context saturates the GPU process.
+  - Beside flappybird's gameplay (GPU process at about 620% CPU), each synchronous call from a Worker
+    context takes 5–8 s, such as `getParameter` or `readPixels`. A new Worker context does not finish
+    within minutes.
+  - With Metal, the same calls take 3–5 ms.
+  - microG's checkin queries GL through EGL, so the GMS Worker blocks in `eglMakeCurrent`. The fast e2e
+    flappybird flow then reports "Worker diagnostic timeout" for pid 1001 while every checkpoint is still
+    reached. Running alone, the flow passes.
+  - Moving the foreground app into a Worker (all GL contexts on Workers) is expected to remove the
+    priority gap. This needs verification.

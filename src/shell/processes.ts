@@ -231,7 +231,7 @@ export class ProcessBroker {
   });
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
-      const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
+      const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process, undefined, true) : live && !live.dead ? live : null;
       if (!entry) return null;
       const caller = client === null ? null : this.entries.get(client) ?? null;
       return this.inherit(caller, entry, () => this.request(entry, (endpoint) => endpoint.service(request))).then((result) => {
@@ -288,7 +288,8 @@ export class ProcessBroker {
     this.entry(pid);
     if (active) this.clipboardWatchers.add(pid); else this.clipboardWatchers.delete(pid);
   }
-  connect(pkg: string, process: string, pid?: number): Entry {
+  /** `background`: started for a service, provider or broadcast rather than an activity, it runs in a Worker off the page's thread */
+  connect(pkg: string, process: string, pid?: number, background = false): Entry {
     const key = pkg + "/" + process, previous = this.byName.get(key);
     if (previous && !previous.dead) return previous;
     const owner = packages.get(pkg);
@@ -298,7 +299,7 @@ export class ProcessBroker {
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
-    if (pid === undefined && new URLSearchParams(location.search).get("processMode") === "worker") {
+    if (pid === undefined && (background || new URLSearchParams(location.search).get("processMode") === "worker")) {
       const canvas = document.createElement("canvas"); entry.canvas = canvas;
       canvas.hidden = true;
       canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
@@ -903,7 +904,7 @@ export class ProcessBroker {
       if (!exported(provider) || !await allowed("readPermission") && !await allowed("writePermission"))
         throw rt.mkThrowable("java/lang/SecurityException", `Permission Denial: opening provider ${provider.name} from pid=${pid}, uid=${caller.uid}`);
     }
-    const target = this.connect(pkg, process);
+    const target = this.connect(pkg, process, undefined, true);
     return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.contentProvider(authority)));
   }
   /** `manifest` is the sender's resolution of the intent's manifest receivers */
@@ -918,7 +919,7 @@ export class ProcessBroker {
       const receiver = { owner, kind: "receiver" as const, name: cls, node }, permission = componentPermission(receiver);
       if (caller && !exported(receiver) && pkg !== caller.pkg) continue;
       if (caller && permission && await permissionDenied(permission, caller.pkg)) continue;
-      targets.push({ entry: this.connect(pkg, componentProcess(receiver)), component: cls, priority });
+      targets.push({ entry: this.connect(pkg, componentProcess(receiver), undefined, true), component: cls, priority });
     }
     targets.sort((a, b) => b.priority - a.priority);
     let result = initial;
