@@ -5,6 +5,11 @@ import type { Kind } from "../compiler/program";
 import type { Compiler, FnTrace } from "../compiler/j2w";
 
 /** ART's heap limit, as src/jvm/runtime.ts HEAP_LIMIT: the JS tier throws OutOfMemoryError past it too */
+/** a capture deep enough for Java stack traces; other JS errors keep the engine's default depth */
+export function deepStack(limit = 128): Error {
+  const prior = Error.stackTraceLimit; Error.stackTraceLimit = limit;
+  try { return new Error(); } finally { Error.stackTraceLimit = prior; }
+}
 export const HEAP_LIMIT = 512 * 1024 * 1024;
 export const MAX_ARRAY_BYTES = HEAP_LIMIT;
 /** calls and loop iterations a method runs as first-tier code before it is recompiled (World.upgrade) */

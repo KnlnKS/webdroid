@@ -34,7 +34,7 @@ import { hostObject } from "./annotations";
 import { classByName, dexOpen, dexOpenMemory, loaderObject, LOADER_OF_CLASS, Lookup } from "./loaders";
 import { definitionReady, initiatedInstruction, initiatedType, instructionClass, resolveInstruction, resolveClass, resolveForName, resolveCatch } from "./resolution";
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
-import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, type JavaFrame, type Thrower } from "./exc";
+import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
 import { descToName, parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
@@ -68,8 +68,6 @@ export interface WorldOptions {
   claim?: (owner: object, handle: bigint) => void;
   /** classes of the platform the host implements whole: their initializers do not run (hostclass.ts) */
   hostWhole?: (name: string) => boolean;
-  /** frames V8 keeps per exception; Java stacks are deeper than its default of 10 */
-  stackTraceLimit?: number;
   /** precompiled platform code (aot.ts); the Program holds exactly the platform dexes it was built from, apps are added with addDexes */
   aot?: AotStore;
   /** a build of that code: classes, slots and selectors are numbered but nothing is instantiated */
@@ -194,7 +192,6 @@ export class World {
     this.cha = new Cha(prog);
     // the heap holds the engine's own data too (the program model is hundreds of MB), which is not the Java heap ART's limit is about
     const heap = opts.heapUsed, heapBase = heap(), limit = opts.heapLimit ?? HEAP_LIMIT;
-    if (opts.stackTraceLimit ?? 128) Error.stackTraceLimit = Math.max(Error.stackTraceLimit, opts.stackTraceLimit ?? 128);
     const names = (id: number) => javaName(this.names[id]);
     this.host = {
       fmod: (a: number, b: number) => a % b,
@@ -266,7 +263,7 @@ export class World {
         return message;
       },
       capture: (exn: object) => {
-        const stack = new Error();
+        const stack = deepStack();
         this.stacks.set(exn, this.bridgeStacks.has(this.sched.current()) || this.cold?.hasActive(this.sched.current()) || this.captureScopes.get(this.sched.current())?.length ? this.javaStack(stack.stack ?? "") : stack);
       },
       stFrames: (state: object | null) => (this.frames = state ? this.stackTrace(state) : []).length,
@@ -1096,7 +1093,7 @@ export class World {
   private outermostWaiting(): number | undefined {
     if (!this.refused.size || !namesWasmFrames()) return undefined;
     let found: number | undefined;
-    for (const name of wasmFrameNames(new Error().stack ?? "")) {
+    for (const name of wasmFrameNames(deepStack().stack ?? "")) {
       const m = methodOf(this.prog, name.replace(/^\$dispatch:/, "").split("#")[0]), slot = m && this.slotOf(m);
       if (slot !== undefined && this.refused.has(slot) && this.waits(slot)) found = slot;
     }
@@ -1883,27 +1880,28 @@ export class World {
     // Each callFn enters a fresh engine stack. Keep only that stack's frames,
     // then append its suspended callers; parse once so recursive cold PCs retain
     // their activation order. The marker's name is explicit, even in minified builds.
-    const local = (text: string) => {
-      const rows = text.split("\n"), boundary = rows.findIndex(row => row.includes("at webdroid:callFn (") || row.startsWith("wdWasmCallFn@"));
-      return (boundary < 0 ? rows : rows.slice(0, boundary)).filter(row => row.includes("wasm-function[")).join("\n");
+    // A caller that has not suspended is still on the physical stack, beyond its call's marker.
+    const segments = (text: string) => {
+      const out: string[][] = [[]];
+      for (const row of text.split("\n")) {
+        if (row.includes("at webdroid:callFn (") || row.startsWith("wdWasmCallFn@")) out.push([]);
+        else if (row.includes("wasm-function[")) out[out.length - 1].push(row);
+      }
+      return out;
     };
-    const parts = [local(stack)];
+    const physical = segments(stack), parts = [physical[0]];
+    let next = 1;
     for (let caller = this.bridgeStacks.get(this.sched.current()); caller; caller = caller.prior)
-      if (caller.stack) parts.push(local(caller.stack.stack ?? ""));
-    return javaFrames(parts.join("\n"), this.frameTraces, count, lines);
+      parts.push(caller.stack ? segments(caller.stack.stack ?? "")[0] : physical[next++] ?? []);
+    return javaFrames(parts.flat().join("\n"), this.frameTraces, count, lines);
   }
   /** the innermost `count` Java frames, including callers suspended at host bridges */
   callerFrames(count: number): JavaFrame[] {
-    const full = Error.stackTraceLimit;
-    try {
-      for (const limit of [16, 48]) {
-        if (limit >= full) break;
-        Error.stackTraceLimit = limit;
-        const frames = this.javaStack(new Error().stack ?? "", count, false);
-        if (frames.length >= count) return frames;
-      }
-    } finally { Error.stackTraceLimit = full; }
-    return this.javaStack(new Error().stack ?? "", count, false);
+    for (const limit of [16, 48]) {
+      const frames = this.javaStack(deepStack(limit).stack ?? "", count, false);
+      if (frames.length >= count) return frames;
+    }
+    return this.javaStack(deepStack().stack ?? "", count, false);
   }
   /** captured frames without the throwable's own construction */
   stackTrace(state: object): JavaFrame[] {
@@ -1915,23 +1913,15 @@ export class World {
     return frames.slice(skip);
   }
   private synchronousEntries = 0;
-  private nativeCaller: Error | null | undefined;
-  /** Java caller frames stay fixed during one import's synchronous work. */
-  nativeScope<A extends unknown[], R>(run: (...args: A) => R, args: A): R {
-    const prior = this.nativeCaller; this.nativeCaller = null;
-    try { return run(...args); } finally { this.nativeCaller = prior; }
-  }
   inSynchronousJava(): boolean { return this.synchronousEntries > 0; }
   synchronous<T>(run: () => T): T {
-    const prior = this.nativeCaller; this.nativeCaller = undefined;
     this.synchronousEntries++;
-    try { return run(); } finally { this.synchronousEntries--; this.nativeCaller = prior; }
+    try { return run(); } finally { this.synchronousEntries--; }
   }
   private freshStack<T>(run: () => T): T {
     this.refreshHotUnits();
-    const caller = this.nativeCaller; this.nativeCaller = undefined;
     const prior = this.synchronousEntries; this.synchronousEntries = 0;
-    try { return run(); } finally { this.synchronousEntries = prior; this.nativeCaller = caller; }
+    try { return run(); } finally { this.synchronousEntries = prior; }
   }
   private hostFns = new Map<string, Function>();
   // Private helper owners do not consume method-table numbering shared with compile workers.
@@ -2033,17 +2023,10 @@ export class World {
     let token = 0;
     this.callFns.set(name, f = (s, ...args) => {
       token = token % 0x3fffffff + 1;
-      // A host-only entry has no physical Java caller frames to preserve.
-      let stack = this.bridgeCaller;
-      if (!stack && (!this.sched.current().root || this.inSynchronousJava())) {
-        stack = this.nativeCaller ?? undefined;
-        if (!stack) {
-          stack = new Error(); this.stats.bridgeCallerCaptures++;
-          if (this.nativeCaller !== undefined) this.nativeCaller = stack;
-        }
-      }
+      // Java callers stay on the physical stack until the call suspends; only then are their frames captured.
+      const javaCaller = !this.sched.current().root || this.inSynchronousJava();
+      const caller: BridgeStack = { stack: this.bridgeCaller, prior: this.bridgeStacks.get(s), done: false };
       this.bridgeCaller = undefined;
-      const caller: BridgeStack = { stack, prior: this.bridgeStacks.get(s), done: false };
       this.bridgeStacks.set(s, caller);
       const leave = () => {
         caller.done = true;
@@ -2057,6 +2040,7 @@ export class World {
       try { p = this.freshStack(() => enter(s, mine, ...args)); } catch (error) { leave(); throw error; }
       const state = d.value as number;
       if (state !== mine && state !== -mine) {
+        if (javaCaller && !caller.stack) { caller.stack = deepStack(); this.stats.bridgeCallerCaptures++; }
         const complete = () => {
           if (d.value === mine && ret === "L") v.value = null;
           else if (d.value === -mine) thr.value = null;

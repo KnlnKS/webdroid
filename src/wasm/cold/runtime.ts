@@ -7,6 +7,7 @@ import { mid } from "../compiler/ids";
 import { T, type VT } from "../compiler/wasmbin";
 import { FUEL, ROOT } from "../link/sched";
 import type { World } from "../link/world";
+import { deepStack } from "../link/exc";
 import { ColdSlowOps } from "./slowops";
 import { hasJspi } from "../link/module";
 import { coldCode, type ColdInterpreter } from "./interpreter";
@@ -115,7 +116,7 @@ function activationImports(w: World, m: MethodInfo, cold: ColdInterpreter, make:
   const snapshots = new WeakMap<object, ColdSnapshot>();
   const step = (frame: object) => {
     let caller = callers.get(frame);
-    if (!caller) { callers.set(frame, caller = new Error()); w.stats.coldCallerCaptures++; }
+    if (!caller) { callers.set(frame, caller = deepStack()); w.stats.coldCallerCaptures++; }
     const state = cold.snapshot(frame, snapshots.get(frame)), owner = state.owner!;
     snapshots.set(frame, state); w.stats.coldSnapshotRegisters += registers;
     cold.inFlight(frame, true); cold.attempt(frame, state.pc);
