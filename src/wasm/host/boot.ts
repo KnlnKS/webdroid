@@ -158,6 +158,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
       mark(code.hit ? "appCodeSaved" : "appCode");
+      store.ready = Promise.all([store.ready, code.launchReady]).then(() => {});
       void code.made?.then(() => mark("appBuilt"), () => {});
       // the World is made while the build's modules are still arriving; no Java runs until they have
       current();

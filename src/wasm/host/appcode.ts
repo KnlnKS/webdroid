@@ -10,6 +10,7 @@ import type { DexFile } from "../../jvm/dex";
 import type { FetchStore } from "../link/aotstore";
 import { buildFiles, appKey, SavedBuild, type Persist } from "./persist";
 import { fetchBundle } from "./bundle";
+import { prefetchInWorker } from "./aotload";
 import { CompileClient, containers, type WorkerPort } from "./compiler";
 import type { BuildRoots, CompileResponse, Containers } from "./compile-serve";
 import type { Loader, LoaderId, LoaderSnapshot } from "../compiler/program";
@@ -28,6 +29,8 @@ export interface AppCodeRequest {
 export interface AppCode {
   /** whether a saved build was found and its modules compiled */
   hit: boolean;
+  /** settles once the platform modules earlier launches of the app loaded are compiled, which no Java should run before */
+  launchReady: Promise<void>;
   source: "persist" | "bundle" | "none";
   persisted: Promise<boolean>;
   options: Pick<WorldOptions, "app" | "compiler">;
@@ -55,8 +58,10 @@ const TICK_MS = 2000, WATCH_MS = 120_000, MAX_REFINES = 3;
 
 export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   // a store that fails is a store without the build
-  const key = await appKey(req.dexes, req.aot.key);
-  let files = await req.persist?.load(key).catch(() => undefined);
+  const key = await appKey(req.dexes, req.aot.key), launchKey = key + "-launch";
+  let [files, launch] = await Promise.all([req.persist?.load(key).catch(() => undefined), req.persist?.load(launchKey).catch(() => undefined)]);
+  const launchFiles: string[] = launch?.has("files.json") ? JSON.parse(new TextDecoder().decode(launch.get("files.json"))) : [];
+  const launchReady = launchFiles.length ? prefetchInWorker(req.aot, launchFiles) : Promise.resolve();
   let source: AppCode["source"] = files ? "persist" : "none";
   if (!files) {
     // the platform build may ship a build for this app; this device keeps it for the launches after
@@ -90,7 +95,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   let coveredVerdicts = verdictMap(initial?.verdicts ?? []), verdicts: Verdict[] = [], verdictChanges = 0;
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
   const builds: Built[] = [];
-  const code: AppCode = { hit: !!saved, source, persisted, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
+  const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
     refine, watch: (world) => { if (!closed && !watching && req.persist) { watching = true; watch(world); } }, settle, builds, close };
   if (!saved && !closed) {
     code.made = builder.build({ methods: [], classes: [], infos: [] });
@@ -126,10 +131,20 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     return built;
   }
   async function settle(world: World): Promise<Built | undefined> {
+    recordLaunch(world);
     await code.made?.catch(() => {});
     while (builder.busy && !closed) await new Promise((r) => setTimeout(r, 100));
     // the verdicts found since are worth a build without new demand
     return refine(world, 0);
+  }
+  /** keeps the platform modules this launch loaded for the next one, once they include any the last launch did not */
+  function recordLaunch(world: World): void {
+    const aot = world.aot;
+    if (!aot) return;
+    const known = new Set(launchFiles), loaded = [...aot.loaded, ...aot.missed].filter((f) => /^[cd]\d+\.wasm$/.test(f));
+    if (loaded.every((f) => known.has(f))) return;
+    const merged = [...new Set([...loaded, ...launchFiles])];
+    void req.persist?.save(launchKey, [["files.json", new TextEncoder().encode(JSON.stringify(merged))]]).then((kept) => { if (kept) launchFiles.splice(0, Infinity, ...merged); }, () => {});
   }
   function watch(world: World): void {
     let last = -1, refines = 0, building = false;
@@ -142,6 +157,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
       if (building || builder.busy) { again(); return; }
       const now = fresh(world);
       // the launch has gone quiet: what it compiled since the last look is all there is for now
+      if (now === last) recordLaunch(world);
       if ((now >= MIN_FRESH || verdictChanges > 0) && now === last) {
         building = true;
         refine(world, 1).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); })
