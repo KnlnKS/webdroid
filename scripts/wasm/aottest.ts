@@ -87,10 +87,15 @@ const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
   const rebound = make(app, saved), library = rebound.prog.newLoader(rebound.prog.boot, null);
   rebound.addDexes(late, library);
   rebound.bindLibraries(rebound.prog.root, [library], []);
-  check("loader rebinding retires persisted verdicts", rebound.aot!.verdictList().length, 0);
+  check("libraries that resolve no app name differently keep persisted verdicts", rebound.aot!.verdictList().length > 0, true);
   const cls = rebound.prog.definedBy(library, "Aot2")!;
   check("the rebound library override takes effect", rebound.entry(cls, "sub", "()I")(), 1);
-  check("obsolete loader verdicts are not exported again", rebound.aot!.verdictList().length, 0);
+  const shadowed = make(app, saved), copy = shadowed.prog.newLoader(shadowed.prog.boot, null);
+  shadowed.addDexes(loadDexes(join(out, "classes.dex")), copy);
+  shadowed.bindLibraries(shadowed.prog.root, [copy], []);
+  check("a library shadowing app classes retires persisted verdicts", shadowed.aot!.verdictList().length, 0);
+  check("the shadowing library's class runs", shadowed.entry("Aot", "inherited", "()I")(), 0);
+  check("obsolete loader verdicts are not exported again", shadowed.aot!.verdictList().length, 0);
 }
 {
   const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars], { natives });

@@ -1561,9 +1561,10 @@ export class World {
     const priorBefore = loader.before ?? [], priorAfter = loader.after ?? [];
     const same = (a: Loader[], b: Loader[]) => a.length === b.length && a.every((l, i) => l === b[i]);
     if (same(priorBefore, before) && same(priorAfter, after)) return;
-    this.rebindResolution(loader, () => this.prog.libraries(loader, before, after), () => this.prog.libraries(loader, priorBefore, priorAfter), "Class loader libraries");
+    const changed = this.prog.libraryChanges(loader, before, after);
+    this.rebindResolution(loader, changed, () => this.prog.libraries(loader, before, after, changed), () => this.prog.libraries(loader, priorBefore, priorAfter, changed), "Class loader libraries");
   }
-  /** The app's loader resolves through Java (loaders.ts standardRoot): code of the default namespace linked as the Program resolves is undone, and its references resolve as they run. */
+  /** The app's loader resolves through Java (loaders.ts standardPath): code of the default namespace linked as the Program resolves is undone, and its references resolve as they run. */
   dynamicRoot(): void {
     if (this.prog.dynamicRoot) return;
     this.prog.dynamicRoot = true;
@@ -1580,12 +1581,15 @@ export class World {
     if (prior === key) return;
     if (prior) throw this.exception(this.makeThrowable("java/lang/LinkageError", `Class loader already initiated ${name}`));
     if (this.prog.lookup(loader, name) === key) { this.prog.initiate(loader, name, key); return; }
-    this.rebindResolution(loader, () => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation", name);
+    this.rebindResolution(loader, new Set([name]), () => this.prog.initiate(loader, name, key), () => this.prog.forgetInitiated(loader, name), "Class initiation");
   }
   resolveClass(loader: Loader, name: string, owner: Strand): string | Promise<string> {
     return resolveClass(this, loader, name, owner);
   }
-  private rebindResolution(loader: Loader, change: () => string[], undo: () => string[], reason: string, binding?: string): void {
+  /** applies `change`, which resolves the `changed` names differently, unless that would change linked dispatch or hierarchy */
+  private rebindResolution(loader: Loader, changed: ReadonlySet<string>, change: () => string[], undo: () => string[], reason: string): void {
+    // The graph still changes what later definitions resolve to, in the compile worker too.
+    if (!changed.size) { change(); this.opts.compiler?.namespaces(); return; }
     const targets = new Map<Assumption, { target: MethodInfo; declared: MethodInfo }>();
     for (const a of this.assumptions.values()) {
       const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
@@ -1593,7 +1597,7 @@ export class World {
       if (target && target.key === a.tk && target.desc === a.desc && declared && !declared.isStatic && declared.desc === a.desc) targets.set(a, { target, declared });
     }
     // Inherited dispatch also depends on interfaces that have not themselves been linked.
-    const changing = this.prog.resolutionClasses(loader);
+    const changing = this.prog.resolutionClasses(loader, changed);
     const dependentOn = (changed: Set<string>) => {
       const affected = new Map<string, boolean>();
       const depends = (name: string): boolean => {
@@ -1605,13 +1609,13 @@ export class World {
       };
       return depends;
     };
-    if (binding && (binding.startsWith("[") || binding.includes("@"))) binding = undefined;
-    const mentions = (descriptor: string) => !binding || javaName(descriptor).includes(`L${binding};`);
+    const exact = ![...changed].some(name => name.startsWith("[") || name.includes("@"));
+    const mentions = (descriptor: string) => !exact || [...javaName(descriptor).matchAll(/L([^;]+);/g)].some(m => changed.has(m[1]));
     const depends = dependentOn(changing);
-    // One initiating identity affects dispatch through matching signatures or inherited types, including unlinked interfaces.
-    const hierarchy = binding ? dependentOn(new Set([...changing].filter(name => {
+    // Changed identities affect dispatch through matching signatures or inherited types, including unlinked interfaces.
+    const hierarchy = exact ? dependentOn(new Set([...changing].filter(name => {
       const c = this.prog.get(name)!;
-      return (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(parent => javaName(parent) === binding);
+      return (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(parent => changed.has(javaName(parent)));
     }))) : depends;
     const dispatch = [...this.classes.keys()].filter(name => depends(name) && (hierarchy(name) || this.vslots(name).some(mentions))).map(name => ({ name, methods: this.vslots(name).map(key => {
       return symbolicDispatchFor(this.prog, name, key);
@@ -1651,8 +1655,8 @@ export class World {
     this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
     // Existing code and app builds used the previous namespace. Platform code retains its defining boot namespace.
-    const changed = new Set(names);
-    for (let b = 0; b < this.blockClass.length; b++) if (changed.has(this.blockClass[b])) {
+    const refreshed = new Set(names);
+    for (let b = 0; b < this.blockClass.length; b++) if (refreshed.has(this.blockClass[b])) {
       for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root)) this.aot?.unbindApp();

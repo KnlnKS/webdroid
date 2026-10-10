@@ -62,6 +62,10 @@ export function sameRuntimePackage(prog: Program, a: string, b: string): boolean
 /** the id of the loader that defines the class (or the element class of the array class) with this key */
 export const loaderIdOf = (key: string): number => +(SUFFIX.exec(key)?.[1] ?? 0);
 
+/** the descriptors of the `changed` names, or undefined when an array or key name leaves every reference suspect */
+const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
+  [...changed].some(name => name.startsWith("[") || name.includes("@")) ? undefined : new Set([...changed].map(name => `L${name};`));
+
 /** a class of a dex file. Its header (supertypes, flags) is read when asked for and its members are built when the first of them is, so a Program holds
  *  little for the thousands of platform classes a process never uses. */
 class DexClass implements JClass {
@@ -70,11 +74,11 @@ class DexClass implements JClass {
   private members_?: { fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
   private methodInfos?: Map<number, MethodInfo>;
   constructor(readonly name: string, readonly dex: DexFile, readonly idx: number) {}
-  refreshTypes(resolve: (desc: string) => string, changedType?: string): void {
-    if (!changedType) this.header_ = undefined;
+  refreshTypes(resolve: (desc: string) => string, changedTypes?: ReadonlySet<string>): void {
+    if (!changedTypes) this.header_ = undefined;
     else if (this.header_) {
       const h = this.dex.classHeader(this.idx);
-      if (h.superIdx !== 0xffffffff && this.dex.rawType(h.superIdx) === changedType || h.interfaces.some(i => this.dex.rawType(i) === changedType)) this.header_ = undefined;
+      if (h.superIdx !== 0xffffffff && changedTypes.has(this.dex.rawType(h.superIdx)) || h.interfaces.some(i => changedTypes.has(this.dex.rawType(i)))) this.header_ = undefined;
     }
     const aliases = this.members_ ? [...this.members_.byKey].filter(([key, m]) => key !== m.key) : [];
     for (const m of this.members_?.methods ?? this.methodInfos?.values() ?? []) {
@@ -283,11 +287,34 @@ export class Program {
     for (const library of loader.after ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
     return undefined;
   }
-  libraries(loader: Loader, before: Loader[], after: Loader[]): string[] {
+  libraries(loader: Loader, before: Loader[], after: Loader[], changed: ReadonlySet<string> = this.libraryChanges(loader, before, after)): string[] {
     const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
     if (same(loader.before, before) && same(loader.after, after)) return [];
     loader.before = before; loader.after = after;
-    return this.refreshResolution(loader);
+    return changed.size ? this.refreshResolution(loader, changed) : [];
+  }
+  /** the names that a loader seeing `loader` resolves differently once `loader` searches these libraries: only names the old or new libraries can supply */
+  libraryChanges(loader: Loader, before: Loader[], after: Loader[]): Set<string> {
+    const names = new Set<string>(), seen = new Set<Loader>();
+    const supply = (l: Loader | null) => {
+      if (!l || l === this.boot || seen.has(l)) return;
+      seen.add(l);
+      for (const name of l === this.root ? this.classes.keys() : l.defined.keys()) names.add(name);
+      for (const name of this.initiated.get(l)?.keys() ?? []) names.add(name);
+      supply(l.parent);
+      for (const library of [...l.before ?? [], ...l.after ?? []]) supply(library);
+    };
+    for (const library of [...loader.before ?? [], ...loader.after ?? [], ...before, ...after]) supply(library);
+    const views = [...this.dependentLoaders(loader)], prior = [loader.before, loader.after];
+    const resolve = () => views.flatMap(view => [...names].map(name => this.lookup(view, name)));
+    const old = resolve();
+    loader.before = before; loader.after = after;
+    const now = resolve();
+    [loader.before, loader.after] = prior;
+    const changed = new Set<string>();
+    let i = 0;
+    for (let v = 0; v < views.length; v++) for (const name of names) if (old[i] !== now[i++]) changed.add(name);
+    return changed;
   }
   initiatedBy(loader: Loader, name: string): string | undefined { return this.initiated.get(loader)?.get(name); }
   /** A successful native definition fixes the initiating loader's identity before its bytecode is resolved. */
@@ -296,11 +323,11 @@ export class Program {
     let loaded = this.initiated.get(loader);
     if (!loaded) this.initiated.set(loader, loaded = new Map());
     loaded.set(name, key);
-    return visible === key ? [] : this.refreshResolution(loader, name);
+    return visible === key ? [] : this.refreshResolution(loader, new Set([name]));
   }
   forgetInitiated(loader: Loader, name: string): string[] {
     this.initiated.get(loader)?.delete(name);
-    return this.refreshResolution(loader, name);
+    return this.refreshResolution(loader, new Set([name]));
   }
   private dependentLoaders(loader: Loader): Set<Loader> {
     const depends = (view: Loader, seen = new Set<Loader>()): boolean => {
@@ -311,16 +338,26 @@ export class Program {
     };
     return new Set(this.loaders.filter(l => depends(l)));
   }
-  resolutionClasses(loader: Loader): Set<string> {
-    const affected = this.dependentLoaders(loader);
-    return new Set([...this.classes.values()].filter(c => c instanceof DexClass && affected.has(this.loaderOfDex(c.dex)!)).map(c => c.name));
+  /** the dex files whose references can resolve differently when `changed` names do: those of loaders that see `loader` naming one of them, as an element type or not */
+  private resolutionDexes(loader: Loader, changed: ReadonlySet<string>): Map<DexFile, Loader> {
+    const affected = this.dependentLoaders(loader), dexes = new Map<DexFile, Loader>(), types = changedTypes(changed);
+    const names = (dex: DexFile) => {
+      for (let i = 0; i < dex.typeCount; i++) if (types!.has(dex.rawType(i).replace(/^\[+/, ""))) return true;
+      return false;
+    };
+    for (const [dex, owner] of this.dexLoader) if (affected.has(owner) && (!types || names(dex))) dexes.set(dex, owner);
+    return dexes;
   }
-  private refreshResolution(loader: Loader, binding?: string): string[] {
-    const affected = this.dependentLoaders(loader), names: string[] = [], changedType = binding && `L${binding};`;
-    for (const [dex, owner] of this.dexLoader) if (affected.has(owner)) dex.resolveType = d => this.rewrite(owner, d);
+  resolutionClasses(loader: Loader, changed: ReadonlySet<string>): Set<string> {
+    const dexes = this.resolutionDexes(loader, changed);
+    return new Set([...this.classes.values()].filter(c => c instanceof DexClass && dexes.has(c.dex)).map(c => c.name));
+  }
+  private refreshResolution(loader: Loader, changed: ReadonlySet<string>): string[] {
+    const dexes = this.resolutionDexes(loader, changed), names: string[] = [], types = changedTypes(changed);
+    for (const [dex, owner] of dexes) dex.resolveType = d => this.rewrite(owner, d);
     for (const c of this.classes.values()) if (c instanceof DexClass) {
-      const owner = this.loaderOfDex(c.dex)!;
-      if (affected.has(owner)) { c.refreshTypes(d => this.rewrite(owner, d), changedType); names.push(c.name); }
+      const owner = dexes.get(c.dex);
+      if (owner) { c.refreshTypes(d => this.rewrite(owner, d), types); names.push(c.name); }
     }
     this.ancestorMemo.clear(); this.implMemo.clear();
     return names;
