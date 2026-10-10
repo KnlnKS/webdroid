@@ -243,7 +243,7 @@ export class Sched {
   running: Strand | null = null;
   /** blocking attempts on a stack that cannot suspend */
   blockedPlain = 0;
-  /** calls of Suspending imports: each switches stacks */
+  /** calls of Suspending imports that switched stacks */
   suspensions = 0;
   /** told whenever the thread whose code runs changes, for the host's notion of the current thread */
   onThread: ((t: ThreadRec, idle: boolean) => void) | null = null;
@@ -319,7 +319,6 @@ export class Sched {
    *  so the globals go back to the host's top level then, and the strand sets its own when it resumes (emitBlock) */
   suspending<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R): (...a: A) => R {
     return suspending((...a: A) => {
-      this.suspensions++;
       const s = this.running = this.current(), depth = this.g.depth.value;
       let r: Promise<R> | R;
       try { r = fn(...a); }
@@ -331,7 +330,7 @@ export class Sched {
       this.idle();
       // Immediate imports retain their engine stacks. Clear the quota only
       // when the import actually suspends, including a forced cold-loop yield.
-      if (r instanceof Promise) s.nested = 0;
+      if (r instanceof Promise) { s.nested = 0; this.suspensions++; }
       // an exception after a wait reaches the strand's code through the call, which has not set the globals again
       return r instanceof Promise ? r.then(undefined, (e) => { this.g.sid.value = s.id; this.g.thr.value = s.thread.obj; this.g.depth.value = depth; this.onThread?.(s.thread, false); throw e; }) : r;
     }) as unknown as (...a: A) => R;
@@ -431,7 +430,8 @@ export class Sched {
       case Block.Sleep: return this.monitors.wait(obj!, s, a, true);
       case Block.Park: return this.park(s, a, b !== 0);
       // b: a turn of the timer queue rather than of the yield channel, which the engine runs its finalizers between
-      case Block.Yield: return b ? new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); }) : this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : Promise.resolve(St.Ok);
+      // before its turn is due the main thread keeps running; other threads let any strand that became ready run first
+      case Block.Yield: return b ? new Promise<St>((r) => { this.loop.after(0, () => r(St.Ok)); }) : this.loop.due() ? this.loop.yield(s.thread === this.main).then(() => St.Ok) : s.thread === this.main ? St.Ok : Promise.resolve(St.Ok);
       case Block.Init: return this.initWait(s, a);
       case Block.Net: return (this.w.opts.net?.wait?.(this.w) ?? Promise.resolve()).then(() => St.Ok);
     }
