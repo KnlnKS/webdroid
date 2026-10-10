@@ -171,14 +171,14 @@ const definitions = new WeakMap<World, Map<string, Definition>>();
 
 export function definitionReady(w: World, key: string): boolean {
   const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
-  return !cls?.dex || !cls.def || loader === w.prog.boot || !objectOfLoader(w, loader)
+  return !cls?.dex || !cls.def || w.prog.linksStatically(loader) || !objectOfLoader(w, loader)
     || definitions.get(w)?.get(key)?.state === "ready";
 }
 
 /** Resolve only declaration hierarchy before a definition publishes layout or its mirror. */
 export function prepareDefinition(w: World, key: string, owner: Strand): string | Promise<string> {
   const cls = w.prog.get(key), loader = w.prog.loaderOf(key);
-  if (!cls?.dex || !cls.def || loader === w.prog.boot || !objectOfLoader(w, loader)) return key;
+  if (!cls?.dex || !cls.def || w.prog.linksStatically(loader) || !objectOfLoader(w, loader)) return key;
   let states = definitions.get(w);
   if (!states) definitions.set(w, states = new Map());
   const prior = states.get(key);

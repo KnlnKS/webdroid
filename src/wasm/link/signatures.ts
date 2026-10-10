@@ -47,14 +47,16 @@ function constraints(w: World, cls: string): Pair[] {
   if (!c || c.isInterface) return [];
   const loader = w.prog.loaderOf(cls);
   if (loader === w.prog.boot) return [];
+  // A static namespace delegates to the boot loader first, so it resolves every type a boot class names as that class does.
+  const other = (name: string) => { const l = w.prog.loaderOf(name); return l !== loader && !(l === w.prog.boot && w.prog.linksStatically(loader)); };
   const interfaces = new Set<string>();
   const visit = (name: string) => {
     if (interfaces.has(name)) return;
     interfaces.add(name); w.prog.get(name)?.ifaces.forEach(visit);
   };
   for (const name of w.prog.chain(cls)) w.prog.require(name).ifaces.forEach(visit);
-  const differentSuper = !!c.sup && loader !== w.prog.loaderOf(c.sup);
-  const differentIfaces = [...interfaces].filter(name => loader !== w.prog.loaderOf(name));
+  const differentSuper = !!c.sup && other(c.sup);
+  const differentIfaces = [...interfaces].filter(other);
   if (!differentSuper && !differentIfaces.length) return [];
   const methods = virtualMethods(w, cls, cls), pairs: Pair[] = [];
   const changed = (a: Declaration, b: Declaration) => a.cls !== b.cls || a.key !== b.key;

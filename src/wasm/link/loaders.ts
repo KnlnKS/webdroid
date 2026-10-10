@@ -69,6 +69,12 @@ export function objectOfLoader(w: World, loader: Loader): object | null {
 
 const PATH_LOADERS = new Set(["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "dalvik/system/InMemoryDexClassLoader"]);
 
+/** whether the app's loader resolves names exactly as the Program's default namespace does: a platform path loader directly over the boot loader, without shared libraries */
+function standardRoot(w: World, object: object, libraries: number): boolean {
+  const cls = w.classNameOf(object), parent = stateOf(w).parentOf(object);
+  return !libraries && PATH_LOADERS.has(cls) && w.prog.loaderOf(cls) === w.prog.boot && (!parent || w.classNameOf(parent) === "java/lang/BootClassLoader");
+}
+
 /** ART searches exact platform loader chains natively before invoking Java loadClass. */
 export function nativeClassLookup(w: World, loader: Loader, name: string): string | undefined {
   const s = states.get(w);
@@ -190,9 +196,11 @@ function openDexes(w: World, dexes: DexFile[], loaderObject: object | null): obj
     loader = ownApp ? w.prog.root : newLoader(w, s.parentOf(loaderObject!), loaderObject!);
     s.byObject.set(loaderObject!, loader);
   }
-  if (loaderObject && loader === w.prog.root) s.appLoader ??= loaderObject;
+  const binding = !!loaderObject && loader === w.prog.root && !s.appLoader;
+  if (binding) s.appLoader = loaderObject;
   if (loaderObject) {
     const [before, after] = librariesOf(w, loaderObject);
+    if (binding && !standardRoot(w, loaderObject!, before.length + after.length)) w.dynamicRoot();
     w.bindLibraries(loader, before, after);
     dexes = dexes.map(d => {
       const owner = w.prog.loaderOfDex(d);

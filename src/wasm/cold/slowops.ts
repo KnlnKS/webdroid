@@ -129,7 +129,7 @@ export class ColdSlowOps {
 
   private batchReady(m: MethodInfo, ins: PreparedInstruction): boolean {
     const loader = this.w.prog.loaderOf(m.cls);
-    if (loader === this.w.prog.boot) return true;
+    if (this.w.prog.linksStatically(loader)) return true;
     if (/^invoke-(custom|polymorphic)|^const-method-/.test(ins.name)) return false;
     const name = instructionClass(m, ins);
     if (!name) return true;

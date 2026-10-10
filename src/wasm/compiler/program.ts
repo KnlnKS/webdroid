@@ -38,6 +38,7 @@ export interface LoaderSnapshot {
   parents: LoaderParent[];
   libraries: [LoaderId, LoaderId[], LoaderId[]][];
   initiated: [LoaderId, string, string][];
+  dynamicRoot?: true;
 }
 /** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
 export interface Loader {
@@ -186,6 +187,8 @@ export class Program {
   private dexLoader = new Map<DexFile, Loader>();
   private sealed = false;
   private bootPath = false;
+  /** The default namespace resolves as `lookup` does, ART's native path for a PathClassLoader over the boot loader, until its loader is found to be another kind. */
+  dynamicRoot = false;
   /** analyses of the classes that outlive a World (cha.ts keeps the platform's class hierarchy here, so the frames of a page build it once) */
   readonly shared = new Map<string, unknown>();
   /** `base` is the platform's Program, which is immutable from now on and may be shared by the Programs of several processes: this one adds the app's dexes and the classes
@@ -226,6 +229,8 @@ export class Program {
     return loader;
   }
   loadedDexes(): IterableIterator<[DexFile, Loader]> { return this.dexLoader.entries(); }
+  /** whether a reference from code this loader defines resolves at compile time to what it resolves to when it runs */
+  linksStatically(loader: Loader): boolean { return loader === this.boot || loader === this.root && !this.dynamicRoot; }
   loaderId(loader: Loader): LoaderId { return loader === this.boot ? "boot" : loader.id; }
   loaderAt(id: LoaderId): Loader { const loader = id === "boot" ? this.boot : this.loaders[id]; if (!loader) throw new Error(`unknown loader ${id}`); return loader; }
   /** Compiler mirrors carry namespace identity, never the source's Java loader objects. */
@@ -233,7 +238,8 @@ export class Program {
     const id = (l: Loader) => this.loaderId(l);
     return { parents: this.loaders.map(l => l.parent ? id(l.parent) : null),
       libraries: [this.boot, ...this.loaders].map(l => [id(l), (l.before ?? []).map(id), (l.after ?? []).map(id)]),
-      initiated: [this.boot, ...this.loaders].flatMap(l => [...this.initiated.get(l) ?? []].map(([name, key]): [LoaderId, string, string] => [id(l), name, key])) };
+      initiated: [this.boot, ...this.loaders].flatMap(l => [...this.initiated.get(l) ?? []].map(([name, key]): [LoaderId, string, string] => [id(l), name, key])),
+      ...this.dynamicRoot && { dynamicRoot: true } };
   }
   followLoaderParents(parents: LoaderParent[]): void {
     if (parents.length < this.loaders.length || parents[0] !== null) throw new Error("incompatible compiler loader graph");

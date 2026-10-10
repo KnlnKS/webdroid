@@ -75,7 +75,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     const setup = beginCompile("residual.wasmSetup");
     try {
     const program = new Program(appDexes, platform);
-    if (req.loaders) program.followLoaderParents(req.loaders.parents);
+    if (req.loaders) { program.followLoaderParents(req.loaders.parents); program.dynamicRoot = !!req.loaders.dynamicRoot; }
     for (const [id, dexes] of req.scopes ?? []) program.add(open(dexes), program.loaderAt(id));
     if (req.loaders) {
       for (const [id, before, after] of req.loaders.libraries) program.libraries(program.loaderAt(id), before.map(id => program.loaderAt(id)), after.map(id => program.loaderAt(id)));
@@ -206,6 +206,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
 function followLoaders(w: World, state: LoaderSnapshot): void {
   const prog = w.prog;
   prog.followLoaderParents(state.parents);
+  if (state.dynamicRoot) prog.dynamicRoot = true;
   for (const [id, before, after] of state.libraries) w.bindLibraries(prog.loaderAt(id), before.map(id => prog.loaderAt(id)), after.map(id => prog.loaderAt(id)));
   for (const [id, name, key] of state.initiated) w.initiateClass(prog.loaderAt(id), name, key);
 }

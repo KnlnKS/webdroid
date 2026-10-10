@@ -31,7 +31,7 @@ export function symbolicInstruction(m: MethodInfo, ins: PreparedInstruction): bo
 }
 
 export function needsSymbolicSite(w: World, m: MethodInfo, ins: PreparedInstruction): boolean {
-  return w.prog.loaderOf(m.cls) !== w.prog.boot && symbolicInstruction(m, ins) && !initiatedInstruction(w, m, ins);
+  return !w.prog.linksStatically(w.prog.loaderOf(m.cls)) && symbolicInstruction(m, ins) && !initiatedInstruction(w, m, ins);
 }
 
 export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Typing): SiteOperands {
@@ -51,7 +51,7 @@ export function siteOperands(m: MethodInfo, ins: PreparedInstruction, typing: Ty
 
 export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
   const cx = mc.cx;
-  if (!mc.symbolic || cx.prog.loaderOf(mc.m.cls) === cx.prog.boot || !symbolicInstruction(mc.m, ins)) return false;
+  if (!mc.symbolic || cx.prog.linksStatically(cx.prog.loaderOf(mc.m.cls)) || !symbolicInstruction(mc.m, ins)) return false;
   const operands = siteOperands(mc.m, ins, mc.typing), name = `${mc.m.cls}:${mc.m.index}:${ins.pc}`;
   const entry = cx.symbolicImports.get(name);
   if (!entry) return false;
@@ -66,7 +66,7 @@ export function emitSymbolicSite(mc: MC, ins: PreparedInstruction): boolean {
 export function declareSymbolicSites(cx: Compiler, methods: MethodInfo[]): void {
   for (const m of methods) {
     if (cx.w.aot?.building && !cx.w.opts.build?.appDexes?.has(m.dex)) continue;
-    if (!m.codeOff || cx.intrinsic(m) || cx.prog.loaderOf(m.cls) === cx.prog.boot) continue;
+    if (!m.codeOff || cx.intrinsic(m) || cx.prog.linksStatically(cx.prog.loaderOf(m.cls))) continue;
     const phase = cx.w.stats.phase, item = m.dex.code(m.codeOff);
     let t = performance.now();
     const prepareSpan = beginCompile("wasm.prepare");

@@ -1563,6 +1563,18 @@ export class World {
     if (same(priorBefore, before) && same(priorAfter, after)) return;
     this.rebindResolution(loader, () => this.prog.libraries(loader, before, after), () => this.prog.libraries(loader, priorBefore, priorAfter), "Class loader libraries");
   }
+  /** The app's loader resolves through Java (loaders.ts standardRoot): code of the default namespace linked as the Program resolves is undone, and its references resolve as they run. */
+  dynamicRoot(): void {
+    if (this.prog.dynamicRoot) return;
+    this.prog.dynamicRoot = true;
+    this.aot?.unbindApp();
+    for (let b = 0; b < this.blockClass.length; b++) {
+      const dex = this.prog.get(this.blockClass[b])?.dex;
+      if (dex && this.prog.loaderOfDex(dex) === this.prog.root) for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
+    }
+    this.epoch++;
+    this.opts.compiler?.namespaces();
+  }
   initiateClass(loader: Loader, name: string, key: string): void {
     const prior = this.prog.initiatedBy(loader, name);
     if (prior === key) return;

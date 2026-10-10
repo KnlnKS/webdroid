@@ -59,7 +59,7 @@ function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
   return w;
 }
 
-// Optional combined-image builds still resolve app symbolic sites at use.
+// A combined image links the app's default namespace as the Program resolves it.
 {
   const dexes = loadDexes(join(out, "classes.dex"));
   const image = world(dexes, { aot: undefined, compileOnly: true, build: { dexes: new Set([...platformDexes, ...dexes]), appDexes: new Set(dexes), dGroup: name => name, cGroup: name => name } });
@@ -67,7 +67,7 @@ function hosted(dexes: DexFile[], opts: Partial<WorldOptions> = {}): World {
   check("combined image retains app root ownership", image.prog.loaderOf("Pst") === image.prog.root, true);
   const cx = new Compiler(image), bytes = cx.buildUnit([image.prog.resolve("Pst", "chain", "()I")!]).bytes;
   compileModule(bytes);
-  check("combined image app code retains deferred symbolic sites", cx.symbolicImports.size > 0, true);
+  check("combined image app code links its default namespace statically", cx.symbolicImports.size, 0);
   const boot = new Compiler(image);
   boot.buildUnit([image.prog.resolve("java/lang/Object", "hashCode", "()I")!]);
   check("combined image does not defer platform methods", boot.symbolicImports.size, 0);
@@ -169,7 +169,9 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
 
 // ---- the numbering handshake, without a worker: a unit made by a World that follows the page's numbering is the page's only while the page has numbered nothing else
 {
+  // hierarchy certificates carry what a dynamic namespace resolved through Java
   const page = world(app), worker = world(app, { compileOnly: true });
+  page.prog.dynamicRoot = worker.prog.dynamicRoot = true;
   page.entry("Pst", "hot", "(I)I")(10);
   const uc = new UnitCompiler(worker);
   check("the worker is where the page started", sameMarks(worker.numbering(), page.base), true);
@@ -181,6 +183,7 @@ check("fixture answers", expected.join(","), "6,610,65529,125374,-8,25");
   if (job.prepared?.length) {
     const bad = { ...job, prepared: job.prepared.map(([key, sup, ifaces], i) => [key, i ? sup : "fixture/WrongSuperclass", ifaces] as [string, string | null, string[]]) };
     const rejected = world(app, { compileOnly: true }), rejecting = new UnitCompiler(rejected);
+    rejected.prog.dynamicRoot = true;
     bad.resolved = [...job.resolved ?? [], ["Pst", "fixture/RejectedIdentity", "Pst"]];
     if (!bad.prepared.some(([key]) => key === "Pst")) {
       const cls = rejected.prog.get("Pst")!;
