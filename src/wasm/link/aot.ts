@@ -56,6 +56,8 @@ export interface AotIndex {
   /** the D and C module of each platform class, run-length coded as (value, count) pairs; -1: none */
   dOf: number[];
   cOf: number[];
+  /** the runtime functions of each y<module>.wasm */
+  synths: string[][];
 }
 /** what a module says about itself, in its custom section "aot" */
 export interface DHeader { version?: number; classes: number[]; touch: number[]; synth: string[] }
@@ -85,7 +87,7 @@ export interface CHeader extends UnitHeader {
   absent: number[];
 }
 // Emitted class import names replace type reflection, which can reject valid GC references.
-export const VERSION = 13;
+export const VERSION = 14;
 
 /** the sizes of what a World numbers, which only grow */
 export interface Marks { names: number; tail: number; selectors: number; gaps: number; links: number }
@@ -205,9 +207,9 @@ export class AotRuntime {
   private appD: (WebAssembly.Exports | undefined)[] = [];
   /** the code modules (absolute) that patch each platform code module */
   private patchesOver = new Map<number, number[]>();
-  /** the app build's module of each synthetic function it holds, and whether each module is loaded (LIVE), being loaded or unusable (DEAD) */
-  private synthIn = new Map<string, number>();
-  private synthState: number[] = [];
+  /** the file of each synthetic function a build holds (the app build's over the platform's), and whether each file is loaded (LIVE), being loaded or unusable (DEAD) */
+  private synthIn = new Map<string, string>();
+  private synthState = new Map<string, number>();
   private appDOf = new Map<number, number>();
   // ---- build
   private dexSigs = new Set<string>();
@@ -265,6 +267,7 @@ export class AotRuntime {
     index.gaps.forEach((g, i) => w.gaps.set(g, i));
     for (const l of index.linkMessages) w.linkMessages.push(l);
     a.dOf = unrle(index.dOf); a.cOf = unrle(index.cOf);
+    index.synths.forEach((names, module) => names.forEach((n) => a.synthIn.set(n, `y${module}.wasm`)));
     a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.cState.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.rest = rest;
@@ -312,7 +315,7 @@ export class AotRuntime {
     this.cOf = cOf;
     this.cState.length = this.appFrom + app.modules;
     for (const [module, over] of app.patches) (this.patchesOver.get(over) ?? this.patchesOver.set(over, []).get(over)!).push(this.appFrom + module);
-    app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, module)));
+    app.synths.forEach((names, module) => names.forEach((n) => this.synthIn.set(n, `s${module}.wasm`)));
     for (const [block, module] of app.dOf) this.appDOf.set(block, module);
     this.appD.length = app.dModules;
     // the app build's files are a<module>.wasm, e<module>.wasm and s<module>.wasm, which no platform file is named like
@@ -373,26 +376,27 @@ export class AotRuntime {
     if (id <= this.nSeeded && !this.building && !w.opts.compileOnly && this.loadD(this.dOf[id - 1])) return;
     w.link(w.names[id]);
   }
-  /** puts the app build's code of synthetic function `name` in its slot, with the others of its module; false if the build has none */
+  /** puts a build's code of synthetic function `name` in its slot, with the others of its module; false if the builds have none */
   installSynth(name: string): boolean {
-    const k = this.synthIn.get(name);
-    if (k === undefined || this.synthState[k]) return false;
-    const w = this.w, mod = this.module(`s${k}.wasm`);
-    this.synthState[k] = LOADING;
-    if (!mod) { this.synthState[k] = DEAD; return false; }
+    const file = this.synthIn.get(name);
+    if (file === undefined || this.synthState.has(file)) return false;
+    const w = this.w, mod = this.module(file), dead = () => { this.synthState.set(file, DEAD); return false; };
+    this.synthState.set(file, LOADING);
+    if (!mod) return dead();
     const head = header<SHeader>(mod);
-    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt) { this.synthState[k] = DEAD; return false; }
-    if (!head.natives.every((id) => w.nativeBound(id))) { this.synthState[k] = DEAD; return false; }
+    if (head.version !== VERSION || (head.deopt ?? 0) !== this.deopt || !head.natives.every((id) => w.nativeBound(id))) return dead();
     for (const id of head.touch) this.touch(id);
     // the functions of this module are not made twice: they are in it
-    for (const s of head.synth) if (this.synthIn.get(s) !== k) w.ensureSynth(s);
+    for (const s of head.synth) if (this.synthIn.get(s) !== file) w.ensureSynth(s);
     const imports: Record<string, any> = { rt: w.rtImports(), host: w.host, n: w.nativeImports(head.natives), symbolic: w.symbolicImports(head.symbols ?? []), deopt: w.deoptImports };
     w.classImports(head.classImports, imports);
+    // a class whose module is being built, naming this function, has no globals yet: a stub stands in for the function, and the module serves the next one asked for
+    if (head.classImports.some(([m, n]) => imports[m][n] === undefined)) { this.synthState.delete(file); return false; }
     w.instantiate(mod, imports);
     for (const n of head.names) { const slot = w.synthSlotOf(n); if (slot !== undefined && !w.isStubbed(slot)) w.holdsSynth(n, slot); }
     for (const cls of head.allocs) w.allocated.add(cls);
     for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
-    this.synthState[k] = LIVE;
+    this.synthState.set(file, LIVE);
     return true;
   }
   /** whether the platform build numbers class `name`: the classes of its jars; those of the other jars of the class path are numbered, like the app's, as they are used */
@@ -606,11 +610,11 @@ export class AotRuntime {
   }
 
   // ---- build output
-  /** the index of a finished build */
-  finish(): AotIndex {
+  /** the index of a finished build whose runtime functions are in `synths` */
+  finish(synths: string[][]): AotIndex {
     const w = this.w;
     const withCode = [...w.prog.all()].filter((c) => c.dex);
     return { version: VERSION, deopt: this.deopt, dexes: [...new Set(withCode.map((c) => dexSig(c.dex!)))], programClasses: withCode.length, aotDexes: [...this.dexSigs], classes: this.nSeeded,
-      extraNames: w.names.slice(this.nSeeded + 1), tail: w.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, linkMessages: w.linkMessages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()] };
+      extraNames: w.names.slice(this.nSeeded + 1), tail: w.tail, selectors: w.selKeys.slice(1), gaps: w.gapList, linkMessages: w.linkMessages, dOf: rle(this.dGroupOf), cOf: rle(this.cGroupOf), extraGroup: this.dKeys.length, intrinsics: [...w.opts.intrinsics.keys()], synths };
   }
 }

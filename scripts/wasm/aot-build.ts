@@ -18,6 +18,7 @@ import { MAY_SUSPEND, SERVICES } from "../../src/wasm/host/suspend";
 import { waitingNatives } from "../../src/wasm/host/nativesource";
 import { Compiler } from "../../src/wasm/compiler/j2w";
 import { DEOPT_ABI, packModule, unitHeader, type CHeader, type DHeader } from "../../src/wasm/link/aot";
+import { synthModules } from "../../src/wasm/link/apps";
 import type { MethodInfo } from "../../src/wasm/compiler/program";
 import { compileModule } from "../../src/wasm/link/module";
 import { AOT_ROOT, buildKey, sourceKey } from "./aot-key";
@@ -166,27 +167,31 @@ dGroups.forEach((blocks, k) => {
   writeFileSync(join(out, `d${k}.wasm`), file); sized(`d${k}.wasm`, file.length);
   dBytes += file.length;
 });
-// the classes the code reserved slots for beyond the platform's (arrays, ...) share one module; building it can reserve more
+// the classes the code reserved slots for beyond the platform's (arrays, ...) share one module, and the runtime functions the modules name, which a World would
+// otherwise make a module for each of, a few; building either can name more of both
 const extraNames = () => w.tail.flatMap((t) => (typeof t === "string" ? [] : [t[0]]));
-let extras: number, xbytes: Uint8Array, xtouch: Set<string>;
+let extras: number, xbytes: Uint8Array, xtouch: Set<string>, synths: string[][], nSynths: number, yBytes: number;
 do {
+  yBytes = 0;
+  synths = synthModules(w, (k, bytes) => { writeFileSync(join(out, `y${k}.wasm`), bytes); yBytes += bytes.length; });
+  nSynths = w.synths().length;
   const names = extraNames();
   extras = names.length;
   w.beginTouch();
   xbytes = w.classModule(names.map((n) => w.link(n)));
   xtouch = w.endTouch();
-} while (extraNames().length !== extras);
+} while (extraNames().length !== extras || w.synths().length !== nSynths);
 if (check(xbytes)) throw new Error("extra classes: module does not validate");
 const xfile = packModule({ classes: [], touch: idsOf(xtouch), synth: synthOf(xtouch) } satisfies DHeader, xbytes);
 writeFileSync(join(out, `d${aot.dKeys.length}.wasm`), xfile); dBytes += xfile.length;
 const t2 = performance.now();
 
-const index = aot.finish();
+const index = aot.finish(synths);
 writeFileSync(join(out, "index.json"), JSON.stringify(index));
 writeFileSync(join(out, "waiting.json"), JSON.stringify(waitingNatives()));
 writeFileSync(join(out, "apps.json"), "[]");
 const kb = (n: number) => (n / 1024).toFixed(0) + " KB";
-console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), index ${kb(JSON.stringify(index).length)}`);
+console.log(`${aot.nSeeded} classes of ${jars.length} jars${appDexes.length ? " and the app" : ""} (${nMethods} methods compiled) in ${aot.cKeys.length} C modules (${kb(cBytes)}, traces ${kb(mapBytes)}) and ${aot.dKeys.length} D modules (${kb(dBytes)}), ${synths.length} runtime function modules (${kb(yBytes)}), index ${kb(JSON.stringify(index).length)}`);
 console.log(`largest module ${kb(largest)}, compile ${(t1 - t0).toFixed(0)} ms (${(w.stats.compileMs).toFixed(0)}), classes ${(t2 - t1).toFixed(0)} ms${validate ? `, V8 validate+compile ${v8Ms.toFixed(0)} ms` : ""}; ${index.selectors.length} selectors, ${index.gaps.length} gaps, ${index.tail.length} extra slots, ${index.extraNames.length} extra ids`);
 console.log("guarded capture work:", JSON.stringify(deoptWork));
 console.log("phases (ms):", Object.entries(w.stats.phase).map(([k, v]) => `${k} ${v.toFixed(0)}`).join(", "));

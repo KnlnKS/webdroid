@@ -23,6 +23,33 @@ export function invalidFunction(bytes: Uint8Array): { fn: number; message: strin
   }
   return undefined;
 }
+/** the World's synthetic functions as modules of a few dozen, which load together; a function V8 rejects is left to the on-demand compiler, as in `compileChecked` */
+export function synthModules(w: World, emit: (module: number, bytes: Uint8Array) => void): string[][] {
+  const synths: string[][] = [];
+  // building a group can name more synthetic functions (one that calls another): the list is read again for the next group
+  for (let at = 0, all = w.synths(); at < all.length; all = w.synths()) {
+    const end = Math.min(at + SYNTH_GROUP, all.length);
+    let group = all.slice(at, end);
+    for (;;) {
+      const cx = new Compiler(w, w.aot ? w.aot.deopt === DEOPT_ABI : !!w.opts.cold || !!w.opts.deopt);
+      w.beginTouch();
+      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes);
+      if (!bad) {
+        if (built.kept.length) {
+          const header: SHeader = { ...unitHeader(w, cx, touch), names: built.kept };
+          emit(synths.length, packModule(header, built.bytes));
+          synths.push(built.kept);
+        }
+        break;
+      }
+      const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs]?.slice(1) : "";
+      if (!name || !group.some((g) => g.name === name)) break;
+      group = group.filter((g) => g.name !== name);
+    }
+    at = end;
+  }
+  return synths;
+}
 /** `methods` as a module that installs them: a method the compiler emits invalid code for (`check` says so) is left out, to the on-demand compiler, which fails the same way if it is ever called */
 export function compileChecked(w: World, methods: MethodInfo[], check: (bytes: Uint8Array) => { fn: number; message: string } | undefined = invalidFunction):
   { cx: Compiler; built: ReturnType<Compiler["buildUnit"]>; touch: Set<string>; skipped: Map<string, string> } {
@@ -101,29 +128,6 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
   flush();
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
   w.replay(demand.infos);
-  // building a group can name more synthetic functions (one that calls another): the list is read again for the next group
-  const synths: AppIndex["synths"] = [];
-  for (let at = 0, all = w.synths(); at < all.length; all = w.synths()) {
-    const end = Math.min(at + SYNTH_GROUP, all.length);
-    let group = all.slice(at, end);
-    for (;;) {
-      const cx = new Compiler(w, w.aot ? w.aot.deopt === DEOPT_ABI : !!w.opts.cold || !!w.opts.deopt);
-      w.beginTouch();
-      const built = cx.buildSynthetics(group), touch = w.endTouch(), bad = invalidFunction(built.bytes);
-      if (!bad) {
-        if (built.kept.length) {
-          const module = synths.length, header: SHeader = { ...unitHeader(w, cx, touch), names: built.kept };
-          synths.push(built.kept);
-          files.push([`s${module}.wasm`, packModule(header, built.bytes)]);
-        }
-        break;
-      }
-      // a function V8 rejects is left to the on-demand compiler, as in `compileChecked`
-      const name = bad.fn >= 0 ? cx.mb.funcNames[bad.fn - cx.mb.nImportedFuncs]?.slice(1) : "";
-      if (!name || !group.some((g) => g.name === name)) break;
-      group = group.filter((g) => g.name !== name);
-    }
-    at = end;
-  }
+  const synths = synthModules(w, (k, bytes) => files.push([`s${k}.wasm`, bytes]));
   return { index: { version: APP_VERSION, deopt: aot.deopt, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand, libraries: aot.rootLibraries() }, files };
 }
