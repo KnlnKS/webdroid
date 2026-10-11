@@ -38,7 +38,12 @@ import { onProcessExit, processExited } from "../../process-exit";
 /** what the JS heap of a tab, which every process's Java heap and the program models share, may grow by before an allocation fails */
 const TAB_HEAP = 2048 * 1024 * 1024;
 
-declare global { interface Window { __wdCold?: { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string }; __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program } }
+/** the Wasm tier's code status, where a harness reads it: a page's window or a process Worker's global */
+type ColdStatus = { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string };
+declare global {
+  var __wdCold: ColdStatus | undefined;
+  interface Window { __wdCold?: ColdStatus; __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program }
+}
 
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
 let starting = typeof location !== "undefined";
@@ -67,7 +72,7 @@ function browserCold(): boolean {
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
   const w = measureCompile("residual.wasmSetup", () => new World(prog, { cold: browserCold(), holdUpgrades: () => starting, intrinsics, natives, heapUsed, net: hostNet, loop: hostLoop, heapLimit: TAB_HEAP, hostWhole, guest: guestMemory, claim: (owner, handle) => rt.claimHandle?.(owner, handle), ...extra }));
   bindWorld(w);
-  if (typeof window !== "undefined") window.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
+  globalThis.__wdCold = { enabled: !!w.opts.cold, stats: w.stats };
   w.onGap = (id) => { count("wasmGaps"); rt.noteMissing(`wasm gap: ${w.gapList[id]}`); };
   // the JS tier notes the class a site cannot link as it links it
   w.onUnresolved = (message, cls) => rt.noteMissing(cls ? "class " + cls : message);
@@ -98,7 +103,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
     code?.start(made);
-    if (typeof window !== "undefined" && window.__wdCold) Object.assign(window.__wdCold, { worker: code?.compiler.stats, appSaved: code?.hit, appSource: code?.source, appPersisted: code && (() => code!.persisted), appAttached: made.appAttached, appBuilds: code?.builds, appSettle: code && (() => code!.settle(made)), aotKey: store?.key });
+    if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { worker: code?.compiler.stats, appSaved: code?.hit, appSource: code?.source, appPersisted: code && (() => code!.persisted), appAttached: made.appAttached, appBuilds: code?.builds, appSettle: code && (() => code!.settle(made)), aotKey: store?.key });
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
     return made;

@@ -34,6 +34,14 @@ export function workerControl(logs: string[], phase: () => string) {
       vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),
       yields: {pushes:yieldStats.pushes,fires:yieldStats.fires,pending:yieldStats.pending()}, timedParks: timedParks.size, web: webViewInfo(),
       main: { ...mainDbg }, perf: { ...perf }, missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
+    /** whether the app's Wasm code was attached from persisted code, or once `save` settles it, saved */
+    codeReadiness: async (save: boolean) => {
+      const cold = globalThis.__wdCold;
+      if (!cold) return null;
+      if (save) await cold.appSettle?.();
+      return { saved: !!cold.appSaved, source: cold.appSource ?? null, attached: !!cold.appAttached,
+        kept: !!cold.appBuilds?.some(build => build.kept), persisted: save ? !!await cold.appPersisted?.() : null };
+    },
     alive: async () => processExited() || phase() !== "ready" ? false : onMain(() => !processExited()),
     uiTree: local.uiTree,
     tap: local.tap,

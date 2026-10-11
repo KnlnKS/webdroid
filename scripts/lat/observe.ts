@@ -30,7 +30,7 @@ export function installLatencyObserver(counters: string[]) {
     }), ...[...found.values()].map(row => ({ ...row, receiptProbe: true, proof: null }))];
   };
   const shown = (canvas: HTMLCanvasElement) => {
-    if (root.document.visibilityState !== "visible" || host.wd?.displayCanvas?.() !== canvas) return false;
+    if (root.document.visibilityState !== "visible" || !host.wd?.displayCanvases?.().includes(canvas)) return false;
     for (let win: Window = window;; win = win.parent) {
       const element = win === window ? canvas : win.document.documentElement;
       const style = win.getComputedStyle(element), rect = element.getBoundingClientRect();
@@ -43,18 +43,20 @@ export function installLatencyObserver(counters: string[]) {
     }
   };
   if (window === root) host.__wdLatObserver = { firstApp: null, lastApp: null, onFrame: null, times: null, snapshot };
+  // a process Worker's canvas names its process; a realm's own screen shows its app
+  const appOf = (canvas: HTMLCanvasElement) => canvas.dataset.pkg ? { pkg: canvas.dataset.pkg, pid: canvas.dataset.pid ?? null }
+    : canvas.id === "screen" && local.wd?.app() ? { pkg: local.wd.app().pkg as string, pid: new URLSearchParams(location.search).get("pid") } : null;
   const original = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
   ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bitmap: ImageBitmap | null) {
-    const canvas = this.canvas as HTMLCanvasElement, observer = host.__wdLatObserver;
-    const copy = bitmap && observer?.onFrame && canvas.id === "screen" && local.wd?.app() ? createImageBitmap(bitmap) : null;
+    const canvas = this.canvas as HTMLCanvasElement, observer = host.__wdLatObserver, app = bitmap && observer ? appOf(canvas) : null;
+    const copy = app && observer.onFrame ? createImageBitmap(bitmap!) : null;
     let result;
     try { result = original.call(this, bitmap); }
     catch (error) { if (copy) void copy.then(image => image.close(), () => {}); throw error; }
     const at = performance.timeOrigin + performance.now() - root.performance.timeOrigin;
     // receipts only while a capture listens: visibility checks walk computed styles of every frame
-    if (bitmap && canvas.id === "screen" && observer && (observer.onFrame || observer.times || !observer.firstApp) && local.wd?.app()) {
-      const receipt = { at, url: location.href, pid: new URLSearchParams(location.search).get("pid"),
-        pkg: local.wd.app().pkg, tier: local.wd.tier, visible: shown(canvas) };
+    if (app && (observer.onFrame || observer.times || !observer.firstApp)) {
+      const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, tier: local.wd?.tier ?? host.wd?.tier, visible: shown(canvas) };
       if (receipt.visible) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(at); }
       observer.onFrame?.(receipt, copy);
     }

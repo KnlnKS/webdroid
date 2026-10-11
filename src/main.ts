@@ -229,6 +229,7 @@ const wd = {
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
   foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
+  foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundWorker()?.control.codeReadiness(save)) ?? null,
   visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
   background: (ms = 1000) => processBroker().activities.background(ms),
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),

@@ -59,6 +59,9 @@ type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: un
 const inPage = (steps: unknown, counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) => `(${async function run(steps: any[], counters: string[], save: boolean, replay: boolean, expectedLaunch: Expectation) {
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
+  // a process Worker's state reaches the page over its control port
+  const workerMode = new URLSearchParams(location.search).get("processMode") === "worker";
+  const foreground = async () => (await w.wd.foregroundWorkerSnapshot())?.snapshot ?? null;
   const realms = () => [window, ...[...document.querySelectorAll("iframe")].flatMap(f => {
     try { return f.contentWindow && new URL(f.contentWindow.location.href).origin === location.origin && f.contentWindow.location.pathname === "/process" ? [f.contentWindow] : []; }
     catch { return []; }
@@ -82,6 +85,13 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     return { at: performance.now(), frames: realms().map(readRealm), workers };
   };
   const appRealms = () => realms().filter(win => !!(win as any).wd?.app());
+  const workerReadiness = async (save: boolean) => {
+    const code = await w.wd.foregroundCodeReadiness(save);
+    if (!code) throw new Error("foreground Worker code readiness unavailable");
+    if (save ? !code.kept && !code.persisted : !code.saved || code.source !== "persist" || !code.attached)
+      throw new Error("Wasm Worker app code is not " + (save ? "saved" : "attached from persisted code") + ": " + JSON.stringify(code));
+    return code;
+  };
   const readiness = async (win: Window, save: boolean) => {
     const wd = (win as any).wd, cold = win.__wdCold;
     if (wd.tier === "wasm") {
@@ -133,7 +143,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       let image: ImageBitmap | undefined;
       try {
         image = await bitmap;
-        if (epoch !== generation || !receipt.visible || receipt.pkg !== w.wd?.app()?.pkg || receipt.tier !== w.wd?.tier) return;
+        if (epoch !== generation || !receipt.visible || !workerMode && receipt.pkg !== w.wd?.app()?.pkg || receipt.tier !== w.wd?.tier) return;
         frameCount++;
         if (latest && latest.t > receipt.at) return;
         latest?.image.close();
@@ -144,10 +154,11 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     };
   };
   const probes: { start: number; end: number }[] = [];
+  /** the UI state, or null while the app's main looper is too busy to answer within a second */
   const state = async () => {
     const start = performance.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    try { return await Promise.race([w.wd.uiTree(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("UI-state observation timed out")), 1000); })]); }
+    try { return await Promise.race([w.wd.uiTree(), new Promise((resolve) => { timer = setTimeout(() => resolve(null), 1000); })]); }
     finally { clearTimeout(timer); probes.push({ start, end: performance.now() }); }
   };
   const pixelsMatch = (expectation: Expectation, pixels: Pixels[], baseline: Pixels[]) => expectation.pixels.every((p, i) => {
@@ -187,7 +198,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
         }
         if (w.wd && !candidates.length) {
           nodes = await state();
-          if (w.__wdLatMatches(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
+          if (nodes && w.__wdLatMatches(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
         }
       } catch (e) { error = String(e); break; }
       // the next probe follows the next app frame: probing runs Java on the app's main looper
@@ -196,23 +207,32 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     return await settle() ?? { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable", probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
   };
   collect();
-  const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd?.perf[k] ?? 0]));
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  while (!(w.wd && w.wd.perf.draws > 0)) await sleep(5);
-  const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(snapshot()).filter(([, v]) => v));
+  /** the topmost app's canvas: a process Worker's lies under the page's system layer */
+  const appCanvas = (): HTMLCanvasElement => workerMode ? w.wd.displayCanvases().findLast((c: HTMLCanvasElement) => c.dataset.pkg) : w.wd.displayCanvas();
+  /** the app's counters and main queue: the foreground Worker's, or this realm's */
+  const app = async () => {
+    if (!workerMode) return w.wd ? { perf: w.wd.perf, queued: w.wd.mainDbg.queued } : null;
+    const s = w.wd && await foreground();
+    return s && { perf: s.perf, queued: s.main.queued };
+  };
+  const snapshot = async () => { const perf = (await app())?.perf; return Object.fromEntries(counters.map((k) => [k, perf?.[k] ?? 0])); };
+  while (!((await app())?.perf.draws > 0)) await sleep(5);
+  const firstFrame = Math.round(performance.now()), launchPerf = Object.fromEntries(Object.entries(await snapshot()).filter(([, v]) => v));
   const idle = async (maxMs = 8000) => {
     const until = performance.now() + maxMs;
-    let quiet = 0, draws = w.wd.perf.draws;
+    let quiet = 0, draws = (await app())!.perf.draws;
     while (performance.now() < until) {
-      const now = performance.now(), cur = w.wd.perf.draws;
-      quiet = w.wd.mainDbg.queued === 0 && cur === draws ? quiet || now : 0;
+      const now = performance.now(), state = (await app())!, cur = state.perf.draws;
+      quiet = state.queued === 0 && cur === draws ? quiet || now : 0;
       if (quiet && now - quiet >= 600) return;
       draws = cur;
       await sleep(100);
     }
   };
-  for (const until = performance.now() + 60_000; !appRealms().some(win => (win as any).wd.perf.presentations > 0);) {
-    if (performance.now() > until) throw new Error("First app presentation unavailable (Worker launches require a separate presentation protocol)");
+  const presented = async () => workerMode ? (await app())!.perf.presentations > 0 : appRealms().some(win => (win as any).wd.perf.presentations > 0);
+  for (const until = performance.now() + 60_000; !await presented();) {
+    if (performance.now() > until) throw new Error("First app presentation unavailable");
     await sleep(50);
   }
   result.presentation = { firstApp: observer.firstApp };
@@ -231,14 +251,14 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt, appPresentationMarks,
     idle: Math.round(performance.now()), perf: launchPerf, marks };
   result.processesBefore = await diagnostics();
-  if (replay) {
-    if (new URLSearchParams(location.search).get("processMode") === "worker") throw new Error("Worker warm readiness is unavailable");
-    result.codeReadiness = { phase: "attached", realms: await Promise.all(appRealms().map(win => readiness(win, false))) };
-  }
+  if (replay) result.codeReadiness = { phase: "attached", realms: workerMode ? [await workerReadiness(false)] : await Promise.all(appRealms().map(win => readiness(win, false))) };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
+  // a gesture goes to the element under its press, as the browser's hit test sends it
+  let target: Element | null = null;
   const ev = (type: string, x: number, y: number) => {
-    const c = screen(), r = c.getBoundingClientRect();
-    c.dispatchEvent(new PointerEvent(type, { clientX: r.left + x * r.width / 1080, clientY: r.top + y * r.height / 2160, pointerId: 1, isPrimary: true, bubbles: true, pointerType: "touch" }));
+    const r = screen().getBoundingClientRect(), clientX = r.left + x * r.width / 1080, clientY = r.top + y * r.height / 2160;
+    if (type === "pointerdown") target = document.elementFromPoint(clientX, clientY) ?? screen();
+    target!.dispatchEvent(new PointerEvent(type, { clientX, clientY, pointerId: 1, isPrimary: true, bubbles: true, pointerType: "touch" }));
   };
   const out = result.taps;
   for (const s of steps) {
@@ -296,13 +316,13 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       ({ x, y } = at);
     }
     const processesBefore = s.m ? await diagnostics() : undefined;
-    const baseline = s.m ? await regionsOf(w.wd.displayCanvas(), s.expect) : [];
+    const baseline = s.m ? await regionsOf(appCanvas(), s.expect) : [];
     if (s.m) collect();
     const t0 = performance.now();
     ev("pointerdown", x, y);
     await sleep(s.hold ?? 60);
     if (s.m && w.__wdProfiling) (function __wdMarkUp() { const t = performance.now(); while (performance.now() - t < 1); })();
-    const before = snapshot(), compileBefore = observer.snapshot(), tu = performance.now();
+    const before = await snapshot(), compileBefore = observer.snapshot(), tu = performance.now();
     ev("pointerup", x, y);
     if (!s.m) { await sleep(300); await idle(); continue; }
     const semantic = intended(s.expect, tu, baseline);
@@ -313,20 +333,20 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     }
     const response = await semantic;
     stop();
-    const after = response.compileAfter.find((p: any) => p.url === location.href)?.perf ?? snapshot();
+    const after = workerMode ? await snapshot() : response.compileAfter.find((p: any) => p.url === location.href)?.perf ?? await snapshot();
     const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: response.compileAt }, m: s.m, frames: frameCount,
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
     out.push(tap);
     await idle();
     tap.processesAfter = await diagnostics();
-    const completionNodes = await state(), completionPixels = await regionsOf(w.wd.displayCanvas(), s.expect);
+    const completionNodes = await state(), completionPixels = await regionsOf(appCanvas(), s.expect);
     tap.semantic = { ...response, completion: { at: performance.now(), nodes: completionNodes, pixels: completionPixels } };
-    if (frameError || !w.__wdLatMatches(completionNodes, s.expect) || !pixelsMatch(s.expect, completionPixels, baseline)) {
+    if (frameError || !completionNodes || !w.__wdLatMatches(completionNodes, s.expect) || !pixelsMatch(s.expect, completionPixels, baseline)) {
       tap.intended = null; tap.semantic = { ...tap.semantic as object, error: frameError ?? "intended rendered state did not persist through tap completion" };
     }
   }
   result.processesAfter = await diagnostics();
-  if (save) result.codeReadiness = { phase: "saved", realms: await Promise.all(appRealms().map(win => readiness(win, true))) };
+  if (save) result.codeReadiness = { phase: "saved", realms: workerMode ? [await workerReadiness(true)] : await Promise.all(appRealms().map(win => readiness(win, true))) };
   document.title = "DONE";
 }})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
@@ -444,7 +464,6 @@ for (const name of names) {
     if (!validExpectation(expectedLaunch) || steps.some((step: any) => step.m && !validExpectation(step.expect))) throw new Error("scenario intended-state expectations missing");
     if (engine === "webkit" && cpuProfile) throw new Error("WebKit CPU profiling requires a separate protocol");
     row.apk = apk; row.expectedTaps = steps.flatMap((step: { m?: string }) => step.m ? [step.m] : []);
-    if (row.processMode === "worker") throw new Error("Worker app presentation and persisted-code readiness need a separate capture protocol");
     profile = mkdtempSync(join(tmpdir(), "wdlat-"));
     browser = await openBrowser(profile); row.browser = browser.version;
     if (warm) {
