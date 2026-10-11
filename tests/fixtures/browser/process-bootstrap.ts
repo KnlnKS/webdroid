@@ -112,7 +112,7 @@ export async function endpointOwnership() {
       entered(); return new Promise(() => {});
     },
     service: async () => ({ pid, id: 1 }), serviceConnected: async () => {}, contentProvider: async () => null,
-    broadcast: async (_intent, _component, _ordered, result) => result, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
+    broadcast: async (_intent, _component, _ordered, result) => result, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged: async () => {},
     packageRemoved: async () => { await new Promise(resolve => setTimeout(resolve, 10)); removed = true; },
     kill: () => { setTimeout(() => { killed = true; broker.fail(pid, "fixture kill delivered", NOT_CRASHED); }, 10); },
   });
@@ -155,7 +155,7 @@ export async function endpointOwnership() {
         if(request.intent?.bytes[0]===49){await life.signal(8001,9);await life.signal(8003,9);return {pid:deaths,id:1};}
         return {pid:8002,id:removed?2:1};
       }, serviceConnected:async()=>{}, contentProvider:async()=>null,
-      broadcast:async(_i,_c,_o,r)=>r, processDied:async token=>life.died(token), locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
+      broadcast:async(_i,_c,_o,r)=>r, processDied:async token=>life.died(token), locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{clips++;}, kill:()=>{},
       packageRemoved:async()=>{await new Promise(r=>setTimeout(r,10));removed=true;}
     });};`;
   const url = URL.createObjectURL(new Blob([workerCode], {type:"text/javascript"}));
@@ -379,8 +379,8 @@ export async function clipboardOwnership() {
   let peerChanges = 0, peerChanged!: () => void;
   const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),
     service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-    processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
-  broker.ready(8302,empty); broker.ready(8303,{...empty,processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{}});
+    processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{peerChanges++;peerChanged?.();},packageRemoved:async()=>{},kill:()=>{}};
+  broker.ready(8302,empty); broker.ready(8303,{...empty,processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{}});
   const peers = [8302,8303].map(pid=>callProxy<BrokerCalls>(broker.brokerPort(pid),brokerMethods));
   const code = `import {callProxy,serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
     let broker;
@@ -389,7 +389,7 @@ export async function clipboardOwnership() {
         broker=callProxy(data.reverse,${JSON.stringify(brokerMethods)}).endpoint;
         serveProcess(data.endpoint,{activity:async()=>{},transact:async r=>({handled:0,data:r.data}),service:async()=>null,
           serviceConnected:async()=>{},contentProvider:async()=>null,broadcast:async(_i,_c,_o,r)=>r,
-          processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>self.postMessage({accountsChanged:true}), settingsChanged:async(table,name)=>self.postMessage({setting:[table,name]}), clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
+          processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>self.postMessage({accountsChanged:true}), settingsChanged:async(table,name)=>self.postMessage({setting:[table,name]}),storageChanged:async()=>{}, clipboardChanged:async()=>self.postMessage({changed:true}),packageRemoved:async()=>{},kill:()=>{}});
         self.postMessage({ready:true});return;
       }
       try {
@@ -757,7 +757,7 @@ export async function locationOwnership() {
   const peerClient = callProxy<BrokerCalls>(broker.brokerPort(peer.pid),brokerMethods);
   let peerEvents = 0;
   const empty: ProcessEndpoint = {activity:async()=>{},transact:async request=>({handled:0,data:request.data}),service:async()=>null,serviceConnected:async()=>{},contentProvider:async()=>null,
-    broadcast:async(_i,_c,_o,r)=>r,accountsChanged:async()=>{},settingsChanged:async()=>{},clipboardChanged:async()=>{},processDied:async()=>{}, locationChanged:async()=>{peerEvents++;},packageRemoved:async()=>{},kill:()=>{}};
+    broadcast:async(_i,_c,_o,r)=>r,accountsChanged:async()=>{},settingsChanged:async()=>{},storageChanged:async()=>{},clipboardChanged:async()=>{},processDied:async()=>{}, locationChanged:async()=>{peerEvents++;},packageRemoved:async()=>{},kill:()=>{}};
   broker.ready(peer.pid,empty);
   const emit = (latitude:number) => watched!({coords:{latitude,longitude:2,accuracy:3,altitude:null,altitudeAccuracy:null,heading:null,speed:null},timestamp:Date.now()} as GeolocationPosition);
   const waitEvents = async(count:number)=>{

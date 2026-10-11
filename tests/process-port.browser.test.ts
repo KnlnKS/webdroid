@@ -63,7 +63,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
           serveProcess(data.endpoint, {
             activity: async()=>{}, service: async()=>null, serviceConnected: async()=>{}, contentProvider:async()=>null,
             broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
-            processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged:async()=>{clips++;},
+            processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{clips++;},
             transact:async(request,caller)=>{
               if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data,cached};}
               if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
@@ -80,7 +80,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const empty = { bytes: new Uint8Array(0), objects: [] };
       const stopCallbacks = serveProcess(callbacks.port1, {
         activity: async () => {}, service: async () => null, serviceConnected: async () => {}, contentProvider: async () => null,
-        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{}, clipboardChanged: async () => {},
+        broadcast: async (_i, _c, _o, r) => r, packageRemoved: async () => {}, kill: () => {}, processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged: async () => {},
         transact: async () => {
           await proxy.endpoint.clipboardChanged();
           return { handled: 1, data: { ...empty, bytes: Uint8Array.of(21) } };

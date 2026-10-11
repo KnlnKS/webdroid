@@ -6,7 +6,7 @@ import { newObj, scall, vcall, iof } from "../jvm/natives/jentry";
 import { logUncaught, detached } from "../jvm/natives/jthrowable";
 import { systemResource } from "./resnative";
 import { toJsArray } from "../jvm/natives/jcoll";
-import { settingsStore } from "./settings";
+import { settingsAccess } from "./settings";
 
 const VIBRATOR_ID = 1;
 /** VibrationSettings' fallbacks for prebaked effects a motor without effects cannot play (CLICK,
@@ -78,7 +78,7 @@ const HAPTIC_EFFECTS: Record<number, [number, boolean]> = {
  *  unless the caller bypasses that setting */
 function* performHapticFeedback(constant: number, always: number): Gen<void> {
   const effect = HAPTIC_EFFECTS[constant];
-  if (!effect || !always && settingsStore().get("system", "haptic_feedback_enabled") === "0") return;
+  if (!effect || !always && (yield* awaited(settingsAccess().get("system", "haptic_feedback_enabled"))) === "0") return;
   const vibration = yield scall("android/os/VibrationEffect", "get", "(IZ)Landroid/os/VibrationEffect;", effect[0], +effect[1]);
   play(...(yield* timingsOf(vibration)));
 }

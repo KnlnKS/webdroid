@@ -32,6 +32,8 @@ export function useSettingsStore(shared: SettingsStore): () => void {
   return stopWatching = shared.watch(settingsChanged);
 }
 export const settingsStore = (): SettingsStore => store;
+/** the settings this process reads: its store, or the broker's */
+export const settingsAccess = (): SettingsAccess => access;
 export function useSettingsAccess(shared: SettingsAccess): void {
   stopWatching(); access = shared;
 }

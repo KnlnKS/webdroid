@@ -6,7 +6,9 @@ type PackageSnapshot = { certificates: Uint8Array[]; pkg: string;
   source: RemoteFileData | { index: PackedArchiveIndex; base: string }; splits: RemoteFileData[];
   uid: number; system: boolean; grants: string[]; signatures: Uint8Array[] | null };
 export type ProcessBootstrap = { pid: number; pkg: string; process: string; uid: number; registry: PackageSnapshot[];
-  launcher: { assetKey: string } | null; refreshRate: number; broker?: MessagePort; display?: MessagePort; ime?: MessagePort; web?: MessagePort; media?: MessagePort };
+  launcher: { assetKey: string } | null; refreshRate: number; broker?: MessagePort; display?: MessagePort; ime?: MessagePort; web?: MessagePort; media?: MessagePort;
+  /** a Worker's replica of the device storage its package reads (device-storage.ts) */
+  storage?: [string, string][] };
 
 /** Use at every bootstrap hop: structuredClone and the subsequent Worker postMessage. */
 export function bootstrapTransfers(data: ProcessBootstrap): MessagePort[] {

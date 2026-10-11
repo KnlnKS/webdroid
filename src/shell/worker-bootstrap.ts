@@ -12,6 +12,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     setProcessName(data.process);
     const { attachProcessBrokerPort, closeProcessBrokerPort } = await import("./process-endpoint");
     const broker = attachProcessBrokerPort(data.broker);
+    (await import("./device-storage")).useStorageReplica(data.storage ?? [], broker.storageWrite);
     if (data.display) {
       const {sendFrames} = await import("./frame-port");
       const {setScreenSink} = await import("./device");

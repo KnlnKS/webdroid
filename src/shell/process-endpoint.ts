@@ -33,12 +33,14 @@ import { cookieTransport, useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import { locationTransport } from "../android/locationmanager";
 import { useHostUi } from "./host-ui";
+import { packageDataTransport } from "../android/appdata";
+import { storageChanged } from "./device-storage";
 import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
 
 import { callProxy, processError, processFailure } from "./process-port";
 
 let calls: ReturnType<typeof callProxy<BrokerCalls>> | undefined;
-const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited"],
+const commandProxy = (port: MessagePort) => callProxy<BrokerCalls>(port, brokerMethods, ["processExited", "storageWrite"],
   error => error.javaClass ? rt.mkThrowable(error.javaClass, error.message) : processError(error));
 const brokerCalls = (): BrokerCalls => (calls ??= commandProxy(processBroker().brokerPort(PROCESS_PID))).endpoint;
 const workerLocation = remoteLocation(brokerCalls);
@@ -103,6 +105,7 @@ function connectCommandTransports(): void {
       descriptorTransport.calls = brokerCalls;
       vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
       useHostUi(brokerCalls);
+      packageDataTransport.change = (pkg, how, broadcasts, prompt) => brokerCalls().packageDataChange(pkg, how, broadcasts, prompt);
     }
     usePreferenceAccess({
       preferenceRead: (name, key) => brokerCalls().preferenceRead(name, key),
@@ -247,6 +250,7 @@ export function createProcessEndpoint(requests = workerActivityResults): Process
     accountsChanged: async () => accountsChanged(),
     clipboardChanged: async () => clipboardChanged(),
     settingsChanged: async (table, name) => settingsChanged(table, name),
+    storageChanged: async (key, value) => storageChanged(key, value),
     packageRemoved: async pkg => forgetRemoved(pkg),
     kill: (signal, note) => { if (note) noteAppKill(note); exitProcess({ signal }); },
     activity: async (request) => {

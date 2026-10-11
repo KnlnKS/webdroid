@@ -14,7 +14,6 @@ import { sendIntent } from "./pendingintent";
 import { attr } from "./axml";
 import { resString } from "./res";
 import type { PackageDataChange } from "../shell/packagedata";
-import { hostUi } from "../shell/host-ui";
 import type { Receiver } from "../shell/processes";
 import { detached } from "../jvm/natives/jthrowable";
 
@@ -30,9 +29,13 @@ function* packageBroadcast$(action: string, pkg: string, uid: number, flags: str
   const targets = (yield* awaited(queryReceivers(intent))).filter((r) => r.owner.pkg !== pkg).map((r) => ({ pkg: r.owner.pkg, cls: r.name, priority: r.priority }));
   return { data: yield* awaited(encodeIntent(intent)), targets };
 }
-async function change(pkg: string, how: PackageDataChange, broadcasts: Broadcast[]): Promise<void> {
+/** a process Worker's route to the broker, which runs the change as system_server does */
+export const packageDataTransport = { change: null as ((pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string) => Promise<boolean>) | null };
+/** whether the change ran: with a `prompt`, only once the user agreed to it */
+async function change(pkg: string, how: PackageDataChange, broadcasts: Broadcast[], prompt?: string): Promise<boolean> {
+  if (packageDataTransport.change) return packageDataTransport.change(pkg, how, broadcasts, prompt);
   const { processBroker } = await import("../shell/processes");
-  await processBroker().changePackageData(pkg, how, broadcasts);
+  return processBroker().changePackageData(pkg, how, broadcasts, prompt);
 }
 
 /** clearApplicationUserData of an installed package, `fromApp` when it clears its own: its processes
@@ -51,14 +54,13 @@ const RESULT_FIRST_USER = 1, DELETE_SUCCEEDED = 1, DELETE_FAILED_INTERNAL_ERROR 
 /** deletePackageX for a package the user installed: its processes die, it goes with all its data,
  *  and ACTION_PACKAGE_REMOVED and ACTION_PACKAGE_FULLY_REMOVED go out. A system package answers
  *  DELETE_FAILED_INTERNAL_ERROR, as one without an update does. */
-export const deletePackage = driven(function* (pkg: string): Gen<number> {
+export const deletePackage = driven(function* (pkg: string, prompt?: string): Gen<number> {
   const record = packages.get(pkg);
   if (!record || record.system) return DELETE_FAILED_INTERNAL_ERROR;
   const flags = ["android.intent.extra.DATA_REMOVED", "android.intent.extra.REMOVED_FOR_ALL_USERS"];
   const broadcasts = [yield* packageBroadcast$("android.intent.action.PACKAGE_REMOVED", pkg, record.uid, flags),
     yield* packageBroadcast$("android.intent.action.PACKAGE_FULLY_REMOVED", pkg, record.uid, flags)];
-  yield* awaited(change(pkg, { kind: "remove" }, broadcasts));
-  return DELETE_SUCCEEDED;
+  return (yield* awaited(change(pkg, { kind: "remove" }, broadcasts, prompt))) ? DELETE_SUCCEEDED : DELETE_FAILED_ABORTED;
 });
 
 const DELETE_PACKAGES = "android.permission.DELETE_PACKAGES";
@@ -117,7 +119,7 @@ const uninstaller = driven(function* (intent: JIntent): Gen<SystemResult> {
   let code = DELETE_FAILED_INTERNAL_ERROR;
   if (record && !record.system) {
     const label = record.application && attr(record.application, "label"), name = label ? label.str ?? resString(record.res, label.data) : "";
-    code = (yield* awaited(hostUi().confirmPrompt(`${name || record.pkg}\n\nDo you want to uninstall this app?`))) ? yield* awaited(deletePackage(record.pkg)) : DELETE_FAILED_ABORTED;
+    code = yield* awaited(deletePackage(record.pkg, `${name || record.pkg}\n\nDo you want to uninstall this app?`));
   }
   if (callback) yield vcall(callback, "onUninstallComplete", `(${S}I${S})V`, pkg, code, code === DELETE_FAILED_ABORTED ? "Cancelled by user" : null);
   if (!(yield vcall(intent, "getBooleanExtra", `(${S}Z)Z`, "android.intent.extra.RETURN_RESULT", 0))) return null;

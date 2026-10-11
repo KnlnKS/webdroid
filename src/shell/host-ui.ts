@@ -1,5 +1,5 @@
 // The browser UI a system activity shows over its caller: DocumentsUI's pickers, the share sheet and
-// chooser, a browser tab, the print dialog and the uninstall prompt. It needs the page's document and
+// chooser, a browser tab and the print dialog. It needs the page's document and
 // the user's gesture there, so a process Worker reaches it through the broker.
 
 // lib.dom types the handles but not the pickers
@@ -22,9 +22,8 @@ export type HostUi = {
   /** the index picked, or null when dismissed */
   chooseOne(heading: string, labels: string[]): Promise<number | null>;
   printPdf(pdf: Uint8Array): Promise<void>;
-  confirmPrompt(message: string): Promise<boolean>;
 };
-export const hostUiMethods = ["pickDirectory", "pickFiles", "shareSheet", "openTab", "chooseOne", "printPdf", "confirmPrompt"] as const;
+export const hostUiMethods = ["pickDirectory", "pickFiles", "shareSheet", "openTab", "chooseOne", "printPdf"] as const;
 
 /** Chrome only opens a picker, or re-grants a permission, while a user gesture is still warm.
  *  A request that arrives too late is parked and replayed on the next press rather than lost. */
@@ -136,7 +135,6 @@ const pageUi: HostUi = {
       document.body.append(frame);
     });
   },
-  confirmPrompt: async (message) => confirm(message),
 };
 let ui = (): HostUi => pageUi;
 export const hostUi = (): HostUi => ui();

@@ -27,7 +27,7 @@ import { apkPath, vfs } from "./vfs";
 import { device, formatScreen } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
-import { checkPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
+import { checkPermission, checkUidPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
 import { preferenceStore, canonicalPreferenceCommands, createAppData, type PreferenceCalls } from "../android/sharedprefs";
@@ -51,6 +51,7 @@ import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage
 import { receiveWebSurfaces } from "./web-surface-port";
 import { receiveMedia } from "./media-port";
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui";
+import { storageAccess, storageEntries, storageWrite } from "./device-storage";
 import { receiveIme } from "./ime-port";
 import { receiveFrames, canvasFrameSink } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
@@ -93,6 +94,7 @@ export type ProcessEndpoint = {
   locationChanged: (id: number, token: number, event: LocationEvent) => Promise<void>;
   accountsChanged: () => Promise<void>;
   settingsChanged: (table: SettingsTable, name: string) => Promise<void>;
+  storageChanged: (key: string, value: string | null) => Promise<void>;
   /** a package was removed: this process's package manager forgets it */
   packageRemoved: (pkg: string) => Promise<void>;
   /** the kernel's SIGKILL: the process ends where it stands, with the reason the kill noted */
@@ -109,6 +111,9 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
   notificationForeground: (request: ForegroundNotificationRequest) => Promise<void>;
   exitRecords: (pkg: string) => Promise<ExitRecord[]>;
   processExited: (record: ExitRecord) => void;
+  storageWrite: (key: string, value: string | null) => void;
+  /** a package's own clear, one the caller holds the permission for, or one the user agrees to */
+  packageDataChange: (pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string) => Promise<boolean>;
   activityLaunch: (pkg: string, process: string, component: string, intent: ParcelData, request: number, callingClass: string | null) => Promise<void>;
   activityFinish: (id: number, code: number, data: ParcelData | null) => Promise<void>;
   activityPresentation: (translucent: boolean) => Promise<void>;
@@ -122,7 +127,7 @@ export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & Location
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", ...hostUiMethods] as const;
+export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", "storageWrite", "packageDataChange", ...hostUiMethods] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -394,7 +399,8 @@ export class ProcessBroker {
         ports.push(receiveWebSurfaces(frames.port1,entry.canvas,()=>device)); web=frames.port2;
       }
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker?.port, display, ime, web, media };
+        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker?.port, display, ime, web, media,
+        ...worker ? { storage: storageEntries(entry) } : {} };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       if (imeOwner) entry.ime = imeOwner;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
@@ -575,6 +581,18 @@ export class ProcessBroker {
           throw rt.mkThrowable("java/lang/SecurityException", "Exit records belong to another UID");
         this.entry(pid);
         return exitRecords(pkg);
+      },
+      packageDataChange: async (pkg, change, broadcasts, prompt) => {
+        const caller = this.entry(pid), own = change.kind === "clear" && change.fromApp && pkg === caller.pkg;
+        const permission = change.kind === "clear" ? "android.permission.CLEAR_APP_USER_DATA" : "android.permission.DELETE_PACKAGES";
+        if (!own && !prompt && await checkUidPermission(permission, caller.uid) !== 0)
+          throw rt.mkThrowable("java/lang/SecurityException", `uid ${caller.uid} does not hold ${permission}`);
+        return this.changePackageData(pkg, change, broadcasts, prompt);
+      },
+      storageWrite: (key, value) => {
+        const caller = this.entry(pid);
+        if (storageWrite(caller, key, value)) for (const other of this.entries.values())
+          if (other !== caller && !other.dead && storageAccess(key, other)) unawaited(this.request(other, endpoint => endpoint.storageChanged(key, value)));
       },
       processExited: record => {
         const caller = this.entry(pid);
@@ -832,8 +850,10 @@ export class ProcessBroker {
   }
   /** system_server's part in a package's data change, run in this realm: it outlives its caller,
    *  which may be the package */
-  async changePackageData(pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[]): Promise<void> {
+  async changePackageData(pkg: string, change: PackageDataChange, broadcasts: { data: ParcelData; targets: Receiver[] }[], prompt?: string): Promise<boolean> {
+    if (prompt && !confirm(prompt)) return false;
     await (await import("./packagedata")).changePackageData(this, pkg, change, broadcasts);
+    return true;
   }
   /** whether a process shown on screen, or one serving such a process, waits on `pid` (process
    *  start included) or binds a service it runs: as binder calls inherit their caller's priority,

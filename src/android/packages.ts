@@ -123,7 +123,7 @@ export function storedPackages(prefix: string): string[] {
   return [...names];
 }
 /** the uid a package was given, without assigning one */
-export const knownUid = (pkg: string): number | undefined => uids.get(pkg);
+export const knownUid = (pkg: string): number | undefined => packages.get(pkg)?.uid ?? uids.get(pkg);
 /** the packages installed or with an install kept, whose removal drops the install state (its
  *  install time and what is kept with it) */
 export const installData: PackageState = {
