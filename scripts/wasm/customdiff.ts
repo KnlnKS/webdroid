@@ -224,9 +224,9 @@ const mh = [0, 1, 2, 3, 7, 12], small: Record<string, number[]> = {
 const cases = [...genCases(methods.filter((m) => m.name !== "eq"), small), ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].flatMap((d) => [0, 1, 2, 3, 4, 9].map((a) => ({ m: methods.find((m) => m.name === "eq")!, args: [BigInt(a), BigInt(d)] })))];
 const entries = new Map(methods.map((m) => [m, w.entry(m.cls, m.name, m.desc)]));
 const jdk = sh(["java", "-cp", out, "Ref"], cases.map((c) => `${c.m.cls}.${c.m.name} ${c.args.join(" ")}`).join("\n") + "\n").trim().split("\n");
-// ART ClassLinker::ResolveMethodHandleForMethod keeps the named array receiver; the JDK narrows Object.clone's protected receiver to Mc.
-// These six rows therefore use ART's receiver rule and array clone semantics, rather than claiming a JDK match.
-cases.forEach((c, i) => { if (c.m.name === "tConstClone") { if (jdk[i] !== "throw") throw new Error("JDK array clone receiver changed"); jdk[i] = String(Number(c.args[0]) + 1); } });
+// ART ClassLinker::ResolveMethodHandleForMethod keeps the named array receiver; JDKs before 21.0.12 narrow Object.clone's
+// protected receiver to Mc and throw, so those rows take ART's receiver rule and array clone semantics.
+cases.forEach((c, i) => { if (c.m.name === "tConstClone" && jdk[i] === "throw") jdk[i] = String(Number(c.args[0]) + 1); });
 const tier = await jsTier(loadDexes(dex));
 // the production tier has its own method handle and VarHandle model (jinvoke.ts) and no Class.isRecord: the JDK alone decides those cases
 const asJdk = (cls: string, name: string, _d: string, args: unknown[]) => {
