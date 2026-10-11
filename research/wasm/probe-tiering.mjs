@@ -42,7 +42,7 @@ if (mode === "cache") {
   // cache cannot answer; only the on-disk code cache can make runs 2 and 3 faster. Methods: compileStreaming from the HTTP
   // response (immutable cache headers), from a Cache Storage response built from runtime bytes, from a blob URL, and
   // WebAssembly.compile(bytes) (never cached).
-  const fns = []; for (let i = 0; i < 3000; i++) fns.push(`(func (export "f${i}") (param i32) (result i32) (local i32) ${"(local.set 1 (i32.add (local.get 1) (i32.mul (local.get 0) (i32.const 7))))".repeat(40)} (local.get 1))`);
+  const fns = []; for (let i = 0; i < +(process.env.FUNCS ?? 3000); i++) fns.push(`(func (export "f${i}") (param i32) (result i32) (local i32) ${"(local.set 1 (i32.add (local.get 1) (i32.mul (local.get 0) (i32.const 7))))".repeat(40)} (local.get 1))`);
   const big = new Uint8Array(asm(`(module ${fns.join("\n")})`));
   const srv = http.createServer((q, r) => {
     if (q.url === "/m.wasm") { r.writeHead(200, { "content-type": "application/wasm", "cache-control": "public, max-age=31536000, immutable" }); r.end(big); }
@@ -65,11 +65,11 @@ if (mode === "cache") {
         else if (method === "blobUrl") { const u = URL.createObjectURL(new Blob([await get()], { type: "application/wasm" })); s = performance.now(); mod = await WebAssembly.compileStreaming(fetch(u)); }
         else { const b = await get(); s = performance.now(); mod = await WebAssembly.compile(b); }
         const compileMs = +(performance.now() - s).toFixed(1);
-        const e = new WebAssembly.Instance(mod).exports; const t = performance.now();
+        const i0 = performance.now(), e = (await WebAssembly.instantiate(mod)).exports, instMs = +(performance.now() - i0).toFixed(1); const t = performance.now();
         for (let k = 0; k < 3000; k++) for (let j = 0; j < 50; j++) e["f" + k](j);
         const runMs = +(performance.now() - t).toFixed(1);
         await new Promise(r => setTimeout(r, 3000)); // let tier-up finish so a cache entry can be written
-        return { compileMs, runMs };
+        return { compileMs, instMs, runMs };
       }, method));
       await ctx.close();
     }

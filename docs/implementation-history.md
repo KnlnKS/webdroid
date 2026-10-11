@@ -6633,3 +6633,18 @@ its bitmap transfer leave the frame path, and so does the ack that held the next
 
 Every Calculator tap now passes under SwiftShader. Mihon's next tap remains over the gate. The e2e quick gate passes
 7/7 with clean diagnostics.
+
+### Large modules: code cache and instantiation (2026-10-11)
+
+`FUNCS=30000 node research/wasm/probe-tiering.mjs cache chromium http,cacheStorage` re-probes V8's Wasm code cache
+with a 12.5 MB module, three fresh browser launches per delivery on one profile:
+- Eager compilation (`--no-wasm-lazy-compilation`) takes 75–86 ms per launch whether the module comes from an
+  immutable HTTP response or from Cache Storage, so the on-disk code cache does not help. Asynchronous instantiation
+  takes about 6 ms.
+- Chrome refuses `new WebAssembly.Instance` on a page's main thread for modules over 8 MB. Large images must be
+  instantiated asynchronously there, or in a Worker.
+
+So large images keep the current delivery: compiled once per tab and posted to each Worker.
+- On a warm Mihon launch, microG's main Worker attaches its bundled build yet compiles 3,822 methods inline: 721 ms
+  of compilation and 5,746 module instances (326 ms). Mihon's main thread waits on that Worker's provider. The
+  build covers only what its profile saw.
