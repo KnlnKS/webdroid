@@ -3,8 +3,25 @@
 
 import { onProcessExit } from "../process-exit";
 
-let actx: AudioContext | null = null;
-export const audioContext = (): AudioContext => (actx ??= new AudioContext());
+/** the Web Audio subset this output uses, which a process Worker reaches on the page */
+export interface AudioNodeLike { connect(node: AudioNodeLike): unknown; disconnect(): void }
+export interface AudioData { readonly length: number; readonly duration: number }
+export interface AudioPcm extends AudioData { getChannelData(channel: number): Float32Array }
+export interface AudioGain extends AudioNodeLike { readonly gain: { value: number } }
+export interface AudioSource extends AudioNodeLike {
+  buffer: AudioData | null; loop: boolean; readonly playbackRate: { value: number }; onended: ((event: Event) => void) | null;
+  start(when?: number, offset?: number): void; stop(when?: number): void;
+}
+export interface AudioOut {
+  readonly currentTime: number; readonly sampleRate: number; readonly outputLatency: number; readonly baseLatency: number;
+  readonly state: AudioContextState; readonly destination: AudioNodeLike;
+  resume(): Promise<void>; close(): Promise<void>;
+  createGain(): AudioGain; createBufferSource(): AudioSource; createBuffer(channels: number, length: number, rate: number): AudioPcm;
+  decodeAudioData(bytes: ArrayBuffer): Promise<AudioData>;
+}
+let actx: AudioOut | null = null;
+export const audioContext = (): AudioOut => (actx ??= new AudioContext());
+export const useAudioOut = (out: AudioOut): void => { actx = out; };
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 let audioSession = 0;
@@ -25,7 +42,7 @@ onProcessExit(() => {
   for (const source of sounding) if (typeof HTMLMediaElement !== "undefined" && source instanceof HTMLMediaElement) source.pause();
 });
 
-type Entry = { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null; consumed?: () => void };
+type Entry = { buffer: AudioPcm; offset: number; start: number; source: AudioSource | null; consumed?: () => void };
 export type PcmConfig = { rate: number; channels: number; bytesPerSample: number; sessionId: number };
 /** PCM scheduled back-to-back on the shared context */
 export class PcmOutput {
@@ -37,7 +54,7 @@ export class PcmOutput {
   #queue: Entry[] = [];
   #nextTime = 0;
   #draining = false;
-  #gain: GainNode | null = null;
+  #gain: AudioGain | null = null;
   #volume = 1;
   frameBytes(): number { return this.channels * this.bytesPerSample; }
   /** nothing is queued or playing */

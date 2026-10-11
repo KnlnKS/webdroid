@@ -49,6 +49,7 @@ import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
 import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage";
 import { receiveWebSurfaces } from "./web-surface-port";
+import { receiveAudio } from "./audio-port";
 import { receiveIme } from "./ime-port";
 import { receiveFrames, canvasFrameSink } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
@@ -378,7 +379,8 @@ export class ProcessBroker {
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
       const broker = worker ? this.serveBrokerPort(pid) : undefined;
       if (broker) ports.push(broker.close);
-      let display: MessagePort | undefined, ime: MessagePort | undefined, web: MessagePort | undefined;
+      let display: MessagePort | undefined, ime: MessagePort | undefined, web: MessagePort | undefined, audio: MessagePort | undefined;
+      if (worker) { const sound = new MessageChannel(); ports.push(receiveAudio(sound.port1)); audio = sound.port2; }
       let imeOwner: ReturnType<typeof receiveIme> | undefined;
       if (worker && entry.canvas) {
         const sink = canvasFrameSink(entry.canvas);
@@ -391,7 +393,7 @@ export class ProcessBroker {
         ports.push(receiveWebSurfaces(frames.port1,entry.canvas,()=>device)); web=frames.port2;
       }
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker?.port, display, ime, web };
+        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker?.port, display, ime, web, audio };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       if (imeOwner) entry.ime = imeOwner;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.

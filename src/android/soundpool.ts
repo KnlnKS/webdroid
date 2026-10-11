@@ -4,15 +4,15 @@ import { rt, type JObj } from "../jvm/runtime";
 import { after } from "../jvm/natives/jentry";
 import { fdInt } from "../jvm/natives/jio";
 import { readFully } from "../shell/lazyfile";
-import { audioContext, setSounding } from "./audio-output";
+import { audioContext, setSounding, type AudioData, type AudioGain, type AudioSource } from "./audio-output";
 import { fdSlice, nativePeer, postNativeEvent } from "./media-native";
 
-type Stream = { src: AudioBufferSourceNode; gain: GainNode; prio: number; rate: number; volume: number };
+type Stream = { src: AudioSource; gain: AudioGain; prio: number; rate: number; volume: number };
 /** Web Audio sources cannot pause; a zero playback rate holds the position instead */
 function setRate(s: Stream, rate: number): void { s.src.playbackRate.value = rate; setSounding(s, rate !== 0); }
 class Pool {
   constructor(readonly owner: JObj, readonly maxStreams: number) {}
-  sounds = new Map<number, AudioBuffer | null>();
+  sounds = new Map<number, AudioData | null>();
   streams = new Map<number, Stream>();
   nextId = 1;
   nextStream = 1;
@@ -26,7 +26,7 @@ class Pool {
     return id;
   }
   /** SoundPool::Sound's SAMPLE_LOADED event, unless the sample was unloaded or released first */
-  decoded(id: number, buf: AudioBuffer | null, status: number) {
+  decoded(id: number, buf: AudioData | null, status: number) {
     if (!this.sounds.has(id)) return;
     if (buf) this.sounds.set(id, buf);
     postNativeEvent(this.owner, () => this.sounds.has(id), 1, id, status);
@@ -67,7 +67,7 @@ rt.registerJnis("android/media/SoundPool", {
     src.buffer = buf; src.loop = loop !== 0;
     const gain = actx.createGain(), volume = Math.max(l, r);
     gain.gain.value = p.muted ? 0 : volume;
-    src.connect(gain).connect(actx.destination);
+    src.connect(gain); gain.connect(actx.destination);
     const sid = p.nextStream++, s: Stream = { src, gain, prio, rate, volume };
     src.onended = () => p.ended(sid, s);
     setRate(s, rate);

@@ -18,6 +18,10 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
       const display = sendFrames(data.display);closeDisplay = display.close;
       setScreenSink(bitmap => display.present(bitmap));
     }
+    if (data.audio) {
+      const [{ sendAudio }, { useAudioOut }] = await Promise.all([import("./audio-port"), import("../android/audio-output")]);
+      useAudioOut(sendAudio(data.audio));
+    }
     if (data.ime) closeIme = await (await import("./ime-port")).serveIme(data.ime);
     if (data.web) {
       const surfaces = (await import("./web-surface-port")).sendWebSurfaces(data.web);
