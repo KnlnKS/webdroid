@@ -53,7 +53,8 @@ rt("fprep", ["L", "L", "I"], "I", (cx, c) => {
   c.raw(OP.i32_eqz).if_().lget(cid).lget(1); vtId(cx, c); cx.callThrower(c, "recv"); c.end();
   c.end();
   c.lget(0).refCast(ao).structGet(ao, cx.fieldIndex(ACCESSIBLE, { owner: ACCESSIBLE, name: "override", desc: "Z" })).lset(override);
-  c.lget(override).raw(OP.i32_eqz).if_();
+  // ART's VerifyAccess passes a public member before it looks for the caller
+  c.lget(override).lget(flags).i32(ACC.PUBLIC).raw(OP.i32_and).raw(OP.i32_or).raw(OP.i32_eqz).if_();
   c.i32(0).call(cx.imp.stackClass).lset(caller);
   c.lget(caller).if_();                                       // 0: no frame to judge by
   cx.info(c, Info.CanAccess, () => c.lget(caller), () => c.lget(id)); c.raw(OP.i32_eqz).if_().lget(caller).lget(cid); cx.callThrower(c, "iacc"); c.end();
