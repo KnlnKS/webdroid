@@ -87,7 +87,8 @@ function connectCommandTransports(): void {
   binderTransport.transact = request => remote(brokerCalls().transact(request));
   descriptorTransport.importCalls = brokerCalls;
   sqliteTransport.call = request => brokerCalls().sqlite(request);
-  cookieTransport.calls = brokerCalls;
+  // a Worker's CookieManager shares its WebViews' jar, as an app's WebView keeps its cookies in its data directory
+  if (typeof window !== "undefined") cookieTransport.calls = brokerCalls;
   clipboardTransport.set = data => brokerCalls().clipboardSet(data);
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.has = () => brokerCalls().clipboardHas();
