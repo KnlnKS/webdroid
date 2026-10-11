@@ -6731,15 +6731,13 @@ Of the roughly 1,250 modules a realm instantiates before its first frame, about 
 stubs for the synthetic functions that a loaded precompiled module names (`ensureSynth`), and about 350 are D
 modules. Building those stubs in one module per header cut instantiations to about 795 and warm Calculator's
 launch from 1,603–1,608 ms to 1,556–1,573 ms, with FitNotes unchanged. Module time barely moved (74–87 to
-67–77 ms); the saving was the JS that builds each module. The change was reverted. With it, the Calculator e2e
-flow stopped settling (a step's frames never stop) in most runs, against 6 of 6 passes without it:
-- Batching only in `loadC` passed 1 run of 4.
-- Deferring the stubs to the end of the header but keeping one module each failed 4 of 4.
-- Skipping stubs whose slot had received code meanwhile passed 1 run of 3.
+67–77 ms); the saving was the JS that builds each module. The change was reverted for now. With it, the Calculator
+e2e flow often failed to settle (13 of 21 runs across variants). The unchanged code also fails intermittently
+(2 of 16): after a digit tap the Compose app keeps drawing changing frames at a frozen controlled clock, for 50 s
+or more, and the renderer often crashes afterwards. Batching shifts timing and makes that state much more likely.
+The redraw needs fixing first. Marking an already-stubbed slot done when an app build's synthetic module loads
+(`holdsSynth`) crashed the renderer outright.
 
-No Java runs while a batch is open. Nothing reads a pending slot's table entry, no name lacks a descriptor and the
-old loop never throws. The ordering dependency on creating each stub immediately is unexplained. Marking an
-already-stubbed slot done when an app build's synthetic module loads (`holdsSynth`) crashed the renderer.
-
-Komikku's `09 manga` step times out on the unchanged code with the current platform build and bundles.
+Komikku's `09 manga` step timed out three times on the unchanged code, then passed four times in a row after a dev
+server restart; it is intermittent too.
 
