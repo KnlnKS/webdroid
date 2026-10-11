@@ -93,12 +93,12 @@ if (classes) {
 
 /** each realm's app build made again with all its launch built on demand, so that the exported build holds what a launch on a device would have refined into it */
 async function settleBuilds(page: import("playwright").Page): Promise<void> {
-  for (const frame of page.frames()) {
-    const built = await frame.evaluate(async () => {
-      const settle = window.__wdCold?.appSettle;
+  for (const realm of [page, ...page.workers()] as Pick<import("playwright").Worker, "evaluate" | "url">[]) {
+    const built = await realm.evaluate(async () => {
+      const settle = globalThis.__wdCold?.appSettle;
       return settle ? (await settle()) ?? null : undefined;
     }).catch(() => undefined);
-    if (built !== undefined) console.log(`${frame.url()}: ${built ? `settled build ${built.methods} methods, ${built.modules} modules${built.kept ? "" : ", not kept"}` : "nothing to settle"}`);
+    if (built !== undefined) console.log(`${realm.url()}: ${built ? `settled build ${built.methods} methods, ${built.modules} modules${built.kept ? "" : ", not kept"}` : "nothing to settle"}`);
   }
 }
 
