@@ -6508,8 +6508,33 @@ baseline in [wasm-baselines.md](wasm-baselines.md).
   `restoreStub` only twice for 96 invalidations. Page time in platform code delivery before Mihon's first frame falls from 486 to
   411–421 ms; most of the rest is V8 instantiation of about 800 C/D modules (C modules import about 184 globals each).
 
+- **Fewer runtime modules at launch.** Module instances per warm Calculator launch fall from 1956 to 750, and
+  warm launches reach the JS tier's: Calculator 1460–1497 ms (JS 1616), FitNotes 1420–1462 ms (JS 1561).
+  - `aot-profile --classes` writes `vendor/wasm-aot/hot.json`, and the next `bun run aot` groups the called
+    classes into fewer C modules.
+  - The platform's runtime functions are precompiled into `y<k>.wasm` modules (an app build's into `s<k>.wasm`)
+    rather than instantiated one module per function at about 0.3 ms each; most are `abstract:` stubs.
+    About −150 ms.
+  - Host field accessors use one function per class and kind, switching on the field. Unsafe accesses are recorded
+    by field so app builds hold their accessors. Host-constructed objects are allocated through the class
+    allocator app builds hold. Array classes named by an app build's code get data modules in that build.
+  - Startup waits for the measured display rate only where Java first reads it, in zygote initialization. About −150 ms.
+  - Each class's annotation directory is decoded once, shared by DEX readers and the linker.
+  - Reflective access to a public field no longer walks the stack for the caller, as ART's `VerifyAccess` passes
+    public members first.
+  - `--no-wasm-lazy-compilation` makes Calculator's launch slower (1875 against 1734 ms).
+- **`lat` pixel probes.** A pixel readback waits for the frame's raster. Under SwiftShader, one readback of a
+  Calculator response blocked the page (and the app) for up to 264 ms, starving the ripple animation. Cropping
+  first, `VideoFrame.copyTo` and fenced WebGL pixel-buffer reads all still block. `lat` now crops candidate frames
+  on the GPU as they present and reads them back once presentation pauses; the response time remains the
+  matching frame's. Calculator's gated taps are 44–147 ms under SwiftShader and 24–66 ms with Metal (`--gpu`).
+  Taps now present about 20 frames where they presented 2–4, so the numbers are not comparable with earlier rows.
+
 Open findings:
 
+- Class initializers take about 324 ms of Calculator's launch (`Typeface` 79 ms; ICU `TimeZone` 54 ms through
+  `Logger.getLogger` reading LogManager's configuration through `ZipFile`; `System` 41 ms). A device runs them in
+  its zygote. A zygote snapshot is the remaining structural lever.
 - **Mihon's launch is pinned by its splash cap.** `MainActivity` keeps the splash while `elapsed <= 500 || !ready && elapsed <= 5000`.
   For a MAIN intent, only a home tab's `LaunchedEffect(state.isLoading)` sets `ready`; `handleIntentAction` returns before it.
   On a fresh install, Onboarding is pushed over Home in the same effect pass (about 3.0 s). The Library tab therefore stays
@@ -6518,7 +6543,8 @@ Open findings:
     false on both tiers (read through reflection at 4.6 s), and the first app draw waits for the 5 s cap: about 7.4 s.
   - The launch measurement is therefore bimodal: about 3 s once the load wins this race, otherwise about 7.4 s. Calling Java on
     the main looper earlier (as a 150 ms `uiTree` poll does) shifts the race, so probes must not start before the first draw.
-- Mihon's Next tap (about 300 ms) waits on its screen transition: the expected state has the old screen gone.
+- Mihon's Next tap (255–310 ms) waits on its roughly 300 ms shared-axis transition: the expected state has the old
+  screen gone, so the tap is at the app's floor.
 - Under SwiftShader, Chrome starves a Worker's WebGL work while a page context saturates the GPU process.
   - Beside flappybird's gameplay (GPU process at about 620% CPU), each synchronous call from a Worker
     context takes 5–8 s, such as `getParameter` or `readPixels`. A new Worker context does not finish
