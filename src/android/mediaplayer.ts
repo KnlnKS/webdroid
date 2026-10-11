@@ -17,11 +17,27 @@ const MEDIA_PREPARED = 1, MEDIA_PLAYBACK_COMPLETE = 2, MEDIA_SEEK_COMPLETE = 4, 
 const MP = "android/media/MediaPlayer", PP = "android/media/PlaybackParams";
 /** PlaybackParams' SET_* bits: which of its fields a setPlaybackParams call changes */
 const SET_SPEED = 1, SET_PITCH = 2, SET_FALLBACK = 4, SET_STRETCH = 8;
+export type Handler = ((event: Event) => void) | null;
+/** the media element subset a player drives, which a process Worker reaches on the page */
+export interface MediaElement {
+  preload: string; loop: boolean; volume: number; src: string; playbackRate: number; preservesPitch: boolean; currentTime: number;
+  readonly paused: boolean; readonly duration: number; readonly videoWidth: number; readonly videoHeight: number;
+  readonly readyState: number; readonly error: { readonly code: number } | null;
+  onplay: Handler; onpause: Handler; onended: Handler; onerror: Handler; onloadedmetadata: Handler; onseeked: Handler;
+  play(): Promise<void>; pause(): void; load(): void;
+  /** `show` gets the next frame the element presents */
+  nextFrame(show: (frame: VideoFrame) => void): void;
+}
+let createElement = (): MediaElement => {
+  const el = document.createElement("video");
+  return Object.assign(el, { nextFrame: (show: (frame: VideoFrame) => void) => void el.requestVideoFrameCallback(() => show(new VideoFrame(el))) });
+};
+export const useMediaElements = (create: () => MediaElement): void => { createElement = create; };
 /** a player plays through a media element; given a surface, each video frame the element shows is presented to it */
 class Player {
   constructor(readonly ref: JObj, public sessionId: number) {}
   state = IDLE;
-  media: HTMLVideoElement | null = null;
+  media: MediaElement | null = null;
   looping = false;
   volume = 1;
   surface: JObj | null = null;
@@ -34,7 +50,7 @@ class Player {
   streamType = 3;
   /** the AudioPlaybackRate: the element plays at `speed`, and keeps its pitch only at pitch 1 */
   rate = { mSpeed: 1, mPitch: 1, mAudioFallbackMode: 0, mAudioStretchMode: 0 };
-  applyRate(el: HTMLMediaElement): void {
+  applyRate(el: MediaElement): void {
     if (this.rate.mSpeed) el.playbackRate = this.rate.mSpeed;
     el.preservesPitch = this.rate.mPitch === 1;
   }
@@ -55,7 +71,7 @@ class Player {
   }
   load(src: string | Promise<string>): void {
     this.require(IDLE);
-    const el = this.media = document.createElement("video");
+    const el = this.media = createElement();
     el.preload = "none"; el.loop = this.looping; el.volume = this.volume;
     if (typeof src === "string") el.src = src;
     else src.then((url) => { if (this.media === el) el.src = url; else URL.revokeObjectURL(url); }, () => el.onerror?.(new Event("error")));
@@ -90,18 +106,18 @@ class Player {
     if (el.readyState >= 1) { el.currentTime = 0; queueMicrotask(() => el.onloadedmetadata?.(new Event("loadedmetadata"))); } else el.load();
   }
   /** each frame the element shows goes to the surface while it plays */
-  pumpFrames(el: HTMLVideoElement): void {
+  pumpFrames(el: MediaElement): void {
     let surface: unknown, target: GlSurface | null = null;
-    const next = async () => {
-      if (this.media !== el || el.paused) return;
+    const show = async (frame: VideoFrame) => {
+      if (this.media !== el || el.paused) { frame.close(); return; }
       if (surface !== this.surface) { surface = this.surface; target = await windowSurface(surface); }
-      if (target && el.videoWidth) {
-        presentSurface(target, new VideoFrame(el));
+      if (target && frame.displayWidth) {
+        presentSurface(target, frame);
         if (!this.rendering) { this.rendering = true; this.post(MEDIA_INFO, 3); }   // MEDIA_INFO_VIDEO_RENDERING_START
-      }
-      el.requestVideoFrameCallback(next);
+      } else frame.close();
+      el.nextFrame(show);
     };
-    el.requestVideoFrameCallback(next);
+    el.nextFrame(show);
   }
 }
 // the EventHandler drops events once mNativeContext is 0
