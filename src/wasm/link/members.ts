@@ -20,14 +20,7 @@ const THROWS = "dalvik/annotation/Throws", RUNTIME = 1;
 export const enum MInfo { ExecCount = 300, ExecAt, ClassAnn, ExecAnn, FieldAnn, IsRecord, DeclaringClass, EnclosingClass, EnclosingIndex, CompareParams, ThrowsCount, ThrowsAt, EnclosingOwner, IsAnonymous }
 const enum TextKind { SimpleName }
 
-type Annotations = ReturnType<NonNullable<JClass["dex"]>["classAnnotations"]>;
-const parsed = new WeakMap<JClass, Annotations>();
-const annotationsOf = (jc: JClass | undefined): Annotations | undefined => {
-  if (!jc?.def) return undefined;
-  let a = parsed.get(jc);
-  if (!a) parsed.set(jc, a = jc.dex!.classAnnotations(jc.def));
-  return a;
-};
+const annotationsOf = (jc: JClass | undefined) => jc?.def && jc.dex!.classAnnotations(jc.def);
 /** the annotations of an element that are visible at run time, as ART's lookups see them (build and system visibility are not) */
 const visible = (set: EncAnnotation[] | undefined) => (set ?? []).filter((a) => a.visibility === RUNTIME);
 

@@ -44,6 +44,7 @@ export interface ClassDef {
 }
 
 // `dex` because element values reference types/enums by index into the dex they came from
+export type ClassAnnotations = { cls: EncAnnotation[]; methods: Map<number, EncAnnotation[]>; fields: Map<number, EncAnnotation[]>; params: Map<number, EncAnnotation[][]> };
 export interface EncAnnotation { visibility: number; type: string; elements: Record<string, EncVal>; dex: DexFile; }
 
 interface TryItem { start: number; end: number; handlers: [number, number][]; catchAllAddr: number; }
@@ -391,10 +392,13 @@ export class DexFile {
     return def;
   }
 
-  /** annotations for a class_def: the class's own, and per field, method and method PARAMETER */
-  classAnnotations(def: ClassDef): { cls: EncAnnotation[]; methods: Map<number, EncAnnotation[]>; fields: Map<number, EncAnnotation[]>; params: Map<number, EncAnnotation[][]> } {
-    const out = { cls: [] as EncAnnotation[], methods: new Map<number, EncAnnotation[]>(), fields: new Map<number, EncAnnotation[]>(), params: new Map<number, EncAnnotation[][]>() };
+  /** annotations for a class_def: the class's own, and per field, method and method PARAMETER; shared, so read-only */
+  classAnnotations(def: ClassDef): ClassAnnotations {
     const dir = def.annotationsOff;
+    let out = this.annotations.get(dir);
+    if (out) return out;
+    out = { cls: [], methods: new Map(), fields: new Map(), params: new Map() };
+    this.annotations.set(dir, out);
     if (!dir) return out;
     const v = this.view;
     const classAnnoOff = v.getUint32(dir, true);
@@ -497,6 +501,7 @@ export class DexFile {
     return found;
   }
   private lineTables = new Map<number, Int32Array>();
+  private annotations = new Map<number, ClassAnnotations>();
   /** a code item's position entries: address, line pairs in address order */
   private positions(codeOff: number): Int32Array {
     const debugOff = this.view.getUint32(codeOff + 8, true), out: number[] = [];
