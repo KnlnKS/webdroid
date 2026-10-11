@@ -6741,3 +6741,30 @@ The redraw needs fixing first. Marking an already-stubbed slot done when an app 
 Komikku's `09 manga` step timed out three times on the unchanged code, then passed four times in a row after a dev
 server restart; it is intermittent too.
 
+
+### What a launch waits for before Java (2026-10-11)
+
+`lat --timeline` now includes the app Worker's marks. Warm Calculator (`--gpu`): the page's `boot` at 243 ms
+(after its bundle and the dev server's `/apks` listing), the Worker's `bootApk` at 503 ms, `worldMade` at 604 ms,
+the zygote done at 962 ms and the first frame at 1,603 ms. Before `bootApk` the Worker idled 347 of its first
+650 ms. It was spawned only once `boot()` ran, and its Start message came after the page had loaded its own tier
+(`installOpened` waited for it) and begun system_server's boot, whose Java shares the page thread with the
+serving of the Worker's AOT modules.
+
+- The spare process Worker is now spawned when the page loads. The app's package goes out before system_server
+  boots, and the install no longer waits for the page's tier. A page opened without `?apk=` also boots
+  system_server while it waits for a package, as a device does before any launch. When `?apk=` is given, the
+  early boot competed with the app Worker's AOT loads through the page and cost about 40 ms, so that page boots
+  system_server after the launch is under way, as before.
+- Measured from `wd.boot()` on a page that had loaded 2.5 s earlier, warm in one profile with Metal: Calculator
+  1,373–1,399 → 1,113–1,135 ms and FitNotes 1,313–1,321 → 1,069–1,089 ms. `lat`, which boots from `?apk=` at
+  load, is unchanged (Calculator 1,617/1,630 → 1,619/1,630 ms).
+- `zygoteInit` takes about 260–370 ms of each process: `System.<clinit>` 90 ms, `RuntimeInit.commonInit` 84 ms
+  (LogManager reading its configuration through the boot class path's jars), fonts 51 ms. It cannot start before
+  the app's dex files and saved build are in place, because an app build continues the numbering of a World that
+  has numbered nothing since the platform build. On the page's system realm `zygoteInit` numbers only 2 classes
+  and 56 synthetic slots beyond the platform build.
+- A class loader's library bind in each microG process spent about 325 ms rechecking dispatch: the 515 names of
+  `android.test.*` change, so the bind built the virtual slots and members of 5,412 loaded classes to find the 5
+  whose slots mention them. It now tests the declared method keys up each superclass chain and snapshots only
+  the classes whose types the bind rewrites: about 175 ms.
