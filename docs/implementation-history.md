@@ -6502,8 +6502,22 @@ baseline in [wasm-baselines.md](wasm-baselines.md).
 - **Scroll pacing.** FitNotes' 22 ms SwiftShader present interval is raster cost: with Metal (`--gpu`), p50 is
   16.6 ms and p99 18.9 ms.
 
+- **Original data stubs.** Before instantiating a C module, `loadC` called `Table.get` on every method slot of its classes to keep the
+  stubs its D modules installed, for restoring on invalidation. Each call makes a JS function. Now it keeps only the stubs of slots the
+  module's code can be undone at: the owners of its missing-class sites and host-overridden slots. A warm Mihon launch still needed
+  `restoreStub` only twice for 96 invalidations. Page time in platform code delivery before Mihon's first frame falls from 486 to
+  411–421 ms; most of the rest is V8 instantiation of about 800 C/D modules (C modules import about 184 globals each).
+
 Open findings:
 
+- **Mihon's launch is pinned by its splash cap.** `MainActivity` keeps the splash while `elapsed <= 500 || !ready && elapsed <= 5000`.
+  For a MAIN intent, only a home tab's `LaunchedEffect(state.isLoading)` sets `ready`; `handleIntentAction` returns before it.
+  On a fresh install, Onboarding is pushed over Home in the same effect pass (about 3.0 s). The Library tab therefore stays
+  composed only for the roughly 300 ms shared-axis transition.
+  - Its library load (IO threads; SQLite work at 3.0–3.35 s on the Wasm tier) finishes about 50 ms too late. `ready` stays
+    false on both tiers (read through reflection at 4.6 s), and the first app draw waits for the 5 s cap: about 7.4 s.
+  - The launch measurement is therefore bimodal: about 3 s once the load wins this race, otherwise about 7.4 s. Calling Java on
+    the main looper earlier (as a 150 ms `uiTree` poll does) shifts the race, so probes must not start before the first draw.
 - Mihon's Next tap (about 300 ms) waits on its screen transition: the expected state has the old screen gone.
 - Under SwiftShader, Chrome starves a Worker's WebGL work while a page context saturates the GPU process.
   - Beside flappybird's gameplay (GPU process at about 620% CPU), each synchronous call from a Worker

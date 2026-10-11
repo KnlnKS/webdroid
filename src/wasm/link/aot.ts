@@ -514,15 +514,18 @@ export class AotRuntime {
     if (!dataReady) return false;
     if (!head.mods.every(m => this.fallbackD.has(+m.slice(1)) || !!this.loadD(+m.slice(1)))) { this.cState[c] = DEAD; w.stats.aot.dead++; return false; }
     const absent = new Set(head.absent);
-    // D installed these lazy stubs; retain them before C overwrites the table, without materializing method metadata.
-    for (const b of head.classes) {
-      const base = w.blockBase[b], n = w.methodsIn(b);
-      for (let i = 0; i < n; i++) {
-        const slot = base + i, state = w.peek(slot);
-        if (absent.has(slot) || this.originalStubs.has(slot) || state?.k === "method" && state.done) continue;
-        const stub = w.table.get(slot);
-        if (stub) this.originalStubs.set(slot, stub);
-      }
+    if (this.overriddenSeen !== this.overridden.size) {
+      this.overriddenBy.clear();
+      for (const slot of this.overridden) { const m = this.cOf[w.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
+      this.overriddenSeen = this.overridden.size;
+    }
+    // the lazy stubs D installed where this code is undone as it loads or once a missing class arrives, kept before C overwrites them;
+    // Table.get makes a JS function of each, too dear for every slot
+    for (const slot of [...head.missing.map(([, owner]) => owner), ...this.overriddenBy.get(c) ?? []]) {
+      const state = w.peek(slot);
+      if (absent.has(slot) || this.originalStubs.has(slot) || state?.k === "method" && state.done) continue;
+      const stub = w.table.get(slot);
+      if (stub) this.originalStubs.set(slot, stub);
     }
     this.cState[c] = LIVE; this.cModule[c] = mod; this.cAbsent[c] = absent;
     if (app) this.cClasses[c] = head.classes;
@@ -549,11 +552,6 @@ export class AotRuntime {
       slots.add(owner);
     }
     for (const id of head.gaps) w.gapList[id] ??= this.index.gaps[id];
-    if (this.overriddenSeen !== this.overridden.size) {
-      this.overriddenBy.clear();
-      for (const slot of this.overridden) { const m = this.cOf[w.blockOf(slot)]; if (m >= 0) (this.overriddenBy.get(m) ?? this.overriddenBy.set(m, []).get(m)!).push(slot); }
-      this.overriddenSeen = this.overridden.size;
-    }
     for (const slot of this.overriddenBy.get(c) ?? []) if (!this.cAbsent[c]!.has(slot)) { w.invalidate(slot); this.cAbsent[c]!.add(slot); }
     w.stats.aot.ms += performance.now() - t2;
     // the app build's patches of this module's methods: after its own code, which they replace where they have some
