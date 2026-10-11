@@ -1,5 +1,5 @@
-// Precompiled platform code (aot.ts) stays sound when classes arrive after the build: a dex added later that overrides a method the build
-// devirtualised puts the code that relied on it back on demand, and a dex present from the start keeps such code from being installed.
+// Precompiled platform code (aot.ts) stays sound when classes arrive after the build: it relies on no class-hierarchy decision, so a dex that
+// overrides a method it calls takes effect through dispatch, whether the dex is added later or present from the start, and the code stays installed.
 // Needs javac, d8 and a build of the platform in WEBDROID_AOT (aot-build.ts), which `bun run wasm aottest` makes when it is unset.
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +11,6 @@ import { compileModule } from "../../src/wasm/link/module";
 import { loadDexes, program, world } from "./lib";
 import { Program } from "../../src/wasm/compiler/program";
 import { buildApp } from "../../src/wasm/link/apps";
-import { Persist, SavedBuild, buildFiles, memoryBackend } from "../../src/wasm/host/persist";
 import { natives } from "./oracle";
 import { nativeSource } from "../../src/wasm/host/nativesource";
 import { Natives } from "../../src/wasm/host/natives";
@@ -33,76 +32,28 @@ const check = (what: string, got: unknown, want: unknown) => { checks++; if (got
 const key = "java/util/ArrayList.indexOf(Ljava/lang/Object;)I";
 const fileOf = (f: string) => new Uint8Array(readFileSync(join(build, f)));
 
+const containsInstalled = (w: ReturnType<typeof world>) => { const s = w.slotAt(w.slotOf(w.prog.resolve("java/util/ArrayList", "contains", "(Ljava/lang/Object;)Z")!)); return s?.k === "method" && s.done; };
 {
   const w = world([join(out, "classes.dex"), ...jars], { natives });
   check("the build is attached", !!w.aot, true);
   check("ArrayList.contains before", w.entry("Aot", "plain", "()I")(), 0);
   check("it ran precompiled", w.stats.aot.c > 0, true);
-  check("it relies on the one indexOf", w.assumptions.has(key), true);
+  check("it relies on no hierarchy decision", w.assumptions.has(key), false);
   const library = w.prog.newLoader(w.prog.root, null);
   w.addDexes(loadDexes(join(out, "classes.dex")), library);
-  const decision = w.assumptions.get(key)!;
-  const active = [...decision.slots];
-  check("boot dispatch has a live invalidation owner", active.length > 0, true);
   w.bindLibraries(library, [w.prog.newLoader(w.prog.boot, null)], []);
-  check("descriptor-only rebind retains the canonical boot decision", w.assumptions.get(key), decision);
-  check("descriptor-only rebind keeps boot owners installed", active.every(slot => { const s = w.slotAt(slot); return s?.k === "method" && s.done; }), true);
-  check("preserved boot dispatch Java result", w.entry("Aot", "plain", "()I")(), 0);
-  let replacements = 0;
-  const restore = w.restoreStub.bind(w);
-  w.restoreStub = (slot, method) => { replacements++; return restore(slot, method); };
+  check("a descriptor-only rebind keeps the result", w.entry("Aot", "plain", "()I")(), 0);
   w.addDexes(loadDexes(join(out, "out2/classes.dex")));
-  check("the decision is undone", w.stats.invalidated >= 1, true);
-  check("AOT invalidation reuses original D stubs", replacements, 0);
   check("a subclass overriding indexOf takes effect", w.entry("Aot2", "sub", "()I")(), 1);
   check("and the plain list is as before", w.entry("Aot2", "plain", "()I")(), 0);
-}
-
-// A persisted verdict may cover the entire app, only its prefix, or an obsolete loader graph.
-{
-  const app = loadDexes(join(out, "classes.dex")), late = loadDexes(join(out, "out2/classes.dex")), platform = program(jars);
-  const make = (dexes = app, saved?: SavedBuild) => world(new Program(dexes, platform), { natives, ...(saved && { app: { index: saved.index, store: saved } }) });
-  const observed = make();
-  check("inherited platform target", observed.entry("Aot", "inherited", "()I")(), 0);
-  const verdicts = observed.aot!.verdictList();
-  check("the launch records a true indexOf verdict", verdicts.some(([k, , , stands]) => k === key && stands), true);
-  const built = buildApp(make(), [], { methods: [], classes: [], infos: [], verdicts });
-  const persist = new Persist(memoryBackend());
-  await persist.save("verdict", buildFiles(built));
-  const saved = (await SavedBuild.open((await persist.load("verdict"))!))!;
-  check("the persisted verdict survives loading", saved.index.demand.verdicts?.some(([k, , , stands]) => k === key && stands), true);
-  const matching = make(app, saved);
-  check("the matching app attaches", matching.appAttached, true);
-  let checks = 0;
-  const holds = matching.holds.bind(matching);
-  matching.holds = (a, by) => { if (a.name === "indexOf" && by.includes("Aot$MyList")) checks++; return holds(a, by); };
-  check("cached inherited target", matching.entry("Aot", "inherited", "()I")(), 0);
-  check("the cached target avoids rechecking the app", checks, 0);
-  matching.addDexes(late);
-  check("later override invalidates cached platform code", matching.entry("Aot2", "sub", "()I")(), 1);
-  const prefix = make([...app, ...late], saved);
-  check("a prefix app build still attaches", prefix.appAttached, true);
-  check("a prefix verdict does not hide the extra override", prefix.entry("Aot2", "sub", "()I")(), 1);
-  check("the enlarged app records the falsified target", prefix.aot!.verdictList().some(([k, , , stands]) => k === key && !stands), true);
-  const rebound = make(app, saved), library = rebound.prog.newLoader(rebound.prog.boot, null);
-  rebound.addDexes(late, library);
-  rebound.bindLibraries(rebound.prog.root, [library], []);
-  check("libraries that resolve no app name differently keep persisted verdicts", rebound.aot!.verdictList().length > 0, true);
-  const cls = rebound.prog.definedBy(library, "Aot2")!;
-  check("the rebound library override takes effect", rebound.entry(cls, "sub", "()I")(), 1);
-  const shadowed = make(app, saved), copy = shadowed.prog.newLoader(shadowed.prog.boot, null);
-  shadowed.addDexes(loadDexes(join(out, "classes.dex")), copy);
-  shadowed.bindLibraries(shadowed.prog.root, [copy], []);
-  check("a library shadowing app classes retires persisted verdicts", shadowed.aot!.verdictList().length, 0);
-  check("the shadowing library's class runs", shadowed.entry("Aot", "inherited", "()I")(), 0);
-  check("obsolete loader verdicts are not exported again", shadowed.aot!.verdictList().length, 0);
+  check("the precompiled contains stays installed", containsInstalled(w), true);
 }
 {
   const w = world([join(out, "classes.dex"), join(out, "out2/classes.dex"), ...jars], { natives });
   check("the build is attached with the app's classes in the Program", !!w.aot, true);
   check("the subclass takes effect", w.entry("Aot2", "sub", "()I")(), 1);
-  check("code that relied on the one indexOf is not installed", w.stats.aot.dead >= 1, true);
   check("the plain list is as before", w.entry("Aot", "plain", "()I")(), 0);
+  check("the precompiled contains is installed", containsInstalled(w), true);
 }
 
 // A class the host implements takes the place of the build's code for the methods it names, however the module that holds them is loaded.

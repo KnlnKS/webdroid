@@ -357,7 +357,11 @@ export class Compiler implements Base {
     if (t.length !== 1) return "many";
     // ART links no subclass of a final class and no override of a final method, so no later class can change these.
     const d = this.prog.get(decl);
-    if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) this.assumptions.push([decl, name, desc, t[0], this.assumer]);
+    if (!d || d.isInterface || !(d.flags & ACC.FINAL || t[0].flags & ACC.FINAL && this.prog.isSubclass(decl, t[0].cls))) {
+      // persisted code outlives the classes it was built among: an app's subclasses would undo it at load, to be recompiled on the page
+      if (this.install) return "many";
+      this.assumptions.push([decl, name, desc, t[0], this.assumer]);
+    }
     return t[0];
   }
   /** the likely implementations of a virtual call that this unit contains, for a guarded direct call (see World.likely) */

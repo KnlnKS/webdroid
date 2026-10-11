@@ -55,7 +55,7 @@ await first.made;
 const w1 = launch(first);
 await processStateAsync(w1);
 await run(w1, 100);
-const refined = await first.refine(w1, 0);
+const refined = await first.refine(w1, 1);
 first.close();
 if (!refined?.kept) throw new Error("the refined app build was not kept");
 const files = (await persist.load(await appKey(app, key)))!;

@@ -6488,8 +6488,23 @@ baseline in [wasm-baselines.md](wasm-baselines.md).
     (7.52–7.61 s against 7.55–7.60 s), because the GMS boot still waits on the page that serves its
     bootstrap and binder calls. It cost Calculator up to about 70 ms, so it was reverted.
 
+- **Precompiled code without hierarchy assumptions.** A warm Mihon launch invalidated 3,623 AOT method bodies as
+  their modules loaded. `java/util/ArrayList.size()I` and `View.setTranslationX(F)V` gain overrides among app and
+  library classes, and each invalidated method was then compiled again on the page thread.
+  - In code built with `install` (platform AOT and app builds), a CHA target never changed the emitted call:
+    guards apply only to targets in the same module, which `install` builds never have. The assumption was pure
+    cost, so those builds no longer record it.
+  - Invalidations fall to 3 per launch. Mihon's first Dark tap falls from 427–435 ms to 89–97 ms in a matched
+    A/B. Mihon launch falls by about 100 ms. FitNotes and Calculator are unchanged within noise.
+  - The persisted verdicts that let later launches skip rechecking those assumptions are removed with them.
+- **`lat` theme.** Headless Chrome followed the machine's dark appearance, so Mihon launched dark and its first
+  Dark tap never responded. `lat` now presents a light host in Chrome as it already did in WebKit.
+- **Scroll pacing.** FitNotes' 22 ms SwiftShader present interval is raster cost: with Metal (`--gpu`), p50 is
+  16.6 ms and p99 18.9 ms.
+
 Open findings:
 
+- Mihon's Next tap (about 300 ms) waits on its screen transition: the expected state has the old screen gone.
 - Under SwiftShader, Chrome starves a Worker's WebGL work while a page context saturates the GPU process.
   - Beside flappybird's gameplay (GPU process at about 620% CPU), each synchronous call from a Worker
     context takes 5–8 s, such as `getParameter` or `readPixels`. A new Worker context does not finish
