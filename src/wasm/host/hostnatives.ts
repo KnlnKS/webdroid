@@ -4,7 +4,8 @@ import { jarray } from "../../jvm/abi";
 import { BOOT_JAR_PATHS } from "../../jvm/bootclasspath";
 import { readBytes, FD, type IoBuffer } from "../../android/os";
 import { fdInt } from "../../jvm/natives/jio";
-import { fdFile, javaPreadFd, javaReadFd, javaSeekFd } from "../../native/fs";
+import { fdFile, javaPreadFd, javaSeekFd } from "../../native/fs";
+import { processReadFd } from "../../native/process-fd";
 import { handle } from "../../android/handles";
 import { BytesFile } from "../../shell/lazyfile";
 import { vcall } from "../../jvm/natives/jentry";
@@ -14,7 +15,7 @@ import type { HostFn } from "../link/hostapi";
 /** a read of a file held in memory: production queues every read of a file that has a source behind a Promise, so here it is a positional
  *  read at the file's position, which such a source answers at once */
 function readResident(fd: number, target: Uint8Array): number | Promise<number> {
-  if (!(fdFile(fd)?.source instanceof BytesFile)) return javaReadFd(fd, target);
+  if (!(fdFile(fd)?.source instanceof BytesFile)) return processReadFd(fd, target);
   const at = javaSeekFd(fd, 0, 1), n = javaPreadFd(fd, target, at);
   if (typeof n === "number" && n > 0) javaSeekFd(fd, at + n, 0);
   return n;
