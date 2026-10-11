@@ -98,13 +98,15 @@ export interface Numbering { from: Marks; names: string[]; tail: Tail[]; selecto
 export const sameMarks = (a: Marks, b: Marks): boolean => a.names === b.names && a.tail === b.tail && a.selectors === b.selectors && a.gaps === b.gaps && a.links === b.links;
 
 /** an app compiled ahead on top of the platform build (the build `apps.ts` makes): the numbering of what its code names that the platform does not, and code modules a1.. for the app's classes */
-export const APP_VERSION = 16;
+export const APP_VERSION = 17;
 /** what launches built on demand because no saved code had it: method ids and class names, in order of first use, and the questions the host was asked that made synthetic functions */
 export interface Demand { methods: string[]; classes: string[]; infos: InfoRecord[] }
 export interface AppIndex {
   version: number;
   deopt?: number;
-  /** the numbering it continues: only a World that has attached the platform build and numbered nothing since can use it */
+  /** what the World had numbered after the platform build when the app's numbering began (the zygote's): a World that has numbered exactly that since, or nothing, can use it */
+  prefix: Numbering;
+  /** where the app's numbering begins */
   base: Marks;
   /** the dexes of the app that follow the platform's in the Program, and how many classes with bytecode they define */
   dexes: string[];
@@ -199,8 +201,10 @@ export class AotRuntime {
   private cTraces = new Map<number, { bytes: Uint8Array; starts: Map<number, number> }>();
   /** slots reserved by the build after the platform classes, by class */
   private reservedBases = new Map<string, number>();
-  /** the classes with bytecode after the platform's, which an app build (`extend`) takes the first of */
-  private rest: string[] = [];
+  /** how many classes with bytecode the platform build's dexes define */
+  private programClasses = 0;
+  /** what the World had numbered once the platform build was attached */
+  platformMarks!: Marks;
   /** code modules from this one on belong to the app build; the classes it defines */
   private appFrom = Infinity;
   /** the app build's data modules, and the one that holds each class block */
@@ -243,16 +247,15 @@ export class AotRuntime {
     const index = JSON.parse(new TextDecoder().decode(raw)) as AotIndex;
     if (index.version !== VERSION || ![0, DEOPT_ABI].includes(index.deopt ?? 0) || w.opts.cold && index.deopt !== DEOPT_ABI) return undefined;
     // the first `index.classes` classes with bytecode must come from exactly the dexes of the build
-    const seen: string[] = [], rest: string[] = [];
+    const seen: string[] = [];
     let n = 0;
     for (const c of w.prog.all()) {
-      if (!c.dex) continue;
-      if (n++ >= index.programClasses) { rest.push(c.name); continue; }
+      if (!c.dex || n++ >= index.programClasses) continue;
       if (seen[seen.length - 1] !== dexSig(c.dex)) seen.push(dexSig(c.dex));
     }
     if (n < index.programClasses || seen.length !== index.dexes.length || seen.some((d, i) => d !== index.dexes[i])) {  return undefined; }
     const a = new AotRuntime(w);
-    a.index = index; a.store = store; a.nSeeded = index.classes;
+    a.index = index; a.store = store; a.nSeeded = index.classes; a.programClasses = index.programClasses;
     const mine = new Set(index.aotDexes);
     if (w.seedPlatform((d) => mine.has(dexSig(d))) !== index.classes) return undefined;
     for (const name of index.extraNames) w.idOf(name);
@@ -270,7 +273,7 @@ export class AotRuntime {
     index.synths.forEach((names, module) => names.forEach((n) => a.synthIn.set(n, `y${module}.wasm`)));
     a.dExports.length = a.dOf.reduce((m, v) => Math.max(m, v + 1), 0);
     a.cState.length = a.cOf.reduce((m, v) => Math.max(m, v + 1), 0);
-    a.rest = rest;
+    const rest = a.rest;
     if (rest.length) w.noteLate(rest);
     // a method this World replaces by an intrinsic that the build did not, or the reverse, is not the build's
     const built = new Set(index.intrinsics), now = new Set(w.opts.intrinsics.keys());
@@ -278,11 +281,19 @@ export class AotRuntime {
       const dot = id.indexOf("."), cls = w.ids.get(id.slice(0, dot)), m = w.prog.get(id.slice(0, dot))?.byKey.get(id.slice(dot + 1));
       if (m && cls !== undefined && cls <= a.nSeeded) a.overridden.add(w.blockBase[cls - 1] + m.index);
     }
+    a.platformMarks = w.numbering();
     return a;
   }
 
+  /** the classes of the app's dexes (the default namespace's after the platform's), which an app build (`extend`) takes the first of */
+  private get rest(): string[] {
+    const prog = this.w.prog, out: string[] = [];
+    let n = 0;
+    for (const c of prog.all()) if (c.dex && n++ >= this.programClasses && prog.loaderOfDex(c.dex) === prog.root) out.push(c.name);
+    return out;
+  }
   /** the dexes of the classes with bytecode after the platform's (`count` of them, all by default), in order: what an app build is made from and must find again */
-  appDexes(count = this.rest.length): string[] {
+  appDexes(count?: number): string[] {
     const sigs: string[] = [];
     for (const name of this.rest.slice(0, count)) { const sig = dexSig(this.w.prog.get(name)!.dex!); if (sigs[sigs.length - 1] !== sig) sigs.push(sig); }
     return sigs;
@@ -302,11 +313,15 @@ export class AotRuntime {
   private appLibraries?: string;
   /** whether the root's libraries are now those the attached app build was compiled under */
   boundAsBuilt(): boolean { return this.appLibraries !== undefined && this.appLibraries === this.rootLibraries(); }
-  /** adds the app build in `store` to the platform build: its numbering continues the World's, which must not have numbered anything since the platform build was attached, and its
-   *  Program must start with the dexes it was made from; false (and nothing changed) otherwise */
+  /** adds the app build in `store` to the platform build: its numbering continues the World's, which must have numbered exactly the build's prefix since the platform build was
+   *  attached, or nothing (a compile worker's World, which takes the prefix), and its Program must have the dexes it was made from after the platform's; false (and nothing changed)
+   *  otherwise */
   extend(app: AppIndex, store: AotStore): boolean {
-    const w = this.w, sigs = this.appDexes(app.classes);
-    if ((app.deopt ?? 0) !== this.deopt || w.opts.cold && app.deopt !== DEOPT_ABI || app.version !== APP_VERSION || this.rest.length < app.classes || !sameMarks(w.numbering(), app.base) || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i]) || !w.adopt(app.numbering)) return false;
+    const w = this.w, sigs = this.appDexes(app.classes), since = w.since(this.platformMarks);
+    const fresh = sameMarks(since.from, w.numbering());
+    if ((app.deopt ?? 0) !== this.deopt || w.opts.cold && app.deopt !== DEOPT_ABI || app.version !== APP_VERSION || this.rest.length < app.classes || sigs.length !== app.dexes.length || sigs.some((d, i) => d !== app.dexes[i])
+      || !(fresh || JSON.stringify(since) === JSON.stringify(app.prefix))) return false;
+    if (fresh && !w.adopt(app.prefix) || !sameMarks(w.numbering(), app.base) || !w.adopt(app.numbering)) return false;
     this.appLibraries = app.libraries;
     const platform = this.store!, cOf = new Int32Array(w.blockBase.length).fill(-1);
     cOf.set(this.cOf);

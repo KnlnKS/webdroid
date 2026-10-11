@@ -35,7 +35,7 @@ const spawn = (): WorkerPort => {
 const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key } as unknown as FetchStore, persist, spawn, roots: { launch: [] } };
 /** a launch as the page makes one: the app over the platform's Program, the saved build attached, the host's classes */
 const launch = (code: AppCode): World => {
-  const w = world(new Program(app, platform), { natives, app: code.options.app });
+  const w = world(new Program(app, platform), { natives, app: code.saved });
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
   return w;
 };

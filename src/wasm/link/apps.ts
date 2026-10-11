@@ -65,12 +65,12 @@ export function compileChecked(w: World, methods: MethodInfo[], check: (bytes: U
   }
 }
 
-/** the build of `methods` (of the Program's classes after the platform's, in the order the app will want them) and the data modules of `demand.classes`, by a World that has just attached the platform build */
+/** the build of `methods` (of the Program's classes after the platform's, in the order the app will want them) and the data modules of `demand.classes`, by a World that has just attached the platform build and numbered the app's prefix */
 export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBuild {
   const aot = w.aot;
   if (!aot) throw new Error("an app build needs the platform build");
   const bytesPerUnit = aot.deopt === DEOPT_ABI ? 42 : 14;
-  const base = w.numbering(), byClass = new Map<string, MethodInfo[]>();
+  const prefix = w.since(aot.platformMarks), base = w.numbering(), byClass = new Map<string, MethodInfo[]>();
   for (const m of methods) { const list = byClass.get(m.cls); if (list) list.push(m); else byClass.set(m.cls, [m]); }
   // the methods of platform classes that a platform code module holds are a patch to that module: loaded after it, they replace what a class of the app made it undo or lack. The other
   // classes' methods are in modules of their own.
@@ -129,5 +129,5 @@ export function buildApp(w: World, methods: MethodInfo[], demand: Demand): AppBu
   // the synthetic functions the code names and those the host asked for: modules of a few dozen, which load together
   w.replay(demand.infos);
   const synths = synthModules(w, (k, bytes) => files.push([`s${k}.wasm`, bytes]));
-  return { index: { version: APP_VERSION, deopt: aot.deopt, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand, libraries: aot.rootLibraries() }, files };
+  return { index: { version: APP_VERSION, deopt: aot.deopt, prefix, base, dexes: aot.appDexes(), classes: aot.appClassCount, numbering: w.since(base), cOf, patches: patchOf, modules: code, synths, dOf, dModules: files.length - code, demand, libraries: aot.rootLibraries() }, files };
 }

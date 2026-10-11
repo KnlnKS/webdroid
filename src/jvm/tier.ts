@@ -20,6 +20,8 @@ export interface ThreadState { name: string; state: string; blocker?: string; ow
 /** what the Wasm tier's host provides the places that load code */
 export interface TierBackend {
   threads(): ThreadState[];
+  /** settles once the platform modules a start of the process loads are compiled: no Java runs before */
+  ready?: Promise<void>;
   loadDex(dex: DexFile, platform: boolean): void;
   /** the app's dex files are all loaded: prepare its compiled code (a build an earlier launch saved) before Java first runs */
   appCode?(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void>;
@@ -43,14 +45,11 @@ export async function useAotPort(port: MessagePort): Promise<void> {
 }
 
 /** the Wasm tier's compiled app code, once the app's dex files are loaded; the JS tier has its own (jvm/aot.ts) */
-export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> {
-  try { await backend?.appCode?.(roots); } finally { appCodeDone(); }
-}
+export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> { await backend?.appCode?.(roots); }
+/** settles once the Wasm tier can run Java */
+export const tierReady = (): Promise<void> => loadTier().then(() => backend?.ready);
 /** the app's first frame is on the screen: the Wasm tier sees what the launch had to compile and build for the next one */
 export function appLaunched(): void { backend?.launched?.(); }
-let appCodeDone!: () => void;
-/** settles once the app's code is prepared: the Wasm tier's World is made at the first Java the realm runs, and numbers what it runs from there, which a saved app build needs to find unnumbered */
-export const appCodeReady = new Promise<void>((resolve) => { appCodeDone = resolve; });
 
 /** `dex` made known to the Java that runs: to `runtime` on the JS tier, to the one Wasm World on the Wasm tier, whose loaders share a namespace */
 export function loadDex(runtime: Runtime, dex: DexFile, platform = false): void {

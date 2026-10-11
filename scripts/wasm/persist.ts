@@ -344,7 +344,7 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
     roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } };
   const t0 = performance.now(), first = await prepareApp(request);
   check("no build is saved for the app at first", first.hit, false);
-  first.watch(hosted(app, first.options));
+  first.watch(hosted(app, { app: first.saved, compiler: first.compiler }));
   const made = await first.made!;
   check("the transferred build retires its worker", stopped.has(ports.at(-1)!), true);
   check("the build is kept", made.kept, true);
@@ -414,20 +414,20 @@ if (saved) {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key: "platform" } as unknown as FetchStore, persist, spawn,
     roots: { launch: ["Pst"] } };
   const first = await prepareApp(request);
-  first.watch(hosted(app, first.options));
+  first.watch(hosted(app, { app: first.saved, compiler: first.compiler }));
   await first.made!;
-  const second = await prepareApp(request), w = hosted(app, second.options);
+  const second = await prepareApp(request), w = hosted(app, { app: second.saved, compiler: second.compiler });
   check("the first build attaches", w.appAttached, true);
   answers(w);
   check("the launch compiled methods the build lacked", w.demand.methods.size > 0, true);
-  check("the classes its code names have modules in the build", (second.options.app?.index.dModules ?? 0) > 0 && w.stats.classes < 2, true);
+  check("the classes its code names have modules in the build", (second.saved?.index.dModules ?? 0) > 0 && w.stats.classes < 2, true);
   const built = await second.refine(w, 1);
   check("the build is made again with them", built?.kept, true);
-  const third = await prepareApp(request), w3 = hosted(app, third.options);
+  const third = await prepareApp(request), w3 = hosted(app, { app: third.saved, compiler: third.compiler });
   check("a launch after it finds it", w3.appAttached, true);
   check("answers as without", answers(w3).join(), expected.join());
   check("it compiled fewer methods on demand", w3.stats.methods < w.stats.methods, true);
-  console.log(`  refined build: ${w3.stats.methods} methods built on demand against ${w.stats.methods}, ${third.options.app?.index.dModules} data module(s)`);
+  console.log(`  refined build: ${w3.stats.methods} methods built on demand against ${w.stats.methods}, ${third.saved?.index.dModules} data module(s)`);
   check("nothing new to add the next time", await third.refine(w3, 1), undefined);
   for (const c of [first, second, third]) { c.compiler.close(); c.close(); }
 }
@@ -437,7 +437,7 @@ if (saved) {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: "https://shipped.invalid/", key: "platform" } as unknown as FetchStore, persist, spawn, roots: { launch: ["Pst"] } };
   const key = await appKey(app, "platform"), origin = new Persist(memoryBackend());
   const made = await prepareApp({ ...request, persist: origin, aot: { base: BASE, key: "platform" } as unknown as FetchStore });
-  made.watch(hosted(app, made.options));
+  made.watch(hosted(app, { app: made.saved, compiler: made.compiler }));
   await made.made!;
   const files = (await origin.load(key))!, realFetch = globalThis.fetch, requests: string[] = [];
   globalThis.fetch = (async (url: string) => {

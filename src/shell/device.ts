@@ -3,7 +3,7 @@
 
 import { dexesIn, dexEntryNames, isDexEntry } from "../jvm/dex";
 import { rt } from "../jvm/runtime";
-import { appCodeReady, appLaunched, loadAppCode, loadDex, tier } from "../jvm/tier";
+import { appLaunched, loadAppCode, loadDex, tier, tierReady } from "../jvm/tier";
 import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import type { Install } from "./install";
@@ -117,7 +117,7 @@ export function startZygote(host?: Promise<unknown>): Promise<void> {
     }
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
-    await Promise.all([processBitness, host, tier === "wasm" && appCodeReady]);
+    await Promise.all([processBitness, host, tier === "wasm" && tierReady()]);
     await zygoteInit();
   })();
 }
@@ -143,9 +143,11 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
     for (const name of dexEntryNames(Object.keys(zip))) for (const d of dexesIn(zip[name], name)) loadDex(rt, d);
     mark("dexLoaded");
   };
-  // The Wasm tier's World numbers what it runs from the first Java this realm runs, and the app code a previous launch saved is attached only to a World that has numbered
-  // nothing yet (host/appcode.ts): the app's dex files and its code come before any Java, and the zygote waits for them
+  fixProcessBitness([...Object.keys(zip), ...rt.classpathSource?.names() ?? []]);
+  // The Wasm tier's World is the zygote's, and the app code a previous launch saved continues what the zygote numbered (host/appcode.ts): the app's dex files and its code
+  // join the World once the zygote has run, before any of the app's Java
   if (tier === "wasm") {
+    await startZygote();
     await loadAppDexes();
     await loadAppCode({ profile: zip["assets/dexopt/baseline.prof"], manifest: zip["AndroidManifest.xml"], launch });
   }
@@ -156,7 +158,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcher ? launcherOrientation(appNode, launcher, pkg) : -1);
   const code = tier === "js" ? loadCode(processName ?? pkg) : undefined;
-  fixProcessBitness([...Object.keys(zip), ...rt.classpathSource?.names() ?? []]);
   await Promise.all([startZygote(), restoreRoots()]);
   rt.classpath = zip;
   // sourceDir is the base apk, not the container it arrived in: a library that re-extracts its

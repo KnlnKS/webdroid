@@ -94,8 +94,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
     world = made;
     if (!lifetime.signal.aborted && store) { usage = () => made.usage(); store.worlds.add(usage); }
     mark("worldMade");
-    code?.start(made);
-    if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { worker: code?.compiler.stats, appSaved: code?.hit, appSource: code?.source, appPersisted: code && (() => code!.persisted), appAttached: made.appAttached, appBuilds: code?.builds, appSettle: code && (() => code!.settle(made)), aotKey: store?.key });
+    if (globalThis.__wdCold) globalThis.__wdCold.aotKey = store?.key;
     rt.mkThrowable = hostThrowable;
     rt.make = (cls) => { const spec = rt.natives.get(cls); return spec ? new spec.ctor() : hostObject(made, cls); };
     return made;
@@ -117,10 +116,10 @@ export async function bootWasmTier(): Promise<TierBackend> {
   // a process that never presents a frame, such as a service's, is launched when the start window ends
   const launched = () => { starting = false; if (world) code?.watch(world); };
   setTimeout(launched, START_MS);
-  // The World is made when Java is first needed, so that the app's dex files are in its Program from the start: only then can the app build a previous launch saved be attached
+  // The World is made when Java is first needed: the zygote's, before the app is known, whose dexes and saved build join it as they arrive
   const current = (): World => {
     if (!platform) throw new Error("the Wasm tier is not ready");
-    return world ?? install(createWorld(new Program(appDexes, platform), { aot: store, dexes, ...code?.options }));
+    return world ?? install(createWorld(new Program(appDexes, platform), { aot: store, dexes }));
   };
   let entry: Entry | undefined;
   const lazyEntry = (name: keyof Entry) => (...args: unknown[]) => ((entry ??= wasmEntry(current()))[name] as (...a: unknown[]) => unknown)(...args);
@@ -137,6 +136,7 @@ export async function bootWasmTier(): Promise<TierBackend> {
   mark("platformReady");
   return {
     threads,
+    ready: store?.ready,
     loadDex(dex, isPlatform) {
       if (isPlatform) return;
       appDexes.push(dex);
@@ -144,20 +144,26 @@ export async function bootWasmTier(): Promise<TierBackend> {
     },
     launched,
     async appCode(roots) {
-      if (world || !store) return;
+      if (code || !store) return;
       // System realms have no app DEX, but their first Java entry still needs the
       // prefetched platform modules before AOT.ready can mark a module missed.
       if (!appDexes.length) { await store.ready; return; }
+      // a saved build continues what the World numbered before the app's dexes arrived
+      const w = current(), prefix = w.since(w.base);
       try {
         const workerUrl = new URL("/wasm-compile-worker.js", location.href);
         workerUrl.searchParams.set("owner", location.href);
-        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: role => spawnCompilerWorker(workerUrl, `wasm-${role ?? "unknown"}`) as unknown as WorkerPort, roots, signal: lifetime.signal });
+        code = await prepareApp({ dexes: appDexes, aot: store, persist: await openPersist(), spawn: role => spawnCompilerWorker(workerUrl, `wasm-${role ?? "unknown"}`) as unknown as WorkerPort, roots, prefix, signal: lifetime.signal });
       } catch (error) { if (processExited() || lifetime.signal.aborted) return; throw error; }
       if (lifetime.signal.aborted) { code.close(); return; }
-      mark(code.hit ? "appCodeSaved" : "appCode");
-      store.ready = Promise.all([store.ready, code.launchReady]).then(() => {});
-      // the World is made while the build's modules are still arriving; no Java runs until they have
-      current();
+      const made = code;
+      w.opts.compiler = made.compiler;
+      if (made.saved) w.attachApp(made.saved);
+      mark(made.hit ? "appCodeSaved" : "appCode");
+      made.start(w);
+      if (globalThis.__wdCold) Object.assign(globalThis.__wdCold, { worker: made.compiler.stats, appSaved: made.hit, appSource: made.source, appPersisted: () => made.persisted, appAttached: w.appAttached, appBuilds: made.builds, appSettle: () => made.settle(w) });
+      // no app code runs until the modules of the build and of earlier launches have arrived
+      store.ready = Promise.all([store.ready, made.launchReady]).then(() => {});
       await store.ready;
     },
   };

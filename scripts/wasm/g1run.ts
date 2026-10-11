@@ -74,7 +74,7 @@ async function installed(cfg: G1Config): Promise<{ world: World; startWorker?: (
   if (!code.hit) throw new Error("the installed app's build was not found");
   heapBase = heapUsed();
   const worker = inPage && !(globalThis as { G1_INLINE?: boolean }).G1_INLINE;
-  const w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.options.app, ...(worker && { compiler: code.compiler }) });
+  const w = world(prog, { natives, heapUsed: collectedHeap, ...(cfg.cold !== undefined && { cold: cfg.cold }), app: code.saved, ...(worker && { compiler: code.compiler }) });
   if (!w.appAttached) throw new Error("the installed app's build does not attach");
   for (const spec of natives.source!.hostSpecs!()) w.addHostClass(spec);
   let startWorker: (() => Promise<void>) | undefined;

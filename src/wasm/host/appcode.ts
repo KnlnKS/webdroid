@@ -2,10 +2,10 @@
 // loaded, and a launch without one has a worker compile the methods the app is likely to run for the next launch to find, once the launch is under way (`watch`) and its loader's
 // shared libraries, which the build resolves through, are bound. A launch also notes what its World compiled and built on demand despite the build, and once that has settled a
 // worker makes the build again with it, so the launches after the next find it too. A compile worker for the
-// launch's second-tier units is made either way; `start` gives it the World. The options go to the World's constructor: the saved build only attaches while the World has
-// numbered nothing since the platform build.
+// launch's second-tier units is made either way; `start` gives it the World. The World attaches the saved build only while it has numbered what it had when the app's dexes
+// arrived, as when the build was made (the zygote's numbering).
 import type { World, WorldOptions } from "../link/world";
-import type { Demand } from "../link/aot";
+import type { Demand, Numbering } from "../link/aot";
 import { mid } from "../compiler/ids";
 import type { DexFile } from "../../jvm/dex";
 import type { FetchStore } from "../link/aotstore";
@@ -25,6 +25,8 @@ export interface AppCodeRequest {
   spawn(role?: "build" | "upgrade"): WorkerPort;
   /** where an app build starts, for a launch without a saved one */
   roots: BuildRoots;
+  /** what the World had numbered after the platform build when the app's dexes arrived (nothing by default): where a build's numbering starts */
+  prefix?: Numbering;
   signal?: AbortSignal;
 }
 export interface AppCode {
@@ -34,7 +36,8 @@ export interface AppCode {
   launchReady: Promise<void>;
   source: "persist" | "bundle" | "none";
   persisted: Promise<boolean>;
-  options: Pick<WorldOptions, "app" | "compiler">;
+  /** the saved build, for the World to attach */
+  saved?: NonNullable<WorldOptions["app"]>;
   /** the worker for second-tier units; give it the World once it exists */
   start(world: World): void;
   compiler: CompileClient;
@@ -94,7 +97,7 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const size = () => merged.methods.size + merged.classes.size + merged.infos.size;
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
   const builds: Built[] = [];
-  const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
+  const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, saved: saved ? { index: saved.index, store: saved } : undefined, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
     refine, watch: (world) => {
       if (closed || watching) return;
       watching = true;
@@ -211,7 +214,7 @@ class Builder {
         const list = containers(this.req.dexes);
         port.onmessage = async ({ data }: MessageEvent<CompileResponse>) => {
           if (this.closed || this.port !== port) return;
-          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, hostClasses, build: this.req.roots, demand, oneShot: true, ...libraries },
+          if (data.type === "loaded") port.postMessage({ type: "init", dexes: list, aot: { base: this.req.aot.base }, prefix: this.req.prefix, hostClasses, build: this.req.roots, demand, oneShot: true, ...libraries },
             [list, ...libraries?.scopes.map(([, dexes]) => dexes) ?? []].flatMap(dexes => dexes.map(([, b]) => b.buffer as ArrayBuffer)));
           if (data.type === "failed") this.close(new Error(data.message), false);
           if (data.type !== "built") return;

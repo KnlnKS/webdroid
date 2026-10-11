@@ -167,7 +167,7 @@ export class World {
   /** the synthetic functions whose stub module exists */
   private stubbed = new Set<number>();
   aot?: AotRuntime;
-  /** what the World had numbered when its constructor returned: where a compile worker's numbering starts */
+  /** what the World had numbered when its constructor returned, or once an app build was attached: where a compile worker's numbering starts */
   base!: Marks;
   /** the slot reservations after the platform classes, in order */
   tail: Tail[] = [];
@@ -286,11 +286,17 @@ export class World {
     this.host.initSignatures = (id: number) => this.synchronous(() => signatures(id));
     this.host.initSignaturesWait = this.sched.suspending(signatures);
     this.aot = opts.build ? new AotRuntime(this, opts.build) : opts.aot ? AotRuntime.attach(this, opts.aot) : undefined;
-    this.appAttached = !!opts.app && !!this.aot?.extend(opts.app.index, opts.app.store);
     this.base = this.numbering();
+    if (opts.app) this.attachApp(opts.app);
   }
-  /** whether the app build given in the options is in use */
-  readonly appAttached: boolean;
+  /** whether an app build is in use */
+  appAttached = false;
+  /** uses `app`, an app build, if this World can (AotRuntime.extend): before the app's code first runs */
+  attachApp(app: NonNullable<WorldOptions["app"]>): boolean {
+    if (this.appAttached || !this.aot?.extend(app.index, app.store)) return false;
+    this.base = this.numbering();
+    return this.appAttached = true;
+  }
 
   // ---------- numbering
   /** the sizes of everything numbered so far */

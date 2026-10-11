@@ -34,7 +34,7 @@ export interface BuildRoots { profile?: Uint8Array; manifest?: Uint8Array; launc
 export type Containers = [name: string, bytes: Uint8Array][];
 
 export type CompileRequest =
-  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; initialized?: string[]; hostClasses?: string[]; loaders?: LoaderSnapshot; scopes?: [LoaderId, Containers][]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
+  | { type: "init"; dexes: Containers; aot?: { base: string; app?: AppIndex }; sync?: Numbering; prefix?: Numbering; initialized?: string[]; hostClasses?: string[]; loaders?: LoaderSnapshot; scopes?: [LoaderId, Containers][]; proxies?: ProxyDefinition[]; build?: BuildRoots; demand?: Demand; oneShot?: true }
   | { type: "add"; dexes: Containers; loader?: LoaderId; loaders?: LoaderSnapshot }
   | { type: "proxy"; definition: ProxyDefinition; loaders: LoaderSnapshot }
   | { type: "namespaces"; loaders: LoaderSnapshot }
@@ -91,8 +91,10 @@ export function serveCompile(port: Port, env: CompileEnv): void {
     for (const definition of req.proxies ?? []) defineProxy(w, definition);
     if (req.hostClasses && req.hostClasses.join() !== w.hostClassNames().join()) throw new Error(`the worker's host classes are not the page's: ${w.hostClassNames().filter((n) => !req.hostClasses!.includes(n)).join()} against ${req.hostClasses.filter((n) => !w!.hostClassNames().includes(n)).join()}`);
     } finally { endCompile(setup); }
-    // an app build numbers from where a World starts, before the page's numbering is followed; its app's libraries are bound after, as the page's loader bound them
+    // an app build numbers from where the page's World was when the app's dexes arrived, before the page's numbering is followed; its app's libraries are bound after, as the
+    // page's loader bound them
     roots = req.build;
+    if (roots && req.prefix && !w.adopt(req.prefix)) throw new Error("the app's prefix does not follow the platform build");
     if (roots && req.loaders) {
       w.prog.followLoaderParents(req.loaders.parents);
       for (const [id, dexes] of req.scopes ?? []) w.addDexes(open(dexes), w.prog.loaderAt(id));
