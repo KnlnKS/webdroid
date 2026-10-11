@@ -6647,4 +6647,32 @@ with a 12.5 MB module, three fresh browser launches per delivery on one profile:
 So large images keep the current delivery: compiled once per tab and posted to each Worker.
 - On a warm Mihon launch, microG's main Worker attaches its bundled build yet compiles 3,822 methods inline: 721 ms
   of compilation and 5,746 module instances (326 ms). Mihon's main thread waits on that Worker's provider. The
-  build covers only what its profile saw.
+  next entry finds the cause.
+
+### App builds and shared libraries (2026-10-11)
+
+microG targets an SDK that `PackageBackwardCompatibility` gives shared libraries (`android.test.base` and others),
+so its app loader binds three library loaders before any app code runs. Three faults made every microG process
+compile its app inline on each warm launch:
+- **The first build had no library graph.** `prepareApp` started it before Java ran, so `AppIndex.libraries` was
+  empty and the first `bindLibraries` unbound it. That affects every app with shared libraries, including any
+  targetSdk ≤ 29 app. The first build now starts from `watch` (the first frame, or the 15 s start window for a
+  service), with the bound graph and what the launch compiled so far, and off the launch's critical path.
+  `aot-profile`'s settle still walked iframes. It now settles every Worker realm, and the exported bundles carry
+  their graphs.
+- **A kept build crashed.** A class linked from the build's data module before the bind already exports a static
+  under its post-bind descriptor. `rebindResolution`'s alias for the changed descriptor overwrote that export with
+  `undefined`, and the next module importing it failed to link (`ProviderPropertiesUnbundled@3`). The alias now
+  applies only when the old name exists and the new one does not.
+- **A kept build's code was invalidated anyway.** The refresh invalidated every method of a refreshed class,
+  including code the build compiled under the same graph, and those slots then compiled inline. When the build is
+  kept, the refresh now skips slots whose code is the build's (`AotRuntime.fromAppBuild`, not hot, not compiled
+  here).
+
+Warm Mihon, methods compiled inline per microG process (main, persistent): 2,491 and 351 with the old bundles;
+1,268–1,361 and 267–632 after the first two fixes; 13 and 0 after the third. Foreground lat is unchanged within
+noise: Mihon's launch is held by its splash cap (7.18–7.23 s) and "next" varies between 233 and 294 ms across runs.
+The gain is CPU in background Workers. e2e passes 7/7 with clean diagnostics; `aottest`, `persist` and `loaders`
+pass. The platform build still omits the APEX and module jars (framework-connectivity, statsd, adservices, wifi,
+and others), whose methods every realm compiles on demand. The page realm compiles about 97 such methods. That
+belongs to M5's image composition.
