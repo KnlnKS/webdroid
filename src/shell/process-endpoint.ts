@@ -32,6 +32,7 @@ import { awaited, rt, driven, type Gen } from "../jvm/runtime";
 import { cookieTransport, useWebCookies } from "../android/cookies";
 import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import { locationTransport } from "../android/locationmanager";
+import { useHostUi } from "./host-ui";
 import { asBroker, forgetRemoved, processBroker, receivers, type BroadcastData, type ProcessEndpoint, type BrokerCalls, brokerMethods } from "./processes";
 
 import { callProxy, processError, processFailure } from "./process-port";
@@ -101,6 +102,7 @@ function connectCommandTransports(): void {
       filePathTransport.calls = brokerCalls;
       descriptorTransport.calls = brokerCalls;
       vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
+      useHostUi(brokerCalls);
     }
     usePreferenceAccess({
       preferenceRead: (name, key) => brokerCalls().preferenceRead(name, key),

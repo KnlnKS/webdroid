@@ -50,6 +50,7 @@ import { serveFile } from "./remote-file";
 import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage";
 import { receiveWebSurfaces } from "./web-surface-port";
 import { receiveMedia } from "./media-port";
+import { hostUi, hostUiMethods, type HostUi } from "./host-ui";
 import { receiveIme } from "./ime-port";
 import { receiveFrames, canvasFrameSink } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
@@ -100,7 +101,7 @@ export type ProcessEndpoint = {
 /** Caller identity is bound to the port, never supplied in a request's arguments. */
 type PendingCalls = { [K in keyof PendingAccess as `pending${Capitalize<K>}`]:
   (...args: Parameters<PendingAccess[K]>) => Promise<Awaited<ReturnType<PendingAccess[K]>>> };
-export type BrokerCalls = ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
+export type BrokerCalls = HostUi & ProcessLifeCalls & WebStorageCalls & LocationCalls & ServiceStartCalls & PendingCalls & CookieCalls & SettingsCalls & AccountCalls & PermissionCalls & PreferenceCalls & FilePathCalls & DescriptorCalls & {
   serviceConnected: (key: string, binder: BinderHandle | null, dead: boolean) => Promise<void>;
   alarmSchedule: (id: number, type: number, at: number, interval: number) => Promise<void>;
   alarmCancel: (id: number) => Promise<void>;
@@ -121,7 +122,7 @@ export type BrokerCalls = ProcessLifeCalls & WebStorageCalls & LocationCalls & S
   contentProvider: (pkg: string, process: string, authority: string) => Promise<BinderHandle | null>;
   broadcast: (data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean, initial?: BroadcastData) => Promise<BroadcastData>;
 };
-export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid"] as const;
+export const brokerMethods = ["processAlive", "processSignal", "processWatch", "processUnwatch", "webRenderer", "webStorage", "locationAvailable", "locationEnabled", "locationLast", "locationSubscribe", "locationRemove", "serviceCreated", "serviceDestroyed", "serviceStart", "serviceDeliver", "serviceRequested", "serviceStop", "serviceStopSelf", "serviceDone", "serviceForeground", "serviceConnected", "pendingCreate", "pendingCancel", "pendingSend", "pendingOperation", "pendingKind", "pendingFlags", "pendingCreator", "alarmSchedule", "alarmCancel", "systemService", "notificationForeground", "preferenceRead", "preferenceKeys", "preferenceChange", "preferenceFiles", "fileRename", "fileRemove", "fileCreate", "fileSetAttributes", "fileDescriptor", "filePrepare", "fileStat", "fileMkdir", "fileAccess", "fileList", "permissionCheck", "permissionGrant", "accountList", "accountRead", "accountExists", "accountCached", "accountChange", "exitRecords", "processExited", "activityLaunch", "activityFinish", "activityPresentation", "transact", "service", "contentProvider", "broadcast", "sqlite", "cookieGet", "cookieSet", "cookieAccept", "cookieHas", "cookieRemove", "cookieFlush", "clipboardSet", "clipboardGet", "clipboardHas", "clipboardListen", "settingsGet", "settingsEntries", "settingsPut", "settingsSsaid", ...hostUiMethods] as const;
 export type WorkerTerminal = {expected:boolean;cause:string;record:ExitRecord|null};
 type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
@@ -455,7 +456,11 @@ export class ProcessBroker {
       return this.serviceStarts(pid);
     };
     const watches = new Map<number, () => void>();
+    const ui = Object.fromEntries(hostUiMethods.map(name => [name, (...args: never[]) => {
+      this.entry(pid); return (hostUi()[name] as (...args: never[]) => unknown)(...args);
+    }])) as unknown as HostUi;
     const stop = serveCalls<BrokerCalls>(port1, {
+      ...ui,
       processAlive: async target => { this.entry(pid); return target === 0 || this.alive(target); },
       processSignal: async (target, signal) => this.signal(pid, target, signal),
       processWatch: async (target, token) => {

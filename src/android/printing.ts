@@ -8,6 +8,7 @@ import { csText } from "../jvm/natives/jchars";
 import { newArrayList } from "../jvm/natives/jcoll";
 import { wallMillis } from "../guest-clock";
 import { vfs } from "../shell/vfs";
+import { hostUi } from "../shell/host-ui";
 import { hostStub } from "./binder";
 import { newIntent, registerSystemActivity, type JIntent } from "./intent";
 import { mkUri } from "./net";
@@ -116,20 +117,6 @@ function* documentOf(job: Job): Gen<Uint8Array | PrintFailure | null> {
     } finally { yield vcall(fd, "close", "()V"); vfs.delete(path); }
   } finally { yield vcall(adapter, "finish", "()V"); }
 }
-let shown: { frame: HTMLIFrameElement; url: string } | null = null;
-/** the browser's print dialog over a PDF: Chrome's viewer prints it from a frame of its own, kept
- *  until the next job so the dialog outlives the call */
-function browserPrint(pdf: Uint8Array): Promise<void> {
-  if (shown) { shown.frame.remove(); URL.revokeObjectURL(shown.url); }
-  const frame = document.createElement("iframe"), url = URL.createObjectURL(new Blob([pdf as Uint8Array<ArrayBuffer>], { type: "application/pdf" }));
-  frame.style.cssText = "position:fixed;left:-10000px;width:1px;height:1px;border:0";
-  shown = { frame, url };
-  return new Promise((resolve) => {
-    frame.onload = () => { try { frame.contentWindow?.print(); } finally { resolve(); } };
-    frame.src = url;
-    document.body.append(frame);
-  });
-}
 // PrintActivity: the job's document, printed (or saved as a PDF) through the browser's dialog
 registerSystemActivity(PRINT_DIALOG, driven(function* (intent: JIntent): Gen<null> {
   const data = yield vcall(intent, "getData", "()Landroid/net/Uri;");
@@ -137,7 +124,7 @@ registerSystemActivity(PRINT_DIALOG, driven(function* (intent: JIntent): Gen<nul
   if (!job) return null;
   yield setState(job, STATE_STARTED);
   const pdf = yield* documentOf(job);
-  if (pdf instanceof Uint8Array) { yield* awaited(browserPrint(pdf)); yield setState(job, STATE_COMPLETED); }
+  if (pdf instanceof Uint8Array) { yield* awaited(hostUi().printPdf(pdf)); yield setState(job, STATE_COMPLETED); }
   else {
     if (pdf) yield vcall(job.info, "setStatus", "(Ljava/lang/CharSequence;)V", pdf.message);
     yield setState(job, pdf ? STATE_FAILED : STATE_CANCELED);

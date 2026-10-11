@@ -8,14 +8,10 @@
  */
 
 import { openDb } from "./idb";
+import { hostUi, onNextGesture, type FilePick } from "./host-ui";
 
-// lib.dom types the handles but not the picker, the async iteration or the permission calls.
+// lib.dom types the handles but not the async iteration or the permission calls.
 declare global {
-  interface Window {
-    showDirectoryPicker?(o?: { mode?: string; id?: string }): Promise<FileSystemDirectoryHandle>;
-    showOpenFilePicker?(o?: { multiple?: boolean; types?: unknown[] }): Promise<FileSystemFileHandle[]>;
-    showSaveFilePicker?(o?: { suggestedName?: string }): Promise<FileSystemFileHandle>;
-  }
   interface FileSystemHandle {
     queryPermission?(o?: { mode?: string }): Promise<PermissionState>;
     requestPermission?(o?: { mode?: string }): Promise<PermissionState>;
@@ -33,35 +29,13 @@ function tx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<
   }));
 }
 
-/** Chrome only opens a picker, or re-grants a permission, while a user gesture is still warm.
- *  A request that arrives too late is parked and replayed on the next press rather than lost. */
-let pending: (() => void)[] = [];
-function onNextGesture(fn: () => void) {
-  pending.push(fn);
-  if (pending.length > 1) return;
-  addEventListener("pointerdown", () => {
-    const q = pending;
-    pending = [];
-    for (const f of q) f();
-  }, { capture: true, once: true });
-}
-async function pickWithGesture<T>(open: () => Promise<T>): Promise<T | null> {
-  try { return await open(); }
-  catch (error) {
-    if ((error as { name?: string })?.name !== "SecurityError") return null;
-    return new Promise<T>((resolve, reject) => onNextGesture(() => open().then(resolve, reject))).catch(() => null);
-  }
-}
-
 async function opfsRoot(name: string): Promise<FileSystemDirectoryHandle> {
   return (await navigator.storage.getDirectory()).getDirectoryHandle(name, { create: true });
 }
 
 /** The picked directory, or null if the user backed out. */
 export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
-  const show = window.showDirectoryPicker;
-  const open = () => show ? show.call(window, { mode: "readwrite", id: "webdroid" }) : opfsRoot("storage");
-  const h = await pickWithGesture(open);
+  const picked = await hostUi().pickDirectory(), h = picked === undefined ? await opfsRoot("storage") : picked;
   if (!h) return null;
   roots.set(h.name, h);
   await tx("readwrite", (s) => s.put(h, h.name)).catch(() => {});
@@ -71,14 +45,9 @@ export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null>
 export const rootHandles = (): Map<string, FileSystemDirectoryHandle> => roots;
 
 /** One or more files the user chose, or null if they backed out. `save` asks for a new one. */
-export async function pickFiles(opts: { multiple?: boolean; save?: string; mime?: string | null }): Promise<FileSystemFileHandle[] | null> {
-  const save = opts.save;
-  if (save) {
-    const show = window.showSaveFilePicker;
-    return show ? pickWithGesture(() => show.call(window, { suggestedName: save }).then((h) => [h])) : opfsPicked(save);
-  }
-  const show = window.showOpenFilePicker;
-  return show ? pickWithGesture(() => show.call(window, { multiple: !!opts.multiple, ...(opts.mime ? { types: [{ accept: { [opts.mime]: [] } }] } : {}) })) : opfsPicked();
+export async function pickFiles(pick: FilePick): Promise<FileSystemFileHandle[] | null> {
+  const picked = await hostUi().pickFiles(pick);
+  return picked === undefined ? opfsPicked(pick.save) : picked;
 }
 /** Without a dialog the stand-in is a file in OPFS: a save gets the name it asked for, and an
  *  open can only offer what is already there. */
