@@ -50,6 +50,7 @@ export class Bridge implements HostBridge {
   /** where each scope's scratch ends: a scope that waited gives its scratch back only if no other strand has reserved more above it meanwhile */
   private tops: number[] = [];
   private fields = new Map<string, Map<string, FieldInfo>>();
+  private accessors = new Map<string, Fn>();
   private ops?: { alen: Fn; acopy: Fn; aget: Fn; aset: Fn; js: Fn };
 
   constructor(private w: World, private src?: NativeSource) { handleViews.of = (o) => this.toHost(o); }
@@ -153,12 +154,25 @@ export class Bridge implements HostBridge {
     if (!m) this.fields.set(name, m = new Map(this.w.prog.layout(name).map((f) => [mangleField(f.owner, f.name), f])));
     return m;
   }
+  /** one function per class, operation and kind serves the instance fields of that kind the class declares, picked by their index: a module per field is dear */
   private accessor(op: "get" | "set", f: FieldInfo): Fn {
-    return this.w.hostFn(`b:${op}:${f.owner}.${f.name}`, op === "get" ? ["L"] : ["L", f.kind], op === "get" ? f.kind : "V", (cx, c) => {
-      const st = cx.structFor(f.owner), at = cx.fieldIndex(f.owner, f);
-      c.lget(0).refCast(st);
-      if (op === "get") c.structGet(st, at); else c.lget(1).structSet(st, at);
+    const key = `${op}:${f.owner}.${f.name}:${f.desc}`;
+    let fn = this.accessors.get(key);
+    if (fn) return fn;
+    const same = this.w.prog.require(f.owner).fields.filter((x) => !x.isStatic && x.kind === f.kind), i = same.indexOf(f);
+    const any = this.w.hostFn(`b:${op}:${f.owner}:${f.kind}`, op === "get" ? ["L", "I"] : ["L", "I", f.kind], op === "get" ? f.kind : "V", (cx, c) => {
+      const st = cx.structFor(f.owner);
+      for (let k = 0; k <= same.length; k++) c.block();
+      c.lget(1).brTable(same.map((_, k) => k), same.length);
+      for (const x of same) {
+        c.end().lget(0).refCast(st);
+        if (op === "get") c.structGet(st, cx.fieldIndex(f.owner, x)); else c.lget(2).structSet(st, cx.fieldIndex(f.owner, x));
+        c.ret();
+      }
+      c.end().unreachable();
     });
+    this.accessors.set(key, fn = op === "get" ? (o: object) => any(o, i) : (o: object, v: unknown) => any(o, i, v));
+    return fn;
   }
   /** a throwable's facade stands where the production runtime's JThrowable does (`instanceof`, `msg`, `cause`) */
   private facade(o: object, name: string): object {
