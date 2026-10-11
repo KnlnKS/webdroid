@@ -14,8 +14,8 @@ globalThis.addEventListener("unhandledrejection", event => {
   logs.push(`unhandledrejection: ${error?.message ?? error?.msg ?? String(error)}\n${error?.stack ?? ""}`);
 });
 
-type Prestart = { clock: ClockBootstrap };
-async function prepare({ clock }: Prestart) {
+type Prestart = { clock: ClockBootstrap; aot: MessagePort };
+async function prepare({ clock, aot }: Prestart) {
   (await import("./guest-clock")).attachGuestClockPort(clock);
   await import("./natives");
   const [control, port, jentry, core, coverage, apex, cacerts, packages, device, skia, tier, config] = await Promise.all([
@@ -24,6 +24,7 @@ async function prepare({ clock }: Prestart) {
     import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates();
+  await tier.useAotPort(aot);
   const runtime = Promise.all([skia.loadSkia(), tier.tier === "wasm" ? tier.loadTier() : undefined]);
   void runtime.catch(() => {});
   return { control, port, jentry, core, coverage, packages, device, config, runtime };

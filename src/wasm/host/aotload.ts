@@ -18,17 +18,30 @@ const MAX_WORKERS = 4, WIDTH = 8;
 
 /** `files` of `store`'s build compiled by workers, which the store holds when this resolves; a file that could not be fetched or compiled is left out, as in `FetchStore.prefetch`, which does it all on the page when there is no worker */
 export function prefetchInWorker(store: FetchStore, files: string[]): Promise<void> {
-  const todo = files.filter((f) => !store.has(f)), n = Math.max(1, Math.min(MAX_WORKERS, (navigator.hardwareConcurrency || 4) >> 1));
-  const url = URL.createObjectURL(new Blob([SOURCE], { type: "text/javascript" })), base = new URL(store.base, location.href).href;
-  return Promise.all(Array.from({ length: n }, (_, k) => new Promise<void>((resolve) => {
-    // the list is in the order the start wants the files, so each worker takes every n-th
-    const share = todo.filter((_, i) => i % n === k);
-    let worker: Worker;
-    try { worker = new Worker(url); } catch { void store.prefetch(share).then(resolve); return; }
-    worker.onmessage = ({ data }: MessageEvent<{ file?: string; module?: WebAssembly.Module; done?: boolean }>) => {
-      if (data.done) { worker.terminate(); resolve(); } else if (data.module) store.put(data.file!, data.module); else store.failed.push(data.file!);
-    };
-    worker.onerror = () => { worker.terminate(); void store.prefetch(share).then(resolve); };
-    worker.postMessage({ base, files: share, options: COMPILE_OPTIONS, width: WIDTH });
-  }))).then(() => URL.revokeObjectURL(url));
+  if (store.remote) return store.prefetch(files);
+  const todo = store.claim(files), n = Math.max(1, Math.min(MAX_WORKERS, (navigator.hardwareConcurrency || 4) >> 1));
+  if (todo.length) {
+    const url = URL.createObjectURL(new Blob([SOURCE], { type: "text/javascript" })), base = new URL(store.base, location.href).href;
+    void Promise.all(Array.from({ length: n }, (_, k) => new Promise<void>((resolve) => {
+      // the list is in the order the start wants the files, so each worker takes every n-th
+      const share = todo.filter((_, i) => i % n === k);
+      const here = () => { store.load(share.filter((f) => !store.module(f) && !store.failed.includes(f))); resolve(); };
+      let worker: Worker;
+      try { worker = new Worker(url); } catch { here(); return; }
+      worker.onmessage = ({ data }: MessageEvent<{ file?: string; module?: WebAssembly.Module; done?: boolean }>) => {
+        if (data.done) { worker.terminate(); resolve(); } else if (data.module) store.put(data.file!, data.module); else store.fail(data.file!);
+      };
+      worker.onerror = () => { worker.terminate(); here(); };
+      worker.postMessage({ base, files: share, options: COMPILE_OPTIONS, width: WIDTH });
+    }))).then(() => URL.revokeObjectURL(url));
+  }
+  return store.arrived(files);
+}
+
+/** answers another thread's store (`FetchStore.remote`) with the modules `store` holds or compiles, so that the tab compiles its build once */
+export function serveStore(store: FetchStore | undefined, port: MessagePort): void {
+  port.onmessage = ({ data: files }: MessageEvent<string[]>) => {
+    if (store) void (files.length > 1 ? prefetchInWorker(store, files) : store.prefetch(files));
+    for (const file of files) void (store?.arrived([file]) ?? Promise.resolve()).then(() => port.postMessage({ file, module: store?.module(file) }));
+  };
 }

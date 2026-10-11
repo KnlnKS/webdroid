@@ -29,7 +29,7 @@ import { natives, nativeSource } from "./nativesource";
 import { wasmThreadStates, bindWorld, count, heapUsed } from "./stats";
 import { declareWaiting } from "./suspend";
 import { prepareApp, type AppCode, type Built } from "./appcode";
-import { prefetchInWorker } from "./aotload";
+import { prefetchInWorker, serveStore } from "./aotload";
 import { openPersist } from "./persist";
 import type { CompileClient, WorkerPort } from "./compiler";
 import { onProcessExit, processExited } from "../../process-exit";
@@ -191,13 +191,18 @@ const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
 /** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled: fetched once by the tab,
  *  and the compiled modules are shared by the process frames, which are same-origin. Undefined when the server has no build for the sources, which leaves all code to
  *  the on-demand compiler. */
+let aotPort: MessagePort | undefined;
+/** a process Worker's store takes its modules from the page's (`serveAot`) */
+export function useAotPort(port: MessagePort): void { aotPort = port; }
+export function serveAot(port: MessagePort): void { void openAot().then((store) => serveStore(store, port), () => serveStore(undefined, port)); }
+
 export function openAot(): Promise<FetchStore | undefined> {
   return pageShared("__wdAot", async () => {
     const current = await fetch("/aot/current.json");
     if (!current.ok) return undefined;
     // the cold interpreter deoptimizes into guarded code; other processes load the build without the guards
     const manifest = await current.json() as { key: string; cold?: string };
-    const store = new FetchStore(`/aot/${browserCold() && manifest.cold ? manifest.cold : manifest.key}/`);
+    const store = new FetchStore(`/aot/${browserCold() && manifest.cold ? manifest.cold : manifest.key}/`, aotPort);
     const [, startup, waiting] = await Promise.all([store.fetchBytes("index.json"), store.fetchBytes("startup.json"), store.fetchBytes("waiting.json")]);
     // the natives the modules import as Suspending were chosen when the build was made
     declareWaiting(JSON.parse(new TextDecoder().decode(waiting)) as string[]);

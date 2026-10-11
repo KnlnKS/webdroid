@@ -34,6 +34,14 @@ export function loadTier(): Promise<void> {
   return loading ??= import("../wasm/host/boot").then(async (host) => { backend = await host.bootWasmTier(); });
 }
 
+/** a process Worker's Wasm modules come from the page's store of the platform build: the page serves the port, the Worker uses it */
+export function serveAot(port: MessagePort): void {
+  if (tier === "wasm") void import("../wasm/host/boot").then((host) => host.serveAot(port)); else port.close();
+}
+export async function useAotPort(port: MessagePort): Promise<void> {
+  if (tier === "wasm") (await import("../wasm/host/boot")).useAotPort(port); else port.close();
+}
+
 /** the Wasm tier's compiled app code, once the app's dex files are loaded; the JS tier has its own (jvm/aot.ts) */
 export async function loadAppCode(roots: { profile?: Uint8Array; manifest?: Uint8Array; launch: string[] }): Promise<void> {
   try { await backend?.appCode?.(roots); } finally { appCodeDone(); }
