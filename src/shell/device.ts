@@ -23,6 +23,7 @@ import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../a
 import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
 import { getPrefs, createAppData } from "../android/sharedprefs";
+import { filePathTransport } from "./file-path";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain, postMain } from "../android/mainloop";
@@ -183,7 +184,9 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);
-  await (vfs.prepare ?? createAppData)(pkg);
+  await vfs.prepare(pkg);
+  // a Worker's files live with the broker, whose prepare created its app data
+  if (!filePathTransport.calls) await createAppData(pkg);
   const labelAttr = appNode?.attrs.find((a) => a.name === "label");
 
   mark("dataReady"); onStatus("Loading resources…");
