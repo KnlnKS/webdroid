@@ -43,6 +43,11 @@ function fieldAccessor(w: World, name: string, d: Parameters<World["synthSlot"]>
 
 /** host.info kinds of this file */
 export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, AllocInstance, StaticGet, StaticPut, ObjGet, ObjPut, ObjCas }
+/** an access by offset as the access by field id that names the same accessor: offsets are this World's own */
+export const byFieldId = (w: World, kind: number, a: number): [number, number] => {
+  const f = kind >= UInfo.ObjGet ? cookies.get(w)?.fields[a / 8 - 1] : undefined;
+  return f === undefined ? [kind, a] : [kind - UInfo.ObjGet + UInfo.FieldGet, f];
+};
 /** the table slot of the accessor of field `a` for the operation `kind` (the field's kind must be `b`: 0 int-like, 1 long-like, 2 reference), 0 if there is none;
  *  or, by class id `a`, the element width of arrays of it and a constructor-less allocator */
 export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number {

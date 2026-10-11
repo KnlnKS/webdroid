@@ -15,7 +15,7 @@ import { rt } from "../compiler/rtfns";
 import type { Code } from "../compiler/code";
 import type { Compiler, Intrinsic } from "../compiler/j2w";
 import type { World } from "./world";
-import { hostUnsafe, UInfo, fieldCookie } from "./unsafe";
+import { hostUnsafe, UInfo, fieldCookie, byFieldId } from "./unsafe";
 import { hostReflect, RInfo } from "./reflect";
 import { hostMembers, MInfo } from "./members";
 import { Lookup, LOADER_OF_CLASS } from "./loaders";
@@ -64,7 +64,10 @@ export function canAccess(caller: string, decl: JClass, flags: number, w: World)
 /** a `hostInfo` call that made a synthetic function, by names: the class ids it was given are the World's own */
 export type InfoRecord = [kind: number, cls: string, index: number, b: number];
 const fieldInfo = (kind: number) => kind === UInfo.FieldGet || kind === UInfo.FieldPut || kind === UInfo.FieldCas || kind === UInfo.StaticGet || kind === UInfo.StaticPut;
-export const infoRecord = (w: World, kind: number, a: number, b: number): InfoRecord => (fieldInfo(kind) ? [kind, w.nameOf(a >>> 12), a & 0xfff, b] : [kind, w.nameOf(a), 0, b]);
+export const infoRecord = (w: World, kind: number, a: number, b: number): InfoRecord => {
+  [kind, a] = byFieldId(w, kind, a);
+  return fieldInfo(kind) ? [kind, w.nameOf(a >>> 12), a & 0xfff, b] : [kind, w.nameOf(a), 0, b];
+};
 /** asks again, in a World that numbers its classes differently, for what `infoRecord` recorded */
 export function replayInfo(w: World, [kind, cls, index, b]: InfoRecord): void { hostInfo(w, kind, fieldInfo(kind) ? w.idOf(cls) << 12 | index : w.idOf(cls), b); }
 export function hostInfo(w: World, kind: number, a: number, b: number): number {
