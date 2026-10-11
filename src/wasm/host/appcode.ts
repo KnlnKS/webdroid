@@ -1,6 +1,7 @@
 // The app's compiled code before a launch (the counterpart of what src/shell/device.ts does with src/jvm/codecache.ts and aot.ts on the JS tier): a build saved by an earlier launch is
-// loaded, and a launch without one has a worker compile the methods the app is likely to run for the next launch to find. A launch also notes what its World compiled and built
-// on demand despite the build (`watch`), and once that has settled a worker makes the build again with it, so the launches after the next find it too. A compile worker for the
+// loaded, and a launch without one has a worker compile the methods the app is likely to run for the next launch to find, once the launch is under way (`watch`) and its loader's
+// shared libraries, which the build resolves through, are bound. A launch also notes what its World compiled and built on demand despite the build, and once that has settled a
+// worker makes the build again with it, so the launches after the next find it too. A compile worker for the
 // launch's second-tier units is made either way; `start` gives it the World. The options go to the World's constructor: the saved build only attaches while the World has
 // numbered nothing since the platform build.
 import type { World, WorldOptions } from "../link/world";
@@ -37,11 +38,11 @@ export interface AppCode {
   /** the worker for second-tier units; give it the World once it exists */
   start(world: World): void;
   compiler: CompileClient;
-  /** the build this launch made (and whether it was kept), when it had none to load */
+  /** the build this launch made from its start on (and whether it was kept), when it had none to load */
   made?: Promise<Built>;
   /** makes the build again with what `world` has compiled and built on demand, if that is at least `min` things the saved build lacks; the build it made, if it did */
   refine(world: World, min?: number): Promise<Built | undefined>;
-  /** from the first frame of the app on: looks at the launch every so often, and refines once it has gone quiet */
+  /** from the first frame of the app on: makes the build the launch had none of, looks at the launch every so often, and refines once it has gone quiet */
   watch(world: World): void;
   /** waits for a build in progress, then builds again with everything `world` built on demand and decided since (a profile run exports the result: scripts/wasm/aot-profile.ts) */
   settle(world: World): Promise<Built | undefined>;
@@ -94,11 +95,12 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   let covered = size(), seen = { world: undefined as World | undefined, methods: 0, classes: 0, infos: 0 };
   const builds: Built[] = [];
   const code: AppCode = { hit: !!saved, launchReady, source, persisted, compiler, options: { app: saved && { index: saved.index, store: saved }, compiler }, start: (world) => { if (closed) return; hostClasses = world.hostClassNames(); compiler.start(world, req.aot.base, saved?.index); },
-    refine, watch: (world) => { if (!closed && !watching && req.persist) { watching = true; watch(world); } }, settle, builds, close };
-  if (!saved && !closed) {
-    code.made = builder.build({ methods: [], classes: [], infos: [] });
-    code.made.then((built) => { builds.unshift(built); }, (e) => { if (!closed) console.warn("[webdroid] the app build failed", e); });
-  }
+    refine, watch: (world) => {
+      if (closed || watching) return;
+      watching = true;
+      if (!saved) { fresh(world); (code.made = rebuild(world)).catch((e) => { if (!closed) console.warn("[webdroid] the app build failed", e); }); }
+      if (req.persist) watch(world);
+    }, settle, builds, close };
 
   /** how much `world` built on demand that the saved build lacks */
   function fresh(world: World): number {
@@ -113,12 +115,14 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
     for (; seen.infos < d.infos.length; seen.infos++) { const r = d.infos[seen.infos]; merged.infos.set(r.join("\0"), r); }
     return size() - covered;
   }
-  async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
-    if (closed || fresh(world) < min) return undefined;
+  async function rebuild(world: World): Promise<Built> {
     const at = size(), built = await builder.build({ methods: [...merged.methods], classes: [...merged.classes], infos: [...merged.infos.values()] }, hostClasses, rootLibraries(world));
     builds.unshift(built);
     if (built.kept) covered = at;
     return built;
+  }
+  async function refine(world: World, min = MIN_FRESH): Promise<Built | undefined> {
+    return closed || fresh(world) < min ? undefined : rebuild(world);
   }
   async function settle(world: World): Promise<Built | undefined> {
     recordLaunch(world);

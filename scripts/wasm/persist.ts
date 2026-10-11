@@ -344,6 +344,7 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
     roots: { launch: ["Pst", "Pst$Add", "Pst$Mul", "Pst$Base"] } };
   const t0 = performance.now(), first = await prepareApp(request);
   check("no build is saved for the app at first", first.hit, false);
+  first.watch(hosted(app, first.options));
   const made = await first.made!;
   check("the transferred build retires its worker", stopped.has(ports.at(-1)!), true);
   check("the build is kept", made.kept, true);
@@ -353,7 +354,7 @@ let saved: SavedBuild | undefined, savedFiles: Map<string, Uint8Array> | undefin
   check("under a key made of the dex files and the platform build", await appKey(app, "platform") === await appKey(app, "platform") && await appKey(app, "platform") !== await appKey(app, "other") && await appKey(late, "platform") !== await appKey(app, "platform"), true);
   check("and a different platform build finds none", (await prepareApp({ ...request, aot: { base: BASE, key: "other" } as unknown as FetchStore })).hit, false);
   second.compiler.close();
-  first.compiler.close();
+  first.close();
   savedFiles = (await persist.load(await appKey(app, "platform")))!;
   saved = await SavedBuild.open(savedFiles);
   check("saved modules load with their matching activation policy", !!saved, true);
@@ -413,6 +414,7 @@ if (saved) {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: BASE, key: "platform" } as unknown as FetchStore, persist, spawn,
     roots: { launch: ["Pst"] } };
   const first = await prepareApp(request);
+  first.watch(hosted(app, first.options));
   await first.made!;
   const second = await prepareApp(request), w = hosted(app, second.options);
   check("the first build attaches", w.appAttached, true);
@@ -435,6 +437,7 @@ if (saved) {
   const persist = new Persist(memoryBackend()), request = { dexes: app, aot: { base: "https://shipped.invalid/", key: "platform" } as unknown as FetchStore, persist, spawn, roots: { launch: ["Pst"] } };
   const key = await appKey(app, "platform"), origin = new Persist(memoryBackend());
   const made = await prepareApp({ ...request, persist: origin, aot: { base: BASE, key: "platform" } as unknown as FetchStore });
+  made.watch(hosted(app, made.options));
   await made.made!;
   const files = (await origin.load(key))!, realFetch = globalThis.fetch, requests: string[] = [];
   globalThis.fetch = (async (url: string) => {

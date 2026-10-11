@@ -71,7 +71,7 @@ async function probe(): Promise<ProbeResult> {
   const t1 = performance.now();
   while (code.compiler.stats.adopted + w.stats.upgrades === 0 && performance.now() - t1 < 10000) { hot(4000); await new Promise((r) => setTimeout(r, 2)); }
    const answers = [w.entry("Pst", "chain", "()I")(), w.entry("Pst", "fib", "(I)I")(15), hot(3000), w.entry("Pst", "fill", "(I)I")(500)].join(",");
-  const made = await code.made;  const c = code.compiler.stats;
+  code.watch(w); const made = await code.made;  const c = code.compiler.stats;
   return { tier, attached: !!w.aot, syncRequests, aheadMs, bootMs, compileMs: s.compileMs, moduleMs: s.moduleMs, instantiateMs: s.instantiateMs, aotMs: s.aot.ms,
     loaded: w.aot?.loaded.filter((f) => f[0] !== "a") ?? [], missed: [...w.aot?.missed ?? []], failed: store?.failed ?? [], methods: s.methods,
     app: { store: persist ? ("getDirectory" in (navigator.storage ?? {}) ? "opfs" : "cache") : "none", hit: code.hit, prepareMs, attached: w.appAttached, modules: w.aot?.loaded.filter((f) => f[0] === "a").length ?? 0, compiledOnDemand: w.stats.methods, made,

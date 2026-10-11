@@ -51,8 +51,9 @@ const run = async (w: World, reps: number) => {
 await jsTier([]);
 // the first launch: no saved build; the worker makes one from the roots, and the launch's own compiling refines it
 const first = await prepareApp(request);
-await first.made;
 const w1 = launch(first);
+first.watch(w1);
+await first.made;
 await processStateAsync(w1);
 await run(w1, 100);
 const refined = await first.refine(w1, 1);
