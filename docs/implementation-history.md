@@ -6602,19 +6602,34 @@ Measured with `bun run lat fitnotes calculatorm mihon` (Wasm tier, one job):
 
 - On Metal, a tap's frame reaches the page within about 1 ms of its draw, and every Calculator tap passes.
 - Under SwiftShader, a Worker's frames cost GPU-process time that slows the page's rAF to one tick every 75–97 ms
-  while frames are produced, and a Worker's vsync is that tick. Calculator's plus and equals taps take 176–178 ms
-  against 127–129 ms with the app on the page, though their state is observed sooner (30–36 ms against 50–68 ms).
-  Scroll falls from about 32 to 24 fps.
-- **Deferred: presenting from the Worker.** A Worker drawing into its canvas through `transferControlToOffscreen`
-  produced 170 rather than 119 frames in a 5 s FitNotes scroll under SwiftShader, and the page's rAF ran 25% more
-  often. With Metal it made no difference (380 against 380). The e2e probe and `lat` observe frames through the page's
-  `transferFromImageBitmap`, so a Worker-side present needs a page-visible present signal whose pixels are already
-  readable. It also takes per-frame presentation off the page's thread, which matters once page work contends
-  (until system_server leaves the page).
+  while frames are produced, and a Worker's vsync was that tick. Calculator's plus and equals taps took 176–178 ms
+  against 127–129 ms with the app on the page, though their state was observed sooner (30–36 ms against 50–68 ms).
+  Scroll fell from about 32 to 24 fps.
 - **Deferred: cross-origin isolation.** Nothing yet needs `SharedArrayBuffer`: another process's shared mappings use
   leases and audio crosses the media port. Isolation would constrain the cross-origin WebView frames for no
   measured gain, so it waits for its first consumer.
 - The platform build's modules were already compiled once per tab and posted to each Worker.
-- The e2e quick gate passes 7/7 serially, and every step reached the page and each Worker with no new missing APIs
-  or errors. The "Worker diagnostic timeout" beside flappybird no longer occurs: no GL context remains on the page.
-- Each process Worker gets a vsync message on every page rAF, including the background GMS Workers, which drop it.
+- Every step of the e2e quick gate reached the page and each Worker with no new missing APIs or errors.
+
+**Presenting from the Worker.** Each process's page canvas is transferred to its Worker
+(`transferControlToOffscreen`), which shows every frame there through a `bitmaprenderer` context. The page thread and
+its bitmap transfer leave the frame path, and so does the ack that held the next composition.
+- The Worker's vsync comes from its own animation frames rather than the page's rAF. Driven by page ticks, Chrome's
+  new headless mode showed a Worker's commits only every other display frame (lat scroll p50 33.3 ms, Calculator taps
+  up to 123 ms with Metal); the headless shell did not.
+- A GL swap's watchdog no longer releases it after two vsync intervals while host frames still arrive, only once
+  they stop (250 ms). Without that, flappybird and doodlejump outran a SwiftShader display and starved the GMS
+  Worker's GL calls: both flows failed with "Worker diagnostic timeout" in two of two runs. With it, they passed in
+  every run. Raising the host-frame timer fallback the same way instead made Mihon's next tap 340–434 ms
+  (237–264 without) and added scroll intervals over 25 ms, so it stays at 40 ms.
+- The page hears of each frame shown, with its present time, and with a copy only while an observer mirrors frames
+  (`wd.mirrorFrames`, for lat's crops and the e2e probe's samples).
+
+| warm | SwiftShader before | SwiftShader | Metal before | Metal |
+|---|---|---|---|---|
+| Calculator gated taps | 36–178 | 27–113 | 26–69 | 28–74 |
+| Mihon gated taps | 76–427 | 68–242 | 75–171 | 75–163 |
+| FitNotes scroll (fps, p99, >25 ms) | 24.6, 53.4, — | 29.3, 53.2, 66 | 41, 25.2, 3 | 41.1, 19.7, 0 |
+
+Every Calculator tap now passes under SwiftShader. Mihon's next tap remains over the gate. The e2e quick gate passes
+7/7 with clean diagnostics.
