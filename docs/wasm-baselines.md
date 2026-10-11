@@ -41,6 +41,11 @@ Cold is a fresh profile; warm launches twice in one profile and gates the second
 | Wasm warm | 31.0 | 23.0 | 45.9 | 308.5 | 30 |
 | JS warm | 31.5 | 22.0 | 41.2 | 311.2 | 22 |
 
+Under SwiftShader these numbers measure the GPU process rather than webdroid: in a trace of the scroll the GPU
+process's compositor spends 5.5 of 9 s in `SwapBuffers`, and the app Worker is busy 0.4 s. With `--gpu`, warm Wasm
+at `f18fc7dc` presents at the display's rate: p50 16.6, p95 18.2, p99 29.3 ms, with 2 intervals over 25 ms. Compare
+scroll with `--gpu`.
+
 ## Counters of note (Wasm warm launch)
 
 | | modules instantiated | AOT modules loaded | methods compiled | compile ms | module ms | Suspending import calls |

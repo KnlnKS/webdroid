@@ -6693,3 +6693,26 @@ Neither of Mihon's slow measurements is runtime work:
 `lat --cpuprofile` now also writes one profile per Worker (`<file>-<pid>.cpuprofile`), since the app runs in
 Workers.
 
+### Direct calls in precompiled code, and what bounds scroll (2026-10-11)
+
+- **Direct calls.** Precompiled modules call every method through its table slot, so V8 inlines nothing across
+  them; M5 planned direct calls between the methods of an image. An experiment built the platform with direct
+  calls between methods of the same module. A first build with every such call direct crashed Mihon: a method
+  the host implements (`HostClasses.overlay`) keeps its bytecode body in the build, and direct callers bypassed
+  the host's version. Mihon then failed with an OutOfMemoryError for a 1.8 GB allocation. With classes that have a
+  host spec excluded, it was compared with a rebuild of the unchanged compiler under the same `hot.json`, re-profiled
+  bundles and two warm lat runs each. The results match within run-to-run noise:
+  - Calculator launch: 1,666–1,719 ms direct against 1,660–1,669 ms.
+  - Mihon "next": 245–255 ms against 218–258 ms.
+  - FitNotes launch: 1,670–1,704 ms against 1,697–1,705 ms.
+  - Scroll: 29.4–30.2 fps against 28.4–29.5 fps.
+
+  Hot code already reaches V8 inlined through the second tier's copies. Code that runs only a few times gains
+  nothing from inlining, because V8 inlines only in optimized code. Direct calls are not worth an image's call
+  policy; M5's case rests on module counts and instantiation.
+- **Scroll.** `lat`'s default SwiftShader renders in the GPU process: in a trace of `scroll-chest`, its compositor
+  thread spends 5.5 of 9 s in `SwapBuffers` and its main thread 3.5 s in command-buffer flushes, while the app
+  Worker is busy 0.4 s. With `--gpu`, presentation intervals are p50 16.6, p95 18.2 and p99 29.3 ms. The CPU
+  profiles of the earlier FitNotes run showed every Worker idle during the scroll, consistent with this.
+  `lat --trace <file>` now writes a browser-wide trace (every thread, GPU process included) of the gated launch.
+
