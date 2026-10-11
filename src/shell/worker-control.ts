@@ -33,7 +33,8 @@ export function workerControl(logs: string[], phase: () => string) {
       coverage: jvmCoverage.snapshot(), compositor: Reflect.get(local,"compositorStatus") ?? null,
       vsyncScheduled: vsyncScheduled(), pendingTransitions: pendingTransitions(),
       yields: {pushes:yieldStats.pushes,fires:yieldStats.fires,pending:yieldStats.pending()}, timedParks: timedParks.size, web: webViewInfo(),
-      main: { ...mainDbg }, perf: { ...perf }, missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
+      main: { ...mainDbg }, perf: { ...perf },
+      marks: performance.getEntriesByType("mark").filter(e=>e.name.startsWith("wd:")).map(e=>[e.name.slice(3),performance.timeOrigin+e.startTime] as const), missing: [...rt.missing], nativeRequired: nativeRequirements(), logs: logs.slice() }),
     /** whether the app's Wasm code was attached from persisted code, or once `save` settles it, saved */
     codeReadiness: async (save: boolean) => {
       const cold = globalThis.__wdCold;

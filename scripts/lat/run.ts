@@ -217,8 +217,9 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   stop();
   if (renderedApp.at === null) throw new Error("Rendered app launch unavailable: " + renderedApp.error);
   await idle();
-  // the page's launch timeline: its marks (src/perf.ts), in ms since this navigation
-  const marks = performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:")).map((e) => `page:${e.name.slice(3)}:${Math.round(e.startTime)}`);
+  // the launch timeline: the page's and the app Worker's marks (src/perf.ts), in ms since this navigation
+  const marks = performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:")).map((e) => `page:${e.name.slice(3)}:${Math.round(e.startTime)}`)
+    .concat(((await foreground())?.marks ?? []).map(([name, at]: [string, number]) => `app:${name}:${Math.round(at - performance.timeOrigin)}`));
   result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt,
     idle: Math.round(performance.now()), perf: launchPerf, marks };
   result.processesBefore = await diagnostics();
