@@ -63,13 +63,12 @@ export function setSystemDisplayTarget(): void { setDisplayTarget(frame, present
 let firstFrame!: () => void;
 /** resolves once the screen first shows the app: work a device did before the app launched waits for it */
 export const firstPresented = new Promise<void>((resolve) => { firstFrame = resolve; });
-function present(): void {
+function present(): void | Promise<unknown> {
   if (!screen) return;
   const shown = screen(fb.transferToImageBitmap());
-  if (shown instanceof Promise) {
-    void shown.then(presented => { if (presented && !processExited()) presentedFrame(); },
-      error => { if (!processExited()) console.error("[display]", error); });
-  } else presentedFrame();
+  if (!(shown instanceof Promise)) { presentedFrame(); return; }
+  return shown.then(presented => { if (presented && !processExited()) presentedFrame(); },
+    error => { if (!processExited()) console.error("[display]", error); });
 }
 function presentedFrame(): void {
   if (!perf.presentations++) { mark("firstPresented"); if (tier === "js") startupDone(); appLaunched(); firstFrame(); }

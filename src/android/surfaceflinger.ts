@@ -65,10 +65,20 @@ const releaseFrame = (f: Frame | null) => { if (f && !(f instanceof OffscreenCan
 const roots = new Set<Layer>();
 
 // ── composition
-let target: { ctx: OffscreenCanvasRenderingContext2D; present: () => void; transparent: boolean } | null = null;
+/** a display that shows a frame later answers when it has, and composes nothing new until then */
+type Present = () => void | Promise<unknown>;
+type Target = { ctx: OffscreenCanvasRenderingContext2D; present: Present; transparent: boolean };
+let target: Target | null = null;
 /** where the display composes: the realm's frame, and what shows it */
-export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: () => void, transparent = target?.transparent ?? overlaid): void { target = { ctx, present, transparent }; }
-let composing = false;
+export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: Present, transparent = target?.transparent ?? overlaid): void { target = { ctx, present, transparent }; }
+let composing = false, displaying = false, recompose = false;
+const waiters: (() => void)[] = [];
+/** resolves once the display has composed what is queued now: a producer's swap waits for it, as
+ *  dequeueBuffer waits for the consumer to release a buffer, so frames are never drawn to be dropped */
+export function composited(): Promise<void> {
+  scheduleComposite();
+  return new Promise((resolve) => waiters.push(resolve));
+}
 const overlaid = typeof window !== "undefined" && window.top !== window;
 /** compose the display once the current turn's transactions and draws are done */
 export function scheduleComposite(): void {
@@ -79,7 +89,11 @@ export function scheduleComposite(): void {
 let queuedAt: number | null = null;
 function composite(): void {
   composing = false;
-  if (!target) return;
+  if (target && displaying) { recompose = true; return; }
+  if (target) compose(target);
+  for (const resolve of waiters.splice(0)) resolve();
+}
+function compose(target: Target): void {
   const { ctx } = target, t0 = performance.now();
   if (queuedAt !== null) { perf.presentLagMs += t0 - queuedAt; queuedAt = null; }
   ctx.save();
@@ -92,7 +106,11 @@ function composite(): void {
   ctx.restore();
   placeFunctors(placed);
   perf.drawMs += performance.now() - t0;
-  target.present();
+  const shown = target.present();
+  if (!shown) return;
+  displaying = true;
+  const done = () => { displaying = false; if (recompose) { recompose = false; scheduleComposite(); } };
+  void shown.then(done, done);
 }
 const byZ = (a: Layer, b: Layer) => a.z - b.z;
 /** Layer::traverseInZOrder: the children and the layers relative to this one, by Z, those below
