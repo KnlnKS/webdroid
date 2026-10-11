@@ -1,7 +1,7 @@
 // Intended response joins scenario UI state with the current app-owned bitmap's response
 // region. The later receipt clock is a conservative latency upper bound.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>]
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>] (one file per Worker too)
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -325,7 +325,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
 });`;
 
 /** one headless Chrome over raw CDP, with its own profile directory */
-type BrowserDriver = { context?: BrowserContext; send?: (method: string, params?: object, sessionId?: string) => Promise<any>; version: string; close(): void | Promise<void> };
+type BrowserDriver = { context?: BrowserContext; send?: (method: string, params?: object, sessionId?: string) => Promise<any>; events?: Set<(m: any) => void>; version: string; close(): void | Promise<void> };
 async function openBrowser(profile: string): Promise<BrowserDriver> {
   if (engine === "webkit") {
     const context = await webkit.launchPersistentContext(profile, { headless: true, viewport: { width: 1400, height: 1500 }, colorScheme: "light" });
@@ -345,14 +345,18 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
   const ws = new WebSocket(webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
   let nextId = 1;
-  const pending = new Map<number, (m: any) => void>();
-  ws.addEventListener("message", (e) => { const m = JSON.parse(String(e.data)); pending.get(m.id)?.(m); pending.delete(m.id); });
+  const pending = new Map<number, (m: any) => void>(), events = new Set<(m: any) => void>();
+  ws.addEventListener("message", (e) => {
+    const m = JSON.parse(String(e.data));
+    if (m.id === undefined) for (const on of events) on(m);
+    else { pending.get(m.id)?.(m); pending.delete(m.id); }
+  });
   const send = (method: string, params: object = {}, sessionId?: string): Promise<any> => new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, (m) => m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result));
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
-  return { send, version: (await send("Browser.getVersion")).product, close: () => { ws.close(); proc.kill(); } };
+  return { send, events, version: (await send("Browser.getVersion")).product, close: () => { ws.close(); proc.kill(); } };
 }
 
 async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false): Promise<Capture> {
@@ -375,20 +379,36 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
   // as the WebKit context: a light host, whatever the machine's appearance, so a scenario's theme taps change something
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] }, sessionId);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: injection }, sessionId);
-  if (profile) { await send("Profiler.enable", {}, sessionId); await send("Profiler.setSamplingInterval", { interval: 200 }, sessionId); await send("Profiler.start", {}, sessionId); }
+  // the page and every Worker it starts, each paused until its profiler runs
+  const profiled = new Map<string, string>();
+  const startProfile = async (session: string, label: string) => {
+    profiled.set(session, label);
+    await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, session);
+    await send("Profiler.enable", {}, session); await send("Profiler.setSamplingInterval", { interval: 200 }, session); await send("Profiler.start", {}, session);
+  };
+  const attached = (m: any) => {
+    if (m.method !== "Target.attachedToTarget" || !profiled.has(m.sessionId)) return;
+    const { sessionId: worker, targetInfo } = m.params, pid = new URL(targetInfo.url).searchParams.get("pid");
+    void startProfile(worker, pid ?? `${targetInfo.type}-${worker.slice(0, 6)}`).catch(() => {})
+      .finally(() => send("Runtime.runIfWaitingForDebugger", {}, worker).catch(() => {}));
+  };
+  if (profile) { browser.events!.add(attached); await startProfile(sessionId, ""); }
   await send("Page.navigate", { url: url.href }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
       await Bun.sleep(500);
       const { targetInfo } = await send("Target.getTargetInfo", { targetId });
       if (targetInfo.title !== "DONE") continue;
-      if (profile) await Bun.write(profile, JSON.stringify((await send("Profiler.stop", {}, sessionId)).profile));
+      for (const [session, label] of profiled) {
+        const stopped = await send("Profiler.stop", {}, session).catch(() => undefined);
+        if (stopped) await Bun.write(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
+      }
       const read = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat)", returnByValue: true }, sessionId);
       return JSON.parse(read.result.value);
     }
     const partial = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId);
     return { ...JSON.parse(partial.result.value), error: "scenario timed out" };
-  } finally { await send("Target.closeTarget", { targetId }); }
+  } finally { browser.events?.delete(attached); await send("Target.closeTarget", { targetId }); }
 }
 
 /** wipe app data (installs, preferences, databases, files) and keep everything else */

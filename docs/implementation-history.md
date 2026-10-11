@@ -6676,3 +6676,20 @@ The gain is CPU in background Workers. e2e passes 7/7 with clean diagnostics; `a
 pass. The platform build still omits the APEX and module jars (framework-connectivity, statsd, adservices, wifi,
 and others), whose methods every realm compiles on demand. The page realm compiles about 97 such methods. That
 belongs to M5's image composition.
+
+### Mihon's launch and "next" floors (2026-10-11)
+
+Neither of Mihon's slow measurements is runtime work:
+- **Launch.** Mihon keeps its splash while `elapsed <= 500 || !ready && elapsed <= 5000`. Only
+  `MainActivity.handleIntentAction` sets `ready`, and only for the actions it handles. A launcher `ACTION_MAIN`
+  returns before the assignment, so the splash always lasts 5 s from `onCreate`. Warm runs show `performCreate` at
+  2.27 s and the cancelled draw resuming at 7.28 s on the Wasm tier; the JS tier releases 5.02 s after its
+  `performCreate`. Vsync and traversals run throughout, so the predicate is re-evaluated each frame. What is left
+  to improve is the time before `onCreate`.
+- **"next".** The response requires the old onboarding page's "Dark" and "Light" to have left the tree, which
+  happens only once the page transition's exit animation finishes. During the tap only the Mihon Worker is busy,
+  at about 50%, with the rest spent waiting for frames. The page and the other processes are idle.
+
+`lat --cpuprofile` now also writes one profile per Worker (`<file>-<pid>.cpuprofile`), since the app runs in
+Workers.
+
