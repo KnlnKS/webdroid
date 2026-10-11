@@ -36,11 +36,20 @@ const is32Bit = (names: Iterable<string>) => ABIS_32.includes(libraryAbi(names) 
 let wide: boolean | null = null, bitnessFixed!: () => void;
 /** resolves once the process's bitness is fixed: until then no zygote of either bitness is chosen */
 export const processBitness = new Promise<void>((resolve) => { bitnessFixed = resolve; });
-/** Fix the bitness of the process that runs the app with these entries. PackageManager's ABI
- *  selection gives the app a 32-bit primary ABI only when 32-bit libraries are the ones that match,
- *  and that ABI picks the zygote (zygote64 or zygote) that forks it. */
+/** whether a package with these entries runs in a 64-bit process. PackageManager's ABI selection gives
+ *  the app a 32-bit primary ABI only when 32-bit libraries are the ones that match, and that ABI picks
+ *  the zygote (zygote64 or zygote) that forks it. */
+export const is64BitPackage = (names: Iterable<string>): boolean => !is32Bit(names);
+/** the bitness of the zygote a process Worker runs before its package is known: its launcher chose it by the package */
+export function setZygoteBitness(is64: boolean): void {
+  wide = is64;
+  bitnessFixed();
+}
+/** Fix the bitness of the process that runs the app with these entries. */
 export function fixProcessBitness(names: Iterable<string>): void {
-  wide ??= !is32Bit(names);
+  const is64 = is64BitPackage(names);
+  if (wide !== null && wide !== is64) throw new Error(`a ${is64 ? 64 : 32}-bit package in a process forked from the ${wide ? 64 : 32}-bit zygote`);
+  wide = is64;
   bitnessFixed();
 }
 /** whether the process runs arm64 code */

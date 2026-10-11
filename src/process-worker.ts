@@ -15,25 +15,32 @@ globalThis.addEventListener("unhandledrejection", event => {
 });
 
 type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort };
+let rateKnown!: (hz: number) => void;
+/** the display's rate, which the page sends once it has measured it */
+const rate = new Promise<number>((resolve) => { rateKnown = resolve; });
 async function prepare({ clock, aot, jars }: Prestart) {
   (await import("./guest-clock")).attachGuestClockPort(clock);
   await import("./natives");
   (await import("./android/framework")).receivePlatformJars(jars);
-  const [control, port, jentry, core, coverage, apex, cacerts, packages, device, skia, tier, config] = await Promise.all([
+  const [control, port, jentry, core, coverage, apex, cacerts, packages, device, skia, tier, config, jvmruntime] = await Promise.all([
     import("./shell/worker-control"), import("./shell/process-port"), import("./jvm/natives/jentry"), import("./native/core"),
     import("./jvm/coverage"), import("./shell/apex"), import("./shell/cacerts"), import("./shell/process-bootstrap"),
-    import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"),
+    import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"), import("./jvm/natives/jvmruntime"),
   ]);
   apex.mountPlatformData(); cacerts.mountSystemCertificates();
   await tier.useAotPort(aot);
   const runtime = Promise.all([skia.loadSkia(), tier.tier === "wasm" ? tier.loadTier() : undefined]);
   void runtime.catch(() => {});
+  // the zygote this process is forked from runs before its package is known, of the bitness the page chose by the package
+  jvmruntime.setZygoteBitness(new URLSearchParams(location.search).get("abi") !== "32");
+  void runtime.then(() => device.startZygote(rate.then((hz) => { config.device.refreshRate = hz; }))).catch(() => {});
   return { control, port, jentry, core, coverage, packages, device, config, runtime };
 }
 
 let prepared: ReturnType<typeof prepare> | undefined, started = false;
-globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start>) => {
+globalThis.onmessage = async ({ data }: MessageEvent<Prestart | Start | { rate: number }>) => {
   if ("clock" in data) { prepared ??= prepare(data); void prepared.catch(() => {}); return; }
+  if ("rate" in data) { rateKnown(data.rate); return; }
   if (started || !prepared) {
     closeProcessBootstrap(data.bootstrap); data.endpoint.close(); data.control.close();
     return;

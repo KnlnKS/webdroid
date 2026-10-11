@@ -6,6 +6,8 @@ import { attachPointerInput, type PointerGeometry } from "./pointer-input";
 import { createGuestClockPort } from "../guest-clock";
 import { serveAot } from "../jvm/tier";
 import { sendPlatformJars } from "../android/framework";
+import { displayRate } from "./display-rate";
+import { device } from "./config";
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
 /** A process Worker that loads its runtime before the broker gives it a package; the Wasm tier's modules come from the page's store. */
@@ -16,6 +18,8 @@ export function spawnProcessWorker(url: string, pid: number): SpareWorker {
   const spare: SpareWorker = { pid, url: new URL(url, location.href).href, worker, release: () => { clock.close(); aot.port1.close(); } };
   worker.onerror = event => { spare.error ??= event.message; };
   worker.postMessage({ clock: clock.data, aot: aot.port2, jars: jars.port2 }, [aot.port2, jars.port2, ...clock.data.port ? [clock.data.port] : []]);
+  // the zygote it runs reads the display's rate
+  void displayRate().then(() => worker.postMessage({ rate: device.refreshRate }));
   return spare;
 }
 

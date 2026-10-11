@@ -36,6 +36,7 @@ import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { processBroker } from "./shell/processes";
+import { displayRate } from "./shell/display-rate";
 import { processPresentation } from "./shell/process-endpoint";
 import { swipe } from "./shell/gesture";
 import { device } from "./shell/config";
@@ -113,7 +114,7 @@ async function boot(file: string, local?: File) {
   let rollbackAssets: (() => void) | undefined;
   try {
     mark("boot");
-    void startZygote(displayRate);
+    void startZygote(displayRate());
     // the app's process needs only the package: the system realm waits for the page's tier itself
     const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkia()]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
@@ -131,7 +132,7 @@ async function boot(file: string, local?: File) {
     canvas.style.zIndex = "2147483647";
     canvas.style.background = "transparent";
     canvas.style.pointerEvents = "none";
-    await displayRate;
+    await displayRate();
     runtimeStarted = true;
     const { pkg, label } = await prepareWorkerInstall(install);
     const broker = processBroker();
@@ -294,24 +295,9 @@ attachIme(canvas, kbd, systemInput.element);
 mountSystemCertificates();
 mountPlatformData();
 
-/** The host display's rate, from rAF spacing: skipped frames only lengthen intervals, so the
- *  lower quartile is the frame period even while page startup keeps the thread busy. */
-const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : new Promise<void>((resolve) => {
-  const stamps: number[] = [];
-  const sample = (time: number) => {
-    stamps.push(time);
-    if (stamps.length <= 12 && !document.hidden) { requestAnimationFrame(sample); return; }
-    const gaps = stamps.slice(1).map((t, i) => t - stamps[i]).sort((a, b) => a - b);
-    const hz = gaps.length ? 1000 / gaps[gaps.length >> 2] : 60;
-    device.refreshRate = [60, 90, 120].reduce((best, rate) => Math.abs(rate - hz) < Math.abs(best - hz) ? rate : best);
-    resolve();
-  };
-  requestAnimationFrame(sample);
-});
-
 // system_server boots while the page waits for a package to open, as a device's does before any app launches. A page opened for
 // an app boots it once the app's process has its package: the page serves that process's code meanwhile.
 if (!params.has("apk")) {
-  void startZygote(displayRate);
+  void startZygote(displayRate());
   void provisionPackages().then(bootSystemOwner).catch(() => {});
 }

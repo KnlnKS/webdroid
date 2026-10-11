@@ -6768,3 +6768,25 @@ serving of the Worker's AOT modules.
   `android.test.*` change, so the bind built the virtual slots and members of 5,412 loaded classes to find the 5
   whose slots mention them. It now tests the declared method keys up each superclass chain and snapshots only
   the classes whose types the bind rewrites: about 175 ms.
+
+### A zygote before the package (2026-10-11)
+
+An app build now records its `prefix`: what the World had numbered after the platform build when the app's
+dexes arrived. A World attaches the build if it has numbered exactly that prefix since, or nothing (a compile
+Worker's World, which adopts the prefix first). The zygote's numbering is deterministic (the 2 classes and 56
+synthetic slots above, the same across loads and Workers), so the World is made, and `zygoteInit` runs, before
+the package is known. Only classes of the default namespace's dexes count as the app's: the boot path's extra
+dexes (core-oj, conscrypt, okhttp, framework classes4/5) that the zygote loads would otherwise shift the app's
+dex signatures, and the saved build would not attach.
+
+The spare process Worker runs the 64-bit zygote as soon as its runtime is loaded. The page sends the display rate
+once measured, and a 32-bit package gets a Worker spawned with `abi=32` instead (`fixProcessBitness` throws on a
+mismatch). Measured from `wd.boot()` as in the previous entry: Calculator 1,113–1,135 → 768–779 ms and FitNotes
+1,069–1,089 → 763–770 ms, about 44% below the 1,373 and 1,313 ms before either change. `lat` boots from `?apk=`
+at load, where the Worker reaches the zygote no earlier than the package, and is unchanged (warm Calculator
+1,619 ms).
+
+The bundled app builds were re-exported (`APP_VERSION` 17); every Mihon realm, the app's and microG's, attaches a
+saved build. The e2e quick gate's two Mihon flows now fail on any commit: upstream published v0.21.0, and
+Mihon's launch-time release check shows a "New version available!" dialog over every later step. The Calculator
+flow's endless redraw fails on the JS tier too (1 of 4 passed at the starting commit, 2 of 7 with this change).

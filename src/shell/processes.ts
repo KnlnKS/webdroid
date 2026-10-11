@@ -45,6 +45,7 @@ import { StoredParcel, StoredParcelError } from "./stored-parcel";
 import { spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
+import { is64BitPackage } from "../jvm/natives/jvmruntime";
 import { serveFile } from "./remote-file";
 import { canonicalWebStorage, type WebStorageCalls } from "../android/webstorage";
 import { receiveWebSurfaces } from "./web-surface-port";
@@ -298,11 +299,11 @@ export class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const worker = pid === undefined;
+    const worker = pid === undefined, wide = !worker || is64BitPackage(packedArchives.get(owner.path)?.names() ?? Object.keys(owner.res.zip));
     let spare = worker ? this.spare : undefined;
     if (spare) {
       this.spare = undefined;
-      if (spare.url !== new URL(this.workerUrl(spare.pid), location.href).href) { spare.worker.terminate(); spare.release(); spare = undefined; }
+      if (spare.url !== new URL(this.workerUrl(spare.pid, wide), location.href).href) { spare.worker.terminate(); spare.release(); spare = undefined; }
     }
     const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, translucent: false, dead: false, launcher: null, watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
@@ -316,7 +317,7 @@ export class ProcessBroker {
       canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
       try {
-        spare ??= spawnProcessWorker(this.workerUrl(entry.pid), entry.pid);
+        spare ??= spawnProcessWorker(this.workerUrl(entry.pid, wide), entry.pid);
         entry.workerDiagnostic = {url:spare.url};
         entry.worker = startProcessWorker(spare, canvas, () => device,
           () => this.bootstrap(entry.pid), port => this.readyPort(entry.pid, port),
@@ -328,11 +329,13 @@ export class ProcessBroker {
     return entry;
   }
   private spare: SpareWorker | undefined;
-  /** a Worker for the next process, loading its runtime while the page boots, as the zygote's unspecialized app processes do */
-  prestartWorker(): void { if (!this.spare) { const pid = this.nextPid++; this.spare = spawnProcessWorker(this.workerUrl(pid), pid); } }
-  private workerUrl(pid: number): string {
+  /** a Worker for the next process, loading its runtime and running the 64-bit zygote while the page boots, as the zygote's unspecialized app processes do */
+  prestartWorker(): void { if (!this.spare) { const pid = this.nextPid++; this.spare = spawnProcessWorker(this.workerUrl(pid, true), pid); } }
+  /** the URL of a process Worker; `wide` picks the bitness of the zygote it runs (process-worker.ts) */
+  private workerUrl(pid: number, wide: boolean): string {
     const params = new URLSearchParams(location.search);
     params.set("pid", String(pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp));
+    if (!wide) params.set("abi", "32");
     return "/process-worker.js?" + params;
   }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
