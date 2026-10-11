@@ -17,7 +17,7 @@ import type { ColdSnapshot } from "../cold/state";
 import { coldUnit, supportsColdBody } from "../cold/runtime";
 import { ModuleBuilder, T, ref, refNull, sleb, uleb, type VT } from "../compiler/wasmbin";
 import { Code, OP } from "../compiler/code";
-import { Program, ACC, kindOf, declaredMethod, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
+import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
 import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
@@ -1620,11 +1620,19 @@ export class World {
       const c = this.prog.get(name)!;
       return (c.sup ? [c.sup, ...c.ifaces] : c.ifaces).some(parent => changed.has(javaName(parent)));
     }))) : depends;
-    const dispatch = [...this.classes.keys()].filter(name => depends(name) && (hierarchy(name) || this.vslots(name).some(mentions))).map(name => ({ name, methods: this.vslots(name).map(key => {
+    // A class's slots come from the methods its superclass chain declares; testing their keys spares building its slots and members.
+    const chainMentions = new Map<string, boolean>();
+    const mentioned = (name: string): boolean => {
+      let hit = chainMentions.get(name); if (hit !== undefined) return hit;
+      const c = this.prog.get(name);
+      hit = !!c && (!!c.sup && mentioned(c.sup) || !c.isInterface && declaredMethods(c).some(([key, flags]) => !(flags & (ACC.STATIC | ACC.PRIVATE)) && !key.startsWith("<init>") && mentions(key)));
+      chainMentions.set(name, hit); return hit;
+    };
+    const dispatch = [...this.classes.keys()].filter(name => depends(name) && (hierarchy(name) || mentioned(name))).map(name => ({ name, methods: this.vslots(name).map(key => {
       return symbolicDispatchFor(this.prog, name, key);
     }) }));
-    const own = new Set([...this.prog.own()].filter(c => c.dex).map(c => c.name));
-    const existing = [...this.classes].filter(([name]) => own.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
+    // Only the classes of the dexes that resolve through the changed loader have their types rewritten.
+    const existing = [...this.classes].filter(([name]) => changing.has(name)).map(([name, rt]) => ({ name, rt, sup: this.prog.get(name)!.sup, ifaces: [...this.prog.get(name)!.ifaces], fields: this.prog.get(name)!.fields.map(f => ({ field: f, desc: f.desc })) }));
     const names = change();
     if (!names.length) return;
     this.vslotCache.clear();
