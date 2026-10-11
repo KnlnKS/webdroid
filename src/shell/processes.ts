@@ -127,7 +127,7 @@ export type WorkerDiagnosticRow = WorkerIdentity & (
   {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
 const workerMode = () => new URLSearchParams(location.search).get("processMode") === "worker";
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** requests in flight from foreground processes, which this one runs at their priority */
@@ -307,6 +307,7 @@ export class ProcessBroker {
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
     if (worker) {
+      entry.presented = Promise.withResolvers();
       const canvas = document.createElement("canvas"); entry.canvas = canvas;
       canvas.hidden = true;
       canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
@@ -382,7 +383,7 @@ export class ProcessBroker {
       if (worker && entry.canvas) {
         const sink = canvasFrameSink(entry.canvas);
         const {port1,port2} = new MessageChannel();
-        ports.push(receiveFrames(port1,sink));display=port2;
+        ports.push(receiveFrames(port1,bitmap => { sink(bitmap); entry.presented?.resolve(); }));display=port2;
         const input = new MessageChannel();
         const inputOwner = receiveIme(input.port1, entry.canvas); imeOwner = inputOwner;
         ports.push(() => { inputOwner.close(); if (entry.ime === inputOwner) entry.ime = undefined; }); ime=input.port2;
@@ -671,6 +672,7 @@ export class ProcessBroker {
     entry.pending.clear();
     this.services.clientDied(pid);
     this.services.processDied(entry.pkg, entry.process, death);
+    entry.presented?.resolve();
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
     for (const key of this.locationTokens.keys()) if (key.startsWith(pid + ":")) this.locationTokens.delete(key);
     this.workerReads.delete(pid); this.workerLiveness.delete(pid);
@@ -774,6 +776,8 @@ export class ProcessBroker {
     if (!entry?.worker && !entry?.workerDiagnostic) return null;
     return (await this.workerSnapshots([entry]))[0] ?? null;
   }
+  /** settles once the process has presented a frame, or has died */
+  presented(pid: number): Promise<void> { return this.entries.get(pid)?.presented?.promise ?? Promise.resolve(); }
   foregroundWorker(): Entry["worker"] {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.worker : undefined;

@@ -24,6 +24,9 @@ export function bootSystemOwner(): Promise<void> {
     fixProcessBitness([]);
     if (tier === "wasm") await loadTier();
     await Promise.all([loadFramework(), loadPlatformDex()]);
+    // app processes start meanwhile: their calls to system services wait for its endpoint
+    const broker = processBroker();
+    broker.connect("android", "system_server", PROCESS_PID);
     if (tier === "wasm") await loadAppCode({ launch: [] });
     hostWindowManager();
     setSystemDisplayTarget();
@@ -31,8 +34,6 @@ export function bootSystemOwner(): Promise<void> {
     await onMain(() => rt.drive(loadSystemFontMap()));
     await onMain(initDeviceLocales);
     await onMain(applyDeviceConfiguration);
-    const broker = processBroker();
-    broker.connect("android", "system_server", PROCESS_PID);
     const endpoint = connectProcess();
     await onMain(() => scall("android/app/ActivityThread", "systemMain", "()Landroid/app/ActivityThread;"));
     broker.ready(PROCESS_PID, endpoint);

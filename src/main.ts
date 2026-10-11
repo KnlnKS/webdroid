@@ -136,21 +136,24 @@ async function boot(file: string, local?: File) {
       canvas.style.zIndex = "2147483647";
       canvas.style.background = "transparent";
       canvas.style.pointerEvents = "none";
-      await Promise.all([bootSystemOwner(), displayRate]);
+      const system = bootSystemOwner();
+      await displayRate;
       runtimeStarted = true;
       const { pkg, label } = await prepareWorkerInstall(install);
       const broker = processBroker();
+      let started!: ReturnType<typeof broker.launch>;
       const launch = () => {
         shell.setState({ kind: "loading", file, stage: "Starting app…" });
-        const started = broker.launch(pkg, assets?.key ?? file);
+        started = broker.launch(pkg, assets?.key ?? file);
         broker.watch(started.pid, death => shell.setState({ kind: "exited", file, label, crashed: death.crashed,
           crashDialog: death.crashed && death.repeated, retry: launch }));
         return started.shown.then(() => { shell.setState({ kind: "running", file, label }); },
           error => { shell.setState({ kind: "failed", file, error, retry: launch }); });
       };
-      await launch();
+      await Promise.all([launch(), system]);
       perf.bootMs = performance.now() - t0;
-      void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
+      // other packages' processes start once the app has shown its first frame
+      void broker.presented(started.pid).then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
         .then(() => broker.boot()).catch(error => console.error("[provision]", error));
       return;
     }
