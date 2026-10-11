@@ -1,7 +1,7 @@
 // Intended response joins scenario UI state with the current app-owned bitmap's response
 // region. The later receipt clock is a conservative latency upper bound.
 //
-//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>] (one file per Worker too)
+//   bun run lat [scenario ...] [--engine chrome|webkit] [--gpu] [--warm] [--timeline] [--json <file>] [--query jvmProfile=1] [--cpuprofile <file>] (one file per Worker too) [--trace <file>]
 //
 // Drives headless Chrome over raw CDP with only Page/Target enabled: Playwright's Runtime.enable
 // makes V8 capture a detailed stack for every Java exception, about 5x their cost. The scenario
@@ -15,7 +15,8 @@
 // Coordinates are in the fixed 1080x2160@480 screen. Only "m" taps are gated; each launch also
 // reports root frame proxies and actual app presentation separately. --cpuprofile writes
 // the gated launch's V8 profile; each gated pointerup then runs __wdMarkUp (1 ms) so
-// scripts/lat/profsum.ts can window the profile to one tap.
+// scripts/lat/profsum.ts can window the profile to one tap. --trace writes the gated launch's browser-wide trace (every
+// thread: page, Workers, GPU), for chrome://tracing or Perfetto.
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -31,7 +32,7 @@ const SCENARIOS = join(import.meta.dir, "scenarios");
 
 const args = process.argv.slice(2);
 const { flag, option } = consume(args);
-const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), engine = option("--engine") ?? "chrome";
+const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"), jsonOut = option("--json"), query = option("--query"), cpuProfile = option("--cpuprofile"), traceOut = option("--trace"), engine = option("--engine") ?? "chrome";
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "wasm");
@@ -359,7 +360,7 @@ async function openBrowser(profile: string): Promise<BrowserDriver> {
   return { send, events, version: (await send("Browser.getVersion")).product, close: () => { ws.close(); proc.kill(); } };
 }
 
-async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false): Promise<Capture> {
+async function launch(browser: BrowserDriver, apk: string, steps: unknown, expectedLaunch: Expectation, profile?: string, save = false, replay = false, trace?: string): Promise<Capture> {
   const injection = `(${installLatencyObserver.toString()})(${JSON.stringify(COUNTERS)});globalThis.__wdLatMatches=(${matchesState.toString()});${profile ? "globalThis.__wdProfiling=1;" : ""}if (location.pathname === "/") addEventListener("DOMContentLoaded", () => { ${inPage(steps, COUNTERS, save, replay, expectedLaunch)} });`;
   const url = new URL("/", BASE);
   url.search = new URLSearchParams({ ...Object.fromEntries(launchQuery), apk, screen: SCREEN }).toString();
@@ -393,6 +394,7 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
       .finally(() => send("Runtime.runIfWaitingForDebugger", {}, worker).catch(() => {}));
   };
   if (profile) { browser.events!.add(attached); await startProfile(sessionId, ""); }
+  if (trace) await send("Tracing.start", { transferMode: "ReturnAsStream", traceConfig: { includedCategories: ["devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame", "v8.execute", "blink.user_timing", "gpu", "viz", "cc"] } });
   await send("Page.navigate", { url: url.href }, sessionId);
   try {
     for (const deadline = Date.now() + 600_000; Date.now() < deadline;) {
@@ -403,12 +405,27 @@ async function launch(browser: BrowserDriver, apk: string, steps: unknown, expec
         const stopped = await send("Profiler.stop", {}, session).catch(() => undefined);
         if (stopped) await Bun.write(label ? profile!.replace(/\.cpuprofile$/, `-${label}.cpuprofile`) : profile!, JSON.stringify(stopped.profile));
       }
+      if (trace) await writeTrace(browser, trace);
       const read = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat)", returnByValue: true }, sessionId);
       return JSON.parse(read.result.value);
     }
     const partial = await send("Runtime.evaluate", { expression: "JSON.stringify(globalThis.__wdLat ?? {taps:[]})", returnByValue: true }, sessionId);
     return { ...JSON.parse(partial.result.value), error: "scenario timed out" };
   } finally { browser.events?.delete(attached); await send("Target.closeTarget", { targetId }); }
+}
+
+async function writeTrace(browser: BrowserDriver, file: string): Promise<void> {
+  const done = new Promise<string>((resolve) => browser.events!.add(function on(m) {
+    if (m.method === "Tracing.tracingComplete") { browser.events!.delete(on); resolve(m.params.stream); }
+  }));
+  await browser.send!("Tracing.end");
+  const handle = await done, out = Bun.file(file).writer();
+  for (let eof = false; !eof;) {
+    const chunk = await browser.send!("IO.read", { handle, size: 1 << 22 });
+    out.write(chunk.base64Encoded ? Buffer.from(chunk.data, "base64") : chunk.data);
+    eof = chunk.eof;
+  }
+  await out.end(); await browser.send!("IO.close", { handle });
 }
 
 /** wipe app data (installs, preferences, databases, files) and keep everything else */
@@ -452,7 +469,7 @@ for (const name of names) {
     const steps = scenarioSteps.map((step: any) => step.m ? { ...step, expect: responses?.[step.expect ?? step.m] } : step);
     const validExpectation = (e: Expectation | undefined) => !!e?.nodes?.length && !!e.pixels?.length;
     if (!validExpectation(expectedLaunch) || steps.some((step: any) => step.m && !validExpectation(step.expect))) throw new Error("scenario intended-state expectations missing");
-    if (engine === "webkit" && cpuProfile) throw new Error("WebKit CPU profiling requires a separate protocol");
+    if (engine === "webkit" && (cpuProfile || traceOut)) throw new Error("WebKit profiling and tracing require a separate protocol");
     row.apk = apk; row.expectedTaps = steps.flatMap((step: { m?: string }) => step.m ? [step.m] : []);
     profile = mkdtempSync(join(tmpdir(), "wdlat-"));
     browser = await openBrowser(profile); row.browser = browser.version;
@@ -461,7 +478,8 @@ for (const name of names) {
       if (row.preparation.error) throw new Error("warm preparation: " + row.preparation.error);
       await resetData(browser);
     }
-    Object.assign(row, await launch(browser, apk, steps, expectedLaunch, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`, false, warm));
+    Object.assign(row, await launch(browser, apk, steps, expectedLaunch, cpuProfile && `${cpuProfile.replace(/\.cpuprofile$/, "")}-${name}.cpuprofile`, false, warm,
+      traceOut && `${traceOut.replace(/\.json$/, "")}-${name}.json`));
     if (row.error) throw new Error(row.error);
     const { launch: started, taps } = row;
     if (!started || taps.length !== row.expectedTaps!.length || taps.some((tap, i) => tap.m !== row.expectedTaps![i])) throw new Error("incomplete scenario capture");
