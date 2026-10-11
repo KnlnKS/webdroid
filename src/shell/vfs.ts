@@ -62,7 +62,8 @@ export const vfs = {
     Object.assign(this.attributes(path,this.isDir(path)),change);
     if (notify) this.onWrite(path,"modify");
   },
-  prepare: (_pkg: string): Promise<void> => Promise.resolve(),
+  /** a process's app data held by another owner, which prepares it there */
+  prepare: undefined as ((pkg: string) => Promise<void>) | undefined,
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
   onShared: (_path: string, _source: SharedFile) => {},

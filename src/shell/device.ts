@@ -22,7 +22,7 @@ import { setAppHost } from "../android/apphost";
 import { loadResources, javaConfiguration, applyDeviceConfiguration } from "../android/resources";
 import { registerApk, registerSplit } from "../android/assetmanager";
 import { setManifest } from "../android/pm";
-import { getPrefs, writePrefsFiles } from "../android/sharedprefs";
+import { getPrefs, createAppData } from "../android/sharedprefs";
 import { PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages, usesSdk } from "../android/packages";
 import { onMain, postMain } from "../android/mainloop";
@@ -184,11 +184,7 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   // the archives LoadedApk's class loader reads
   appArchives.add(apkPath()); appArchives.add(packages.get(pkg)?.path ?? apkPath());
   await onMain(initDeviceLocales);
-  await vfs.prepare(pkg);
-  // installd's createAppData: the data directory with its cache directories, which apps stat
-  // before ContextImpl ever creates them
-  for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
-  await writePrefsFiles(pkg);
+  await (vfs.prepare ?? createAppData)(pkg);
   const labelAttr = appNode?.attrs.find((a) => a.name === "label");
 
   mark("dataReady"); onStatus("Loading resources…");

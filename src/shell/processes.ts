@@ -30,7 +30,7 @@ import { queryReceivers, exported, componentPermission, componentProcess, resolv
 import { checkPermission, PermissionStore, canonicalPermissionCommands, holdsPlatformPermission, type PermissionCalls } from "../android/permissions";
 import { attrStr } from "../android/axml";
 import { sqliteStore, createSQLiteSession, type SQLiteRequest, type SQLiteReply } from "../android/sqlite";
-import { preferenceStore, canonicalPreferenceCommands, type PreferenceCalls } from "../android/sharedprefs";
+import { preferenceStore, canonicalPreferenceCommands, createAppData, type PreferenceCalls } from "../android/sharedprefs";
 import { notificationStore, receiveForegroundNotification, type ForegroundNotificationRequest } from "../android/notification";
 import { PROCESS_PID } from "../android/os";
 import { settingsStore } from "../android/settings";
@@ -541,7 +541,7 @@ export class ProcessBroker {
         const caller = this.entry(pid);
         if (packages.get(pkg)?.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "File preparation belongs to another UID");
         await this.files.prepare(pkg); this.entry(pid);
-        for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
+        await createAppData(pkg);
       },
       fileSetAttributes: async (path,change) => paths.fileSetAttributes(path,change),
       fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),

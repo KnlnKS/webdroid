@@ -103,7 +103,7 @@ const escapeXml = (s: string) => s.replace(/[&<>"]/g, (c) => `&${({ "&": "amp", 
 /** AOSP's SharedPreferencesImpl reads shared_prefs XML: a package's preferences this store holds
  *  (an earlier run, a harness seed) become the files it has not written yet, in
  *  XmlUtils.writeMapXml's form. A whole number becomes an int: the store does not keep the type. */
-export function writePrefsFiles(pkg: string): void | Promise<void> {
+function writePrefsFiles(pkg: string): void | Promise<void> {
   return after(preferenceAccess.preferenceFiles(pkg), files => {
     for (const [file, values] of files) {
       const path = `/data/data/${pkg}/shared_prefs/${file}.xml`;
@@ -120,6 +120,12 @@ export function writePrefsFiles(pkg: string): void | Promise<void> {
       vfs.write(path, new TextEncoder().encode(`<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n${entries.join("\n")}\n</map>\n`));
     }
   });
+}
+/** installd's createAppData: the data directory and its cache directories, which apps stat before
+ *  ContextImpl ever creates them, holding the preference files the store keeps for the package */
+export function createAppData(pkg: string): void | Promise<void> {
+  for (const root of ["/data/data/", "/data/user_de/0/"]) for (const dir of ["", "/cache", "/code_cache"]) vfs.mkdir(`${root}${pkg}${dir}`);
+  return writePrefsFiles(pkg);
 }
 /** a preference file the platform keeps for itself, outside the app's shared_prefs */
 export class Prefs {
