@@ -1646,10 +1646,11 @@ export class World {
         throw this.exception(this.makeThrowable("java/lang/LinkageError", `${reason} changed linked hierarchy of ${old.name}`));
       }
     }
+    // A class's globals keep the names its module gave them: an app build made under the new graph has them already.
     for (const old of existing) {
       for (const { field, desc } of old.fields) if (field.isStatic && desc !== field.desc) {
         const oldKey = `${old.rt.id}:s:${field.name}:${desc}`, newKey = `${old.rt.id}:s:${field.name}:${field.desc}`;
-        old.rt.exports = { ...old.rt.exports, [newKey]: old.rt.exports[oldKey] };
+        if (oldKey in old.rt.exports && !(newKey in old.rt.exports)) old.rt.exports = { ...old.rt.exports, [newKey]: old.rt.exports[oldKey] };
       }
     }
     this.epoch++;
@@ -1657,12 +1658,14 @@ export class World {
     this.cha = new Cha(this.prog); this.implemented.clear(); this.allocatedIndex = undefined;
     this.coldResumes.clear(); this.compiled.clear(); this.fieldReaders.clear();
     this.vslotCache.clear(); this.imtCache.clear();
-    // Existing code and app builds used the previous namespace. Platform code retains its defining boot namespace.
-    const refreshed = new Set(names);
+    // Existing code and app builds used the previous namespace, except a kept build, which was made under this one. Platform code retains its defining boot namespace.
+    const refreshed = new Set(names), kept = keepApp();
+    // a slot without state has never been compiled here
+    const builtUnder = (slot: number) => { const s = this.peek(slot); return (!s || s.k === "method" && !s.hot && !this.demand.methods.has(s.m)) && !!this.aot?.fromAppBuild(slot); };
     for (let b = 0; b < this.blockClass.length; b++) if (refreshed.has(this.blockClass[b])) {
-      for (let i = 0; i < this.methodsIn(b); i++) this.invalidate(this.blockBase[b] + i);
+      for (let i = 0; i < this.methodsIn(b); i++) if (!kept || !builtUnder(this.blockBase[b] + i)) this.invalidate(this.blockBase[b] + i);
     }
-    if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !keepApp()) this.aot?.unbindApp();
+    if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !kept) this.aot?.unbindApp();
     this.refreshLate();
     const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {

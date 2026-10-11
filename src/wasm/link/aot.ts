@@ -445,6 +445,11 @@ export class AotRuntime {
     return false;
   }
   private has(c: number, slot: number): boolean { return !this.cAbsent[c]!.has(slot); }
+  /** whether the attached app build has `slot`'s code loaded */
+  fromAppBuild(slot: number): boolean {
+    const b = this.w.blockOf(slot), c = b < 0 ? -1 : this.cOf[b];
+    return c >= this.appFrom && this.cState[c] === LIVE && this.has(c, slot);
+  }
   private preparation = new Map<number, Promise<void>>();
   private prepared = new Set<number>();
   private preparationModule(slot: number): number {
