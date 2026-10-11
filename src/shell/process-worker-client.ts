@@ -3,11 +3,22 @@ import { callProxy, processError, type ProcessFailure } from "./process-port";
 import type { WorkerControl } from "./worker-control";
 import { workerControlMethods } from "./worker-control-methods";
 import { attachPointerInput, type PointerGeometry } from "./pointer-input";
+import { createGuestClockPort } from "../guest-clock";
+
+export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
+/** A process Worker that loads its runtime before the broker gives it a package. */
+export function spawnProcessWorker(url: string, pid: number): SpareWorker {
+  const worker = new Worker(url, { type: "module" }), clock = createGuestClockPort(pid);
+  const spare: SpareWorker = { pid, url: new URL(url, location.href).href, worker, release: clock.close };
+  worker.onerror = event => { spare.error ??= event.message; };
+  worker.postMessage({ clock: clock.data }, clock.data.port ? [clock.data.port] : []);
+  return spare;
+}
 
 /** Page-owned Worker, input and control ports. JVM endpoint ownership passes to the broker on ready. */
-export function startProcessWorker(url: string, canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
+export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
   bootstrap: () => Promise<ProcessBootstrap>, ready: (port: MessagePort) => void, failed: (message: string) => void, focusInput: () => void = () => {}) {
-  const worker = new Worker(url, { type: "module" });
+  const { worker } = spare;
   const endpoint = new MessageChannel(), control = new MessageChannel();
   let closed = false, published = false, transferred = false, ticking = false, frame = 0;
   const client = callProxy<WorkerControl>(control.port1, workerControlMethods, [], processError,
@@ -19,7 +30,7 @@ export function startProcessWorker(url: string, canvas: HTMLCanvasElement, geome
   });
   const close = () => {
     if (closed) return;
-    closed = true; clearTimeout(focusTimer); window.removeEventListener("pagehide", pagehide); cancelAnimationFrame(frame); pointers.close(); client.close(); worker.terminate();
+    closed = true; clearTimeout(focusTimer); window.removeEventListener("pagehide", pagehide); cancelAnimationFrame(frame); pointers.close(); client.close(); worker.terminate(); spare.release();
     if (!published) endpoint.port2.close();
     if (!transferred) { endpoint.port1.close(); control.port2.close(); }
   };
@@ -50,6 +61,7 @@ export function startProcessWorker(url: string, canvas: HTMLCanvasElement, geome
   queueMicrotask(() => { void (async () => {
     try {
       if (closed) return;
+      if (spare.error) throw new Error(spare.error);
       const data = await bootstrap();
       if (closed) { closeProcessBootstrap(data); return; }
       try {
@@ -59,5 +71,5 @@ export function startProcessWorker(url: string, canvas: HTMLCanvasElement, geome
       } catch (error) { closeProcessBootstrap(data); throw error; }
     } catch (error) { if (!closed) failed(String(error)); }
   })(); });
-  return { url: new URL(url, location.href).href, control: client.endpoint, close };
+  return { url: spare.url, control: client.endpoint, close };
 }

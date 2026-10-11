@@ -1,16 +1,12 @@
-import { attachGuestClockPort, guestClockControl } from "../guest-clock";
+import { guestClockControl } from "../guest-clock";
 import { closeProcessBootstrap, type ProcessBootstrap } from "./process-bootstrap-data";
 import type { BrokerCalls } from "./processes";
 
-/** Time is attached before loading natives, process identity or any other JVM module. */
+/** The Worker attached its clock and loaded natives before this bootstrap arrived. */
 export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<BrokerCalls> {
-  let attachedClock = false;
   let closeDisplay = () => {}, closeIme = () => {}, closeWeb = () => {};
   try {
-    if (!data.clock || !data.broker) throw new Error("Worker bootstrap is missing clock or command capabilities");
-    attachGuestClockPort(data.clock);
-    attachedClock = true;
-    await import("../natives");
+    if (!data.broker) throw new Error("Worker bootstrap is missing command capabilities");
     const { setProcessIdentity, setProcessName } = await import("../android/os");
     setProcessIdentity(data.pid, data.uid);
     setProcessName(data.process);
@@ -35,7 +31,7 @@ export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<Bro
     return broker;
   } catch (error) {
     closeWeb(); closeIme(); closeDisplay();
-    if (attachedClock) guestClockControl.dispose();
+    guestClockControl.dispose();
     closeProcessBootstrap(data);
     throw error;
   }

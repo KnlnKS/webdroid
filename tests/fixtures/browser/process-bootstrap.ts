@@ -9,8 +9,7 @@ import { vfs } from "../../../src/shell/vfs";
 import { packedArchives } from "../../../src/shell/packedarchive";
 import { RemoteFile } from "../../../src/shell/remote-file";
 import { bootstrapTransfers } from "../../../src/shell/process-bootstrap-data";
-import { connectClock } from "../../../src/shell/clock-port";
-import { guestClockControl, setSystemTimeout, wallMillis, bootTime } from "../../../src/guest-clock";
+import { guestClockControl, setSystemTimeout, wallMillis, bootTime, createGuestClockPort } from "../../../src/guest-clock";
 import { callProxy } from "../../../src/shell/process-port";
 import { brokerMethods, type BrokerCalls } from "../../../src/shell/processes";
 import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appexitinfo";
@@ -30,18 +29,13 @@ export async function bootstrapOwnership() {
       return Uint8Array.of(i + 10);
     } });
   }
-  const broker = processBroker(), clocks: Promise<void>[] = [], callers: ReturnType<typeof callProxy<BrokerCalls>>[] = [];
-  let fired = 0;
+  const broker = processBroker(), callers: ReturnType<typeof callProxy<BrokerCalls>>[] = [];
   const watchClock = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
     if (!data.broker) throw new Error("expected command capability");
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
     if (!data.display) throw new Error("expected display capability");
     displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
     senders.push(sendFrames(data.display));
-    const port = data.clock?.port;
-    if (!port) throw new Error("expected controlled clock port");
-    clocks.push(new Promise<void>(resolve => port.addEventListener("message", ({data}) => { if (data.kind === "close") resolve(); })));
-    connectClock(data.clock!)!.schedule(() => fired++, 5);
   };
   const ownerOne=broker.connect("test.archive.one", "test.archive.one", 7001);ownerOne.canvas=document.createElement("canvas");
   const ownerTwo=broker.connect("test.archive.two", "test.archive.two", 7002);ownerTwo.canvas=document.createElement("canvas");
@@ -82,12 +76,11 @@ export async function bootstrapOwnership() {
   const imeDeadClosed=!replacementIme.input.isConnected,imePeerSurvives=otherIme.input.isConnected;
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
-  await Promise.all([...clocks,...displays]);
+  await Promise.all(displays);
   const displayErrors = await Promise.all(senders.map(sender => {const fb=new OffscreenCanvas(1,1);fb.getContext("2d");return sender.present(fb.transferToImageBitmap()).then(()=>"unexpected frame",error=>error.message);}));
-  const clockPending = guestClockControl.pending();
   const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, clocksClosed: clocks.length, clockPending, fired, callersClosed, displaysClosed:displays.length,displayErrors };
+  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length,displayErrors };
 }
 
 export async function endpointOwnership() {
@@ -283,9 +276,12 @@ export async function clockBootstrapOwnership() {
   packages.set(pkg, new PackageRecord(root, new Resources(null, {}), path, 15000, async () => []));
   vfs.mount(path, {size:1,read:()=>Uint8Array.of(31)});
   const entry = broker.connect(pkg, pkg, pid);entry.canvas=document.createElement("canvas");
+  const clock = createGuestClockPort(pid);
+  broker.watch(pid, clock.close);
   const data = await broker.bootstrap(pid, true), start = guestClockControl.now(), wall = wallMillis();
-  const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout} from ${JSON.stringify(location.origin + "/guest-clock.js")};
+  const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout,attachGuestClockPort} from ${JSON.stringify(location.origin + "/guest-clock.js")};
     self.onmessage = async ({data}) => {
+      if(data.clock){attachGuestClockPort(data.clock);return;}
       if(data.finish!==undefined){const {exitProcess}=await import(${JSON.stringify(location.origin + "/process-exit.js")});exitProcess({code:data.finish});return;}
       const {attachWorkerBootstrap,serveWorkerEndpoint} = await import(${JSON.stringify(location.origin + "/worker-bootstrap.js")});
       const broker = await attachWorkerBootstrap(data);
@@ -313,6 +309,7 @@ export async function clockBootstrapOwnership() {
     const ready = await new Promise<{display:boolean;archive:number[];controlled:boolean;bootTime:number;identity:(number|string)[];commands:{cookies:boolean;clipboard:unknown}}>((resolve,reject) => {
       worker.onerror = event => reject(new Error(event.message));
       worker.onmessage = ({data}) => { if(data.ready) {broker.readyPort(pid,data.endpoint);resolve(data);} else ticks.push(data); };
+      worker.postMessage({clock:clock.data}, [clock.data.port!]);
       worker.postMessage(data, bootstrapTransfers(data));
     });
     let brokerTimer = 0;

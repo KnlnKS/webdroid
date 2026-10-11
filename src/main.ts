@@ -116,6 +116,7 @@ async function boot(file: string, local?: File) {
     mark("boot");
     const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
     const workerMode = params.get("processMode") === "worker";
+    if (workerMode) processBroker().prestartWorker();
     void startZygote(displayRate);
     const bitness = workerMode ? undefined : fixProcessBitness;
     const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, bitness) : openInstallRemote("/apks/" + encodeURIComponent(file), bitness), provisionPackages(), loadSkia()]);

@@ -19,7 +19,7 @@ import { newIntent, type ComponentRef } from "../android/intent";
 import { NOT_CRASHED, REASON_EXIT_SELF, REASON_USER_REQUESTED, recordRemoteExit, copyExitRecord, exitRecords, deathOf, type ExitRecord, type Death, type KillNote } from "../android/server/appexitinfo";
 import type { PackageDataChange } from "./packagedata";
 import { logUncaught } from "../jvm/natives/jthrowable";
-import { createGuestClockPort, uptimeMillis } from "../guest-clock";
+import { uptimeMillis } from "../guest-clock";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords";
 import { ActivityStack } from "./activitystack";
 import type { FileSource } from "./lazyfile";
@@ -43,7 +43,7 @@ import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-pa
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors";
 import type { WorkerControl } from "./worker-control";
 import { StoredParcel, StoredParcelError } from "./stored-parcel";
-import { startProcessWorker } from "./process-worker-client";
+import { spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { serveFile } from "./remote-file";
@@ -126,6 +126,7 @@ type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
   {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
+const workerMode = () => new URLSearchParams(location.search).get("processMode") === "worker";
 export type Entry = { worker?: ReturnType<typeof startProcessWorker>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
@@ -295,21 +296,25 @@ export class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, launcher: null, watchers: new Set(), pending: new Set(),
+    const worker = pid === undefined && (background || workerMode());
+    let spare = worker ? this.spare : undefined;
+    if (spare) {
+      this.spare = undefined;
+      if (spare.url !== new URL(this.workerUrl(spare.pid), location.href).href) { spare.worker.terminate(); spare.release(); spare = undefined; }
+    }
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, launcher: null, watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
-    if (pid === undefined && (background || new URLSearchParams(location.search).get("processMode") === "worker")) {
+    if (worker) {
       const canvas = document.createElement("canvas"); entry.canvas = canvas;
       canvas.hidden = true;
       canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:16px;z-index:1";
       (document.getElementById("screen")?.parentElement ?? document.body).appendChild(canvas);
-      const params = new URLSearchParams(location.search);
-      params.set("pid", String(entry.pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp)); params.set("hz", String(device.refreshRate));
-      const url = "/process-worker.js?" + params;
-      entry.workerDiagnostic = {url:new URL(url,location.href).href};
       try {
-        entry.worker = startProcessWorker(url, canvas, () => device,
+        spare ??= spawnProcessWorker(this.workerUrl(entry.pid), entry.pid);
+        entry.workerDiagnostic = {url:spare.url};
+        entry.worker = startProcessWorker(spare, canvas, () => device,
           () => this.bootstrap(entry.pid, true), port => this.readyPort(entry.pid, port),
           message => this.fail(entry.pid, message, NOT_CRASHED), () => entry.ime?.focus());
       } catch (error) { this.fail(entry.pid,String(error),NOT_CRASHED); throw error; }
@@ -328,6 +333,14 @@ export class ProcessBroker {
     this.counterEvent(entry, "created");
     this.services.processStarted(pkg, process);
     return entry;
+  }
+  private spare: SpareWorker | undefined;
+  /** a Worker for the next process, loading its runtime while the page boots, as the zygote's unspecialized app processes do */
+  prestartWorker(): void { if (!this.spare) { const pid = this.nextPid++; this.spare = spawnProcessWorker(this.workerUrl(pid), pid); } }
+  private workerUrl(pid: number): string {
+    const params = new URLSearchParams(location.search);
+    params.set("pid", String(pid)); params.set("screen", formatScreen(device)); params.set("statusBarDp", String(device.statusBarDp));
+    return "/process-worker.js?" + params;
   }
   /** the home screen opening `pkg` while no process of its runs: a new process, which starts the
    *  launcher activity and is shown, at the top app's priority while it starts */
@@ -362,8 +375,6 @@ export class ProcessBroker {
       this.entry(pid);
       const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
-      const clock = worker ? createGuestClockPort(pid) : undefined;
-      if (clock) ports.push(clock.close);
       const broker = worker ? this.serveBrokerPort(pid) : undefined;
       if (broker) ports.push(broker.close);
       let display: MessagePort | undefined, ime: MessagePort | undefined, web: MessagePort | undefined;
@@ -379,7 +390,7 @@ export class ProcessBroker {
         ports.push(receiveWebSurfaces(frames.port1,entry.canvas,()=>device)); web=frames.port2;
       }
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, clock: clock?.data, broker: broker?.port, display, ime, web };
+        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker?.port, display, ime, web };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
       if (imeOwner) entry.ime = imeOwner;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
@@ -773,7 +784,7 @@ export class ProcessBroker {
       return canvas && !(entry.canvas ?? entry.frame)?.hidden ? [canvas] : [];
     });
     const apps = layers.filter(canvas => canvas !== root);
-    return new URLSearchParams(location.search).get("processMode") === "worker" ? [...apps, root] : [root, ...apps];
+    return workerMode() ? [...apps, root] : [root, ...apps];
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
