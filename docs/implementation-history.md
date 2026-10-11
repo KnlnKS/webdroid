@@ -6545,6 +6545,13 @@ baseline in [wasm-baselines.md](wasm-baselines.md).
   but the zygote numbers runtime functions (Unsafe accessors, allocators, invokers, array constructors) that the
   platform build does not reserve.
 
+- **e2e quick gate on the Wasm tier.** Serially (`--jobs 1`), all 7 flows reach their checkpoints in 158 s. Five at
+  a time, a platform build without its bundled app builds (`aot` run after the last `aot-profile`, so `apps.json` is
+  empty) has every flow's microG Worker compile its own 44k-method build. That run reached 1/7 flows in 502 s, and
+  doodlejump's main loop wedged. With `aot-profile` run on the current build, 3/7 flows pass in 87 s. The rest fail
+  only on "Worker diagnostic timeout" (the SwiftShader Worker GL starvation below); the JS tier reaches 4/7 with the
+  same failure.
+
 Open findings:
 
 - Class initializers take about 324 ms of Calculator's launch (`Typeface` 79 ms; ICU `TimeZone` 54 ms through
