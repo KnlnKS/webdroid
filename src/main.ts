@@ -67,7 +67,9 @@ setDisplayChangeHandler(shell.resizeDisplay);
 
 void loadFramework();
 void fetchPlatformJars();
-if (tier === "wasm") void loadTier();
+if (tier === "wasm") void loadTier().then(() => mark("tierLoaded"), () => {});
+// the next app's process loads its runtime while the page waits for a package to open, as a device's zygote waits forked
+processBroker().prestartWorker();
 // the worker serves persisted compiled code (src/jvm/codecache.ts), so V8 can cache it
 void navigator.serviceWorker?.register("/webview-worker.js").catch(() => {});
 
@@ -111,10 +113,9 @@ async function boot(file: string, local?: File) {
   let rollbackAssets: (() => void) | undefined;
   try {
     mark("boot");
-    const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
-    processBroker().prestartWorker();
     void startZygote(displayRate);
-    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkia()]);
+    // the app's process needs only the package: the system realm waits for the page's tier itself
+    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkia()]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -130,7 +131,6 @@ async function boot(file: string, local?: File) {
     canvas.style.zIndex = "2147483647";
     canvas.style.background = "transparent";
     canvas.style.pointerEvents = "none";
-    const system = bootSystemOwner();
     await displayRate;
     runtimeStarted = true;
     const { pkg, label } = await prepareWorkerInstall(install);
@@ -147,7 +147,8 @@ async function boot(file: string, local?: File) {
       return started.shown.then(() => { shell.setState({ kind: "running", file, label }); },
         error => { shell.setState({ kind: "failed", file, error, retry: launch }); });
     };
-    await Promise.all([launch(), system]);
+    // the app's process is sent its package before the system realm's Java takes the page
+    await Promise.all([launch(), bootSystemOwner()]);
     perf.bootMs = performance.now() - t0;
     // other packages' processes start once the app has shown its first frame
     void broker.presented(started.pid).then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
@@ -307,3 +308,10 @@ const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : ne
   };
   requestAnimationFrame(sample);
 });
+
+// system_server boots while the page waits for a package to open, as a device's does before any app launches. A page opened for
+// an app boots it once the app's process has its package: the page serves that process's code meanwhile.
+if (!params.has("apk")) {
+  void startZygote(displayRate);
+  void provisionPackages().then(bootSystemOwner).catch(() => {});
+}
