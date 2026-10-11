@@ -116,9 +116,9 @@ async function boot(file: string, local?: File) {
     mark("boot");
     const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
     const workerMode = params.get("processMode") === "worker";
-    void startZygote();
+    void startZygote(displayRate);
     const bitness = workerMode ? undefined : fixProcessBitness;
-    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, bitness) : openInstallRemote("/apks/" + encodeURIComponent(file), bitness), provisionPackages(), loadSkia(), displayRate]);
+    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, bitness) : openInstallRemote("/apks/" + encodeURIComponent(file), bitness), provisionPackages(), loadSkia()]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -135,7 +135,7 @@ async function boot(file: string, local?: File) {
       canvas.style.zIndex = "2147483647";
       canvas.style.background = "transparent";
       canvas.style.pointerEvents = "none";
-      await bootSystemOwner();
+      await Promise.all([bootSystemOwner(), displayRate]);
       runtimeStarted = true;
       const { pkg, label } = await prepareWorkerInstall(install);
       const broker = processBroker();

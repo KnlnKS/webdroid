@@ -112,8 +112,9 @@ let zygote: Promise<void> | null = null;
 /** What a device's zygote holds before it forks an app: the framework package, the boot class
  *  path indexed and the natives linked. It needs no app, so a page starts it while the app
  *  downloads. Natives link after the platform is indexed, never before: a native whose super or
- *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed. */
-export function startZygote(): Promise<void> {
+ *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed.
+ *  `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
+export function startZygote(host?: Promise<unknown>): Promise<void> {
   return zygote ??= (async () => {
     // the JS tier's link table and persisted bodies; the Wasm tier links and persists its own code (wasm/host/appcode.ts)
     const table = tier === "js" ? fetchLinkTable() : null;
@@ -125,8 +126,7 @@ export function startZygote(): Promise<void> {
     }
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
-    await processBitness;
-    if (tier === "wasm") await appCodeReady;
+    await Promise.all([processBitness, host, tier === "wasm" && appCodeReady]);
     await zygoteInit();
   })();
 }
