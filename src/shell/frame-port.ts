@@ -1,69 +1,49 @@
-/** Complete frame snapshots cross this port; a pending frame never aliases the renderer. */
-type FrameMessage = {kind:"frame";id:number;bitmap:ImageBitmap} | {kind:"ack";id:number;error?:string} | {kind:"close"};
-type PendingFrame = {id:number;bitmap:ImageBitmap;resolve(shown:boolean):void;reject(error:Error):void};
-export type FrameSender = {present(bitmap:ImageBitmap):Promise<boolean>;close():void};
+// A process Worker presents straight into its page canvas, transferred as an OffscreenCanvas, so the
+// page thread and its GPU work are not in the frame path. The page hears of each frame shown, with a
+// copy while it mirrors frames for an observer that reads their pixels.
+type DisplayMessage = {kind:"shown";at:number;copy:ImageBitmap|null} | {kind:"mirror";on:boolean} | {kind:"close"};
+export type FrameSender = {present(bitmap:ImageBitmap):void;close():void};
 
-/** One transferred frame and one newest pending frame bound both memory and stale presentation. */
-export function sendFrames(port:MessagePort):FrameSender {
-  let closed=false,nextId=1,inflight:Omit<PendingFrame,"bitmap">|undefined,pending:PendingFrame|undefined;
-  const error = () => new Error("Process display closed");
-  const finish = () => {
-    if(closed)return;
-    closed=true;
-    inflight?.reject(error());inflight=undefined;
-    if(pending){pending.bitmap.close();pending.reject(error());pending=undefined;}
-    port.close();
-  };
-  const send = (frame:PendingFrame) => {
-    const {bitmap:_,...request}=frame;inflight=request;
-    try{port.postMessage({kind:"frame",id:frame.id,bitmap:frame.bitmap} satisfies FrameMessage,[frame.bitmap]);}
-    catch(error){inflight=undefined;frame.bitmap.close();frame.reject(error instanceof Error?error:new Error(String(error)));}
-  };
+/** whoever reads presented frames (lat, the e2e probe): `copy` is a frame's pixels, its to close,
+ *  and `at` when it was presented, on the page's clock */
+export type DisplayObserver = (canvas:HTMLCanvasElement,copy:ImageBitmap|null,at:number)=>void;
+declare global { var __wdPresented: DisplayObserver | undefined; }
+
+export function sendFrames(port:MessagePort,screen:OffscreenCanvas):FrameSender {
+  const context=screen.getContext("bitmaprenderer");
+  if(!context)throw new Error("Bitmap presentation context unavailable");
+  let closed=false,mirror=false;
+  const finish=()=>{if(!closed){closed=true;port.close();}};
   port.onmessageerror=finish;
-  port.onmessage=({data}:MessageEvent<FrameMessage>)=>{
-    if(data.kind==="close"){finish();return;}
-    if(data.kind!=="ack"||data.id!==inflight?.id)return;
-    const sent=inflight;inflight=undefined;
-    if(data.error)sent.reject(new Error(data.error));else sent.resolve(true);
-    if(pending){const next=pending;pending=undefined;send(next);}
-  };
+  port.onmessage=({data}:MessageEvent<DisplayMessage>)=>{if(data.kind==="mirror")mirror=data.on;else if(data.kind==="close")finish();};
   return {
     present(bitmap){
-      if(closed){bitmap.close();return Promise.reject(error());}
-      return new Promise((resolve,reject)=>{
-        const frame={id:nextId++,bitmap,resolve,reject};
-        if(!inflight){send(frame);return;}
-        if(pending){pending.bitmap.close();pending.resolve(false);}
-        pending=frame;
+      if(closed){bitmap.close();return;}
+      if(screen.width!==bitmap.width)screen.width=bitmap.width;
+      if(screen.height!==bitmap.height)screen.height=bitmap.height;
+      context.transferFromImageBitmap(bitmap);
+      const at=performance.timeOrigin+performance.now();
+      if(!mirror){port.postMessage({kind:"shown",at,copy:null} satisfies DisplayMessage);return;}
+      void createImageBitmap(screen).then(copy=>{
+        if(closed)copy.close();else port.postMessage({kind:"shown",at,copy} satisfies DisplayMessage,[copy]);
       });
     },
-    close(){if(!closed)try{port.postMessage({kind:"close"} satisfies FrameMessage);}finally{finish();}},
+    close(){if(!closed)try{port.postMessage({kind:"close"} satisfies DisplayMessage);}finally{finish();}},
   };
 }
 
-/** The page owns the receiving bitmap until the synchronous sink consumes it or fails. */
-export function receiveFrames(port:MessagePort,present:(bitmap:ImageBitmap)=>void):()=>void {
+export type FrameReceiver = {mirror(on:boolean):void;close():void};
+export function receiveFrames(port:MessagePort,canvas:HTMLCanvasElement,shown:()=>void):FrameReceiver {
   let closed=false;
-  const close=()=>{if(closed)return;closed=true;try{port.postMessage({kind:"close"} satisfies FrameMessage);}finally{port.close();}};
+  const close=()=>{if(closed)return;closed=true;try{port.postMessage({kind:"close"} satisfies DisplayMessage);}finally{port.close();}};
   port.onmessageerror=close;
-  port.onmessage=({data}:MessageEvent<FrameMessage>)=>{
+  port.onmessage=({data}:MessageEvent<DisplayMessage>)=>{
     if(data.kind==="close"){close();return;}
-    if(data.kind!=="frame")return;
-    if(closed){data.bitmap.close();return;}
-    let error:string|undefined;
-    try{present(data.bitmap);}catch(cause){error=cause instanceof Error?cause.message:String(cause);}
-    finally{data.bitmap.close();}
-    port.postMessage({kind:"ack",id:data.id,error} satisfies FrameMessage);
+    if(data.kind!=="shown")return;
+    if(closed){data.copy?.close();return;}
+    shown();
+    const observe=globalThis.__wdPresented;
+    if(observe)observe(canvas,data.copy,data.at-performance.timeOrigin);else data.copy?.close();
   };
-  return close;
-}
-
-export function canvasFrameSink(canvas:HTMLCanvasElement):(bitmap:ImageBitmap)=>void {
-  const context=canvas.getContext("bitmaprenderer");
-  if(!context)throw new Error("Bitmap presentation context unavailable");
-  return bitmap=>{
-    if(canvas.width!==bitmap.width)canvas.width=bitmap.width;
-    if(canvas.height!==bitmap.height)canvas.height=bitmap.height;
-    context.transferFromImageBitmap(bitmap);
-  };
+  return {mirror:on=>{if(!closed)port.postMessage({kind:"mirror",on} satisfies DisplayMessage);},close};
 }

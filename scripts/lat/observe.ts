@@ -28,20 +28,12 @@ export function installLatencyObserver(counters: string[]) {
   host.__wdLatObserver = { firstApp: null, lastApp: null, onFrame: null, times: null, snapshot };
   // a process Worker's canvas names its process
   const appOf = (canvas: HTMLCanvasElement) => canvas.dataset.pkg ? { pkg: canvas.dataset.pkg, pid: canvas.dataset.pid ?? null } : null;
-  const original = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
-  ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bitmap: ImageBitmap | null) {
-    const canvas = this.canvas as HTMLCanvasElement, observer = host.__wdLatObserver, app = bitmap && observer ? appOf(canvas) : null;
-    const copy = app && observer.onFrame ? createImageBitmap(bitmap!) : null;
-    let result;
-    try { result = original.call(this, bitmap); }
-    catch (error) { if (copy) void copy.then(image => image.close(), () => {}); throw error; }
-    const at = performance.now();
+  globalThis.__wdPresented = (canvas: HTMLCanvasElement, copy: ImageBitmap | null, at: number) => {
+    const observer = host.__wdLatObserver, app = appOf(canvas);
     // receipts only while a capture listens: visibility checks read computed styles
-    if (app && (observer.onFrame || observer.times || !observer.firstApp)) {
-      const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, tier: host.wd?.tier, visible: shown(canvas) };
-      if (receipt.visible) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(at); }
-      observer.onFrame?.(receipt, copy);
-    }
-    return result;
+    if (!app || !(observer.onFrame || observer.times || !observer.firstApp)) { copy?.close(); return; }
+    const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, tier: host.wd?.tier, visible: shown(canvas) };
+    if (receipt.visible) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(at); }
+    if (observer.onFrame && copy) observer.onFrame(receipt, copy); else copy?.close();
   };
 }

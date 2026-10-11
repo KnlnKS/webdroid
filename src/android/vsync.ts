@@ -13,6 +13,11 @@ import { uptimeMillis } from "../guest-clock";
 
 let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
 const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
+/** Host frames this far apart have stopped (a hidden tab or canvas) rather than come slowly. A swap waits
+ *  for a display that falls behind its rate, as a software rasterizer's does, rather than outrun it and
+ *  starve the GPU process's other contexts. */
+const STALLED_MS = 250;
+let hostFrameAt = -Infinity;
 function flushVsyncWaiters(): void {
   clearTimeout(vsyncWatchdog); vsyncWatchdog = undefined;
   const waiters = vsyncWaiters;
@@ -24,7 +29,7 @@ function flushVsyncWaiters(): void {
 export function vsync(): Promise<void> {
   return new Promise((resolve) => {
     vsyncWaiters.push(resolve);
-    vsyncWatchdog ??= setTimeout(flushVsyncWaiters, 2 * vsyncIntervalMs());
+    vsyncWatchdog ??= setTimeout(flushVsyncWaiters, performance.now() - hostFrameAt < STALLED_MS ? STALLED_MS : 2 * vsyncIntervalMs());
   });
 }
 
@@ -51,6 +56,7 @@ const ref = (weak: JObj): JObj | null | Promise<JObj | null> => vcall(weak, "get
 
 /** a host display frame: true when it is a virtual vsync, delivered now to every receiver that asked */
 export function recordVsync(time: number): boolean {
+  hostFrameAt = performance.now();
   const interval = vsyncIntervalMs();
   if (!nextVsync) nextVsync = time;
   // Re-anchor missed periods so host jitter cannot straddle a stale phase boundary.
@@ -59,6 +65,14 @@ export function recordVsync(time: number): boolean {
   nextVsync = elapsed < interval ? nextVsync + interval : time + interval;
   deliverVsync();
   return true;
+}
+/** The host's frame loop: an animation frame while the realm has them (a process Worker's come with
+ *  the canvas it presents to), a timer while the browser runs none, as in a hidden tab */
+export function hostFrames(frame: (time: number) => void): void {
+  let framed = -Infinity;
+  const loop = (time: number) => { framed = performance.now(); frame(time); requestAnimationFrame(loop); };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(loop);
+  setInterval(() => { if (performance.now() - framed > 40) frame(performance.now()); }, 33);
 }
 export const vsyncScheduled = (): boolean => scheduled.size > 0 || vsyncHooks.length > 0;
 let vsyncHooks: (() => void)[] = [];

@@ -57,11 +57,6 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
         return { ...await reply, source: Array.from(source), requests };
       } finally { worker.terminate(); URL.revokeObjectURL(url); served.close(); }
     });
-    const display = await page.evaluate(async () => {
-      const {workerFrameOwnership} = await import(location.origin+"/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
-      return workerFrameOwnership();
-    });
-    expect(display).toEqual({sinkError:"display sink failure",results:[true,false,true],released:[0,0,0],dimensions:[4,1],pixels:[[255,0,0,255],[0,0,255,255]],closed:["Process display closed",false,"Process display closed","Process display closed"],pendingReleased:[0,0]});
     expect(errors).toEqual([]);
     expect(result).toEqual({ size: 4, bytes: [[10, 11], [12, 13]], readAgain: [10],
       failure: ["RangeError", "archive unavailable"], closed: "Archive source closed", later: "Archive source closed",
@@ -71,7 +66,7 @@ test("lazy archive reads cross a Worker without sharing buffers and fail on proc
       return bootstrapOwnership();
     });
     expect(ownership).toEqual({ eagerReads: 0, superseded: "Archive source closed", failed: true, discarded: ["Archive source closed", "Archive source closed"],
-      imeOwners:{replaced:true,retained:true,deadClosed:true,peerSurvives:true},retained: [10], ended: "Archive source closed", isolated: [10], callersClosed: true,displaysClosed:4,displayErrors:Array(4).fill("Process display closed") });
+      imeOwners:{replaced:true,retained:true,deadClosed:true,peerSurvives:true},retained: [10], ended: "Archive source closed", isolated: [10], callersClosed: true,displaysClosed:4 });
     const clock = await page.evaluate(async () => {
       const { clockBootstrapOwnership } = await import(location.origin + "/bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return clockBootstrapOwnership();

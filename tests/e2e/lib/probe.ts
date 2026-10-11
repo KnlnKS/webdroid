@@ -157,6 +157,7 @@ function installProbe(cfg: ProbeConfig): void {
   };
   const awaitingSockets = () => { let n = 0; for (const s of sockets) if (s.readyState === 0 || s.sent > s.recv) n++; return n; };
 
+  const mirrored = new Map<HTMLCanvasElement, ImageBitmap>();
   const displayCanvases = (): HTMLCanvasElement[] => g.wd?.displayCanvases?.() ?? [document.getElementById("screen") as HTMLCanvasElement];
   let scratch: OffscreenCanvas | null = null, scratchCtx: OffscreenCanvasRenderingContext2D | null = null;
   const readDisplay = (canvases: HTMLCanvasElement[]): ImageData => {
@@ -166,7 +167,7 @@ function installProbe(cfg: ProbeConfig): void {
       scratchCtx = scratch.getContext("2d", { willReadFrequently: true })!;
     }
     scratchCtx!.clearRect(0, 0, width, height);
-    for (const canvas of canvases) scratchCtx!.drawImage(canvas, 0, 0, width, height);
+    for (const canvas of canvases) scratchCtx!.drawImage(mirrored.get(canvas) ?? canvas, 0, 0, width, height);
     return scratchCtx!.getImageData(0, 0, width, height);
   };
   const hashOf = (img: ImageData): number => {
@@ -190,14 +191,15 @@ function installProbe(cfg: ProbeConfig): void {
   const shots: ImageData[] = [];
   let shotHash = -1, shooting = false;
   const presentWaiters: (() => void)[] = [];
-  const rawTransfer = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
-  ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bmp: ImageBitmap | null) {
-    const result = rawTransfer.call(this, bmp);
+  // a process Worker presents into its canvas off the page, and mirrors each frame here (src/shell/frame-port.ts)
+  globalThis.__wdPresented = (canvas: HTMLCanvasElement, copy: ImageBitmap | null, at: number) => {
+    if (copy) { mirrored.get(canvas)?.close(); mirrored.set(canvas, copy); }
+    for (const [shown, image] of mirrored) if (!shown.isConnected) { image.close(); mirrored.delete(shown); }
     const canvases = displayCanvases();
-    if (!canvases.includes(this.canvas as HTMLCanvasElement)) return result;
-    lastPresent = performance.now();
+    if (!canvases.includes(canvas)) return;
+    lastPresent = at;
     presentation++;
-    if (bmp && (wantSample || shooting)) {
+    if (wantSample || shooting) {
       const img = readDisplay(canvases);
       const h = hashOf(img);
       if (wantSample) {
@@ -209,7 +211,6 @@ function installProbe(cfg: ProbeConfig): void {
       if (shooting && h !== shotHash && shots.length < 240) { shotHash = h; shots.push(img); }
     }
     for (const w of presentWaiters.splice(0)) w();
-    return result;
   };
   const nextPresent = (ms: number) => new Promise<boolean>((r) => {
     const id = rawSetTimeout(() => { const i = presentWaiters.indexOf(ok); if (i >= 0) presentWaiters.splice(i, 1); r(false); }, ms);
@@ -416,6 +417,7 @@ function installProbe(cfg: ProbeConfig): void {
   };
   const step = async (spec: StepSpec): Promise<StepResult> => {
     const wd = g.wd, hangs: Hang[] = [];
+    wd.mirrorFrames(true);
     stepStart = await foreground();
     wd.perfReset();
     shots.length = 0; shotHash = -1; shooting = cfg.shots;

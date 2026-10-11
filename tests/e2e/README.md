@@ -134,8 +134,8 @@ Android reference fingerprints remain independent of browser overrides.
 
 ### How webdroid completes a step
 
-The probe wraps `setTimeout`, `fetch`, `createImageBitmap`, `ImageDecoder`, `WebSocket` and the
-screen's `transferFromImageBitmap` before the page boots, and pins `Date` to the flow's clock
+The probe wraps `setTimeout`, `fetch`, `createImageBitmap`, `ImageDecoder` and `WebSocket` and observes
+every presented frame (`__wdPresented`) before the page boots, and pins `Date` to the flow's clock
 (Playwright's own clock shim cannot be wrapped). With that and what `wd` exposes it knows when
 the app is idle. Each step declares one completion policy:
 

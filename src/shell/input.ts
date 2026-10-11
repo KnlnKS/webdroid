@@ -6,7 +6,6 @@ import { setInputElement, imeInput, imeAction, imeActive, imeHasAction, imeSelec
 import { receiveIme, serveIme } from "./ime-port";
 import { onProcessExit } from "../process-exit";
 import { attachPointerInput } from "./pointer-input";
-let input: ReturnType<typeof attachPointerInput> | undefined;
 let closeInput: (() => void) | undefined;
 onProcessExit(() => closeInput?.());
 if (typeof window !== "undefined") window.addEventListener("pagehide", () => closeInput?.(), { once: true });
@@ -33,17 +32,14 @@ export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement, s
       if (event.key === "Enter" && !event.isComposing && imeHasAction()) { event.preventDefault(); void imeAction(); }
     }, { signal: events.signal });
   }
-  input = attachPointerInput(canvas, () => device, dispatchPointer, () => {
+  const pointers = attachPointerInput(canvas, () => device, dispatchPointer, () => {
     if (!imeActive()) return;
     clearTimeout(focusTimer);
     focusTimer = setTimeout(() => { if (!closed) { if (keyboard) keyboard.focus(); else kbd.focus(); } }, 0);
   }, source);
-  const pointers = input;
   closeInput = () => {
     if (closed) return;
     closed = true; clearTimeout(focusTimer); events.abort(); pointers.close(); keyboard?.close(); stop?.();
     channel?.port1.close(); channel?.port2.close();
   };
 }
-
-export function drainInput(): void { input?.drain(); }

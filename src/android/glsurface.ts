@@ -9,7 +9,7 @@ import { gl, tables, untracked } from "./gl";
 import { vsync } from "./vsync";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
-import { nativeSurface, glSurfaceOf, composited, type Surface } from "./surfaceflinger";
+import { nativeSurface, glSurfaceOf, type Surface } from "./surfaceflinger";
 import { detached } from "../jvm/natives/jthrowable";
 
 export interface GlSurface {
@@ -61,7 +61,7 @@ export class EglContext {
     if (this.canvas.width !== width || this.canvas.height !== height) { this.canvas.width = width; this.canvas.height = height; }
   }
   /** present: the frame goes to the surface's consumer and the caller waits for the next display
-   *  frame (eglSwapBuffers blocks for vsync) and, on a window, for the display to compose it */
+   *  frame (eglSwapBuffers blocks for vsync) */
   swap(): Promise<boolean> {
     const s = this.target;
     if (!s || this.gl?.isContextLost()) return Promise.resolve(false);
@@ -71,7 +71,7 @@ export class EglContext {
     presentSurface(s, bmp);
     this.fit(s);
     if (s.swapInterval === 0) return Promise.resolve(!this.gl?.isContextLost());
-    return Promise.all([vsync(), s.post && composited()]).then(() => !this.gl?.isContextLost());
+    return vsync().then(() => !this.gl?.isContextLost());
   }
 }
 export function setEglSwapInterval(interval: number, thread = curThread): number {

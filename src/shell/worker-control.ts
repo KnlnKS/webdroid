@@ -8,10 +8,9 @@ import { dispatchPointer, pressBack, SCREEN_W, SCREEN_H } from "./device";
 import { yieldStats, timedParks } from "../jvm/yield";
 import { webViewInfo } from "../android/webframes";
 import { mainDbg, onMain } from "../android/mainloop";
-import { recordVsync } from "../android/vsync";
 import { swipe } from "./gesture";
 import { imeInput, imeAction, imeState } from "../android/ime";
-import { vsyncScheduled } from "../android/vsync";
+import { hostFrames, recordVsync, vsyncScheduled } from "../android/vsync";
 import { pendingTransitions } from "../android/server/atm";
 import { perf } from "../perf";
 import { processPresentation } from "./process-endpoint";
@@ -22,6 +21,7 @@ import { existingAotProfile } from "./aot-profile";
 export function workerControl(logs: string[], phase: () => string) {
   let ticks = 0;
   const local = realmWd();
+  hostFrames(time => { if (processPresentation.visible && !processExited() && recordVsync(time)) ticks++; });
   return {
     aotProfile: async () => ({phase:phase(),dead:processExited(),
       identity:{pid:PROCESS_PID,uid:PROCESS_UID,process:PROCESS_NAME,pkg:appHost?.pkg ?? null},
@@ -51,7 +51,6 @@ export function workerControl(logs: string[], phase: () => string) {
     imeState: async () => imeState(),
     pointer: async (action: number, x: number, y: number) => { await dispatchPointer(action, x, y); },
     back: async () => { await pressBack(); },
-    frame: async (time: number) => { if (processPresentation.visible && !processExited() && recordVsync(time)) ticks++; },
     testFrame: local.testFrame,
   };
 }

@@ -13,7 +13,7 @@ import { NOT_CRASHED, recordRemoteExit } from "../../../src/android/server/appex
 
 export async function bootstrapOwnership() {
   const {sendFrames} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port");
-  const displays: Promise<void>[] = [], senders: ReturnType<typeof sendFrames>[] = [];
+  const displays: Promise<void>[] = [];
   let reads = 0, began!: () => void;
   const waiting = new Promise<void>(resolve => began = resolve);
   for (const [i, pkg] of ["test.archive.one", "test.archive.two"].entries()) {
@@ -32,20 +32,21 @@ export async function bootstrapOwnership() {
     callers.push(callProxy<BrokerCalls>(data.broker,brokerMethods));
     if (!data.display) throw new Error("expected display capability");
     displays.push(new Promise<void>(resolve => data.display!.addEventListener("message",({data})=>{if(data.kind==="close")resolve();})));
-    senders.push(sendFrames(data.display));
+    sendFrames(data.display, data.screen);
   };
-  const ownerOne=broker.connect("test.archive.one", "test.archive.one", 7001);ownerOne.canvas=document.createElement("canvas");
-  const ownerTwo=broker.connect("test.archive.two", "test.archive.two", 7002);ownerTwo.canvas=document.createElement("canvas");
+  const ownerOne=broker.connect("test.archive.one", "test.archive.one", 7001),ownerTwo=broker.connect("test.archive.two", "test.archive.two", 7002);
+  // each bootstrap hands its process the canvas it presents to
+  const bootstrap = (owner: typeof ownerOne) => { owner.canvas=document.createElement("canvas"); return broker.bootstrap(owner.pid); };
   const file = (data: Awaited<ReturnType<typeof broker.bootstrap>>) => {
     watchClock(data);
     const source = data.registry[0].source;
     if (!("port" in source)) throw new Error("expected lazy archive port");
     return new RemoteFile(source);
   };
-  const first = file(await broker.bootstrap(7001)), other = file(await broker.bootstrap(7002));
+  const first = file(await bootstrap(ownerOne)), other = file(await bootstrap(ownerTwo));
   const firstIme=ownerOne.ime!,otherIme=ownerTwo.ime!;
   const eagerReads = reads;
-  const replacement = file(await broker.bootstrap(7001));
+  const replacement = file(await bootstrap(ownerOne));
   const replacementIme=ownerOne.ime!;
   const imeReplaced=firstIme!==replacementIme && !firstIme.input.isConnected;
   const superseded = await first.read(0, 1).catch(error => error.message);
@@ -60,7 +61,7 @@ export async function bootstrapOwnership() {
       for (const record of data.registry) if ("port" in record.source) unpublished.push(new RemoteFile(record.source));
       throw new DOMException("handoff failed", "DataCloneError");
     };
-    await broker.bootstrap(7001);
+    await bootstrap(ownerOne);
   } catch (error) { failed = error instanceof DOMException && error.name === "DataCloneError"; }
   finally { globalThis.structuredClone = clone; }
   const discarded = await Promise.all(unpublished.map(file => file.read(0, 1).catch(error => error.message)));
@@ -74,10 +75,9 @@ export async function bootstrapOwnership() {
   const isolated = Array.from(await other.read(0, 1));
   broker.fail(7002, "fixture process exit", NOT_CRASHED);
   await Promise.all(displays);
-  const displayErrors = await Promise.all(senders.map(sender => {const fb=new OffscreenCanvas(1,1);fb.getContext("2d");return sender.present(fb.transferToImageBitmap()).then(()=>"unexpected frame",error=>error.message);}));
   const callersClosed = (await Promise.all(callers.map(client=>client.endpoint.clipboardGet().then(()=>false,()=>true)))).every(Boolean);
   packages.clear(); packedArchives.clear();
-  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length,displayErrors };
+  return { imeOwners:{replaced:imeReplaced,retained:imeRetained,deadClosed:imeDeadClosed,peerSurvives:imePeerSurvives},eagerReads, superseded, failed, discarded, retained, ended, isolated, callersClosed, displaysClosed:displays.length };
 }
 
 export async function endpointOwnership() {
@@ -580,41 +580,6 @@ export async function storedClipboardRights() {
 }
 
 
-
-export async function workerFrameOwnership() {
-  const {receiveFrames,canvasFrameSink} = await import(location.origin+"/frame-port.js") as typeof import("../../../src/shell/frame-port");
-  const canvas = document.createElement("canvas"), consume = canvasFrameSink(canvas), channel = new MessageChannel(), held = new MessageChannel(), failed = new MessageChannel();
-  const pixels: number[][] = [];
-  const close = receiveFrames(channel.port1,bitmap=>{
-    const copy = new OffscreenCanvas(bitmap.width,bitmap.height), ctx = copy.getContext("2d")!;
-    ctx.drawImage(bitmap,0,0);pixels.push(Array.from(ctx.getImageData(0,0,1,1).data));consume(bitmap);
-  });
-  const closeFailed = receiveFrames(failed.port1,()=>{throw new Error("display sink failure");});
-  const code = `import {sendFrames} from ${JSON.stringify(location.origin+"/frame-port.js")};
-    self.onmessage=async({data})=>{
-      const sender=sendFrames(data.port),fb=new OffscreenCanvas(2,3);let ctx=fb.getContext('2d');
-      const snapshot=color=>{ctx.fillStyle=color;ctx.fillRect(0,0,fb.width,fb.height);return fb.transferToImageBitmap();};
-      const red=snapshot('red'),first=sender.present(red),green=snapshot('lime'),second=sender.present(green);
-      fb.width=4;fb.height=1;ctx=fb.getContext('2d');const blue=snapshot('blue'),last=sender.present(blue);
-      ctx.fillStyle='yellow';ctx.fillRect(0,0,4,1);
-      const results=await Promise.all([first,second,last]);
-      sender.close();
-      const blocked=sendFrames(data.held),a=snapshot('black'),b=snapshot('white'),c=snapshot('red');
-      const failure=promise=>promise.then(value=>value,error=>error.message);
-      const p1=failure(blocked.present(a)),p2=failure(blocked.present(b)),p3=failure(blocked.present(c));
-      blocked.close();const future=snapshot('green'),p4=failure(blocked.present(future));
-      const rejected=sendFrames(data.failed);const sinkError=await failure(rejected.present(snapshot("black")));rejected.close();
-      self.postMessage({sinkError,results,released:[red.width,green.width,blue.width],closed:await Promise.all([p1,p2,p3,p4]),pendingReleased:[c.width,future.width]});
-    };`;
-  const url=URL.createObjectURL(new Blob([code],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
-  try {
-    const result=await new Promise<{sinkError:string;results:boolean[];released:number[];closed:(string|boolean)[];pendingReleased:number[]}>((resolve,reject)=>{
-      worker.onerror=event=>reject(new Error(event.message));worker.onmessage=({data})=>resolve(data);
-      worker.postMessage({port:channel.port2,held:held.port2,failed:failed.port2},[channel.port2,held.port2,failed.port2]);
-    });
-    return {...result,dimensions:[canvas.width,canvas.height],pixels};
-  } finally {worker.terminate();close();closeFailed();held.port1.close();URL.revokeObjectURL(url);}
-}
 
 export async function pointerInputOwnership() {
   const {attachPointerInput} = await import("../../../src/shell/pointer-input");

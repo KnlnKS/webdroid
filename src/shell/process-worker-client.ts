@@ -24,7 +24,7 @@ export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement
   bootstrap: () => Promise<ProcessBootstrap>, ready: (port: MessagePort) => void, failed: (message: string) => void, focusInput: () => void = () => {}) {
   const { worker } = spare;
   const endpoint = new MessageChannel(), control = new MessageChannel();
-  let closed = false, published = false, transferred = false, ticking = false, frame = 0;
+  let closed = false, published = false, transferred = false;
   const client = callProxy<WorkerControl>(control.port1, workerControlMethods, [], processError,
     error => { if (!closed) failed(error.message ?? "Process Worker control closed"); });
   let focusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -34,27 +34,18 @@ export function startProcessWorker(spare: SpareWorker, canvas: HTMLCanvasElement
   });
   const close = () => {
     if (closed) return;
-    closed = true; clearTimeout(focusTimer); window.removeEventListener("pagehide", pagehide); cancelAnimationFrame(frame); pointers.close(); client.close(); worker.terminate(); spare.release();
+    closed = true; clearTimeout(focusTimer); window.removeEventListener("pagehide", pagehide); pointers.close(); client.close(); worker.terminate(); spare.release();
     if (!published) endpoint.port2.close();
     if (!transferred) { endpoint.port1.close(); control.port2.close(); }
   };
   const pagehide = () => { if (!closed) failed("Process page closed"); };
   window.addEventListener("pagehide", pagehide, {once:true});
-  const tick = (time: number) => {
-    if (closed) return;
-    pointers.drain();
-    if (!ticking) {
-      ticking = true;
-      void client.endpoint.frame(time).catch(error => { if (!closed) failed(String(error)); }).finally(() => { ticking = false; });
-    }
-    frame = requestAnimationFrame(tick);
-  };
   worker.onerror = event => { if (!closed) failed(event.message); };
   worker.onmessageerror = () => { if (!closed) failed("Invalid process Worker message"); };
   worker.onmessage = ({data}: MessageEvent<{kind:string;error?:ProcessFailure;logs?:string[]}>) => {
     if (closed) return;
     if (data.kind === "ready" && !published) {
-      try { ready(endpoint.port2); published = true; frame = requestAnimationFrame(tick); }
+      try { ready(endpoint.port2); published = true; }
       catch (error) { failed(String(error)); }
     } else if (data.kind === "failed") {
       for (const log of data.logs ?? []) console.error("[process Worker]", log);

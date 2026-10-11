@@ -3,7 +3,7 @@ import { compilerWorkerReceipts, compilerWorkerBarrier } from "./shell/compiler-
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import "./natives";
 import { PROCESS_PID } from "./android/os";
-import { recordVsync, vsyncScheduled } from "./android/vsync";
+import { hostFrames, recordVsync, vsyncScheduled } from "./android/vsync";
 import { pendingTransitions } from "./android/server/atm";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { mountPlatformData } from "./shell/apex";
@@ -13,7 +13,8 @@ import { threadStates } from "./jvm/natives/jthread";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
 import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
-import { attachIme, drainInput } from "./shell/input";
+import { attachIme } from "./shell/input";
+import { drainPointers } from "./shell/pointer-input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
 import { mark, perf, perfReset } from "./perf";
@@ -185,6 +186,7 @@ const wd = {
   workerAotProfiles: () => processBroker().workerAotProfiles(),
   displayCanvas: () => processBroker().displayCanvases(canvas).at(-1)!,
   displayCanvases: () => processBroker().displayCanvases(canvas),
+  mirrorFrames: (on: boolean) => processBroker().mirrorFrames(on),
   foregroundWorkerSnapshot: () => processBroker().foregroundWorkerSnapshot(),
   foregroundCodeReadiness: async (save: boolean) => (await processBroker().foregroundWorker()?.control.codeReadiness(save)) ?? null,
   visibleWorkerProcesses: (ms = 1500) => processBroker().visibleWorkerProcesses(ms),
@@ -265,21 +267,11 @@ const wd = {
 };
 (globalThis as any).wd = wd;
 
-// the display: a vsync per rAF while visible, at the display's rate on a timer while the tab is hidden
-let lastVsync = 0;
-function vsync(time: number) {
+hostFrames(time => {
   if (!processPresentation.visible) return;
-  drainInput(); // the wheel's synthetic drag steps once per display frame
-  if (recordVsync(time)) { wd.ticks++; lastVsync = performance.now(); }
-}
-function loop(time: number) {
-  vsync(time);
-  requestAnimationFrame(loop);
-}
-requestAnimationFrame(loop);
-setInterval(() => {
-  if (performance.now() - lastVsync > 40) vsync(performance.now());
-}, 33);
+  drainPointers(); // a wheel's synthetic drag steps once per display frame
+  if (recordVsync(time)) wd.ticks++;
+});
 
 attachIme(canvas, kbd, systemInput.element);
 {

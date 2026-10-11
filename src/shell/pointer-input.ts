@@ -2,6 +2,9 @@
 import { queuePointer, type PointerSample } from "./pointer-queue";
 
 export type PointerGeometry = { width: number; height: number; scrollUnit: number; touchSlop: number };
+const attached = new Set<() => void>();
+/** step every canvas's wheel gesture: once per display frame */
+export function drainPointers(): void { for (const drain of attached) drain(); }
 export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => PointerGeometry,
   dispatch: (action: number, x: number, y: number) => Promise<void>, onDown: () => void = () => {}, source: HTMLElement = canvas) {
   const listeners = new AbortController();
@@ -137,9 +140,11 @@ export function attachPointerInput(canvas: HTMLCanvasElement, geometry: () => Po
     if (idle) { live = armed = false; send(1, x, y); }
   }
   listen();
-  return { drain, close(): void {
+  attached.add(drain);
+  return { close(): void {
     if (closed) return;
     closed = true;
+    attached.delete(drain);
     listeners.abort();
     pendingPointers.length = 0;
     down = live = armed = false;

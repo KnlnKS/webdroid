@@ -40,7 +40,6 @@ import { hostWindowManager, dispatchTouch, dispatchKey } from "../android/server
 import { startActivityThread } from "../android/server/am";
 import { configurationChanged, displayHooks, topOrientation } from "../android/server/atm";
 import { setDisplayTarget, scheduleComposite } from "../android/surfaceflinger";
-import { processExited } from "../process-exit";
 import { toThread } from "../jvm/natives/jthrowable";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
@@ -52,23 +51,18 @@ export function setDisplayChangeHandler(handler: () => void): void { displayChan
 // a frame. Read the screen back with toBlob: toDataURL on a transferred bitmap stalls.
 let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
 let frame = fb.getContext("2d")!;
-type ScreenSink = (bitmap: ImageBitmap) => void | Promise<boolean>;
+type ScreenSink = (bitmap: ImageBitmap) => void;
 let screen: ScreenSink | null = null;
 export function setScreenSink(sink: ScreenSink): void { screen = sink; }
 export function setScreenCanvas(c: HTMLCanvasElement): void {
   const context = c.getContext("bitmaprenderer");
-  screen = context ? bitmap => context.transferFromImageBitmap(bitmap) : null;
+  screen = context ? bitmap => { context.transferFromImageBitmap(bitmap); globalThis.__wdPresented?.(c, null, performance.now()); } : null;
 }
 /** System windows compose over app process canvases rather than an opaque app background. */
 export function setSystemDisplayTarget(): void { setDisplayTarget(frame, present, true); }
-function present(): void | Promise<unknown> {
+function present(): void {
   if (!screen) return;
-  const shown = screen(fb.transferToImageBitmap());
-  if (!(shown instanceof Promise)) { presentedFrame(); return; }
-  return shown.then(presented => { if (presented && !processExited()) presentedFrame(); },
-    error => { if (!processExited()) console.error("[display]", error); });
-}
-function presentedFrame(): void {
+  screen(fb.transferToImageBitmap());
   if (!perf.presentations++) { mark("firstPresented"); if (tier === "js") startupDone(); appLaunched(); }
   notePresent();
 }

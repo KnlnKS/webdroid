@@ -52,7 +52,7 @@ import { receiveMedia } from "./media-port";
 import { hostUi, hostUiMethods, type HostUi } from "./host-ui";
 import { storageAccess, storageEntries, storageWrite } from "./device-storage";
 import { receiveIme } from "./ime-port";
-import { receiveFrames, canvasFrameSink } from "./frame-port";
+import { receiveFrames, type FrameReceiver } from "./frame-port";
 import { bootstrapTransfers, type ProcessBootstrap } from "./process-bootstrap-data";
 import type { SettingsCalls, SettingsTable } from "./settings";
 import { serveProcess, processProxy, processError, serveCalls } from "./process-port";
@@ -131,7 +131,7 @@ type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
   {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; display?: FrameReceiver; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
@@ -372,16 +372,17 @@ export class ProcessBroker {
       ports.push(broker.close);
       const media = new MessageChannel(), display = new MessageChannel(), input = new MessageChannel(), web = new MessageChannel();
       ports.push(receiveMedia(media.port1));
-      const sink = canvasFrameSink(canvas);
-      ports.push(receiveFrames(display.port1, bitmap => { sink(bitmap); entry.presented?.resolve(); }));
+      const frames = receiveFrames(display.port1, canvas, () => entry.presented?.resolve());
+      if (this.mirroring) frames.mirror(true);
+      ports.push(() => { frames.close(); if (entry.display === frames) entry.display = undefined; });
       const ime = receiveIme(input.port1, canvas);
       ports.push(() => { ime.close(); if (entry.ime === ime) entry.ime = undefined; });
       ports.push(receiveWebSurfaces(web.port1, canvas, () => device));
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
         registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker.port,
-        display: display.port2, ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry) };
+        display: display.port2, screen: canvas.transferControlToOffscreen(), ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry) };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
-      entry.ime = ime;
+      entry.ime = ime; entry.display = frames;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
       for (const close of this.bootstrapPorts.get(pid) ?? []) close();
       this.bootstrapPorts.set(pid, ports);
@@ -785,6 +786,12 @@ export class ProcessBroker {
   foregroundWorker(): Entry["worker"] {
     const entry = this.entries.get(this.activities.foreground);
     return entry && !entry.dead ? entry.worker : undefined;
+  }
+  private mirroring = false;
+  /** whether process Workers send the page a copy of each frame they show */
+  mirrorFrames(on: boolean): void {
+    this.mirroring = on;
+    for (const entry of this.entries.values()) entry.display?.mirror(on);
   }
   displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
     const layers = this.activities.shownEntries().flatMap(entry => {

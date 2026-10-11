@@ -107,17 +107,17 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     return { hash, nonUniform: variation > 8, rgb: rgb.map(v => v / 4096) };
   };
   const stop = () => {
-    observer.onFrame = null;
+    observer.onFrame = null; w.wd?.mirrorFrames(false);
     generation++;
     latest?.image.close(); latest = null;
   };
   const collect = () => {
     stop(); frameCount = 0;
     const epoch = generation;
-    observer.onFrame = async (receipt: any, bitmap: Promise<ImageBitmap>) => {
-      let image: ImageBitmap | undefined;
+    w.wd.mirrorFrames(true);
+    observer.onFrame = (receipt: any, bitmap: ImageBitmap) => {
+      let image: ImageBitmap | undefined = bitmap;
       try {
-        image = await bitmap;
         if (epoch !== generation || !receipt.visible || receipt.tier !== w.wd?.tier) return;
         frameCount++;
         if (latest && latest.t > receipt.at) return;
@@ -181,8 +181,9 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     }
     return await settle() ?? { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable", probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
   };
-  collect();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  while (!w.wd) await sleep(5);
+  collect();
   /** the topmost app's canvas: a process Worker's lies under the page's system layer */
   const appCanvas = (): HTMLCanvasElement => w.wd.displayCanvases().findLast((c: HTMLCanvasElement) => c.dataset.pkg);
   /** the foreground Worker's counters and main queue */
