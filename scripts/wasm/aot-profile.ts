@@ -112,7 +112,8 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
       text = await (await (await store.getFileHandle("meta.json")).getFile()).text();
     } catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return {}; throw error; }
     const meta = JSON.parse(text) as { entries: Record<string, { files: Record<string, number> }> };
-    return Object.fromEntries(Object.entries(meta.entries).map(([k, e]) => [k, Object.keys(e.files)]));
+    // launch module lists share the store
+    return Object.fromEntries(Object.entries(meta.entries).filter(([, e]) => "index.json" in e.files).map(([k, e]) => [k, Object.keys(e.files)]));
   }, COMPILED_CODE_DIR);
   if (!Object.keys(listing).length) console.log("no app build was kept");
   for (const [entry, names] of Object.entries(listing)) {
