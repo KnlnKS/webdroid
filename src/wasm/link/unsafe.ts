@@ -35,11 +35,7 @@ const kindOfTy = (t: Ty): Kind => kindOf(desc(t));
 const ELEM: Record<number, ElemKind> = { 1: "i8", 2: "i16", 4: "i32", 8: "i64" };
 
 /** Field accessor bodies are pure; install them before returning their slot so linking cannot split a VarHandle update. */
-function fieldAccessor(w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number {
-  const slot = w.synthSlot(name, d);
-  w.host.link(slot);
-  return slot;
-}
+const fieldAccessor = (w: World, name: string, d: Parameters<World["synthSlot"]>[1]): number => w.synthSlot(name, d, true);
 
 /** host.info kinds of this file */
 export const enum UInfo { FieldGet = 100, FieldPut, FieldCas, ComponentScale, AllocInstance, StaticGet, StaticPut, ObjGet, ObjPut, ObjCas }
@@ -57,7 +53,7 @@ export function hostUnsafe(w: World, kind: UInfo, a: number, b: number): number 
   if (kind === UInfo.ComponentScale) return name[0] === "#" ? WIDTH[name[1] as Ty] : 4;
   if (kind === UInfo.AllocInstance) {
     const jc = w.prog.get(name);
-    return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } });
+    return !jc || jc.isInterface ? 0 : w.synthSlot("alloc:" + name, { params: [], ret: "L", body: (cx, c) => { cx.emitEnsure(c, name); cx.emitNew(c, name); } }, true);
   }
   const stat = kind === UInfo.StaticGet || kind === UInfo.StaticPut;
   const f = w.prog.get(name)?.fields[a & 0xfff];

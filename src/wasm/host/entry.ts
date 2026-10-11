@@ -19,6 +19,7 @@ import { OP, type Code } from "../compiler/code";
 import type { Kind } from "../compiler/program";
 import { fromBits, refOf, toBits } from "./bridge";
 import { failed } from "../compiler/linkage";
+import { UInfo } from "../link/unsafe";
 import { count } from "./stats";
 
 const OBJECT = "Ljava/lang/Object;", ARRAY_SUPERS = new Set(["java/lang/Object", "java/lang/Cloneable", "java/io/Serializable"]);
@@ -121,7 +122,8 @@ export function wasmEntry(w: World): Entry {
     if (obj instanceof JObj && !(obj instanceof JThrowable) && !refOf(obj) && !w.hosts.specOfHost(obj)) throw missing(`${what} on a host object of class ${(obj.constructor as { $i?: { name: string } }).$i?.name}`);
     return bridge.toJava(obj, OBJECT) as object;
   };
-  const alloc = (cls: string) => call("e:new:" + cls, [], "L", (cx, c) => { cx.emitEnsure(c, cls); cx.emitNew(c, cls); }) as object | Promise<object>;
+  // asked as compiled code asks, so that an app build holds the allocator
+  const alloc = (cls: string) => onStrand((s) => w.invoker([], "L", true)(s, w.host.info(UInfo.AllocInstance, w.idOf(cls), 0), -1)) as object | Promise<object>;
   const init = (cls: string) => w.needsInit(cls) ? enter(() => onStrand((s) => w.invoker([], "V", true)(s, w.ensureSlot(cls), -1))) as void | Promise<void> : undefined;
 
   /** the static field `name` (of type `desc`, when given) that `cls` declares or inherits */

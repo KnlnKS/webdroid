@@ -536,7 +536,8 @@ export class World {
   slotOf(m: MethodInfo): number { return this.link(m.cls).slotBase + m.index; }
   ensureSlot(cls: string): number { const rt = this.link(cls); return rt.slotBase + rt.nMethods; }
   /** the slot of the generated function `name` (runtime functions, per-class allocators, abstract-method stubs), a lazy-link stub until first called */
-  synthSlot(name: string, d: Synth): number {
+  /** `eager`: its code is compiled now, for a caller about to call it, instead of after a stub's first call */
+  synthSlot(name: string, d: Synth, eager = false): number {
     this.touching?.add("!" + name);
     let slot = this.synth.get(name);
     if (slot === undefined) { this.synth.set(name, slot = this.reserveSlots(1)); this.tail.push(name); }
@@ -546,6 +547,7 @@ export class World {
     if (this.aot?.building || this.opts.compileOnly) return slot;
     // the app build may hold its code, which its module puts in the slot
     if (this.aot?.installSynth(name)) { (this.slots[slot] as { done: boolean }).done = true; return slot; }
+    if (eager) { this.linkSlot(slot); return slot; }
     const mb = new ModuleBuilder(), b = declareBase(mb);
     mb.importTable("rt", "table", T.funcref, 0);
     const link = this.importLink(mb);
