@@ -6530,6 +6530,21 @@ baseline in [wasm-baselines.md](wasm-baselines.md).
   matching frame's. Calculator's gated taps are 44–147 ms under SwiftShader and 24–66 ms with Metal (`--gpu`).
   Taps now present about 20 frames where they presented 2–4, so the numbers are not comparable with earlier rows.
 
+- **Second tier.** Without it, steady state falls from 1.59× to 0.82× of the JS tier over the Bench workloads (G1:
+  1.67× to 1.05×); call-heavy loops slow 3–4×, so it stays. Its page cost was mostly inline compilation: while the
+  compile worker started (about 380 ms), hot methods overflowed its 16-job queue and compiled on the page, 84 ms of
+  Mihon's launch. They now ask again after another budget. Page time in upgrades falls from 182 to 56 ms, most of it
+  `upgradeJob` planning.
+- **Rejected: waiting for a parallel app build on a cold launch.** Six Workers compiled the first app build in two
+  passes: each part compiled its share of 256 KB groups and reported its numbering, the parts' numberings were merged
+  in order, and the parts after the first compiled again under the merged numbering. The launch waited and attached
+  the result. Calculator's cold launch went from 3.47–3.82 to 3.43–3.47 s, and its first taps no longer compiled
+  (7: 38–48 ms against 181–187). FitNotes got slower (2.48 to 2.61–2.81 s) and Mihon too (9.6 to 10.5 s). The build
+  (1.3 s for FitNotes, including 230 ms of setup per Worker and 1.7× the single-Worker compile CPU) moved ahead of the
+  zygote, which had overlapped the platform prefetch. Overlapping them needs a build that attaches after the zygote,
+  but the zygote numbers runtime functions (Unsafe accessors, allocators, invokers, array constructors) that the
+  platform build does not reserve.
+
 Open findings:
 
 - Class initializers take about 324 ms of Calculator's launch (`Typeface` 79 ms; ICU `TimeZone` 54 ms through
