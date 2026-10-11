@@ -12,7 +12,7 @@ import { format, scan } from "./printf";
 import { KLAYOUT } from "./syscall";
 import { vfs } from "../shell/vfs";
 import { FS_SYSCALLS, O_ACCMODE, O_APPEND, O_CREAT, O_EXCL, O_TRUNC, DIRENT64, openFd, fdOpenProcess as fdOpen, fdRead, fdReadFully, fdWrite, fdCloseProcess as fdClose, fdSeekProcess as fdSeek, fdDup2, fdFallocate,
-  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, dirEntries, fillStat, inoOf } from "./fs";
+  statProcess as statPath, accessProcess as accessPath, faccessatPath, renameProcess as renamePath, mkdirProcess as mkdirPath, removeProcess as removePath, makeFifo, makePipe, truncateProcess as truncateFd, pread, pwrite, listProcess, fillStat, inoOf } from "./fs";
 import { POLL_SYSCALLS, epollCreate } from "./poll";
 
 function complete<T>(value: number | Promise<number>, done: (value: number) => T | Promise<T>): T | Promise<T> {
@@ -107,10 +107,15 @@ function fwriteStr(cpu: Cpu, fp: number, s: string): number | Promise<number> {
   return r instanceof Promise ? r.then(done) : done(r);
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
-function openDir(path: string): number {
-  const h = mem.malloc(16);
-  dirs.set(h, { entries: dirEntries(path), i: 0, dirent: mem.malloc(DIRENT_SIZE) });
-  return h;
+function openDir(cpu: Cpu, path: string): number | Promise<number> {
+  const open = (entries: string[] | number) => {
+    if (typeof entries === "number") { fail(cpu, -entries); return 0; }
+    const h = mem.malloc(16);
+    dirs.set(h, { entries, i: 0, dirent: mem.malloc(DIRENT_SIZE) });
+    return h;
+  };
+  const entries = listProcess(path);
+  return entries instanceof Promise ? entries.then(open) : open(entries);
 }
 function nextDirent(d: { entries: string[]; i: number }, de: number): number {
   const name = d.entries[d.i++];
@@ -238,12 +243,12 @@ export function stdioInit(): void {
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
     faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
     chmod: () => 0, chown: () => 0,
-    unlink: (cpu, a) => vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT),
+    unlink: (cpu, a) => removePath(cpu, a.str(), false),
     mkfifo: (cpu, a) => makeFifo(cpu, a.str()),
-    remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
+    remove: (cpu, a) => removePath(cpu, a.str()),
     rename: (cpu, a) => renamePath(cpu, a.str(), a.str()),
     mkdir: (cpu, a) => mkdirPath(cpu, a.str()),
-    rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
+    rmdir: (cpu, a) => removePath(cpu, a.str(), true),
     ftruncate64: (cpu, a) => truncateFd(cpu, a.i(), Number(a.l())),
     posix_fallocate: (_c, a) => fdFallocate(a.i(), a.i(), a.i()),
     posix_fallocate64: (_c, a) => fdFallocate(a.i(), Number(a.l()), Number(a.l())),
@@ -271,12 +276,8 @@ export function stdioInit(): void {
     symlink: (cpu) => fail(cpu, E.PERM), link: (cpu) => fail(cpu, E.PERM),
     utimes: () => 0, utime: () => 0,
 
-    opendir: (cpu, a) => {
-      const p = vfs.norm(a.str());
-      if (!vfs.isDir(p)) { fail(cpu, vfs.exists(p) ? E.NOTDIR : E.NOENT); return 0; }
-      return openDir(p);
-    },
-    fdopendir: (cpu, a) => { const f = openFd(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } return openDir(f.path); },
+    opendir: (cpu, a) => openDir(cpu, a.str()),
+    fdopendir: (cpu, a) => { const f = openFd(a.i()); if (!f || !f.dir) { fail(cpu, E.NOTDIR); return 0; } return openDir(cpu, f.path); },
     readdir: (_c, a) => { const d = dirs.get(a.p()); return d && d.i < d.entries.length ? nextDirent(d, d.dirent) : 0; },
     readdir_r: (_c, a) => { const d = dirs.get(a.p()), ent = a.p(), res = a.p(); stp(res, d && d.i < d.entries.length ? nextDirent(d, ent) : 0); return 0; },
     rewinddir: (_c, a) => { const d = dirs.get(a.p()); if (d) d.i = 0; },
@@ -285,10 +286,10 @@ export function stdioInit(): void {
     // scandir(path, &namelist, filter, compar): every entry the filter keeps, each its own
     // malloc'd dirent, sorted by the guest's comparator (over dirent**) into a malloc'd array
     scandir: async (cpu, a) => {
-      const path = vfs.norm(a.str()), out = a.p(), filter = a.p(), compar = a.p();
-      if (!vfs.isDir(path)) return fail(cpu, vfs.exists(path) ? E.NOTDIR : E.NOENT);
+      const path = a.str(), out = a.p(), filter = a.p(), compar = a.p(), entries = await listProcess(path);
+      if (typeof entries === "number") return fail(cpu, -entries);
       const kept: number[] = [];
-      for (const name of dirEntries(path)) {
+      for (const name of entries) {
         const de = mem.malloc(DIRENT_SIZE);
         nextDirent({ entries: [name], i: 0 }, de);
         if (filter && !(await cpu.call(filter, [de]))) { mem.free(de); continue; }

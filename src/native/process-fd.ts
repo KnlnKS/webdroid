@@ -20,9 +20,9 @@ const request = (remote: RemoteDescriptor, operation: Operation) => remote.calls
 const result = (remote: RemoteDescriptor, operation: Operation) => request(remote,operation).then(reply => reply.result);
 export const isRemoteFd = (fd: number): boolean => !!openFd(fd)?.remote;
 
-function installRemote(token: number, calls: () => DescriptorCalls, path: string, flags: number, cloexec = !!(flags & O_CLOEXEC)): number {
+function installRemote(token: number, calls: () => DescriptorCalls, path: string, flags: number, dir = false, cloexec = !!(flags & O_CLOEXEC)): number {
   const remote: RemoteDescriptor = {token,calls,close:null};
-  const file: OpenFile = {...fdBase(path),write:!!(flags & O_ACCMODE),statusFlags:flags,remote};
+  const file: OpenFile = {...fdBase(path),write:!!(flags & O_ACCMODE),statusFlags:flags,remote,dir};
   file.onLastClose = () => {
     remote.close = result(remote,{kind:"close"});
     void remote.close.catch(() => {});
@@ -51,7 +51,7 @@ export async function takeBinderFd(token: number): Promise<number> {
   if (flags.result < 0) { await calls().fileDescriptor({kind:"close",fd:token}); return flags.result; }
   const taken = await calls().fileDescriptor({kind:"take",fd:token});
   if (taken.result < 0) return taken.result;
-  return installRemote(token,calls,stat.stat.path ?? "",flags.result,true);
+  return installRemote(token,calls,stat.stat.path ?? "",flags.result,(stat.stat.mode & 0xf000) === 0x4000,true);
 }
 
 export function processOpenFd(path: string, flags: number): number | Promise<number> {
@@ -59,7 +59,7 @@ export function processOpenFd(path: string, flags: number): number | Promise<num
   if (!calls) return javaOpenFd(normalized,flags);
   return calls().fileDescriptor({kind:"open",path:normalized,flags}).then(reply => {
     if (reply.result < 0) return reply.result;
-    return installRemote(reply.result,calls,normalized,flags);
+    return installRemote(reply.result,calls,normalized,flags,reply.directory);
   });
 }
 
@@ -157,7 +157,7 @@ export async function processMapping(fd: number, offset: number, length: number,
 }
 export function processAshmemCreate(size: number): Promise<number> | null {
   const calls = descriptorTransport.calls;
-  return calls ? calls().fileDescriptor({kind:"ashmemCreate",size}).then(reply => reply.result < 0 ? reply.result : installRemote(reply.result,calls,"",2,true)) : null;
+  return calls ? calls().fileDescriptor({kind:"ashmemCreate",size}).then(reply => reply.result < 0 ? reply.result : installRemote(reply.result,calls,"",2,false,true)) : null;
 }
 export function processAshmemProtect(fd: number, prot: number): Promise<number> | null {
   const remote = openFd(fd)?.remote;

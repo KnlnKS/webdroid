@@ -546,7 +546,7 @@ export class ProcessBroker {
       fileSetAttributes: async (path,change) => paths.fileSetAttributes(path,change),
       fileStat: async path => paths.fileStat(path), fileMkdir: async path => paths.fileMkdir(path),
       fileAccess: async (path, mode) => paths.fileAccess(path, mode), fileList: async path => paths.fileList(path),
-      fileRename: async (from,to) => paths.fileRename(from,to), fileRemove: async path => paths.fileRemove(path), fileCreate: async path => paths.fileCreate(path),
+      fileRename: async (from,to) => paths.fileRename(from,to), fileRemove: async (path,directory) => paths.fileRemove(path,directory), fileCreate: async path => paths.fileCreate(path),
       fileDescriptor: request => { this.entry(pid); return descriptors.fileDescriptor(request); },
       webRenderer: async origin => { this.entry(pid); return webStorage.webRenderer(origin); },
       webStorage: async (op, origin) => { this.entry(pid); return webStorage.webStorage(op,origin); },

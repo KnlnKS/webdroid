@@ -40,6 +40,8 @@ export interface OpenFile {
   timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
   socket?: Socket;
   remote?: RemoteDescriptor;
+  /** a remote directory's entries, listed when reading starts */
+  entries?: string[];
   /** run when the last descriptor sharing this open file closes it */
   onLastClose?: () => void;
 }
@@ -222,10 +224,11 @@ export function createPath(cpu: Cpu | null, path: string): number {
   if (taken) return taken;
   vfs.write(p, new Uint8Array(0)); return 0;
 }
-/** remove(3): unlink a file, or rmdir an empty directory */
-export function removePath(cpu: Cpu | null, path: string): number {
+/** unlink(2) with `directory` false, rmdir(2) with true, and remove(3) when it is omitted */
+export function removePath(cpu: Cpu | null, path: string, directory?: boolean): number {
   const p = vfs.norm(path);
-  if (!vfs.isDir(p)) return vfs.delete(p) ? 0 : fail(cpu, E.NOENT);
+  if (!vfs.isDir(p)) return directory ? fail(cpu, vfs.exists(p) ? E.NOTDIR : E.NOENT) : vfs.delete(p) ? 0 : fail(cpu, E.NOENT);
+  if (directory === false) return fail(cpu, E.ISDIR);
   if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY);
   vfs.rmdir(p); return 0;
 }
@@ -405,6 +408,10 @@ export function mkdirProcess(cpu: Cpu | null, path: string): number | Promise<nu
 export function renameProcess(cpu: Cpu | null, from: string, to: string): number | Promise<number> {
   const calls = remoteFilePath(from) ?? remoteFilePath(to);
   return calls ? kernelResult(cpu,calls.fileRename(vfs.norm(from),vfs.norm(to))) : renamePath(cpu,from,to);
+}
+export function removeProcess(cpu: Cpu | null, path: string, directory?: boolean): number | Promise<number> {
+  const calls = remoteFilePath(path);
+  return calls ? kernelResult(cpu,calls.fileRemove(vfs.norm(path),directory)) : removePath(cpu,path,directory);
 }
 export function accessProcess(cpu: Cpu | null, path: string, mode: number): number | Promise<number> {
   if (mode & ~7) return fail(cpu,E.INVAL);
@@ -830,12 +837,27 @@ export function fdFallocate(fd: number, offset: number, len: number): number {
 export const dirEntries = (path: string) => [".", "..", ...vfs.list(path)];
 /** linux_dirent64, which is also bionic's struct dirent */
 export const DIRENT64 = { ino: 0, off: 8, reclen: 16, type: 18, name: 19 };
+/** a directory's entries as readdir lists them, or a negative errno */
+export function listProcess(path: string): string[] | number | Promise<string[] | number> {
+  const p = vfs.norm(path), calls = remoteFilePath(p);
+  if (calls) return calls.fileList(p).then(reply => reply.value ? [".", "..", ...reply.value] : -(reply.errno || E.NOENT));
+  return vfs.isDir(p) ? dirEntries(p) : -(vfs.exists(p) ? E.NOTDIR : E.NOENT);
+}
 /** getdents64: linux_dirent64 records from the fd's position on */
-export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): number {
+export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (!f.dir) return fail(cpu, E.NOTDIR);
-  const entries = dirEntries(f.path);
+  if (!f.remote) return dirents(cpu, f, dirEntries(f.path), buf, size);
+  if (f.pos && f.entries) return dirents(cpu, f, f.entries, buf, size);
+  const destination = anchor(buf);
+  return Promise.resolve(listProcess(f.path)).then(entries => {
+    if (typeof entries === "number") return fail(cpu, -entries);
+    f.entries = entries;
+    return dirents(cpu, f, entries, destination(), size);
+  });
+}
+function dirents(cpu: Cpu, f: OpenFile, entries: string[], buf: number, size: number): number {
   let at = 0;
   for (; f.pos < entries.length; f.pos++) {
     const name = utf8(entries[f.pos]), reclen = (DIRENT64.name + name.length + 1 + 7) & ~7;
@@ -844,7 +866,7 @@ export function getdents64(cpu: Cpu, fd: number, buf: number, size: number): num
     mem.memset(de, 0, reclen);
     mem.st64(de + DIRENT64.ino, BigInt(f.pos + 1)); mem.st64(de + DIRENT64.off, BigInt(f.pos + 1));
     mem.st16(de + DIRENT64.reclen, reclen);
-    mem.st8(de + DIRENT64.type, vfs.isDir(`${f.path}/${entries[f.pos]}`) ? 4 : 8);
+    mem.st8(de + DIRENT64.type, f.remote ? 0 : vfs.isDir(`${f.path}/${entries[f.pos]}`) ? 4 : 8);
     mem.write(de + DIRENT64.name, name);
     at += reclen;
   }
@@ -959,7 +981,7 @@ export const FS_SYSCALLS: Record<string, HostFn> = {
   eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC)); },
   sendfile: (cpu) => fail(cpu, E.NOSYS),
   flock: () => 0,
-  unlinkat: (cpu, a) => { a.i(); const p = a.str(), flags = a.i(); if (flags & 0x200) { const d = vfs.norm(p); if (!vfs.isDir(d)) return fail(cpu, E.NOTDIR); vfs.rmdir(d); return 0; } return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },
+  unlinkat: (cpu, a) => { const path = atPath(cpu, a.i(), a.str()), flags = a.i(); return typeof path === "string" ? removeProcess(cpu, path, !!(flags & 0x200)) : path; },
   fchmodat: () => 0, utimensat: () => 0,
   ioctl: (cpu, a) => {
     const fd = a.i(), request = a.i(), argument = a.p();

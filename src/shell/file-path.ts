@@ -11,7 +11,7 @@ export type FilePathCalls = {
   fileAccess(path: string, mode: number): Promise<number>;
   fileList(path: string): Promise<PathReply<string[] | null>>;
   fileRename(from: string, to: string): Promise<number>;
-  fileRemove(path: string): Promise<number>;
+  fileRemove(path: string, directory?: boolean): Promise<number>;
   fileCreate(path: string): Promise<number>;
   fileSetAttributes(path: string, change: Partial<FileAttributes>): Promise<number>;
 }
@@ -55,7 +55,7 @@ export function canonicalFilePaths(authorize: (path: string, write: boolean) => 
       const denied = authorize(a,true) || authorize(b,true);
       return denied ? -denied : renamePath(null,a,b);
     },
-    fileRemove(path: string): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : removePath(null,p); },
+    fileRemove(path: string, directory?: boolean): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : removePath(null,p,directory); },
     fileCreate(path: string): number { const p=vfs.norm(path), denied=isMutablePath(p) ? authorize(p,true) : E.ACCES; return denied ? -denied : created(p,createPath(null,p)); },
     fileAccess(path: string, mode: number): number { const p = vfs.norm(path), denied = authorize(p, !!(mode & 2)); return denied ? -denied : accessPath(null, p, mode); },
     fileList(path: string): PathReply<string[] | null> {

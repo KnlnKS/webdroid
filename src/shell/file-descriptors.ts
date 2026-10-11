@@ -26,7 +26,7 @@ export type DescriptorRequest = { kind: "ashmemCreate"; size: number }
   | { kind: "mappingSync"; fd: number }
   | { kind: "mappingPages"; fd: number }
   | { kind: "stat" | "sync" | "close"; fd: number };
-export type DescriptorReply = { result: number; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
+export type DescriptorReply = { result: number; directory?: boolean; bytes?: Uint8Array; stat?: NonNullable<ReturnType<typeof javaFdStat>>; ashmemProt?: number;
   mapping?: { region: number; offset: number; length: number; prot: number; immutable: boolean };
   pages?: Omit<SharedFileLease,"release"> };
 export type DescriptorCalls = { fileDescriptor(request: DescriptorRequest): Promise<DescriptorReply> };
@@ -86,7 +86,7 @@ export class FileDescriptors {
     const file = openFd(fd)!;
     // Pipes/sockets must not wait behind their own blocking read. They require their
     // existing independent readiness protocol, not this regular-file operation queue.
-    if ((javaFdStat(fd)!.mode & 0xf000) !== 0x8000) { javaCloseFd(fd); return -E.NOTSUP; }
+    if (!file.dir && (javaFdStat(fd)!.mode & 0xf000) !== 0x8000) { javaCloseFd(fd); return -E.NOTSUP; }
     const token = this.next++;
     session.descriptors.set(token, {fd,file});
     return token;
@@ -148,7 +148,8 @@ export class FileDescriptors {
       if (denied) return {result:-denied};
       const existed = vfs.exists(path), fd = javaOpenFd(path,request.flags);
       if (fd >= 0 && !existed && session.uid !== undefined) vfs.setAttributes(path,{uid:session.uid,gid:session.uid});
-      return {result:this.put(session,fd)};
+      const result = this.put(session,fd);
+      return {result,directory:result >= 0 && openFd(fd)!.dir};
     }
     const descriptor = session.descriptors.get(request.fd);
     if (!descriptor) return {result:-E.BADF};
