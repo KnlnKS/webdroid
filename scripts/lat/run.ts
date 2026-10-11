@@ -100,14 +100,19 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       throw new Error("JS app code is not " + (save ? "saved" : "loaded") + ": " + win.location.href);
     return { ...readRealm(win), savedPaths: paths.sort() };
   };
-  type Frame = { t: number; image: ImageBitmap; pixels?: ReturnType<typeof regionInfo>[]; receipt: any };
+  type Pixels = ReturnType<typeof regionInfo>;
+  type Frame = { t: number; image: ImageBitmap; receipt: any };
   let latest: Frame | null = null, frameCount = 0, generation = 0, frameError: string | null = null;
   const observer = w.__wdLatObserver;
   if (!observer) throw new Error("All-realm presentation observer unavailable");
   const regionCanvas = new OffscreenCanvas(64, 64), regionContext = regionCanvas.getContext("2d", { willReadFrequently: true })!;
-  const regionInfo = (source: CanvasImageSource, region: number[]) => {
+  const crop = (source: ImageBitmapSource, region: number[]) => {
     const [left, top, right, bottom] = region;
-    regionContext.drawImage(source, left, top, right - left, bottom - top, 0, 0, 64, 64);
+    return createImageBitmap(source, left, top, right - left, bottom - top, { resizeWidth: 64, resizeHeight: 64 });
+  };
+  const regionInfo = (image: ImageBitmap) => {
+    regionContext.drawImage(image, 0, 0);
+    image.close();
     const data = regionContext.getImageData(0, 0, 64, 64).data, rgb = [0, 0, 0];
     let hash = 0, variation = 0;
     for (let i = 0; i < data.length; i += 4) for (let k = 0; k < 3; k++) {
@@ -145,27 +150,42 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     try { return await Promise.race([w.wd.uiTree(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("UI-state observation timed out")), 1000); })]); }
     finally { clearTimeout(timer); probes.push({ start, end: performance.now() }); }
   };
-  const pixelsMatch = (expectation: Expectation, pixels: ReturnType<typeof regionInfo>[], baseline: ReturnType<typeof regionInfo>[]) => expectation.pixels.every((p, i) => {
+  const pixelsMatch = (expectation: Expectation, pixels: Pixels[], baseline: Pixels[]) => expectation.pixels.every((p, i) => {
     const pixel = pixels[i];
     return !!pixel && (!p.changed || baseline[i]?.hash !== pixel.hash) && (!p.nonUniform || pixel.nonUniform) &&
       (!p.rgb || p.rgb.some(rgb => rgb.every((v, k) => Math.abs(pixel.rgb[k] - v) <= 1)));
   });
-  const intended = async (expectation: Expectation, start: number, baseline: ReturnType<typeof regionInfo>[]) => {
+  const regionsOf = async (source: ImageBitmapSource, expectation: Expectation) => (await Promise.all(expectation.pixels.map(p => crop(source, p.region)))).map(regionInfo);
+  const intended = async (expectation: Expectation, start: number, baseline: Pixels[]) => {
     const end = performance.now() + 8000, probeStart = probes.length;
-    let stateAt: number | null = null, nodes: unknown, error: string | null = null;
+    let stateAt: number | null = null, nodes: unknown, error: string | null = null, seen: Frame | null = null;
+    // reading a frame back waits for its raster, which under software GL stalls the app: candidates are cropped
+    // as they present and read once the app is quiet
+    const candidates: { frame: Frame; stateAt: number; nodes: unknown; crops: Promise<ImageBitmap[]> }[] = [];
+    const settle = async () => {
+      let found;
+      for (const c of candidates.splice(0)) {
+        const crops = await c.crops;
+        if (found) { crops.forEach(i => i.close()); continue; }
+        const pixels = crops.map(regionInfo);
+        if (pixelsMatch(expectation, pixels, baseline)) found = { at: Math.max(c.frame.t, c.stateAt), frameAt: c.frame.t, stateAt: c.stateAt, nodes: c.nodes, pixels, receipt: c.frame.receipt, error,
+          probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
+      }
+      return found;
+    };
     while (performance.now() < end) {
       if (frameError) { error = frameError; break; }
       try {
-        // Readback can stall the app while it is still building the response.
-        if (stateAt !== null) {
-          const frame = latest;
-          if (frame && frame.t >= start && frame.t === observer.lastApp?.at && frame.receipt.url === observer.lastApp.url) {
-            const pixels = frame.pixels ??= expectation.pixels.map(p => regionInfo(frame.image, p.region));
-            if (pixelsMatch(expectation, pixels, baseline)) return { at: Math.max(frame.t, stateAt), frameAt: frame.t, stateAt, nodes, pixels, receipt: frame.receipt, error,
-              probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
-          }
+        const frame = latest;
+        if (stateAt !== null && frame && frame !== seen && frame.t >= start && frame.t === observer.lastApp?.at && frame.receipt.url === observer.lastApp.url) {
+          seen = frame;
+          candidates.push({ frame, stateAt, nodes, crops: Promise.all(expectation.pixels.map(p => crop(frame.image, p.region))) });
         }
-        if (w.wd) {
+        if (candidates.length && (!expectation.pixels.length || candidates.length >= 32 || performance.now() - latest!.t >= 100)) {
+          const found = await settle();
+          if (found) return found;
+        }
+        if (w.wd && !candidates.length) {
           nodes = await state();
           if (w.__wdLatMatches(nodes, expectation)) stateAt ??= performance.now(); else stateAt = null;
         }
@@ -173,7 +193,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       // the next probe follows the next app frame: probing runs Java on the app's main looper
       for (const seen = frameCount, until = performance.now() + 100; frameCount === seen && performance.now() < until;) await sleep(4);
     }
-    return { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable", probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
+    return await settle() ?? { at: null, stateAt, nodes, receipt: null, error: error ?? "intended rendered response unavailable", probes: probes.slice(probeStart), compileAfter: observer.snapshot(), compileAt: performance.now() };
   };
   collect();
   const snapshot = () => Object.fromEntries(counters.map((k) => [k, w.wd?.perf[k] ?? 0]));
@@ -276,7 +296,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       ({ x, y } = at);
     }
     const processesBefore = s.m ? await diagnostics() : undefined;
-    const baseline = s.m ? s.expect.pixels.map((p: any) => regionInfo(w.wd.displayCanvas(), p.region)) : [];
+    const baseline = s.m ? await regionsOf(w.wd.displayCanvas(), s.expect) : [];
     if (s.m) collect();
     const t0 = performance.now();
     ev("pointerdown", x, y);
@@ -299,7 +319,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     out.push(tap);
     await idle();
     tap.processesAfter = await diagnostics();
-    const completionNodes = await state(), completionPixels = s.expect.pixels.map((p: any) => regionInfo(w.wd.displayCanvas(), p.region));
+    const completionNodes = await state(), completionPixels = await regionsOf(w.wd.displayCanvas(), s.expect);
     tap.semantic = { ...response, completion: { at: performance.now(), nodes: completionNodes, pixels: completionPixels } };
     if (frameError || !w.__wdLatMatches(completionNodes, s.expect) || !pixelsMatch(s.expect, completionPixels, baseline)) {
       tap.intended = null; tap.semantic = { ...tap.semantic as object, error: frameError ?? "intended rendered state did not persist through tap completion" };
