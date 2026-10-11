@@ -1,4 +1,4 @@
-import { apkCertificates, packageArchive, packageArchiveSource } from "../android/packagearchive";
+import { packageArchive, packageArchiveSource } from "../android/packagearchive";
 import { zipTree } from "../jvm/natives/jzip";
 import { PackedArchive, packedArchives } from "./packedarchive";
 import { rt } from "../jvm/runtime";
@@ -10,10 +10,10 @@ import { vfs } from "./vfs";
 import { hexBytes, u8 } from "../jvm/abi";
 import type { ProcessBootstrap } from "./process-bootstrap-data";
 
-/** Load a process registry from its transferred archive descriptors. */
+/** Load a process registry from its transferred archive descriptors: archives open together, packages register in registry order. */
 export async function loadProcessPackages(data: ProcessBootstrap): Promise<Install | null> {
   let boot: Install | null = null;
-  for (const snapshot of data.registry) {
+  const opened = await Promise.all(data.registry.map(async (snapshot) => {
     const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;
     let archive, base: Pick<Install, "zip" | "base">;
     if ("index" in source) {
@@ -30,7 +30,7 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
       base = {zip: archive.res.zip, base: file};
     } else {
       const bytes = await readFully(new RemoteFile(source)), zip = zipTree(bytes);
-      archive = packageArchive(zip, await apkCertificates(bytes, zip)); vfs.write(path, bytes);
+      archive = packageArchive(zip, snapshot.certificates); vfs.write(path, bytes);
       base = { zip, base: bytes };
     }
     if (own) {
@@ -39,6 +39,9 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
       for (const split of boot.splits) if (split.resources) archive.res.arsc?.add(split.resources);
       for (const [name, source] of boot.lazyEntries) archive.res.lazyEntries.set(name, source);
     }
+    return { snapshot, archive, path };
+  }));
+  for (const { snapshot, archive, path } of opened) {
     const record = registerPackage(archive, path, snapshot.uid);
     record.system = snapshot.system;
     for (const grant of snapshot.grants) record.grants.add(grant);
