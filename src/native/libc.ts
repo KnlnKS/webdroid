@@ -27,7 +27,7 @@ import { procIdentity, sysconf, uname } from "../shell/procfs";
 import { guestNow, wallMillis } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
-import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt } from "./mappings";
+import { isShared, syncShared, trackSharedMap, trackPrivateMap, fileMapAt, mapRemoteShared } from "./mappings";
 /** the C locale's month and weekday names (strftime, asctime) */
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -216,7 +216,6 @@ export function fillSysinfo(p: number): void {
 const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn => (cpu, a) => {
   const hint = a.va(), n = Number(a.va()), prot = a.i(), flags = a.i(), fd = a.i(), off = offOf(a);
   if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return mapFailed(cpu, E.INVAL);
-  if (flags & 1 && isRemoteFd(fd)) return mapFailed(cpu,E.NOTSUP);
   const reserve = (flags & 0x20) !== 0 && prot === 0;
   // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
   // low and made executable later, as V8's is) must not land in a plane above it.
@@ -224,6 +223,8 @@ const mmapWith = (offOf: (a: Parameters<HostFn>[1]) => number): HostFn => (cpu, 
   if (!p || (flags & 0x10 && !(mem.mapFixed(hint, pages(n)) && (reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n))))) return mapFailed(cpu, E.NOMEM);
   if (flags & 0x10) syncShared(hint, n, true);
   if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
+  if (fd !== -1 && !(flags & 0x20) && flags & 1 && isRemoteFd(fd))
+    return mapRemoteShared(BigInt(p), n, off, fd, prot).then(e => { if (!e) return p; mem.unmapVa(BigInt(p), n); return mapFailed(cpu, e); });
   if (fd !== -1 && !(flags & 0x20)) {
     const file = fdFile(fd), track = () => {
       if (file) { if (flags & 1) trackSharedMap(BigInt(p), n, off, file, (prot & 2) !== 0); else trackPrivateMap(BigInt(p), n, off, file); }
