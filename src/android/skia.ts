@@ -4,7 +4,6 @@
 import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface, FillType } from "canvaskit-wasm";
-import { pageShared } from "../shell/pageshared";
 import { after } from "../jvm/natives/jentry";
 import { servedFont, platformFontBytes } from "./fonts";
 
@@ -40,7 +39,6 @@ export type PathCommands = number[] | Float32Array;
 /** SkPathOps' Op over two paths of the given SkPathFillTypes: the result's commands and fill type,
  *  or null where Skia finds none */
 export function pathOp(a: PathCommands, aFill: number, b: PathCommands, bFill: number, op: number): { cmds: Float32Array; fill: number } | null | Promise<{ cmds: Float32Array; fill: number } | null> {
-  if (page.pathOp !== pathOp) return page.pathOp(a, aFill, b, bFill, op);
   return after(canvasKit(), (k) => {
     const pa = k.Path.MakeFromCmds(a), pb = k.Path.MakeFromCmds(b);
     try {
@@ -53,7 +51,6 @@ export function pathOp(a: PathCommands, aFill: number, b: PathCommands, bFill: n
 }
 /** SkStroke: a path's outline at the stroke's width, cap and join (Paint's ordinals), as commands */
 export function strokeCommands(cmds: PathCommands, width: number, miter: number, cap: number, join: number): Float32Array | null | Promise<Float32Array | null> {
-  if (page.strokeCommands !== strokeCommands) return page.strokeCommands(cmds, width, miter, cap, join);
   return after(canvasKit(), (k) => {
     const path = k.Path.MakeFromCmds(cmds);
     if (!path) return null;
@@ -109,17 +106,13 @@ function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
   return clips;
 }
 
-type Skia = { loadSkia: typeof loadSkia; drawSkiaText: typeof drawSkiaText; strokeCommands: typeof strokeCommands; pathOp: typeof pathOp };
-declare global { interface Window { __wdSkia?: Skia } }
-const page = pageShared("__wdSkia", () => ({ loadSkia, drawSkiaText, strokeCommands, pathOp }));
 
 /** the bytes as a buffer of their own, which CanvasKit and the CPAL reader take whole */
 const ownBuffer = (b: Uint8Array): ArrayBuffer =>
   b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer as ArrayBuffer : b.slice().buffer;
-/** CanvasKit and the faces it draws bitmap text in, loaded once per tab; text falls back to Canvas2D
+/** CanvasKit and the faces it draws bitmap text in, loaded once per realm; text falls back to Canvas2D
  *  without them */
 export function loadSkia(): Promise<void> {
-  if (page.loadSkia !== loadSkia) return page.loadSkia();
   return loading ??= Promise.all([
     canvasKit(),
     platformFontBytes(SKIA_TEXT_FACE).then(ownBuffer),
@@ -140,7 +133,6 @@ export function loadSkia(): Promise<void> {
  *  origin) through FreeType's rasterizer into a bitmap's context; false where CanvasKit cannot */
 export function drawSkiaText(ctx: Ctx, emoji: boolean, glyphs: Uint16Array, positions: Float32Array, x: number, y: number, size: number, color: number,
   style: "fill" | "hairline", subpixel: boolean): boolean {
-  if (page.drawSkiaText !== drawSkiaText) return page.drawSkiaText(ctx, emoji, glyphs, positions, x, y, size, color, style, subpixel);
   const typeface = emoji ? emojiFace : face;
   if (!kit || !typeface || !glyphs.length || !Number.isFinite(size) || size <= 0) return false;
   const width = ctx.canvas.width, height = ctx.canvas.height;

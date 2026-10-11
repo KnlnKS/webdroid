@@ -144,31 +144,18 @@ async function exportBundles(page: import("playwright").Page): Promise<void> {
 type WorkerProfile = {pid:number;error?:string;result?:{phase:string;profile:AotProfile|null}};
 
 async function readProfiles(page: import("playwright").Page): Promise<AotProfile[]> {
-  const origin = new URL(page.url()).origin;
-  const frames = page.frames().filter(frame => {
-    const url = new URL(frame.url());
-    return url.origin === origin && ["/", "/process"].includes(url.pathname);
-  });
-  const profiles = (await Promise.all(frames.map(frame => frame.evaluate(async () => {
-    // a same-origin process frame shares the page's store (pageShared), which the page reads
-    if (!window.__wdAot && window.parent !== window && window.parent.__wdAot) return null;
-    const store = await window.__wdAot;
+  const profiles: AotProfile[] = [await page.evaluate(async () => {
+    const store = await globalThis.__wdAot;
     if (!store) throw new Error("AOT profile unavailable");
     return {key:store.key,wanted:[...store.wanted],worlds:[...store.worlds].map(read => read())};
-  })))).filter((profile): profile is AotProfile => profile !== null);
-  const workers = await page.evaluate(async () => {
-    const read = globalThis.wd && Reflect.get(globalThis.wd,"workerAotProfiles") as (() => Promise<WorkerProfile[]>) | undefined;
-    if (read) return read();
-    if (new URLSearchParams(location.search).get("processMode") === "worker") throw new Error("Worker AOT profiling unavailable");
-    return [];
-  });
+  })];
+  const workers = await page.evaluate(() => globalThis.wd.workerAotProfiles() as Promise<WorkerProfile[]>);
   for (const worker of workers) {
     if (worker.error || worker.result?.phase !== "ready" || !worker.result.profile)
       throw new Error(`Worker ${worker.pid}: ${worker.error ?? "AOT profile unavailable"}`);
-    const profile = worker.result.profile;
-    profiles.push(profile);
+    profiles.push(worker.result.profile);
   }
-  if (!profiles.length || profiles.some(profile => profile.key !== key)) throw new Error("AOT profile build mismatch");
+  if (profiles.some(profile => profile.key !== key)) throw new Error("AOT profile build mismatch");
   for (const worker of workers) {
     const profile = worker.result!.profile!;
     console.log(`Worker ${worker.pid}: build ${profile.key}, ${profile.wanted.length} wanted, ${profile.worlds.length} Worlds`);

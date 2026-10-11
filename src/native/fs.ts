@@ -502,8 +502,7 @@ function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): nu
   let value: Uint8Array | Promise<Uint8Array>;
   try { value = contentAt(f.content, off, n); }
   catch { return fail(cpu, E.IO); }
-  // a lazy source of another realm (a process frame reads the page's) answers that realm's Promise
-  if (!("then" in value)) { mem.write(p, value); return value.length; }
+  if (!(value instanceof Promise)) { mem.write(p, value); return value.length; }
   const dst = anchor(p);
   return value.then((bytes) => { mem.write(dst(), bytes); return bytes.length; }, () => fail(cpu, E.IO));
 }

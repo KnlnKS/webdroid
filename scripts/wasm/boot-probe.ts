@@ -1,6 +1,6 @@
 // The platform build in a page: a headless Chrome tab opens the build (host/boot.ts), starts the process the way ActivityThread.main leaves it
 // (processState) and reports which modules were loaded and which missed, how many synchronous requests the page made (none are allowed) and where the time went;
-// then an iframe of the same page does it again, which must find the modules the tab compiled and fetch nothing.
+// then an iframe of the same page does it again.
 // The page also runs an app (the Pst fixture) in the World: the first load has no saved build, so a Worker compiles the app's likely methods and the page keeps them in OPFS, and runs a
 // hot loop whose second-tier compile the Worker makes; the iframe, a second load of the same dex, finds the saved build, attaches it and loads its modules.
 // The page is not under ?tier=wasm: the natives it binds are the oracle's, which read the JS runtime's classes, and that tier refuses to link them (until the tab's own boot runs there).
@@ -25,7 +25,6 @@ const appDir = mkdtempSync(join(tmpdir(), "wasm-probe-app-")), sh = shellIn(appD
 sh(["javac", "--release", "8", "-Xlint:-options", "-d", appDir, join(JAVA, "Pst.java")]);
 sh(["d8", "--release", "--output", appDir, ...filesIn(appDir, /\.class$/)]);
 
-const fetched = new Map<string, number>();
 const server = Bun.serve({ port: 0, async fetch(req) {
   const p = new URL(req.url).pathname;
   if (p === "/") return new Response('<!doctype html><script type="module" src="/probe.js"></script>', { headers: { "content-type": "text/html" } });
@@ -34,7 +33,7 @@ const server = Bun.serve({ port: 0, async fetch(req) {
   if (p === "/app.dex") return new Response(Bun.file(join(appDir, "classes.dex")));
   if (p === "/aot/current.json") return aotManifest();
   const aot = /^\/aot\/(\w+)\/([\w.]+)$/.exec(p);
-  if (aot) { fetched.set(aot[2], (fetched.get(aot[2]) ?? 0) + 1); return aotFile(aot[1], aot[2]); }
+  if (aot) return aotFile(aot[1], aot[2]);
   const file = join(ROOT, p);
   return p.startsWith("/vendor/aosp/") && !p.includes("..") && existsSync(file) ? new Response(Bun.file(file)) : new Response("", { status: 404 });
 } });
@@ -45,7 +44,7 @@ const page = await browser.newPage();
 page.on("pageerror", (e) => console.log("page error:", String(e).slice(0, 500)));
 await page.goto(`http://localhost:${server.port}/`);
 const run = async (name: string) => { await page.waitForFunction(`window.${name} !== undefined`, null, { timeout: 120000 }); return page.evaluate(`window.${name}`) as Promise<ProbeResult>; };
-const tab = await run("probe"), fetchedByTab = new Map(fetched);
+const tab = await run("probe");
 await page.evaluate(() => { const f = document.createElement("iframe"); f.src = "/?frame"; document.body.append(f); });
 const frame = await run("probeFrame");
 await browser.close(); server.stop();
@@ -58,7 +57,6 @@ for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
   check(`${name}: ${r.error}`, !r.error);
   check(`${name}: the build is attached`, r.attached);
   check(`${name}: no synchronous request`, r.syncRequests === 0);
-  check(`${name}: the platform Program is the tab's`, r.sharedPlatform);
   check(`${name}: nothing missed or failed (${[...r.missed, ...r.failed].slice(0, 5)})`, !r.missed.length && !r.failed.length);
 }
 for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
@@ -71,8 +69,5 @@ for (const [name, r] of [["tab", tab], ["frame", frame]] as const) {
 check("the first load has no saved build and makes one", !tab.error && !tab.app.hit && !tab.app.attached && tab.app.made?.kept === true);
 check("the second load finds it, attaches it and uses its modules", !frame.error && frame.app.hit && frame.app.attached && frame.app.modules > 0);
 check("and compiles fewer methods on demand", !frame.error && !tab.error && frame.app.compiledOnDemand < tab.app.compiledOnDemand);
-const dup = [...fetched].filter(([f, n]) => n > 1);
-console.log(`${fetched.size} files fetched by the tab and its frame, ${dup.length} more than once`);
-check("the frame fetched nothing the tab had not", [...fetched].every(([f, n]) => n === fetchedByTab.get(f)));
 console.log(failed ? "boot-probe: FAILED" : "boot-probe: all pass");
 process.exit(failed ? 1 : 0);

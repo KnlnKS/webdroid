@@ -1,6 +1,6 @@
 // ActivityTaskManager's part the broker plays across processes: the activities each launch stacks
 // on its caller's, which process is in front, which are shown beneath a translucent one, and their
-// visibility changes, made one at a time. The shown processes' frames are layered to match.
+// visibility changes, made one at a time. The shown processes' canvases are layered to match.
 import type { ParcelData } from "../android/binder";
 import { guestSleep } from "../guest-clock";
 import type { ActivityRequest, Entry } from "./processes";
@@ -24,19 +24,15 @@ export class ActivityStack {
   private nextId = 1;
   private top = 0;
   private shownPids = new Set<number>();
-  /** the shown processes as show() last layered their frames, bottom to top */
+  /** the shown processes as show() last layered them, bottom to top */
   private layers: number[] = [];
   constructor(private port: StackPort) {}
 
   get foreground(): number { return this.top; }
   shownEntries(): Entry[] { return this.layers.filter(pid => this.port.alive(pid)).map(pid => this.port.entry(pid)); }
   shown(pid: number): boolean { return this.shownPids.has(pid); }
-  /** the page's own process, in front from its boot */
+  /** `pid` alone in front */
   setForeground(pid: number): void { this.top = pid; this.shownPids = new Set([pid]); this.layers = [pid]; }
-  /** the windows of the processes on screen, bottom to top: their frames, or the page for its own process */
-  shownWindows(): Window[] {
-    return this.layers.flatMap((pid) => this.port.alive(pid) ? [this.port.entry(pid).frame?.contentWindow ?? window.parent] : []);
-  }
   presentation(pid: number, translucent: boolean): void {
     const entry = this.port.entry(pid);
     if (entry.translucent === translucent) return;
@@ -148,7 +144,7 @@ export class ActivityStack {
     this.shownPids = visible;
     const layers = this.layers = [...visible].reverse();
     for (const entry of this.port.entries()) {
-      const surface = entry.frame ?? entry.canvas;
+      const surface = entry.canvas;
       if (!surface) continue;
       surface.hidden = !visible.has(entry.pid);
       surface.style.zIndex = String(layers.indexOf(entry.pid) + 1);

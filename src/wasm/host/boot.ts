@@ -1,9 +1,8 @@
 import { spawnCompilerWorker } from "../../shell/compiler-workers";
 import { measureCompile } from "../../jvm/compiler-observer";
-// The Wasm tier's entry (src/jvm/tier.ts loads it under ?tier=wasm). Each realm (the page, every process frame) has a World over the tab's one platform build
+// The Wasm tier's entry (src/jvm/tier.ts loads it under ?tier=wasm). Each realm (the page, every process Worker) has a World over the platform build
 // and platform Program; what is the realm's own is the app's dex files, its classes' statics and its heap.
 import { mark } from "../../perf";
-import { pageShared } from "../../shell/pageshared";
 import { FetchStore } from "../link/aotstore";
 import { rt, fieldNames } from "../../jvm/runtime";
 import { useEntry, type Entry } from "../../jvm/natives/jentry";
@@ -42,7 +41,9 @@ const TAB_HEAP = 2048 * 1024 * 1024;
 type ColdStatus = { enabled: boolean; stats: World["stats"]; worker?: CompileClient["stats"]; appSaved?: boolean; appSource?: AppCode["source"]; appPersisted?: () => Promise<boolean>; appAttached?: boolean; appBuilds?: Built[]; appSettle?: () => Promise<Built | undefined>; aotKey?: string };
 declare global {
   var __wdCold: ColdStatus | undefined;
-  interface Window { __wdCold?: ColdStatus; __wdAot?: Promise<FetchStore | undefined>; __wdPlatformProgram?: Program }
+  /** the realm's AOT store, which a diagnostic reads without opening it (shell/aot-profile.ts) */
+  var __wdAot: Promise<FetchStore | undefined> | undefined;
+  interface Window { __wdCold?: ColdStatus }
 }
 
 /** until the app's first frame, or this long, the hot methods are compiled by the worker only: what runs hot while a process starts is mostly run-once code */
@@ -56,17 +57,8 @@ const hostLoop: HostLoop = {
   after: (ms, fn) => { const id = parkTimeout(fn, ms); return () => unparkTimeout(id); },
 };
 
-/** Process URLs inherit the tab's explicit choice; a local cold=0 overrides it. */
-function browserCold(): boolean {
-  if (typeof location === "undefined") return false;
-  let choice = new URLSearchParams(location.search).get("cold");
-  if (choice === null && typeof window !== "undefined") {
-    try {
-      if (window.parent.location.origin === location.origin) choice = new URLSearchParams(window.parent.location.search).get("cold");
-    } catch { /* A page in another origin keeps its own default. */ }
-  }
-  return choice === "1";
-}
+/** Process Worker URLs inherit the tab's query. */
+const browserCold = (): boolean => typeof location !== "undefined" && new URLSearchParams(location.search).get("cold") === "1";
 
 /** a World over `prog`, with the registered natives and the host's resolver; `extra` is what the app's code adds (appcode.ts) */
 export function createWorld(prog: Program, extra: Partial<WorldOptions> = {}): World {
@@ -193,16 +185,15 @@ const dexesOf = (zip: Uint8Array, label: string): DexFile[] => {
   return dexEntryNames(dir.keys()).flatMap((name) => dexesIn(entryBytes(zip, dir.get(name)!), `${label}:${name}`));
 };
 
-/** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled: fetched once by the tab,
- *  and the compiled modules are shared by the process frames, which are same-origin. Undefined when the server has no build for the sources, which leaves all code to
- *  the on-demand compiler. */
+/** The platform build (scripts/wasm/aot-build.ts) the server holds for these sources, with the modules a start of the process loads compiled. Undefined when the
+ *  server has no build for the sources, which leaves all code to the on-demand compiler. */
 let aotPort: MessagePort | undefined;
 /** a process Worker's store takes its modules from the page's (`serveAot`) */
 export function useAotPort(port: MessagePort): void { aotPort = port; }
 export function serveAot(port: MessagePort): void { void openAot().then((store) => serveStore(store, port), () => serveStore(undefined, port)); }
 
 export function openAot(): Promise<FetchStore | undefined> {
-  return pageShared("__wdAot", async () => {
+  return globalThis.__wdAot ??= (async () => {
     const current = await fetch("/aot/current.json");
     if (!current.ok) return undefined;
     // the cold interpreter deoptimizes into guarded code; other processes load the build without the guards
@@ -214,11 +205,12 @@ export function openAot(): Promise<FetchStore | undefined> {
     mark("aotIndex");
     store.ready = prefetchInWorker(store, JSON.parse(new TextDecoder().decode(startup)) as string[]).then(() => mark("aotOpened"));
     return store;
-  });
+  })();
 }
 
-/** The platform's Program, made by the first process of the tab from the boot class path's dexes and shared by the others: it is immutable, and each process extends it with
- *  its own dexes (`new Program(appDexes, platform)`), so the class model and class-hierarchy index of the 40,000 platform classes exist once per tab. */
+/** The platform's Program from the boot class path's dexes: it is immutable, and the process extends it with its own dexes (`new Program(appDexes, platform)`). */
+let platform: Program | undefined;
 export function platformProgram(dexes: () => DexFile[]): Program {
-  return pageShared("__wdPlatformProgram", () => { const p = new Program(dexes()); p.addExterns(externs); return p; });
+  if (!platform) { platform = new Program(dexes()); platform.addExterns(externs); }
+  return platform;
 }

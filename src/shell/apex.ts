@@ -1,15 +1,12 @@
 import { PLATFORM_DATA } from "../jvm/bootclasspath";
 import { vfs } from "./vfs";
 import { RangeFile, type FileSource } from "./lazyfile";
-import { pageShared } from "./pageshared";
 
-declare global { interface Window { __wdPlatformData?: Map<string, FileSource> } }
+const sources = new Map<string, FileSource>();
 /** the reference build's ICU and time zone files at their device paths, read on first use. A large
- *  one (the ICU data) is mapped and read by page, so it is fetched in pages; a small one whole. The
- *  files are the page's, so every realm maps the pages another has read (jmemory.ts' Region). */
+ *  one (the ICU data) is mapped and read by page, so it is fetched in pages; a small one whole. */
 export function mountPlatformData(source = (path: string, size: number): FileSource =>
   new RangeFile(`/vendor/aosp${path}`, size, size > 1 << 20 ? 1 << 16 : 1 << 20, 4)): void {
-  const sources = pageShared("__wdPlatformData", () => new Map());
   for (const [path, size] of Object.entries(PLATFORM_DATA)) {
     let file = sources.get(path);
     if (!file) sources.set(path, file = source(path, size));

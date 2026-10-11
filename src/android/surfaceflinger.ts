@@ -70,7 +70,7 @@ type Present = () => void | Promise<unknown>;
 type Target = { ctx: OffscreenCanvasRenderingContext2D; present: Present; transparent: boolean };
 let target: Target | null = null;
 /** where the display composes: the realm's frame, and what shows it */
-export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: Present, transparent = target?.transparent ?? overlaid): void { target = { ctx, present, transparent }; }
+export function setDisplayTarget(ctx: OffscreenCanvasRenderingContext2D, present: Present, transparent = target?.transparent ?? false): void { target = { ctx, present, transparent }; }
 let composing = false, displaying = false, recompose = false;
 const waiters: (() => void)[] = [];
 /** resolves once the display has composed what is queued now: a producer's swap waits for it, as
@@ -79,7 +79,6 @@ export function composited(): Promise<void> {
   scheduleComposite();
   return new Promise((resolve) => waiters.push(resolve));
 }
-const overlaid = typeof window !== "undefined" && window.top !== window;
 /** compose the display once the current turn's transactions and draws are done */
 export function scheduleComposite(): void {
   if (composing) return;
@@ -97,8 +96,8 @@ function compose(target: Target): void {
   const { ctx } = target, t0 = performance.now();
   if (queuedAt !== null) { perf.presentLagMs += t0 - queuedAt; queuedAt = null; }
   ctx.save();
-  // a process's frame stacks over the processes below it (processes.ts), which show through
-  // wherever its windows draw nothing; the bottom one shows black there, as a display does
+  // the system windows stack over the processes' canvases (processes.ts), which show through
+  // wherever they draw nothing; an app's display shows black there, as a display does
   if (target.transparent) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
   placed.clear();

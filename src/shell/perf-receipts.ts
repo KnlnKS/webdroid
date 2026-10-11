@@ -10,9 +10,7 @@ export function installCounterReceipt(counters: Record<string, number>, source: 
   if (typeof window === "undefined" || new URLSearchParams(location.search).get("perfProbe") !== "1") return;
   const url = location.href, params = new URLSearchParams(location.search), pid = params.has("pid") ? Number(params.get("pid")) : null;
   const copy = () => Object.freeze(Object.fromEntries(COMPILE_COUNTERS.map(key => [key, counters[key]])));
-  let root: Window = window;
-  try { while (root.parent !== root && root.parent.location.origin === location.origin) root = root.parent; } catch {}
-  const clock = root.performance, clockUrl = root.location.href;
+  const clock = performance, clockUrl = url;
   const bornAt = clock.timeOrigin + clock.now(), realmBornAt = performance.timeOrigin + performance.now(), initial = copy();
   let sequence = 0, resets = 0;
   Object.defineProperty(window, "__wdCounterReceipt", { value: () => Object.freeze({ schema: 1 as const, source, url, pid, bornAt,

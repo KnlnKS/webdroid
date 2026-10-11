@@ -12,7 +12,6 @@ import { OS_CONSTANTS } from "./os-constants";
 import { PLATFORM_DATA } from "../jvm/bootclasspath";
 import { FONT_UPDATES } from "./font-updates";
 import { vfs } from "../shell/vfs";
-import { pageShared } from "../shell/pageshared";
 import { deref, handle } from "./handles";
 import { harfBuzz } from "./harfbuzz";
 import { type FaceMetrics, type FaceInfo, type FvarAxis, faceInfo, faceCount } from "./sfnt";
@@ -56,9 +55,8 @@ export const isPlatformFont = (path: string) => /^\/(system\/fonts|data\/fonts\/
 /** the file the device serves for a system font named without a PostScript name: its update, found
  *  by the name FontListParser derives from the file's (findUpdatedFontFile) */
 export const servedFont = (path: string) => FONT_UPDATES.postScriptMap[path.slice(path.lastIndexOf("/") + 1, path.lastIndexOf("."))] ?? path;
-declare global { interface Window { __wdFontFiles?: Map<string, FontFile> } }
+const files = new Map<string, FontFile>();
 function platformFile(path: string): FontFile {
-  const files = pageShared("__wdFontFiles", () => new Map<string, FontFile>());
   let file = files.get(path);
   if (!file) files.set(path, file = new FontFile(null, path));
   return file;
@@ -79,7 +77,7 @@ export const warmUpCache = (path: string): Promise<void> | void => isPlatformFon
 type IndexedFace = Omit<FaceInfo, "coverage"> & { coverage: number[] };
 /** the faces by "path#ttcIndex", and the serialized system font map in base64 */
 export interface FontIndex { faces: Record<string, IndexedFace>; fontMap?: string }
-declare global { interface Window { __wdFontIndex?: Promise<FontIndex> } }
+let indexed: Promise<FontIndex> | undefined;
 let fontIndex: FontIndex | null = null;
 /** every reference-build face's FaceInfo by "path#ttcIndex", its coverage pairs delta-encoded */
 export async function platformFontIndex(): Promise<Record<string, IndexedFace>> {
@@ -268,7 +266,7 @@ export const typefaceOf = (t: object | null): NativeTypeface =>
  *  class initialized (its default fonts read ahead). The system font map is the application's, from
  *  bindApplication (systemFontMap). */
 export function* preloadFonts(): Gen<void> {
-  [fontIndex] = yield* awaited(Promise.all([pageShared("__wdFontIndex", fetchFontIndex), harfBuzz()]));
+  [fontIndex] = yield* awaited(Promise.all([indexed ??= fetchFontIndex(), harfBuzz()]));
   yield initClass("android/graphics/Typeface");
 }
 let fontMapMemory: JObj | undefined;

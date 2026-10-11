@@ -3,7 +3,6 @@
 // pointers. It is loaded on first use, once per tab (the tab's realms share one thread, so they
 // share one instance and its faces, as they share CanvasKit).
 
-import { pageShared } from "../shell/pageshared";
 
 type Ptr = number;
 interface Exports {
@@ -243,11 +242,10 @@ export class HarfBuzz {
   }
 }
 
-declare global { interface Window { __wdHarfBuzz?: Promise<HarfBuzz> } }
-let ready: HarfBuzz | null = null;
+let ready: HarfBuzz | null = null, loading: Promise<HarfBuzz> | undefined;
 /** the tab's HarfBuzz, loading it on first use */
 export function harfBuzz(): HarfBuzz | Promise<HarfBuzz> {
-  return ready ?? pageShared("__wdHarfBuzz", load).then((hb) => ready = hb);
+  return ready ?? (loading ??= load().then((hb) => ready = hb));
 }
 /** the tab's HarfBuzz, which preloadFonts loaded with the realm's fonts: text is measured
  *  synchronously */
@@ -273,15 +271,15 @@ interface SubsetExports {
   hb_subset_input_create_or_fail(): Ptr; hb_subset_input_destroy(i: Ptr): void; hb_subset_input_keep_everything(i: Ptr): void;
   hb_subset_input_pin_axis_location(i: Ptr, face: Ptr, tag: number, value: number): number; hb_subset_or_fail(face: Ptr, input: Ptr): Ptr;
 }
-declare global { interface Window { __wdHarfBuzzSubset?: Promise<SubsetExports> } }
+let subset: Promise<SubsetExports> | undefined;
 /** face `ttcIndex` of a font file as a font of its own, the variation axes in `pins` fixed at their
  *  values: everything else (glyph ids, layout tables, other axes) kept */
 export async function instanceFace(bytes: Uint8Array, ttcIndex: number, pins: readonly (readonly [number, number])[]): Promise<Uint8Array> {
-  const x = await pageShared("__wdHarfBuzzSubset", async () => {
+  const x = await (subset ??= (async () => {
     const e = await instantiate("harfbuzz-subset.wasm", {}) as unknown as SubsetExports;
     e._initialize();
     return e;
-  });
+  })());
   const data = x.malloc(bytes.length);
   new Uint8Array(x.memory.buffer).set(bytes, data);
   const blob = x.hb_blob_create(data, bytes.length, HB_MEMORY_MODE_READONLY, 0, 0), face = x.hb_face_create(blob, ttcIndex);

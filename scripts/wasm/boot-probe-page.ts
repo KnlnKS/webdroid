@@ -1,4 +1,4 @@
-// The page of boot-probe.ts, also loaded in an iframe of itself (`?frame`), the way a process realm shares the page's modules.
+// The page of boot-probe.ts, also loaded in an iframe of itself (`?frame`) as a second load of the same build.
 import { fetchPlatformJars, jarDexes } from "../../src/android/framework";
 import { PLATFORM_JARS } from "../../src/jvm/provenance";
 import { tier } from "../../src/jvm/tier";
@@ -29,7 +29,6 @@ export interface ProbeResult {
   /** methods compiled on demand */
   methods: number;
   /** whether the Program under the World extends the tab's platform Program */
-  sharedPlatform: boolean;
   app: {
     /** the store the app's compiled code persisted in (OPFS or Cache Storage) */
     store: string;
@@ -74,11 +73,11 @@ async function probe(): Promise<ProbeResult> {
    const answers = [w.entry("Pst", "chain", "()I")(), w.entry("Pst", "fib", "(I)I")(15), hot(3000), w.entry("Pst", "fill", "(I)I")(500)].join(",");
   const made = await code.made;  const c = code.compiler.stats;
   return { tier, attached: !!w.aot, syncRequests, aheadMs, bootMs, compileMs: s.compileMs, moduleMs: s.moduleMs, instantiateMs: s.instantiateMs, aotMs: s.aot.ms,
-    loaded: w.aot?.loaded.filter((f) => f[0] !== "a") ?? [], missed: [...w.aot?.missed ?? []], failed: store?.failed ?? [], methods: s.methods, sharedPlatform: w.prog.base === (window.top ?? window).__wdPlatformProgram,
+    loaded: w.aot?.loaded.filter((f) => f[0] !== "a") ?? [], missed: [...w.aot?.missed ?? []], failed: store?.failed ?? [], methods: s.methods,
     app: { store: persist ? ("getDirectory" in (navigator.storage ?? {}) ? "opfs" : "cache") : "none", hit: code.hit, prepareMs, attached: w.appAttached, modules: w.aot?.loaded.filter((f) => f[0] === "a").length ?? 0, compiledOnDemand: w.stats.methods, made,
       jobs: c.jobs, adopted: c.adopted, stale: c.stale, inlineUpgrades: w.stats.upgrades - c.adopted, workerMs: c.workerMs, answers } };
 }
 
-const result = probe().catch((e): ProbeResult => ({ tier, error: String(e?.stack ?? e), attached: false, syncRequests, aheadMs: 0, bootMs: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, aotMs: 0, loaded: [], missed: [], failed: [], methods: 0, sharedPlatform: false, app: undefined as never }));
+const result = probe().catch((e): ProbeResult => ({ tier, error: String(e?.stack ?? e), attached: false, syncRequests, aheadMs: 0, bootMs: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, aotMs: 0, loaded: [], missed: [], failed: [], methods: 0, app: undefined as never }));
 if (new URLSearchParams(location.search).has("frame")) (window.parent as unknown as { probeFrame: Promise<ProbeResult> }).probeFrame = result;
 else (window as unknown as { probe: Promise<ProbeResult> }).probe = result;

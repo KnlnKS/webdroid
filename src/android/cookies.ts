@@ -12,9 +12,7 @@ export let webCookies = (pkg: string): Promise<WebCookies> => {
   if (!store) { store = import("../shell/webcookies").then(({ WebCookies }) => new WebCookies(pkg)); defaults.set(pkg, store); }
   return store;
 };
-// a child process gets the broker's Promise from the parent realm, which a driven native
-// would not recognise as one to wait for
-export function useWebCookies(get: typeof webCookies) { webCookies = (pkg) => Promise.resolve(get(pkg)); }
+export function useWebCookies(get: typeof webCookies) { webCookies = get; }
 /** The process's CookieManager reaches the canonical jar through acknowledged operations. */
 export const cookieTransport: { calls?: () => CookieCalls } = {};
 const localCalls = cookieCalls(() => webCookies(appHost?.pkg ?? ""));

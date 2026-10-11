@@ -43,16 +43,9 @@ export const answeringInput = (now = performance.now()): boolean => now < respon
 export async function inputSettled(): Promise<void> {
   for (let wait; (wait = responsiveUntil - performance.now()) > 0;) await new Promise((r) => setTimeout(r, wait));
 }
-/** A realm the user is not looking at, and that no presented process is waiting on: its yields wait
- *  for the page's own work to finish, since every realm shares the page's one main thread and input
- *  goes to the presented one. */
-let background = (): boolean => false;
-export function setBackgroundRealm(isBackground: () => boolean): void { background = isBackground; }
-const scheduler = (globalThis as { scheduler?: { postTask(task: () => void, options: { priority: string }): Promise<void> } }).scheduler;
-/** a later turn, after what `queue` already holds; a background realm's after the page's own work */
+/** a later turn, after what `queue` already holds */
 function turn(queue: (() => void)[]): Promise<void> {
   if (processExited()) return never();
-  if (scheduler && background()) return scheduler.postTask(() => {}, { priority: "background" });
   if (!chan) return new Promise((r) => setTimeout(r, 0));
   return new Promise((r) => { yieldStats.pushes++; queue.push(r); post(); });
 }

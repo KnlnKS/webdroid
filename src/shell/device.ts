@@ -61,9 +61,6 @@ export function setScreenCanvas(c: HTMLCanvasElement): void {
 }
 /** System windows compose over app process canvases rather than an opaque app background. */
 export function setSystemDisplayTarget(): void { setDisplayTarget(frame, present, true); }
-let firstFrame!: () => void;
-/** resolves once the screen first shows the app: work a device did before the app launched waits for it */
-export const firstPresented = new Promise<void>((resolve) => { firstFrame = resolve; });
 function present(): void | Promise<unknown> {
   if (!screen) return;
   const shown = screen(fb.transferToImageBitmap());
@@ -72,7 +69,7 @@ function present(): void | Promise<unknown> {
     error => { if (!processExited()) console.error("[display]", error); });
 }
 function presentedFrame(): void {
-  if (!perf.presentations++) { mark("firstPresented"); if (tier === "js") startupDone(); appLaunched(); firstFrame(); }
+  if (!perf.presentations++) { mark("firstPresented"); if (tier === "js") startupDone(); appLaunched(); }
   notePresent();
 }
 
@@ -132,7 +129,7 @@ export function startZygote(host?: Promise<unknown>): Promise<void> {
 }
 
 /** boots the app, resolving to its label */
-export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<string> {
+export async function bootApk(install: Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null): Promise<string> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   mark("bootApk"); onStatus("Reading package…");
@@ -214,7 +211,6 @@ export async function bootApk(install: Install, onStatus: (s: string) => void, a
   setProcessName(processName ?? pkg);
   setManifest(manifest);
   setTargetSdkVersion(target);
-  prepared?.();
 
   hostWindowManager();
   setDisplayTarget(frame, present);

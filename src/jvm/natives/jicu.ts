@@ -8,7 +8,6 @@ import type { JavaClass } from "../tier";
 import { once } from "../suspend";
 import { jarray, mangleField } from "../abi";
 import { BytesTrie, ResBundle, cString, icuItem, icuRead } from "./icudata";
-import { pageShared } from "../../shell/pageshared";
 
 const ULOCALE = "Landroid/icu/util/ULocale;", STRING = "Ljava/lang/String;";
 
@@ -59,8 +58,7 @@ interface Likely {
   languageAliases: Map<string, string>; regionAliases: Map<string, string>; trie: Uint8Array; lsrs: Int32Array; m49: string[];
   und: [number, number]; undZzzz: [number, number]; defaultLsr: number; scripts: Map<number, string>;
 }
-declare global { interface Window { __wdLikelySubtags?: Promise<Likely | null> } }
-const pageLikely = () => pageShared("__wdLikelySubtags", async () => {
+const likelyData = once(async (): Promise<Likely | null> => {
   try {
     const bundle = await ResBundle.open("langInfo.res"), table = bundle.get(bundle.root, "likely")!;
     const pairs = (key: string) => {
@@ -79,9 +77,6 @@ const pageLikely = () => pageShared("__wdLikelySubtags", async () => {
       m49: bundle.strings(bundle.get(table, "m49")!), und, undZzzz, defaultLsr: walk.value(), scripts: new Map() };
   } catch (e) { console.warn("[webdroid] likely subtags unavailable", e); return null; }
 });
-/** the table, once this realm has it: a process realm's page promise is another realm's Promise,
- *  which neither `once` nor `after` waits on, so this realm awaits it in a Promise of its own */
-const likelyData = once(async () => pageLikely());
 /** LikelySubtags.trieNext: a subtag's last character is marked with 0x80, an empty one is "*" */
 function trieNext(iter: BytesTrie, s: string): number {
   let result: number;

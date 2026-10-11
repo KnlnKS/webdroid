@@ -58,7 +58,7 @@ export interface WorldOptions {
   heapUsed: () => number;
   /** a collection of the host heap, when it has a way to ask for one: the limit applies to live data, and `heapUsed` counts the garbage not yet swept */
   collect?: () => void;
-  /** how much the heap may grow before an allocation fails, where the heap is shared with other realms (a tab's processes): ART's limit, a process's own, by default */
+  /** how much the heap may grow before an allocation fails: ART's limit, a process's own, by default */
   heapLimit?: number;
   /** resolves names for libcore's getaddrinfo; without it a lookup is a gap */
   net?: HostNet;

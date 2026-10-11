@@ -3,9 +3,7 @@ import { compilerReceipt, compilerReceiptsEnabled } from "../jvm/compiler-observ
 type Owner = { instance: string; role: string; url: string; owner: string; bornAt: number };
 type CompilerOwner = { owner: Owner; worker: Worker; latest: unknown; receivedAt: number | null; retiredAt: number | null; error: string | null; requests: { sequence: number; type: string; id: number | null; at: number }[]; pending: Map<string, (value: unknown) => void> };
 const records: CompilerOwner[] = [];
-let root: Window | undefined = compilerReceiptsEnabled && typeof window !== "undefined" ? window : undefined;
-if (root) { try { while (root.parent !== root && root.parent.location.origin === location.origin) root = root.parent; } catch {} }
-const clock = root?.performance ?? performance, clockUrl = root?.location.href ?? (typeof location === "undefined" ? "" : location.href);
+const clock = performance, clockUrl = typeof location === "undefined" ? "" : location.href;
 const now = () => clock.timeOrigin + clock.now();
 let dropped = 0;
 const MESSAGE = "webdroid:compiler-receipt", SNAPSHOT = "webdroid:compiler-snapshot";

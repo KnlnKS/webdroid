@@ -1,7 +1,7 @@
 import type { ProcessLifeCalls } from "./process-life";
 import { readCounterReceipt, type CounterReceipt } from "./perf-receipts";
-// The broker: system_server's part across process realms, kept in the page's top realm, which
-// outlives them all. It registers each process and its frame, routes binder transactions, service,
+// The broker: system_server's part across process realms, kept in the page's realm, which
+// outlives them all. It registers each process and its Worker, routes binder transactions, service,
 // provider and broadcast requests and process deaths between them, and holds the stores every
 // process shares. Each realm reaches it through shell/process-endpoint.ts.
 import type { PendingAccess } from "../android/pendingintent";
@@ -12,7 +12,6 @@ import { accountAuthority } from "../android/accounts";
 import { encodeIntent, intentCodec } from "../android/intentipc";
 import type { IntentCodec } from "./pendingintents";
 import { packages } from "../android/packages";
-import { appHost } from "../android/apphost";
 import { ownedSystemService, asSystem, SYSTEM_CALLER, INTERFACE_TRANSACTION, exportParcel, type Caller, type ParcelData, type Transaction, type TransactionReply, type BinderHandle } from "../android/binder";
 import { NativeParcel, writeString } from "../android/parcel";
 import { newIntent, type ComponentRef } from "../android/intent";
@@ -23,7 +22,7 @@ import { uptimeMillis } from "../guest-clock";
 import { ServiceRecords, type ServiceRequest, type ServiceStarts, type ServiceStartCalls } from "./servicerecords";
 import { ActivityStack } from "./activitystack";
 import type { FileSource } from "./lazyfile";
-import { apkPath, vfs } from "./vfs";
+import { vfs } from "./vfs";
 import { device, formatScreen } from "./config";
 import type { Sender } from "../android/server/broadcastqueue";
 import { queryReceivers, exported, componentPermission, componentProcess, resolveProvider, installedPath } from "../android/pm";
@@ -80,7 +79,6 @@ export type BroadcastData = { code: number; data: string | null; extras: ParcelD
 export type ActivityRequest = { kind: "launch"; id: number; component: string; intent: ParcelData; caller: ComponentRef | null }
   | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
   | { kind: "result"; request: number; code: number; data: ParcelData | null } | { kind: "back" };
-const BIND_NOT_FOREGROUND = 4, BIND_WAIVE_PRIORITY = 0x20;
 export type ProcessEndpoint = {
   processDied: (token: number) => Promise<void>;
   activity: (request: ActivityRequest) => Promise<void>;
@@ -133,12 +131,9 @@ type WorkerIdentity = {pid:number;pkg:string;process:string;url:string};
 export type WorkerDiagnosticRow = WorkerIdentity & (
   {snapshot:Awaited<ReturnType<WorkerControl["snapshot"]>>;terminal?:never;error?:never} |
   {error:string;terminal?:WorkerTerminal} | {terminal:WorkerTerminal;error?:never});
-const workerMode = () => new URLSearchParams(location.search).get("processMode") === "worker";
-export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+export type Entry = { worker?: ReturnType<typeof startProcessWorker>; presented?: ReturnType<typeof Promise.withResolvers<void>>; workerDiagnostic?: {url:string;error?:string;terminal?:WorkerTerminal}; canvas?: HTMLCanvasElement; ime?: ReturnType<typeof receiveIme>; pkg: string; process: string; uid: number; pid: number;
   translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
-  /** requests in flight from foreground processes, which this one runs at their priority */
-  foregroundClients: number;
   /** the home screen started it, so it starts its launcher activity as the user's app does */
   launcher: { assetKey: string } | null;
   /** what hears how it ended */
@@ -152,15 +147,15 @@ export class ProcessBroker {
     if (typeof window === "undefined" || !window.__wdCounterReceipt) return;
     const sequence = ++this.counterSequence;
     if (this.counterEvents.length === 128) { this.counterDropped++; return; }
-    this.counterEvents.push({ sequence, kind, at: performance.timeOrigin + performance.now(), pid: entry.pid, pkg: entry.pkg, process: entry.process, url: url ?? entry.frame?.src ?? entry.worker?.url ?? location.href });
+    this.counterEvents.push({ sequence, kind, at: performance.timeOrigin + performance.now(), pid: entry.pid, pkg: entry.pkg, process: entry.process, url: url ?? entry.worker?.url ?? location.href });
   }
   counterReceipts() {
     if (typeof window === "undefined" || !window.__wdCounterReceipt) return null;
     const rows = [];
     for (const entry of this.entries.values()) {
       if (rows.length === 128) break;
-      const terminal = this.counterTerminals.get(entry.pid), rootRealm = entry.pid === PROCESS_PID, win = entry.frame?.contentWindow ?? (rootRealm ? window : null);
-      const url = terminal?.url ?? entry.frame?.src ?? entry.worker?.url ?? entry.workerDiagnostic?.url ?? location.href;
+      const terminal = this.counterTerminals.get(entry.pid), rootRealm = entry.pid === PROCESS_PID, win = rootRealm ? window : null;
+      const url = terminal?.url ?? entry.worker?.url ?? entry.workerDiagnostic?.url ?? location.href;
       let receipt = terminal?.receipt ?? null, error = terminal?.error ?? null;
       if ((!entry.dead || rootRealm) && win) try { receipt = readCounterReceipt(win); } catch (e) { error = String(e); }
       if (!win && !entry.dead) error ??= "Process Worker counters require a separate protocol";
@@ -239,10 +234,10 @@ export class ProcessBroker {
   });
   private services = new ServiceRecords({
     send: (client, pkg, process, request, start) => {
-      const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process, undefined, true) : live && !live.dead ? live : null;
+      const live = this.byName.get(pkg + "/" + process), entry = start ? this.connect(pkg, process) : live && !live.dead ? live : null;
       if (!entry) return null;
       const caller = client === null ? null : this.entries.get(client) ?? null;
-      return this.inherit(caller, entry, () => this.request(entry, (endpoint) => endpoint.service(request))).then((result) => {
+      return this.request(entry, (endpoint) => endpoint.service(request)).then((result) => {
         if (caller?.dead) throw rt.mkThrowable("android/os/DeadObjectException", "Service caller died");
         return result;
       });
@@ -296,20 +291,20 @@ export class ProcessBroker {
     this.entry(pid);
     if (active) this.clipboardWatchers.add(pid); else this.clipboardWatchers.delete(pid);
   }
-  /** `background`: started for a service, provider or broadcast rather than an activity, it runs in a Worker off the page's thread */
-  connect(pkg: string, process: string, pid?: number, background = false): Entry {
+  /** `pid`: the page's own process; any other runs in a Worker */
+  connect(pkg: string, process: string, pid?: number): Entry {
     const key = pkg + "/" + process, previous = this.byName.get(key);
     if (previous && !previous.dead) return previous;
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const worker = pid === undefined && (background || workerMode());
+    const worker = pid === undefined;
     let spare = worker ? this.spare : undefined;
     if (spare) {
       this.spare = undefined;
       if (spare.url !== new URL(this.workerUrl(spare.pid), location.href).href) { spare.worker.terminate(); spare.release(); spare = undefined; }
     }
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, frame: null, translucent: false, dead: false, foregroundClients: 0, launcher: null, watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? spare?.pid ?? this.nextPid++, translucent: false, dead: false, launcher: null, watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -324,20 +319,9 @@ export class ProcessBroker {
         spare ??= spawnProcessWorker(this.workerUrl(entry.pid), entry.pid);
         entry.workerDiagnostic = {url:spare.url};
         entry.worker = startProcessWorker(spare, canvas, () => device,
-          () => this.bootstrap(entry.pid, true), port => this.readyPort(entry.pid, port),
+          () => this.bootstrap(entry.pid), port => this.readyPort(entry.pid, port),
           message => this.fail(entry.pid, message, NOT_CRASHED), () => entry.ime?.focus());
       } catch (error) { this.fail(entry.pid,String(error),NOT_CRASHED); throw error; }
-    } else if (pid === undefined) {
-      const frame = document.createElement("iframe"); entry.frame = frame;
-      frame.hidden = true;
-      frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
-      frame.src = "/process?pid=" + entry.pid + `&screen=${formatScreen(device)}&statusBarDp=${device.statusBarDp}&hz=${device.refreshRate}`;
-      const params = new URLSearchParams(location.search);
-      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock", "tier", "cold", "processMode", "perfProbe", "compileProbe"]) {
-        const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
-      }
-      frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed", NOT_CRASHED));
-      (document.getElementById("screen")?.parentElement ?? document.body).appendChild(frame);
     }
     this.counterEvent(entry, "created");
     this.services.processStarted(pkg, process);
@@ -355,8 +339,8 @@ export class ProcessBroker {
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
     const entry = this.connect(pkg, pkg);
-    entry.launcher = { assetKey }; entry.foregroundClients++;
-    const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid)).finally(() => { entry.foregroundClients--; });
+    entry.launcher = { assetKey };
+    const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid));
     return { pid: entry.pid, shown };
   }
   private packageSplits = new Map<string, readonly FileSource[]>();
@@ -364,7 +348,7 @@ export class ProcessBroker {
     if (!packages.has(pkg)) throw new Error("Package not installed: " + pkg);
     this.packageSplits.set(pkg, [...sources]);
   }
-  async bootstrap(pid: number, worker = false): Promise<ProcessBootstrap> {
+  async bootstrap(pid: number): Promise<ProcessBootstrap> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
     this.watchSettings(pid);
     this.watchAccounts(pid);
@@ -372,7 +356,7 @@ export class ProcessBroker {
       const packed = packedArchives.get(record.path);
       const source = packed ? { index: packed.index, base: packed.base } : null, file = packed ? null : vfs.source(record.path);
       if (!source && !file) throw new Error("Package bytes unavailable: " + record.pkg);
-      const splits = this.packageSplits.get(record.pkg) ?? (record.pkg === appHost?.pkg ? appHost.splits.map((name) => vfs.source(apkPath(name))!) : []);
+      const splits = this.packageSplits.get(record.pkg) ?? [];
       return { certificates: record.certificates(), pkg: record.pkg, source, file, splits, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
     });
     const ports: (() => void)[] = [];
@@ -384,26 +368,20 @@ export class ProcessBroker {
       this.entry(pid);
       const snapshots = registry.map(({ file, ...record }, i) => ({ ...record, certificates: certificates[i],
         source: record.source ?? publish(file!), splits: record.splits.map(publish) }));
-      const broker = worker ? this.serveBrokerPort(pid) : undefined;
-      if (broker) ports.push(broker.close);
-      let display: MessagePort | undefined, ime: MessagePort | undefined, web: MessagePort | undefined, media: MessagePort | undefined;
-      if (worker) { const channel = new MessageChannel(); ports.push(receiveMedia(channel.port1)); media = channel.port2; }
-      let imeOwner: ReturnType<typeof receiveIme> | undefined;
-      if (worker && entry.canvas) {
-        const sink = canvasFrameSink(entry.canvas);
-        const {port1,port2} = new MessageChannel();
-        ports.push(receiveFrames(port1,bitmap => { sink(bitmap); entry.presented?.resolve(); }));display=port2;
-        const input = new MessageChannel();
-        const inputOwner = receiveIme(input.port1, entry.canvas); imeOwner = inputOwner;
-        ports.push(() => { inputOwner.close(); if (entry.ime === inputOwner) entry.ime = undefined; }); ime=input.port2;
-        const frames = new MessageChannel();
-        ports.push(receiveWebSurfaces(frames.port1,entry.canvas,()=>device)); web=frames.port2;
-      }
+      const broker = this.serveBrokerPort(pid), canvas = entry.canvas!;
+      ports.push(broker.close);
+      const media = new MessageChannel(), display = new MessageChannel(), input = new MessageChannel(), web = new MessageChannel();
+      ports.push(receiveMedia(media.port1));
+      const sink = canvasFrameSink(canvas);
+      ports.push(receiveFrames(display.port1, bitmap => { sink(bitmap); entry.presented?.resolve(); }));
+      const ime = receiveIme(input.port1, canvas);
+      ports.push(() => { ime.close(); if (entry.ime === ime) entry.ime = undefined; });
+      ports.push(receiveWebSurfaces(web.port1, canvas, () => device));
       const payload: ProcessBootstrap = { pid: entry.pid, pkg: owner.pkg, process: entry.process, uid: entry.uid,
-        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker?.port, display, ime, web, media,
-        ...worker ? { storage: storageEntries(entry) } : {} };
+        registry: snapshots, launcher: entry.launcher, refreshRate: device.refreshRate, broker: broker.port,
+        display: display.port2, ime: input.port2, web: web.port2, media: media.port2, storage: storageEntries(entry) };
       const data = structuredClone(payload, { transfer: bootstrapTransfers(payload) });
-      if (imeOwner) entry.ime = imeOwner;
+      entry.ime = ime;
       // A replacement bootstrap owns a new set; a failed replacement leaves the old one live.
       for (const close of this.bootstrapPorts.get(pid) ?? []) close();
       this.bootstrapPorts.set(pid, ports);
@@ -664,12 +642,12 @@ export class ProcessBroker {
       if (!entry.dead) unawaited(this.request(entry, endpoint => endpoint.settingsChanged(table, name)));
     }));
   }
-  /** a process ended, or its frame failed: ActivityManagerService.appDiedLocked */
+  /** a process ended, or its Worker failed: ActivityManagerService.appDiedLocked */
   fail(pid: number, message: string, death: Death, record: ExitRecord | null = null): void {
     const entry = this.entries.get(pid);
     if (!entry || entry.dead) return;
     if (typeof window !== "undefined" && window.__wdCounterReceipt) {
-      const win = entry.frame?.contentWindow ?? (entry.pid === PROCESS_PID ? window : null), url = entry.frame?.src ?? entry.worker?.url ?? location.href;
+      const win = entry.pid === PROCESS_PID ? window : null, url = entry.worker?.url ?? location.href;
       let receipt: Readonly<CounterReceipt> | null = null, error: string | null = null;
       try { if (win) receipt = readCounterReceipt(win); } catch (e) { error = String(e); }
       if (pid !== PROCESS_PID) {
@@ -702,7 +680,7 @@ export class ProcessBroker {
     for (const watcher of entry.watchers) { try { watcher(death); } catch (error) { console.error("[process death]", error); } }
     for (const key of this.locationTokens.keys()) if (key.startsWith(pid + ":")) this.locationTokens.delete(key);
     this.workerReads.delete(pid); this.workerLiveness.delete(pid);
-    entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.frame?.remove(); entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
+    entry.watchers.clear(); entry.worker?.close(); entry.worker=undefined; entry.canvas?.remove(); entry.canvas=undefined; this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     this.activities.processDied(pid);
   }
   private workerReads = new Map<number, Promise<Awaited<ReturnType<WorkerControl["snapshot"]>>>>();
@@ -810,11 +788,10 @@ export class ProcessBroker {
   }
   displayCanvases(root: HTMLCanvasElement): HTMLCanvasElement[] {
     const layers = this.activities.shownEntries().flatMap(entry => {
-      const canvas = entry.canvas ?? entry.frame?.contentDocument?.querySelector<HTMLCanvasElement>("#screen");
-      return canvas && !(entry.canvas ?? entry.frame)?.hidden ? [canvas] : [];
+      const canvas = entry.canvas;
+      return canvas && !canvas.hidden ? [canvas] : [];
     });
-    const apps = layers.filter(canvas => canvas !== root);
-    return workerMode() ? [...apps, root] : [root, ...apps];
+    return [...layers, root];
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
   /** kill(2) from a process: SIGKILL of a process of the caller's uid (Process.killProcess of
@@ -856,24 +833,6 @@ export class ProcessBroker {
     await (await import("./packagedata")).changePackageData(this, pkg, change, broadcasts);
     return true;
   }
-  /** whether a process shown on screen, or one serving such a process, waits on `pid` (process
-   *  start included) or binds a service it runs: as binder calls inherit their caller's priority,
-   *  and OomAdjuster gives a service its clients' scheduling group unless they bind it
-   *  BIND_NOT_FOREGROUND or BIND_WAIVE_PRIORITY */
-  servesForeground(pid: number, seen = new Set<number>()): boolean {
-    const entry = this.entries.get(pid);
-    if (!entry || entry.dead || seen.has(pid)) return false;
-    if (entry.foregroundClients > 0) return true;
-    seen.add(pid);
-    return this.services.clients(entry.pkg, entry.process).some((b) => !(b.flags & (BIND_NOT_FOREGROUND | BIND_WAIVE_PRIORITY))
-      && (this.activities.shown(b.client) && this.alive(b.client) || this.servesForeground(b.client, seen)));
-  }
-  /** `work` for `caller` on `target`, at the caller's priority */
-  private inherit<T>(caller: Entry | null, target: Entry, work: () => Promise<T>): Promise<T> {
-    if (!caller || !(this.activities.shown(caller.pid) || caller.foregroundClients > 0)) return work();
-    target.foregroundClients++;
-    return work().finally(() => { target.foregroundClients--; });
-  }
   watch(pid: number, died: (death: Death) => void): () => void {
     const entry = this.entry(pid); entry.watchers.add(died); return () => { entry.watchers.delete(died); };
   }
@@ -889,11 +848,11 @@ export class ProcessBroker {
       }
       const target = this.entry(request.handle.pid);
       delivered = await this.transferDescriptors(caller.pid,target.pid,request.data);
-      return await this.inherit(caller, target, () => this.request(target, async endpoint => {
+      return await this.request(target, async endpoint => {
         const reply = await endpoint.transact({...request,data:delivered!},request.system ? SYSTEM_CALLER : {pid:caller.pid,uid:caller.uid});
         try { return {...reply,data:await this.transferDescriptors(target.pid,caller.pid,reply.data)}; }
         finally { await this.discardDescriptors(target.pid,reply.data,true); }
-      }));
+      });
     } catch (error) {
       if (delivered) await this.discardDescriptors(request.handle.pid,delivered,false);
       throw error;
@@ -947,8 +906,8 @@ export class ProcessBroker {
       if (!exported(provider) || !await allowed("readPermission") && !await allowed("writePermission"))
         throw rt.mkThrowable("java/lang/SecurityException", `Permission Denial: opening provider ${provider.name} from pid=${pid}, uid=${caller.uid}`);
     }
-    const target = this.connect(pkg, process, undefined, true);
-    return this.inherit(caller, target, () => this.request(target, (endpoint) => endpoint.contentProvider(authority)));
+    const target = this.connect(pkg, process);
+    return this.request(target, (endpoint) => endpoint.contentProvider(authority));
   }
   /** `manifest` is the sender's resolution of the intent's manifest receivers */
   async broadcast(pid: number | null, data: ParcelData, manifest: Receiver[], permissions: string[], ordered: boolean,
@@ -962,7 +921,7 @@ export class ProcessBroker {
       const receiver = { owner, kind: "receiver" as const, name: cls, node }, permission = componentPermission(receiver);
       if (caller && !exported(receiver) && pkg !== caller.pkg) continue;
       if (caller && permission && await permissionDenied(permission, caller.pkg)) continue;
-      targets.push({ entry: this.connect(pkg, componentProcess(receiver), undefined, true), component: cls, priority });
+      targets.push({ entry: this.connect(pkg, componentProcess(receiver)), component: cls, priority });
     }
     targets.sort((a, b) => b.priority - a.priority);
     let result = initial;
@@ -1002,10 +961,9 @@ export function forgetRemoved(pkg: string): void {
 }
 declare global { interface Window { __wdProcesses?: ProcessBroker; } }
 export function processBroker(): ProcessBroker {
-  const root = window.parent;
-  if (!root.__wdProcesses) {
-    const broker = root.__wdProcesses = new ProcessBroker();
-    root.addEventListener("pagehide", () => { void broker.files.flush().catch((error) => console.error("[private files]", error)); });
+  if (!window.__wdProcesses) {
+    const broker = window.__wdProcesses = new ProcessBroker();
+    addEventListener("pagehide", () => { void broker.files.flush().catch((error) => console.error("[private files]", error)); });
   }
-  return root.__wdProcesses;
+  return window.__wdProcesses;
 }

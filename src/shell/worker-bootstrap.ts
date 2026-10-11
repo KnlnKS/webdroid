@@ -6,31 +6,24 @@ import type { BrokerCalls } from "./processes";
 export async function attachWorkerBootstrap(data: ProcessBootstrap): Promise<BrokerCalls> {
   let closeDisplay = () => {}, closeIme = () => {}, closeWeb = () => {};
   try {
-    if (!data.broker) throw new Error("Worker bootstrap is missing command capabilities");
     const { setProcessIdentity, setProcessName } = await import("../android/os");
     setProcessIdentity(data.pid, data.uid);
     setProcessName(data.process);
     const { attachProcessBrokerPort, closeProcessBrokerPort } = await import("./process-endpoint");
     const broker = attachProcessBrokerPort(data.broker);
-    (await import("./device-storage")).useStorageReplica(data.storage ?? [], broker.storageWrite);
-    if (data.display) {
-      const {sendFrames} = await import("./frame-port");
-      const {setScreenSink} = await import("./device");
-      const display = sendFrames(data.display);closeDisplay = display.close;
-      setScreenSink(bitmap => display.present(bitmap));
-    }
-    if (data.media) {
-      const [{ sendMedia }, { useAudioOut }, { useMediaElements }] = await Promise.all([import("./media-port"), import("../android/audio-output"), import("../android/mediaplayer")]);
-      const media = sendMedia(data.media);
-      useAudioOut(media.audio); useMediaElements(media.createElement);
-    }
-    if (data.ime) closeIme = await (await import("./ime-port")).serveIme(data.ime);
-    if (data.web) {
-      const surfaces = (await import("./web-surface-port")).sendWebSurfaces(data.web);
-      const {useWebSurfaces} = await import("../android/webframes");
-      useWebSurfaces(surfaces.create);
-      closeWeb = () => { useWebSurfaces(null); surfaces.close(); };
-    }
+    (await import("./device-storage")).useStorageReplica(data.storage, broker.storageWrite);
+    const {sendFrames} = await import("./frame-port");
+    const {setScreenSink} = await import("./device");
+    const display = sendFrames(data.display);closeDisplay = display.close;
+    setScreenSink(bitmap => display.present(bitmap));
+    const [{ sendMedia }, { useAudioOut }, { useMediaElements }] = await Promise.all([import("./media-port"), import("../android/audio-output"), import("../android/mediaplayer")]);
+    const media = sendMedia(data.media);
+    useAudioOut(media.audio); useMediaElements(media.createElement);
+    closeIme = await (await import("./ime-port")).serveIme(data.ime);
+    const surfaces = (await import("./web-surface-port")).sendWebSurfaces(data.web);
+    const {useWebSurfaces} = await import("../android/webframes");
+    useWebSurfaces(surfaces.create);
+    closeWeb = () => { useWebSurfaces(null); surfaces.close(); };
     const { onProcessExit } = await import("../process-exit");
     // AppExitInfoTracker publishes the real record first, then these received owners close.
     onProcessExit(() => { closeWeb(); closeIme(); closeDisplay(); guestClockControl.dispose(); closeProcessBrokerPort(); closeProcessBootstrap(data); });

@@ -89,7 +89,6 @@ export default {
       if (path === "/webview-socket" && request.headers.get("origin") !== url.origin) return new Response("bad bridge", { status: 403 });
       return bridgeCall(request, env, id);
     }
-    if (path === "/process") return env.ASSETS.fetch(new URL("/process.html", url));
     if (path.startsWith("/vendor/aosp/")) return largeAsset(request, env);
     if (path.startsWith("/vendor/microg/") && path.endsWith(".gz") && !url.searchParams.has("raw")) {
       const asset = await env.ASSETS.fetch(request);

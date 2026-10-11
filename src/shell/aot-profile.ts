@@ -1,5 +1,3 @@
-import { peekPageShared } from "./pageshared";
-
 export interface AotProfile {
   key: string;
   wanted: string[];
@@ -9,7 +7,7 @@ type FetchStore = {key:string;wanted:Iterable<string>;worlds:Iterable<() => {lin
 
 /** Explicit diagnostic read: never opens AOT, prefetches modules or waits for startup prefetch. */
 export async function existingAotProfile(): Promise<AotProfile | null> {
-  const opened = peekPageShared("__wdAot") as Promise<FetchStore | undefined> | undefined;
+  const opened: Promise<FetchStore | undefined> | undefined = globalThis.__wdAot;
   if (!opened) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

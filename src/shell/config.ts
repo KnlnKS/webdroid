@@ -70,7 +70,7 @@ export const device = {
   width: screen.width,
   height: screen.height,
   densityDpi: screen.densityDpi,
-  /** `?hz=` pins it (process frames inherit the page's); otherwise the shell sets the host
+  /** `?hz=` pins it (process Workers inherit the page's); otherwise the shell sets the host
    *  display's rate before boot. Choreographer, Display and eglSwapBuffers pace to it. */
   refreshRate: pinnedHz > 0 ? pinnedHz : 60,
   get frameIntervalNanos(): bigint { return BigInt(Math.round(1e9 / this.refreshRate)); },

@@ -15,7 +15,7 @@ for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp/${name}`).exists
 await prepareSystemPackages();
 await rm(out, { recursive: true, force: true });
 await mkdir(out);
-const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", "--minify", "--splitting", "--external", "*core.wasm", "--external", "*core.safe.wasm", "--outdir", out, "index.html", "process.html"], {
+const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", "--minify", "--splitting", "--external", "*core.wasm", "--external", "*core.safe.wasm", "--outdir", out, "index.html"], {
   stdout: "inherit", stderr: "inherit",
 });
 if (await build.exited !== 0) throw new Error("Browser build failed");

@@ -97,32 +97,25 @@ async function openedApk(source: FileSource, entries: Map<string, ZEntry>): Prom
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
 }
 
-/** told an install's entry names once its central directories are read, before its contents arrive */
-type EntryNames = (names: string[]) => void;
-
-async function openInstallSource(source: FileSource, onEntries?: EntryNames): Promise<Install> {
+async function openInstallSource(source: FileSource): Promise<Install> {
   const entries = await centralDirOfSource(source);
-  if (entries.has("AndroidManifest.xml")) {
-    onEntries?.([...entries.keys()]);
-    return openInstall(await readFully(source));
-  }
+  if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
-  return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))), undefined, onEntries);
+  return openInstallApks(await Promise.all(apks.map((entry) => entrySource(source, entry))));
 }
 
 /** an install from its apks: the base among them, or given already open (a packed archive, a
  *  parsed apk) so that it is not read again */
-export async function openInstallApks(apks: FileSource[], base?: Pick<Install, "zip" | "base">, onEntries?: EntryNames): Promise<Install> {
+export async function openInstallApks(apks: FileSource[], base?: Pick<Install, "zip" | "base">): Promise<Install> {
   const dirs = await Promise.all(apks.map(centralDirOfSource));
-  onEntries?.(dirs.flatMap((entries) => [...entries.keys()]));
   return mergeInstall(await Promise.all(apks.map((apk, i) => openedApk(apk, dirs[i]))), base);
 }
 
-export async function openInstallRemote(url: string, onEntries?: EntryNames): Promise<Install> {
-  return openInstallSource(await RangeFile.open(url), onEntries);
+export async function openInstallRemote(url: string): Promise<Install> {
+  return openInstallSource(await RangeFile.open(url));
 }
 
-export async function openInstallLocal(file: File, onEntries?: EntryNames): Promise<Install> {
-  return openInstallSource(new BlobFile(file), onEntries);
+export async function openInstallLocal(file: File): Promise<Install> {
+  return openInstallSource(new BlobFile(file));
 }

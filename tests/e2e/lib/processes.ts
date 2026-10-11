@@ -59,16 +59,10 @@ function workerDiagnostics(worker: WorkerProcess): ProcessDiagnostics {
     queue: { queued: snapshot.main.queued, depth: snapshot.main.depth }, compositor: snapshot.compositor, coverage: snapshot.coverage };
 }
 
-function isWebdroidProcessFrame(url: string, origin: string): boolean {
-  if (!URL.canParse(url)) return false;
-  const frame = new URL(url), root = new URL(origin);
-  return frame.origin === root.origin && (frame.pathname === "/" || frame.pathname === "/process");
-}
-
-/** Diagnostics from every webdroid realm, including process Workers. */
+/** Diagnostics from the page's realm and every process Worker. */
 export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
-  const origin = new URL(page.url()).origin;
-  const frames = Promise.all(page.frames().filter((frame) => isWebdroidProcessFrame(frame.url(), origin)).map(async (frame) => {
+  const origin = new URL(page.url()).origin, frame = page.mainFrame();
+  const root = (async () => {
     const read = () => frame.evaluate(() => {
       const wd = globalThis.wd;
       return wd ? { status: "ok" as const, pkg: wd.app()?.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
@@ -91,23 +85,20 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
       return result;
     })());
     return { url: frame.url(), diagnostics };
-  }));
+  })();
   const workers = bounded(page.evaluate(async () => {
     const read = globalThis.wd?.workerProcesses;
-    if (read) {
-      const deadline = performance.now() + 2000;
-      let rows = await read();
-      while (rows.some((row: WorkerProcess) => row.error?.startsWith("Worker is not ready:")) && performance.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, 50));
-        rows = await read();
-      }
-      return rows;
+    if (!read) throw new Error("Worker diagnostics unavailable");
+    const deadline = performance.now() + 2000;
+    let rows = await read();
+    while (rows.some((row: WorkerProcess) => row.error?.startsWith("Worker is not ready:")) && performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      rows = await read();
     }
-    if (new URLSearchParams(location.search).get("processMode") === "worker") throw new Error("Worker diagnostics unavailable");
-    return [];
+    return rows;
   }) as Promise<WorkerProcess[]>).then(result => Array.isArray(result)
     ? result.map(worker => ({ url: `worker:${worker.url ?? origin + "/process-worker.js"}#pid=${worker.pid}`, diagnostics: workerDiagnostics(worker) }))
     : [{ url: "worker:" + origin, diagnostics: result }]);
-  const results = await Promise.all([frames, workers]);
-  return results.flat();
+  const [page_, rows] = await Promise.all([root, workers]);
+  return [page_, ...rows];
 }

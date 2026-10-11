@@ -12,7 +12,7 @@ import { newObj, vcall, scall, strictThreadOwnership } from "./jvm/natives/jentr
 import { threadStates } from "./jvm/natives/jthread";
 import { fetchPlatformJars, loadFramework } from "./android/framework";
 import { loadSkia } from "./android/skia";
-import { bootApk, firstPresented, startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { startZygote, redraw, pressBack, rotateDevice, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -30,22 +30,19 @@ import { mountDiagnostics } from "./shell/diagnostics";
 import { realmWd, type RealmWd } from "./shell/realmwd";
 import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
-import { fixProcessBitness } from "./jvm/natives/jvmruntime";
 import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { processBroker } from "./shell/processes";
-import { connectProcess, registerForegroundProcess, processPresentation } from "./shell/process-endpoint";
+import { processPresentation } from "./shell/process-endpoint";
 import { swipe } from "./shell/gesture";
 import { device } from "./shell/config";
-import { appHost } from "./android/apphost";
 import { bootSystemOwner, prepareWorkerInstall } from "./shell/system-boot";
 import { hasFocusedWindow, hasTouchWindow, dispatchKey } from "./android/server/wm";
 import { imeActive } from "./android/ime";
 import { systemInputLayer } from "./shell/system-input";
 import { onProcessExit } from "./process-exit";
-import { deathOf, lastExit, type Death } from "./android/server/appexitinfo";
 
 strictThreadOwnership();
 const params = new URLSearchParams(location.search);
@@ -55,16 +52,15 @@ configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(par
 configureJvmCoverage(params.get("fuzzCoverage") === "1");
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
-const systemWindows = params.get("processMode") === "worker";
 const back = async () => {
-  if (systemWindows && hasFocusedWindow()) { await pressBack(); return; }
+  if (hasFocusedWindow()) { await pressBack(); return; }
   const routed = processBroker().activities.back(PROCESS_PID);
   if (routed) await routed; else await pressBack();
 };
 const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });
 const { canvas, kbd } = shell;
 setScreenCanvas(canvas);
-const systemInput = systemWindows ? systemInputLayer(canvas, () => device) : undefined;
+const systemInput = systemInputLayer(canvas, () => device);
 setWebLayer(shell.webLayer);
 setDisplayChangeHandler(shell.resizeDisplay);
 
@@ -105,7 +101,7 @@ window.addEventListener("error", (e) => logBuf.push("window.error: " + e.message
 window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejection: " + ((e.reason as any)?.message ?? (e.reason as any)?.msg ?? String(e.reason)) + "\n" + ((e.reason as any)?.stack ?? "").slice(0, 600)));
 
 let booting = false;
-// this realm runs one app; it opens again in a process of its own
+// the page opens one app; reopening it starts a new process
 let runtimeStarted = false;
 async function boot(file: string, local?: File) {
   if (booting || runtimeStarted) return;
@@ -115,11 +111,9 @@ async function boot(file: string, local?: File) {
   try {
     mark("boot");
     const tierReady = tier === "wasm" ? loadTier().then(() => mark("tierLoaded")) : undefined;
-    const workerMode = params.get("processMode") === "worker";
-    if (workerMode) processBroker().prestartWorker();
+    processBroker().prestartWorker();
     void startZygote(displayRate);
-    const bitness = workerMode ? undefined : fixProcessBitness;
-    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local, bitness) : openInstallRemote("/apks/" + encodeURIComponent(file), bitness), provisionPackages(), loadSkia()]);
+    const [, install] = await Promise.all([tierReady, local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), provisionPackages(), loadSkia()]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -130,62 +124,33 @@ async function boot(file: string, local?: File) {
     mark("installOpened");
     rollbackAssets = activateLocalAssets(assets);
     const t0 = performance.now();
-    if (workerMode) {
-      shell.setState({ kind: "loading", file, stage: "Starting system services…" });
-      canvas.style.position = "relative";
-      canvas.style.zIndex = "2147483647";
-      canvas.style.background = "transparent";
-      canvas.style.pointerEvents = "none";
-      const system = bootSystemOwner();
-      await displayRate;
-      runtimeStarted = true;
-      const { pkg, label } = await prepareWorkerInstall(install);
-      const broker = processBroker();
-      let started!: ReturnType<typeof broker.launch>;
-      const launch = () => {
-        shell.setState({ kind: "loading", file, stage: "Starting app…" });
-        started = broker.launch(pkg, assets?.key ?? file);
-        broker.watch(started.pid, death => shell.setState({ kind: "exited", file, label, crashed: death.crashed,
-          crashDialog: death.crashed && death.repeated, retry: launch }));
-        return started.shown.then(() => { shell.setState({ kind: "running", file, label }); },
-          error => { shell.setState({ kind: "failed", file, error, retry: launch }); });
-      };
-      await Promise.all([launch(), system]);
-      perf.bootMs = performance.now() - t0;
-      // other packages' processes start once the app has shown its first frame
-      void broker.presented(started.pid).then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
-        .then(() => broker.boot()).catch(error => console.error("[provision]", error));
-      return;
-    }
-    connectProcess();
+    shell.setState({ kind: "loading", file, stage: "Starting system services…" });
+    canvas.style.position = "relative";
+    canvas.style.zIndex = "2147483647";
+    canvas.style.background = "transparent";
+    canvas.style.pointerEvents = "none";
+    const system = bootSystemOwner();
+    await displayRate;
     runtimeStarted = true;
-    let shown = file;
+    const { pkg, label } = await prepareWorkerInstall(install);
+    const broker = processBroker();
+    let started!: ReturnType<typeof broker.launch>;
     // the task goes with its process (ActivityRecord.handleAppDied removes an activity with no saved
-    // state) and the launcher returns, under AppErrors' crash dialog when it showed one. Opening the
-    // app again starts a new process for it, in a frame: the other processes and the broker live on.
-    const exited = (death: Death) => {
-      processPresentation.visible = false;
-      const pkg = appHost?.pkg;
-      shell.setState({ kind: "exited", file, label: shown, crashed: death.crashed, crashDialog: death.crashed && death.repeated, retry: pkg ? () => relaunch(pkg) : null });
-    };
-    const relaunch = (pkg: string) => {
+    // state) and the launcher returns, under AppErrors' crash dialog when it showed one; opening the
+    // app again starts a new process for it while the other processes and the broker live on
+    const launch = () => {
       shell.setState({ kind: "loading", file, stage: "Starting app…" });
-      const broker = processBroker(), started = broker.launch(pkg, assets?.key ?? file);
-      broker.watch(started.pid, exited);
-      started.shown.then(() => shell.setState({ kind: "running", file, label: shown }), (error) => shell.setState({ kind: "failed", file, error, retry: () => relaunch(pkg) }));
+      started = broker.launch(pkg, assets?.key ?? file);
+      broker.watch(started.pid, death => shell.setState({ kind: "exited", file, label, crashed: death.crashed,
+        crashDialog: death.crashed && death.repeated, retry: launch }));
+      return started.shown.then(() => { shell.setState({ kind: "running", file, label }); },
+        error => { shell.setState({ kind: "failed", file, error, retry: launch }); });
     };
-    // the broker tells of this process's death once it registers, with its package; only this realm
-    // sees a death before then
-    let registered = false;
-    onProcessExit(() => { if (!registered) exited(deathOf(lastExit)); });
-    const register = () => { registerForegroundProcess(); registered = true; processBroker().watch(PROCESS_PID, exited); };
-    const label = shown = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, register);
-    // a device's Play services are up before an app launches: here their realm boots after the
-    // app's first frame rather than competing with it
-    void firstPresented.then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
-      .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
+    await Promise.all([launch(), system]);
     perf.bootMs = performance.now() - t0;
-    shell.setState({ kind: "running", file, label });
+    // other packages' processes start once the app has shown its first frame
+    void broker.presented(started.pid).then(() => provisionServices({ attestationEnabled: params.get("attestation") === "1" }))
+      .then(() => broker.boot()).catch(error => console.error("[provision]", error));
   } catch (e) {
     rollbackAssets?.();
     console.error(e);
@@ -196,18 +161,10 @@ async function boot(file: string, local?: File) {
 }
 
 const local = realmWd();
-/** the realms of the processes the broker shows in frames above this one, bottom to top */
-const framed = (): RealmWd[] => processBroker().activities.shownWindows().flatMap((w) => {
-  const child = w === window ? undefined : (w as unknown as { wd?: RealmWd }).wd;
-  return child ? [child] : [];
-});
-// the process on top takes the tap, as it takes the browser's own pointer events
+// a system window, then the process on top, takes the tap, as they take the browser's own pointer events
 const tap = (x: number, y: number): Promise<void> => {
-  if (systemWindows && hasTouchWindow(x, y)) return local.tap(x, y);
   const worker = processBroker().activities.shownEntries().at(-1)?.worker;
-  if (worker) return worker.control.tap(x, y);
-  const top = processBroker().activities.shownWindows().at(-1);
-  return (top && top !== window ? (top as unknown as { wd: RealmWd }).wd : local).tap(x, y);
+  return worker && !hasTouchWindow(x, y) ? worker.control.tap(x, y) : local.tap(x, y);
 };
 
 // `?jit=0` runs the interpreter alone, to tell the tiers apart
@@ -235,13 +192,11 @@ const wd = {
   configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
-  // the processes the broker shows stack above this one in their frames, as their windows do on a display
+  // the shown processes' windows bottom to top, then the system windows above them
   uiTree: async (): Promise<Awaited<ReturnType<RealmWd["uiTree"]>>> => {
-    const root = await local.uiTree();
-    const nodes = systemWindows ? [] : root;
-    for (const child of framed()) nodes.push(...await child.uiTree());
+    const nodes = [];
     for (const entry of processBroker().activities.shownEntries()) if (entry.worker) nodes.push(...await entry.worker.control.uiTree());
-    return systemWindows ? [...nodes, ...root] : nodes;
+    return [...nodes, ...await local.uiTree()];
   },
   // Center of the first visible view whose text matches, in SCREEN coords (status bar included,
   // the space wd.tap takes), topmost window first.
@@ -265,7 +220,7 @@ const wd = {
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
     const worker = processBroker().foregroundWorker();
-    if (worker && !(systemWindows && hasTouchWindow(x1, y1))) await worker.control.swipe(x1, y1, x2, y2, ms);
+    if (worker && !hasTouchWindow(x1, y1)) await worker.control.swipe(x1, y1, x2, y2, ms);
     else await swipe(x1, y1, x2, y2, ms);
     return `swiped ${x1},${y1} -> ${x2},${y2}`;
   },
@@ -294,18 +249,17 @@ const wd = {
   uninstall: (pkg: string) => onMain(() => deletePackage(pkg)),
   type: async (s: string) => {
     const worker = processBroker().foregroundWorker();
-    if (worker && !(systemWindows && hasFocusedWindow())) await worker.control.type(s);
+    if (worker && !hasFocusedWindow()) await worker.control.type(s);
     else { kbd.value = s; await imeInput(s); }
     return "typed " + s;
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
-  enter: async () => "action " + ((await ((systemWindows && hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
+  enter: async () => "action " + ((await ((hasFocusedWindow() ? imeAction() : processBroker().foregroundWorker()?.control.enter()) ?? imeAction())) ? "handled" : "ignored"),
   looperDump: () => import("./android/mainloop").then((m) => m.looperDump()),
   threads: tier === "wasm" ? wasmThreads : threadStates,
   redraw,
   testFrame: async () => {
     await local.testFrame();
-    for (const child of framed()) await child.testFrame();
     for (const entry of processBroker().activities.shownEntries()) if (entry.worker) await entry.worker.control.testFrame();
   },
 };
@@ -327,8 +281,8 @@ setInterval(() => {
   if (performance.now() - lastVsync > 40) vsync(performance.now());
 }, 33);
 
-attachIme(canvas, kbd, systemInput?.element);
-if (systemWindows) {
+attachIme(canvas, kbd, systemInput.element);
+{
   const keys = new Map([["Escape", 4], ["BrowserBack", 4], ["Enter", 66], ["Tab", 61],
     ["ArrowUp", 19], ["ArrowDown", 20], ["ArrowLeft", 21], ["ArrowRight", 22]]);
   const listeners = new AbortController();

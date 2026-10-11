@@ -51,19 +51,6 @@ export class ControlledGuestClock {
     this.live.delete(id);
   }
 
-  cancelRealm(realm: number): number {
-    let cancelled = 0;
-    for (const [id, owner] of this.live) if (owner === realm) {
-      this.live.delete(id);
-      cancelled++;
-    }
-    if (!cancelled) return 0;
-    const keep = this.heap.filter((task) => task.realm !== realm);
-    this.heap = [];
-    for (const task of keep) this.push(task);
-    return cancelled;
-  }
-
   pending(): number {
     return this.live.size;
   }
@@ -153,12 +140,10 @@ export class ControlledGuestClock {
   }
 }
 
-type ClockHost = typeof globalThis & { __wdGuestClock?: ControlledGuestClock; __wdWallAtStart?: number };
 const browser = typeof location !== "undefined" && typeof window !== "undefined";
 const controlledGuestTime = browser && new URLSearchParams(location.search).get("testClock") === "controlled";
-const realm = browser ? Number(new URLSearchParams(location.search).get("pid") ?? 0) : 0;
 const clock = controlledGuestTime
-  ? (((window.top as unknown as ClockHost).__wdGuestClock ??= new ControlledGuestClock(performance.now())))
+  ? new ControlledGuestClock(performance.now())
   : null;
 
 const realNow = browser ? performance.now.bind(performance) : () => performance.now();
@@ -176,7 +161,7 @@ export let guestNow = clock ? () => clock.nowMs : realNow;
 // a dead process's timers never fire
 const live = (callback: () => void) => () => { if (!processExited()) callback(); };
 export let setGuestTimeout = clock
-  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(live(callback), delayMs, realm)
+  ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(live(callback), delayMs)
   : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(live(callback), Math.min(delayMs, MAX_TIMER_DELAY));
 export let clearGuestTimeout = clock
   ? (timer: GuestTimer | null | undefined): void => { if (timer != null) clock.cancel(Number(timer)); }
@@ -187,12 +172,12 @@ export const setSystemTimeout = clock
   ? (callback: () => void, delayMs = 0): GuestTimer => clock.schedule(callback, delayMs, -1)
   : (callback: () => void, delayMs = 0): GuestTimer => realSetTimeout(callback, Math.min(delayMs, MAX_TIMER_DELAY));
 /** the page's start: every realm's CLOCK_MONOTONIC (SystemClock.uptimeMillis, System.nanoTime) counts from it */
-export let bootTime = browser ? window.top!.performance.timeOrigin : performance.timeOrigin;
+export let bootTime = performance.timeOrigin;
 /** CLOCK_MONOTONIC in milliseconds, one clock for every realm of the page */
 export let uptimeMillis = clock ? guestNow : (): number => performance.timeOrigin - bootTime + realNow();
 /** CLOCK_REALTIME in milliseconds: the host's, or under a controlled clock the host's at the
  *  clock's start advancing with guest time, as a device's wall clock advances with its uptime */
-const wallAtStart = clock ? ((window.top as unknown as ClockHost).__wdWallAtStart ??= Date.now() - clock.nowMs) : 0;
+const wallAtStart = clock ? Date.now() - clock.nowMs : 0;
 export let wallMillis = clock ? () => wallAtStart + clock.nowMs : (): number => Date.now();
 
 /** The broker transfers data.port with a process bootstrap; process death calls close. */
@@ -258,5 +243,5 @@ export const guestClockControl = {
     }
     return operation;
   },
-  dispose: (): number => remoteClock ? remoteClock.close() : clock?.cancelRealm(realm) ?? 0,
+  dispose: (): number => remoteClock?.close() ?? 0,
 };

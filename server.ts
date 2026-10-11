@@ -1,5 +1,4 @@
 import index from "./index.html";
-import processIndex from "./process.html";
 import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { webDocument } from "./src/shell/webhtml";
 import { forwardDnsMessage, proxyRequest, sandboxDocument } from "./src/shell/proxy";
@@ -119,7 +118,6 @@ const server: Bun.Server<SocketData> = Bun.serve({
   development: { hmr: false },
   routes: {
     "/": index,
-    "/process": processIndex,
     "/webview": () => new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } }),
     "/webview-call": (req) => webRelay.call(req),
     "/webview-origin": (req) => {

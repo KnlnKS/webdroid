@@ -1,6 +1,6 @@
 // The harness surface (`wd`, tests/e2e/drivers/webdroid.ts) every process realm has: its app, its
-// diagnostics, and its own windows, frames and touches. The page's `wd` adds the processes the
-// broker shows in frames above it.
+// diagnostics, and its own windows, frames and touches. The page's `wd` adds the process Workers
+// the broker shows beneath its system windows.
 import { rt } from "../jvm/runtime";
 import { appHost } from "../android/apphost";
 import { jvmCoverage } from "../jvm/coverage";

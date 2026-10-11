@@ -9,7 +9,6 @@ import { useAccountStore, useAccountAccess, accountsChanged } from "../android/a
 import { executePendingIntent, pendingTransport } from "../android/pendingintent";
 import { alarmTransport } from "../android/alarm";
 import { encodeIntent, decodeIntent, intentCodec } from "../android/intentipc";
-import { appHost } from "../android/apphost";
 import { useSystemServiceAccess, binderTransport, receiveTransaction, exportBinder, importBinder, parcelled, unparcelled, type BinderHandle, type ParcelData } from "../android/binder";
 import { PROCESS_PID, processTransport } from "../android/os";
 import { exitProcess, onProcessExit } from "../process-exit";
@@ -87,45 +86,42 @@ function connectCommandTransports(): void {
   binderTransport.transact = request => remote(brokerCalls().transact(request));
   descriptorTransport.importCalls = brokerCalls;
   sqliteTransport.call = request => brokerCalls().sqlite(request);
-  // a Worker's CookieManager shares its WebViews' jar, as an app's WebView keeps its cookies in its data directory
-  if (typeof window !== "undefined") cookieTransport.calls = brokerCalls;
   clipboardTransport.set = data => brokerCalls().clipboardSet(data);
   clipboardTransport.get = () => brokerCalls().clipboardGet();
   clipboardTransport.has = () => brokerCalls().clipboardHas();
   clipboardTransport.listen = active => brokerCalls().clipboardListen(active);
-  if (typeof window === "undefined" || window !== window.top) {
-    webStorageTransport.calls = brokerCalls;
-    useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
-    notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
-    useSettingsAccess(remoteSettings(brokerCalls));
-    if (typeof window === "undefined") {
-      processTransport.signal = workerLife.signal;
-      binderTransport.alive = workerLife.alive;
-      binderTransport.watch = workerLife.watch;
-      filePathTransport.calls = brokerCalls;
-      descriptorTransport.calls = brokerCalls;
-      vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
-      useHostUi(brokerCalls);
-      packageDataTransport.change = (pkg, how, broadcasts, prompt) => brokerCalls().packageDataChange(pkg, how, broadcasts, prompt);
-    }
-    usePreferenceAccess({
-      preferenceRead: (name, key) => brokerCalls().preferenceRead(name, key),
-      preferenceKeys: name => brokerCalls().preferenceKeys(name),
-      preferenceChange: (name, changes) => brokerCalls().preferenceChange(name, changes),
-      preferenceFiles: pkg => brokerCalls().preferenceFiles(pkg),
-    });
-    usePermissionAccess({
-      permissionCheck: (pkg, names) => brokerCalls().permissionCheck(pkg, names),
-      permissionGrant: (pkg, names) => brokerCalls().permissionGrant(pkg, names),
-    });
-    useAccountAccess({
-      accountList: query => brokerCalls().accountList(query),
-      accountRead: key => brokerCalls().accountRead(key),
-      accountExists: key => brokerCalls().accountExists(key),
-      accountCached: (key, type) => brokerCalls().accountCached(key, type),
-      accountChange: change => brokerCalls().accountChange(change),
-    });
-  }
+}
+/** the stores and system services a Worker reaches only through the broker */
+function connectWorkerTransports(): void {
+  webStorageTransport.calls = brokerCalls;
+  useSystemServiceAccess(["notification","mount"], name => brokerCalls().systemService(name));
+  notificationTransport.foreground = request => brokerCalls().notificationForeground(request);
+  useSettingsAccess(remoteSettings(brokerCalls));
+  processTransport.signal = workerLife.signal;
+  binderTransport.alive = workerLife.alive;
+  binderTransport.watch = workerLife.watch;
+  filePathTransport.calls = brokerCalls;
+  descriptorTransport.calls = brokerCalls;
+  vfs.prepare = pkg => brokerCalls().filePrepare(pkg);
+  useHostUi(brokerCalls);
+  packageDataTransport.change = (pkg, how, broadcasts, prompt) => brokerCalls().packageDataChange(pkg, how, broadcasts, prompt);
+  usePreferenceAccess({
+    preferenceRead: (name, key) => brokerCalls().preferenceRead(name, key),
+    preferenceKeys: name => brokerCalls().preferenceKeys(name),
+    preferenceChange: (name, changes) => brokerCalls().preferenceChange(name, changes),
+    preferenceFiles: pkg => brokerCalls().preferenceFiles(pkg),
+  });
+  usePermissionAccess({
+    permissionCheck: (pkg, names) => brokerCalls().permissionCheck(pkg, names),
+    permissionGrant: (pkg, names) => brokerCalls().permissionGrant(pkg, names),
+  });
+  useAccountAccess({
+    accountList: query => brokerCalls().accountList(query),
+    accountRead: key => brokerCalls().accountRead(key),
+    accountExists: key => brokerCalls().accountExists(key),
+    accountCached: (key, type) => brokerCalls().accountCached(key, type),
+    accountChange: change => brokerCalls().accountChange(change),
+  });
 }
 export function closeProcessBrokerPort(): void {
   calls?.close();
@@ -155,6 +151,7 @@ export function attachProcessBrokerPort(port: MessagePort): BrokerCalls {
   if (calls) { commandProxy(port).close(); throw new Error("Process command port already attached"); }
   calls = commandProxy(port);
   connectCommandTransports();
+  connectWorkerTransports();
   connectActivityCommands();
   exitRecordTransport.records = pkg => brokerCalls().exitRecords(pkg);
   exitRecordTransport.publish = record => brokerCalls().processExited(record);
@@ -195,29 +192,26 @@ export function connectProcess(): ProcessEndpoint {
     detached(() => after(data && encodeIntent(data), (encoded) => broker.activities.finish(PROCESS_PID, id, code, encoded)), logUncaught);
   };
   broker.files.attach(PROCESS_PID, vfs);
-  if (typeof window !== "undefined" && window === window.top) {
-    descriptorTransport.stageLocal = fd => broker.stageDescriptor(PROCESS_PID,fd);
-    descriptorTransport.takeLocal = token => broker.takeDescriptor(PROCESS_PID,token);
-    descriptorTransport.unstageLocal = token => broker.unstageDescriptor(PROCESS_PID,token);
-    descriptorTransport.discardLocal = token => broker.discardDescriptor(PROCESS_PID,token);
-    useSystemServiceAccess([]);
-    notificationTransport.foreground = null;
-    useNotificationStore(broker.notifications);
-    usePreferenceStore(broker.preferences);
-    usePermissionStore(broker.permissions);
-    const stopAccounts = useAccountStore(broker.accounts);
-    if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
-    const stopSettings = useSettingsStore(broker.settings);
-    if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
-  }
+  descriptorTransport.stageLocal = fd => broker.stageDescriptor(PROCESS_PID,fd);
+  descriptorTransport.takeLocal = token => broker.takeDescriptor(PROCESS_PID,token);
+  descriptorTransport.unstageLocal = token => broker.unstageDescriptor(PROCESS_PID,token);
+  descriptorTransport.discardLocal = token => broker.discardDescriptor(PROCESS_PID,token);
+  useSystemServiceAccess([]);
+  notificationTransport.foreground = null;
+  useNotificationStore(broker.notifications);
+  usePreferenceStore(broker.preferences);
+  usePermissionStore(broker.permissions);
+  const stopAccounts = useAccountStore(broker.accounts);
+  if (broker.alive(PROCESS_PID)) broker.watchAccounts(PROCESS_PID, stopAccounts);
+  const stopSettings = useSettingsStore(broker.settings);
+  if (broker.alive(PROCESS_PID)) broker.watch(PROCESS_PID, stopSettings);
   useWebCookies((pkg) => broker.cookies(pkg));
-  if (typeof window !== "undefined" && window === window.top) {
-    locationTransport.available = () => broker.location.available;
-    locationTransport.enabled = () => broker.location.enabled;
-    locationTransport.last = () => broker.location.last;
-    locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
-    locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
-  }
+  cookieTransport.calls = brokerCalls;
+  locationTransport.available = () => broker.location.available;
+  locationTransport.enabled = () => broker.location.enabled;
+  locationTransport.last = () => broker.location.last;
+  locationTransport.subscribe = (id, high, active, receive) => broker.location.subscribe(PROCESS_PID, id, high, active, receive);
+  locationTransport.remove = id => broker.location.remove(PROCESS_PID, id);
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
   pendingTransport.create = (pkg, kind, code, flags, intent, intents) => remote(broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, intents, intentCodec));
@@ -287,11 +281,4 @@ export function createProcessEndpoint(requests = workerActivityResults): Process
     }()),
     serviceConnected: (key, binder, dead) => asBroker(function* (): Gen<void> { remoteServiceConnected(key, yield* awaited(importBinder(binder)), dead); }()),
   };
-}
-export function registerForegroundProcess(): void {
-  if (!appHost) return;
-  const broker = processBroker();
-  broker.connect(appHost.pkg, appHost.pkg, PROCESS_PID);
-  broker.activities.setForeground(PROCESS_PID);
-  broker.ready(PROCESS_PID, connectProcess());
 }

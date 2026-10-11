@@ -8,7 +8,6 @@ import { rt } from "../runtime";
 import { after } from "./jentry";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 import type { ProcessMapping } from "../../native/process-fd";
-import { pageShared } from "../../shell/pageshared";
 
 type Elements = Int8Array | Uint16Array | Int16Array | Int32Array | BigInt64Array | Float32Array | Float64Array;
 
@@ -16,7 +15,7 @@ const PAGE_SHIFT = 16, PAGE = 1 << PAGE_SHIFT, EXTERNAL = 1n << 48n, REGION_SHIF
 /** a mapped range's pages and those being read, shared by every mapping of it: a source the page
  *  shares (the platform data) is read once for all its realms, as a device's page cache holds a file */
 interface Paged { pages: (Uint8Array | undefined)[]; loading: Map<number, Promise<void>> }
-declare global { interface Window { __wdMappedPages?: WeakMap<FileSource, Map<string, Paged>> } }
+const mappedPages = new WeakMap<FileSource, Map<string, Paged>>();
 /** A read-only mapping of an immutable source: 64 KB pages, each loaded on first touch as a
  *  device's mmap faults it in, so a mapping costs only what is read of it (the ICU data file is
  *  27 MB, of which a date format reads about 2). Native code, which reads memory directly, gets a
@@ -27,9 +26,9 @@ class Region {
   private readonly copies = new Map<string, Uint8Array>();
   guest = 0n;
   constructor(private readonly source: FileSource, private readonly offset: number, readonly size: number, readonly release?: () => Promise<void>) {
-    const bySource = pageShared("__wdMappedPages", () => new WeakMap()), key = `${offset}+${size}`;
-    let ranges = bySource.get(source), paged = ranges?.get(key);
-    if (!ranges) bySource.set(source, ranges = new Map());
+    const key = `${offset}+${size}`;
+    let ranges = mappedPages.get(source), paged = ranges?.get(key);
+    if (!ranges) mappedPages.set(source, ranges = new Map());
     if (!paged) ranges.set(key, paged = { pages: new Array((size + PAGE - 1) >>> PAGE_SHIFT), loading: new Map() });
     this.pages = paged.pages; this.loading = paged.loading;
   }

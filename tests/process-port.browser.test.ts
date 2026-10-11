@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright";
 
 test("process endpoints preserve Parcel isolation, reentrant callbacks, errors and death across Workers", async () => {
-  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/perf.ts", import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/../src/shell/pageshared.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
+  const build = await Bun.build({ entrypoints: [import.meta.dir + "/../src/perf.ts", import.meta.dir + "/../src/shell/process-life.ts", import.meta.dir + "/../src/shell/aot-profile.ts",import.meta.dir + "/../src/shell/ime-port.ts",import.meta.dir + "/../src/shell/location-access.ts", import.meta.dir + "/../src/shell/worker-control-methods.ts", import.meta.dir + "/../src/shell/process-port.ts", import.meta.dir + "/fixtures/browser/process-bootstrap.ts"], target: "browser", format: "esm", splitting: true });
   if (!build.success) throw new AggregateError(build.logs, "process endpoint build failed");
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -32,11 +32,10 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
     expect(counterReceipt).toEqual({ absent: true, readonly: true, pid: 17, initial: 0, first: 0, second: 7, resets: [0, 0, 1], reset: 0, ordered: true });
     const profileOwnership = await page.evaluate(async () => {
       const source = `import {existingAotProfile} from ${JSON.stringify(location.origin+"/aot-profile.js")};
-        import {pageShared,peekPageShared} from ${JSON.stringify(location.origin+"/pageshared.js")};
-        const absent=await existingAotProfile(), untouched=peekPageShared('__wdAot')===undefined;
+        const absent=await existingAotProfile(), untouched=globalThis.__wdAot===undefined;
         const linked=['LExample;'],called=['LCalled;'];
         const owner={key:'build-key',wanted:new Set(['c1.wasm']),worlds:new Set([()=>({linked,called})]),ready:new Promise(()=>{})};
-        pageShared('__wdAot',()=>Promise.resolve(owner));
+        globalThis.__wdAot=Promise.resolve(owner);
         const copied=await existingAotProfile();copied.wanted.push('foreign');copied.worlds[0].linked.push('foreign');
         self.postMessage({absent,untouched,copiedKey:copied.key,fresh:await existingAotProfile()});`;
       const url=URL.createObjectURL(new Blob([source],{type:"text/javascript"})),worker=new Worker(url,{type:"module"});
@@ -54,10 +53,6 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
       const { processProxy, serveProcess, processError } = await import(location.origin + "/process-port.js") as typeof import("../src/shell/process-port");
       const endpointPorts = new MessageChannel(), callbacks = new MessageChannel();
       const code = `import {processProxy, serveProcess} from ${JSON.stringify(location.origin + "/process-port.js")};
-        import {pageShared} from ${JSON.stringify(location.origin + "/pageshared.js")};
-        let builds=0;
-        const cache=pageShared('__wdMappedPages',()=>{builds++;return new WeakMap();});
-        const cached=cache===pageShared('__wdMappedPages',()=>{builds++;return new WeakMap();})&&builds===1;
         self.onmessage = ({data}) => {
           const callback = processProxy(data.callback); let clips = 0;
           serveProcess(data.endpoint, {
@@ -65,7 +60,7 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
             broadcast:async(_i,_c,_o,r)=>r, packageRemoved:async()=>{}, kill:()=>{},
             processDied:async()=>{}, locationChanged:async()=>{}, accountsChanged:async()=>{}, settingsChanged: async()=>{},storageChanged:async()=>{}, clipboardChanged:async()=>{clips++;},
             transact:async(request,caller)=>{
-              if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data,cached};}
+              if(request.code===1){request.data.bytes[0]=99;return {handled:caller.uid,data:request.data};}
               if(request.code===2){const reply=await callback.endpoint.transact(request,caller); reply.data.bytes=Uint8Array.of(reply.data.bytes[0],clips); return reply;}
               if(request.code===3)throw {$javaClass:'java/lang/SecurityException',msg:'denied'};
               if(request.code===4)return {handled:1,data:()=>{}};
@@ -101,19 +96,14 @@ test("process endpoints preserve Parcel isolation, reentrant callbacks, errors a
         await entered;
         proxy.close();
         const death = await pending, later = await call(1).catch(error => error.javaClass);
-        return { source: Array.from(source), copied: { cached: Reflect.get(copied,"cached"), handled: copied.handled, bytes: Array.from(copied.data.bytes), objects: copied.data.objects },
+        return { source: Array.from(source), copied: { handled: copied.handled, bytes: Array.from(copied.data.bytes), objects: copied.data.objects },
           callback: Array.from(callback.data.bytes), failure, cloneError, hostError, death, later };
       } finally { proxy.close(); stopCallbacks(); worker.terminate(); URL.revokeObjectURL(url); }
     });
-    expect(result).toEqual({ source: [1, 2], copied: { cached: true, handled: 12000, bytes: [99, 2], objects: [[0, { pid: 10, id: 4 }]] },
+    expect(result).toEqual({ source: [1, 2], copied: { handled: 12000, bytes: [99, 2], objects: [[0, { pid: 10, id: 4 }]] },
       callback: [21, 1], failure: { javaClass: "java/lang/SecurityException", message: "denied" }, cloneError: "DataCloneError",
       hostError:{name:"TypeError",message:"undefined.hasTransform",origin:true,caller:false},
       death: "android/os/DeadObjectException", later: "android/os/DeadObjectException" });
-    const foreground = await page.evaluate(async () => {
-      const { foregroundConnectionOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
-      return foregroundConnectionOwnership();
-    });
-    expect(foreground).toEqual({unregistered:true,noCookies:true,clipboard:42});
     const ownership = await page.evaluate(async () => {
       const { endpointOwnership } = await import(location.origin + "/process-bootstrap.js") as typeof import("./fixtures/browser/process-bootstrap");
       return endpointOwnership();

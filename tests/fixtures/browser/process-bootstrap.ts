@@ -1,6 +1,3 @@
-import { connectProcess } from "../../../src/shell/process-endpoint";
-import { cookieTransport } from "../../../src/android/cookies";
-import { clipboardTransport } from "../../../src/android/clipboard";
 import { processBroker, type ProcessEndpoint } from "../../../src/shell/processes";
 import { packages, PackageRecord } from "../../../src/android/packages";
 import { Resources } from "../../../src/android/res";
@@ -45,10 +42,10 @@ export async function bootstrapOwnership() {
     if (!("port" in source)) throw new Error("expected lazy archive port");
     return new RemoteFile(source);
   };
-  const first = file(await broker.bootstrap(7001, true)), other = file(await broker.bootstrap(7002, true));
+  const first = file(await broker.bootstrap(7001)), other = file(await broker.bootstrap(7002));
   const firstIme=ownerOne.ime!,otherIme=ownerTwo.ime!;
   const eagerReads = reads;
-  const replacement = file(await broker.bootstrap(7001, true));
+  const replacement = file(await broker.bootstrap(7001));
   const replacementIme=ownerOne.ime!;
   const imeReplaced=firstIme!==replacementIme && !firstIme.input.isConnected;
   const superseded = await first.read(0, 1).catch(error => error.message);
@@ -63,7 +60,7 @@ export async function bootstrapOwnership() {
       for (const record of data.registry) if ("port" in record.source) unpublished.push(new RemoteFile(record.source));
       throw new DOMException("handoff failed", "DataCloneError");
     };
-    await broker.bootstrap(7001, true);
+    await broker.bootstrap(7001);
   } catch (error) { failed = error instanceof DOMException && error.name === "DataCloneError"; }
   finally { globalThis.structuredClone = clone; }
   const discarded = await Promise.all(unpublished.map(file => file.read(0, 1).catch(error => error.message)));
@@ -278,7 +275,7 @@ export async function clockBootstrapOwnership() {
   const entry = broker.connect(pkg, pkg, pid);entry.canvas=document.createElement("canvas");
   const clock = createGuestClockPort(pid);
   broker.watch(pid, clock.close);
-  const data = await broker.bootstrap(pid, true), start = guestClockControl.now(), wall = wallMillis();
+  const data = await broker.bootstrap(pid), start = guestClockControl.now(), wall = wallMillis();
   const code = `import {guestClockControl,uptimeMillis,wallMillis,bootTime,setGuestTimeout,attachGuestClockPort} from ${JSON.stringify(location.origin + "/guest-clock.js")};
     self.onmessage = async ({data}) => {
       if(data.clock){attachGuestClockPort(data.clock);return;}
@@ -340,8 +337,8 @@ export async function clockBootstrapOwnership() {
     const terminals=[];
     for(const [i,status] of [0,7,null].entries()) {
       const nextPid=8203+i,next=broker.connect(pkg,pkg+":"+nextPid,nextPid);
-      next.workerDiagnostic={url};
-      const nextData=await broker.bootstrap(nextPid,true),peer=new Worker(url,{type:"module"});workers.push(peer);
+      next.workerDiagnostic={url};next.canvas=document.createElement("canvas");
+      const nextData=await broker.bootstrap(nextPid),peer=new Worker(url,{type:"module"});workers.push(peer);
       await new Promise<void>((resolve,reject)=>{
         peer.onerror=event=>reject(new Error(event.message));
         peer.onmessage=({data})=>{if(data.ready){broker.readyPort(nextPid,data.endpoint);resolve();}};
@@ -582,22 +579,6 @@ export async function storedClipboardRights() {
   }
 }
 
-export async function foregroundConnectionOwnership() {
-  const broker = processBroker(), pkg = "test.foreground.connect", pid = 1000;
-  const unregistered = !broker.alive(pid), previous = broker.activities.foreground;
-  // main.ts connects transports before bootApk registers the foreground process.
-  connectProcess();
-  const root = {name:"manifest",attrs:[{ns:"",name:"package",resId:0,type:TV.STRING,data:0,str:pkg}],children:[]};
-  packages.set(pkg,new PackageRecord(root,new Resources(null,{}),`/data/app/${pkg}/base.apk`,17000,async()=>[]));
-  broker.connect(pkg,pkg,pid);broker.activities.setForeground(pid);
-  try {
-    const noCookies = !(await cookieTransport.calls!().cookieHas());
-    await clipboardTransport.set({bytes:Uint8Array.of(42),objects:[]});
-    const clip = await clipboardTransport.get();
-    await clipboardTransport.set(null);
-    return {unregistered,noCookies,clipboard:clip?.bytes[0]};
-  } finally { broker.fail(pid,"foreground fixture cleanup",NOT_CRASHED);broker.activities.setForeground(previous);packages.delete(pkg); }
-}
 
 
 export async function workerFrameOwnership() {

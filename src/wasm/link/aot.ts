@@ -427,7 +427,6 @@ export class AotRuntime {
     const w = this.w, t0 = performance.now(), f = this.store!.get(file)!;
     this.loaded.push(file);
     w.stats.aot.readMs += performance.now() - t0;
-    // not `instanceof WebAssembly.Module`: a module compiled by the page belongs to the page's realm, not a process frame's
     if (!ArrayBuffer.isView(f)) return f;
     w.stats.aot.bytes += f.byteLength;
     return w.compile(f as Uint8Array);

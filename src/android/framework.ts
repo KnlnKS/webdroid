@@ -17,15 +17,12 @@ import { PLATFORM_JARS } from "../jvm/provenance";
 import { loadDex } from "../jvm/tier";
 import { BOOT_JAR_PATHS } from "../jvm/bootclasspath";
 import { vfs } from "../shell/vfs";
-import { pageShared } from "../shell/pageshared";
 import { BytesFile, type FileSource } from "../shell/lazyfile";
 import { parseAXML } from "./axml";
 import { PackageRecord, packages } from "./packages";
 import { apkCertificates } from "./packagearchive";
 
 const TYPE_INT_COLOR_ARGB8 = 0x1c;
-// the tab fetches these once; each realm views the page's bytes
-declare global { interface Window { __wdPlatformJars?: Promise<Uint8Array[]>; __wdFrameworkRes?: Promise<Uint8Array> } }
 let pending: Promise<Arsc> | null = null;
 let pendingDex: Promise<void> | null = null;
 
@@ -58,30 +55,27 @@ export function receivePlatformJars(port: MessagePort): void {
 }
 /** start fetching the platform jars, ahead of the app they are indexed behind */
 export function fetchPlatformJars(): Promise<Uint8Array[]> {
-  return jars ??= pageShared("__wdPlatformJars", () => Promise.all(PLATFORM_JARS.map(async (jar) => {
+  return jars ??= Promise.all(PLATFORM_JARS.map(async (jar) => {
     const res = await fetch(`/vendor/aosp/${jar}`);
     if (!res.ok) throw new Error(`no platform bytecode at ${jar} (${res.status}) — run: bun run gen-framework`);
     return new Uint8Array(await res.arrayBuffer());
-  }))).then((list) => list.map((b) => new Uint8Array(b.buffer, b.byteOffset, b.byteLength)));
+  }));
 }
 
 /** Index every platform class after the app's own, which loadDex's first-wins keeps ahead.
  *  Indexing 40,860 classes costs ~20ms and compiling is lazy per class. */
 export function loadPlatformDex(): Promise<void> {
   return pendingDex ??= fetchPlatformJars().then(async (bytes) => {
-    // a jar at a time: a process realm's boot shares the page's main thread with the presented app
+    // a jar at a time, leaving turns for the realm's other work
     for (let i = 0; i < bytes.length; i++) { loadPlatformJar(bytes[i], i); await yieldToLoop(); }
   });
 }
 
 export function loadFramework(): Promise<Arsc> {
   return pending ??= (async () => {
-    const page = await pageShared("__wdFrameworkRes", async () => {
-      const res = await fetch("/vendor/aosp/framework-res.apk");
-      if (!res.ok) throw new Error(`no framework package (${res.status}) — run: bun run gen-framework`);
-      return new Uint8Array(await res.arrayBuffer());
-    });
-    return installFramework(new Uint8Array(page.buffer, page.byteOffset, page.byteLength));
+    const res = await fetch("/vendor/aosp/framework-res.apk");
+    if (!res.ok) throw new Error(`no framework package (${res.status}) — run: bun run gen-framework`);
+    return installFramework(new Uint8Array(await res.arrayBuffer()));
   })();
 }
 

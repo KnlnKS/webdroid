@@ -20,7 +20,7 @@ import { turnElapsed, wakeSoon, yieldToLoop } from "../jvm/yield";
 export const mainDbg = { trace: false, running: "", started: 0, depth: 0, queued: 0 };
 
 /** A thread may hold the JS thread this long between macrotask turns before its looper yields, so
- *  a message that keeps reposting itself cannot starve input, rendering or other realms. */
+ *  a message that keeps reposting itself cannot starve input or rendering. */
 const SLICE_MS = 16;
 
 export class NativeLooper {
