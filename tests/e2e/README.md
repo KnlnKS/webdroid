@@ -45,7 +45,7 @@ prior run durations when available. `actual-fast/summary.json` distinguishes `co
 
 Frame rates are recorded (`fps`, `glFps`, `presentFps`) and flagged `SLOW` below a flow's
 `minFps` under `--jobs 1`, but never fail the quick gate: a rate measured beside other browsers
-or background load measures the host. Use `scripts/perf-browser.ts` (below) for performance.
+or background load measures the host. Use `bun run lat` (below) for performance.
 Flappy Bird and Doodle Jump remain smoke-only because the ARM64 reference emulator
 cannot install their ARM32 native libraries. Visual checkpoints compare the launch or core
 result where references exist; later live steps are semantic checks and do not claim Android
@@ -93,56 +93,12 @@ GL callbacks/swaps, and `presentFps` counts completed framebuffer transfers when
 revision exposes that counter. Counters and elapsed time are sampled together before PNG
 encoding. These capture windows still include settling and its pixel readbacks.
 
-For isolated performance comparisons, use `bun scripts/perf-browser.ts --flow flappybird
---after title --url http://localhost:4090 --out webdroid-shots/title.json`. This runs a fresh
-browser, follows the flow through the named step, warms for 3 seconds, then samples for
-15 seconds without readback. `--exercise <step,step,...>` cycles those steps' actions in the window;
-repeated game inputs do not guarantee the game remains in play. `--probe` installs the
-ordinary tracking wrappers. `--gpu hardware` uses full bundled Chromium, removes forced
-software-rendering flags and disables the automatic SwiftShader fallback. The report's
-actual GPU information must confirm acceleration; selecting this mode alone does not.
-The output records the actual GPU, since the browser may still fall back to software.
-Inputs start strictly before the window ends. `--interval <ms>` overrides their spacing;
-`--exercise-once` runs each listed action once, for sequences such as legal chess moves.
-`--setup-shots` records setup screenshots and counter snapshots outside the timing window.
-Require matching `plannedInputs`/`inputs`
-and `actionInFlight: false` for complete interaction windows; blocked actions are reported.
-Missing text targets fail setup immediately. Invalid interaction windows retain their report
-with `valid: false` and reasons in `invalid`, and exit nonzero. A static screen with no
-presentations cannot establish interaction performance. Use `--setup-min-wait` when setup
-must outlast a splash; inspect `setup` and the final screen before comparing rates.
-`--input-offsets <file.json>` supplies strictly increasing millisecond offsets within the
-window, one ordinary action per offset, cycling the exercise list (or once per action with
-`--exercise-once`). It replaces `--interval`; skipped or unfinished actions invalidate an
-interaction comparison. Outputs retain requested offsets and actual issuance times.
-`--start-exercise <step>` runs one ordinary action after warmup and initial GC, then waits
-100 ms before the measured window; repeated tap steps become one tap.
-`--state-reader <file.js>` loads a trusted, read-only function expression returning JSON
-serializable data. It runs before initial metric sampling and after final metric sampling,
-never inside the timed window. State readers must not write guest fields, invoke guest
-methods, replace clocks, or initiate work. Reader failures are explicit diagnostic objects.
-`--start-state <file.json>` requires a synchronous `--state-reader` and cannot be combined
-with `--align-presentation`. After any ordinary start action it skips the fixed 100 ms wait.
-Inside the measurement evaluation, before installing observers or starting counters, it
-waits up to 3 seconds for the preselected JSON state using read-only rAF sampling. Object
-keys are sorted for exact comparison; arrays retain order. Promise readers, timeouts and
-state drift before the counter boundary fail explicitly. It never changes guest fields,
-clocks or timers. Record the desired state before comparisons, without searching for a
-favorable run. Actual `stateBefore` and `stateWaitMs` are retained in the result and output.
-The CDP CPU interval includes this pre-window wait; in-page counters exclude it.
-`--align-presentation` starts a supplemental window after the next successful screen bitmap
-transfer. It waits at most 3 seconds, failing explicitly if no presentation occurs. The
-anchor frame and pre-start rAF samples are excluded; counters, clock and interval origins
-start together after the presenting call unwinds. `anchorWaitMs` and `anchorToStartMs`
-record that boundary. Both revisions must use the same mode. This controls initial frame
-phase; the input proxy still does not establish completed input or changed pixels.
-Heap samples follow explicit garbage collection; CDP CPU counters cover a slightly wider
-interval than the in-page window, including any presentation-anchor wait. Input-to-next-presentation is an opportunity proxy,
-not proof that the input changed those pixels. Screenshots and process diagnostics follow
-the timed window. Alternate revisions, serialize runs, and keep their code stable.
+For isolated performance comparisons, use `bun run lat` (`scripts/lat/run.ts`): its `fps` step scrolls for a
+fixed window and reports presentation intervals and page long tasks, and `--gpu` measures with Metal instead of
+SwiftShader. Alternate revisions, serialize runs, and keep their code stable.
 
-E2E steps and corpus rows also retain snapshots from every reachable frame's emulator
-runtime. Unavailable log, performance and queue snapshots are null; failed inspection is
+E2E steps and corpus rows also retain snapshots from the page's and every process Worker's
+emulator runtime. Unavailable log, performance and queue snapshots are null; failed inspection is
 explicit. Neither means an empty error list. Browser exceptions and console errors are
 retained separately from runtime logs, including caught failures in child processes.
 

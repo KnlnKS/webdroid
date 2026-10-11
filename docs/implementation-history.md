@@ -6577,3 +6577,44 @@ Open findings:
     reached. Running alone, the flow passes.
   - Moving the foreground app into a Worker (all GL contexts on Workers) is expected to remove the
     priority gap. This needs verification.
+
+### Every app process in a Worker (2026-10-11)
+
+The page realm is now system_server only. The broker starts every app process, the launched app included, in a
+process Worker. The `/process` iframe topology is deleted, along with its cross-frame state (`pageShared`, the
+`window.top` guest clock) and the priority inheritance that only fed its scheduler. A Worker reaches what needs the
+page through the broker:
+- MediaPlayer, through a page media element;
+- system activities' browser UI (pickers, share sheet, print);
+- the device's localStorage, through a replica written through to the page;
+- its WebView cookies, in its own jar.
+
+Measured with `bun run lat fitnotes calculatorm mihon` (Wasm tier, one job):
+
+| | cold | warm | warm `--gpu` |
+|---|---|---|---|
+| FitNotes launch | 2020 | 1700 | — |
+| Calculator launch | 2085 | 1718 | 1629 |
+| Mihon launch | 7731 | 7293 | 7178 |
+| Calculator gated taps | 49–176 | 36–178 | 26–69 |
+| Mihon gated taps | 77–300 | 76–427 | 75–171 |
+| FitNotes scroll (fps, p99) | 23.3, 56.7 | 24.6, 53.4 | — |
+
+- On Metal, a tap's frame reaches the page within about 1 ms of its draw, and every Calculator tap passes.
+- Under SwiftShader, a Worker's frames cost GPU-process time that slows the page's rAF to one tick every 75–97 ms
+  while frames are produced, and a Worker's vsync is that tick. Calculator's plus and equals taps take 176–178 ms
+  against 127–129 ms with the app on the page, though their state is observed sooner (30–36 ms against 50–68 ms).
+  Scroll falls from about 32 to 24 fps.
+- **Deferred: presenting from the Worker.** A Worker drawing into its canvas through `transferControlToOffscreen`
+  produced 170 rather than 119 frames in a 5 s FitNotes scroll under SwiftShader, and the page's rAF ran 25% more
+  often. With Metal it made no difference (380 against 380). The e2e probe and `lat` observe frames through the page's
+  `transferFromImageBitmap`, so a Worker-side present needs a page-visible present signal whose pixels are already
+  readable. It also takes per-frame presentation off the page's thread, which matters once page work contends
+  (until system_server leaves the page).
+- **Deferred: cross-origin isolation.** Nothing yet needs `SharedArrayBuffer`: another process's shared mappings use
+  leases and audio crosses the media port. Isolation would constrain the cross-origin WebView frames for no
+  measured gain, so it waits for its first consumer.
+- The platform build's modules were already compiled once per tab and posted to each Worker.
+- The e2e quick gate passes 7/7 serially, and every step reached the page and each Worker with no new missing APIs
+  or errors. The "Worker diagnostic timeout" beside flappybird no longer occurs: no GL context remains on the page.
+- Each process Worker gets a vsync message on every page rAF, including the background GMS Workers, which drop it.
