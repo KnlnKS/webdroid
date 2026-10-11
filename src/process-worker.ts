@@ -14,10 +14,11 @@ globalThis.addEventListener("unhandledrejection", event => {
   logs.push(`unhandledrejection: ${error?.message ?? error?.msg ?? String(error)}\n${error?.stack ?? ""}`);
 });
 
-type Prestart = { clock: ClockBootstrap; aot: MessagePort };
-async function prepare({ clock, aot }: Prestart) {
+type Prestart = { clock: ClockBootstrap; aot: MessagePort; jars: MessagePort };
+async function prepare({ clock, aot, jars }: Prestart) {
   (await import("./guest-clock")).attachGuestClockPort(clock);
   await import("./natives");
+  (await import("./android/framework")).receivePlatformJars(jars);
   const [control, port, jentry, core, coverage, apex, cacerts, packages, device, skia, tier, config] = await Promise.all([
     import("./shell/worker-control"), import("./shell/process-port"), import("./jvm/natives/jentry"), import("./native/core"),
     import("./jvm/coverage"), import("./shell/apex"), import("./shell/cacerts"), import("./shell/process-bootstrap"),

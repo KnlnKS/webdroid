@@ -48,6 +48,14 @@ export function loadPlatformJar(bytes: Uint8Array, i: number): void {
 }
 
 let jars: Promise<Uint8Array[]> | null = null;
+/** the page's copy, which a process Worker takes rather than fetching its own behind the page's other requests */
+export function sendPlatformJars(port: MessagePort): void {
+  void fetchPlatformJars().then((list) => port.postMessage(list), () => port.postMessage(null)).finally(() => port.close());
+}
+export function receivePlatformJars(port: MessagePort): void {
+  jars = new Promise<Uint8Array[] | null>((resolve) => { port.onmessage = ({ data }) => { port.close(); resolve(data); }; })
+    .then((list) => list ?? (jars = null, fetchPlatformJars()));
+}
 /** start fetching the platform jars, ahead of the app they are indexed behind */
 export function fetchPlatformJars(): Promise<Uint8Array[]> {
   return jars ??= pageShared("__wdPlatformJars", () => Promise.all(PLATFORM_JARS.map(async (jar) => {
