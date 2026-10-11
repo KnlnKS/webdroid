@@ -219,6 +219,18 @@ function installProbe(cfg: ProbeConfig): void {
   const screenPng = () => encode(readDisplay(displayCanvases()));
 
   const foreground = () => g.wd.foregroundWorkerSnapshot?.() ?? Promise.resolve(null);
+  type Foreground = Awaited<ReturnType<typeof foreground>>;
+  /** the step's counters: a foreground Worker's, less what it had counted when the step began */
+  let stepStart: Foreground = null;
+  const stepPerf = (worker: Foreground): Record<string, number> => {
+    const snapshot = worker?.snapshot;
+    if (!snapshot) return { ...g.wd.perf };
+    const previous = stepStart?.pid === worker.pid ? stepStart?.snapshot?.perf : undefined;
+    return { ...Object.fromEntries(Object.entries(snapshot.perf).map(([name, value]) => [name, (value as number) - (previous?.[name] ?? 0)])),
+      bootMs: g.wd.perf.bootMs };
+  };
+  const usesPerf = (condition: StateCondition): boolean =>
+    condition.kind === "perf" || (condition.kind === "all" || condition.kind === "any") && condition.conditions.some(usesPerf);
   const busy = async (dueBefore: number, stableMs: number): Promise<string[]> => {
     const now = performance.now();
     const wd = g.wd, d = wd.mainDbg;
@@ -251,12 +263,12 @@ function installProbe(cfg: ProbeConfig): void {
   let captured: ImageData | null = null;
   const inScreen = (node: UiNode, screen: Screen) =>
     node.bounds[2] > 0 && node.bounds[3] > 0 && node.bounds[0] < screen.width && node.bounds[1] < screen.height;
-  const stateMatches = (condition: StateCondition, screen: Screen, nodes: UiNode[]): boolean => {
+  const stateMatches = (condition: StateCondition, screen: Screen, nodes: UiNode[], perf: Record<string, number>): boolean => {
     if (condition.kind === "all" || condition.kind === "any") {
-      const matches = condition.conditions.map((item) => stateMatches(item, screen, nodes));
+      const matches = condition.conditions.map((item) => stateMatches(item, screen, nodes, perf));
       return condition.kind === "all" ? matches.every(Boolean) : matches.some(Boolean);
     }
-    if (condition.kind === "perf") return (g.wd.perf[condition.counter] ?? 0) >= condition.atLeast;
+    if (condition.kind === "perf") return (perf[condition.counter] ?? 0) >= condition.atLeast;
     if (condition.kind === "resource" || condition.kind === "resource-absent") {
       const found = nodes.some((node) => node.resId === condition.resId && inScreen(node, screen));
       return condition.kind === "resource" ? found : !found;
@@ -293,7 +305,8 @@ function installProbe(cfg: ProbeConfig): void {
       let matchedAt = 0;
       for (;;) {
         const now = performance.now();
-        const matches = stateMatches(condition, screen, await g.wd.uiTree());
+        const perf = usesPerf(condition) ? stepPerf(await foreground()) : g.wd.perf;
+        const matches = stateMatches(condition, screen, await g.wd.uiTree(), perf);
         if (matches) {
           matchedAt ||= now;
           if (now - matchedAt >= stableMs) break;
@@ -403,7 +416,7 @@ function installProbe(cfg: ProbeConfig): void {
   };
   const step = async (spec: StepSpec): Promise<StepResult> => {
     const wd = g.wd, hangs: Hang[] = [];
-    const beforeWorker = await foreground();
+    stepStart = await foreground();
     wd.perfReset();
     shots.length = 0; shotHash = -1; shooting = cfg.shots;
     const t0 = performance.now();
@@ -438,11 +451,7 @@ function installProbe(cfg: ProbeConfig): void {
     const captureMs = performance.now() - captureAt;
     const telemetryAt = performance.now();
     const uiTree: UiNode[] = await bounded("uiTree", wd.uiTree(), PHASE_BOUND_MS, [], hangs);
-    const worker = await foreground(), snapshot = worker?.snapshot;
-    const previous = beforeWorker?.pid === worker?.pid ? beforeWorker?.snapshot?.perf : undefined;
-    const counters = snapshot ? Object.fromEntries(Object.entries(snapshot.perf).map(([name, value]) =>
-      [name, (value as number) - (previous?.[name] ?? 0)])) : { ...wd.perf };
-    if (snapshot) counters.bootMs = wd.perf.bootMs;
+    const worker = await foreground(), snapshot = worker?.snapshot, counters = stepPerf(worker);
     const workerErrors = worker?.error ? ["error: Worker diagnostics: " + worker.error] : snapshot?.logs ?? [];
     const result = {
       png, frameHash: lastHash < 0 ? null : lastHash.toString(16).padStart(8, "0"), presentation,
