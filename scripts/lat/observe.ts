@@ -1,22 +1,13 @@
-/** Injected before navigation in every realm; does not enable debugger domains or run guest code. */
+/** Injected before navigation; does not enable debugger domains or run guest code. */
 export function installLatencyObserver(counters: string[]) {
-  const local = globalThis as any;
-  if (location.origin === "null" || !["/", "/process"].includes(location.pathname)) return;
-  let root: Window = window;
-  try { while (root.parent !== root && root.parent.location.origin === location.origin) root = root.parent; } catch { return; }
-  const host = root as any;
+  if (window !== window.top || location.pathname !== "/") return;
+  const host = window as any;
   const snapshot = () => {
-    const rows = [root, ...Array.from(root.document.querySelectorAll("iframe")).flatMap(f => {
-      try { return f.contentWindow?.location.pathname === "/process" ? [f.contentWindow] : []; } catch { return []; }
-    })].map(win => {
-      const wd = (win as any).wd;
-      return { url: win.location.href, pid: new URLSearchParams(win.location.search).get("pid"), pkg: wd?.app()?.pkg ?? null,
-        tier: wd?.tier ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
-        perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
-        compilerWorker: win.__wdCold?.worker ? { ...win.__wdCold.worker } : null,
-        appBuilds: win.__wdCold?.appBuilds?.map(build => ({ ...build })) ?? [] };
-    });
-    if (new URLSearchParams(root.location.search).get("perfProbe") !== "1") return rows;
+    const wd = host.wd, cold = window.__wdCold;
+    const rows = [{ url: location.href, pid: null, pkg: wd?.app()?.pkg ?? null, tier: wd?.tier ?? null, available: !!wd?.perf, ticks: wd?.ticks ?? null,
+      perf: wd?.perf ? Object.fromEntries(counters.map(k => [k, wd.perf[k] ?? null])) : null,
+      compilerWorker: cold?.worker ? { ...cold.worker } : null, appBuilds: cold?.appBuilds?.map(build => ({ ...build })) ?? [] }];
+    if (new URLSearchParams(location.search).get("perfProbe") !== "1") return rows;
     const registry = host.wd?.counterReceipts?.();
     const found = new Map(rows.map(row => [row.url, row]));
     return [...(registry?.rows ?? []).map((record: any) => {
@@ -30,22 +21,13 @@ export function installLatencyObserver(counters: string[]) {
     }), ...[...found.values()].map(row => ({ ...row, receiptProbe: true, proof: null }))];
   };
   const shown = (canvas: HTMLCanvasElement) => {
-    if (root.document.visibilityState !== "visible" || !host.wd?.displayCanvases?.().includes(canvas)) return false;
-    for (let win: Window = window;; win = win.parent) {
-      const element = win === window ? canvas : win.document.documentElement;
-      const style = win.getComputedStyle(element), rect = element.getBoundingClientRect();
-      if (style.display === "none" || style.visibility !== "visible" || +style.opacity === 0 || !rect.width || !rect.height) return false;
-      if (win === root) return true;
-      const frame = win.frameElement;
-      if (!frame || (frame as HTMLElement).hidden) return false;
-      const parentStyle = win.parent.getComputedStyle(frame), frameRect = frame.getBoundingClientRect();
-      if (parentStyle.display === "none" || parentStyle.visibility !== "visible" || +parentStyle.opacity === 0 || !frameRect.width || !frameRect.height) return false;
-    }
+    if (document.visibilityState !== "visible" || !host.wd?.displayCanvases?.().includes(canvas)) return false;
+    const style = getComputedStyle(canvas), rect = canvas.getBoundingClientRect();
+    return style.display !== "none" && style.visibility === "visible" && +style.opacity !== 0 && !!rect.width && !!rect.height;
   };
-  if (window === root) host.__wdLatObserver = { firstApp: null, lastApp: null, onFrame: null, times: null, snapshot };
-  // a process Worker's canvas names its process; a realm's own screen shows its app
-  const appOf = (canvas: HTMLCanvasElement) => canvas.dataset.pkg ? { pkg: canvas.dataset.pkg, pid: canvas.dataset.pid ?? null }
-    : canvas.id === "screen" && local.wd?.app() ? { pkg: local.wd.app().pkg as string, pid: new URLSearchParams(location.search).get("pid") } : null;
+  host.__wdLatObserver = { firstApp: null, lastApp: null, onFrame: null, times: null, snapshot };
+  // a process Worker's canvas names its process
+  const appOf = (canvas: HTMLCanvasElement) => canvas.dataset.pkg ? { pkg: canvas.dataset.pkg, pid: canvas.dataset.pid ?? null } : null;
   const original = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
   ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bitmap: ImageBitmap | null) {
     const canvas = this.canvas as HTMLCanvasElement, observer = host.__wdLatObserver, app = bitmap && observer ? appOf(canvas) : null;
@@ -53,10 +35,10 @@ export function installLatencyObserver(counters: string[]) {
     let result;
     try { result = original.call(this, bitmap); }
     catch (error) { if (copy) void copy.then(image => image.close(), () => {}); throw error; }
-    const at = performance.timeOrigin + performance.now() - root.performance.timeOrigin;
-    // receipts only while a capture listens: visibility checks walk computed styles of every frame
+    const at = performance.now();
+    // receipts only while a capture listens: visibility checks read computed styles
     if (app && (observer.onFrame || observer.times || !observer.firstApp)) {
-      const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, tier: local.wd?.tier ?? host.wd?.tier, visible: shown(canvas) };
+      const receipt = { at, url: location.href, pid: app.pid, pkg: app.pkg, tier: host.wd?.tier, visible: shown(canvas) };
       if (receipt.visible) { observer.lastApp = receipt; observer.firstApp ??= receipt; observer.times?.push(at); }
       observer.onFrame?.(receipt, copy);
     }

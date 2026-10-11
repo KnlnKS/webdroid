@@ -35,7 +35,6 @@ const gpu = flag("--gpu"), warm = flag("--warm"), timeline = flag("--timeline"),
 if (!["chrome", "webkit"].includes(engine)) throw new Error("lat engine must be chrome or webkit");
 const launchQuery = new URLSearchParams(query);
 if (!launchQuery.has("tier")) launchQuery.set("tier", process.env.WEBDROID_TIER ?? "wasm");
-if (!launchQuery.has("processMode")) launchQuery.set("processMode", "iframe");
 if (!launchQuery.has("perfProbe")) launchQuery.set("perfProbe", "1");
 if (!["js", "wasm"].includes(launchQuery.get("tier")!)) throw new Error("lat tier must be js or wasm");
 const names = args.length ? args : readdirSync(SCENARIOS).filter((f) => f.endsWith(".json")).map((f) => basename(f, ".json"));
@@ -49,7 +48,7 @@ const COUNTERS = ["inputMs", "compileMs", "classesCompiled", "clinitMs", "resPar
 
 type Tap = { intended: number | null; semantic: unknown; compileBefore: any[]; compileAfter: any[]; compileWindow: { origin: number; up: number; end: number | null }; compile?: ReturnType<typeof compileDeltas>; m: string; frames: number; perf: Record<string, number>; processesBefore: unknown; processesAfter: unknown };
 /** Root draw proxy and realm presentation marks; compile counters below still belong to the root. */
-type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number; appPresentationMarks: { url: string; pkg: string; tier: string; at: number; visible: boolean }[];
+type Launch = { firstApp: unknown; renderedApp: unknown; compileCounters: any[]; compileCounterAt: number; firstFrame: number;
   idle: number; perf: Record<string, number>; marks: string[] };
 type Fps = { m: string; ms: number; presents: number; fps: number; p50: number | null; p95: number | null; p99: number | null; over25: number; longTasks: number; longTaskMs: number };
 type Capture = { launch?: Launch; taps: Tap[]; fps?: Fps[]; processesBefore?: unknown; processesAfter?: unknown;
@@ -60,12 +59,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   const w = globalThis as any;
   const result: Capture = w.__wdLat = { taps: [] };
   // a process Worker's state reaches the page over its control port
-  const workerMode = new URLSearchParams(location.search).get("processMode") === "worker";
   const foreground = async () => (await w.wd.foregroundWorkerSnapshot())?.snapshot ?? null;
-  const realms = () => [window, ...[...document.querySelectorAll("iframe")].flatMap(f => {
-    try { return f.contentWindow && new URL(f.contentWindow.location.href).origin === location.origin && f.contentWindow.location.pathname === "/process" ? [f.contentWindow] : []; }
-    catch { return []; }
-  })];
   const readRealm = (win: Window) => {
     const wd = (win as any).wd, cold = win.__wdCold;
     if (!wd) return { url: win.location.href, status: "unavailable" };
@@ -82,33 +76,14 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     let workers;
     try { workers = w.wd?.workerProcesses ? await w.wd.workerProcesses() : []; }
     catch (error) { workers = [{ error: String(error) }]; }
-    return { at: performance.now(), frames: realms().map(readRealm), workers };
+    return { at: performance.now(), frames: [readRealm(window)], workers };
   };
-  const appRealms = () => realms().filter(win => !!(win as any).wd?.app());
   const workerReadiness = async (save: boolean) => {
     const code = await w.wd.foregroundCodeReadiness(save);
     if (!code) throw new Error("foreground Worker code readiness unavailable");
     if (save ? !code.kept && !code.persisted : !code.saved || code.source !== "persist" || !code.attached)
       throw new Error("Wasm Worker app code is not " + (save ? "saved" : "attached from persisted code") + ": " + JSON.stringify(code));
     return code;
-  };
-  const readiness = async (win: Window, save: boolean) => {
-    const wd = (win as any).wd, cold = win.__wdCold;
-    if (wd.tier === "wasm") {
-      if (save) {
-        if (!cold?.appSettle) throw new Error("Wasm app save hook unavailable: " + win.location.href);
-        await cold.appSettle();
-        if (!cold.appBuilds?.some(b => b.kept) && !await cold.appPersisted?.()) throw new Error("Wasm app build was not saved: " + win.location.href);
-      } else if (!cold?.appSaved || cold.appSource !== "persist" || !cold.appAttached) throw new Error("Wasm warm replay did not attach persisted app code: " + win.location.href);
-      return readRealm(win);
-    }
-    if (save) await wd.codeSettle();
-    const code = wd.code(), paths: string[] = [];
-    for (const name of await win.caches.keys()) for (const request of await (await win.caches.open(name)).keys())
-      if (code.dir && new URL(request.url).pathname.startsWith(code.dir)) paths.push(request.url);
-    if (!paths.length || save && code.pending !== 0 || !save && code.loaded === 0)
-      throw new Error("JS app code is not " + (save ? "saved" : "loaded") + ": " + win.location.href);
-    return { ...readRealm(win), savedPaths: paths.sort() };
   };
   type Pixels = ReturnType<typeof regionInfo>;
   type Frame = { t: number; image: ImageBitmap; receipt: any };
@@ -143,7 +118,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       let image: ImageBitmap | undefined;
       try {
         image = await bitmap;
-        if (epoch !== generation || !receipt.visible || !workerMode && receipt.pkg !== w.wd?.app()?.pkg || receipt.tier !== w.wd?.tier) return;
+        if (epoch !== generation || !receipt.visible || receipt.tier !== w.wd?.tier) return;
         frameCount++;
         if (latest && latest.t > receipt.at) return;
         latest?.image.close();
@@ -209,10 +184,9 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   collect();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   /** the topmost app's canvas: a process Worker's lies under the page's system layer */
-  const appCanvas = (): HTMLCanvasElement => workerMode ? w.wd.displayCanvases().findLast((c: HTMLCanvasElement) => c.dataset.pkg) : w.wd.displayCanvas();
-  /** the app's counters and main queue: the foreground Worker's, or this realm's */
+  const appCanvas = (): HTMLCanvasElement => w.wd.displayCanvases().findLast((c: HTMLCanvasElement) => c.dataset.pkg);
+  /** the foreground Worker's counters and main queue */
   const app = async () => {
-    if (!workerMode) return w.wd ? { perf: w.wd.perf, queued: w.wd.mainDbg.queued } : null;
     const s = w.wd && await foreground();
     return s && { perf: s.perf, queued: s.main.queued };
   };
@@ -230,7 +204,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
       await sleep(100);
     }
   };
-  const presented = async () => workerMode ? (await app())!.perf.presentations > 0 : appRealms().some(win => (win as any).wd.perf.presentations > 0);
+  const presented = async () => (await app())!.perf.presentations > 0;
   for (const until = performance.now() + 60_000; !await presented();) {
     if (performance.now() > until) throw new Error("First app presentation unavailable");
     await sleep(50);
@@ -241,17 +215,12 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
   stop();
   if (renderedApp.at === null) throw new Error("Rendered app launch unavailable: " + renderedApp.error);
   await idle();
-  // the launch timeline: the marks (src/perf.ts) of this realm and of the frames in it, in ms since this navigation
-  const marksOf = (win: Window, realm: string) => win.performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:"))
-    .map((e) => `${realm}:${e.name.slice(3)}:${Math.round(win.performance.timeOrigin + e.startTime - performance.timeOrigin)}`);
-  const marks = [...marksOf(window, "page"), ...[...document.querySelectorAll("iframe")].flatMap((f, i) => f.contentWindow ? marksOf(f.contentWindow, "frame" + i) : [])];
-  const appPresentationMarks = appRealms().flatMap(win => win.performance.getEntriesByName("wd:firstPresented").map(e => ({ url: win.location.href,
-    pkg: (win as any).wd.app().pkg, tier: (win as any).wd.tier, at: Math.round(win.performance.timeOrigin + e.startTime - performance.timeOrigin),
-    visible: !win.frameElement || !!win.frameElement.getBoundingClientRect().height })));
-  result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt, appPresentationMarks,
+  // the page's launch timeline: its marks (src/perf.ts), in ms since this navigation
+  const marks = performance.getEntriesByType("mark").filter((e) => e.name.startsWith("wd:")).map((e) => `page:${e.name.slice(3)}:${Math.round(e.startTime)}`);
+  result.launch = { firstFrame, firstApp: observer.firstApp, renderedApp, compileCounters: renderedApp.compileAfter, compileCounterAt: renderedApp.compileAt,
     idle: Math.round(performance.now()), perf: launchPerf, marks };
   result.processesBefore = await diagnostics();
-  if (replay) result.codeReadiness = { phase: "attached", realms: workerMode ? [await workerReadiness(false)] : await Promise.all(appRealms().map(win => readiness(win, false))) };
+  if (replay) result.codeReadiness = { phase: "attached", realms: [await workerReadiness(false)] };
   const screen = () => document.getElementById("screen") as HTMLCanvasElement;
   // a gesture goes to the element under its press, as the browser's hit test sends it
   let target: Element | null = null;
@@ -333,7 +302,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     }
     const response = await semantic;
     stop();
-    const after = workerMode ? await snapshot() : response.compileAfter.find((p: any) => p.url === location.href)?.perf ?? await snapshot();
+    const after = await snapshot();
     const tap: Tap = { intended: response.at === null ? null : response.at - tu, semantic: response, compileBefore, compileAfter: response.compileAfter, compileWindow: { origin: performance.timeOrigin, up: tu, end: response.compileAt }, m: s.m, frames: frameCount,
       perf: Object.fromEntries(counters.map((k) => [k, Math.round((after[k] - before[k]) * 10) / 10]).filter(([, v]) => v)) as Record<string, number>, processesBefore, processesAfter: null };
     out.push(tap);
@@ -346,7 +315,7 @@ const inPage = (steps: unknown, counters: string[], save: boolean, replay: boole
     }
   }
   result.processesAfter = await diagnostics();
-  if (save) result.codeReadiness = { phase: "saved", realms: workerMode ? [await workerReadiness(true)] : await Promise.all(appRealms().map(win => readiness(win, true))) };
+  if (save) result.codeReadiness = { phase: "saved", realms: [await workerReadiness(true)] };
   document.title = "DONE";
 }})(${JSON.stringify(steps)}, ${JSON.stringify(counters)}, ${save}, ${replay}, ${JSON.stringify(expectedLaunch)}).catch(async e => {
   const result = globalThis.__wdLat; result.error = String(e);
@@ -446,12 +415,12 @@ async function resetData(browser: BrowserDriver): Promise<void> {
   } finally { await send("Target.closeTarget", { targetId }); }
 }
 
-type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; tier: string; processMode: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
+type Report = Capture & { engine: string; browser?: string; scenario: string; apk?: string; tier: string; warm: boolean; query: string; expectedTaps?: string[]; preparation?: Capture;
   accepted: false; intendedObservation: string; instrumentation: string; launchProxy: string };
 const report: Report[] = [];
 let failed = false;
 for (const name of names) {
-  const row: Report = { scenario: name, engine, tier: launchQuery.get("tier")!, processMode: launchQuery.get("processMode")!, warm, query: launchQuery.toString(), taps: [],
+  const row: Report = { scenario: name, engine, tier: launchQuery.get("tier")!, warm, query: launchQuery.toString(), taps: [],
     accepted: false, intendedObservation: "conservative upper bound: max(UI predicate receipt, latest visible app-owned immutable bitmap matching scenario response regions), followed by persistent UI/pixel confirmation",
     instrumentation: (engine === "chrome" ? "raw CDP Page/Target; Runtime read after capture" : "Playwright WebKit instrumentation") + "; latest immutable bitmap retained, response pixels read after matching UI state; probe intervals include queue waits and guest execution, not isolated probe CPU; compile counters end after joined response observation",
     launchProxy: "firstFrame/perf remain root draw proxies; firstApp is visible app-owned transfer, renderedApp is scenario content after semantic receipt; compileCounters cover copied main realms and separate partial Worker receipts" };

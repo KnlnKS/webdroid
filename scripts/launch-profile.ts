@@ -31,7 +31,6 @@ try {
     if (values["cpu-profile"] && last) { await session.send("Profiler.enable"); await session.send("Profiler.start"); }
     await page.goto(url.href, { waitUntil: "domcontentloaded" });
     const result = await page.evaluate(async ({ idleMs, maxMs }) => {
-      const workerMode = new URLSearchParams(location.search).get("processMode") === "worker";
       let firstDraw = 0, lastBusy = performance.now(), idleReached = false;
       let firstFramePerf: Record<string, number> | undefined, idlePerf: Record<string, number> | undefined;
       let firstTicks: number | undefined, lastTicks: number | undefined, pid: number | undefined;
@@ -40,15 +39,14 @@ try {
         await new Promise((r) => setTimeout(r, 50));
         const wd = globalThis.wd;
         if (!wd) continue;
-        const worker = await wd.foregroundWorkerSnapshot?.();
+        const worker = await wd.foregroundWorkerSnapshot();
         if (worker?.terminal || worker?.snapshot?.dead) throw new Error("Foreground process died during launch");
         if (worker?.error && !worker.error.startsWith("Worker is not ready:")) throw new Error(worker.error);
-        if (workerMode && (!worker?.snapshot || worker.snapshot.phase !== "ready")) continue;
-        const perf = worker?.snapshot?.perf ?? wd.perf, main = worker?.snapshot?.main ?? wd.mainDbg;
-        const ticks = worker?.snapshot?.ticks ?? wd.ticks;
+        if (!worker?.snapshot || worker.snapshot.phase !== "ready") continue;
+        const { perf, main, ticks } = worker.snapshot;
         idlePerf = { ...perf }; lastTicks = ticks;
         if (!firstDraw && perf.presentations > 0) {
-          firstDraw = performance.now(); firstFramePerf = { ...perf }; firstTicks = ticks; pid = worker?.pid;
+          firstDraw = performance.now(); firstFramePerf = { ...perf }; firstTicks = ticks; pid = worker.pid;
           lastBusy = firstDraw;
         }
         if (main.queued || main.depth) lastBusy = performance.now();
@@ -56,7 +54,7 @@ try {
       }
       return { navToFirstDrawMs: firstDraw || null, navToIdleMs: idleReached ? performance.now() : null,
         idleReached, timedOut: !idleReached, firstFramePerf, idlePerf, pid, firstTicks, lastTicks,
-        visible: document.visibilityState === "visible", counterOwner: workerMode ? "foreground Worker" : "page" };
+        visible: document.visibilityState === "visible" };
     }, { idleMs, maxMs });
     const record = { apk, launch, url: url.href, ...result, processes: await readProcesses(page) };
     results.push(record);

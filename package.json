@@ -32,7 +32,6 @@
     "e2e": "bun tests/e2e/run.ts",
     "textcmp": "bun scripts/textcmp.ts",
     "lat": "bun scripts/lat/run.ts",
-    "relaunch": "bun scripts/relaunch.ts",
     "jbench": "bun scripts/jbench/run.ts",
     "conform": "bun scripts/conform/run.ts",
     "wasm": "bun scripts/wasm/run.ts",

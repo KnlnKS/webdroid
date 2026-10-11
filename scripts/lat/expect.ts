@@ -24,8 +24,8 @@ function proofError(row: any, pending = false): string | null {
   if (!r) return pending && !p.dead ? null : "counter birth or terminal receipt unavailable";
   try {
     const url = new URL(row.url);
-    if (!["/", "/process"].includes(url.pathname) || new URL(p.source).origin !== url.origin || new URL(r.source).origin !== url.origin ||
-      r.url !== row.url || r.pid !== (url.pathname === "/process" ? o.pid : null) || row.tier !== (url.searchParams.get("tier") ?? "js")) return "counter source/realm association mismatch";
+    if (url.pathname !== "/" || new URL(p.source).origin !== url.origin || new URL(r.source).origin !== url.origin ||
+      r.url !== row.url || r.pid !== null || row.tier !== (url.searchParams.get("tier") ?? "js")) return "counter source/realm association mismatch";
   } catch { return "invalid counter source URL"; }
   if (r.schema !== 1 || !Number.isSafeInteger(r.resets) || r.resets < 0 || !Number.isSafeInteger(r.sequence) || r.sequence < 1 || !Number.isFinite(r.bornAt) || !Number.isFinite(r.at) || r.at < r.bornAt ||
     COMPILE_COUNTERS.some(k => r.initial?.[k] !== 0 || !Number.isFinite(r.counters?.[k]) || r.counters[k] < 0 || r.counters[k] !== row.perf?.[k])) return "invalid counter initialization, sequence or snapshot";
@@ -34,8 +34,8 @@ function proofError(row: any, pending = false): string | null {
 }
 
 export function compileDeltas(allBefore: any[], allAfter: any[], window?: { origin: number; up: number; end: number | null }) {
-  // process Workers run off the page's thread: the main-realm accounting covers the page and its frames
-  const onPage = (row: any) => { try { return ["/", "/process"].includes(new URL(row.url).pathname); } catch { return true; } };
+  // process Workers run off the page's thread: the main-realm accounting covers the page
+  const onPage = (row: any) => { try { return new URL(row.url).pathname === "/"; } catch { return true; } };
   const before = allBefore.filter(onPage), after = allAfter.filter(onPage);
   const byUrl = new Map(before.map(row => [row.url, row])), failures: string[] = [];
   const counters = COMPILE_COUNTERS, probe = [...before, ...after].some(row => row.receiptProbe);
