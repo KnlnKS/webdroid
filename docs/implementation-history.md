@@ -6716,3 +6716,30 @@ Workers.
   profiles of the earlier FitNotes run showed every Worker idle during the scroll, consistent with this.
   `lat --trace <file>` now writes a browser-wide trace (every thread, GPU process included) of the gated launch.
 
+### Launch critical path and synthetic stubs (2026-10-11)
+
+A browser-wide trace of warm Calculator (`--gpu`) shows the app Worker busy almost without a break from 0.25 s
+to its first frame at 1.56 s: its gaps total 77 ms, mostly vsync waits. The page is not on the path after the
+bootstrap. The Worker gets its package at about 0.44 s, after the page has evaluated its 8 MB bundle (123 ms, with a
+70 ms major GC) and opened the install. A CPU profile splits the Worker's time into realm setup (about 400 ms:
+module evaluation, `Program.add` and `Cha.add` over the platform), AOT loading (about 250 ms) and Java (about
+850 ms, 40% of it a JS tail of instantiation, DEX metadata lookups and crossings). Warm and cold launches
+(1.52–1.72 s for Calculator and FitNotes) now match the JS tier's warm baseline (1.56–1.62 s), since cold runs get
+the exported app bundles too.
+
+Of the roughly 1,250 modules a realm instantiates before its first frame, about 550 are single-function lazy-link
+stubs for the synthetic functions that a loaded precompiled module names (`ensureSynth`), and about 350 are D
+modules. Building those stubs in one module per header cut instantiations to about 795 and warm Calculator's
+launch from 1,603–1,608 ms to 1,556–1,573 ms, with FitNotes unchanged. Module time barely moved (74–87 to
+67–77 ms); the saving was the JS that builds each module. The change was reverted. With it, the Calculator e2e
+flow stopped settling (a step's frames never stop) in most runs, against 6 of 6 passes without it:
+- Batching only in `loadC` passed 1 run of 4.
+- Deferring the stubs to the end of the header but keeping one module each failed 4 of 4.
+- Skipping stubs whose slot had received code meanwhile passed 1 run of 3.
+
+No Java runs while a batch is open. Nothing reads a pending slot's table entry, no name lacks a descriptor and the
+old loop never throws. The ordering dependency on creating each stub immediately is unexplained. Marking an
+already-stubbed slot done when an app build's synthetic module loads (`holdsSynth`) crashed the renderer.
+
+Komikku's `09 manga` step times out on the unchanged code with the current platform build and bundles.
+
