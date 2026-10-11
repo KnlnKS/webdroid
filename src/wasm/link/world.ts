@@ -1030,7 +1030,8 @@ export class World {
       const waited = this.leafWaits.get(slot) ?? 0;
       if (waited < LEAF_WAITS) { this.leafWaits.set(slot, waited + 1); reset(); return; }
     }
-    if (this.opts.compiler?.submit(this, slot)) { s.pending = true; reset(); return; }
+    const taken = this.opts.compiler?.submit(this, slot);
+    if (taken) { if (taken === true) s.pending = true; reset(); return; }
     if (this.opts.holdUpgrades?.()) { reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
     // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
@@ -1067,7 +1068,8 @@ export class World {
       let start: number | undefined;
       let clock: { start: number; accounted: number } | undefined;
       try {
-        if (this.opts.compiler?.submit(this, slot)) { s.pending = true; return; }
+        const taken = this.opts.compiler?.submit(this, slot);
+        if (taken) { if (taken === true) s.pending = true; return; }
         start = performance.now();
         if (!this.upgradeAllowed(start)) return;
         const epoch = this.epoch;

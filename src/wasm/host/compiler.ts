@@ -12,7 +12,7 @@ import type { CompileRequest, CompileResponse, Containers, Port } from "./compil
 
 /** a worker, or anything that serves the protocol */
 export interface WorkerPort extends Port { terminate(): void; onerror: ((e: ErrorEvent) => void) | null }
-/** jobs waiting for the worker; a hot method that finds the queue full is compiled inline */
+/** jobs waiting for the worker; a hot method that finds the queue full asks again after another budget */
 const MAX_QUEUE = 16, MAX_FAILURES = 3;
 
 /** `dexes` as the archives they are views of, copied for the worker (the copies are transferred) */
@@ -75,12 +75,13 @@ export class CompileClient implements CompileService {
   private waiting: [CompileRequest, Transferable[]][] = [];
   private post(m: CompileRequest, transfer: Transferable[] = []): void { if (this.loaded) this.port!.postMessage(m, transfer); else this.waiting.push([m, transfer]); }
 
-  submit(_w: World, slot: number): boolean {
+  submit(_w: World, slot: number): boolean | "later" {
     if (this.state === "idle" && this.w) {
       try { this.attach((this.source as () => WorkerPort)()); this.initialize(); }
       catch (e) { this.retire(`the compile worker could not start: ${String(e)}`); }
     }
-    if ((this.state !== "ready" && this.state !== "starting") || this.queue.length >= MAX_QUEUE) return false;
+    if (this.state !== "ready" && this.state !== "starting") return false;
+    if (this.queue.length >= MAX_QUEUE) return "later";
     this.queue.push(slot);
     this.pump();
     return true;

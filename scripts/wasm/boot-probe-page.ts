@@ -67,7 +67,7 @@ async function probe(): Promise<ProbeResult> {
   code.start(w);  await processStateAsync(w);  const bootMs = performance.now() - b0, s = w.stats;
   // the app: a loop hot enough to ask for the second tier, and the entry points whose answers every load must agree on
   const hot = w.entry("Pst", "hot", "(I)I");
-  // the worker takes a few seconds to load the platform's dex files; until it is ready a hot method is compiled inline
+  // the worker takes a few seconds to load the platform's dex files; until it is ready hot methods wait in its queue
   while (!code.compiler.ready && !code.compiler.retired) await new Promise((r) => setTimeout(r, 20));
   const t1 = performance.now();
   while (code.compiler.stats.adopted + w.stats.upgrades === 0 && performance.now() - t1 < 10000) { hot(4000); await new Promise((r) => setTimeout(r, 2)); }
