@@ -77,7 +77,7 @@ export interface WorldOptions {
   /** the dex files of the archive at `path`, for the DexFile natives of class loaders (loaders.ts); undefined for a file that does not exist. Dex files it answers twice
    *  that are the same objects stay in one namespace. Without it a loader cannot open dex files. */
   dexes?: (path: string) => DexFile[] | undefined | Promise<DexFile[] | undefined>;
-  /** whether the inline second-tier compile waits: the host is starting an app, and what is hot now is mostly code that runs once */
+  /** whether the second tier waits, inline or in the worker: the host is starting an app, and what is hot now is mostly code that runs once */
   holdUpgrades?: () => boolean;
   /** an app compiled ahead on top of `aot` (apps.ts): used when this World is where it starts, the platform build attached and nothing numbered since */
   app?: { index: AppIndex; store: AotStore };
@@ -1036,9 +1036,9 @@ export class World {
       const waited = this.leafWaits.get(slot) ?? 0;
       if (waited < LEAF_WAITS) { this.leafWaits.set(slot, waited + 1); reset(); return; }
     }
+    if (this.opts.holdUpgrades?.()) { reset(); return; }
     const taken = this.opts.compiler?.submit(this, slot);
     if (taken) { if (taken === true) s.pending = true; reset(); return; }
-    if (this.opts.holdUpgrades?.()) { reset(); return; }
     // the second tier is paid for out of the time the program runs: its compiling is kept to a share of it. A method that asks too soon waits in line and asks
     // again after another budget. The next compile the share allows goes to the outermost waiting method on the stack, whose unit can take in what it calls,
     // else to the one that has waited longest and asked again since, so it is still hot

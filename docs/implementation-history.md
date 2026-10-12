@@ -6865,6 +6865,28 @@ The process that owns a system package still prepares its own with code. Matched
 page loaded 2.5 s earlier, 4 runs each: Calculator `bootApk` 108–111 → 66–76 ms and first frame 617–623 →
 568–583 ms; FitNotes `bootApk` 97–105 → 69–73 ms and first frame 535–545 → 499–506 ms.
 
+### What an on-demand launch still compiles (2026-10-11)
+
+Counted per process from `wd.boot()` on a page loaded earlier, after `bootApk`:
+- **Symbolic sites (M6) barely occur.** Calculator and FitNotes resolve none in any process, microG's included.
+  Mihon's app resolves 18 through 4 stub modules. Sites without per-site modules are not worth their rewrite.
+- **Runtime-built modules.** Calculator's app process builds about 185 and Mihon's about 548. Host helpers
+  (`hostFn`, `callFn`: bridge field accessors per owner class, call trampolines per signature, allocators) take
+  15 ms and 30 ms of that.
+- **Methods compiled on demand (`linkSlot`).** Together with loading the saved code modules this is 46 ms for
+  Calculator and 190 ms for Mihon. Mihon's 104 on-demand methods break down as:
+  - about 66 app methods the bundled build lacks, on the live release check's path;
+  - 28 platform methods undone by a later class load (`javax/net` and others, where an app class overrides a
+    method that platform code was compiled to call directly);
+  - a few with no code module.
+- **The second tier during launch.** Hot methods submitted their upgrade jobs to the compile Worker while the
+  app was starting. The planning (`group`, `callees`, `likely`) took 34 ms of the app thread before the first
+  frame. The inline compile already waited for the starting window (`holdUpgrades`); now both wait.
+  - Measured from `wd.boot()`, 4 runs each: Calculator first frame 568–583 → 548–559 ms and FitNotes 499–506 →
+    472–480 ms.
+  - `lat --warm --gpu` taps are unchanged within run-to-run noise (three Calculator pairs, one FitNotes pair),
+    and every gated tap passes. FitNotes scroll is unchanged: p99 18.6 against 18.7 ms.
+
 ### TikTok's renderer OOM and the late-class index (2026-10-11)
 
 `e2e --full` on the Wasm tier crashes the renderer in TikTok's launch with `V8 javascript OOM (CALL_AND_RETRY_LAST)`.
