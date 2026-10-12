@@ -20,7 +20,7 @@ import { Code, OP } from "../compiler/code";
 import { Program, ACC, kindOf, declaredMethod, declaredMethods, methodAt, methodCount, javaName, type Loader, type Kind, type JClass, type MethodInfo, type FieldInfo } from "../compiler/program";
 import { Cha } from "../compiler/cha";
 import { H, ELEM, ELEM_KIND, ELEM_IFACE, ELEM_OTHER, f32bits, f64bits } from "../compiler/consts";
-import { Compiler, declareBase, intrinsicFor, kindVT, type FnTrace, type Intrinsic } from "../compiler/j2w";
+import { Compiler, declareBase, intrinsicFor, kindVT, type Base, type FnTrace, type Intrinsic } from "../compiler/j2w";
 import type { CompileService, GuestMemory, HostBridge, HostContext, HostNet, HostSpec, NativeBinder } from "./hostapi";
 import { emitRestored, Sched, Sync, defaultLoop, ROOT, SYSTEM_LOADER, type HostLoop, type Strand } from "./sched";
 import { rtfns, type Synth } from "../compiler/rtfns";
@@ -93,7 +93,12 @@ export interface WorldOptions {
 /** a class module's exports are the class's globals under "<id>:vt", "<id>:init" and "<id>:s:<field>"; a module of several classes (aot.ts) shares them */
 export interface ClassRt { name: string; id: number; mod: string; slotBase: number; nMethods: number; exports: WebAssembly.Exports }
 type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?: boolean; stub?: Function } | { k: "thrower"; name: Thrower; done: boolean; stub?: Function }
-  | { k: "synth"; name: string; d?: Synth; done: boolean; stub?: Function } | { k: "ensure" };
+  | { k: "synth"; name: string; d?: Synth; done: boolean; stub?: Function } | { k: "ensure"; done?: boolean };
+/** what ensure()'s body uses of the module it is compiled into (World.emitEnsure) */
+interface InitScope { mb: ModuleBuilder; b: Base; initG: number; sid: number; iw: number; tag: number; statics(f: FieldInfo): number; literal(c: Code, s: string): void }
+/** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
+const STUB_POOL = 1024;
+type StubRequest = { params: Kind[]; ret: Kind | "V"; slot: number };
 /** a hot method is recompiled with up to MAX_GROUP methods in its module: the small callees (size in code units) that ran at least COPY_MIN times, and guards for at most MAX_GUARDS
  *  implementations per virtual call. A small method without a loop asks LEAF_WAITS more budgets before it is compiled alone */
 const MAX_GROUP = 24, SMALL_CALLEE = 100, MAX_GUARDS = 2, LEAF_WAITS = 3, COPY_MIN = 64;
@@ -160,7 +165,7 @@ export class World {
   /** the classes the host implements (hostclass.ts) */
   hosts = new HostClasses(this);
   host: Record<string, Function>;
-  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; unsafeSlots: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void };
+  private rt!: { tag: WebAssembly.Tag; alloc: WebAssembly.Global; hash: WebAssembly.Global; ctab: WebAssembly.Global; unsafeSlots: WebAssembly.Global; sid: WebAssembly.Global; thr: WebAssembly.Global; depth: WebAssembly.Global; iw: WebAssembly.Global; wait: WebAssembly.Global; classId: (o: object) => number; link: (slot: number) => void; nop: Function };
   /** the threads: strands, monitors, waits (sched.ts) */
   sched!: Sched;
   private synth = new Map<string, number>();
@@ -197,6 +202,7 @@ export class World {
       fmod: (a: number, b: number) => a % b,
       gap: (id: number) => { this.lastGap = id; this.onGap(id); },
       link: (slot: number) => this.linkSlot(slot),
+      stubSlot: (at: number) => this.stubSlots[at],
       linkDue: (slot: number) => +(hasJspi() && this.sched.canWait() && !this.inSynchronousJava() && (this.sched.turnDue() || !!this.aot?.needsPreparation(slot))),
       linkWait: hasJspi() ? suspending((slot: number) => this.sched.admitLink(() => this.linkSlot(slot), () => this.aot?.prepare(slot))) : (slot: number) => this.linkSlot(slot),
       sync: (op: number, obj: object | null, a: number) => this.sched.sync(op, obj, a),
@@ -555,12 +561,7 @@ export class World {
     // the app build may hold its code, which its module puts in the slot
     if (this.aot?.installSynth(name)) { (this.slots[slot] as { done: boolean }).done = true; return slot; }
     if (eager) { this.linkSlot(slot); return slot; }
-    const mb = new ModuleBuilder(), b = declareBase(mb);
-    mb.importTable("rt", "table", T.funcref, 0);
-    const link = this.importLink(mb);
-    const params = d.params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, d.ret === "V" ? [] : [kindVT(b.tObj, d.ret)]);
-    mb.addElemActive(0, slot, [mb.addFunc(sig, this.stubBody(slot, sig, params, link), "stub:" + name)]);
-    this.instantiate(mb.build(), { rt: this.rtImports(), host: this.host });
+    this.table.set(slot, this.poolStubs([{ params: d.params, ret: d.ret, slot }])[0]);
     return slot;
   }
   /** the slot of synthetic function `name`, if it has one */
@@ -635,15 +636,7 @@ export class World {
     } finally { endCompile(span); }
   }
   /** a lazy-link stub for method `m` in `slot`, to put back where precompiled code was removed */
-  restoreStub(slot: number, m: MethodInfo): Function {
-    const mb = new ModuleBuilder(), b = declareBase(mb);
-    mb.importTable("rt", "table", T.funcref, 0);
-    const link = this.importLink(mb);
-    const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
-    const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-    mb.export("f", "func", mb.addFunc(sig, this.stubBody(slot, sig, params, link), "stub"));
-    return this.instantiate(mb.build(), { rt: this.rtImports(), host: this.host }).exports.f as Function;
-  }
+  restoreStub(slot: number, m: MethodInfo): Function { return this.poolStubs([{ ...this.methodKinds(m), slot }])[0]; }
   private importLink(mb: ModuleBuilder): number {
     return mb.importFunc("rt", "link", mb.addFuncType([T.i32], []));
   }
@@ -651,6 +644,49 @@ export class World {
     const c = new Code(params.length).i32(slot).call(link);
     params.forEach((_, i) => c.lget(i));
     return c.i32(slot).callIndirect(sig).finish();
+  }
+  /** Lazy-link stubs shared by slots: modules of stubs, a pool per signature, each stub asking the host which slot it stands for (host.stubSlot), linking it
+   *  and calling it. The engine's cost of a module with code is mostly fixed, so slots get their stubs without a module each, and one module adds to
+   *  every pool a request lacks. A stub stays its slot's (Slot.stub puts it back). */
+  private stubPools = new Map<string, { chunks: { fns: Function[]; base: number; used: number }[]; size: number }>();
+  private stubSlots: number[] = [];
+  private poolStubs(want: StubRequest[]): Function[] {
+    const key = (w: StubRequest) => w.params.join("") + ":" + w.ret, need = new Map<string, { w: StubRequest; n: number }>();
+    for (const w of want) { const k = key(w), e = need.get(k); if (e) e.n++; else need.set(k, { w, n: 1 }); }
+    const grow: { k: string; w: StubRequest; size: number }[] = [];
+    for (const [k, { w, n }] of need) {
+      const p = this.stubPools.get(k), free = p ? p.chunks.reduce((a, c) => a + c.fns.length - c.used, 0) : 0;
+      if (free < n) grow.push({ k, w, size: Math.max(n - free, Math.min(STUB_POOL, 4 * (p?.size ?? 4))) });
+    }
+    if (grow.length) {
+      const mb = new ModuleBuilder(), b = declareBase(mb);
+      mb.importTable("rt", "table", T.funcref, 0);
+      const link = this.importLink(mb), slotOf = mb.importFunc("host", "stubSlot", mb.addFuncType([T.i32], [T.i32]));
+      let at = this.stubSlots.length, e = 0;
+      const made = grow.map(({ k, w, size }) => {
+        const vts = w.params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vts, w.ret === "V" ? [] : [kindVT(b.tObj, w.ret)]), first = e, base = at;
+        for (let i = 0; i < size; i++, at++, e++) {
+          const c = new Code(vts.length), s = c.newLocal(T.i32);
+          c.i32(at).call(slotOf).ltee(s).call(link);
+          vts.forEach((_, j) => c.lget(j));
+          mb.export(String(e), "func", mb.addFunc(sig, c.lget(s).callIndirect(sig).finish(), "stub"));
+        }
+        return { k, size, first, base };
+      });
+      const x = this.instantiate(mb.build(), { rt: this.rtImports(), host: this.host }).exports;
+      this.stubSlots.length = at;
+      for (const { k, size, first, base } of made) {
+        const p = this.stubPools.get(k) ?? this.stubPools.set(k, { chunks: [], size: 0 }).get(k)!;
+        p.chunks.push({ fns: Array.from({ length: size }, (_, i) => x[first + i] as Function), base, used: 0 }); p.size = size;
+      }
+    }
+    return want.map((w) => {
+      const p = this.stubPools.get(key(w))!;
+      while (p.chunks[0].used === p.chunks[0].fns.length) p.chunks.shift();
+      const c = p.chunks[0];
+      this.stubSlots[c.base + c.used] = w.slot;
+      return c.fns[c.used++];
+    });
   }
   private addLinker(mb: ModuleBuilder, state: [number, number, number]): number {
     const sig = mb.addFuncType([T.i32], []), link = mb.importFunc("host", "link", sig);
@@ -690,6 +726,7 @@ export class World {
     mb.export("wait", "global", mb.addGlobal(T.i32, true, i32Init(0)));
     const cid = mb.addFunc(mb.addFuncType([refNull(b.tObj)], [T.i32]), new Code(1).lget(0).refAsNonNull().structGet(b.tObj, 0).i32(H.ID).arrayGet(b.tVT).finish(), "classId");
     mb.export("classId", "func", cid);
+    mb.export("nop", "func", mb.addFunc(mb.addFuncType([], []), new Code(0).finish(), "nop"));
     for (const name of Object.keys(SLOT) as Thrower[]) {
       const params = THROWERS[name].params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(params, []);
       const f = mb.addFunc(sig, this.stubBody(SLOT[name], sig, params, link), "stub:" + name);
@@ -697,7 +734,7 @@ export class World {
       this.slots[SLOT[name]] = { k: "thrower", name, done: false };
     }
     const x = this.instantiate(mb.build(), { rt: { table: this.table }, host: this.host }).exports as Record<string, any>;
-    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId, link: x.link };
+    this.rt = { tag: x.tag, alloc: x.alloc, hash: x.hash, ctab: x.ctab, unsafeSlots: x.unsafeSlots, sid: x.sid, thr: x.thr, depth: x.depth, iw: x.iw, wait: x.wait, classId: x.classId, link: x.link, nop: x.nop };
   }
 
   rtImports() { const { tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link } = this.rt; return { deoptEnabled: +!!this.opts.cold, deoptEpoch: this.deoptEpoch, table: this.table, nm: this.nm, tag, alloc, hash, ctab, unsafeSlots, sid, thr, depth, iw, wait, link, mem: this.mem, sp: this.sp, gmem: this.opts.guest?.memory, gflags: this.opts.guest?.flags }; }
@@ -716,9 +753,10 @@ export class World {
     rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} };
     this.classes.set(name, rt);
     if (this.aot?.building || this.opts.compileOnly) return rt;
-    const bytes = this.classModule([rt]);
+    const bytes = this.classModule([rt], true);
     this.stats.phase.classBuild += performance.now() - t0;
-    rt.exports = this.instantiate(bytes, { rt: this.rtImports(), host: this.host }).exports;
+    rt.exports = this.instantiate(bytes, {}).exports;
+    this.stubClass(rt, jc);
     this.noteInit(rt);
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
     if (jc?.dex && id > (this.aot?.nSeeded ?? 0) && !name.includes("@")) this.demand.classes.push(name);
@@ -735,18 +773,22 @@ export class World {
   /** a host class defined after classes were linked from the build: repairs the vtables of the ones it concerns */
   repairLinked(): void { for (const [name, rt] of this.classes) if (rt.mod[0] === "g" || rt.mod[0] === "e") this.repairVtable(name); }
   /** The bytes of a module that defines classes `rts`: what a build-time mode stores beside the unit modules of Compiler.buildUnit, and instantiates
-   *  in the same order (importing the same table), instead of this linker doing both on demand. */
-  classModule(rts: ClassRt[]): Uint8Array {
+   *  in the same order (importing the same table), instead of this linker doing both on demand. A `lean` module (a class linked on demand) holds only
+   *  the class's globals, since a module with code costs the engine far more: its slots get shared stubs and its ensure() is compiled on first call. */
+  classModule(rts: ClassRt[], lean = false): Uint8Array {
     const span = beginCompile("wasm.classBuild");
     try {
       const mb = new ModuleBuilder(), b = declareBase(mb);
-      mb.importTable("rt", "table", T.funcref, 0);
-      const link = this.importLink(mb);
-      const sid = mb.importGlobal("rt", "sid", T.i32, true), iw = mb.importGlobal("rt", "iw", T.i32, true), tag = mb.importTag("rt", "tag", b.tTagFn);
+      let link = -1, sid = -1, iw = -1, tag = -1;
+      if (!lean) {
+        mb.importTable("rt", "table", T.funcref, 0);
+        link = this.importLink(mb);
+        sid = mb.importGlobal("rt", "sid", T.i32, true); iw = mb.importGlobal("rt", "iw", T.i32, true); tag = mb.importTag("rt", "tag", b.tTagFn);
+      }
       // the String constants of the static values are imported before the module defines a global of its own
       const consts = new Map<string, number>();
       let fromChars = -1;
-      for (const { name } of rts) {
+      if (!lean) for (const { name } of rts) {
         const jc = this.prog.get(name);
         if (jc?.def?.staticValuesOff) for (const v of jc.dex!.encodedArray(jc.def.staticValuesOff)) {
           if (typeof v !== "string" || consts.has(v)) continue;
@@ -755,43 +797,73 @@ export class World {
           else if (fromChars < 0) fromChars = mb.importFunc("wasm:js-string", "fromCharCodeArray", mb.addFuncType([refNull(b.tData.i16), T.i32, T.i32], [ref(-17)]));
         }
       }
+      const literal = (c: Code, v: string) => {
+        if (v.isWellFormed()) c.gget(consts.get(v)!); else c.i32(0).i32(v.length).arrayNewData(b.tData.i16, mb.addDataPassive(Uint8Array.from({ length: 2 * v.length }, (_, k) => (v.charCodeAt(k >> 1) >> (8 * (k & 1))) & 255))).i32(0).i32(v.length).call(fromChars);
+        c.anyConvertExtern().i32(this.synthSlot("strLit", rtfns.get("strLit")!)).callIndirect(mb.addFuncType([T.anyref], [T.anyref]));
+      };
       const nullInit = (t: number) => { const o = [0xd0]; sleb(t, o); return o; };
       const zero = (k: Kind) => (k === "I" ? [0x41, 0] : k === "J" ? [0x42, 0] : [0xd0, 0x6e]);
       const vts: number[][] = [];
       for (const rt of rts) {
         const { name, id, slotBase } = rt, jc = this.prog.get(name), methods = jc?.methods ?? [];
-        const vtG = name[0] === "[" || !jc?.isInterface ? mb.addGlobal(refNull(b.tVT), true, nullInit(b.tVT)) : -1;
-        if (vtG >= 0) mb.export(id + ":vt", "global", vtG);
+        let vtG = -1;
+        if (name[0] === "[" || !jc?.isInterface) {
+          // a vtable the engine's limit on array.new_fixed admits is the global's constant initializer, else the start function fills it in
+          const words = this.vtWords(name, id), fixed = words.length <= 10_000;
+          const init = fixed ? [...[...words].flatMap((w) => { const o = [0x41]; sleb(w, o); return o; }), 0xfb, 0x08] : nullInit(b.tVT);
+          if (fixed) { uleb(b.tVT, init); uleb(words.length, init); }
+          vtG = mb.addGlobal(refNull(b.tVT), true, init);
+          if (!fixed) vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, mb.addDataPassive(new Uint8Array(words.buffer))).gset(vtG).b);
+          mb.export(id + ":vt", "global", vtG);
+        }
         // a class with nothing to initialize (no static values or <clinit>, nor supertypes that have) starts initialized: there is no event to wait for or report
         const initialize = !!jc && this.needsInit(name), initG = mb.addGlobal(T.i32, true, [0x41, initialize ? 0 : INIT_DONE]);
         mb.export(id + ":init", "global", initG);
-        const statics = new Map<string, number>();
+        const statics = new Map<FieldInfo, number>();
         for (const f of jc?.fields ?? []) if (f.isStatic) {
-          const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f.name + ":" + f.desc, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
+          const g = mb.addGlobal(kindVT(b.tObj, f.kind), true, zero(f.kind)); statics.set(f, g); mb.export(id + ":s:" + f.name + ":" + f.desc, "global", g);
         }
+        if (lean) continue;
         const stubs = methods.map((m, i) => {
-          const params = (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)).map((k) => kindVT(b.tObj, k));
-          const sig = mb.addFuncType(params, m.ret === "V" ? [] : [kindVT(b.tObj, kindOf(m.ret))]);
-          return mb.addFunc(sig, this.stubBody(slotBase + i, sig, params, link));
+          const { params, ret } = this.methodKinds(m);
+          const vt = params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vt, ret === "V" ? [] : [kindVT(b.tObj, ret)]);
+          return mb.addFunc(sig, this.stubBody(slotBase + i, sig, vt, link));
         });
-        if (initialize) stubs.push(mb.addFunc(mb.addFuncType([], []), this.ensureBody(mb, b, jc!, initG, statics, consts, fromChars, rt, sid, iw, tag)));
-        else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
-        if (vtG >= 0) {
-          const words = this.vtWords(name, id), seg = mb.addDataPassive(new Uint8Array(words.buffer));
-          vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, seg).gset(vtG).b);
-        }
+        if (initialize) {
+          const c = new Code(0);
+          this.emitEnsure({ mb, b, initG, sid, iw, tag, statics: (f) => statics.get(f)!, literal }, jc!, rt, c);
+          stubs.push(mb.addFunc(mb.addFuncType([], []), c.finish()));
+        } else if (jc) stubs.push(mb.addFunc(mb.addFuncType([], []), new Code(0).finish()));
         if (stubs.length) mb.addElemActive(0, slotBase, stubs);
       }
       if (vts.length) mb.start = mb.addFunc(mb.addFuncType([], []), [0, ...vts.flat(), 0x0b], "$vt");
       return mb.build();
     } finally { endCompile(span); }
   }
+  /** the kinds of the parameters (the receiver first) and result of `m` */
+  private methodKinds(m: MethodInfo): { params: Kind[]; ret: Kind | "V" } {
+    return { params: (m.isStatic ? [] : ["L" as Kind]).concat(m.params.map(kindOf)), ret: m.ret === "V" ? "V" : kindOf(m.ret) };
+  }
+  /** the stubs of a class linked on demand, whose module holds no code: shared ones in its method slots and its ensure slot (a function that does nothing
+   *  for a class with nothing to initialize) */
+  private stubClass(rt: ClassRt, jc: JClass | undefined): void {
+    const want: StubRequest[] = (jc?.methods ?? []).map((m, i) => ({ ...this.methodKinds(m), slot: rt.slotBase + i })), ensure = rt.slotBase + rt.nMethods;
+    if (jc && this.needsInit(rt.name)) want.push({ params: [], ret: "V", slot: ensure });
+    else if (jc) this.table.set(ensure, this.rt.nop);
+    this.poolStubs(want).forEach((f, i) => this.table.set(want[i].slot, f));
+  }
+  /** the body of ensure() of class `cls` in a unit `cx` compiles (Compiler.buildUnit), which imports the class's globals */
+  ensureBody(cx: Compiler, cls: string, c: Code): void {
+    const jc = this.prog.require(cls), rt = this.link(cls);
+    this.emitEnsure({ mb: cx.mb, b: cx, initG: cx.initGlobal(cls), sid: cx.global("rt", "sid", T.i32, true), iw: cx.global("rt", "iw", T.i32, true), tag: cx.tag,
+      statics: (f) => cx.staticGlobal(cls, f.name, f.desc), literal: (c, v) => cx.str.literal(c, v) }, jc, rt, c);
+  }
   /** ensure(): class initialization (JLS 12.4.2). The init word says who is initializing the class: a request from that thread returns at
    *  once (re-entry and cycles see the half-initialized class), one from another waits in initWait (the scheduler's hook). Superclass and
    *  default-method superinterfaces first, then the dex's static values and <clinit>. A throw marks the class failed and goes to initFail
    *  (an Error propagates, anything else becomes ExceptionInInitializerError); later requests throw NoClassDefFoundError. */
-  private ensureBody(mb: ModuleBuilder, b: ReturnType<typeof declareBase>, jc: JClass, initG: number, statics: Map<string, number>, consts: Map<string, number>, fromChars: number, rt: ClassRt, sid: number, iw: number, tag: number): number[] {
-    const c = new Code(0), voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
+  private emitEnsure(x: InitScope, jc: JClass, rt: ClassRt, c: Code): void {
+    const { mb, b, initG, sid, iw, tag } = x, voidSig = mb.addFuncType([], []), e = c.newLocal(T.anyref);
     const call = (slot: number, sig = voidSig) => c.i32(slot).callIndirect(sig);
     const rtfn = (name: string) => this.synthSlot(name, rtfns.get(name)!);
     if (hasSignatureConstraints(this, jc.name)) {
@@ -815,17 +887,15 @@ export class World {
     if (jc.def?.staticValuesOff) {
       const sfields = jc.fields.filter((f) => f.isStatic);
       jc.dex!.encodedArray(jc.def.staticValuesOff).forEach((v, i) => {
-        const fi = sfields[i], g = fi && statics.get(fi.name + ":" + fi.desc);
-        if (!fi || g === undefined || v === null || v === 0 || v === 0n || v === false) return;
+        const fi = sfields[i];
+        if (!fi || v === null || v === 0 || v === 0n || v === false) return;
         if (typeof v === "number" || typeof v === "boolean") {
           if (fi.desc === "F") c.i32(f32bits(v as number)); else if (fi.desc === "D") c.i64(f64bits(v as number));
           else if (fi.desc === "J") c.i64(BigInt(v as number)); else c.i32(Number(v));
-          c.gset(g);
-        } else if (typeof v === "bigint") { c.i64(fi.desc === "D" ? f64bits(Number(v)) : v); c.gset(g); }
-        else if (typeof v === "string") {
-          if (v.isWellFormed()) c.gget(consts.get(v)!); else c.i32(0).i32(v.length).arrayNewData(b.tData.i16, mb.addDataPassive(Uint8Array.from({ length: 2 * v.length }, (_, k) => (v.charCodeAt(k >> 1) >> (8 * (k & 1))) & 255))).i32(0).i32(v.length).call(fromChars);
-          c.anyConvertExtern(); call(rtfn("strLit"), mb.addFuncType([T.anyref], [T.anyref])); c.gset(g);
-        }
+        } else if (typeof v === "bigint") c.i64(fi.desc === "D" ? f64bits(Number(v)) : v);
+        else if (typeof v === "string") x.literal(c, v);
+        else return;
+        c.gset(x.statics(fi));
       });
     }
     const ci = jc.byKey.get("<clinit>()V");
@@ -836,7 +906,7 @@ export class World {
     wake(); c.br(2);
     c.end().unreachable().end();                                // the thrown Throwable is on the stack
     c.lset(e).i32(INIT_FAILED).gset(initG); wake(); c.lget(e); call(rtfn("initFail"), b.tTagFn);
-    return c.end().finish();
+    c.end();
   }
 
   // ---------- compiling methods on demand
@@ -844,7 +914,8 @@ export class World {
    *  iterations; `upgrade` recompiles the hot ones with their small callees. */
   private linkSlot(slot: number): void {
     const s = this.slotAt(slot);
-    if (!s || s.k === "ensure" || s.done) return;
+    if (!s || s.done) return;
+    if (s.k === "ensure") { this.linkEnsure(slot); return; }
     if (s.k === "method" && this.aot?.install(slot) && s.done) return;
     const clock = this.unitClock();
     if (s.k === "method" && this.opts.cold && this.installCold(slot, s.m, clock)) return;
@@ -854,6 +925,16 @@ export class World {
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.units++; this.stats.methods += 1;
     this.install(s.k === "method" ? [slot] : [], false, cx, this.unitImports(cx), built, slot, clock);
+  }
+  /** ensure() of a class linked on demand, in one unit with its <clinit>, which only ensure() calls */
+  private linkEnsure(slot: number): void {
+    const cls = this.blockClass[this.blockOf(slot)], ci = this.prog.require(cls).byKey.get("<clinit>()V"), clock = this.unitClock();
+    const at = ci && this.slotOf(ci), clinit = at === undefined ? undefined : this.slotAt(at);
+    const own = clinit?.k === "method" && !clinit.done && !this.opts.cold && !(this.aot?.install(at!) && clinit.done) ? clinit.m : undefined;
+    const cx = new Compiler(this), built = cx.buildUnit(own ? [own] : [], [], false, false, [cls]);
+    if (own) { this.demand.methods.add(own); this.stats.methods++; }
+    this.stats.units++;
+    this.install(own ? [at!] : [], false, cx, this.unitImports(cx), built, slot, clock);
   }
   private cold?: ColdInterpreter;
   private coldValidation?: ColdSlowOps;
@@ -1247,13 +1328,14 @@ export class World {
       sl.done = true;
       this.table.set(at, exports[name]);
     };
-    if (s.k === "method") {
+    if (s.k === "method" || s.k === "ensure") {
       for (const x of group) { set(x, "m" + x); this.groupOf.set(x, group); (this.slotAt(x) as { hot?: boolean }).hot = hot; if (x < COUNT_SLOTS) new Int32Array(this.mem.buffer, COUNT_BASE + 4 * x, 1)[0] = 0; }
       if (hot) {
         const names = cx instanceof Compiler ? cx.symbolicImports.keys() : (cx.symbols ?? []).map(([name]) => name);
         const unit = this.hotUnits.publish(group, names, this.table);
         for (const name of unit?.sites ?? []) if (this.symbolicSites.get(name)?.ready) this.hotUnits.resolved(name);
       } else group.forEach(at => this.hotUnits.forget(at));
+      if (s.k === "ensure") { s.done = true; this.table.set(slot, exports["m" + slot]); }
     } else set(slot, "m");
   }
   private unitClock(): { start: number; accounted: number } { return { start: performance.now(), accounted: this.stats.compileMs }; }

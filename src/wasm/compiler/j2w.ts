@@ -316,6 +316,7 @@ export class Compiler implements Base {
   /** the immutable global holding String constant `s`, which the engine fills in at instantiation (WebAssembly.Module's importedStringConstants) */
   stringConst(s: string): number { return this.global("#", s, ref(-17), false); }
   vtGlobal(cls: string): number { return this.classGlobal(cls, "vt", refNull(this.tVT)); }
+  initGlobal(cls: string): number { return this.classGlobal(cls, "init", T.i32); }
   /** the global holding static field `name` of type `desc` of `owner`, which must declare it (a dex may declare one name with several types, so callers that know the type pass it) */
   staticGlobal(owner: string, name: string, desc?: string): number {
     const f = this.prog.get(owner)?.fields.find((x) => x.isStatic && x.name === name && (desc === undefined || x.desc === desc));
@@ -420,7 +421,7 @@ export class Compiler implements Base {
    *  the classes every path to here has already requested */
   emitEnsure(c: Code, cls: string, known?: Set<string>): void {
     if (known?.has(cls) || !this.w.needsInit(cls) || this.w.initialized(cls) || (this.owner && this.prog.chain(this.owner.cls).includes(cls))) return;
-    c.gget(this.classGlobal(cls, "init", T.i32)).i32(INIT_DONE).raw(OP.i32_ne).if_().i32(this.w.ensureSlot(cls)).callIndirect(this.sig([], "V")).end();
+    c.gget(this.initGlobal(cls)).i32(INIT_DONE).raw(OP.i32_ne).if_().i32(this.w.ensureSlot(cls)).callIndirect(this.sig([], "V")).end();
   }
   idOf(name: string): number { return this.w.idOf(name); }
   /** calls the runtime function `name` (see rtfns.ts) with its arguments already pushed */
@@ -681,7 +682,8 @@ export class Compiler implements Base {
    *  beside them for the unit's own calls and not exported; what they assume about the class hierarchy counts against `methods[0]`. A `hot`
    *  unit is the second tier: its methods do not count. With `install` the module puts its functions in the table itself, when it is instantiated,
    *  instead of exporting them (a precompiled module, aot.ts). */
-  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install = false): { bytes: Uint8Array; traces: FnTrace[] } {
+  /** `ensures`: classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
+  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
     const span = beginCompile("wasm.emit");
     try {
     const { mb, w } = this, all = methods.concat(copies);
@@ -707,7 +709,13 @@ export class Compiler implements Base {
       while (++j < at.length && at[j][0] === at[j - 1][0] + 1);
       mb.addElemActive(0, at[i][0], at.slice(i, j).map((x) => x[1]));
     }
-    return this.finishModule(all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })));
+    const inits = ensures.map((cls) => {
+      const name = "$ensure:" + cls, f = mb.reserveFunc(this.sig([], "V"), name), code = new Code(0);
+      w.ensureBody(this, cls, code);
+      mb.setBody(f, code.finish()); mb.export("m" + w.ensureSlot(cls), "func", f);
+      return { name, f, code };
+    });
+    return this.finishModule([...all.map((m, i) => ({ name: label(m, i), f: this.fn.get(mid(m))!, code: codes[i], m })), ...inits]);
     } finally { endCompile(span); }
   }
   buildResume(m: MethodInfo, pc: number) {
