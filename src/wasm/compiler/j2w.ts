@@ -373,23 +373,30 @@ export class Compiler implements Base {
     const slot = this.w.slotOf(m);
     if (slot >= COUNT_SLOTS) return;
     this.scratch();
-    const addr = COUNT_BASE + 4 * slot, n = c.scratch();
+    // a call to this module's counter is a fraction of the sequence, which the engine compiles for every method a launch runs
+    const count = (b: Code, add: (b: Code) => void, due: (b: Code, n: number) => void) => {
+      const at = b.newLocal(T.i32), n = b.newLocal(T.i32);
+      b.lget(0).i32(2).raw(OP.i32_shl).ltee(at).lget(at).mem(OP.i32_load, 2, COUNT_BASE); add(b); b.raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2, COUNT_BASE);
+      due(b, n); b.if_().lget(0).call(this.imp.hot).end();
+    };
+    c.i32(slot);
     if (iterations === undefined) {
-      c.i32(addr).i32(addr).mem(OP.i32_load, 2).i32(1).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
-      c.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq).if_().i32(slot).call(this.imp.hot).end();
+      c.call(this.local("count", ["I"], "V", (b) => count(b, (b) => b.i32(1), (b, n) => b.lget(n).i32(HOT_BUDGET).raw(OP.i32_eq))));
       return;
     }
-    c.i32(addr).i32(addr).mem(OP.i32_load, 2).lget(iterations).raw(OP.i32_add).ltee(n).mem(OP.i32_store, 2);
-    c.lget(n).lget(iterations).raw(OP.i32_sub).i32(HOT_BUDGET).raw(OP.i32_lt_u);
-    c.lget(n).i32(HOT_BUDGET).raw(OP.i32_ge_u, OP.i32_and).if_().i32(slot).call(this.imp.hot).end();
+    // the budget is reached by this activation's iterations when the count crosses it
+    c.lget(iterations).call(this.local("countLoop", ["I", "I"], "V", (b) => count(b, (b) => b.lget(1), (b, n) => {
+      b.lget(n).lget(1).raw(OP.i32_sub).i32(HOT_BUDGET).raw(OP.i32_lt_u).lget(n).i32(HOT_BUDGET).raw(OP.i32_ge_u, OP.i32_and);
+    })));
   }
   /** a method that calls something counts its frame (exc.ts MAX_DEPTH): `entry` takes the depth before it, which is restored on return and at a handler */
   emitEnter(c: Code, entry: number): number[] {
-    const g = this.global("rt", "depth", T.i32, true);
-    c.gget(g).ltee(entry).i32(MAX_DEPTH).raw(OP.i32_ge_s).if_(); this.callThrower(c, "soe"); c.end();
-    c.lget(entry);
     const weight = c.i32Patched();
-    c.raw(OP.i32_add).gset(g);
+    c.call(this.local("enter", ["I"], "I", (b) => {
+      const g = this.global("rt", "depth", T.i32, true), depth = b.newLocal(T.i32);
+      b.gget(g).ltee(depth).i32(MAX_DEPTH).raw(OP.i32_ge_s).if_(); this.callThrower(b, "soe"); b.end();
+      b.lget(depth).lget(0).raw(OP.i32_add).gset(g).lget(depth);
+    })).lset(entry);
     return [weight];
   }
   /** sets the depth to what it was before the frame (`frame` false) or with the frame counted (the weight, patched in at the end of the method) */
