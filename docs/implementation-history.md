@@ -6891,6 +6891,18 @@ Counted per process from `wd.boot()` on a page loaded earlier, after `bootApk`:
   took 22 ms of Calculator's launch. Fields are now built on their own: Calculator 548–559 → 539–551 ms and
   FitNotes 472–480 → 463–468 ms.
 
+**First launches without a saved build.** An APK with no bundled build compiles its launch on demand. A build is
+then made in a Worker for later launches. Measured from `wd.boot()` in a fresh profile:
+
+| App | First launch | Later launch (saved build) | Its first build |
+|---|---|---|---|
+| Markor | 1,396–1,402 ms | 517–535 ms | 1.2 s, 5,083 methods |
+| Feeder | 3,165–3,227 ms | 753–770 ms | 4.3 s, 20,431 methods |
+
+Holding the first launch until a one-Worker build is ready would make it slower, not faster: Feeder would take
+about 5 s against 3.2 s. M4's install-time build pays only when it is split across Workers. Each of those
+Workers holds the app's Program, which TikTok's size rules out.
+
 ### TikTok's renderer OOM and the late-class index (2026-10-11)
 
 `e2e --full` on the Wasm tier crashes the renderer in TikTok's launch with `V8 javascript OOM (CALL_AND_RETRY_LAST)`.
