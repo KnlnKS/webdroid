@@ -667,11 +667,13 @@ export class World {
       let at = this.stubSlots.length, e = 0;
       const made = grow.map(({ k, w, size }) => {
         const vts = w.params.map((k) => kindVT(b.tObj, k)), sig = mb.addFuncType(vts, w.ret === "V" ? [] : [kindVT(b.tObj, w.ret)]), first = e, base = at;
+        // a stub's body, in bytes: (local i32) i32.const at, call slotOf, local.tee, call link, the params and the slot, call_indirect
+        const tail = [0x10]; uleb(slotOf, tail); tail.push(0x22); uleb(vts.length, tail); tail.push(0x10); uleb(link, tail);
+        vts.forEach((_, j) => { tail.push(0x20); uleb(j, tail); });
+        tail.push(0x20); uleb(vts.length, tail); tail.push(0x11); uleb(sig, tail); tail.push(0, 0x0b);
         for (let i = 0; i < size; i++, at++, e++) {
-          const c = new Code(vts.length), s = c.newLocal(T.i32);
-          c.i32(at).call(slotOf).ltee(s).call(link);
-          vts.forEach((_, j) => c.lget(j));
-          mb.export(String(e), "func", mb.addFunc(sig, c.lget(s).callIndirect(sig).finish(), "stub"));
+          const body = [1, 1, 0x7f, 0x41]; sleb(at, body);
+          mb.export(String(e), "func", mb.addFunc(sig, body.concat(tail), "stub"));
         }
         return { k, size, first, base };
       });
@@ -811,9 +813,8 @@ export class World {
         let vtG = -1;
         if (name[0] === "[" || !jc?.isInterface) {
           // a vtable the engine's limit on array.new_fixed admits is the global's constant initializer, else the start function fills it in
-          const words = this.vtWords(name, id), fixed = words.length <= 10_000;
-          const init = fixed ? [...[...words].flatMap((w) => { const o = [0x41]; sleb(w, o); return o; }), 0xfb, 0x08] : nullInit(b.tVT);
-          if (fixed) { uleb(b.tVT, init); uleb(words.length, init); }
+          const words = this.vtWords(name, id), fixed = words.length <= 10_000, init: number[] = fixed ? [] : nullInit(b.tVT);
+          if (fixed) { for (const w of words) { init.push(0x41); sleb(w, init); } init.push(0xfb, 0x08); uleb(b.tVT, init); uleb(words.length, init); }
           vtG = mb.addGlobal(refNull(b.tVT), true, init);
           if (!fixed) vts.push(new Code(0).i32(0).i32(words.length).arrayNewData(b.tVT, mb.addDataPassive(new Uint8Array(words.buffer))).gset(vtG).b);
           mb.export(id + ":vt", "global", vtG);
@@ -1930,12 +1931,21 @@ export class World {
    *  in the hundreds of thousands, each with dozens of supertypes. */
   lateBy(decls: ReadonlySet<string>, names: Iterable<string> = this.lateKnown): Map<string, string[]> {
     const out = new Map<string, string[]>(), memo = new Map<string, readonly string[]>(), none: readonly string[] = [];
+    // most classes reach no decl or the decls of one supertype only: those share an array
     const within = (n: string): readonly string[] => {
-      let s = memo.get(n);
-      if (s) return s;
-      const c = this.prog.get(n), found = new Set<string>(decls.has(n) ? [n] : []);
-      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of within(p)) found.add(x);
-      memo.set(n, s = found.size ? [...found] : none);
+      const memoed = memo.get(n);
+      if (memoed) return memoed;
+      const c = this.prog.get(n);
+      let s: readonly string[] = decls.has(n) ? [n] : none, found: Set<string> | undefined;
+      const join = (xs: readonly string[]) => {
+        if (!xs.length || xs === s) return;
+        if (!s.length) { s = xs; return; }
+        found ??= new Set(s);
+        for (const x of xs) found.add(x);
+      };
+      if (c) { if (c.sup) join(within(c.sup)); for (const i of c.ifaces) join(within(i)); }
+      if (found) s = [...found];
+      memo.set(n, s);
       return s;
     };
     for (const n of names) {
