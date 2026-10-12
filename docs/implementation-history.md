@@ -6853,3 +6853,30 @@ function this way means calling it, which needs an instance. The app's modules i
 GC reference types, which only a World that numbered the same classes can supply. Binaryen's `-O1` shrinks an app
 module's code section by 17.5%, and `simplify-locals` alone by 7%. That makes the encoding a small lever on
 compile time.
+
+### TikTok's renderer OOM and the late-class index (2026-10-11)
+
+`e2e --full` on the Wasm tier crashes the renderer in TikTok's launch with `V8 javascript OOM (CALL_AND_RETRY_LAST)`.
+The same crash happens at 381efca9, so this branch did not cause it. The JS tier renders all 13 of its steps.
+Process Workers and compile Workers share the page's renderer process, and so share one 4 GB pointer-compression
+cage. Just before the crash, CDP's committed heap summed over the page and every Worker is 4.1–4.4 GB:
+
+| Realm | Committed heap |
+|---|---|
+| App process | 1.0–1.3 GB |
+| One-shot app-build Worker | about 1.2 GB |
+| Each of three background TikTok processes | 0.2–0.4 GB |
+| Each upgrade compile Worker | 0.1–0.45 GB |
+
+Each of these realms holds a Program and World over TikTok's dexes.
+
+`World.late` indexed every late concrete class under each of its transitive supertypes, about 70 MB in TikTok's
+app process and again in its build Worker. Its only readers ask about the declaring classes of CHA assumptions,
+so `lateBy` now answers for those classes on demand. Mihon launches from `wd.boot()` are unchanged:
+1,127–1,148 ms with it against 1,145–1,190 ms without. TikTok still crashes. Fitting it needs fewer resident
+Worlds, or realms in more than one renderer process.
+
+Other `e2e --full` failures on Wasm also fail on JS:
+- YouTube's playback-control steps.
+- Resy: its step-02 wedge on Wasm, and on JS its steps 10–14 time out.
+- Mihon: the live update dialog.

@@ -410,19 +410,19 @@ try {
   cache.noteLate([...p.own()].map(c => c.name));
   const note = cache.noteLate.bind(cache);
   let reindexed = 0;
-  cache.noteLate = names => { reindexed += names.length; return note(names); };
+  cache.noteLate = names => { reindexed += names.length; note(names); };
   const epoch = cache.epoch;
   cache.initiateClass(child, "Shared", key);
   const sub = p.definedBy(child, "Sub")!;
-  if (!reindexed || !cache.late.get(key)?.includes(sub) || cache.late.get("Shared")?.includes(sub)) throw new Error("initiated superclass identity retained stale subtype relationships");
+  if (!reindexed || !cache.lateSubtypes(key).includes(sub) || cache.lateSubtypes("Shared").includes(sub)) throw new Error("initiated superclass identity retained stale subtype relationships");
   if (p.lookup(child, "Shared") !== key || cls.dex!.type(type) !== `L${key};` || self.ret !== `L${key};` || peer.desc !== self.ret || cls.byKey.get(self.key) !== self || cache.epoch !== epoch + 1) throw new Error("initiating identity retained stale DEX/member caches");
-  const priorLate = cache.late.get("NamespaceFace");
+  const priorLate = cache.lateSubtypes("NamespaceFace").join();
   reindexed = 0;
   cache.initiateClass(child, "SymbolicHelper", p.definedBy(child, "SymbolicHelper")!);
-  if (reindexed || cache.late.get("NamespaceFace") !== priorLate) throw new Error("descriptor-only initiation rebuilt the subtype index");
+  if (reindexed || cache.lateSubtypes("NamespaceFace").join() !== priorLate) throw new Error("descriptor-only initiation rebuilt the subtype index");
   const face = p.definedBy(child, "NamespaceFace")!;
   cache.initiateClass(child, "NamespaceFace", face);
-  if (!reindexed || !cache.late.get(face)?.includes(key) || cache.late.get("NamespaceFace")?.includes(key)) throw new Error("initiated interface identity retained stale subtype relationships");
+  if (!reindexed || !cache.lateSubtypes(face).includes(key) || cache.lateSubtypes("NamespaceFace").includes(key)) throw new Error("initiated interface identity retained stale subtype relationships");
   console.log(`  subtype index: descriptor-only 0 classes, interface change ${reindexed} classes reindexed`);
   cache.link(key);
   try { cache.initiateClass(child, "Shared", "Shared"); throw new Error("conflicting initiated identity accepted"); }

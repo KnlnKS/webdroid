@@ -1715,6 +1715,7 @@ export class World {
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !kept) this.aot?.unbindApp();
     this.refreshLate();
+    const lateBy = this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)));
     const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {
       for (const slot of a.slots) {
@@ -1728,7 +1729,7 @@ export class World {
       const samePrototype = declared && declared === saved?.declared && !declared.isStatic && declared.desc === a.desc;
       const narrow = !mentions(a.desc), cache = narrow ? hierarchySubtypes : changedSubtypes;
       let by = cache.get(a.decl);
-      if (!by) cache.set(a.decl, by = (this.late.get(a.decl) ?? []).filter(narrow ? hierarchy : depends));
+      if (!by) cache.set(a.decl, by = (lateBy.get(a.decl) ?? []).filter(narrow ? hierarchy : depends));
       if (sameTarget && samePrototype && this.holds(a, by)) {
         delete a.stands;
         continue;
@@ -1799,7 +1800,8 @@ export class World {
     this.coldResumes.clear(); this.implemented.clear(); this.allocatedIndex = undefined;
     this.cha.index(added);
     // a decision about the implementations of decl.name+desc changes only when a concrete subtype of decl is added that has one
-    const now = this.noteLate(added);
+    this.noteLate(added);
+    const now = this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)), added);
     for (const [key, a] of this.assumptions) {
       const by = now.get(a.decl);
       if (!by || this.holds(a, by)) continue;
@@ -1811,8 +1813,7 @@ export class World {
     this.settlingHosts = true;
     try { this.hosts.loaded(); } finally { this.settlingHosts = false; }
   }
-  /** the concrete classes added since compiled code was made, by each of their supertypes (themselves included) */
-  late = new Map<string, string[]>();
+  /** the classes added since compiled code was made */
   private lateKnown = new Set<string>();
   private lateHierarchy = new Map<string, { sup: string | null; ifaces: string[]; flags: number } | undefined>();
   private rememberLate(name: string): void {
@@ -1825,37 +1826,48 @@ export class World {
     for (const [name, old] of this.lateHierarchy) {
       const c = this.prog.get(name);
       if (!!c !== !!old || c && old && (c.sup !== old.sup || c.flags !== old.flags || c.ifaces.length !== old.ifaces.length || c.ifaces.some((n, i) => n !== old.ifaces[i]))) {
-        this.late.clear(); this.lateKnown.clear(); this.lateHierarchy.clear();
+        this.lateKnown.clear(); this.lateHierarchy.clear();
         break;
       }
     }
     this.noteLate([...this.prog.own()].map(c => c.name).filter(n => !this.lateKnown.has(n)));
   }
-  /** records the concrete classes among `added` and returns them by supertype */
-  noteLate(added: string[]): Map<string, string[]> {
-    const now = new Map<string, string[]>(), up = new Map<string, string[]>();
-    const supers = (n: string): string[] => {
-      let s = up.get(n);
-      if (!s) {
-        this.rememberLate(n);
-        const c = this.prog.get(n), out = new Set([n]);
-        if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of supers(p)) out.add(x);
-        up.set(n, s = [...out]);
-      }
-      return s;
-    };
-    for (const n of added) {
+  /** records `added` as late, with the hierarchy of the concrete ones (refreshLate) */
+  noteLate(added: string[]): void {
+    const visit = (n: string): void => {
+      if (this.lateHierarchy.has(n)) return;
       this.rememberLate(n);
       const c = this.prog.get(n);
+      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) visit(p);
+    };
+    for (const n of added) {
+      const c = this.prog.get(n);
+      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) visit(n); else this.rememberLate(n);
       if (c) this.lateKnown.add(n);
-      if (!c || c.isInterface || c.flags & ACC.ABSTRACT) continue;
-      for (const s of supers(n)) {
-        let a = now.get(s); if (!a) now.set(s, a = []); a.push(n);
-        let b = this.late.get(s); if (!b) this.late.set(s, b = []); b.push(n);
-      }
     }
-    return now;
   }
+  /** the concrete classes among `names` (the late ones by default) by each of their supertypes in `decls`, themselves included. Only the
+   *  supertypes an assumption names are asked about, so no index of every late class by every supertype is kept: an app's classes number
+   *  in the hundreds of thousands, each with dozens of supertypes. */
+  lateBy(decls: ReadonlySet<string>, names: Iterable<string> = this.lateKnown): Map<string, string[]> {
+    const out = new Map<string, string[]>(), memo = new Map<string, readonly string[]>(), none: readonly string[] = [];
+    const within = (n: string): readonly string[] => {
+      let s = memo.get(n);
+      if (s) return s;
+      const c = this.prog.get(n), found = new Set<string>(decls.has(n) ? [n] : []);
+      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) for (const x of within(p)) found.add(x);
+      memo.set(n, s = found.size ? [...found] : none);
+      return s;
+    };
+    for (const n of names) {
+      const c = this.prog.get(n);
+      if (!c || c.isInterface || c.flags & ACC.ABSTRACT) continue;
+      for (const d of within(n)) { let a = out.get(d); if (!a) out.set(d, a = []); a.push(n); }
+    }
+    return out;
+  }
+  /** the concrete late classes that are subtypes of `decl` */
+  lateSubtypes(decl: string): string[] { return this.lateBy(new Set([decl])).get(decl) ?? []; }
   /** whether the implementation code relied on for decl.name+desc (`tc`'s method `tk`, none if empty) stands once the concrete classes `by`, all subtypes of decl, exist */
   holds(a: { name: string; desc: string; tc: string; tk: string }, by: string[]): boolean {
     const target = a.tc ? this.prog.get(a.tc)?.byKey.get(a.tk) : undefined;
