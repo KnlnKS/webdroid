@@ -1,6 +1,7 @@
 import { packageArchive, packageArchiveSource } from "../android/packagearchive";
 import { zipTree } from "../jvm/natives/jzip";
-import { PackedArchive, packedArchives } from "./packedarchive";
+import { PackedArchive, packedArchives, SYSTEM_PACKAGE_BASE, systemPackage, type PackedArchiveIndex } from "./packedarchive";
+import { SYSTEM_PACKAGES } from "./system-packages";
 import { rt } from "../jvm/runtime";
 import { openInstallApks, type Install } from "./install";
 import { RemoteFile } from "./remote-file";
@@ -10,6 +11,21 @@ import { vfs } from "./vfs";
 import { hexBytes, u8 } from "../jvm/abi";
 import type { ProcessBootstrap } from "./process-bootstrap-data";
 
+/** system packages' archives prepared before a process's package arrives, by source digest: every process registers them,
+ *  and preparing one fetches and reads its bootstrap file (11 MB for GMS) */
+const prepared = new Map<string, Promise<PackedArchive>>();
+export function prepareSystemPackages(): void {
+  for (const spec of SYSTEM_PACKAGES) prepared.set(spec.sha256, systemPackage(spec));
+}
+async function preparedArchive(index: PackedArchiveIndex, base: string, own: boolean): Promise<PackedArchive> {
+  const ready = own || base !== SYSTEM_PACKAGE_BASE ? undefined : prepared.get(index.sha256);
+  prepared.delete(index.sha256);
+  const packed = await ready?.catch(() => undefined);
+  if (packed && packed.index.bootstrap.file === index.bootstrap.file) return packed;
+  const opened = new PackedArchive(index, base);
+  await opened.prepare(own);
+  return opened;
+}
 /** Load a process registry from its transferred archive descriptors: archives open together, packages register in registry order. */
 export async function loadProcessPackages(data: ProcessBootstrap): Promise<Install | null> {
   let boot: Install | null = null;
@@ -17,8 +33,7 @@ export async function loadProcessPackages(data: ProcessBootstrap): Promise<Insta
     const path = installedPath(snapshot.pkg), source = snapshot.source, own = snapshot.pkg === data.pkg;
     let archive, base: Pick<Install, "zip" | "base">;
     if ("index" in source) {
-      const packed = new PackedArchive(source.index, source.base);
-      await packed.prepare(own);
+      const packed = await preparedArchive(source.index, source.base, own);
       archive = packageArchive(packed.zip, source.index.certificates.map(hexBytes));
       packedArchives.set(path, packed); vfs.mount(path, packed);
       if (own) rt.classpathSource = packed;

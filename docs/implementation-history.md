@@ -6854,6 +6854,17 @@ GC reference types, which only a World that numbered the same classes can supply
 module's code section by 17.5%, and `simplify-locals` alone by 7%. That makes the encoding a small lever on
 compile time.
 
+### System packages prepared in the spare (2026-10-11)
+
+With the zygote and warm in the spare, the launch's remaining gap before Java was the registry: every process
+registers microG's GMS and vending packages, and `loadProcessPackages` fetched, checked and read their packed
+bootstraps (GMS 11.5 MB, vending 2.35 MB) only once the package arrived. GMS's was ready about 32 ms after the
+Worker's Start, and `bootApk` waited for it. The spare now prepares them while it waits, using the same checked
+loader as the page's provisioning (`systemPackage`), and a matching registry entry takes the prepared archive.
+The process that owns a system package still prepares its own with code. Matched pairs from `wd.boot()` on a
+page loaded 2.5 s earlier, 4 runs each: Calculator `bootApk` 108–111 → 66–76 ms and first frame 617–623 →
+568–583 ms; FitNotes `bootApk` 97–105 → 69–73 ms and first frame 535–545 → 499–506 ms.
+
 ### TikTok's renderer OOM and the late-class index (2026-10-11)
 
 `e2e --full` on the Wasm tier crashes the renderer in TikTok's launch with `V8 javascript OOM (CALL_AND_RETRY_LAST)`.

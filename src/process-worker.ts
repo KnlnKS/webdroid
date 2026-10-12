@@ -27,7 +27,7 @@ async function prepare({ clock, aot, jars, warm }: Prestart) {
     import("./jvm/coverage"), import("./shell/apex"), import("./shell/cacerts"), import("./shell/process-bootstrap"),
     import("./shell/device"), import("./android/skia"), import("./jvm/tier"), import("./shell/config"), import("./jvm/natives/jvmruntime"),
   ]);
-  apex.mountPlatformData(); cacerts.mountSystemCertificates();
+  apex.mountPlatformData(); cacerts.mountSystemCertificates(); packages.prepareSystemPackages();
   await tier.useAotPort(aot);
   const runtime = Promise.all([skia.loadSkia(), tier.tier === "wasm" ? tier.loadTier() : undefined]);
   void runtime.catch(() => {});

@@ -19,6 +19,19 @@ export async function sha256(bytes: Uint8Array): Promise<string> {
   const input = bytes.buffer instanceof ArrayBuffer ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
   return new Uint8Array(await crypto.subtle.digest("SHA-256", input)).toHex();
 }
+/** a system package packed under /vendor/microg/, checked against the digests the build pinned, with its bootstrap read */
+export async function systemPackage(spec: { file: string; sha256: string; indexSha256: string }): Promise<PackedArchive> {
+  const response = await fetch(SYSTEM_PACKAGE_BASE + spec.file.replace(/\.apk$/, ".json"));
+  if (!response.ok) throw new Error(`System package unavailable: ${spec.file}: ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (await sha256(bytes) !== spec.indexSha256) throw new Error(`System package index digest mismatch: ${spec.file}`);
+  const index: PackedArchiveIndex = JSON.parse(new TextDecoder().decode(bytes));
+  if (index.version !== 1 || index.sha256 !== spec.sha256) throw new Error(`System package source mismatch: ${spec.file}`);
+  const packed = new PackedArchive(index, SYSTEM_PACKAGE_BASE);
+  await packed.prepare();
+  return packed;
+}
+export const SYSTEM_PACKAGE_BASE = "/vendor/microg/";
 export class PackedArchive implements FileSource {
   readonly size: number;
   readonly zip: Record<string, Uint8Array> = {};

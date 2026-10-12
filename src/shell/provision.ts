@@ -1,6 +1,6 @@
 import { SYSTEM_PACKAGES } from "./system-packages";
 import { packageArchive } from "../android/packagearchive";
-import { PackedArchive, packedArchives, sha256, type PackedArchiveIndex } from "./packedarchive";
+import { packedArchives, systemPackage } from "./packedarchive";
 import { installedPath, registerPackage } from "../android/pm";
 import { attr, attrStr, TV } from "../android/axml";
 import { resString } from "../android/res";
@@ -16,14 +16,7 @@ import { hexBytes } from "../jvm/abi";
 let ready: Promise<void> | null = null;
 export function provisionPackages(): Promise<void> {
   return ready ??= Promise.all(SYSTEM_PACKAGES.map(async (spec) => {
-    const response = await fetch("/vendor/microg/" + spec.file.replace(/\.apk$/, ".json"));
-    if (!response.ok) throw new Error(`System package unavailable: ${spec.file}: ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (await sha256(bytes) !== spec.indexSha256) throw new Error(`System package index digest mismatch: ${spec.file}`);
-    const index: PackedArchiveIndex = JSON.parse(new TextDecoder().decode(bytes));
-    if (index.version !== 1 || index.sha256 !== spec.sha256) throw new Error(`System package source mismatch: ${spec.file}`);
-    const packed = new PackedArchive(index, "/vendor/microg/");
-    await packed.prepare();
+    const packed = await systemPackage(spec), index = packed.index;
     const archive = packageArchive(packed.zip, index.certificates.map(hexBytes));
     if (archive.pkg !== spec.pkg) throw new Error(`System package identity mismatch: ${spec.file}`);
     const record = registerPackage(archive);
