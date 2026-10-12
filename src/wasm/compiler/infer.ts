@@ -16,16 +16,17 @@ export const I = 1, F = 2, R = 4, J = 8, D = 16;
 const N32 = I | F | R, WIDE = J | D;
 const kc = (c: string) => (c === "L" || c === "[" ? R : c === "J" ? J : c === "D" ? D : c === "F" ? F : I);
 
-interface Eff { u: number[]; d: number; dm: number; link: number; zero: boolean; fconst: boolean }
-const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0, zero: false, fconst: false };
+interface Eff { u: number[]; d: number; dm: number; link: number }
+const NOEFF: Eff = { u: [], d: -1, dm: 0, link: 0 };
 const NO_USES = new Int32Array(0);
 
 /** The webs of one method: nodes are definitions (parameters included), unioned at joins where the register is live. */
 interface WebAnalysis {
   regs: number;
+  pcToIdx: Int32Array;
   ins: readonly PreparedInstruction[];
   /** per node */
-  mask: number[]; vreg: number[]; used: number[]; zero: number[]; fcon: number[];
+  mask: number[]; vreg: number[]; used: number[];
   find(node: number): number;
   /** the node defined by instruction i (-1: none); the nodes its operands read, aligned with the register/mask pairs of its effect */
   defNode: Int32Array;
@@ -102,13 +103,13 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
   }
 
   // ---- webs
-  const parent: number[] = [], mask: number[] = [], vreg: number[] = [], used: number[] = [], zero: number[] = [], fcon: number[] = [];
+  const parent: number[] = [], mask: number[] = [], vreg: number[] = [], used: number[] = [];
   const find = (x: number) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
-  const mk = (m: number, r: number, z: boolean, fc: boolean) => { parent.push(parent.length); mask.push(m); vreg.push(r); used.push(0); zero.push(z ? 1 : 0); fcon.push(fc ? 1 : 0); return parent.length - 1; };
+  const mk = (m: number, r: number) => { parent.push(parent.length); mask.push(m); vreg.push(r); used.push(0); return parent.length - 1; };
   const union = (a: number, b: number) => {
     a = find(a); b = find(b);
     if (a === b) return;
-    parent[b] = a; mask[a] &= mask[b]; used[a] |= used[b]; zero[a] |= zero[b]; fcon[a] |= fcon[b];
+    parent[b] = a; mask[a] &= mask[b]; used[a] |= used[b];
   };
   const defNode = new Int32Array(n).fill(-1);
   const links: number[] = [], linked = new Uint8Array(n);
@@ -121,10 +122,10 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
   const start = new Int32Array(R_).fill(-1);
   const paramNode = new Int32Array(R_).fill(-1);
   let p = R_ - code.ins;
-  if (!isStatic) { start[p] = paramNode[p] = mk(R, p, false, false); p++; }
+  if (!isStatic) { start[p] = paramNode[p] = mk(R, p); p++; }
   for (const t of sig.params) {
     const m = kc(t[0]);
-    const node = mk(m, p, false, false);
+    const node = mk(m, p);
     start[p] = paramNode[p] = node;
     if (m & WIDE) start[p + 1] = node;
     p += m & WIDE ? 2 : 1;
@@ -171,7 +172,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
       }
       if (e.d >= 0 && e.d < R_) {
         let node = defNode[i];
-        if (node < 0) { node = defNode[i] = mk(e.dm, e.d, e.zero, e.fconst); if (e.link === 1 && st[e.u[0]] >= 0) { links.push(node, st[e.u[0]]); } }
+        if (node < 0) { node = defNode[i] = mk(e.dm, e.d); if (e.link === 1 && st[e.u[0]] >= 0) { links.push(node, st[e.u[0]]); } }
         st[e.d] = node;
         if (e.dm & WIDE && e.d + 1 < R_) st[e.d + 1] = node;
       }
@@ -214,28 +215,20 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
       for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
     }
   };
-  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useSlot, paramNode, links, reached, entryNodes, before, ranges };
+  return { regs: R_, pcToIdx: cfg.pcToIdx, ins, mask, vreg, used, find, defNode, useNode, useSlot, paramNode, links, reached, entryNodes, before, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
-interface Components { kf(node: number): number; roots: Set<number>; mask: Map<number, number>; used: Map<number, number>; zero: Map<number, number> }
-export function components(a: WebAnalysis): Components {
-  const kp = new Map<number, number>();
-  const kf = (x: number): number => { let r = kp.get(x) ?? x; while (r !== (kp.get(r) ?? r)) r = kp.get(r) ?? r; return r; };
-  const roots = new Set<number>();
-  for (let w = 0; w < a.mask.length; w++) roots.add(a.find(w));
+function componentMask(a: WebAnalysis): (root: number) => number {
+  const n = a.mask.length, kp = new Int32Array(n), mask = new Int32Array(n).fill(31);
+  for (let i = 0; i < n; i++) kp[i] = i;
+  const kf = (x: number) => { while (kp[x] !== x) { kp[x] = kp[kp[x]]; x = kp[x]; } return x; };
   for (let k = 0; k < a.links.length; k += 2) {
     const x = kf(a.find(a.links[k])), c = kf(a.find(a.links[k + 1]));
-    if (x !== c) kp.set(c, x);
+    if (x !== c) kp[c] = x;
   }
-  const mask = new Map<number, number>(), used = new Map<number, number>(), zero = new Map<number, number>();
-  for (const w of roots) {
-    const c = kf(w);
-    mask.set(c, (mask.get(c) ?? 31) & a.mask[w]);
-    used.set(c, (used.get(c) ?? 0) | a.used[w]);
-    zero.set(c, (zero.get(c) ?? 0) | a.zero[w]);
-  }
-  return { kf, roots, mask, used, zero };
+  for (let w = 0; w < n; w++) if (a.find(w) === w) mask[kf(w)] &= a.mask[w];
+  return (root) => mask[kf(root)];
 }
 
 /** Typed webs and conservative instruction intervals for local storage. */
@@ -260,20 +253,20 @@ export interface Typing {
 export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic: boolean, instrs: readonly PreparedInstruction[], entryPc?: number): Typing {
   const a = analyzeWebs(dex, code, desc, isStatic, instrs, entryPc);
   if (typeof a === "string") throw new Error("type inference " + a);
-  const comp = components(a), id = new Map<number, number>(), kind: number[] = [];
+  const maskOf = componentMask(a), id = new Int32Array(a.mask.length).fill(-1), kind: number[] = [];
   const web = (node: number): number => {
     if (node < 0) return -1;
     const root = a.find(node);
     if (!a.used[root]) return -1;
-    let w = id.get(root);
-    if (w === undefined) {
-      const m = comp.mask.get(comp.kf(root))!;
+    let w = id[root];
+    if (w < 0) {
+      const m = maskOf(root);
       if (!m) throw new Error("type conflict in v" + a.vreg[root]);
-      id.set(root, w = kind.length); kind.push(m & -m);
+      id[root] = w = kind.length; kind.push(m & -m);
     }
     return w;
   };
-  const idxOfPc = new Map(a.ins.map((x, i) => [x.pc, i]));
+  const idxOfPc = a.pcToIdx;
   return {
     kind, entry: a.entryNodes?.map(web),
     before(pc) { return a.before(pc).map(web); },
@@ -282,16 +275,16 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
       a.ranges((node, i) => { const w = web(node); if (w >= 0) { start[w] = Math.min(start[w] ?? i, i); end[w] = Math.max(end[w] ?? i, i); } });
       return { start, end };
     },
-    reached(pc) { return !!a.reached[idxOfPc.get(pc)!]; },
-    use(pc, reg) { const i = idxOfPc.get(pc)!, k = a.useSlot(i, reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
-    def(pc) { return web(a.defNode[idxOfPc.get(pc)!]); },
+    reached(pc) { return !!a.reached[idxOfPc[pc]]; },
+    use(pc, reg) { const i = idxOfPc[pc], k = a.useSlot(i, reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
+    def(pc) { return web(a.defNode[idxOfPc[pc]]); },
     param(reg) { return web(a.paramNode[reg]); },
   };
 }
 
 function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction | null, retMask: number): Eff {
   const { op, a, b, c } = x;
-  const E = (u: number[], d = -1, dm = 0, link = 0, zero = false, fconst = false): Eff => ({ u, d, dm, link, zero, fconst });
+  const E = (u: number[], d = -1, dm = 0, link = 0): Eff => ({ u, d, dm, link });
   if (op <= 0x00) return NOEFF;
   if (op <= 0x03) return E([b, N32], a, N32, 1);
   if (op <= 0x06) return E([b, WIDE], a, WIDE, 1);
@@ -310,7 +303,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
   if (op === 0x0f) return E([a, retMask & N32 ? retMask : N32]);
   if (op === 0x10) return E([a, retMask & WIDE ? retMask : WIDE]);
   if (op === 0x11) return E([a, R]);
-  if (op <= 0x15) return E([], a, b === 0 ? N32 : I | F, 0, b === 0, true);
+  if (op <= 0x15) return E([], a, b === 0 ? N32 : I | F);
   if (op <= 0x19) return E([], a, WIDE);
   if (op <= 0x1c) return E([], a, R);
   if (op <= 0x1e) return E([a, R]);
