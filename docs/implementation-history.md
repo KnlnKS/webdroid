@@ -7083,3 +7083,17 @@ intermittent `7b`/`eq` completion timeout is unchanged.
 33 ms after the tap. Dismissing a dialog removes a window rather than presenting an app frame, so `lat` waited for
 the next unrelated frame. A later Komikku launch with its saved build takes 2.7–3.0 s, against 8.7 s for the
 first.
+
+### Fewer modules for on-demand compiles: shared helpers and batched class globals (2026-10-12)
+
+A first-tier unit averaged 12.4 functions, of which about 11 were helpers duplicated in every unit (thrower calls,
+counters, string and generic local helpers). In Chrome a unit costs about 74 µs (49 µs to create the module, 25 µs to
+instantiate it), and in Node about 7.5 µs for its types and imports plus about 2 µs per function.
+- **Shared helpers.** A unit exports a helper whose signature uses only base types, and later units import it.
+  Komikku's first launch went from 8,734–10,101 ms to 8,232–9,869 ms over three matched runs, with compile time and
+  module time both lower.
+- **Batched class globals.** Each class linked on demand had built its own globals module (5,853 on Komikku's launch).
+  The globals of classes linked since the last read are now made in one module when something first reads them.
+  Against shared helpers alone (3 runs each), Komikku's launch went from 8,289–8,431 ms to 8,140–8,226 ms. Launch
+  modules fell from about 23,000 to 17,700–18,000, module time from 1,040–1,059 ms to 977–994 ms, and the whole flow's
+  modules from about 34,300 to about 27,600.
