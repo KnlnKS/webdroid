@@ -40,14 +40,19 @@ function loaderFor(w: World, obj: object | null): Loader {
   return w.prog.boot;
 }
 
-/** Parent-first resolution uses the nearest defining ancestor. Custom loadClass overrides need dynamic resolution; their class kind does not specify delegation order. */
+/** Parent-first resolution uses the nearest defining ancestor. Custom loadClass overrides need dynamic resolution; their class kind does not specify delegation
+ *  order. A loader resolves its own classes first, after the boot classes, when it is the platform's DelegateLastClassLoader, or when an ancestor below its
+ *  nearest defining one is a ClassLoader of the app's, which decides in Java what it hands down (an isolating loader usually hands down little): Java's
+ *  resolutions correct either guess as they happen, and each correction re-resolves the loader's dex files. */
 function newLoader(w: World, parent: object | null, loader: object): Loader {
-  const s = stateOf(w);
+  const s = stateOf(w), platform = (o: object) => { const cls = w.classNameOf(o); return w.prog.loaderOf(cls) === w.prog.boot ? cls : undefined; };
+  let ownFirst = platform(loader) === "dalvik/system/DelegateLastClassLoader";
   for (let o = parent; o; o = s.parentOf(o)) {
     const ancestor = s.byObject.get(o);
-    if (ancestor) return w.prog.newLoader(ancestor, loader);
+    if (ancestor) return w.prog.newLoader(ancestor, loader, ownFirst);
+    ownFirst ||= !platform(o);
   }
-  return w.prog.newLoader(w.prog.boot, loader);
+  return w.prog.newLoader(w.prog.boot, loader, ownFirst);
 }
 
 /** Native class generation defines in the supplied loader even when it has never opened dex files. */

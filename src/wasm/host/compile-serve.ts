@@ -214,7 +214,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
 
 function followLoaders(w: World, state: LoaderSnapshot): void {
   const prog = w.prog;
-  prog.followLoaderParents(state.parents);
+  prog.followLoaderParents(state.parents, state.ownFirst);
   if (state.dynamicRoot) prog.dynamicRoot = true;
   for (const [id, before, after] of state.libraries) w.bindLibraries(prog.loaderAt(id), before.map(id => prog.loaderAt(id)), after.map(id => prog.loaderAt(id)));
   for (const [id, name, key] of state.initiated) w.initiateClass(prog.loaderAt(id), name, key);

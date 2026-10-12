@@ -38,6 +38,7 @@ export interface LoaderSnapshot {
   parents: LoaderParent[];
   libraries: [LoaderId, LoaderId[], LoaderId[]][];
   initiated: [LoaderId, string, string][];
+  ownFirst?: number[];
   dynamicRoot?: true;
 }
 /** A defining namespace. The root holds app classes, the boot view exposes its platform base, and other loaders own distinct `name@id` keys. Visibility follows parent, before libraries, own definitions, then after libraries. */
@@ -50,6 +51,8 @@ export interface Loader {
   readonly defined: Map<string, string>;
   before?: Loader[];
   after?: Loader[];
+  /** its own classes come before its parent's, after the boot classes, as a dalvik.system.DelegateLastClassLoader resolves (loaders.ts) */
+  ownFirst?: boolean;
 }
 const SUFFIX = /@(\d+);?$/;
 /** the name Java code sees for a class key (and for the key of an array class) */
@@ -230,8 +233,8 @@ export class Program {
   /** the loader whose namespace holds `dex`'s classes */
   loaderOfDex(dex: DexFile): Loader | undefined { return this.dexLoader.get(dex) ?? this.base?.loaderOfDex(dex); }
   /** a namespace of its own under `parent`, which it consults first */
-  newLoader(parent: Loader, object: object | null): Loader {
-    const loader: Loader = { id: this.loaders.length, parent, object, defined: new Map() };
+  newLoader(parent: Loader, object: object | null, ownFirst = false): Loader {
+    const loader: Loader = { id: this.loaders.length, parent, object, defined: new Map(), ...ownFirst && { ownFirst } };
     this.loaders.push(loader);
     return loader;
   }
@@ -246,16 +249,17 @@ export class Program {
     return { parents: this.loaders.map(l => l.parent ? id(l.parent) : null),
       libraries: [this.boot, ...this.loaders].map(l => [id(l), (l.before ?? []).map(id), (l.after ?? []).map(id)]),
       initiated: [this.boot, ...this.loaders].flatMap(l => [...this.initiated.get(l) ?? []].map(([name, key]): [LoaderId, string, string] => [id(l), name, key])),
+      ownFirst: this.loaders.filter(l => l.ownFirst).map(l => l.id),
       ...this.dynamicRoot && { dynamicRoot: true } };
   }
-  followLoaderParents(parents: LoaderParent[]): void {
+  followLoaderParents(parents: LoaderParent[], ownFirst: readonly number[] = []): void {
     if (parents.length < this.loaders.length || parents[0] !== null) throw new Error("incompatible compiler loader graph");
     for (let i = 1; i < parents.length; i++) {
       const ref = parents[i];
       if (ref !== "boot" && (typeof ref !== "number" || !Number.isInteger(ref) || ref < 0 || ref >= i)) throw new Error(`invalid parent of loader ${i}`);
       const parent = ref === "boot" ? this.boot : this.loaderAt(ref), prior = this.loaders[i];
       if (prior && prior.parent !== parent) throw new Error(`changed parent of loader ${i}`);
-      if (!prior) this.newLoader(parent, null);
+      if (!prior) this.newLoader(parent, null, ownFirst.includes(i));
     }
   }
   /** the loader that defines the class with this key */
@@ -283,13 +287,15 @@ export class Program {
     const loaded = this.initiatedBy(loader, name);
     if (loaded) return loaded;
     if (loader === this.boot) return this.boot.defined.get(name) ?? (this.base ? this.base.lookup(this.base.boot, name) : this.inBoot(name) ? name : undefined);
-    const parent = loader.parent ? this.lookup(loader.parent, name, seen) : this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name);
-    if (parent) return parent;
+    // as DelegateLastClassLoader.loadClass: the boot loader, then findClass, then the parent
+    const first = loader.ownFirst ? this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name)
+      : loader.parent ? this.lookup(loader.parent, name, seen) : this.base ? this.lookup(this.boot, name, seen) : this.boot.defined.get(name);
+    if (first) return first;
     for (const library of loader.before ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
     const own = loader === this.root ? this.classes.has(name) ? name : undefined : loader.defined.get(name);
     if (own) return own;
     for (const library of loader.after ?? []) { const key = this.lookup(library, name, seen); if (key) return key; }
-    return undefined;
+    return loader.ownFirst && loader.parent ? this.lookup(loader.parent, name, seen) : undefined;
   }
   libraries(loader: Loader, before: Loader[], after: Loader[], changed: ReadonlySet<string> = this.libraryChanges(loader, before, after)): string[] {
     const same = (a: Loader[] | undefined, b: Loader[]) => (a?.length ?? 0) === b.length && b.every((l, i) => l === a![i]);
