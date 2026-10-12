@@ -6917,3 +6917,29 @@ Other `e2e --full` failures on Wasm also fail on JS:
 - YouTube's playback-control steps.
 - Resy: its step-02 wedge on Wasm, and on JS its steps 10–14 time out.
 - Mihon: the live update dialog.
+
+### TikTok's first launch: on-demand compiling and its allocation (2026-10-11)
+
+Sampled with CDP, TikTok's first launch on the Wasm tier keeps its app thread busy 57.7 of its first 60 s. Of
+that, 29.6 s is compiling methods on demand (`linkSlot`): 65,400 methods by 80 s. The app build that a Worker
+makes during this launch only serves the next one, because a World that has numbered its own classes cannot
+attach it. The app process allocated 11 GB in its first 28 s and 6.5 GB between 60 and 110 s.
+
+**Why the heap grows.** The used heap stays near 1 GB. In one run the committed heap grew from 1.1 to 2.5 GB
+over 100 s, and the renderer crashed with no input at about 160 s. Another run's compiling settled by 80 s, and
+its heap stayed at 0.93 GB. V8 grows an isolate's heap with its allocation rate. Every realm shares the
+renderer's 4 GB cage, so one realm's unreclaimed growth leaves another without room.
+
+Changes:
+- **CHA subtype walks.** `Cha.subsOf` concatenated the platform's and the app's subtype lists on every call.
+  `java/lang/Object`'s list runs to hundreds of thousands of entries, so `targets` allocated 1 GB while
+  visiting at most 64 classes. The walks now read the lists in place.
+- **CHA caches.** A class load cleared every memoized answer and every list of the classes that declare a
+  method, and TikTok loads classes throughout. Now a load drops only the answers about the new classes'
+  supertypes, and those of classes already present below them. A new class joins the declaring lists already
+  made. CHA time in the first 60 s fell from 6.1 to 2.0 s, and on-demand compiling from 29.6 to 19.5 s.
+- **Late-class snapshot.** Each realm holding TikTok's classes kept a copy of every late class's supertypes,
+  only to rebuild an index that `lateBy` no longer keeps. That was about 20 MB per realm, and it is removed.
+
+TikTok's e2e flow still crashes the renderer, now at step 09 rather than earlier. What remains is the first
+launch's on-demand compiling: its rate, and the realms that each hold the app's Program at the same time.

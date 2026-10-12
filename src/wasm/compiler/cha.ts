@@ -14,7 +14,8 @@ class Index {
     this.classes.push(c);
     if (this.byType) this.note(c);
     for (const s of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) { const l = this.subs.get(s); if (l) l.push(c.name); else this.subs.set(s, [c.name]); }
-    this.implementors.clear();
+    // the lists already made gain the class where it declares their method, as a scan would find it; an app's classes keep arriving
+    if (this.implementors.size) for (const [key, flags] of declaredKeys(c)) if (!(flags & (ACC.STATIC | ACC.ABSTRACT))) this.implementors.get(key)?.push(c.name);
   }
   declaring(key: string): Iterable<string> {
     let found = this.implementors.get(key);
@@ -48,27 +49,46 @@ class Index {
   }
 }
 
+/** the keys and flags of the methods `c` declares, as its dex names them (Index.scan reads the same) */
+function declaredKeys(c: JClass): [string, number][] {
+  const i = classDefIdx(c);
+  if (i < 0) return c.methods.map((m) => [m.key, m.flags]);
+  const def = c.dex!.classDef(i);
+  return [...def.directMethods, ...def.virtualMethods].map((m) => [c.dex!.methodKey(m.methodIdx), m.flags]);
+}
+
 /** Class-hierarchy analysis over every class the Program knows, so a decision stays valid for classes that are linked later;
  *  a dex added afterwards can still falsify it, which `World.addDexes` checks against the recorded assumptions.
  *  The index of a base Program is built once and kept in the Program, which processes share. */
 export class Cha {
   private base: Index[] = [];
   private own = new Index();
-  private memo = new Map<string, MethodInfo[]>();
+  /** answers by decl, then name and descriptor */
+  private memo = new Map<string, Map<string, MethodInfo[]>>();
   constructor(private prog: Program) {
     for (let p = prog.base; p; p = p.base) this.base.unshift(sharedIndex(p));
     for (const c of prog.own()) this.own.add(c);
   }
 
+  /** adds classes: the answers that change are those about their supertypes, and about those of classes already here below them (a class can arrive after its subclasses) */
   index(names: Iterable<string>): void {
+    const stale = new Set<string>(), below = new Set<string>();
+    const up = (n: string): void => {
+      if (stale.has(n)) return;
+      stale.add(n);
+      const c = this.prog.get(n);
+      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) up(p);
+    };
+    const down = (n: string): void => { if (below.has(n)) return; below.add(n); up(n); for (const sub of this.subsOf(n)) down(sub); };
     for (const n of names) this.own.add(this.prog.get(n)!);
-    this.memo.clear();
+    for (const n of names) down(n);
+    for (const n of stale) this.memo.delete(n);
   }
-  private subsOf(n: string): string[] {
+  /** the direct subtypes of n, read where they are listed: Object's run to hundreds of thousands in a large app, and a walk takes a few */
+  private *subsOf(n: string): Generator<string> {
+    for (const b of this.base) { const x = b.subs.get(n); if (x) yield* x; }
     const l = this.own.subs.get(n);
-    let out = l;
-    for (const b of this.base) { const x = b.subs.get(n); if (x) out = out ? [...x, ...out] : x; }
-    return out ?? [];
+    if (l) yield* l;
   }
   private *declaring(key: string): Generator<string> {
     for (const b of this.base) yield* b.declaring(key);
@@ -78,24 +98,26 @@ export class Cha {
   /** The distinct implementations a call of decl.name+desc can reach among the concrete subtypes of decl (decl included),
    *  cut off at two: callers only distinguish none, one and many. */
   targets(decl: string, name: string, desc: string): MethodInfo[] {
-    const key = decl + "\0" + mkey(name, desc);
-    let out = this.memo.get(key);
+    const key = mkey(name, desc), memo = this.memo.get(decl) ?? this.memo.set(decl, new Map()).get(decl)!;
+    let out = memo.get(key);
     if (out) return out;
     const declared = this.prog.resolve(decl, name, desc), packageMethod = declared && !(declared.flags & (ACC.PUBLIC | ACC.PROTECTED));
-    const found = new Set<MethodInfo>(), seen = new Set<string>(), stack = [decl];
+    const found = new Set<MethodInfo>(), seen = new Set<string>(), stack: Iterator<string>[] = [[decl].values()];
     // a small hierarchy is walked; a large one (decl = Object) is answered from the methods that can be implementations
     let budget = WALK;
     while (stack.length && found.size < 2 && budget > 0) {
-      const n = stack.pop()!;
+      const next = stack[stack.length - 1].next();
+      if (next.done) { stack.pop(); continue; }
+      const n = next.value;
       if (seen.has(n)) continue;
       seen.add(n); budget--;
       const c = this.prog.get(n);
       if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) {
         const m = packageMethod ? symbolicOverride(this.prog, n, declared!) : this.prog.dispatchFor(n, name, desc);
-        if (m && failed(m)) { this.memo.set(key, out = []); return out; }
+        if (m && failed(m)) { memo.set(key, out = []); return out; }
         if (m) found.add(m);
       }
-      for (const sub of this.subsOf(n)) stack.push(sub);
+      stack.push(this.subsOf(n));
     }
     if (budget <= 0 && stack.length && found.size < 2) {
       found.clear();
@@ -104,11 +126,11 @@ export class Cha {
       for (const cls of this.declaring(methodKey)) {
         const m = declaredMethod(this.prog.get(cls), methodKey)!;
         const reaches = this.reaches(decl, m);
-        if (reaches === "conflict") { this.memo.set(key, out = []); return out; }
+        if (reaches === "conflict") { memo.set(key, out = []); return out; }
         if (reaches && found.add(m).size >= 2) break;
       }
     }
-    this.memo.set(key, out = [...found]);
+    memo.set(key, out = [...found]);
     return out;
   }
   /** whether some concrete subtype of decl (decl included) runs `m` for its method of that name and descriptor */
@@ -116,10 +138,12 @@ export class Cha {
     const p = this.prog, key = m.key;
     // the subtypes that can run m are subtypes of its class; those of decl are the ones that count
     const [top, filter] = p.isSubclass(m.cls, decl) ? [m.cls, null] : p.isSubclass(decl, m.cls) ? [decl, null] : [m.cls, decl];
-    const seen = new Set<string>(), stack = [top];
+    const seen = new Set<string>(), stack: Iterator<string>[] = [[top].values()];
     let reachesAny = false;
     while (stack.length) {
-      const n = stack.pop()!;
+      const next = stack[stack.length - 1].next();
+      if (next.done) { stack.pop(); continue; }
+      const n = next.value;
       if (seen.has(n)) continue;
       seen.add(n);
       const c = p.get(n);
@@ -134,7 +158,7 @@ export class Cha {
       // a class that implements the method itself decides it for every subclass: none of them runs m
       const own = c && !c.isInterface ? declaredMethod(c, key) : undefined;
       if (own && own !== m && !(own.flags & (ACC.STATIC | ACC.ABSTRACT))) continue;
-      for (const sub of this.subsOf(n)) stack.push(sub);
+      stack.push(this.subsOf(n));
     }
     return reachesAny;
   }
