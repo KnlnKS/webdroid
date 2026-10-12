@@ -6886,6 +6886,10 @@ Counted per process from `wd.boot()` on a page loaded earlier, after `bootApk`:
     472–480 ms.
   - `lat --warm --gpu` taps are unchanged within run-to-run noise (three Calculator pairs, one FitNotes pair),
     and every gated tap passes. FitNotes scroll is unchanged: p99 18.6 against 18.7 ms.
+- **Class metadata.** A class's field list was built together with its methods, parsing every method descriptor.
+  Class information queries from Wasm (`hostInfo`) read fields for classes whose methods were never built, which
+  took 22 ms of Calculator's launch. Fields are now built on their own: Calculator 548–559 → 539–551 ms and
+  FitNotes 472–480 → 463–468 ms.
 
 ### TikTok's renderer OOM and the late-class index (2026-10-11)
 

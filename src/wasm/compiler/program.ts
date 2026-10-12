@@ -71,7 +71,8 @@ const changedTypes = (changed: ReadonlySet<string>): Set<string> | undefined =>
 class DexClass implements JClass {
   private header_?: { flags: number; sup: string | null; ifaces: string[] };
   private def_?: ClassDef;
-  private members_?: { fields: FieldInfo[]; methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
+  private members_?: { methods: MethodInfo[]; byKey: Map<string, MethodInfo> };
+  private fields_?: FieldInfo[];
   private methodInfos?: Map<number, MethodInfo>;
   constructor(readonly name: string, readonly dex: DexFile, readonly idx: number) {}
   refreshTypes(resolve: (desc: string) => string, changedTypes?: ReadonlySet<string>): void {
@@ -94,11 +95,11 @@ class DexClass implements JClass {
       if (key !== resolved) this.members_!.byKey.delete(key);
       this.members_!.byKey.set(resolved, method);
     }
-    if (this.members_) {
+    if (this.fields_) {
       let i = 0;
       for (const list of [this.def.staticFields, this.def.instanceFields]) for (const f of list) {
         if (this.name === "java/lang/Object" && list === this.def.instanceFields) continue;
-        this.members_.fields[i++].desc = this.dex.type(this.dex.field(f.fieldIdx).type);
+        this.fields_[i++].desc = this.dex.type(this.dex.field(f.fieldIdx).type);
       }
     }
   }
@@ -117,7 +118,7 @@ class DexClass implements JClass {
   /** how many methods it declares, which the members need not be built to tell */
   get nMethods() { return this.members_ ? this.members_.methods.length : this.dex.declaredMethodCount(this.idx); }
   private get members() { return this.members_ ??= this.build(); }
-  get fields() { return this.members.fields; }
+  get fields() { return this.fields_ ??= this.buildFields(); }
   get methods() { return this.members.methods; }
   get byKey() { return this.members.byKey; }
   /** the keys and access flags of its methods, for the class-hierarchy index (no record of the methods is kept) */
@@ -148,9 +149,8 @@ class DexClass implements JClass {
     (this.methodInfos ??= new Map()).set(index, info);
     return info;
   }
-  private build() {
-    const { dex, name, def } = this;
-    const fields: FieldInfo[] = [];
+  private buildFields(): FieldInfo[] {
+    const { dex, name, def } = this, fields: FieldInfo[] = [];
     // ART's Object declares its class and monitor words as fields; here they are the object header
     for (const [list, isStatic] of [[def.staticFields, true], [def.instanceFields, false]] as const) {
       for (const f of name === "java/lang/Object" && !isStatic ? [] : list) {
@@ -158,12 +158,15 @@ class DexClass implements JClass {
         fields.push({ owner: name, name: fr.name, desc, kind: kindOf(desc), isStatic, flags: f.flags });
       }
     }
-    const methods: MethodInfo[] = [];
+    return fields;
+  }
+  private build() {
+    const def = this.def, methods: MethodInfo[] = [];
     for (const list of [def.directMethods, def.virtualMethods]) for (const m of list) {
       methods.push(this.methodInfo(m, methods.length));
     }
     this.methodInfos = undefined;
-    return { fields, methods, byKey: new Map(methods.map((m) => [m.key, m])) };
+    return { methods, byKey: new Map(methods.map((m) => [m.key, m])) };
   }
 }
 /** how many methods (and so table slots) a class has */
