@@ -30,7 +30,7 @@ interface WebAnalysis {
   /** the node defined by instruction i (-1: none); the nodes its operands read, aligned with the register/mask pairs of its effect */
   defNode: Int32Array;
   useNode: Int32Array[];
-  useReg: number[][];
+  useSlot(i: number, reg: number): number;
   /** the node of each parameter register at entry (-1: not a parameter) */
   paramNode: Int32Array;
   /** node pairs whose kinds must agree: moves and if-eq ties */
@@ -68,32 +68,38 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     }
   }
 
-  // ---- liveness (block live-in), handler edges treated as successors
-  const B = cfg.n;
-  const liveIn: Uint8Array[] = Array.from({ length: B }, () => new Uint8Array(R_));
+  // ---- liveness (block live-in bitsets of W words), handler edges treated as successors
+  const B = cfg.n, W = (R_ + 31) >> 5;
+  const liveIn = new Int32Array(B * W);
   const preds: number[][] = Array.from({ length: B }, () => []);
-  for (let b = 0; b < B; b++) for (const s of [...cfg.succ[b], ...cfg.hsucc[b]]) preds[s].push(b);
+  for (let b = 0; b < B; b++) { for (const s of cfg.succ[b]) preds[s].push(b); for (const s of cfg.hsucc[b]) preds[s].push(b); }
   const work: number[] = Array.from({ length: B }, (_, k) => B - 1 - k), inWork = new Uint8Array(B).fill(1);
-  const tmp = new Uint8Array(R_);
+  const tmp = new Int32Array(W);
+  const orLive = (b: number) => { for (let w = 0, o = b * W; w < W; w++) tmp[w] |= liveIn[o + w]; };
+  const set = (r: number, on: boolean) => { if (on) tmp[r >> 5] |= 1 << r; else tmp[r >> 5] &= ~(1 << r); };
   const stepLive = (i: number) => {
     const e = effs[i];
-    if (e.d >= 0) { tmp[e.d] = 0; if (e.dm & WIDE) tmp[e.d + 1] = 0; }
-    for (let k = 0; k < e.u.length; k += 2) { const r = e.u[k]; if (r < R_) { tmp[r] = 1; if (e.u[k + 1] & WIDE && r + 1 < R_) tmp[r + 1] = 1; } }
+    if (e.d >= 0) { set(e.d, false); if (e.dm & WIDE) set(e.d + 1, false); }
+    for (let k = 0; k < e.u.length; k += 2) { const r = e.u[k]; if (r < R_) { set(r, true); if (e.u[k + 1] & WIDE && r + 1 < R_) set(r + 1, true); } }
     // a throwing instruction hands its PRE-state to the handlers
     const hs = handlerOfIdx[i];
-    if (hs && !NO_THROW[ins[i].op]) for (const h of hs) { const l = liveIn[h]; for (let r = 0; r < R_; r++) if (l[r]) tmp[r] = 1; }
+    if (hs && !NO_THROW[ins[i].op]) for (const h of hs) orLive(h);
   };
+  const liveOut = (b: number) => { tmp.fill(0); for (const s of cfg.succ[b]) orLive(s); };
   while (work.length) {
     const b = work.pop()!; inWork[b] = 0;
-    tmp.fill(0);
-    for (const s of cfg.succ[b]) { const l = liveIn[s]; for (let r = 0; r < R_; r++) if (l[r]) tmp[r] = 1; }
+    liveOut(b);
     for (let i = cfg.lastIdx[b]; i >= cfg.firstIdx[b]; i--) stepLive(i);
-    const cur = liveIn[b];
-    let changed = false;
-    for (let r = 0; r < R_; r++) if (tmp[r] && !cur[r]) { cur[r] = 1; changed = true; }
+    let changed = 0;
+    for (let w = 0, o = b * W; w < W; w++) { changed |= tmp[w] & ~liveIn[o + w]; liveIn[o + w] |= tmp[w]; }
     if (changed) for (const p of preds[b]) if (!inWork[p]) { inWork[p] = 1; work.push(p); }
   }
-  const liveList = liveIn.map((l) => { const o: number[] = []; for (let r = 0; r < R_; r++) if (l[r]) o.push(r); return Int32Array.from(o); });
+  const liveList: Int32Array[] = new Array(B);
+  for (let b = 0; b < B; b++) {
+    const o: number[] = [];
+    for (let r = 0; r < R_; r++) if (liveIn[b * W + (r >> 5)] & (1 << r)) o.push(r);
+    liveList[b] = Int32Array.from(o);
+  }
 
   // ---- webs
   const parent: number[] = [], mask: number[] = [], vreg: number[] = [], used: number[] = [], zero: number[] = [], fcon: number[] = [];
@@ -107,7 +113,9 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
   const defNode = new Int32Array(n).fill(-1);
   const links: number[] = [], linked = new Uint8Array(n);
   const reached = new Uint8Array(n);
-  const useNode: Int32Array[] = new Array(n).fill(NO_USES), useReg: number[][] = effs.map((e) => e.u.filter((_, k) => !(k & 1)));
+  const useNode: Int32Array[] = new Array(n).fill(NO_USES);
+  /** the operand slot through which instruction i reads `reg`, -1 if it does not */
+  const useSlot = (i: number, reg: number) => { const u = effs[i].u; for (let k = 0; k < u.length; k += 2) if (u[k] === reg) return k >> 1; return -1; };
 
   const inState: (Int32Array | null)[] = new Array(B).fill(null);
   const start = new Int32Array(R_).fill(-1);
@@ -146,7 +154,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
   let guard = 0;
   while (queue.length) {
     const b = queue.pop()!; queued[b] = 0;
-    const st = Int32Array.from(inState[b]!);
+    const st = inState[b]!.slice();
     if (++guard > B * 50 + 1000) return "no-fixpoint";
     for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
       const e = effs[i], x = ins[i];
@@ -174,15 +182,14 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     const i = cfg.pcToIdx[pc];
     if (i === undefined || i < 0 || !reached[i]) throw new Error("invalid-resume-pc");
     const b = cfg.blockOfIdx[i];
-    const entryNodes = Int32Array.from(inState[b]!);
+    const entryNodes = inState[b]!.slice();
     for (let j = cfg.firstIdx[b]; j < i; j++) {
       const e = effs[j];
       if (e.d >= 0) { entryNodes[e.d] = defNode[j]; if (e.dm & WIDE) entryNodes[e.d + 1] = defNode[j]; }
     }
-    tmp.fill(0);
-    for (const successor of cfg.succ[b]) for (let r = 0; r < R_; r++) if (liveIn[successor][r]) tmp[r] = 1;
+    liveOut(b);
     for (let j = cfg.lastIdx[b]; j >= i; j--) stepLive(j);
-    for (let r = 0; r < R_; r++) if (!tmp[r]) entryNodes[r] = -1;
+    for (let r = 0; r < R_; r++) if (!(tmp[r >> 5] & (1 << r))) entryNodes[r] = -1;
     return entryNodes;
   };
   const entryNodes = entryPc === undefined ? undefined : before(entryPc);
@@ -191,7 +198,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
     for (const node of paramNode) touch(node, 0);
     for (let b = 0; b < B; b++) {
       if (!inState[b]) continue;
-      const st = Int32Array.from(inState[b]!);
+      const st = inState[b]!.slice();
       for (const r of liveList[b]) touch(st[r], cfg.firstIdx[b]);
       for (let i = cfg.firstIdx[b]; i <= cfg.lastIdx[b]; i++) {
         if (!reached[i]) continue;
@@ -207,7 +214,7 @@ export function analyzeWebs(dex: DexFile, code: CodeItem, desc: string, isStatic
       for (const successor of cfg.succ[b]) for (const r of liveList[successor]) touch(st[r], cfg.lastIdx[b]);
     }
   };
-  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useReg, paramNode, links, reached, entryNodes, before, ranges };
+  return { regs: R_, ins, mask, vreg, used, zero, fcon, find, defNode, useNode, useSlot, paramNode, links, reached, entryNodes, before, ranges };
 }
 
 /** Kind components: webs tied by moves and if-eq share a kind; the mask of a component is the intersection of its webs'. */
@@ -276,7 +283,7 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
       return { start, end };
     },
     reached(pc) { return !!a.reached[idxOfPc.get(pc)!]; },
-    use(pc, reg) { const i = idxOfPc.get(pc)!, k = a.useReg[i].indexOf(reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
+    use(pc, reg) { const i = idxOfPc.get(pc)!, k = a.useSlot(i, reg); return k < 0 ? -1 : web(a.useNode[i][k]); },
     def(pc) { return web(a.defNode[idxOfPc.get(pc)!]); },
     param(reg) { return web(a.paramNode[reg]); },
   };
@@ -284,10 +291,10 @@ export function inferTyping(dex: DexFile, code: CodeItem, desc: string, isStatic
 
 function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction | null, retMask: number): Eff {
   const { op, a, b, c } = x;
-  const E = (u: number[], d = -1, dm = 0, extra: Partial<Eff> = {}): Eff => ({ u, d, dm, link: 0, zero: false, fconst: false, ...extra });
+  const E = (u: number[], d = -1, dm = 0, link = 0, zero = false, fconst = false): Eff => ({ u, d, dm, link, zero, fconst });
   if (op <= 0x00) return NOEFF;
-  if (op <= 0x03) return E([b, N32], a, N32, { link: 1 });
-  if (op <= 0x06) return E([b, WIDE], a, WIDE, { link: 1 });
+  if (op <= 0x03) return E([b, N32], a, N32, 1);
+  if (op <= 0x06) return E([b, WIDE], a, WIDE, 1);
   if (op <= 0x09) return E([b, R], a, R);
   if (op <= 0x0c) {
     let m = N32;
@@ -303,7 +310,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
   if (op === 0x0f) return E([a, retMask & N32 ? retMask : N32]);
   if (op === 0x10) return E([a, retMask & WIDE ? retMask : WIDE]);
   if (op === 0x11) return E([a, R]);
-  if (op <= 0x15) return E([], a, b === 0 ? N32 : I | F, { zero: b === 0, fconst: true });
+  if (op <= 0x15) return E([], a, b === 0 ? N32 : I | F, 0, b === 0, true);
   if (op <= 0x19) return E([], a, WIDE);
   if (op <= 0x1c) return E([], a, R);
   if (op <= 0x1e) return E([a, R]);
@@ -325,7 +332,7 @@ function effect(dex: DexFile, x: PreparedInstruction, prev: PreparedInstruction 
   if (op === 0x31) return E([b, J, c, J], a, I);
   if (op <= 0x37) {
     const eq = op <= 0x33;
-    return eq ? E([a, I | R, b, I | R], -1, 0, { link: 2 }) : E([a, I, b, I]);
+    return eq ? E([a, I | R, b, I | R], -1, 0, 2) : E([a, I, b, I]);
   }
   if (op <= 0x3d) return E([a, op <= 0x39 ? I | R : I]);
   if (op >= 0x44 && op <= 0x4a) {
