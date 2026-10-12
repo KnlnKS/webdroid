@@ -7010,3 +7010,26 @@ build 0.6 GB and a fifth TikTok process 0.4 GB. Isolates that had only just star
 - Each realm holding TikTok also holds its own Program and compile caches, and compiling allocates about
   200 MB/s in any of them, `Flow` construction first (12%).
 - Allocation cuts in `lateBy`, vtable initializers and pool-stub bodies did not change the GC count.
+
+### TikTok's crash was a second process's refine; DataStore renames in Workers (2026-10-12)
+
+Labelling each compile Worker by its owner pid showed what the cage held just before the crash (committed, at
+90 s): the app process 1.5 GB, its upgrade Worker 0.9 GB, TikTok process 1005 (a service, about 630 units)
+0.5 GB and 1005's build Worker 0.7 GB. 1005 had loaded the main process's saved build, compiled a few hundred
+methods past it, and refined: a refine rebuilds the whole merged demand in a fresh Worker, here TikTok's ~80,000
+methods for a gain of a few hundred. The app-build lock queued it behind the main build, so it started just as
+the main process's own heap peaked. A refine now waits until the new demand is an eighth of what the build
+covers (`REFINE_SHARE`), so rebuilding work grows geometrically with the build rather than with each look.
+TikTok's e2e flow then completes all 13 steps (it crashed after step 10). The cage is still close to full: the
+sum of committed heaps swings between 3.7 and 4.2 GB after 100 s.
+- The upgrade Worker's live heap is about 0.3 GB at 100 s against 0.7–0.9 GB committed: V8 sizes each isolate
+  from its own allocation rate (compiling churns about 200 MB/s) and knows nothing of the others in the cage.
+- 72% of the 358,000 pool stubs in the app process at 80 s belong to slots never looked up. Classes are linked
+  because compiled code refers to them, not because their methods run.
+
+Mihon's DataStore failed every write with "Unable to rename …preferences_pb.tmp" on both tiers. DataStore
+moves its scratch file with `Files.move`, and in a process Worker `UnixNativeDispatcher`'s path calls (stat,
+lstat, access, unlink, rmdir, mkdir, opendir, realpath) read the Worker's own VFS, while app data lives in the
+broker's. `lstat` found no source and the move threw before `rename0`. Those calls, and `java.io.File`'s
+modification time and permission natives, now go to the realm that owns the path, as `Os` and the other
+`UnixFileSystem` natives already did.
