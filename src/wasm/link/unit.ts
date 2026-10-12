@@ -16,6 +16,8 @@ export interface UpgradeJob {
   /** A refresh may replace only this live hot-unit generation in the source World. */
   refresh?: number;
   cold?: boolean;
+  /** first-tier code of methods already linked, merged into one module (World.mergeJob) */
+  merge?: boolean;
   /** the methods it installs, and the small ones it copies in for its own calls (method ids), first the method asked for */
   installed: string[]; copies: string[];
   /** per virtual call (declaring class, name, descriptor), the implementations worth a guarded direct call (method ids) */
@@ -73,7 +75,7 @@ export class UnitCompiler {
     w.opts.cold = !!job.cold;
     const cx = new Compiler(w);
     w.beginTouch();
-    const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), true);
+    const { bytes, traces } = cx.buildUnit(job.installed.map(method), job.copies.map(method), !job.merge, job.merge && "merge");
     const touch = w.endTouch();
     let module: WebAssembly.Module;
     const span = beginCompile("wasm.module");

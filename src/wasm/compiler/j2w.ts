@@ -336,7 +336,7 @@ export class Compiler implements Base {
     if (this.codes.has(id)) return this.codes.get(id) ?? undefined;
     const owner = this.owner, assumer = this.assumer;
     this.codes.set(id, null);
-    this.owner = m; this.assumer = this.install ? m : this.head;
+    this.owner = m; this.assumer = this.direct ? this.head : m;
     const code = compileMethod(this, m);
     this.owner = owner; this.assumer = assumer;
     this.codes.set(id, code);
@@ -683,7 +683,9 @@ export class Compiler implements Base {
    *  unit is the second tier: its methods do not count. With `install` the module puts its functions in the table itself, when it is instantiated,
    *  instead of exporting them (a precompiled module, aot.ts). */
   /** `ensures`: classes whose ensure() the unit also defines, exported as the methods are (World.ensureBody) */
-  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
+  /** `install`: the methods go straight into their table slots and call each other through them, as precompiled code (true) or code merged from first-tier units
+   *  ("merge"), which unlike precompiled code relies on the classes loaded now */
+  buildUnit(methods: MethodInfo[], copies: MethodInfo[] = [], hot = false, install: boolean | "merge" = false, ensures: string[] = []): { bytes: Uint8Array; traces: FnTrace[] } {
     const span = beginCompile("wasm.emit");
     try {
     const { mb, w } = this, all = methods.concat(copies);
@@ -691,10 +693,10 @@ export class Compiler implements Base {
     this.natives.declare(this, all);
     declareSymbolicSites(this, all);
     // the second tier's names differ from the first's, and a copy's from the installed method's, so a stack frame finds its own offsets (traces are keyed by name)
-    const label = (m: MethodInfo, i: number) => (hot || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
+    const label = (m: MethodInfo, i: number) => (hot || install === "merge" || i >= methods.length ? `${mid(m)}#${w.stats.units}` : mid(m));
     all.forEach((m, i) => this.fn.set(mid(m), mb.reserveFunc(this.methodSig(m), label(m, i))));
     const { phase } = w.stats, t0 = performance.now(), analysed = phase.prepare + phase.flow + phase.infer + phase.facts;
-    this.direct = !install; this.install = install; this.head = methods[0];
+    this.direct = !install; this.install = install === true; this.head = methods[0];
     const codes = all.map((m) => this.compiled(m)!);
     phase.emit += performance.now() - t0 - (phase.prepare + phase.flow + phase.infer + phase.facts - analysed);
     const at: [number, number][] = [];

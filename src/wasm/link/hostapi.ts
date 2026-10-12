@@ -122,6 +122,8 @@ export interface HostNet {
 export interface CompileService {
   /** takes the second-tier compile of the method in `slot` (`World.upgradeJob` describes it); "later" while it has too many waiting, false if it cannot */
   submit(w: World, slot: number): boolean | "later";
+  /** the World has first-tier units to merge (World.mergeJob), which the service takes when no second-tier job waits */
+  merge(w: World): void;
   /** dex files were added to a defining namespace, or (null) something the service cannot follow was: it stops serving */
   added(dexes: DexFile[] | null, loader?: Loader): void;
   namespaces(): void;

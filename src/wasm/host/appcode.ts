@@ -77,7 +77,8 @@ export async function prepareApp(req: AppCodeRequest): Promise<AppCode> {
   const persisted = saved && source === "persist" ? Promise.resolve(true)
     : saved && files && req.persist ? req.persist.save(key, [...files]).catch(() => false) : Promise.resolve(false);
   req.signal?.throwIfAborted();
-  const compiler = new CompileClient(() => req.spawn("upgrade")), builder = new Builder(req, key);
+  // merges wait for the launch's first frame, and leave the memory to a build while one is made
+  const compiler = new CompileClient(() => req.spawn("upgrade"), () => !watching || builder.busy), builder = new Builder(req, key);
   let closed = false, watching = false, timer: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
     if (closed) return;

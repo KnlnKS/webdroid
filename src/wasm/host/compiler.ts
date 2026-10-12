@@ -14,6 +14,9 @@ import type { CompileRequest, CompileResponse, Containers, Port } from "./compil
 export interface WorkerPort extends Port { terminate(): void; onerror: ((e: ErrorEvent) => void) | null }
 /** jobs waiting for the worker; a hot method that finds the queue full asks again after another budget */
 const MAX_QUEUE = 16, MAX_FAILURES = 3;
+/** a merge (World.mergeJob) is paced to leave the worker idle MERGE_REST times as long as it took: its compiling allocates fast enough to grow the worker's heap
+ *  faster than collections shrink it, in the address space every process of the page shares */
+const MERGE_REST = 2;
 
 /** `dexes` as the archives they are views of, copied for the worker (the copies are transferred) */
 export function containers(dexes: Iterable<DexFile>): Containers {
@@ -30,12 +33,14 @@ export class CompileClient implements CompileService {
   private marks!: Marks;
   private keep = false;
   private queue: number[] = [];
-  private busy?: { id: number; slot: number; job: UpgradeJob; epoch: number; from: Marks };
+  private busy?: { id: number; slot: number; job: UpgradeJob; epoch: number; from: Marks; sent: number };
+  private mergeAfter = 0;
   private nextId = 0;
 
   private port?: WorkerPort;
   private setup?: { aotBase: string | undefined; app: AppIndex | undefined };
-  constructor(private source: WorkerPort | (() => WorkerPort)) {
+  /** `holdMerges`: whether merges wait, as while another worker's compiling takes the memory */
+  constructor(private source: WorkerPort | (() => WorkerPort), private holdMerges = () => false) {
     if (typeof source !== "function") this.attach(source);
   }
   private attach(port: WorkerPort): void {
@@ -75,17 +80,22 @@ export class CompileClient implements CompileService {
   private waiting: [CompileRequest, Transferable[]][] = [];
   private post(m: CompileRequest, transfer: Transferable[] = []): void { if (this.loaded) this.port!.postMessage(m, transfer); else this.waiting.push([m, transfer]); }
 
-  submit(_w: World, slot: number): boolean | "later" {
+  /** whether the worker serves, starting it if it has not been */
+  private serving(): boolean {
     if (this.state === "idle" && this.w) {
       try { this.attach((this.source as () => WorkerPort)()); this.initialize(); }
       catch (e) { this.retire(`the compile worker could not start: ${String(e)}`); }
     }
-    if (this.state !== "ready" && this.state !== "starting") return false;
+    return this.state === "ready" || this.state === "starting";
+  }
+  submit(_w: World, slot: number): boolean | "later" {
+    if (!this.serving()) return false;
     if (this.queue.length >= MAX_QUEUE) return "later";
     this.queue.push(slot);
     this.pump();
     return true;
   }
+  merge(_w: World): void { if (this.serving()) this.pump(); }
   added(dexes: DexFile[] | null, loader?: Loader): void {
     if (this.state === "retired" || !this.w) return;
     if (!dexes) { this.retire("something the worker cannot follow was added"); return; }
@@ -105,13 +115,16 @@ export class CompileClient implements CompileService {
     const w = this.w!;
     while (!this.busy && this.queue.length) {
       const slot = this.queue.shift()!, job = w.upgradeJob(slot);
-      if (!job) { w.release(slot); continue; }
-      const from = w.numbering(), id = this.nextId++;
-      this.busy = { id, slot, job, epoch: w.epoch, from };
-      this.post({ type: "upgrade", id, keep: this.keep, sync: w.since(this.marks), job });
-      this.marks = from; this.keep = false;
-      this.stats.jobs++;
+      if (job) this.send(slot, job); else w.release(slot);
     }
+    if (!this.busy && performance.now() >= this.mergeAfter && !this.holdMerges()) { const job = w.mergeJob(); if (job) this.send(-1, job); }
+  }
+  private send(slot: number, job: UpgradeJob): void {
+    const w = this.w!, from = w.numbering(), id = this.nextId++;
+    this.busy = { id, slot, job, epoch: w.epoch, from, sent: performance.now() };
+    this.post({ type: "upgrade", id, keep: this.keep, sync: w.since(this.marks), job });
+    this.marks = from; this.keep = false;
+    this.stats.jobs++;
   }
   private receive(m: CompileResponse): void {
     if (this.state === "retired") return;
@@ -123,6 +136,7 @@ export class CompileClient implements CompileService {
     const busy = this.busy;
     if (!busy || m.id !== busy.id) return;
     this.busy = undefined;
+    if (busy.job.merge) this.mergeAfter = performance.now() * (1 + MERGE_REST) - busy.sent * MERGE_REST;
     if (m.type === "failed") {
       if (busy.job.refresh !== undefined) {
         if (!this.queue.includes(busy.slot)) w.release(busy.slot);

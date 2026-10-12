@@ -98,6 +98,9 @@ type Slot = { k: "method"; m: MethodInfo; done: boolean; hot?: boolean; pending?
 interface InitScope { mb: ModuleBuilder; b: Base; initG: number; sid: number; iw: number; tag: number; statics(f: FieldInfo): number; literal(c: Code, s: string): void }
 /** the most methods a first-tier unit holds (World.batch) */
 const BATCH = 32;
+/** the engine charges a module some tens of KB of external memory however small, and external memory drives full collections: once MERGE_AT first-tier units
+ *  are loose, a compile worker merges up to MERGE_MAX of their methods into one module */
+const MERGE_AT = 1024, MERGE_MAX = 512;
 /** the most lazy-link stubs a module of shared stubs adds to the pool of a signature (World.poolStubs) */
 const STUB_POOL = 1024;
 type StubRequest = { params: Kind[]; ret: Kind | "V"; slot: number };
@@ -126,7 +129,7 @@ export class World {
   private lastGap = 0;
   /** the message the last implicit exception would carry; stored in the Throwable once Strings exist */
   lastMessage: string | null = null;
-  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0 };
+  stats = { phase: { prepare: 0, flow: 0, infer: 0, facts: 0, emit: 0, encode: 0, classBuild: 0 }, aot: { d: 0, c: 0, dead: 0, missed: 0, readMs: 0, ms: 0, bytes: 0 }, classes: 0, units: 0, methods: 0, coldMethods: 0, coldCalls: 0, coldResumes: 0, coldDeopts: 0, coldResumeEntries: 0, coldSlowAdapters: 0, coldSlowModules: 0, coldSlowCalls: 0, coldSlowWaits: 0, coldTypingMethods: 0, coldSnapshotRegisters: 0, coldCallerCaptures: 0, bridgeCallerCaptures: 0, bytes: 0, compileMs: 0, moduleMs: 0, instantiateMs: 0, instances: 0, classMs: 0, invalidated: 0, upgrades: 0, merged: 0 };
   private slots: (Slot | undefined)[] = [];
   /** the table slots a class owns: [blockBase[i], blockBase[i] + blockSize[i]), in ascending order. A method's slot is the block's base plus its index, the last slot is the class's `ensure` */
   blockBase: number[] = [];
@@ -927,7 +930,39 @@ export class World {
     const built = s.k === "method" ? cx.buildUnit(batch) : s.k === "synth" ? cx.buildSynthetic(s.name, s.d!.params, (c) => s.d!.body(cx, c), s.d!.ret)
       : cx.buildSynthetic(s.name, THROWERS[s.name].params, (c) => throwerBody(cx, c, s.name));
     this.stats.units++; this.stats.methods += Math.max(1, batch.length);
-    this.install(batch.map((m) => this.slotOf(m)), false, cx, this.unitImports(cx), built, slot, clock);
+    const group = batch.map((m) => this.slotOf(m));
+    this.install(group, false, cx, this.unitImports(cx), built, slot, clock);
+    if (group.length && this.opts.compiler) {
+      this.loose.push(group);
+      if (this.loose.length >= this.mergeAt) this.opts.compiler.merge(this);
+    }
+  }
+  /** first-tier units of methods (their slots) not merged yet, oldest first, and those of the merge on its way */
+  private loose: number[][] = [];
+  private merging: number[][] = [];
+  private mergeAt = MERGE_AT;
+  private mergeable(g: number[]): boolean {
+    return g.every((at) => { const s = this.peek(at); return s?.k === "method" && s.done && !s.hot && !s.pending && this.groupOf.get(at) === g; });
+  }
+  /** the oldest loose units, merged into one module by a compile worker; the merged code calls through the table, so each method can be reset alone */
+  mergeJob(): UpgradeJob | undefined {
+    this.loose.push(...this.merging.filter((g) => this.mergeable(g)));
+    this.merging = [];
+    if (this.loose.length < this.mergeAt) return undefined;
+    const clock = this.unitClock(), groups: number[][] = [];
+    let n = 0, size = 0;
+    for (; n < this.loose.length && size < MERGE_MAX; n++) {
+      const g = this.loose[n];
+      if (this.mergeable(g)) { groups.push(g); size += g.length; }
+    }
+    this.loose.splice(0, n);
+    const units = groups.map((g) => g.map((at) => (this.peek(at) as { m: MethodInfo }).m)), refs = this.jobRefs(units), taken = new Set(refs.units);
+    groups.forEach((g, i) => (taken.has(units[i]) ? this.merging : this.loose).push(g));
+    this.accountCompilation(clock);
+    // what is not ready waits for more units to be linked
+    if (!refs.units.length) { this.mergeAt = this.loose.length + MERGE_AT / 4; return undefined; }
+    this.mergeAt = MERGE_AT;
+    return this.job(refs.units.flat(), [], refs, undefined, true);
   }
   /** `m` and the methods without code that its first run will call: its static and direct calls before its first branch, and theirs. They are compiled beside
    *  it rather than in a module each, which costs the engine far more than the functions */
@@ -1235,35 +1270,51 @@ export class World {
     if (s?.k !== "method" || !s.done || (s.hot && (!refresh?.ready.size || refresh.slots[0] !== slot || !this.hotUnits.live(refresh, this.table)))) return undefined;
     const clock = this.unitClock(), members = s.hot ? refresh!.slots.map(at => (this.peek(at) as { m: MethodInfo }).m) : undefined;
     const { installed, copies } = this.group(s.m, members);
+    const refs = this.jobRefs([[...installed, ...copies]]);
+    this.accountCompilation(clock);
+    return refs.units.length ? this.job(installed, copies, refs, s.hot ? refresh!.generation : undefined) : undefined;
+  }
+  private job(installed: MethodInfo[], copies: MethodInfo[], refs: Pick<UpgradeJob, "resolved" | "prepared">, refresh?: number, merge?: boolean): UpgradeJob {
+    return { refresh, merge, resolved: refs.resolved, prepared: refs.prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+  }
+  /** what a compile worker must be told of this World's class loading to compile `units` as it would: the initiating identities their code resolves, and the
+   *  hierarchies of those classes. A unit that reaches a class whose definition is not ready is left out */
+  private jobRefs(units: MethodInfo[][]): { units: MethodInfo[][]; resolved: [string, string, string][]; prepared: [string, string | null, string[]][] } {
     const resolved: [string, string, string][] = [], prepared: [string, string | null, string[]][] = [];
-    const seen = new Map<string, Set<string>>(), hierarchies = new Set<string>();
-    let ready = true;
-    const addResolved = (referrer: string, name: string, key: string) => {
+    const seen = new Map<string, Set<string>>(), hierarchies = new Set<string>(), ready = new Map<string, boolean>();
+    const own = (key: string) => { const cls = this.prog.get(key)!; return !!cls.dex && !!cls.def && this.prog.loaderOf(key) !== this.prog.boot; };
+    const isReady = (key: string): boolean => {
+      let r = ready.get(key);
+      if (r === undefined) {
+        ready.set(key, true);
+        const cls = this.prog.get(key);
+        r = !!cls && definitionReady(this, key) && (!own(key) || [...cls.sup ? [cls.sup] : [], ...cls.ifaces].every(isReady));
+        ready.set(key, r);
+      }
+      return r;
+    };
+    const resolve = (referrer: string, name: string, key: string) => {
       const names = seen.get(referrer) ?? seen.set(referrer, new Set()).get(referrer)!;
       if (names.has(name)) return;
       names.add(name); resolved.push([referrer, name, key]);
-      addHierarchy(key);
-    };
-    const addHierarchy = (key: string) => {
       if (hierarchies.has(key)) return;
       hierarchies.add(key);
-      const cls = this.prog.get(key);
-      if (!cls || !definitionReady(this, key)) { ready = false; return; }
+      const cls = this.prog.get(key)!;
       prepared.push([key, cls.sup, [...cls.ifaces]]);
-      if (!cls.dex || !cls.def || this.prog.loaderOf(key) === this.prog.boot) return;
-      const indices = [...cls.def.superIdx === 0xffffffff ? [] : [cls.def.superIdx], ...cls.def.interfaces];
+      if (!own(key)) return;
+      const indices = [...cls.def!.superIdx === 0xffffffff ? [] : [cls.def!.superIdx], ...cls.def!.interfaces];
       const targets = [...cls.sup ? [cls.sup] : [], ...cls.ifaces];
-      indices.forEach((index, i) => addResolved(key, descToName(cls.dex!.rawType(index)), targets[i]));
+      indices.forEach((index, i) => resolve(key, descToName(cls.dex!.rawType(index)), targets[i]));
     };
-    for (const method of [...installed, ...copies]) if (method.codeOff && !this.intrinsic(method)) {
-      for (const name of this.planning(method).references) {
-        const owner = initiatedType(this, method.cls, name);
-        if (owner) addResolved(method.cls, owner.name, owner.key);
-      }
+    const owners = (m: MethodInfo) => !m.codeOff || this.intrinsic(m) ? [] : this.planning(m).references.flatMap((name) => initiatedType(this, m.cls, name) ?? []);
+    const taken: MethodInfo[][] = [];
+    for (const u of units) {
+      const os = u.map(owners);
+      if (!os.every((o) => o.every((x) => isReady(x.key)))) continue;
+      taken.push(u);
+      u.forEach((m, i) => os[i].forEach((o) => resolve(m.cls, o.name, o.key)));
     }
-    this.accountCompilation(clock);
-    if (!ready) return undefined;
-    return { refresh: s.hot ? refresh!.generation : undefined, resolved, prepared, unit: this.stats.units++, installed: installed.map(mid), copies: copies.map(mid), plan: [...this.plan].map(([key, ms]) => [key, ms.map(mid)]), cold: !!this.opts.cold, initialized: this.newlyInitialized(), long: [...installed, ...copies].map(mid).filter((id) => this.longLoops.has(id)) };
+    return { units: taken, resolved, prepared };
   }
   /** the classes linked so far, and those with a method that has been called (a method's slot is done once it has run or its precompiled code is installed) */
   usage(): { linked: string[]; called: string[] } {
@@ -1298,10 +1349,11 @@ export class World {
   /** installs the second-tier unit a compile worker made for `slot`, if it is still sound here: nothing was added to the Program since `epoch`, and the numbering its code relies on
    *  is this World's (it was numbered from `result.numbering.from`) */
   adoptUnit(slot: number, job: UpgradeJob, result: UnitResult, epoch: number): boolean {
+    if (job.merge) return this.adoptMerged(job, result, epoch);
     const s = this.slotAt(slot), head = result.header, clock = this.unitClock();
     this.release(slot);
     const refresh = this.hotUnits.get(slot);
-    if (head.version !== VERSION || (head.deopt ?? 0) !== (job.cold ? DEOPT_ABI : 0) || !!job.cold !== !!this.opts.cold || epoch !== this.epoch || s?.k !== "method" || !s.done || !head.natives.every((id) => this.nativeBound(id))) return false;
+    if (!this.sound(job, result, epoch) || s?.k !== "method" || !s.done) return false;
     if (job.refresh === undefined ? s.hot : !s.hot || refresh?.generation !== job.refresh || !this.hotUnits.live(refresh, this.table)) return false;
     if (job.refresh !== undefined && ![...refresh!.ready].some(name => !(head.symbols ?? []).some(([site]) => site === name))) { this.hotUnits.forget(slot); return false; }
     if (job.refresh !== undefined) {
@@ -1319,8 +1371,22 @@ export class World {
         if (!cls || !definitionReady(this, key) || cls.sup !== sup || cls.ifaces.length !== ifaces.length || cls.ifaces.some((name, i) => name !== ifaces[i])) return false;
       }
     }
-    const n = result.numbering;
-    if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return false;
+    const r = this.received(result);
+    if (!r) return false;
+    this.stats.methods += job.installed.length + job.copies.length; this.stats.upgrades++;
+    this.install(job.installed.map((id) => this.slotOf(methodOf(this.prog, id)!)), true, r.unit, r.imports, r.built, slot, clock);
+    if (job.refresh !== undefined) this.hotRefreshes++;
+    return true;
+  }
+  /** whether a worker's unit was made for this World as it is: nothing was added to the Program since `epoch`, and its natives are bound here */
+  private sound(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
+    const head = result.header;
+    return head.version === VERSION && (head.deopt ?? 0) === (job.cold ? DEOPT_ABI : 0) && !!job.cold === !!this.opts.cold && epoch === this.epoch && head.natives.every((id) => this.nativeBound(id));
+  }
+  /** takes the numbering of a worker's unit and links what it names; its module and imports, undefined if the numbering does not follow this World's */
+  private received(result: UnitResult) {
+    const head = result.header, n = result.numbering;
+    if ((n.names.length || n.tail.length || n.selectors.length || n.gaps.length || n.links.length) && !this.adopt(n)) return undefined;
     for (const id of head.touch) this.link(this.names[id]);
     for (const name of head.synth) this.ensureSynth(name);
     const method = (id: string) => methodOf(this.prog, id);
@@ -1332,9 +1398,21 @@ export class World {
     this.classImports(head.classImports, imports);
     const traces = result.traces.map((t) => ({ name: t.name, m: t.m ? method(t.m) : undefined, offsets: t.offsets, pcs: t.pcs }));
     for (const c of head.allocs) this.allocated.add(c);
-    this.stats.methods += job.installed.length + job.copies.length; this.stats.upgrades++;
-    this.install(job.installed.map((id) => this.slotOf(method(id)!)), true, unit, imports, { bytes: mod, traces }, slot, clock);
-    if (job.refresh !== undefined) this.hotRefreshes++;
+    return { unit, imports, built: { bytes: mod, traces } };
+  }
+  /** installs merged first-tier code in the slots of the units it was merged from that still hold them; the others keep what they have */
+  private adoptMerged(job: UpgradeJob, result: UnitResult, epoch: number): boolean {
+    const groups = this.merging, clock = this.unitClock();
+    this.merging = [];
+    const r = this.sound(job, result, epoch) ? this.received(result) : undefined;
+    if (!r) { this.loose.push(...groups.filter((g) => this.mergeable(g))); return false; }
+    const live = groups.filter((g) => this.mergeable(g)).flat(), merged = new Set(live);
+    if (!live.length) return true;
+    const kept = job.installed.map((id) => this.slotOf(methodOf(this.prog, id)!)).filter((at) => !merged.has(at)).map((at) => [at, this.table.get(at)] as const);
+    this.instantiateUnit(r.unit, r.imports, r.built, live[0], clock);
+    for (const [at, f] of kept) this.table.set(at, f);
+    for (const at of live) this.groupOf.set(at, [at]);
+    this.stats.merged += live.length;
     return true;
   }
   private hotSince?: number;
