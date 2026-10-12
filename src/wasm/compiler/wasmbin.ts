@@ -185,20 +185,18 @@ export class ModuleBuilder {
       }
       signatures.set(signature, type);
     }
+    // Bodies whose function indices move are patched where they land in the output: [offset, index] pairs.
+    const moved = new Set<FuncBytes>(), fixes: number[] = [];
     const relocate = (body: FuncBytes): ArrayLike<number> => {
-      if (imported === this.nImportedFuncs || !body.functionRefs?.length) return body;
-      const bytes = Uint8Array.from(body);
-      for (const at of body.functionRefs) {
-        let value = index(readIndex(body, at)), i = at;
-        // Preserve immediate widths so stack-trace marks within a body stay valid.
-        while (body[i] & 128) { bytes[i++] = (value & 127) | 128; value = Math.floor(value / 128); }
-        bytes[i] = value;
-      }
-      return bytes;
+      if (imported !== this.nImportedFuncs && body.functionRefs?.length) moved.add(body);
+      return body;
     };
     const parts: ArrayLike<number>[] = [[0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]];
     let size = 8;
-    const put = (a: ArrayLike<number>) => { parts.push(a); size += a.length; };
+    const put = (a: ArrayLike<number>) => {
+      if (moved.has(a as FuncBytes)) for (const at of (a as FuncBytes).functionRefs!) fixes.push(size + at, index(readIndex(a as FuncBytes, at)));
+      parts.push(a); size += a.length;
+    };
     /** a section: its id, the length of its parts, then the parts */
     const section = (id: number, body: ArrayLike<number>[]) => {
       let len = 0;
@@ -269,7 +267,14 @@ export class ModuleBuilder {
     }
     const out = new Uint8Array(size);
     let at = 0;
-    for (const p of parts) { out.set(p, at); at += p.length; }
+    // an indexed copy: TypedArray.set from small JS arrays costs several times more
+    for (const p of parts) for (let i = 0; i < p.length; i++) out[at++] = p[i];
+    for (let k = 0; k < fixes.length; k += 2) {
+      let i = fixes[k], value = fixes[k + 1];
+      // Preserve immediate widths so stack-trace marks within a body stay valid.
+      while (out[i] & 128) { out[i++] = (value & 127) | 128; value = Math.floor(value / 128); }
+      out[i] = value;
+    }
     return out;
   }
 }

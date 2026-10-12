@@ -419,7 +419,7 @@ export class MC {
   }
   /** the method an invoke calls directly; null if it calls no Java method, "dynamic" if the target is known only at run time */
   private deferredSite(ins: Ins): boolean {
-    return this.symbolic && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
+    return this.symbolic && this.cx.symbolicImports.size > 0 && this.cx.symbolicImports.has(`${this.m.cls}:${this.m.index}:${ins.pc}`);
   }
   callee(ins: Ins): MethodInfo | null | "dynamic" {
     if (this.deferredSite(ins)) return "dynamic";
