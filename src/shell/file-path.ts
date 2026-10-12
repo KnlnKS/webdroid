@@ -19,6 +19,11 @@ export type FilePathCalls = {
 export const isMutablePath = (path: string): boolean => /^\/(?:data\/(?:data|user\/0|user_de\/0)(?:\/|$)|sdcard(?:\/|$))/.test(vfs.norm(path));
 export const filePathTransport: { calls?: () => FilePathCalls } = {};
 export const remoteFilePath = (path: string): FilePathCalls | undefined => isMutablePath(path) ? filePathTransport.calls?.() : undefined;
+/** stat of normalized `p` in this realm's VFS */
+export function pathStat(p: string): PathReply<PathStat | null> {
+  const directory = vfs.isDir(p), stat = directory ? null : vfs.stat(p);
+  return {errno: directory || stat ? 0 : E.NOENT, value: directory || stat ? {directory, size: directory ? 0 : stat!.size, mtime: vfs.mtime(p),...vfs.attributes(p,directory)} : null};
+}
 export function changeFileAttributes(path: string, change: Partial<FileAttributes>, uid = procIdentity.uid): number {
   for (const value of [change.uid,change.gid]) if (value !== undefined && (!Number.isInteger(value) || value < -1 || value > 0xffffffff)) return -E.INVAL;
   if (change.mode !== undefined && !Number.isInteger(change.mode)) return -E.INVAL;
@@ -45,8 +50,7 @@ export function canonicalFilePaths(authorize: (path: string, write: boolean) => 
     fileStat(path: string): PathReply<PathStat | null> {
       const p = vfs.norm(path), denied = authorize(p, false);
       if (denied) return {errno: denied, value: null};
-      const directory = vfs.isDir(p), stat = directory ? null : vfs.stat(p);
-      return {errno: directory || stat ? 0 : E.NOENT, value: directory || stat ? {directory, size: directory ? 0 : stat!.size, mtime: vfs.mtime(p),...vfs.attributes(p,directory)} : null};
+      return pathStat(p);
     },
     fileMkdir(path: string): number { const p = vfs.norm(path), denied = isMutablePath(p) ? authorize(p, true) : E.ACCES; return denied ? -denied : created(p,mkdirPath(null, p)); },
     fileRename(from: string, to: string): number {

@@ -19,7 +19,7 @@ import { is64BitProcess } from "../jvm/natives/jvmruntime";
 import { OS_CONSTANTS } from "./os-constants";
 import { pathOf, fdInt, setFdInt, mkFd } from "../jvm/natives/jio";
 import { vfs, type FileAttributes } from "../shell/vfs";
-import { remoteFilePath, changeFileAttributes } from "../shell/file-path";
+import { remoteFilePath, changeFileAttributes, pathStat, type PathStat } from "../shell/file-path";
 import { processOpenFd, processCloseFd, processReadFd, processPreadFd, processWriteFd, processPwriteFd, processSeekFd, processTruncateFd, processSyncFd, processFcntlFd, processFdStat, processIoctlIntFd, processAshmemCreate, processAshmemSize, processAshmemProtect, processMapping, isRemoteFd, descriptorTransport } from "../native/process-fd";
 import { openFd, javaOnLastClose, javaOpenFd, javaCloseFd, javaDupFd, javaBytesFd, javaFdSource, javaFdStat, javaPipeFds, javaReadFd, javaPreadFd, javaWriteFd, fdFile, inoOf, accessPath, createPath, mkdirPath, removePath, renamePath } from "../native/fs";
 import { fdsanClose, fdsanExchangeOwnerTag, fdsanOwnerTag, fdsanTagType, fdsanTagValue } from "../native/fd";
@@ -545,32 +545,27 @@ function atPath(dfd: number, address: bigint): string {
 const ATTR_FIELDS = ["st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size",
   "st_atime_sec", "st_atime_nsec", "st_mtime_sec", "st_mtime_nsec", "st_ctime_sec", "st_ctime_nsec"] as const;
 let attrProps: string[] | undefined;
-function fillAttrs(attrs: JObj, path: string, mode: number, size: number): void {
+function fillAttrs(attrs: JObj, path: string, st: PathStat): void {
   const a = attrs as unknown as Record<string, number | bigint>;
   const p = attrProps ??= ATTR_FIELDS.map((name) => declaredField("sun/nio/fs/UnixFileAttributes", name));
-  const ms = vfs.mtime(path), sec = BigInt(Math.floor(ms / 1000)), nsec = BigInt((ms % 1000) * 1e6);
-  const attributes = vfs.attributes(path,(mode & S_IFDIR) !== 0);
-  a[p[0]] = (mode & ~0o7777) | attributes.mode; a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = attributes.uid; a[p[5]] = attributes.gid; a[p[6]] = BigInt(size);
+  const sec = BigInt(Math.floor(st.mtime / 1000)), nsec = BigInt((st.mtime % 1000) * 1e6);
+  a[p[0]] = modeOf(st); a[p[1]] = BigInt(inoOf(path)); a[p[2]] = 1n; a[p[3]] = 1; a[p[4]] = st.uid; a[p[5]] = st.gid; a[p[6]] = BigInt(st.directory ? 4096 : st.size);
   for (let i = 7; i < 13; i += 2) { a[p[i]] = sec; a[p[i + 1]] = nsec; }
 }
-/** stat(2) of a path: a directory, or a file (procfs included) */
-function statPath(path: string, attrs: JObj | null): number {
-  const p = vfs.norm(path), dir = vfs.isDir(p), st = dir ? null : vfs.stat(p);
-  if (!dir && !st) throw unixError(E.NOENT);
-  const mode = dir ? S_IFDIR | 0o755 : S_IFREG | 0o644;
-  if (attrs) fillAttrs(attrs, p, mode, dir ? 4096 : st!.size);
-  return mode;
+const modeOf = (st: PathStat) => (st.directory ? S_IFDIR : S_IFREG) | st.mode;
+/** stat(2) of a path in the realm that owns it: a directory, or a file (procfs included) */
+function pathReply(path: string) { const p = vfs.norm(path); return remoteFilePath(p)?.fileStat(p) ?? pathStat(p); }
+function statPath(path: string, attrs: JObj | null): number | Promise<number> {
+  return after(pathReply(path), ({ errno, value }) => {
+    if (!value) throw unixError(errno);
+    if (attrs) fillAttrs(attrs, vfs.norm(path), value);
+    return modeOf(value);
+  });
 }
-function unlinkPath(path: string): void {
+/** unlink(2) with `directory` false, rmdir(2) with true */
+function removeAt(path: string, directory: boolean) {
   const p = vfs.norm(path);
-  if (vfs.isDir(p)) throw unixError(E.ISDIR);
-  if (!vfs.delete(p)) throw unixError(E.NOENT);
-}
-function rmdirPath(path: string): void {
-  const p = vfs.norm(path);
-  if (!vfs.isDir(p)) throw unixError(vfs.exists(p) ? E.NOTDIR : E.NOENT);
-  if (vfs.list(p).length) throw unixError(E.NOTEMPTY);
-  vfs.rmdir(p);
+  return after(remoteFilePath(p)?.fileRemove(p, directory) ?? removePath(null, p, directory), (n) => { unixSys(n); });
 }
 /** utimes(2): times in microseconds; the VFS keeps modification times only */
 function setTimes(path: string, modified: bigint): void {
@@ -584,19 +579,20 @@ function mayChown(uid: number, gid: number): boolean {
   const own = procIdentity.uid, user = own - own % 100000, offset = own % 100000 - 10000;
   return (uid === -1 || uid === own) && (gid === -1 || gid === own || offset >= 0 && (gid === user + 20000 + offset || gid === 50000 + offset));
 }
-function chownPath(path: string, uid: number, gid: number): void {
-  statPath(path, null);
-  if (!mayChown(uid, gid)) throw unixError(E.PERM);
+function chownPath(path: string, uid: number, gid: number) {
+  return after(statPath(path, null), () => { if (!mayChown(uid, gid)) throw unixError(E.PERM); });
 }
 const fdPath = (fd: number): string => { const st = javaFdStat(fd); if (!st) throw unixError(E.BADF); return st.path ?? ""; };
 /** open DIR streams: the entries as readdir(3) returns them, and the descriptor closedir closes */
 const dirStreams = new Map<bigint, { names: string[]; i: number; fd: number }>();
 let nextDir = 0n;
-function openDirStream(path: string, fd: number): bigint {
+function openDirStream(path: string, fd: number) {
   const p = vfs.norm(path);
-  if (!vfs.isDir(p)) throw unixError(vfs.exists(p) ? E.NOTDIR : E.NOENT);
-  dirStreams.set(++nextDir, { names: [".", "..", ...vfs.list(p)], i: 0, fd });
-  return nextDir;
+  return after(remoteFilePath(p)?.fileList(p) ?? (vfs.isDir(p) ? {errno: 0, value: vfs.list(p)} : {errno: vfs.exists(p) ? E.NOTDIR : E.NOENT, value: null}), ({ errno, value }) => {
+    if (!value) throw unixError(errno);
+    dirStreams.set(++nextDir, { names: [".", "..", ...value], i: 0, fd });
+    return nextDir;
+  });
 }
 const passwdName = (id: number) => bytesOf(appUserName(id));
 const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
@@ -611,25 +607,26 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
   "close(I)V": (fd: number) => after(processCloseFd(fd),n => {unixSys(n);}),
   "link0(JJ)V": () => { throw unixError(E.PERM); },
   "symlink0(JJ)V": () => { throw unixError(E.PERM); },
-  "unlink0(J)V": (path: bigint) => unlinkPath(cpath(path)),
-  "unlinkat0(IJI)V": (dfd: number, path: bigint, flags: number) => (flags & AT_REMOVEDIR ? rmdirPath : unlinkPath)(atPath(dfd, path)),
+  "unlink0(J)V": (path: bigint) => removeAt(cpath(path), false),
+  "unlinkat0(IJI)V": (dfd: number, path: bigint, flags: number) => removeAt(atPath(dfd, path), !!(flags & AT_REMOVEDIR)),
   "rename0(JJ)V": (from: bigint, to: bigint) => { const a=cpath(from),b=cpath(to);return after((remoteFilePath(a)??remoteFilePath(b))?.fileRename(a,b)??renamePath(null,a,b),n => {unixSys(n);}); },
   "renameat0(IJIJ)V": (fromDir: number, from: bigint, toDir: number, to: bigint) => { const a=atPath(fromDir,from),b=atPath(toDir,to);return after((remoteFilePath(a)??remoteFilePath(b))?.fileRename(a,b)??renamePath(null,a,b),n => {unixSys(n);}); },
-  "mkdir0(JI)V": (path: bigint) => { unixSys(mkdirPath(null, cpath(path))); },
-  "rmdir0(J)V": (path: bigint) => rmdirPath(cpath(path)),
+  "mkdir0(JI)V": (path: bigint) => { const p = cpath(path); return after(remoteFilePath(p)?.fileMkdir(p) ?? mkdirPath(null, p), (n) => { unixSys(n); }); },
+  "rmdir0(J)V": (path: bigint) => removeAt(cpath(path), true),
   // an existing path is never a link
-  "readlink0(J)[B": (path: bigint) => { statPath(cpath(path), null); throw unixError(E.INVAL); },
-  "realpath0(J)[B": (path: bigint) => { const p = vfs.norm(cpath(path)); statPath(p, null); return bytesOf(p); },
-  "stat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => { statPath(cpath(path), attrs); },
-  "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => { statPath(cpath(path), attrs); },
-  "stat1(J)I": (path: bigint) => { try { return statPath(cpath(path), null); } catch { return 0; } },
-  "fstatat0(IJILsun/nio/fs/UnixFileAttributes;)V": (dfd: number, path: bigint, _flag: number, attrs: JObj) => { statPath(atPath(dfd, path), attrs); },
+  "readlink0(J)[B": (path: bigint) => after(statPath(cpath(path), null), () => { throw unixError(E.INVAL); }),
+  "realpath0(J)[B": (path: bigint) => { const p = vfs.norm(cpath(path)); return after(statPath(p, null), () => bytesOf(p)); },
+  "stat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
+  "lstat0(JLsun/nio/fs/UnixFileAttributes;)V": (path: bigint, attrs: JObj) => after(statPath(cpath(path), attrs), () => {}),
+  "stat1(J)I": (path: bigint) => after(pathReply(cpath(path)), ({ value }) => value ? modeOf(value) : 0),
+  "fstatat0(IJILsun/nio/fs/UnixFileAttributes;)V": (dfd: number, path: bigint, _flag: number, attrs: JObj) => after(statPath(atPath(dfd, path), attrs), () => {}),
   "fstat(ILsun/nio/fs/UnixFileAttributes;)V": (fd: number, attrs: JObj) => {
     const st = javaFdStat(fd);
     if (!st) throw unixError(E.BADF);
-    fillAttrs(attrs, st.path ?? "", st.mode, (st.mode & S_IFMT) === S_IFDIR ? 4096 : st.size);
+    const path = st.path ?? "", directory = (st.mode & S_IFMT) === S_IFDIR;
+    fillAttrs(attrs, path, { directory, size: st.size, mtime: vfs.mtime(path), ...vfs.attributes(path, directory) });
   },
-  "chmod0(JI)V": (path: bigint) => { statPath(cpath(path), null); },
+  "chmod0(JI)V": (path: bigint) => after(statPath(cpath(path), null), () => {}),
   "fchmod(II)V": (fd: number) => { fdPath(fd); },
   "chown0(JII)V": (path: bigint, uid: number, gid: number) => chownPath(cpath(path), uid, gid),
   "lchown0(JII)V": (path: bigint, uid: number, gid: number) => chownPath(cpath(path), uid, gid),
@@ -649,12 +646,12 @@ const unixNativeDispatcher: Record<string, (...args: never[]) => unknown> = {
     if (!stream) throw unixError(E.BADF);
     return stream.i < stream.names.length ? bytesOf(stream.names[stream.i++]) : null;
   },
-  "access0(JI)V": (path: bigint, mode: number) => { unixSys(accessPath(null, cpath(path), mode)); },
-  "exists0(J)Z": (path: bigint) => +(accessPath(null, cpath(path), 0) === 0),
+  "access0(JI)V": (path: bigint, mode: number) => { const p = cpath(path); return after(remoteFilePath(p)?.fileAccess(p, mode) ?? accessPath(null, p, mode), (n) => { unixSys(n); }); },
+  "exists0(J)Z": (path: bigint) => { const p = cpath(path); return after(remoteFilePath(p)?.fileAccess(p, 0) ?? accessPath(null, p, 0), (n) => +(n === 0)); },
   "getpwuid(I)[B": passwdName,
   "getgrgid(I)[B": passwdName,
   "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V": driven(function* (path: bigint, attrs: JObj): Gen {
-    statPath(cpath(path), null);
+    yield* awaited(statPath(cpath(path), null));
     const s = yield* awaited(storageStatVfs()), a = attrs as unknown as Record<string, bigint>;
     const f = (name: string) => declaredField("sun/nio/fs/UnixFileStoreAttributes", name);
     a[f("f_frsize")] = s.f_frsize; a[f("f_blocks")] = s.f_blocks; a[f("f_bfree")] = s.f_bfree; a[f("f_bavail")] = s.f_bavail;
