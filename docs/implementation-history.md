@@ -7060,3 +7060,26 @@ and 5,156 methods were installed ahead. On Komikku against the unchanged code (3
 The app thread reaches most methods before the Worker has compiled them. Adopting a unit costs about 1.1 ms of the
 app thread, and numbering the stale units costs more. Only relocated code (M5) could make an ahead unit
 independent of the page's numbering in the meantime.
+
+### The e2e probe's readbacks starved the app's IPC (2026-10-12)
+
+Komikku's `09 manga` step took 7–21 s, and in some runs it timed out. Opening the manga from the page's `wd` API
+took 1.3–1.6 s to show its chapter list, polling the UI tree without pixel samples. CPU profiles of every realm
+during the step explain the gap:
+- the app Worker was idle for whole seconds;
+- the page spent 45–100% of each second in the probe's `getImageData`.
+
+Under SwiftShader a full-screen readback waits for the GPU process's backlog of the app's frames. That took
+Komikku 0.3–1.1 s per sample and up to 6.5 s; ten samples took 19.8 s of one 20.9 s step. FitNotes' samples took
+about 0.1–0.15 s. The broker answers the app's IPC on the page's thread, so the storage-folder queries behind
+the chapter list waited behind the readbacks.
+
+The probe now keeps a readback's time beyond 150 ms to a fifth of the page's thread. Komikku's step settles in
+1.7–1.9 s and its flow takes 36.6 s against 51.9 s. FitNotes is unchanged at 23.2 s. Calculator's pixel-settled
+steps take 2–4 s against about 1–1.5 s, because its 0.3–0.75 s samples are now spaced further apart. Its
+intermittent `7b`/`eq` completion timeout is unchanged.
+
+`lat` reported 2.5–2.9 s for Komikku's first "OK" tap on a later launch, although the intended UI state matched
+33 ms after the tap. Dismissing a dialog removes a window rather than presenting an app frame, so `lat` waited for
+the next unrelated frame. A later Komikku launch with its saved build takes 2.7–3.0 s, against 8.7 s for the
+first.
