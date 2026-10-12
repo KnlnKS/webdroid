@@ -1,4 +1,5 @@
 import { T, sleb, uleb, vt, vtKey, type VT, type FuncBytes, functionIndex } from "./wasmbin";
+const END = [0x0b];
 /** instruction emitter for one function body */
 export class Code {
   b: FuncBytes = [];
@@ -155,19 +156,18 @@ export class Code {
   finish(): FuncBytes {
     this.materialize();
     // locals: run-length encode consecutive identical types
-    const out: FuncBytes = [];
+    const prefix: number[] = [];
     const groups: [number, VT][] = [];
     let lastKey = "";
     for (const t of this.localTypes) {
       const key = vtKey(t);
       if (groups.length && key === lastKey) groups[groups.length - 1][0]++; else { groups.push([1, t]); lastKey = key; }
     }
-    uleb(groups.length, out);
-    for (const [n, t] of groups) { uleb(n, out); vt(t, out); }
-    this.prefixLen = out.length;
+    uleb(groups.length, prefix);
+    for (const [n, t] of groups) { uleb(n, prefix); vt(t, prefix); }
+    this.prefixLen = prefix.length;
+    const out: FuncBytes = prefix.concat(this.b, END);
     out.functionRefs = (this.b.functionRefs ?? []).map(at => at + this.prefixLen);
-    for (const x of this.b) out.push(x);
-    out.push(0x0b);
     return out;
   }
 }

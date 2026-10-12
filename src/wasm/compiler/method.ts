@@ -806,10 +806,16 @@ export class MC {
   }
   /** emit "ensure class initialized", unless an earlier instruction on every path to here has */
   ensure(cls: string) { this.cx.emitEnsure(this.code, cls, this.facts.inited); }
-  /** the class whose initialization `ins` requests, as its translation does */
-  ensureTarget(ins: Ins): string | undefined {
-    if (this.deferredSite(ins)) return undefined;
+  private initedAt = new Map<number, readonly string[]>();
+  /** the classes whose initialization `ins` requests, as its translation does: its target and the target's superclasses */
+  initedBy(ins: Ins): readonly string[] {
+    let r = this.initedAt.get(ins.pc);
+    if (!r) { const cls = this.ensureTarget(ins); this.initedAt.set(ins.pc, r = cls ? this.cx.prog.chain(cls) : []); }
+    return r;
+  }
+  private ensureTarget(ins: Ins): string | undefined {
     const n = ins.name;
+    if (n !== "new-instance" && !n.startsWith("sget") && !n.startsWith("sput") && !n.startsWith("invoke-static") || this.deferredSite(ins)) return undefined;
     if (n === "new-instance") { const name = descToName(this.dex.type(ins.b)); return this.cx.str.isString(name) ? undefined : name; }
     if (n.startsWith("sget") || n.startsWith("sput")) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     if (n === "invoke-static" || n === "invoke-static/range") {
@@ -831,9 +837,16 @@ export class MC {
     return false;
   }
   /** the shadow key (see facts.ts) of the field access `ins` if its object is cast more than once in the method, else undefined */
+  private shadowAt = new Map<number, string | undefined>();
   shadowKey(ins: Ins): string | undefined {
+    if (!this.shadowKeys.size || !ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
+    if (this.shadowAt.has(ins.pc)) return this.shadowAt.get(ins.pc);
+    const key = this.findShadowKey(ins);
+    this.shadowAt.set(ins.pc, key);
+    return key;
+  }
+  private findShadowKey(ins: Ins): string | undefined {
     if (this.deferredSite(ins)) return undefined;
-    if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) return undefined;
     const w = this.typing.use(ins.pc, ins.b);
     if (w < 0) return undefined;
     const r = this.fieldOf(ins.c, false);
@@ -844,8 +857,7 @@ export class MC {
   private findShadows() {
     const seen = new Set<string>();
     for (const ins of this.prepared.instructions) {
-      if (this.deferredSite(ins)) continue;
-      if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput")) continue;
+      if (!ins.name.startsWith("iget") && !ins.name.startsWith("iput") || this.deferredSite(ins)) continue;
       const w = this.typing.use(ins.pc, ins.b);
       if (w < 0) continue;
       const r = this.fieldOf(ins.c, false);

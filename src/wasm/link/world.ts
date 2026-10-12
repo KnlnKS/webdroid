@@ -495,15 +495,16 @@ export class World {
       body[ELEM] = this.idOf(comp);
       body[ELEM_KIND] = !cc ? ELEM_OTHER : cc.isInterface || d >= H.MAXD ? ELEM_IFACE : d + 1;
     }
-    keys.forEach((key, i) => { body[H.VTAB + i] = this.dispatchSlot(key, impl(key)); });
+    const targets = keys.map(impl);
+    keys.forEach((key, i) => { body[H.VTAB + i] = this.dispatchSlot(key, targets[i]); });
     // interface dispatch: a small hash table of the selectors known now, the rest learned from imtMiss
     const slow: number[] = [];
-    if (!arr) for (const key of keys) {
-      const sel = this.selectors.get(dispatchMethodKey(key)), target = sel ? impl(key) : undefined;
-      if (!sel || !target || !failed(target) && !(target.flags & ACC.PUBLIC)) continue;
+    if (!arr) keys.forEach((key, i) => {
+      const sel = this.selectors.get(dispatchMethodKey(key)), target = sel ? targets[i] : undefined;
+      if (!sel || !target || !failed(target) && !(target.flags & ACC.PUBLIC)) return;
       const s = sel % H.IMT_N, f = this.dispatchSlot(key, target);
       if (body[H.IMT + 2 * s] === 0) { body[H.IMT + 2 * s] = sel; body[H.IMT + 2 * s + 1] = f; } else slow.push(sel, f);
-    }
+    });
     const addI = (i: string) => { const ic = prog.get(i); if (ic) { ifs.add(this.idOf(i)); ic.ifaces.forEach(addI); } };
     if (arr) ["java/lang/Cloneable", "java/io/Serializable"].forEach(addI);
     else for (let k: JClass | undefined = c; k; k = k.sup ? prog.get(k.sup) : undefined) k.ifaces.forEach(addI);

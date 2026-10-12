@@ -180,14 +180,19 @@ export class DexFile {
 
   /** the index of string `s`, or -1. string_ids sort by UTF-16 code units, which is how JS compares strings (ART's verifier rejects any other order). */
   findString(s: string): number {
+    let found = this.foundStrings.get(s);
+    if (found !== undefined) return found;
     let lo = 0, hi = this.stringCount;
+    found = -1;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1, t = this.string(mid);
-      if (t === s) return mid;
+      if (t === s) { found = mid; break; }
       if (t < s) lo = mid + 1; else hi = mid;
     }
-    return -1;
+    this.foundStrings.set(s, found);
+    return found;
   }
+  private foundStrings = new Map<string, number>();
   private methodNames?: { heads: Uint32Array; next: Uint32Array };
   /** The method_ids whose name is string `nameIdx`, in DEX order. */
   *methodsNamed(nameIdx: number): Iterable<number> {

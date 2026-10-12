@@ -35,8 +35,7 @@ export function step(mc: MC, ins: Ins, f: Facts): void {
   const reg = checkedReg(ins);
   if (reg >= 0 && !(ins.name.startsWith("invoke-direct") && mc.isStringInit(ins))) { const w = mc.typing.use(ins.pc, reg); if (w >= 0 && mc.typing.kind[w] === KR) f.nonNull.add(w); }
   const d = mc.typing.def(ins.pc);
-  const cls = mc.ensureTarget(ins);
-  if (cls) for (const c of mc.cx.prog.chain(cls)) f.inited.add(c);
+  for (const c of mc.initedBy(ins)) f.inited.add(c);
   const shadow = mc.shadowKey(ins);
   if (shadow) f.typed.add(shadow);
   if (d < 0) return;
