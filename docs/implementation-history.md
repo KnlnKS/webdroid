@@ -6810,11 +6810,10 @@ steady state falls from 1.59× to 0.82× Node. It and the frame check are now ca
 The zygote instead compiles in advance what launches use. Engine code is per `WebAssembly.Module`, and Modules
 are shared tab-wide, so code compiled in one realm serves every other realm, including the page's
 system_server. `aot-profile` records the AOT methods whose counters a profiled launch moved, in the page and in
-every Worker, and writes the list to `warm.json` beside `startup.json` (18,117 methods). While the spare Worker's
-zygote waits for a package, `World.warm` installs each listed method and calls it with zero arguments. A word
-in linear memory, which the `count` helper reads first, makes the method trap on entry, so nothing runs.
-Numbering is unchanged, so app builds still attach. The warm runs in 10 ms slices and stops when `bootApk`
-starts, because methods it has not reached compile on first call as before.
+every Worker, and writes the list to `warm.json` beside `startup.json` (18,117 methods). Before the spare
+Worker's zygote runs, `World.warm` installs each listed method and calls it with zero arguments. A word in linear
+memory, which the `count` helper reads first, makes the method trap on entry, so nothing runs. Numbering is
+unchanged, so app builds still attach.
 
 Measured from `wd.boot()`, without the warm then with it:
 
@@ -6827,6 +6826,30 @@ Measured from `wd.boot()`, without the warm then with it:
 A list built from Calculator and Mihon alone took FitNotes from 735–743 to 626–630 ms, so the gain is not limited
 to the profiled apps. On the full list, the warm completes about 1.3 s before the user boots an app.
 
-`lat` boots from `?apk=` and so reaches `bootApk` with the warm barely begun. When the warm ran to completion,
-FitNotes took 1,746 ms against 1,578 and Calculator 1,801 ms against 1,630. Sliced, they take 1,605 and 1,600 ms,
-and FitNotes' scroll shows no present interval over 25 ms.
+`lat` boots from `?apk=`, so its app Worker reaches `bootApk` with the warm barely begun. When the warm ran to
+completion first, FitNotes took 1,746 ms against 1,578 and Calculator 1,801 ms against 1,630. The warm now runs in
+10 ms slices and stops when `bootApk` starts; methods it has not reached compile on first call, as before. Engine
+code belongs to the tab, so the warm happens once: the Worker that gets through it tells the page, and later
+Workers skip it.
+
+A home-screen launch that takes the spare before its warm completed starts a new spare, as Android refills its
+pool of unspecialized app processes. That spare warms alongside the launch, on another core. Refilling after every
+process start, microG's included, chained spares that each ran a warm and a zygote. A FitNotes run then showed 9–21
+scroll intervals over 25 ms, against 0–1, and an unused spare still cost 0.9 s of CPU. Starting the new spare on
+every launch also slowed launches from an already warmed tab by about 30 ms, because it loads its runtime and
+modules through the page while the app launches.
+
+| `lat --warm --gpu` | Before the warm | Now |
+|---|---|---|
+| FitNotes | 1,578–1,605 ms | 1,438–1,457 ms |
+| Calculator | 1,600–1,630 ms | 1,512–1,563 ms |
+
+Scroll shows 0–1 intervals over 25 ms, and the launches from `wd.boot()` above are unchanged.
+
+Of the lazy compiles still left in Calculator's launch window, the platform's take 12 ms, down from 116 ms. The
+app's take 107 ms. The app Worker is busy without a break from 150 ms after `boot()` to its first frame, so there is
+no idle time on that thread to compile the app's code in. A helper Worker cannot compile it either: compiling a
+function this way means calling it, which needs an instance. The app's modules import globals of the module's own
+GC reference types, which only a World that numbered the same classes can supply. Binaryen's `-O1` shrinks an app
+module's code section by 17.5%, and `simplify-locals` alone by 7%. That makes the encoding a small lever on
+compile time.

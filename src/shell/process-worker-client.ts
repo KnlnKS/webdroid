@@ -10,6 +10,9 @@ import { displayRate } from "./display-rate";
 import { device } from "./config";
 
 export type SpareWorker = { pid: number; url: string; worker: Worker; release(): void; error?: string };
+/** whether a Worker's zygote has had the engine compile the platform code launches use: the code is the tab's, so no later Worker warms it again */
+let warmed = false;
+export const platformWarmed = (): boolean => warmed;
 /** A process Worker that loads its runtime before the broker gives it a package; the Wasm tier's modules come from the page's store. */
 export function spawnProcessWorker(url: string, pid: number): SpareWorker {
   const worker = new Worker(url, { type: "module" }), clock = createGuestClockPort(pid), aot = new MessageChannel(), jars = new MessageChannel();
@@ -17,7 +20,8 @@ export function spawnProcessWorker(url: string, pid: number): SpareWorker {
   sendPlatformJars(jars.port1);
   const spare: SpareWorker = { pid, url: new URL(url, location.href).href, worker, release: () => { clock.close(); aot.port1.close(); } };
   worker.onerror = event => { spare.error ??= event.message; };
-  worker.postMessage({ clock: clock.data, aot: aot.port2, jars: jars.port2 }, [aot.port2, jars.port2, ...clock.data.port ? [clock.data.port] : []]);
+  worker.addEventListener("message", ({ data }: MessageEvent<{ kind?: string }>) => { if (data.kind === "warmed") warmed = true; });
+  worker.postMessage({ clock: clock.data, aot: aot.port2, jars: jars.port2, warm: !warmed }, [aot.port2, jars.port2, ...clock.data.port ? [clock.data.port] : []]);
   // the zygote it runs reads the display's rate
   void displayRate().then(() => worker.postMessage({ rate: device.refreshRate }));
   return spare;

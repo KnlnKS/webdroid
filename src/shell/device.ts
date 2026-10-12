@@ -105,7 +105,7 @@ let zygote: Promise<void> | null = null, booting = false;
  *  downloads. Natives link after the platform is indexed, never before: a native whose super or
  *  interface is a class provenance withheld would otherwise find no dex and be auto-stubbed.
  *  `host` settles host properties Java reads from zygoteInit on, such as the display rate. */
-export function startZygote(host?: Promise<unknown>, warm = false): Promise<void> {
+export function startZygote(host?: Promise<unknown>, warmed?: () => void): Promise<void> {
   return zygote ??= (async () => {
     // the JS tier's link table and persisted bodies; the Wasm tier links and persists its own code (wasm/host/appcode.ts)
     const table = tier === "js" ? fetchLinkTable() : null;
@@ -115,12 +115,16 @@ export function startZygote(host?: Promise<unknown>, warm = false): Promise<void
       useLinkTable(await table, rt.linkFingerprint());
       await rt.linkNatives((name, e) => console.warn("[link native]", name, e), 8);
     }
+    // the platform code launches use is compiled while the zygote waits, once per tab: a package arriving
+    // stops it, and the spare that replaces a Worker taken early (processes.ts launch) goes through it
+    if (warmed && tier === "wasm") {
+      await tierReady();
+      if (await warmCode(() => booting)) warmed();
+    }
     // the runtime's own setup and the system font map need no app, but its bitness does (os.arch,
     // Build.CPU_ABI): a device has a zygote of each, and the app's ABI picks the one that forks it
     await Promise.all([processBitness, host, tier === "wasm" && tierReady()]);
     await zygoteInit();
-    // what launches run is compiled while the zygote waits for one
-    if (warm && tier === "wasm") await warmCode(() => booting);
   })();
 }
 

@@ -146,11 +146,13 @@ export async function bootWasmTier(): Promise<TierBackend> {
     async warm(stop) {
       // a build without the list (or the guarded build) leaves the platform's code to its first calls
       const list = await store?.fetchBytes("warm.json").catch(() => undefined);
-      if (!list) return;
+      if (!list) return true;
       const ids = JSON.parse(new TextDecoder().decode(list)) as string[], w = current();
       // in slices, so that a package arriving ends it: the code of what its launch runs is compiled as it runs either way
-      for (let at = 0; at < ids.length && !stop(); await new Promise((resolve) => setTimeout(resolve))) at = w.warm(ids, at, performance.now() + 10);
+      let at = 0;
+      for (; at < ids.length && !stop(); await new Promise((resolve) => setTimeout(resolve))) at = w.warm(ids, at, performance.now() + 10);
       mark("warmed");
+      return at === ids.length;
     },
     async appCode(roots) {
       if (code || !store) return;

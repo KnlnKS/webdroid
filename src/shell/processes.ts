@@ -42,7 +42,7 @@ import { canonicalFilePaths, isMutablePath, type FilePathCalls } from "./file-pa
 import { FileDescriptors, type DescriptorCalls } from "./file-descriptors";
 import type { WorkerControl } from "./worker-control";
 import { StoredParcel, StoredParcelError } from "./stored-parcel";
-import { spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client";
+import { platformWarmed, spawnProcessWorker, startProcessWorker, type SpareWorker } from "./process-worker-client";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives } from "./packedarchive";
 import { is64BitPackage } from "../jvm/natives/jvmruntime";
@@ -342,6 +342,8 @@ export class ProcessBroker {
    *  launcher activity and is shown, at the top app's priority while it starts */
   launch(pkg: string, assetKey: string): { pid: number; shown: Promise<void> } {
     const entry = this.connect(pkg, pkg);
+    // a launch that took the spare before its zygote compiled the platform's code leaves that to a new spare, which runs alongside
+    if (!platformWarmed()) this.prestartWorker();
     entry.launcher = { assetKey };
     const shown = entry.ready.then(() => this.activities.bringToFront(entry.pid));
     return { pid: entry.pid, shown };
