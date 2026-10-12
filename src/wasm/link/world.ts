@@ -1714,7 +1714,7 @@ export class World {
       for (let i = 0; i < this.methodsIn(b); i++) if (!kept || !builtUnder(this.blockBase[b] + i)) this.invalidate(this.blockBase[b] + i);
     }
     if (names.some(name => this.prog.loaderOfDex(this.prog.get(name)!.dex!) === this.prog.root) && !kept) this.aot?.unbindApp();
-    this.refreshLate();
+    this.noteLate([...this.prog.own()].map(c => c.name));
     const lateBy = this.lateBy(new Set([...this.assumptions.values()].map(a => a.decl)));
     const changedSubtypes = new Map<string, string[]>(), hierarchySubtypes = new Map<string, string[]>();
     for (const [key, a] of this.assumptions) {
@@ -1815,37 +1815,7 @@ export class World {
   }
   /** the classes added since compiled code was made */
   private lateKnown = new Set<string>();
-  private lateHierarchy = new Map<string, { sup: string | null; ifaces: string[]; flags: number } | undefined>();
-  private rememberLate(name: string): void {
-    if (this.lateHierarchy.has(name)) return;
-    const c = this.prog.get(name);
-    this.lateHierarchy.set(name, c && { sup: c.sup, ifaces: [...c.ifaces], flags: c.flags });
-  }
-  private refreshLate(): void {
-    // Descriptor rebinding can leave every subtype relationship intact. Missing ancestors and changed interfaces still require a rebuild.
-    for (const [name, old] of this.lateHierarchy) {
-      const c = this.prog.get(name);
-      if (!!c !== !!old || c && old && (c.sup !== old.sup || c.flags !== old.flags || c.ifaces.length !== old.ifaces.length || c.ifaces.some((n, i) => n !== old.ifaces[i]))) {
-        this.lateKnown.clear(); this.lateHierarchy.clear();
-        break;
-      }
-    }
-    this.noteLate([...this.prog.own()].map(c => c.name).filter(n => !this.lateKnown.has(n)));
-  }
-  /** records `added` as late, with the hierarchy of the concrete ones (refreshLate) */
-  noteLate(added: string[]): void {
-    const visit = (n: string): void => {
-      if (this.lateHierarchy.has(n)) return;
-      this.rememberLate(n);
-      const c = this.prog.get(n);
-      if (c) for (const p of c.sup ? [c.sup, ...c.ifaces] : c.ifaces) visit(p);
-    };
-    for (const n of added) {
-      const c = this.prog.get(n);
-      if (c && !c.isInterface && !(c.flags & ACC.ABSTRACT)) visit(n); else this.rememberLate(n);
-      if (c) this.lateKnown.add(n);
-    }
-  }
+  noteLate(added: string[]): void { for (const n of added) if (this.prog.get(n)) this.lateKnown.add(n); }
   /** the concrete classes among `names` (the late ones by default) by each of their supertypes in `decls`, themselves included. Only the
    *  supertypes an assumption names are asked about, so no index of every late class by every supertype is kept: an app's classes number
    *  in the hundreds of thousands, each with dozens of supertypes. */
