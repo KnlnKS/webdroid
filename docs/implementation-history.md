@@ -7033,3 +7033,30 @@ lstat, access, unlink, rmdir, mkdir, opendir, realpath) read the Worker's own VF
 broker's. `lstat` found no source and the move threw before `rename0`. Those calls, and `java.io.File`'s
 modification time and permission natives, now go to the realm that owns the path, as `Os` and the other
 `UnixFileSystem` natives already did.
+
+### First launches compiled on demand, and compiling ahead in the Worker (2026-10-12)
+
+Bundled app builds (`vendor/wasm-aot/*/apps.json`) cover the gate apps, so their launch numbers do not include
+on-demand compiling. Apps without one pay it at every first launch:
+- **Komikku** launches in about 8.7 s. On the app thread, the compiler takes 3.5 s for about 15,200 methods, creating
+  `WebAssembly.Module`s takes 1.1 s, and V8's lazy compilation on first call takes about 0.45 s.
+- **TikTok.** Of its main process's busy time, 27.6 s is native code (crypto and bignum work in its security
+  libraries) and 26 s is on-demand compiling.
+
+What a module costs in V8 (microbenchmarks, per function unless noted):
+- an exported function, about 390 B;
+- a distinct function placed with `table.set`, about 300 B;
+- an active elem segment entry, about 24 B, and it is placed lazily;
+- an instance, about 1.1 KB;
+- a tiny stub's lazy Liftoff compile on first call, about 2.5 µs.
+
+**Compiling ahead of the first call** (rejected). The idle compile Worker compiled the callees of each method compiled on
+demand, latest first, 64 to a merged module. A unit that went stale because the page had numbered names
+meanwhile had its numbering copied into the page's World and was queued again. With that, 305 of 521 jobs were adopted
+and 5,156 methods were installed ahead. On Komikku against the unchanged code (3 runs each):
+- launch went from 8,645–8,670 ms to 8,792–8,911 ms;
+- on-demand compiling stayed at 3,472–3,499 ms against 3,572–3,624 ms.
+
+The app thread reaches most methods before the Worker has compiled them. Adopting a unit costs about 1.1 ms of the
+app thread, and numbering the stale units costs more. Only relocated code (M5) could make an ahead unit
+independent of the page's numbering in the meantime.
