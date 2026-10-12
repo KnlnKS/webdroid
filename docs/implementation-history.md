@@ -6960,3 +6960,53 @@ Changes:
 
 TikTok's e2e flow still crashes the renderer, now at step 09 rather than earlier. What remains is the first
 launch's on-demand compiling: its rate, and the realms that each hold the app's Program at the same time.
+
+### TikTok's GC spiral and what a module costs (2026-10-12)
+
+TikTok's app process spent 27 s of a 130 s first launch in full collections: 186 mark-compacts, 130 of them for
+external memory pressure. V8's global allocation limit adds the external memory left after the last collection
+(with a growth factor of at most 1.1), and external memory reached 7.7 GB. Most of it is what V8 charges per
+Wasm module. Measured in Chromium 151 on Apple Silicon:
+
+| Module | External memory |
+|---|---|
+| With one function, instantiated | 37–40 KB |
+| Each further function | 0.16–0.35 KB |
+| Globals only, instantiated | 7.5 KB |
+
+A module with code commits a code-space page for its jump tables, so the cost is per module, not per function.
+Each instance also holds about 0.7 KB of JS heap. When nothing references a module's functions any more (its
+table entries replaced), a collection releases all of it: 5,000 modules held 199 MB, then 82 KB.
+
+At 120 s the app process had made 80,904 compiled units and 50,142 class modules: 55,106 units held one method,
+12,016 initialized a class, 4,955 were synthetic functions. Changes:
+- **Classes.** A class linked on demand is a globals-only module (its vtable, init word and statics); its
+  method slots take stubs from pools shared by signature, and its initializer compiles together with
+  `<clinit>` when first needed.
+- **Entry batches.** A method compiles together with the static and direct calls it makes before its first
+  branch, transitively, up to 32 methods. Static batching tops out early: over TikTok's demand, compiling each
+  method with its callees removes at most 45% of modules and compiles methods the launch never runs.
+- **Merging.** Once 1,024 first-tier units are loose, the upgrade Worker recompiles up to 512 of their
+  methods into one module. Merged code calls through the table, so invalidation still resets one method at a
+  time; the page installs it over the slots that still hold the units' code, and the units are collected.
+  Merges wait for the launch's first frame and for any app build, and leave the Worker idle twice as long as
+  each took. Run back to back, a merge Worker's heap grew to 1 GB in 20 s: compiling at about 2,000 methods/s
+  allocates faster than its collections reclaim.
+
+In the first 100 s the app process ran 97 mark-compacts before merging, 66 of them for external memory, with
+12.7 s of mark-compact pauses. With merging it ran 26–35, 3–5 for external memory, with 1.5–1.8 s of pauses;
+42,000–50,000 methods were merged by then. Feeder's first frame is unchanged (2,996–3,022 ms
+against 2,978–3,008 ms); merging during the launch cost it 70 ms, hence the first-frame hold. The quick e2e gate
+fails as it does without merging (Mihon's text checkpoints and two visual diffs). Komikku's step 09 sometimes
+never settles because the manga page keeps animating: 4 of 6 runs with merging, 1 of 3 without.
+
+TikTok still crashes the renderer at 95–105 s, as before. The crash is in the shared 4 GB cage: at 100 s the
+app process holds 1.5 GB, the merge Worker 0.8 GB (about 0.3 GB more than the upgrade Worker alone), a refine
+build 0.6 GB and a fifth TikTok process 0.4 GB. Isolates that had only just started failed at 150 MB.
+- The app process's own live heap is 1.1 GB after full collections. Of a sampled 940 MB, 185 MB is instances,
+  70 MB of it the pool stubs: a stub per method slot of every linked class, about 190 B for each funcref the
+  table holds, whether exported or copied in from a module's own table. Dropping it means call sites pass the
+  slot, so one stub per signature serves every unlinked method.
+- Each realm holding TikTok also holds its own Program and compile caches, and compiling allocates about
+  200 MB/s in any of them, `Flow` construction first (12%).
+- Allocation cuts in `lateBy`, vtable initializers and pool-stub bodies did not change the GC count.
