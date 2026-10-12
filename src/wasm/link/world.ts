@@ -757,17 +757,36 @@ export class World {
     const jc = this.prog.get(name), id = this.idOf(name), methods = jc?.methods ?? [];
     let slotBase = this.aot?.reservedBase(name) ?? this.preassigned.get(name);
     if (slotBase === undefined) { slotBase = this.addBlock(name, methods.length + 1); this.tail.push([name, methods.length + 1]); }
-    rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} };
+    if (this.aot?.building || this.opts.compileOnly) {
+      this.classes.set(name, rt = { name, id, mod: this.aot?.building ? this.aot.extraMod : "c" + id, slotBase, nMethods: methods.length, exports: {} });
+      return rt;
+    }
+    // the class's globals are made when something first reads them, in one module with those of the other classes linked meanwhile
+    const w = this;
+    let exports: WebAssembly.Exports | undefined;
+    rt = { name, id, mod: "c" + id, slotBase, nMethods: methods.length,
+      get exports() { if (!exports) w.buildClasses(); return exports!; }, set exports(x) { exports = x; } };
     this.classes.set(name, rt);
-    if (this.aot?.building || this.opts.compileOnly) return rt;
-    const bytes = this.classModule([rt], true);
-    this.stats.phase.classBuild += performance.now() - t0;
-    rt.exports = this.instantiate(bytes, {}).exports;
+    this.unbuilt.push(rt);
     this.stubClass(rt, jc);
-    this.noteInit(rt);
     this.stats.classes++; this.stats.classMs += performance.now() - t0;
     if (jc?.dex && id > (this.aot?.nSeeded ?? 0) && !name.includes("@")) this.demand.classes.push(name);
     return rt;
+  }
+  /** classes linked on demand whose globals no module holds yet (World.link) */
+  private unbuilt: ClassRt[] = [];
+  private buildClasses(): void {
+    const t0 = performance.now();
+    // a vtable can link the classes it names
+    while (this.unbuilt.length) {
+      const rts = this.unbuilt;
+      this.unbuilt = [];
+      const t1 = performance.now(), bytes = this.classModule(rts, true);
+      this.stats.phase.classBuild += performance.now() - t1;
+      const exports = this.instantiate(bytes, {}).exports;
+      for (const rt of rts) { rt.exports = exports; this.noteInit(rt); }
+    }
+    this.stats.classMs += performance.now() - t0;
   }
   /** the vtable of a class module the platform build holds was made before this World's host classes: the entries of the methods they implement (abstract in the build) are put right */
   private repairVtable(name: string): void {
