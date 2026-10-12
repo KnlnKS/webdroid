@@ -106,6 +106,8 @@ export class DexFile {
 
   private stringCache: (string | undefined)[];
   private typeCache: (string | undefined)[];
+  private typeNames: (string | undefined)[];
+  private rawTypeNames: (string | undefined)[];
   private classDefCache?: Map<string, number>;
   private protoCache: (ProtoRef | undefined)[];
   private fieldCache: PagedCache<FieldRef>;
@@ -139,6 +141,8 @@ export class DexFile {
     const protoCount = v.getUint32(h + 72, true), fieldCount = v.getUint32(h + 80, true), methodCount = v.getUint32(h + 88, true);
     this.stringCache = new Array(this.stringCount);
     this.typeCache = new Array(this.typeCount);
+    this.typeNames = new Array(this.typeCount);
+    this.rawTypeNames = new Array(this.typeCount);
     this.protoCache = new Array(protoCount);
     this.fieldCache = new PagedCache(fieldCount);
     this.methodCache = new PagedCache(methodCount);
@@ -215,7 +219,7 @@ export class DexFile {
   set resolveType(resolve: ((descriptor: string) => string) | undefined) {
     if (this.typeResolver === resolve) return;
     this.typeResolver = resolve;
-    this.typeCache.fill(undefined);
+    this.typeCache.fill(undefined); this.typeNames.fill(undefined);
     this.descCache.length = this.paramTypeCache.length = 0;
   }
   /** type descriptor, e.g. "Ljava/lang/String;" or "[I" */
@@ -228,6 +232,9 @@ export class DexFile {
   }
   /** the descriptor as the file spells it */
   rawType(i: number): string { return this.string(this.view.getUint32(this.typeIdsOff + i * 4, true)); }
+  /** binary names of `type(i)` and `rawType(i)`, kept so lookups by them hash each name once */
+  typeName(i: number): string { return this.typeNames[i] ??= this.resolveType ? descToName(this.type(i)) : this.rawTypeName(i); }
+  rawTypeName(i: number): string { return this.rawTypeNames[i] ??= descToName(this.rawType(i)); }
 
   proto(i: number): ProtoRef {
     let p = this.protoCache[i];

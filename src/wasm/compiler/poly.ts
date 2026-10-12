@@ -50,7 +50,7 @@ export function emitVarHandleOperation(cx: Compiler, c: Code, mode: string, type
 
 export function emitPolymorphic(mc: MC, ins: Ins): void {
   const { dex } = mc;
-  const mr = dex.method(ins.b), cls = descToName(dex.type(mr.cls)), mode = mr.name;
+  const mr = dex.method(ins.b), cls = dex.typeName(mr.cls), mode = mr.name;
   if (cls === "java/lang/invoke/MethodHandle" && (mode === "invoke" || mode === "invokeExact")) return emitHandleCall(mc, ins, mode === "invokeExact");
   if (cls !== VH || varHandleValues(mode) === undefined) return mc.invokeGap(ins, `${cls}.${mode}`);
   if (!emitExactAccess(mc, ins, mode)) return emitHandleCall(mc, ins, false, mode);

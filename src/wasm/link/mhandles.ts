@@ -37,7 +37,7 @@ export function methodTypeSignatureTypes(referrer: MethodInfo, index: number): S
 export function handleMemberOwner(referrer: MethodInfo, index: number): string {
   const dex = referrer.dex, handle = dex.methodHandle(index);
   const member = handle.type <= 3 ? dex.field(handle.idx) : dex.method(handle.idx);
-  return descToName(dex.rawType(member.cls));
+  return dex.rawTypeName(member.cls);
 }
 
 /** Invoke after member/access checks. Field type resolution belongs to its declaration's loader. */
@@ -104,7 +104,7 @@ export function resolveHandleMember(w: World, referrer: MethodInfo, index: numbe
     if ((h.type === 0 || h.type === 2) && f.flags & ACC.FINAL) return { errorClass: "java/lang/IllegalAccessError", message: `Cannot write final field ${javaName(f.owner)}.${f.name}` };
     return { field: f };
   }
-  const mr = dex.method(h.idx), cls = descToName(dex.type(mr.cls)), desc = dex.methodDesc(h.idx);
+  const mr = dex.method(h.idx), cls = dex.typeName(mr.cls), desc = dex.methodDesc(h.idx);
   let invoke = h.type === 4 ? "invoke-static" : h.type === 8 ? "invoke-interface" : h.type === 6 ? "invoke-direct" : "invoke-virtual";
   if (h.type === 7) {
     const target = resolveInvoke(prog, "invoke-direct", cls, mr.name, desc, referrer.cls);

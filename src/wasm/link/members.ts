@@ -53,14 +53,14 @@ export function hostMembers(w: World, kind: MInfo, a: number, b: number): number
     case MInfo.ThrowsCount: case MInfo.ThrowsAt: {
       // the classes in the method's dalvik.annotation.Throws (system visibility), by class id
       const m = methodAt(w, a), jc = w.prog.get(m.cls)!, v = annotationsOf(jc)?.methods.get(m.methodIdx)?.find((x) => x.type === THROWS)?.elements.value;
-      const types = Array.isArray(v) ? v.map((e) => w.idOf(descToName(jc.dex!.type((e as { idx: number }).idx)))) : [];
+      const types = Array.isArray(v) ? v.map((e) => w.idOf(jc.dex!.typeName((e as { idx: number }).idx))) : [];
       return kind === MInfo.ThrowsCount ? types.length : types[b];
     }
     case MInfo.EnclosingOwner: {
       // the class a member class is declared in, else the class of the method a local or anonymous class is declared in
       const jc = cls(a)!, set = annotationsOf(jc)?.cls, v = (set?.find((x) => x.type === ENCLOSING_CLASS) ?? set?.find((x) => x.type === ENCLOSING_METHOD))?.elements.value as { idx: number } | undefined;
       if (!v) return 0;
-      return w.idOf(descToName(jc.dex!.type(set!.some((x) => x.type === ENCLOSING_CLASS) ? v.idx : jc.dex!.method(v.idx).cls)));
+      return w.idOf(jc.dex!.typeName(set!.some((x) => x.type === ENCLOSING_CLASS) ? v.idx : jc.dex!.method(v.idx).cls));
     }
     case MInfo.IsAnonymous: return +!!annotationsOf(cls(a))?.cls.find((x) => x.type === INNER && x.elements.name === null);
     case MInfo.IsRecord: return +(cls(a)?.sup === "java/lang/Record");
@@ -72,7 +72,7 @@ export function hostMembers(w: World, kind: MInfo, a: number, b: number): number
       // the method a local or anonymous class is declared in (b: asking for a constructor); -1 when it has none of that kind
       const jc = cls(a)!, v = annotationsOf(jc)?.cls.find((x) => x.type === ENCLOSING_METHOD)?.elements.value as { idx: number } | undefined;
       if (!v) return -1;
-      const owner = w.prog.get(descToName(jc.dex!.type(jc.dex!.method(v.idx).cls))), index = owner?.methods.findIndex((m) => m.dex === jc.dex && m.methodIdx === v.idx) ?? -1;
+      const owner = w.prog.get(jc.dex!.typeName(jc.dex!.method(v.idx).cls)), index = owner?.methods.findIndex((m) => m.dex === jc.dex && m.methodIdx === v.idx) ?? -1;
       if (index < 0 || (owner!.methods[index].name === "<init>") !== !!b) return -1;
       return kind === MInfo.EnclosingClass ? w.idOf(owner!.name) : index;
     }

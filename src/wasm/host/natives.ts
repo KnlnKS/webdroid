@@ -11,7 +11,6 @@ import { ACC, kindOf, type MethodInfo } from "../compiler/program";
 import { elemKindOf, type ElemKind } from "../compiler/consts";
 import { mid } from "../compiler/ids";
 import { decodeInstructions } from "../../jvm/prepared";
-import { descToName } from "../../jvm/abi";
 import { Bridge } from "./bridge";
 import { adaptImport, hostForm, reportSuspended, reportSuspendError, suspends, waitsAlways } from "./suspend";
 import { specClass, type HostBridge, type HostContext, type HostFn, type NativeBinder, type NativeSource } from "../link/hostapi";
@@ -32,7 +31,7 @@ const abi = (d: string): VT | undefined => isRef(d) ? (isPrimArray(d) ? undefine
 const HOST_FIRST = /^(getBytes|matches|replaceAll|replaceFirst)\(|^replace\(CC\)/;
 /** must `m`, a String method with a body, be replaced by its production override */
 function overridden(m: MethodInfo): boolean {
-  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && descToName(m.dex.type(m.dex.field(i.c).cls)) === STRING_CLASS);
+  return HOST_FIRST.test(m.key) || decodeInstructions(m.dex.code(m.codeOff).insns).some((i) => (i.name.startsWith("iget") || i.name.startsWith("iput")) && m.dex.typeName(m.dex.field(i.c).cls) === STRING_CLASS);
 }
 
 /** natives that touch only [offset, offset + length) of a primitive array, as (array, offset, length) parameter positions (receiver first),
@@ -163,7 +162,7 @@ export class Natives implements NativeBinder {
       if (m.codeOff) for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
         if (!ins.name.startsWith("invoke-direct")) continue;
         const mr = m.dex.method(ins.b);
-        if (mr.name !== "<init>" || descToName(m.dex.type(mr.cls)) !== STRING_CLASS) continue;
+        if (mr.name !== "<init>" || m.dex.typeName(mr.cls) !== STRING_CLASS) continue;
         const ctor = string?.byKey.get("<init>" + m.dex.methodDesc(ins.b));
         if (ctor) add(ctor, false);
       }

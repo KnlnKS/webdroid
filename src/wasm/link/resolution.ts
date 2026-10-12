@@ -104,7 +104,7 @@ export function resolveCatch(w: World, method: MethodInfo, pc: number, throwable
       return next(at + 1);
     };
     try {
-      const key = resolveType(w, loader, descToName(method.dex.rawType(type)), owner);
+      const key = resolveType(w, loader, method.dex.rawTypeName(type), owner);
       return key instanceof Promise ? key.then(matched, failed) : matched(key);
     } catch (error) { return failed(error); }
   };
@@ -117,7 +117,7 @@ export function knownCatch(w: World, method: MethodInfo, pc: number, throwable: 
   if (!range) return -1;
   const loader = w.prog.loaderOf(method.cls), thrown = w.classNameOf(throwable);
   for (const [type, target] of range.handlers) {
-    const name = descToName(method.dex.rawType(type));
+    const name = method.dex.rawTypeName(type);
     const key = w.prog.initiatedBy(loader, name) ?? (loader === w.prog.boot ? w.prog.lookup(loader, name) : undefined);
     if (key && definitionReady(w, key) && w.prog.isSubclass(thrown, key)) return target;
   }
@@ -194,7 +194,7 @@ export function prepareDefinition(w: World, key: string, owner: Strand): string 
   const state: Definition = { owner: owner.thread, state: "resolving", wait };
   states.set(key, state);
   const { superIdx, interfaces } = cls.def, dex = cls.dex;
-  const names = [...superIdx === 0xffffffff ? [] : [superIdx], ...interfaces].map(i => descToName(dex.rawType(i)));
+  const names = [...superIdx === 0xffffffff ? [] : [superIdx], ...interfaces].map(i => dex.rawTypeName(i));
   const finish = () => { state.state = "ready"; complete(key); return key; };
   const fail = (error: unknown): never => { state.state = "failed"; state.error = error; reject(error); throw error; };
   const next = (at: number): string | Promise<string> => {

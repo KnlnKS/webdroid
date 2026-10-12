@@ -1,6 +1,6 @@
 import type { LinkFailure } from "./linkage";
 import type { DexFile, ClassDef } from "../../jvm/dex";
-import { descToName, parseMethodDesc } from "../../jvm/abi";
+import { parseMethodDesc } from "../../jvm/abi";
 
 export const ACC = { PUBLIC: 1, PRIVATE: 2, PROTECTED: 4, STATIC: 8, FINAL: 0x10, SYNCHRONIZED: 0x20, DECLARED_SYNCHRONIZED: 0x20000, NATIVE: 0x100, INTERFACE: 0x200, ABSTRACT: 0x400, ENUM: 0x4000, CONSTRUCTOR: 0x10000 };
 export type Kind = "I" | "J" | "L";               // wasm-level kinds: i32 (int,float bits,small ints), i64 (long,double bits), ref
@@ -106,7 +106,7 @@ class DexClass implements JClass {
   private get header() {
     if (!this.header_) {
       const h = this.dex.classHeader(this.idx), dex = this.dex;
-      this.header_ = { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : descToName(dex.type(h.superIdx)), ifaces: h.interfaces.map((t) => descToName(dex.type(t))) };
+      this.header_ = { flags: h.flags, sup: h.superIdx === 0xffffffff ? null : dex.typeName(h.superIdx), ifaces: h.interfaces.map((t) => dex.typeName(t)) };
     }
     return this.header_;
   }
@@ -217,7 +217,7 @@ export class Program {
       this.dexLoader.set(dex, loader);
       if (loader !== this.root) dex.resolveType ??= (d) => this.rewrite(loader, d);
       for (let i = 0; i < dex.classDefCount; i++) {
-        const name = descToName(dex.rawType(dex.classDef2Type(i)));
+        const name = dex.rawTypeName(dex.classDef2Type(i));
         if (loader === this.root ? this.has(name) : loader.defined.has(name)) continue;
         const key = loader.id ? `${name}@${loader.id}` : name;
         loader.defined.set(name, key);

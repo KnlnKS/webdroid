@@ -15,7 +15,6 @@ import { Program as Reach, callClosure, type MethodRoot } from "../../jvm/reach"
 import { parseBaselineProfile } from "../../jvm/baselineprof";
 import { rootsOf } from "../../jvm/roots";
 import { dexesIn, type DexFile } from "../../jvm/dex";
-import { descToName } from "../../jvm/abi";
 import { methodOf } from "../compiler/ids";
 
 /** what the worker's realm provides: the platform's dex files, the registered natives and the intrinsics, which must be the page's for the code to be the page's */
@@ -135,7 +134,7 @@ export function serveCompile(port: Port, env: CompileEnv): void {
       const m = world.prog.get(cls)?.methods.find((x) => x.dex === dex && x.methodIdx === methodIdx);
       if (m && (m.codeOff || world.intrinsic(m))) out.add(m);
     };
-    const nameOf = (dex: DexFile, idx: number) => descToName(dex.type(dex.method(idx).cls));
+    const nameOf = (dex: DexFile, idx: number) => dex.typeName(dex.method(idx).cls);
     const rootOf = (dex: DexFile, idx: number): MethodRoot => ({ cls: nameOf(dex, idx), sig: dex.method(idx).name + dex.methodDesc(idx) });
     let called: MethodRoot[] = [];
     for (const [name, methods] of (roots.profile && parseBaselineProfile(roots.profile)) || []) {

@@ -146,7 +146,7 @@ export function resolveInvoke(prog: Program, kind: string, declaredCls: string, 
 
 /** the field an iget/iput/sget/sput names, or why it does not resolve */
 export function resolveFieldRef(prog: Program, dex: DexFile, idx: number, isStatic: boolean, referrer: string): { decl: string; f: FieldInfo } | LinkFailure {
-  const fr = dex.field(idx), decl = descToName(dex.type(fr.cls)), type = dex.rawType(fr.type);
+  const fr = dex.field(idx), decl = dex.typeName(fr.cls), type = dex.rawType(fr.type);
   if (!prog.get(decl)) return fail("ncdfr", UNRESOLVED + dex.type(fr.cls), decl);
   const f = resolveSymbolicField(prog, decl, fr.name, type);
   if (!f) return fail("nsfer", `No ${isStatic ? "static " : "instance "}field ${fr.name} of type ${type} in class ${descriptor(decl)} or its superclasses${declared(prog, decl)}`);

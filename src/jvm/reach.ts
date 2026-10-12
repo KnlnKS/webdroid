@@ -56,7 +56,7 @@ export class Program {
 
   add(dex: DexFile) {
     for (let i = 0; i < dex.classDefCount; i++) {
-      const name = descToName(dex.type(dex.classDef2Type(i)));
+      const name = dex.typeName(dex.classDef2Type(i));
       if (!this.byName.has(name)) this.byName.set(name, { loc: { dex, defIdx: i } });
     }
   }
@@ -97,7 +97,7 @@ export class Program {
     rec.supers = [];   // stands in while we recurse, so a malformed cycle terminates
     const def = this.def(name)!, dex = rec.loc.dex;
     const out = new Set<string>();
-    const parents = def.interfaces.map((i) => descToName(dex.type(i)));
+    const parents = def.interfaces.map((i) => dex.typeName(i));
     const sup = this.superOf(name);
     if (sup) parents.unshift(sup);
     for (const p of parents) {

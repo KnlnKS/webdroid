@@ -1,6 +1,6 @@
 import { beginCompile, endCompile } from "../../jvm/compiler-observer";
 // Canonical compiler adapters for the shared cold opcode loop.
-import { descToName, parseMethodDesc } from "../../jvm/abi";
+import { parseMethodDesc } from "../../jvm/abi";
 import { prepareMethod, registersOf, type PreparedInstruction } from "../../jvm/prepared";
 import { OP } from "../compiler/code";
 import { inferTyping, D, R, J, type Typing } from "../compiler/infer";
@@ -110,7 +110,7 @@ export class ColdSlowOps {
     if (/^invoke-custom/.test(n)) { const ret = m.dex.type(m.dex.proto((m.dex.callSite(ins.b)[2] as { idx: number }).idx).ret); return ret === "V" ? "V" : kindOf(ret); }
     if (n.startsWith("invoke")) {
       const mr = m.dex.method(ins.b);
-      if (/^invoke-direct/.test(n) && mr.name === "<init>" && descToName(m.dex.type(mr.cls)) === "java/lang/String")
+      if (/^invoke-direct/.test(n) && mr.name === "<init>" && m.dex.typeName(mr.cls) === "java/lang/String")
         return "L";
       const ret = parseMethodDesc(m.dex.methodDesc(ins.b)).ret;
       return ret === "V" ? "V" : kindOf(ret);
@@ -150,7 +150,7 @@ export class ColdSlowOps {
       // Preseal only already-resolved owners; inactive symbolic names stay lazy.
       for (const op of analysis.prepared.instructions) {
         if (!analysis.typing.reached(op.pc) || !ColdSlowOps.supports(op) || /^(move-result|move-exception)/.test(op.name)
-          || op.name === "new-instance" && descToName(m.dex.type(op.b)) === "java/lang/String" || !this.batchReady(m, op)) continue;
+          || op.name === "new-instance" && m.dex.typeName(op.b) === "java/lang/String" || !this.batchReady(m, op)) continue;
         this.adapter(m, op, false);
       }
     }
@@ -290,7 +290,7 @@ export class ColdSlowOps {
   }
 
   private stringConstructor(m: MethodInfo, ins: PreparedInstruction): boolean {
-    return /^invoke-direct/.test(ins.name) && m.dex.method(ins.b).name === "<init>" && descToName(m.dex.type(m.dex.method(ins.b).cls)) === "java/lang/String";
+    return /^invoke-direct/.test(ins.name) && m.dex.method(ins.b).name === "<init>" && m.dex.typeName(m.dex.method(ins.b).cls) === "java/lang/String";
   }
 
   validate(state: ColdSnapshot, strand: Strand): void {
@@ -326,7 +326,7 @@ export class ColdSlowOps {
       this.write(state, ins.a, "L", state.exception.value); state.exception = undefined;
       state.executedPc = ins.pc; state.pc += ins.len; return "next";
     }
-    if (ins.name === "new-instance" && descToName(m.dex.type(ins.b)) === "java/lang/String") {
+    if (ins.name === "new-instance" && m.dex.typeName(ins.b) === "java/lang/String") {
       // The canonical String constructor creates the actual reference. Keep a
       // unique allocation identity meanwhile so moves retain uninitialized aliases.
       const token = {};

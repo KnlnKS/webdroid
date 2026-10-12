@@ -36,7 +36,7 @@ import { definitionReady, initiatedInstruction, initiatedType, instructionClass,
 import { hasSignatureConstraints, validateSignatures } from "./signatures";
 import { SLOT, FIRST_FREE_SLOT, HOT_BUDGET, COUNT_BASE, COUNT_SLOTS, WARM_AT, INIT_DONE, INIT_FAILED, THROWERS, ALLOC_WINDOW, HEAP_LIMIT, excMessage, throwerBody, javaFrames, isStackOverflow, namesWasmFrames, wasmFrameNames, deepStack, type JavaFrame, type Thrower } from "./exc";
 import { branchTargets, decodeInstructions } from "../../jvm/prepared";
-import { descToName, parseMethodDesc } from "../../jvm/abi";
+import { parseMethodDesc } from "../../jvm/abi";
 import { mid, methodOf } from "../compiler/ids";
 import { dispatchMethodKey, dispatchSlotKey, overridesMethod, failed, symbolicDispatchFor, symbolicImplFor, symbolicOverride, symbolicMethod, resolveSymbolicMethod, unresolvedClass } from "../compiler/linkage";
 import type { DexFile } from "../../jvm/dex";
@@ -974,7 +974,7 @@ export class World {
       for (const ins of this.planning(c).entry) {
         if (out.length >= BATCH) break;
         if (needsSymbolicSite(this, c, ins)) continue;
-        const mr = c.dex.method(ins.b), t = this.prog.resolve(descToName(c.dex.type(mr.cls)), mr.name, c.dex.methodDesc(ins.b));
+        const mr = c.dex.method(ins.b), t = this.prog.resolve(c.dex.typeName(mr.cls), mr.name, c.dex.methodDesc(ins.b));
         if (!t || out.includes(t) || !t.codeOff || t.flags & ACC.NATIVE || this.intrinsic(t)) continue;
         const at = this.slotOf(t), ts = this.slotAt(at);
         if (ts?.k !== "method" || ts.done || ts.pending || this.aot?.install(at) && ts.done) continue;
@@ -1304,7 +1304,7 @@ export class World {
       if (!own(key)) return;
       const indices = [...cls.def!.superIdx === 0xffffffff ? [] : [cls.def!.superIdx], ...cls.def!.interfaces];
       const targets = [...cls.sup ? [cls.sup] : [], ...cls.ifaces];
-      indices.forEach((index, i) => resolve(key, descToName(cls.dex!.rawType(index)), targets[i]));
+      indices.forEach((index, i) => resolve(key, cls.dex!.rawTypeName(index), targets[i]));
     };
     const owners = (m: MethodInfo) => !m.codeOff || this.intrinsic(m) ? [] : this.planning(m).references.flatMap((name) => initiatedType(this, m.cls, name) ?? []);
     const taken: MethodInfo[][] = [];
@@ -1647,7 +1647,7 @@ export class World {
       for (const ins of decodeInstructions(m.dex.code(m.codeOff).insns)) {
         const name = !ins.name.startsWith("invoke-polymorphic") && instructionClass(m, ins);
         if (name) references.add(name);
-        if (ins.op === 0x22) allocations.add(descToName(m.dex.type(ins.b)));
+        if (ins.op === 0x22) allocations.add(m.dex.typeName(ins.b));
         // return, throw, goto, switch and if
         branched ||= ins.op >= 0x0e && ins.op <= 0x11 || ins.op >= 0x27 && ins.op <= 0x2c || ins.op >= 0x32 && ins.op <= 0x3d;
         if (!(ins.op >= 0x6e && ins.op <= 0x72) && !(ins.op >= 0x74 && ins.op <= 0x78)) continue;
@@ -1701,7 +1701,7 @@ export class World {
     // Cache bytecode references, not eligibility or targets: loader initiation can change both.
     for (const ins of this.planning(m).calls) {
       if (needsSymbolicSite(this, m, ins)) continue;
-      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = descToName(dex.type(mr.cls)), kind = ins.name.replace("/range", "");
+      const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), decl = dex.typeName(mr.cls), kind = ins.name.replace("/range", "");
       if (decl[0] === "[" || kind === "invoke-super") continue;
       const targets = kind === "invoke-static" || kind === "invoke-direct" ? undefined : this.cha.targets(decl, mr.name, desc);
       const t = targets ? targets.length === 1 ? targets[0] : undefined : this.prog.resolve(decl, mr.name, desc);

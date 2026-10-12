@@ -3,7 +3,6 @@
 // values the dex encodes, typed by the return type of the annotation's method: boxed primitives, Strings, Class objects, enum constants, nested
 // annotations and arrays of these. Method.getDefaultValue and the Signature annotation (generic types) come from the same section.
 import { javaName, type JClass } from "../compiler/program";
-import { descToName } from "../../jvm/abi";
 import { idOfClass, fieldId, typeName } from "./classes";
 import { BOX, executableSlot, methodAt } from "./reflect";
 import { VIEWS } from "../compiler/copy";
@@ -101,7 +100,7 @@ function* valueOf(w: World, s: ReturnType<typeof make>, strand: Strand, dex: Enc
     return name[0] === "#" || name[0] === "[" || w.prog.get(name) ? s.classOf(w.idOf(name)) : yield s.typeNotPresent(strand, w.javaString(javaName(name).replace(/\//g, ".")), null);
   }
   if (ref.kind === "enum") {
-    const fr = dex.field(ref.idx), cls = descToName(dex.type(fr.cls)), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);
+    const fr = dex.field(ref.idx), cls = dex.typeName(fr.cls), jc = w.prog.get(cls), f = jc?.fields.find((x) => x.isStatic && x.name === fr.name);
     return yield (f ? s.enumConstant(cls, f.name, f.desc)(strand) : s.enumNotPresent(strand, s.classOf(w.idOf(cls)), w.javaString(fr.name)));
   }
   if (ref.kind === "annotation") return yield* annotation(w, s, strand, ref.anno!);

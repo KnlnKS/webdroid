@@ -5,7 +5,7 @@ import { T, ref, refNull, type VT } from "./wasmbin";
 import { kindOf, type Kind, type MethodInfo } from "./program";
 import type { Compiler } from "./j2w";
 import { H, elemKindOf, type ElemKind } from "./consts";
-import { descToName, parseMethodDesc, isWide } from "../../jvm/abi";
+import { parseMethodDesc, isWide } from "../../jvm/abi";
 import { prepareMethod, endsBlock, ifTarget, branchTargets, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "../../jvm/prepared";
 import { Flow, Go, Irreducible, structureAny } from "../../jvm/structure";
 import { mid } from "./ids";
@@ -256,7 +256,7 @@ export class MC {
     if (hasLoops && this.deferred) this.fuelLocal = c.newLocal(T.i32);
     if (this.deopt) {
       // Resume rejects uninitialized aliases; only this activation's String operations can block later handoff.
-      this.stringAliases = this.prepared.instructions.some(ins => ins.name === "new-instance" ? descToName(this.dex.type(ins.b)) === "java/lang/String" : ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && descToName(this.dex.type(this.dex.method(ins.b).cls)) === "java/lang/String");
+      this.stringAliases = this.prepared.instructions.some(ins => ins.name === "new-instance" ? this.dex.typeName(ins.b) === "java/lang/String" : ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && this.dex.typeName(this.dex.method(ins.b).cls) === "java/lang/String");
       this.activationLocal = c.newLocal(T.externref); this.versionLocal = c.newLocal(T.i32); this.executedLocal = c.newLocal(T.i32); this.deoptState = c.newLocal(T.externref); this.deoptTarget = c.newLocal(T.funcref);
       c.gget(this.deopt.enabled).if_();
       if (this.resume) c.raw(0x20, 0);
@@ -430,7 +430,7 @@ export class MC {
   private resolveCallee(ins: Ins): MethodInfo | null | "dynamic" {
     const cx = this.cx, dex = this.dex, kind = ins.name.replace("/range", "");
     if (kind === "invoke-custom" || kind === "invoke-polymorphic") return "dynamic";
-    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = descToName(dex.type(mr.cls)), decl = declared[0] === "[" ? "java/lang/Object" : declared;
+    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls), decl = declared[0] === "[" ? "java/lang/Object" : declared;
     if (declared !== decl && mr.name + desc === "clone()Ljava/lang/Object;") return null;
     const target = resolveInvoke(cx.prog, kind, declared, mr.name, desc, this.m.cls);
     if (failed(target)) return null;
@@ -727,8 +727,8 @@ export class MC {
         if (ins.name === "monitor-enter" || ins.name === "monitor-exit") {
           c.gget(d.enabled).if_(); c.lget(this.activationLocal); this.get("L", ins.a); c.externConvertAny().i32(+(ins.name === "monitor-enter")).call(d.monitor).end();
         }
-        const allocation = ins.name === "new-instance" && descToName(this.dex.type(ins.b)) === "java/lang/String";
-        const constructor = ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && descToName(this.dex.type(this.dex.method(ins.b).cls)) === "java/lang/String";
+        const allocation = ins.name === "new-instance" && this.dex.typeName(ins.b) === "java/lang/String";
+        const constructor = ins.name.startsWith("invoke-direct") && this.dex.method(ins.b).name === "<init>" && this.dex.typeName(this.dex.method(ins.b).cls) === "java/lang/String";
         if (allocation || constructor) c.gget(d.enabled).if_().lget(this.activationLocal).i32(allocation ? 1 : -1).call(d.allocation).end();
         let j = i + 1; while (j < inss.length && this.consumed.has(inss[j].pc)) j++;
         const next = inss[j];
@@ -816,22 +816,22 @@ export class MC {
   private ensureTarget(ins: Ins): string | undefined {
     const n = ins.name;
     if (n !== "new-instance" && !n.startsWith("sget") && !n.startsWith("sput") && !n.startsWith("invoke-static") || this.deferredSite(ins)) return undefined;
-    if (n === "new-instance") { const name = descToName(this.dex.type(ins.b)); return this.cx.str.isString(name) ? undefined : name; }
+    if (n === "new-instance") { const name = this.dex.typeName(ins.b); return this.cx.str.isString(name) ? undefined : name; }
     if (n.startsWith("sget") || n.startsWith("sput")) { const r = this.fieldOf(ins.b, true); return failed(r) ? undefined : r.f.owner; }
     if (n === "invoke-static" || n === "invoke-static/range") {
-      const mr = this.dex.method(ins.b), decl = descToName(this.dex.type(mr.cls));
+      const mr = this.dex.method(ins.b), decl = this.dex.typeName(mr.cls);
       return this.cx.prog.resolve(decl[0] === "[" ? "java/lang/Object" : decl, mr.name, this.dex.methodDesc(ins.b))?.cls;
     }
     return undefined;
   }
   isStringInit(ins: Ins): boolean {
     const mr = this.dex.method(ins.b);
-    return mr.name === "<init>" && this.cx.str.isString(descToName(this.dex.type(mr.cls)));
+    return mr.name === "<init>" && this.cx.str.isString(this.dex.typeName(mr.cls));
   }
   /** whether the register `ins` defines surely holds a reference: an allocation, a constant, the exception caught, or a copy of one */
   definesNonNull(ins: Ins, f: Facts): boolean {
     const n = ins.name;
-    if (n === "new-instance") return !this.cx.str.isString(descToName(this.dex.type(ins.b)));
+    if (n === "new-instance") return !this.cx.str.isString(this.dex.typeName(ins.b));
     if (n === "const-string" || n === "const-string/jumbo" || n === "const-class" || n === "new-array" || n === "move-exception") return true;
     if (n.startsWith("move-object") || n === "check-cast") { const w = this.typing.use(ins.pc, n === "check-cast" ? ins.a : ins.b); return w >= 0 && f.nonNull.has(w); }
     return false;
@@ -910,25 +910,25 @@ export class MC {
       case "const-wide/16": case "const-wide/32": this.constWide(BigInt(b)); return;
       case "const-wide": this.constWide(ins.wideLit); return;
       case "const-wide/high16": this.constWide(BigInt(b) << 48n); return;
-      case "const-class": if (this.unresolved(dex.type(b))) return; constClass(cx, c, descToName(dex.type(b))); this.set("L"); return;
+      case "const-class": if (this.unresolved(dex.type(b))) return; constClass(cx, c, dex.typeName(b)); this.set("L"); return;
       case "const-string": case "const-string/jumbo": cx.str.literal(c, dex.string(b)); this.set("L"); return;
       case "const-method-handle": emitHandleConstant(this, b); return;
       case "const-method-type": emitTypeConstant(this, b); return;
       case "monitor-enter": case "monitor-exit": this.nonNull(a); this.monitor(ins.name === "monitor-enter"); return;
       case "check-cast": {
         if (this.unresolved(dex.type(b))) return;
-        const name = descToName(dex.type(b));
+        const name = dex.typeName(b);
         if (name === "java/lang/Object") { this.copyReference(a); return; }
         this.get("L", a); c.call(cx.castFn(name)); this.set("L"); return;
       }
-      case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); c.call(cx.instanceOfFn(descToName(dex.type(ins.c)))); this.set("I"); return;
+      case "instance-of": if (this.unresolved(dex.type(ins.c))) return; this.get("L", ins.b); c.call(cx.instanceOfFn(dex.typeName(ins.c))); this.set("I"); return;
       case "array-length": {
         // any array wrapper has the data array in field 2; use the ref wrapper type check-free via per-kind unknown -> test kinds
         this.arrayLength(b); this.set("I"); return;
       }
       case "new-instance": {
         if (this.unresolved(dex.type(b))) return;
-        const name = descToName(dex.type(b));
+        const name = dex.typeName(b);
         // a String is made by the constructor call, which assigns its register
         if (cx.str.isString(name)) c.anyNull(); else { this.ensure(name); cx.emitNew(c, name); }
         this.set("L"); return;
@@ -1162,7 +1162,7 @@ export class MC {
     const kind = ins.name.replace("/range", "");
     if (kind === "invoke-custom") return emitCustom(this, ins);
     if (kind === "invoke-polymorphic") return emitPolymorphic(this, ins);
-    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = descToName(dex.type(mr.cls)), key = mr.name + desc;
+    const mr = dex.method(ins.b), desc = dex.methodDesc(ins.b), declared = dex.typeName(mr.cls), key = mr.name + desc;
     // an array's methods are Object's, except clone, which copies the array
     const decl = declared[0] === "[" ? "java/lang/Object" : declared;
     const p = parseMethodDesc(desc), retK: Kind | "V" = p.ret === "V" ? "V" : kindOf(p.ret);
