@@ -7,6 +7,17 @@ Cold is a fresh profile; warm launches twice in one profile and gates the second
 
 `bun run lat <scenario> [--warm] [--query tier=js]`
 
+## Current (2026-10-12, `9339dea1`, `--gpu`, Worker processes)
+
+| | launch cold | launch warm | gated taps | scroll p50 / p95 / p99 |
+|---|---|---|---|---|
+| fitnotes | 1365–1486 | 1449 | 12–110 | 16.6 / 18.1–26.2 / 19.2–33.4 |
+| calculatorm | 1517 | 1517 | 24–92 | |
+
+The same harness against `381efca9` launches fitnotes in 2711–2809 ms. Scroll is bimodal on both commits
+(p95 about 18 or about 25 ms from run to run), so compare it over several runs. Mihon's launch is not measurable
+while its live update check opens a "New version available" dialog over the onboarding screen.
+
 ## Launch to first app frame (ms)
 
 | Scenario | Wasm cold | Wasm warm | JS warm |
