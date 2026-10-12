@@ -478,6 +478,7 @@ rt.registerJni("libcore/io/AsynchronousCloseMonitor", `signalBlockedThreads(${FD
 // java.io.UnixFileSystem: java.io.File's natives over the VFS. It keeps no permission bits and
 // no hard links, so a mode change on an existing path succeeds, as chmod does above.
 const BA_EXISTS = 1, BA_REGULAR = 2, BA_DIRECTORY = 4;
+const fileExists = (p: string) => { const remote = remoteFilePath(p); return remote ? after(remote.fileStat(p), ({ value }) => +!!value) : +vfs.exists(p); };
 const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
   "initIDs()V": () => {},
   "canonicalize0(Ljava/lang/String;Z)Ljava/lang/String;": (path: string) => vfs.canonical(path),
@@ -503,14 +504,17 @@ const unixFileSystem: Record<string, (...args: never[]) => unknown> = {
     const p = pathOf(file);
     return after(remoteFilePath(p)?.fileMkdir(p) ?? mkdirPath(null, p), result => +(result === 0));
   },
-  "getLastModifiedTime0(Ljava/io/File;)J": (file: JObj) => BigInt(vfs.mtime(pathOf(file))),
+  "getLastModifiedTime0(Ljava/io/File;)J": (file: JObj) => {
+    const p = pathOf(file), remote = remoteFilePath(p);
+    return remote ? after(remote.fileStat(p), ({ value }) => BigInt(value?.mtime ?? 0)) : BigInt(vfs.mtime(p));
+  },
   "setLastModifiedTime0(Ljava/io/File;J)Z": (file: JObj, ms: bigint) => {
     const p = pathOf(file);
     if (!vfs.exists(p)) return 0;
     vfs.mtimes.set(p, Number(ms)); return 1;
   },
-  "setPermission0(Ljava/io/File;IZZ)Z": (file: JObj) => +vfs.exists(pathOf(file)),
-  "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => +vfs.exists(pathOf(file)),
+  "setPermission0(Ljava/io/File;IZZ)Z": (file: JObj) => fileExists(pathOf(file)),
+  "setReadOnly0(Ljava/io/File;)Z": (file: JObj) => fileExists(pathOf(file)),
   // FileSystem.SPACE_TOTAL, SPACE_FREE, SPACE_USABLE
   "getSpace0(Ljava/io/File;I)J": driven(function* (_file: JObj, kind: number): Gen {
     const s = yield* awaited(storageStatVfs());
